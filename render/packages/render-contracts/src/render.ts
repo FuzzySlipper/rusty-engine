@@ -572,11 +572,15 @@ export type RenderDiff =
   | { readonly op: 'defineMaterial'; readonly material: RenderMaterialDescriptor }
   | { readonly op: 'setMaterialInstanceParameters'; readonly handle: RenderHandle; readonly slot: number; readonly parameters: MaterialInstanceParameters | null }
   | { readonly op: 'defineTexture'; readonly texture: TextureDescriptor }
+  | { readonly op: 'releaseTexture'; readonly id: string }
   | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
+  | { readonly op: 'releaseSpriteAtlas'; readonly id: string }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
   | { readonly op: 'releaseStaticMesh'; readonly asset: string }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
+  | { readonly op: 'releaseAnimatedMesh'; readonly asset: string }
+  | { readonly op: 'releaseMaterial'; readonly id: string }
   | { readonly op: 'defineVoxelObject'; readonly asset: VoxelObjectRenderAsset }
   | { readonly op: 'releaseVoxelObject'; readonly asset: string }
   | { readonly op: 'createStaticMeshInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: StaticMeshInstanceDescriptor }

@@ -1227,8 +1227,31 @@ void test('tracks animated mesh definitions and command-selected named clip play
     () => projection.applyDiff({ op: 'defineAnimatedMesh', asset: animatedMeshAsset() }),
     RenderProjectionError,
   );
+  assert.throws(
+    () => projection.applyDiff({ op: 'releaseAnimatedMesh', asset: 'mesh-animation/kenney-retro-character-medium' }),
+    /in use by 1 instance/u,
+  );
   projection.applyDiff({ op: 'destroy', handle: renderHandle(12) });
   assert.equal(projection.animatedMeshRefCount('mesh-animation/kenney-retro-character-medium'), 0);
+  assert.deepEqual(
+    projection.applyDiff({ op: 'releaseAnimatedMesh', asset: 'mesh-animation/kenney-retro-character-medium' }),
+    [{ op: 'releaseAnimatedMesh', asset: 'mesh-animation/kenney-retro-character-medium' }],
+  );
+  assert.equal(projection.animatedMesh('mesh-animation/kenney-retro-character-medium'), undefined);
+  assert.deepEqual(projection.snapshot().animatedMeshes, []);
+  projection.applyDiff({ op: 'defineAnimatedMesh', asset: animatedMeshAsset() });
+  projection.applyDiff({
+    op: 'createAnimatedMeshInstance',
+    handle: renderHandle(13),
+    parent: null,
+    instance: {
+      asset: 'mesh-animation/kenney-retro-character-medium',
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      materialOverrides: [], playback: null, visible: true,
+      metadata: { sourceEntity: 13, sourceSceneNode: null, tags: [], label: 'redefined animated asset' },
+    },
+  });
+  assert.equal(projection.animatedMeshRefCount('mesh-animation/kenney-retro-character-medium'), 1);
 });
 
 void test('effective clip-pack clips admit both play and held sample playback', () => {

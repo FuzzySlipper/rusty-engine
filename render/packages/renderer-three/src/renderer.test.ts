@@ -2761,6 +2761,47 @@ void test('texture redefine is stale-safe and disposes replaced and final GPU re
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
+void test('logical texture material and atlas releases require dependency order and dispose the retained texture', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const texture = textureDescriptor(bytes);
+  const material = texturedMaterial();
+  const atlas: SpriteAtlasDescriptor = {
+    id: 'sprite/release-order', texture: texture.id,
+    frames: [{ frame: 0, uvMin: [0, 0], uvMax: [1, 1] }],
+  };
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture },
+    { op: 'defineMaterial', material },
+    { op: 'defineSpriteAtlas', atlas },
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+  ] });
+  const retained = renderer.textureObjectFor(texture.id)!;
+  let disposals = 0;
+  retained.addEventListener('dispose', () => { disposals += 1; });
+  assert.throws(
+    () => renderer.applyDiff({ op: 'releaseMaterial', id: material.id }),
+    /retained mesh definition/u,
+  );
+  renderer.applyDiff({ op: 'releaseStaticMesh', asset: 'mesh/textured-plank' });
+  assert.throws(
+    () => renderer.applyDiff({ op: 'releaseTexture', id: texture.id }),
+    /retained sprite atlas/u,
+  );
+  renderer.applyDiff({ op: 'releaseSpriteAtlas', id: atlas.id });
+  assert.throws(
+    () => renderer.applyDiff({ op: 'releaseTexture', id: texture.id }),
+    /retained material/u,
+  );
+  renderer.applyDiff({ op: 'releaseMaterial', id: material.id });
+  renderer.applyDiff({ op: 'releaseTexture', id: texture.id });
+  assert.equal(renderer.materialDescriptor(material.id), undefined);
+  assert.equal(renderer.spriteAtlas(atlas.id), undefined);
+  assert.equal(renderer.textureDescriptor(texture.id), undefined);
+  assert.equal(renderer.textureObjectFor(texture.id), undefined);
+  assert.equal(disposals, 1);
+});
+
 void test('retained resource pruning preserves live texture users, then disposes and reloads their GPU texture', () => {
   const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const descriptor = textureDescriptor(bytes, 1, 'resource');
@@ -2877,6 +2918,58 @@ void test('retained resource pruning keeps an animated ghost capture alive until
   capture.dispose();
   assert.equal(templateTextureDisposals, 1, 'capture release retries the pending resource prune');
   assert.equal(sourceTextureDisposals, 0, 'the admitted source texture remains owned by its resource source');
+});
+
+void test('animated mesh release rejects live users and captures, then permits the same asset to be redefined', () => {
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({ animatedMeshSource: testAnimatedMeshSource(asset) });
+  const handle = renderHandle(308);
+  const instance = {
+    asset: asset.asset,
+    transform: { translation: [0, 0, 0] as const, rotation: [0, 0, 0, 1] as const, scale: [1, 1, 1] as const },
+    visible: true,
+    materialOverrides: [],
+    playback: null,
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'releaseable animated asset' },
+  };
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'createAnimatedMeshInstance', handle, parent: null, instance },
+  ] });
+  assert.throws(
+    () => renderer.applyDiff({ op: 'releaseAnimatedMesh', asset: asset.asset }),
+    /in use by 1 instance/u,
+  );
+  const capture = renderer.createAnimatedMeshCaptureAppearance(handle, 'idle', 0.5);
+  renderer.applyDiff({ op: 'destroy', handle });
+  assert.throws(
+    () => renderer.applyDiff({ op: 'releaseAnimatedMesh', asset: asset.asset }),
+    /in use by 0 instance\(s\) and 1 capture/u,
+  );
+  capture.dispose();
+  assert.doesNotThrow(() => renderer.applyDiff({ op: 'releaseAnimatedMesh', asset: asset.asset }));
+  assert.throws(
+    () => renderer.applyDiff({
+      op: 'createAnimatedMeshInstance', handle: renderHandle(309), parent: null, instance,
+    }),
+    /undefined animated mesh asset/u,
+  );
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'createAnimatedMeshInstance', handle: renderHandle(309), parent: null, instance },
+  ] });
+  assert.doesNotThrow(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'destroy', handle: renderHandle(309) },
+    { op: 'releaseAnimatedMesh', asset: asset.asset },
+  ] }), 'an earlier same-frame destroy satisfies the release lifetime');
+  assert.doesNotThrow(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'releaseAnimatedMesh', asset: asset.asset },
+  ] }), 'a definition staged earlier in the frame can be released before it reaches the registry');
+  renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
+  assert.doesNotThrow(() => renderer.applyDiff({
+    op: 'createAnimatedMeshInstance', handle: renderHandle(310), parent: null, instance,
+  }));
 });
 
 void test('sky background flips asymmetric equirectangular content without changing its retained source', () => {

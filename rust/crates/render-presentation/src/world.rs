@@ -68,6 +68,7 @@ pub enum PresentationWorldError {
     DuplicateNode(RenderHandle),
     WrongNodeKind(RenderHandle),
     UndefinedStaticMesh(String),
+    UndefinedResource(String),
     ReferencedResource(String),
 }
 
@@ -742,6 +743,62 @@ impl PresentationWorld {
                 }
                 _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
             },
+            RenderDiff::ReleaseMaterial { id } => {
+                if !self.materials.contains_key(id) {
+                    return Err(PresentationWorldError::UndefinedResource(id.clone()));
+                }
+                let bound = self.static_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
+                    || self.animated_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
+                    || self.voxel_objects.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
+                    || self.nodes.values().any(|node| match &node.kind {
+                        NodeKind::StaticMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
+                        NodeKind::AnimatedMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
+                        NodeKind::VoxelObject(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
+                        _ => false,
+                    })
+                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineMaterial { material } if &material.id == id)));
+                if bound {
+                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
+                }
+                self.materials.remove(id);
+            }
+            RenderDiff::ReleaseTexture { id } => {
+                if !self.textures.contains_key(id) {
+                    return Err(PresentationWorldError::UndefinedResource(id.clone()));
+                }
+                let bound = self.materials.values().any(|material| material.texture.as_ref() == Some(id)
+                    || material.voxel_surface.as_ref().is_some_and(|surface| match &surface.mapping {
+                        VoxelSurfaceMappingDescriptor::Repeat { texture, .. } | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture == id,
+                    }))
+                    || self.atlases.values().any(|atlas| &atlas.texture == id)
+                    || self.sky.as_ref().is_some_and(|sky| &sky.texture == id)
+                    || self.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
+                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineTexture { texture } if &texture.id == id)));
+                if bound {
+                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
+                }
+                self.textures.remove(id);
+            }
+            RenderDiff::ReleaseSpriteAtlas { id } => {
+                if !self.atlases.contains_key(id) {
+                    return Err(PresentationWorldError::UndefinedResource(id.clone()));
+                }
+                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if &sprite.asset == id))
+                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineSpriteAtlas { atlas } if &atlas.id == id))) {
+                    return Err(PresentationWorldError::ReferencedResource(id.clone()));
+                }
+                self.atlases.remove(id);
+            }
+            RenderDiff::ReleaseAnimatedMesh { asset } => {
+                if !self.animated_meshes.contains_key(asset) {
+                    return Err(PresentationWorldError::UndefinedResource(asset.clone()));
+                }
+                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::AnimatedMesh(instance) if &instance.asset == asset))
+                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineAnimatedMesh { asset: definition } if &definition.asset == asset))) {
+                    return Err(PresentationWorldError::ReferencedResource(asset.clone()));
+                }
+                self.animated_meshes.remove(asset);
+            }
             RenderDiff::DefineTexture { texture } => {
                 self.textures
                     .insert(texture.id.clone(), Arc::new(texture.clone()));

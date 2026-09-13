@@ -2753,11 +2753,13 @@ export async function mountProductBrowserHostWithApplication(
       });
     }
     // Rust-driven updates need no browser advance or presentation mutation.
-    // Sample realized ghost direction on the existing renderer cadence so C#
-    // readouts follow camera movement even while retained presentation is quiet.
+    // Sample delayed audio/animation facts and realized ghost direction on the
+    // existing cadence even while retained presentation is quiet.
     rendererObservationCadenceSampler = createProductBrowserRendererDiagnosticsCadenceSampler({
       enqueueOperation: queue.enqueue,
       flush: async () => {
+        await audioFeedbackReporter?.flush();
+        await animationFeedbackReporter?.flush();
         await ghostPlateFeedbackReporter?.flush();
         await rendererDiagnosticsReporter?.flush();
       },

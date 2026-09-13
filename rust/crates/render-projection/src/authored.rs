@@ -682,11 +682,6 @@ fn ensure_acyclic(nodes: &BTreeMap<u64, ProjectedNode>) -> Result<(), SceneProje
 
 fn resource_diffs(previous: &ResourceSnapshot, next: &ResourceSnapshot) -> Vec<RenderDiff> {
     let mut operations = Vec::new();
-    for id in previous.static_meshes.keys() {
-        if !next.static_meshes.contains_key(id) {
-            operations.push(RenderDiff::ReleaseStaticMesh { asset: id.clone() });
-        }
-    }
     for (id, value) in &next.textures {
         if previous.textures.get(id) != Some(value) {
             operations.push(RenderDiff::DefineTexture {
@@ -720,6 +715,33 @@ fn resource_diffs(previous: &ResourceSnapshot, next: &ResourceSnapshot) -> Vec<R
             operations.push(RenderDiff::DefineAnimatedMesh {
                 asset: value.clone(),
             });
+        }
+    }
+    // Replacements may stop referring to a removed dependency. Install them
+    // before releasing old definitions, then retire dependents before sources.
+    for id in previous.static_meshes.keys() {
+        if !next.static_meshes.contains_key(id) {
+            operations.push(RenderDiff::ReleaseStaticMesh { asset: id.clone() });
+        }
+    }
+    for id in previous.animated_meshes.keys() {
+        if !next.animated_meshes.contains_key(id) {
+            operations.push(RenderDiff::ReleaseAnimatedMesh { asset: id.clone() });
+        }
+    }
+    for id in previous.atlases.keys() {
+        if !next.atlases.contains_key(id) {
+            operations.push(RenderDiff::ReleaseSpriteAtlas { id: id.clone() });
+        }
+    }
+    for id in previous.materials.keys() {
+        if !next.materials.contains_key(id) {
+            operations.push(RenderDiff::ReleaseMaterial { id: id.clone() });
+        }
+    }
+    for id in previous.textures.keys() {
+        if !next.textures.contains_key(id) {
+            operations.push(RenderDiff::ReleaseTexture { id: id.clone() });
         }
     }
     operations

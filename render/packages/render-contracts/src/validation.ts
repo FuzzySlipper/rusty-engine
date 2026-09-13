@@ -159,6 +159,11 @@ function renderDiff(input: unknown, path: string): void {
       texture(value['texture'], `${path}.texture`);
       return;
     }
+    case 'releaseTexture': {
+      const value = record(input, path, ['op', 'id']);
+      nonEmptyText(value['id'], `${path}.id`);
+      return;
+    }
     case 'setSkyBackground': {
       const value = record(input, path, ['op', 'background']);
       nullable(value['background'], `${path}.background`, skyBackground);
@@ -167,6 +172,11 @@ function renderDiff(input: unknown, path: string): void {
     case 'defineSpriteAtlas': {
       const value = record(input, path, ['op', 'atlas']);
       spriteAtlas(value['atlas'], `${path}.atlas`);
+      return;
+    }
+    case 'releaseSpriteAtlas': {
+      const value = record(input, path, ['op', 'id']);
+      nonEmptyText(value['id'], `${path}.id`);
       return;
     }
     case 'defineStaticMesh': {
@@ -182,6 +192,16 @@ function renderDiff(input: unknown, path: string): void {
     case 'defineAnimatedMesh': {
       const value = record(input, path, ['op', 'asset']);
       animatedMesh(value['asset'], `${path}.asset`);
+      return;
+    }
+    case 'releaseAnimatedMesh': {
+      const value = record(input, path, ['op', 'asset']);
+      nonEmptyText(value['asset'], `${path}.asset`);
+      return;
+    }
+    case 'releaseMaterial': {
+      const value = record(input, path, ['op', 'id']);
+      nonEmptyText(value['id'], `${path}.id`);
       return;
     }
     case 'defineVoxelObject': {

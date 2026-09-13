@@ -1820,6 +1820,157 @@ test('renderer cadence reports ghost camera changes without product updates or p
   assert.deepEqual(sectors, [0, 2, 6]);
 });
 
+test('rust-host idle cadence flushes an asynchronously completed audio voice', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  type FakeDocument = {
+    body: FakeElement;
+    defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+  };
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: FakeDocument;
+    constructor(document: FakeDocument) {
+      this.ownerDocument = document;
+    }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeDocument;
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: 'audio-idle', generation: '1', controlRevision: '1' } as const;
+    const completion = {
+      kind: 'naturalCompletion' as const,
+      source: 'retainedVoice' as const,
+      factId: 1,
+      sequence: 7,
+      handle: 42,
+    };
+    let facts: readonly typeof completion[] = [];
+    const reports: Array<ProductBrowserRuntimeTransport['reportAudioFeedback'] extends (
+      feedback: infer T,
+    ) => Promise<unknown> ? T : never> = [];
+    const acknowledgements: number[] = [];
+    let presentationCalls = 0;
+    let advanceCalls = 0;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let onCadence: ((timeMs: number) => void) | null = null;
+    const application = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => ({ retainedFactCount: facts.length, evictedFactCount: 0, facts }),
+        acknowledgeAudioRealizedFacts: (throughFactId: number) => {
+          acknowledgements.push(throughFactId);
+          facts = [];
+        },
+        animationRealizedFacts: () => null,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        ghostPlateReadout: () => null,
+        applyPresentation: async () => {
+          presentationCalls += 1;
+          return { applied: 0, outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const transport: ProductBrowserRuntimeTransport = {
+      lifecycle: async (operation) => ({
+        accepted: true,
+        ...ACCEPTED_FAULT,
+        operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback) => {
+        reports.push(feedback);
+        const acceptedThroughFactId = feedback.facts.at(-1)?.factId;
+        return {
+          accepted: true,
+          ...ACCEPTED_FAULT,
+          runtime: feedback.runtime,
+          ...(acceptedThroughFactId === undefined ? {} : { acceptedThroughFactId }),
+        };
+      },
+      reportAnimationFeedback: async (feedback) => ({
+        accepted: true,
+        ...ACCEPTED_FAULT,
+        runtime: feedback.runtime,
+      }),
+      reportGhostPlateFeedback: async (feedback) => ({
+        accepted: true,
+        ...ACCEPTED_FAULT,
+        runtime: feedback.runtime,
+      }),
+      advanceRealtime: async () => {
+        advanceCalls += 1;
+        return { accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const };
+      },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const mountApplication = async (options: {
+      readonly renderer?: { readonly onCadence?: (timeMs: number) => void };
+    }) => {
+      onCadence = options.renderer?.onCadence ?? null;
+      return application as never;
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport,
+      lifecycleMode: 'realtime',
+      realtimeAdvanceOwner: 'rust-host',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, mountApplication as never);
+
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'presentation', frame: { schemaVersion: 1, ops: [] } },
+    ], { epoch: 1, baseline: false, recovery: 'none' });
+    const settle = async (): Promise<void> => {
+      for (let turn = 0; turn < 6; turn += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    };
+    await settle();
+    assert.equal(presentationCalls, 1);
+    assert.deepEqual(reports.map((report) => report.facts.length), [0]);
+
+    // Model Web Audio's later onended callback after the presentation's first
+    // feedback flush has already completed.
+    facts = [completion];
+    const cadence = onCadence!;
+    cadence(0);
+    await settle();
+    cadence(750);
+    await settle();
+
+    assert.deepEqual(reports.filter((report) => report.facts.length > 0).map((report) => report.facts), [[{
+      kind: 'naturalCompletion',
+      source: 'retainedVoice',
+      factId: '1',
+      sequence: 7,
+      voiceHandle: '42',
+    }]]);
+    assert.deepEqual(acknowledgements, [1]);
+    assert.equal(presentationCalls, 1, 'idle feedback did not need another presentation');
+    assert.equal(advanceCalls, 0, 'rust-host ownership did not trigger browser simulation advancement');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
 test('renderer diagnostics retries one recoverable rejection without loss or flood', async () => {
   const reports: number[] = [];
   const observations: number[] = [];

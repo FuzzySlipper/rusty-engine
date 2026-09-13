@@ -1589,6 +1589,7 @@ pub(crate) struct RuntimeAppearanceCall {
     /// source handles. This flag is consumed by that first snapshot only; the
     /// logical product-owned ghost records remain part of the staged state.
     rebase_ghost_plates: bool,
+    resource_releases_pending: bool,
     /// Typed browser realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
     /// output transport and only represents this service family's existing
@@ -1871,6 +1872,7 @@ impl RuntimeAppearanceBridge {
             state: self.state.clone(),
             admitted_update,
             rebase_ghost_plates: false,
+            resource_releases_pending: false,
             outputs: Vec::new(),
             frame: None,
             extra_frames: Vec::new(),
@@ -1946,7 +1948,24 @@ impl RuntimeAppearanceBridge {
             self.staged = None;
             return Err(error);
         }
-        Ok(self.staged.take())
+        let mut staged = self.staged.take();
+        if let Some(call) = &mut staged {
+            if call.resource_releases_pending {
+                let projection = call
+                    .state
+                    .projector
+                    .reconcile_resources()
+                    .map_err(|error| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_RESOURCE_RELEASE",
+                            format!("{error:?}"),
+                        )
+                    })?;
+                push_extra_frame(call, projection.frame);
+                call.resource_releases_pending = false;
+            }
+        }
+        Ok(staged)
     }
 
     pub(crate) fn commit(&mut self, staged: Option<RuntimeAppearanceCall>) {
@@ -3341,6 +3360,7 @@ impl RuntimeAppearanceBridge {
         staged.state.resource_open_counts.remove(&handle);
         let retired = remove_resource(&mut staged.state, handle)?;
         staged.retired_resources.push(retired);
+        staged.resource_releases_pending = true;
         Ok(())
     }
 
@@ -3810,6 +3830,7 @@ impl RuntimeAppearanceBridge {
         let resources = staged.state.projector.resources_mut();
         resources.materials.retain(|candidate| candidate.id != id);
         staged.state.material_resources.remove(&material.value);
+        staged.resource_releases_pending = true;
         Ok(())
     }
 
@@ -3914,6 +3935,7 @@ impl RuntimeAppearanceBridge {
         staged
             .retired_resources
             .extend(release_unowned_internal_resources(&mut staged.state));
+        staged.resource_releases_pending = true;
         Ok(())
     }
 
@@ -4928,6 +4950,7 @@ impl RuntimeAppearanceBridge {
         resources
             .textures
             .retain(|candidate| candidate.id != entry.texture_asset);
+        staged.resource_releases_pending = true;
         Ok(())
     }
 
@@ -9754,6 +9777,20 @@ fn remove_resource(
             "renderer resource is not live",
         )
     })?;
+    if let Some(texture) = resource.texture() {
+        state
+            .projector
+            .resources_mut()
+            .textures
+            .retain(|entry| entry.id != texture.id);
+    }
+    if let Some(animated) = resource.animated_mesh() {
+        state
+            .projector
+            .resources_mut()
+            .animated_meshes
+            .retain(|entry| entry.asset != animated.asset);
+    }
     state.resource_identities.remove(resource.asset_identity());
     state.resource_paths.retain(|_, mapped| *mapped != handle);
     state.resource_open_counts.remove(&handle);
@@ -11353,6 +11390,28 @@ pub(super) mod tests {
         assert!(encoded.contains("sprite/atlas-1"));
         assert!(encoded.contains("authoredNormal"));
         assert!(encoded.contains("castAndReceive"));
+        bridge.commit(Some(call));
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+        bridge.destroy_appearance(appearance).unwrap();
+        bridge.destroy_sprite_atlas(atlas).unwrap();
+        bridge.destroy_resource(sprite_texture.handle).unwrap();
+        bridge.destroy_resource(normal_texture.handle).unwrap();
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        for output in &call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame).unwrap();
+            }
+        }
+        assert!(
+            !world.snapshot().frame.ops.iter().any(|op| matches!(
+                op,
+                RenderDiff::DefineTexture { .. }
+                    | RenderDiff::DefineSpriteAtlas { .. }
+                    | RenderDiff::CreateSprite { .. }
+            )),
+            "fresh unloaded baseline cannot retain an atlas or either of its texture sources"
+        );
     }
 
     #[test]
@@ -11447,6 +11506,22 @@ pub(super) mod tests {
             bridge.destroy_resource(first.handle).unwrap_err().code(),
             "CSHARP_RENDER_RESOURCE_IN_USE"
         );
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        let mut world = render_presentation::PresentationWorld::default();
+        for output in &call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame).unwrap();
+            }
+        }
+        assert!(world
+            .snapshot()
+            .frame
+            .ops
+            .iter()
+            .any(|op| matches!(op, RenderDiff::DefineTexture { .. })));
+        bridge.commit(Some(call));
+        bridge.begin_call();
         bridge
             .destroy_material(NativeMaterialHandle { value: 1 })
             .unwrap();
@@ -11458,6 +11533,18 @@ pub(super) mod tests {
             "same-call publication retains the released payload"
         );
         let call = bridge.take_staged_call().unwrap().unwrap();
+        for output in &call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame).unwrap();
+            }
+        }
+        assert!(
+            !world.snapshot().frame.ops.iter().any(|op| matches!(
+                op,
+                RenderDiff::DefineTexture { .. } | RenderDiff::DefineMaterial { .. }
+            )),
+            "fresh unloaded baseline has no stale texture or material definition"
+        );
         bridge.commit(Some(call));
 
         bridge.begin_call();
@@ -11628,6 +11715,83 @@ pub(super) mod tests {
         let resources = staged.state.projector.resources_mut();
         assert!(resources.static_meshes.is_empty());
         assert!(resources.materials.is_empty());
+    }
+
+    #[test]
+    fn animated_resource_release_removes_baseline_and_reopen_redefines_before_instance() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut content = BTreeMap::new();
+        content.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        let mut world = render_presentation::PresentationWorld::default();
+        for _ in 0..2 {
+            bridge.begin_call();
+            let path = b"character.glb";
+            let resource = bridge
+                .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                    path: NativeUtf8Slice {
+                        bytes: path.as_ptr(),
+                        len: path.len(),
+                    },
+                })
+                .unwrap();
+            let appearance = bridge
+                .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+                .unwrap();
+            let fact = appearance_fact(appearance);
+            unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+            let call = bridge.take_staged_call().unwrap().unwrap();
+            let ops: Vec<_> = call
+                .outputs
+                .iter()
+                .filter_map(|output| match output {
+                    RuntimeAppearanceCallOutput::Frame(frame) => Some(&frame.ops),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let definition = ops
+                .iter()
+                .position(|op| matches!(op, RenderDiff::DefineAnimatedMesh { .. }))
+                .unwrap();
+            let instance = ops
+                .iter()
+                .position(|op| matches!(op, RenderDiff::CreateAnimatedMeshInstance { .. }))
+                .unwrap();
+            assert!(
+                definition < instance,
+                "reopening restores the logical definition before its first use"
+            );
+            for output in &call.outputs {
+                if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                    world.apply(frame).unwrap();
+                }
+            }
+            bridge.commit(Some(call));
+            bridge.begin_call();
+            unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+            bridge.destroy_appearance(appearance).unwrap();
+            bridge.destroy_resource(resource).unwrap();
+            let call = bridge.take_staged_call().unwrap().unwrap();
+            assert!(call.outputs.iter().any(|output| matches!(output, RuntimeAppearanceCallOutput::Frame(frame) if frame.ops.iter().any(|op| matches!(op, RenderDiff::ReleaseAnimatedMesh { .. })))));
+            for output in &call.outputs {
+                if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                    world.apply(frame).unwrap();
+                }
+            }
+            assert!(
+                !world.snapshot().frame.ops.iter().any(|op| matches!(
+                    op,
+                    RenderDiff::DefineAnimatedMesh { .. }
+                        | RenderDiff::CreateAnimatedMeshInstance { .. }
+                )),
+                "fresh unloaded baseline cannot require the retired GLB body"
+            );
+            assert!(call.state.render_resources.is_empty());
+            bridge.commit(Some(call));
+        }
     }
 
     #[test]

@@ -135,6 +135,13 @@ impl RuntimeAppearanceProjector {
         Ok(projection)
     }
 
+    /// Publish direct catalog removals without changing the retained product facts.
+    pub fn reconcile_resources(
+        &mut self,
+    ) -> Result<RuntimeAppearanceProjection, RuntimeAppearanceProjectionError> {
+        self.project_scene(self.appearance_facts.clone(), self.light_facts.clone())
+    }
+
     /// Projects one complete snapshot. Omitted object identities are destroyed by the
     /// retained projector; the Engine-owned catalog remains available for later facts.
     pub fn project(

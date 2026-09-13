@@ -593,6 +593,27 @@ void test('static mesh releases decode strictly', () => {
   );
 });
 
+void test('logical resource releases decode strictly', () => {
+  const frame = {
+    schemaVersion: 1,
+    ops: [
+      { op: 'releaseTexture', id: 'texture/runner' },
+      { op: 'releaseMaterial', id: 'material/runner' },
+      { op: 'releaseSpriteAtlas', id: 'sprite/runner' },
+      { op: 'releaseAnimatedMesh', asset: 'mesh-animation/runner' },
+    ],
+  };
+  assert.deepEqual(decodeRenderFrameDiff(frame).ops, frame.ops);
+  for (const operation of [
+    { op: 'releaseTexture', id: '' },
+    { op: 'releaseMaterial', id: '' },
+    { op: 'releaseSpriteAtlas', id: '' },
+    { op: 'releaseAnimatedMesh', asset: '' },
+  ]) {
+    assert.throws(() => decodeRenderFrameDiff({ schemaVersion: 1, ops: [operation] }), /(?:id|asset)/u);
+  }
+});
+
 void test('content-addressed mesh resources validate identity, layout, and bounds', () => {
   const digest = '1'.repeat(64);
   const frame = {

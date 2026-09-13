@@ -288,6 +288,9 @@ pub enum RenderDiff {
     DefineMaterial {
         material: RenderMaterialDescriptor,
     },
+    ReleaseMaterial {
+        id: String,
+    },
     SetMaterialInstanceParameters {
         handle: RenderHandle,
         slot: u16,
@@ -296,11 +299,17 @@ pub enum RenderDiff {
     DefineTexture {
         texture: TextureDescriptor,
     },
+    ReleaseTexture {
+        id: String,
+    },
     SetSkyBackground {
         background: Option<SkyBackgroundDescriptor>,
     },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
+    },
+    ReleaseSpriteAtlas {
+        id: String,
     },
     DefineStaticMesh {
         asset: StaticMeshAsset,
@@ -310,6 +319,9 @@ pub enum RenderDiff {
     },
     DefineAnimatedMesh {
         asset: AnimatedMeshAsset,
+    },
+    ReleaseAnimatedMesh {
+        asset: String,
     },
     DefineVoxelObject {
         asset: VoxelObjectRenderAsset,
@@ -411,6 +423,22 @@ impl RenderDiff {
             Self::DefineStaticMesh { asset } => {
                 asset.validate().map_err(RenderOperationError::StaticMesh)
             }
+            Self::ReleaseMaterial { id } => {
+                crate::validate_asset_id(id, crate::RenderAssetKind::Material)
+                    .map_err(RenderOperationError::Asset)
+            }
+            Self::ReleaseTexture { id } => {
+                crate::validate_asset_id(id, crate::RenderAssetKind::Texture)
+                    .map_err(RenderOperationError::Asset)
+            }
+            Self::ReleaseSpriteAtlas { id } => {
+                crate::validate_asset_id(id, crate::RenderAssetKind::SpriteAtlas)
+                    .map_err(RenderOperationError::Asset)
+            }
+            Self::ReleaseAnimatedMesh { asset } => {
+                crate::validate_asset_id(asset, crate::RenderAssetKind::AnimatedMesh)
+                    .map_err(RenderOperationError::Asset)
+            }
             Self::ReleaseStaticMesh { asset } => {
                 crate::validate_asset_id(asset, crate::RenderAssetKind::StaticMesh)
                     .map_err(RenderOperationError::Asset)
@@ -476,6 +504,10 @@ impl RenderDiff {
             | Self::SetSkyBackground { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
+            | Self::ReleaseMaterial { .. }
+            | Self::ReleaseTexture { .. }
+            | Self::ReleaseSpriteAtlas { .. }
+            | Self::ReleaseAnimatedMesh { .. }
             | Self::ReleaseStaticMesh { .. }
             | Self::DefineAnimatedMesh { .. }
             | Self::DefineVoxelObject { .. }

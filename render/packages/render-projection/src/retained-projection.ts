@@ -118,12 +118,16 @@ export type RenderProjectionNode =
 
 export type RenderProjectionInstruction =
   | { readonly op: 'defineMaterial'; readonly material: RenderMaterialDescriptor }
+  | { readonly op: 'releaseMaterial'; readonly id: string }
   | { readonly op: 'defineTexture'; readonly texture: TextureDescriptor }
+  | { readonly op: 'releaseTexture'; readonly id: string }
   | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
+  | { readonly op: 'releaseSpriteAtlas'; readonly id: string }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
   | { readonly op: 'releaseStaticMesh'; readonly asset: string }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
+  | { readonly op: 'releaseAnimatedMesh'; readonly asset: string }
   | { readonly op: 'defineVoxelObject'; readonly asset: VoxelObjectRenderAsset }
   | { readonly op: 'releaseVoxelObject'; readonly asset: string }
   | { readonly op: 'upsertLight'; readonly light: RenderProjectionLight }
@@ -388,20 +392,28 @@ export class RenderProjection {
         return [this.#updateLight(diff)];
       case 'defineMaterial':
         return [this.#defineMaterial(diff.material)];
+      case 'releaseMaterial':
+        return [this.#releaseMaterial(diff.id)];
       case 'setMaterialInstanceParameters':
         return [this.#setMaterialInstanceParameters(diff)];
       case 'defineTexture':
         return [this.#defineTexture(diff.texture)];
+      case 'releaseTexture':
+        return [this.#releaseTexture(diff.id)];
       case 'setSkyBackground':
         return [this.#setSkyBackground(diff.background)];
       case 'defineSpriteAtlas':
         return [this.#defineSpriteAtlas(diff.atlas)];
+      case 'releaseSpriteAtlas':
+        return [this.#releaseSpriteAtlas(diff.id)];
       case 'defineStaticMesh':
         return [this.#defineStaticMesh(diff.asset)];
       case 'releaseStaticMesh':
         return [this.#releaseStaticMesh(diff.asset)];
       case 'defineAnimatedMesh':
         return [this.#defineAnimatedMesh(diff.asset)];
+      case 'releaseAnimatedMesh':
+        return [this.#releaseAnimatedMesh(diff.asset)];
       case 'defineVoxelObject':
         return [this.#defineVoxelObject(diff.asset)];
       case 'releaseVoxelObject':
@@ -737,6 +749,17 @@ export class RenderProjection {
     return { op: 'defineMaterial', material: clone(material) };
   }
 
+  #releaseMaterial(id: string): RenderProjectionInstruction {
+    if (!this.#materials.has(id)) {
+      throw new RenderProjectionError(`releaseMaterial: undefined material ${id}`);
+    }
+    if (this.#staticMeshUsesMaterial(id) || this.#animatedMeshUsesMaterial(id) || this.#voxelObjectUsesMaterial(id)) {
+      throw new RenderProjectionError(`releaseMaterial: ${id} is still referenced by a retained mesh definition`);
+    }
+    this.#materials.delete(id);
+    return { op: 'releaseMaterial', id };
+  }
+
   #defineTexture(texture: TextureDescriptor): RenderProjectionInstruction {
     const prior = this.#textures.get(texture.id);
     if (prior !== undefined && texture.version <= prior.version) {
@@ -746,6 +769,23 @@ export class RenderProjection {
     }
     this.#textures.set(texture.id, clone(texture));
     return { op: 'defineTexture', texture: clone(texture) };
+  }
+
+  #releaseTexture(id: string): RenderProjectionInstruction {
+    if (!this.#textures.has(id)) {
+      throw new RenderProjectionError(`releaseTexture: undefined texture ${id}`);
+    }
+    if (this.#skyBackground?.texture === id) {
+      throw new RenderProjectionError(`releaseTexture: ${id} is the active sky background`);
+    }
+    if ([...this.#spriteAtlases.values()].some((atlas) => atlas.texture === id)) {
+      throw new RenderProjectionError(`releaseTexture: ${id} is referenced by a retained sprite atlas`);
+    }
+    if ([...this.#materials.values()].some((material) => materialUsesTexture(material, id))) {
+      throw new RenderProjectionError(`releaseTexture: ${id} is referenced by a retained material`);
+    }
+    this.#textures.delete(id);
+    return { op: 'releaseTexture', id };
   }
 
   #setSkyBackground(
@@ -776,6 +816,17 @@ export class RenderProjection {
   #defineSpriteAtlas(atlas: SpriteAtlasDescriptor): RenderProjectionInstruction {
     this.#spriteAtlases.set(atlas.id, clone(atlas));
     return { op: 'defineSpriteAtlas', atlas: clone(atlas) };
+  }
+
+  #releaseSpriteAtlas(id: string): RenderProjectionInstruction {
+    if (!this.#spriteAtlases.has(id)) {
+      throw new RenderProjectionError(`releaseSpriteAtlas: undefined sprite atlas ${id}`);
+    }
+    if ([...this.#nodes.values()].some((node) => node.kind === 'sprite' && node.sprite.asset === id)) {
+      throw new RenderProjectionError(`releaseSpriteAtlas: ${id} is in use by a sprite instance`);
+    }
+    this.#spriteAtlases.delete(id);
+    return { op: 'releaseSpriteAtlas', id };
   }
 
   #defineStaticMesh(asset: StaticMeshAsset): RenderProjectionInstruction {
@@ -814,6 +865,38 @@ export class RenderProjection {
     }
     this.#animatedMeshes.set(asset.asset, { asset: clone(asset), refCount: 0 });
     return { op: 'defineAnimatedMesh', asset: clone(asset) };
+  }
+
+  #releaseAnimatedMesh(asset: string): RenderProjectionInstruction {
+    const existing = this.#animatedMeshes.get(asset);
+    if (existing === undefined) {
+      throw new RenderProjectionError(`releaseAnimatedMesh: undefined animated mesh ${asset}`);
+    }
+    if (existing.refCount !== 0) {
+      throw new RenderProjectionError(
+        `releaseAnimatedMesh: ${asset} is in use by ${existing.refCount} instance(s)`,
+      );
+    }
+    this.#animatedMeshes.delete(asset);
+    return { op: 'releaseAnimatedMesh', asset };
+  }
+
+  #staticMeshUsesMaterial(id: string): boolean {
+    return [...this.#staticMeshes.values()].some((record) => (
+      record.asset.materialSlots.some((slot) => slot.material === id)
+    ));
+  }
+
+  #animatedMeshUsesMaterial(id: string): boolean {
+    return [...this.#animatedMeshes.values()].some((record) => (
+      record.asset.materialSlots.some((slot) => slot.material === id)
+    ));
+  }
+
+  #voxelObjectUsesMaterial(id: string): boolean {
+    return [...this.#voxelObjects.values()].some((record) => (
+      record.asset.materialSlots.some((slot) => slot.material === id)
+    ));
   }
 
   #createStaticMeshInstance(
@@ -1839,6 +1922,10 @@ function validateMeshPayload(payload: MeshPayloadDescriptor, ctx: string): void 
   }
 }
 
+function materialUsesTexture(material: RenderMaterialDescriptor, texture: string): boolean {
+  return material.texture === texture || material.voxelSurface?.mapping.texture === texture;
+}
+
 function validateOperationHandles(diff: RenderDiff): void {
   switch (diff.op) {
     case 'create':
@@ -1861,12 +1948,16 @@ function validateOperationHandles(diff: RenderDiff): void {
       requireSafeHandle(diff.handle, `${diff.op}.handle`);
       return;
     case 'defineMaterial':
+    case 'releaseMaterial':
     case 'defineTexture':
+    case 'releaseTexture':
     case 'setSkyBackground':
     case 'defineSpriteAtlas':
+    case 'releaseSpriteAtlas':
     case 'defineStaticMesh':
     case 'releaseStaticMesh':
     case 'defineAnimatedMesh':
+    case 'releaseAnimatedMesh':
     case 'defineVoxelObject':
     case 'releaseVoxelObject':
       return;

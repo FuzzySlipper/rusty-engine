@@ -440,6 +440,45 @@ export class AnimatedMeshRegistry {
     });
   }
 
+  /** Reject a backend-only capture lease without requiring a definition staged earlier in this frame. */
+  validateReleaseCaptures(asset: string): void {
+    const record = this.#assets.get(asset);
+    if (record !== undefined && record.captureCount !== 0) {
+      throw new AnimatedMeshApplyError(
+        `releaseAnimatedMesh: ${asset} is in use by ${record.refCount} instance(s) and ${record.captureCount} capture(s)`,
+      );
+    }
+  }
+
+  /** Validate one logical asset release without mutating its template. */
+  validateReleaseDefinition(asset: string): void {
+    const record = this.#assets.get(asset);
+    if (record === undefined) {
+      throw new AnimatedMeshApplyError(`releaseAnimatedMesh: undefined animated mesh ${asset}`);
+    }
+    this.validateReleaseCaptures(asset);
+    if (record.refCount !== 0) {
+      throw new AnimatedMeshApplyError(
+        `releaseAnimatedMesh: ${asset} is in use by ${record.refCount} instance(s) and ${record.captureCount} capture(s)`,
+      );
+    }
+  }
+
+  /** Release one logical asset definition after its final instance and capture lease. */
+  releaseDefinition(asset: string): void {
+    this.validateReleaseDefinition(asset);
+    const record = this.#assets.get(asset)!;
+    disposeAnimatedMeshAssetScene(record.scene);
+    this.#assets.delete(asset);
+  }
+
+  /** Whether a retained logical animated definition still names this material. */
+  usesMaterial(material: string): boolean {
+    return [...this.#assets.values()].some((record) => (
+      record.asset.materialSlots.some((slot) => slot.material === material)
+    ));
+  }
+
   /** Drop resource-backed templates that the host no longer retains.
    * Live instances and detached ghost/capture appearances keep their template
    * alive until their own exact release path runs. */

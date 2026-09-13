@@ -863,11 +863,17 @@ export class ThreeRenderer {
       case 'defineMaterial':
         this.#defineMaterial(diff.material, changedMaterialIds);
         break;
+      case 'releaseMaterial':
+        this.#releaseMaterial(diff.id);
+        break;
       case 'setMaterialInstanceParameters':
         this.#setMaterialInstanceParameters(diff);
         break;
       case 'defineTexture':
         this.#defineTexture(diff.texture, preparedTexture, changedTextureIds);
+        break;
+      case 'releaseTexture':
+        this.#releaseTexture(diff.id);
         break;
       case 'setSkyBackground':
         this.#skyBackgroundTextureId = diff.background?.texture ?? null;
@@ -875,6 +881,9 @@ export class ThreeRenderer {
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
         changedSpriteAtlasIds?.add(diff.atlas.id);
+        break;
+      case 'releaseSpriteAtlas':
+        this.#releaseSpriteAtlas(diff.id);
         break;
       case 'defineStaticMesh':
         this.#defineStaticMesh(diff.asset, preparedGeometry?.[0]);
@@ -884,6 +893,9 @@ export class ThreeRenderer {
         break;
       case 'defineAnimatedMesh':
         this.#defineAnimatedMesh(diff);
+        break;
+      case 'releaseAnimatedMesh':
+        this.#releaseAnimatedMesh(diff.asset);
         break;
       case 'createAnimatedMeshInstance':
         this.#createAnimatedMeshInstance(diff);
@@ -978,6 +990,11 @@ export class ThreeRenderer {
           // asset-scoped render template before the retained mutation.
           this.#animatedMeshes.validateDefinition(operation.asset);
           frameAnimatedDefinitions.set(operation.asset.asset, operation.asset);
+        } else if (operation.op === 'releaseAnimatedMesh') {
+          // Captures are backend-only leases. Logical instance refcounts are
+          // validated by the staged projection, which includes earlier destroys;
+          // a definition introduced earlier in this frame is not in this registry yet.
+          this.#animatedMeshes.validateReleaseCaptures(operation.asset);
         } else if (operation.op === 'createAnimatedMeshInstance') {
           const playback = operation.instance.playback;
           if (playback?.kind === 'pause' || playback?.kind === 'resume') {
@@ -1918,6 +1935,14 @@ export class ThreeRenderer {
     }
   }
 
+  #releaseAnimatedMesh(asset: string): void {
+    try {
+      this.#animatedMeshes.releaseDefinition(asset);
+    } catch (cause) {
+      throw animatedMeshError(cause);
+    }
+  }
+
   #createAnimatedMeshInstance(diff: Extract<RenderDiff, { op: 'createAnimatedMeshInstance' }>): void {
     if (this.#handles.has(diff.handle)) {
       throw new RenderApplyError(`createAnimatedMeshInstance: handle ${diff.handle} already exists`);
@@ -2404,6 +2429,16 @@ export class ThreeRenderer {
     }
   }
 
+  #releaseMaterial(id: string): void {
+    if (!this.#materials.has(id)) {
+      throw new RenderApplyError(`releaseMaterial: undefined material ${id}`);
+    }
+    if (this.#meshDefinitionUsesMaterial(id) || this.#animatedMeshes.usesMaterial(id)) {
+      throw new RenderApplyError(`releaseMaterial: ${id} is still referenced by a retained mesh definition`);
+    }
+    this.#materials.delete(id);
+  }
+
   /** Publish a preflighted texture and rebuild every material that references it. */
   #defineTexture(
     descriptor: TextureDescriptor,
@@ -2429,6 +2464,49 @@ export class ThreeRenderer {
       changed.add(descriptor.id);
     }
     previous?.texture.dispose();
+  }
+
+  #releaseTexture(id: string): void {
+    const descriptor = this.#textures.get(id);
+    if (descriptor === undefined) {
+      throw new RenderApplyError(`releaseTexture: undefined texture ${id}`);
+    }
+    if (this.#skyBackgroundTextureId === id) {
+      throw new RenderApplyError(`releaseTexture: ${id} is the active sky background`);
+    }
+    if ([...this.#atlases.values()].some((atlas) => atlas.texture === id)) {
+      throw new RenderApplyError(`releaseTexture: ${id} is referenced by a retained sprite atlas`);
+    }
+    if ([...this.#materials.values()].some((material) => materialUsesTexture(material, id))) {
+      throw new RenderApplyError(`releaseTexture: ${id} is referenced by a retained material`);
+    }
+    if ([...this.#handles.values()].some((entry) => (
+      entry.kind === 'sprite' && entry.sprite !== undefined && spriteUsesTexture(entry.sprite, id)
+    ))) {
+      throw new RenderApplyError(`releaseTexture: ${id} is referenced by a live sprite material`);
+    }
+    this.#textures.delete(id);
+    const retained = this.#textureResources.get(id);
+    this.#textureResources.delete(id);
+    retained?.texture.dispose();
+  }
+
+  #releaseSpriteAtlas(id: string): void {
+    if (!this.#atlases.has(id)) {
+      throw new RenderApplyError(`releaseSpriteAtlas: undefined sprite atlas ${id}`);
+    }
+    if ([...this.#handles.values()].some((entry) => entry.kind === 'sprite' && entry.sprite?.asset === id)) {
+      throw new RenderApplyError(`releaseSpriteAtlas: ${id} is in use by a sprite instance`);
+    }
+    this.#atlases.delete(id);
+  }
+
+  #meshDefinitionUsesMaterial(id: string): boolean {
+    return [...this.#staticMeshes.values()].some((definition) => (
+      definition.materialSlots.some((slot) => slot.material === id)
+    )) || [...this.#voxelObjects.values()].some((definition) => (
+      definition.materialSlots.some((slot) => slot.material === id)
+    ));
   }
 
   #detachUnusedDefinitionTextureReferences(texture: string): void {
@@ -4181,6 +4259,15 @@ function materialTextures(material: THREE.Material): ReadonlySet<THREE.Texture> 
     }
   }
   return textures;
+}
+
+function materialUsesTexture(material: RenderMaterialDescriptor, texture: string): boolean {
+  return material.texture === texture || material.voxelSurface?.mapping.texture === texture;
+}
+
+function spriteUsesTexture(sprite: SpriteInstanceDescriptor, texture: string): boolean {
+  const material = resolveSpriteMaterialDescriptor(sprite);
+  return material.normalTexture === texture || material.depthTexture === texture;
 }
 
 function objectDepth(object: THREE.Object3D): number {
