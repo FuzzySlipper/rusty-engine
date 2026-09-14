@@ -248,16 +248,11 @@ pub enum NativeImplicitMaterialBoundaryMode {
 /// MajorAxis retains the established per-face dominant-normal charts. Basis
 /// projects every position onto the caller's orthonormal U/V axes.
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeImplicitTextureProjection {
+    #[default]
     MajorAxis = 0,
     Basis = 1,
-}
-
-impl Default for NativeImplicitTextureProjection {
-    fn default() -> Self {
-        Self::MajorAxis
-    }
 }
 
 /// Optional world-space mapping for implicit-surface texture coordinates.
