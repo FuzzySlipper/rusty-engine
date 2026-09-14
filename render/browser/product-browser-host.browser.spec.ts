@@ -6,9 +6,10 @@ test('generated product browser host owns one canvas, cadence, input drain, and 
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   await expect(page.locator('#projection')).toHaveText('projection: product.ui.v1');
   expect(await page.evaluate(() => window.__rustyProductBrowserUiContextShape)).toEqual({
-    keys: ['intents', 'projection', 'ui'],
+    keys: ['input', 'intents', 'projection', 'ui'],
     projectionKeys: ['current', 'subscribe'],
     intentsKeys: ['claim'],
+    inputKeys: ['subscribe'],
   });
 
   await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').focus();

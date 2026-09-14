@@ -17,6 +17,7 @@ declare global {
       readonly keys: readonly string[];
       readonly projectionKeys: readonly string[] | null;
       readonly intentsKeys: readonly string[] | null;
+      readonly inputKeys: readonly string[] | null;
     };
   }
 }
@@ -954,9 +955,10 @@ test('Engine application-host UI projection is read-only in the mounted DOM lane
   expect(result.rebound).toBe(true);
   expect(result.afterRebind).toMatchObject({ hasCurrent: false, sequence: null, subscriberCount: 1 });
   expect(result.context).toEqual({
-    keys: ['intents', 'projection', 'ui'],
+    keys: ['input', 'intents', 'projection', 'ui'],
     projectionKeys: ['current', 'subscribe'],
     intentsKeys: ['claim'],
+    inputKeys: ['subscribe'],
   });
 });
 

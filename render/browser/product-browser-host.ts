@@ -36,6 +36,7 @@ declare global {
       readonly keys: readonly string[];
       readonly projectionKeys: readonly string[] | null;
       readonly intentsKeys: readonly string[] | null;
+      readonly inputKeys: readonly string[] | null;
     };
     __rustyProductBrowserHost?: ProductBrowserHost;
   }
@@ -272,6 +273,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
     keys: Object.keys(context).sort(),
     projectionKeys: context.projection === undefined ? null : Object.keys(context.projection).sort(),
     intentsKeys: context.intents === undefined ? null : Object.keys(context.intents).sort(),
+        inputKeys: context.input === undefined ? null : Object.keys(context.input).sort(),
   };
   const ui = document.createElement('div');
   ui.id = 'product-ui';
