@@ -33,6 +33,7 @@ import {
 import {
   createRustyApplicationInputIngress,
   type RustyApplicationInputPort,
+  type RustyApplicationInterfaceInputObservation,
   type RustyApplicationManagedInputIngress,
   type RustyApplicationRuntimeInputOptions,
   type RustyApplicationRuntimeIdentity,
@@ -425,6 +426,13 @@ export interface RustyApplicationUiContext {
   readonly projection?: RustyApplicationUiProjectionView;
   /** Claim-only adapter for the shared ordered Engine input lane. */
   readonly intents?: RustyApplicationUiIntentsPort;
+  /** Read-only controller observations owned exclusively by interface mode. */
+  readonly input?: RustyApplicationUiInputPort;
+}
+
+export interface RustyApplicationUiInputPort {
+  /** Synchronous observation on the host cadence; returns an unsubscribe function. */
+  readonly subscribe: (observer: (input: RustyApplicationInterfaceInputObservation) => void) => () => void;
 }
 
 export interface RustyApplicationUiOwner {
@@ -625,6 +633,7 @@ export async function mountRustyApplicationWithEnvironment(
   // were still authoritative.
   let rendererTerminal = false;
   let intents: RustyApplicationUiIntentsPort | null = null;
+  const interfaceInputObservers = new Set<(input: RustyApplicationInterfaceInputObservation) => void>();
   const removePresentationResizeListener = installPresentationFrameSizing(
     root,
     layout.host,
@@ -653,8 +662,8 @@ export async function mountRustyApplicationWithEnvironment(
     layout.host.dataset['interactionMode'] = mode;
     if (mode !== 'gameplay') {
       releaseInput();
-      if (changed) input?.clear('interaction-mode-loss');
     }
+    if (changed) input?.interactionModeChanged();
   };
   const focusGameplay = (): void => {
     if (interactionMode !== 'gameplay') return;
@@ -1283,6 +1292,12 @@ export async function mountRustyApplicationWithEnvironment(
         focusGameplay,
         gamepads: () => document.defaultView?.navigator.getGamepads?.() ?? [],
         interactionMode: () => interactionMode,
+        observeInterfaceInput: (observation) => {
+          for (const observer of [...interfaceInputObservers]) {
+            if (closing || disposed || interactionMode !== 'interface') break;
+            if (interfaceInputObservers.has(observer)) observer(observation);
+          }
+        },
       });
       intents = Object.freeze({
         claim: (intent: string, value: RustyApplicationRuntimeIntentValue): void => {
@@ -1308,6 +1323,13 @@ export async function mountRustyApplicationWithEnvironment(
       ui,
       ...(projectionView === null ? {} : { projection: projectionView }),
       ...(intents === null ? {} : { intents }),
+      ...(input === null ? {} : { input: Object.freeze({
+        subscribe: (observer: (input: RustyApplicationInterfaceInputObservation) => void) => {
+          if (closing || disposed) return () => undefined;
+          interfaceInputObservers.add(observer);
+          return () => { interfaceInputObservers.delete(observer); };
+        },
+      }) }),
     });
     const mounted = await options.mountUi(layout.ui, uiContext);
     uiOwner = mounted ?? null;
@@ -1316,6 +1338,7 @@ export async function mountRustyApplicationWithEnvironment(
     root.dataset['rustyApplicationState'] = 'ready';
   } catch (cause) {
     disposed = true;
+    interfaceInputObservers.clear();
     const cleanupFailures = await cleanupApplicationOwners(
       uiOwner,
       input,
@@ -1369,6 +1392,7 @@ export async function mountRustyApplicationWithEnvironment(
       disposal = (async () => {
         await replacementQueue;
         disposed = true;
+        interfaceInputObservers.clear();
         const cleanupFailures = await cleanupApplicationOwners(
           uiOwner,
           input,

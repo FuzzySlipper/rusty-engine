@@ -1255,6 +1255,9 @@ impl CsharpProductRuntime {
         )
     }
 
+    /// Runs provider-fixture assertions, not a general product health check.
+    /// Requires fixture UI, voxel, input, timeline and fault/restart behavior;
+    /// see docs/csharp-sdk.md#host-exercise-contract.
     /// Exercises the selected lifecycle mode plus its rejected neighbouring
     /// operation. Rejection happens before the NativeAOT product update, so its
     /// pending input and lifecycle counters remain unchanged.
@@ -5375,6 +5378,8 @@ fn assert_ui_projection_binding(
 fn complete_voxel_baseline(
     outputs: &[RuntimePublication],
 ) -> Result<serde_json::Value, CsharpProductRuntimeError> {
+    const REQUIRED: [&str; 3] = ["defineMaterial", "create", "replaceMeshPayload"];
+    let mut observed_frames = Vec::new();
     for output in outputs {
         let RuntimePublication::Frame(frame) = output else {
             continue;
@@ -5391,18 +5396,40 @@ fn complete_voxel_baseline(
                     "fresh voxel attachment frame did not expose typed operations",
                 )
             })?;
-        let has = |expected: &str| {
-            operations.iter().any(|operation| {
-                operation.get("op").and_then(serde_json::Value::as_str) == Some(expected)
-            })
-        };
-        if has("defineMaterial") && has("create") && has("replaceMeshPayload") {
-            return Ok(frame.clone());
+        let observed: std::collections::BTreeSet<_> = operations
+            .iter()
+            .filter_map(|operation| operation.get("op").and_then(serde_json::Value::as_str))
+            .collect();
+        let missing: Vec<_> = REQUIRED
+            .iter()
+            .copied()
+            .filter(|required| !observed.contains(required))
+            .collect();
+        if missing.is_empty() {
+            return Ok(frame);
         }
+        observed_frames.push(format!(
+            "frame {}: observed [{}], missing [{}]",
+            observed_frames.len() + 1,
+            observed.into_iter().collect::<Vec<_>>().join(", "),
+            missing.join(", ")
+        ));
     }
     Err(CsharpProductRuntimeError::new(
         "CSHARP_EXERCISE_ATTACH",
-        "fresh browser attachment did not publish a complete retained voxel baseline",
+        format!(
+            "fresh browser attachment did not publish a complete retained voxel baseline; {}; \
+             --exercise requires defineMaterial, create and replaceMeshPayload in one frame. \
+             This is an Engine fixture check, not a general product health check. \
+             The fixture commits a nonempty Voxel scene with a retained VoxelScenePresentation \
+             projection before attachment; product metadata alone does not create it. \
+             Products without voxel content should launch without --exercise. See docs/csharp-sdk.md#host-exercise-contract",
+            if observed_frames.is_empty() {
+                "no frame publications observed; missing [defineMaterial, create, replaceMeshPayload]".to_owned()
+            } else {
+                observed_frames.join("; ")
+            }
+        ),
     ))
 }
 
@@ -6311,6 +6338,24 @@ mod tests {
         assert_eq!(runtime.services.renderer_publication_frontiers(), frontier);
         assert_eq!(first, second);
         let baseline = complete_voxel_baseline(&first).unwrap();
+        // All required operation kinds spread across separate frames must not
+        // accidentally satisfy the single-frame fixture contract.
+        let source_frame: render_model::RenderFrameDiff =
+            serde_json::from_value(baseline.clone()).unwrap();
+        let split: Vec<_> = source_frame
+            .ops
+            .iter()
+            .map(|op| {
+                RuntimePublication::frame(
+                    &render_model::RenderFrameDiff::try_from_ops(vec![op.clone()]).unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let error = complete_voxel_baseline(&split).unwrap_err().to_string();
+        assert!(error.contains("observed [defineMaterial], missing [create, replaceMeshPayload]"));
+        assert!(error.contains("observed [create], missing [defineMaterial, replaceMeshPayload]"));
+        assert!(error.contains("observed [replaceMeshPayload], missing [defineMaterial, create]"));
         assert!(
             baseline["ops"]
                 .as_array()
@@ -6377,6 +6422,20 @@ mod tests {
         assert_eq!(*DROP_EVENTS.lock().unwrap(), callbacks);
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn voxel_exercise_diagnostic_distinguishes_absent_and_empty_frames() {
+        let absent = complete_voxel_baseline(&[]).unwrap_err().to_string();
+        assert!(absent.contains("no frame publications observed"));
+        assert!(absent.contains("missing [defineMaterial, create, replaceMeshPayload]"));
+        assert!(absent.contains("Products without voxel content should launch without --exercise"));
+        let empty = RuntimePublication::frame(&render_model::RenderFrameDiff::new()).unwrap();
+        let error = complete_voxel_baseline(&[empty]).unwrap_err().to_string();
+        assert!(error.contains(
+            "frame 1: observed [], missing [defineMaterial, create, replaceMeshPayload]"
+        ));
+        assert!(!error.contains("no frame publications observed"));
     }
 
     #[test]

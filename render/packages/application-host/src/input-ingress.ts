@@ -97,6 +97,14 @@ export interface RustyApplicationRuntimeInputIngress {
   readonly fact: RustyApplicationRuntimeInputFact;
 }
 
+/** UI-owned observations from the existing selected-controller sampler. */
+export interface RustyApplicationInterfaceInputObservation {
+  readonly context: 'interface';
+  readonly fact: Extract<RustyApplicationRuntimeInputFact, {
+    readonly kind: 'controller-button' | 'controller-axis' | 'controller-button-value';
+  }>;
+}
+
 export type RustyApplicationRuntimeIntentValue =
   | { readonly kind: 'digital'; readonly active: boolean }
   | { readonly kind: 'axis'; readonly value: number }
@@ -188,6 +196,8 @@ interface RustyApplicationInputIngressEnvironment {
   readonly active: () => boolean;
   readonly focusGameplay: () => void;
   readonly gamepads: () => readonly (Gamepad | null)[];
+  /** Exclusive interface delivery; these observations never enter the gameplay queue. */
+  readonly observeInterfaceInput?: (observation: RustyApplicationInterfaceInputObservation) => void;
 }
 
 export interface RustyApplicationInputQueue {
@@ -204,6 +214,8 @@ export interface RustyApplicationInputQueue {
 }
 
 export interface RustyApplicationManagedInputIngress extends RustyApplicationInputPort {
+  /** Clear the old owner and adopt held controller state without replaying its press. */
+  readonly interactionModeChanged: () => void;
   /** Application-host lifecycle seam for transactional renderer canvas replacement. */
   readonly rebindCanvas: (canvas: HTMLCanvasElement) => void;
   /** Application-host lifecycle seam; product callers use the owning host disposal instead. */
@@ -236,11 +248,13 @@ export function createRustyApplicationInputIngress(
   const heldControllerButtons = new Set<RustyApplicationControllerButton>();
   let attachedCanvas = environment.canvas();
   let disposed = false;
+  let controllerEpoch = 0;
 
   const pointerLocked = (): boolean => environment.document.pointerLockElement === environment.canvas();
   const gameplayFocused = (): boolean => pointerLocked()
     || environment.document.activeElement === environment.canvas();
   const clearLocal = (): void => {
+    controllerEpoch += 1;
     heldKeys.clear();
     heldPointerButtons.clear();
     heldControllerButtons.clear();
@@ -249,6 +263,11 @@ export function createRustyApplicationInputIngress(
   };
   const clear = (reason: RustyApplicationInputClearReason): void => {
     clearLocal();
+    // A held menu button must not become a new press when ownership changes,
+    // including the asynchronous pointer-lock loss caused by opening a menu.
+    if ((reason === 'pointer-lock-loss' || reason === 'interaction-mode-loss')
+      && environment.interactionMode() === 'interface'
+      && environment.active() && environment.document.hasFocus?.() !== false) refreshControllerBaseline();
     queue.clear(reason);
     normalized.onAvailable?.();
   };
@@ -352,7 +371,9 @@ export function createRustyApplicationInputIngress(
   };
   const sampleController = (): number => {
     if (disposed || normalized.selectedController === null) return 0;
-    if (!environment.active() || environment.interactionMode() !== 'gameplay' || !gameplayFocused()) {
+    const mode = environment.interactionMode();
+    if (!environment.active() || environment.document.hasFocus?.() === false
+      || mode === 'modal' || (mode === 'gameplay' && !gameplayFocused())) {
       clear('interaction-mode-loss');
       return 0;
     }
@@ -361,6 +382,15 @@ export function createRustyApplicationInputIngress(
       if (heldControllerButtons.size > 0 || controllerAxes.size > 0 || controllerButtonValues.size > 0) clear('interaction-mode-loss');
       return 0;
     }
+    const epoch = controllerEpoch;
+    const publish = (fact: RustyApplicationInterfaceInputObservation['fact']): boolean => {
+      if (mode === 'interface') {
+        environment.observeInterfaceInput?.(Object.freeze({ context: 'interface', fact }));
+      } else if (enqueueFact(fact)) return true;
+      // UI callbacks may close/open a panel synchronously. Never deliver the
+      // rest of that physical sample to the next owner.
+      return disposed || controllerEpoch !== epoch || environment.interactionMode() !== mode;
+    };
     let observed = 0;
     for (let index = 0; index < 4; index += 1) {
       const axis = controllerAxis(index);
@@ -368,7 +398,7 @@ export function createRustyApplicationInputIngress(
       const prior = controllerAxes.get(axis) ?? 0;
       if (value === prior) continue;
       controllerAxes.set(axis, value);
-      if (enqueueFact(Object.freeze({ kind: 'controller-axis', axis, value }))) return observed;
+      if (publish(Object.freeze({ kind: 'controller-axis', axis, value }))) return observed;
       observed += 1;
     }
     for (let index = 0; index < 16; index += 1) {
@@ -376,7 +406,7 @@ export function createRustyApplicationInputIngress(
       const value = Math.max(0, boundedNumber(controller.buttons[index]?.value ?? 0, 1));
       if (value !== (controllerButtonValues.get(button) ?? 0)) {
         controllerButtonValues.set(button, value);
-        if (enqueueFact(Object.freeze({ kind: 'controller-button-value', button, value }))) return observed;
+        if (publish(Object.freeze({ kind: 'controller-button-value', button, value }))) return observed;
         observed += 1;
       }
       const pressed = controller.buttons[index]?.pressed === true;
@@ -384,7 +414,7 @@ export function createRustyApplicationInputIngress(
       if (pressed === wasPressed) continue;
       if (pressed) heldControllerButtons.add(button);
       else heldControllerButtons.delete(button);
-      if (enqueueFact(Object.freeze({
+      if (publish(Object.freeze({
         kind: 'controller-button', button, edge: pressed ? 'pressed' : 'released',
       }))) return observed;
       observed += 1;
@@ -394,6 +424,11 @@ export function createRustyApplicationInputIngress(
 
   const rebaselineRuntime = (binding: RustyApplicationRuntimeInputBinding): void => {
     if (disposed || !queue.rebaseRuntime(binding)) return;
+    if (environment.interactionMode() !== 'gameplay') {
+      clearLocal();
+      refreshControllerBaseline();
+      return;
+    }
     // Runtime control replacement already rebinds its lane with sequence-zero
     // clear. Begin at its published cursor with only state that remains
     // physically held; never mirror or resend the uncertain browser batch.
@@ -447,6 +482,11 @@ export function createRustyApplicationInputIngress(
   if (normalized.initialBinding !== null) queue.bindRuntime(normalized.initialBinding);
 
   return Object.freeze({
+    interactionModeChanged: () => {
+      if (disposed) return;
+      clear('interaction-mode-loss');
+      refreshControllerBaseline();
+    },
     bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => {
       if (disposed) return;
       if (queue.bindRuntime(binding)) clearLocal();

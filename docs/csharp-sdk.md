@@ -209,6 +209,11 @@ session. Use `--debugger` for managed breakpoint sessions; see
 [CoreCLR diagnostics](coreclr-diagnostics.md) for worker discovery, profiling,
 and the opt-in deadline behavior.
 
+For explicit staging without launching, run
+`dotnet msbuild /path/to/Example.Game.csproj -t:StageRustyEngineCoreClrProduct -p:Configuration=Release`.
+A plain `dotnet build` compiles the project but does not request this staging
+target. Use the target (or `rusty dev`) to regenerate `obj/Rusty.Engine/Product`.
+
 The Product directory has `product.json`, managed output under `coreclr/`, and
 Product-owned `ui/` and `content/`. Engine JavaScript and host binaries stay in
 the runtime pack. Product UI is DOM UI and accessibility only; the Engine
@@ -236,6 +241,56 @@ downstream binding generation the normal product setup.
 The fixtures in this repository remain broad provider proof scaffolding. They
 are useful when changing the ABI/generator/runtime, but they are not a template
 for a downstream repository's launch topology.
+
+### Controller input in product menus
+
+With selected-controller input enabled, `mountUi` receives an optional
+`context.input.subscribe(observer)` port. The existing host controller cadence
+delivers immutable `{ context: 'interface', fact }` observations while
+`context.ui.setInteractionMode('interface')` owns input. Facts use the Engine's
+normalized `controller-button` pressed/released edges, `controller-axis`
+samples, and `controller-button-value` pressure changes. UI owns their menu
+meaning; these are not Rust-mapped gameplay intents. Unsubscribe on UI disposal.
+
+Interface observations never enter the gameplay queue or consume its sequence
+numbers. Use `context.intents.claim` for actions that need product processing;
+it remains the sole ordered command lane. No downstream gamepad polling or
+animation loop is needed. Gameplay mode keeps ordinary Engine input delivery;
+modal mode and loss of browser focus suppress controller observation. Mode
+changes adopt already-held controller state without replaying its press, so a
+menu-opening button does not immediately activate or close the new menu.
+
+### Host exercise contract
+
+`rusty-product-host --exercise` runs the Engine's provider fixture assertions,
+not a general product health check. It expects fixture-specific behavior,
+including create-time and Start UI projections, a retained voxel baseline,
+configured exercise input, acceptance of timeline ticket `7`, and deliberate
+fault/restart behavior. See `fixtures/csharp-nativeaot-trial/Product.cs` for
+the fixture used by the Engine's package checks. Ordinary products do not need
+to implement these assertions.
+
+The fresh-attachment assertion requires `defineMaterial`, `create`, and
+`replaceMeshPayload` together in one retained frame, then checks that a second
+attachment preserves the baseline and runtime readout. Its failure reports
+observed operation kinds and missing kinds separately for each frame (or that
+no frame was published). This is a fixture expectation, not a universal shape
+for valid graphics.
+
+The fixture uses the existing safe services: create a `Spatial` session, apply
+nonempty `Voxel` edits, bind the used material slots, and retain a
+`VoxelScenePresentation.ProjectSceneDirectional` projection. These facts must
+be committed during construction/Start before attachment; call `RefreshScene`
+after subsequent edits. The Engine builds and retains the renderer operations.
+Product metadata alone does not create voxel geometry, and initialization in
+`Attach` is not invoked on browser connection.
+
+A product with static meshes, sprites, or no mesh content should not add dummy
+voxels or fixture callbacks to pass this check. Launch normally with
+`rusty dev --project <product.csproj>`, or run the matched host with
+`rusty-product-host --product <staged-Product-directory> --loader coreclr`
+without `--exercise`. Verify the product's actual startup and interactions
+through that host; fixture success is not evidence of gameplay correctness.
 
 ## Current lifecycle
 

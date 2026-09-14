@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   mountRustyApplicationWithEnvironment,
+  type RustyApplicationUiContext,
 } from './application-host.js';
 
 void test('replacement canvas allocation failure retains the mounted surface and later disposes it', async () => {
@@ -89,6 +90,81 @@ void test('a terminal frame outcome closes the current renderer port instead of 
   }
 });
 
+void test('mounted UI exclusively observes interface controller input and ownership transitions do not replay presses', async () => {
+  const previousAudioContext = globalThis.AudioContext;
+  Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: FakeAudioContext });
+  try {
+    const document = new FakeDocument();
+    const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
+    const axes = [0, 0, 0, 0];
+    document.gamepads = [{ connected: true, axes, buttons } as unknown as Gamepad];
+    let uiContext: RustyApplicationUiContext | undefined;
+    const observed: unknown[] = [];
+    let unsubscribe = () => undefined as void;
+    const binding = { runtime: { instanceId: '1', generation: '1', controlRevision: '1' }, context: 'gameplay' };
+    const host = await mountRustyApplicationWithEnvironment({
+      root: document.createElement('div') as unknown as HTMLElement,
+      runtimeInput: { binding, selectedController: { index: 0 } },
+      mountUi: (_root, context) => {
+        uiContext = context;
+        unsubscribe = context.input!.subscribe((observation) => {
+          observed.push(observation);
+          if (observation.fact.kind === 'controller-button' && observation.fact.edge === 'pressed') {
+            if (observation.fact.button === 'button-1') context.ui.setInteractionMode('gameplay');
+            else context.intents!.claim('menu.select', { kind: 'digital', active: true });
+          }
+        });
+      },
+    }, {
+      mountSurface: (canvas) => {
+        document.activeElement = canvas;
+        return fakeSurface(canvas, () => undefined) as never;
+      },
+    });
+    // The opening button is already held when the UI takes ownership.
+    uiContext!.ui.setInteractionMode('gameplay');
+    host.input!.drain();
+    buttons[9] = { value: 1, pressed: true };
+    host.input!.sampleController();
+    host.input!.drain();
+    uiContext!.ui.setInteractionMode('interface');
+    host.input!.drain();
+    host.input!.sampleController();
+    assert.deepEqual(observed, [], 'opening a menu does not replay its held opening button');
+    assert.deepEqual(host.input!.drain(), []);
+    axes[1] = 0.7;
+    buttons[0] = { value: 1, pressed: true };
+    host.input!.sampleController();
+    assert.deepEqual(observed, [
+      { context: 'interface', fact: { kind: 'controller-axis', axis: 'axis-1', value: 0.7 } },
+      { context: 'interface', fact: { kind: 'controller-button-value', button: 'button-0', value: 1 } },
+      { context: 'interface', fact: { kind: 'controller-button', button: 'button-0', edge: 'pressed' } },
+    ]);
+    const claims = host.input!.drain();
+    assert.equal(claims.length, 1);
+    assert.ok(claims.every((entry) => 'intent' in entry && entry.intent === 'menu.select'),
+      'UI commands use the existing claim lane; interface physical facts never reach gameplay');
+    host.input!.rebaselineRuntime({ ...binding, runtime: { ...binding.runtime, controlRevision: '2' } });
+    assert.deepEqual(host.input!.drain(), [], 'recovery in interface mode cannot replay held controls into gameplay');
+    buttons[1] = { value: 1, pressed: true };
+    buttons[2] = { value: 1, pressed: true };
+    host.input!.sampleController();
+    assert.equal(uiContext!.ui.interactionMode(), 'gameplay');
+    assert.ok(host.input!.drain().every((entry) => 'fact' in entry && entry.fact.kind === 'clear'));
+    host.input!.sampleController();
+    assert.deepEqual(host.input!.drain(), [], 'closing sample does not leak held presses to gameplay');
+    const before = observed.length;
+    uiContext!.ui.setInteractionMode('interface');
+    unsubscribe();
+    buttons[0] = { value: 0, pressed: false };
+    host.input!.sampleController();
+    assert.equal(observed.length, before, 'unsubscribe removes observation');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: previousAudioContext });
+  }
+});
+
 class FakeAudioContext {
   readonly currentTime = 0;
   readonly destination = { connect: () => undefined, disconnect: () => undefined };
@@ -106,7 +182,10 @@ class FakeAudioContext {
 }
 
 class FakeDocument {
+  gamepads: (Gamepad | null)[] = [];
+  activeElement: Element | null = null;
   readonly defaultView = {
+    navigator: { getGamepads: () => this.gamepads },
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
   };
