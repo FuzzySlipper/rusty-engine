@@ -8,7 +8,10 @@ use crate::{
 use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
-    surface::{self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions},
+    surface::{
+        self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions,
+        TextureMapping, TextureProjection,
+    },
     volume::{SampledVolume, VolumeDescriptor},
     Bounds, Field, GenerateOptions, Geometry, Node,
 };
@@ -82,10 +85,30 @@ struct DensitySnapshotLease {
 #[derive(Clone, Copy)]
 struct SurfaceGenerationOptions {
     crease_angle_degrees: f32,
-    uv_scale: f32,
+    texture_mapping: TextureMapping,
     default_material: NativeMaterialHandle,
     material_boundary_mode: NativeImplicitMaterialBoundaryMode,
     material_sample_spacing: f32,
+}
+
+fn texture_mapping(legacy_uv_scale: f32, mapping: NativeImplicitTextureMapping) -> TextureMapping {
+    // Existing generated constructors supply a disabled mapping. Keep their
+    // established major-axis chart and scalar UV output exactly intact.
+    if !mapping.enabled {
+        return TextureMapping::legacy(legacy_uv_scale);
+    }
+    let u_axis = v(mapping.u_axis);
+    let v_axis = v(mapping.v_axis);
+    let scale = [mapping.scale.x, mapping.scale.y];
+    let offset = [mapping.offset.x, mapping.offset.y];
+    TextureMapping {
+        projection: match mapping.projection {
+            NativeImplicitTextureProjection::MajorAxis => TextureProjection::MajorAxis,
+            NativeImplicitTextureProjection::Basis => TextureProjection::Basis { u_axis, v_axis },
+        },
+        scale,
+        offset,
+    }
 }
 
 #[derive(Clone, Default)]
@@ -288,7 +311,7 @@ impl RuntimeImplicitBridge {
             &regions,
             SurfaceOptions {
                 crease_angle_degrees: options.crease_angle_degrees,
-                uv_scale: options.uv_scale,
+                texture_mapping: options.texture_mapping,
                 default_slot: 0,
                 material_boundary_mode: match options.material_boundary_mode {
                     NativeImplicitMaterialBoundaryMode::Centroid => MaterialBoundaryMode::Centroid,
@@ -413,7 +436,7 @@ impl RuntimeImplicitBridge {
                 &region_nodes,
                 SurfaceGenerationOptions {
                     crease_angle_degrees: request.crease_angle_degrees,
-                    uv_scale: request.uv_scale,
+                    texture_mapping: texture_mapping(request.uv_scale, request.texture_mapping),
                     default_material: request.default_material,
                     material_boundary_mode: request.material_boundary_mode,
                     material_sample_spacing: request.material_sample_spacing,
@@ -754,7 +777,7 @@ unsafe extern "C" fn generate_sampled_volume(
                 &region_nodes,
                 SurfaceGenerationOptions {
                     crease_angle_degrees: request.crease_angle_degrees,
-                    uv_scale: request.uv_scale,
+                    texture_mapping: TextureMapping::legacy(request.uv_scale),
                     default_material: request.default_material,
                     material_boundary_mode: request.material_boundary_mode,
                     material_sample_spacing: request.material_sample_spacing,

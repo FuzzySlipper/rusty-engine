@@ -77,10 +77,13 @@ public sealed class ImplicitRecipe : IDisposable
         surface.Sampling.CellSize,
         surface.Sampling.CreaseDegrees,
         surface.Sampling.TextureRepeats,
+        surface.Sampling.TextureMapping,
         surface.Material,
         surface.Regions,
         surface.Sampling.MaterialBoundaries,
-        surface.Sampling.MaterialSampleSpacing, surface.Sampling.MaxExtractionVertices, surface.Sampling.MaxExtractionTriangles));
+        surface.Sampling.MaterialSampleSpacing,
+        surface.Sampling.MaxExtractionVertices,
+        surface.Sampling.MaxExtractionTriangles));
 
     public void Dispose() => Field.Dispose();
 }
@@ -93,7 +96,8 @@ public readonly record struct RecipeSampling(
     ImplicitMaterialBoundaryMode MaterialBoundaries,
     float MaterialSampleSpacing = 0f,
     uint MaxExtractionVertices = 0,
-    uint MaxExtractionTriangles = 0);
+    uint MaxExtractionTriangles = 0,
+    ImplicitTextureMapping TextureMapping = default);
 
 /// <summary>
 /// A synchronous description of one field extraction. The receiving callback
@@ -141,7 +145,8 @@ public sealed class RecipeWriter
         Material material,
         Transform placement,
         ImplicitMaterialRegion[]? regions = null,
-        float? cellSize = null)
+        float? cellSize = null,
+        ImplicitTextureMapping? textureMapping = null)
     {
         ArgumentNullException.ThrowIfNull(recipe);
         _emit(new RecipeSurface(
@@ -152,7 +157,11 @@ public sealed class RecipeWriter
             max,
             material,
             regions ?? [],
-            _sampling with { CellSize = cellSize ?? _sampling.CellSize },
+            _sampling with
+            {
+                CellSize = cellSize ?? _sampling.CellSize,
+                TextureMapping = textureMapping ?? _sampling.TextureMapping,
+            },
             placement));
     }
 

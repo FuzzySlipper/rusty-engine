@@ -739,6 +739,13 @@ angle, UV scale, default material, and optional ordered material regions:
 - Zero crease angle gives flat facets; larger angles admit incident faces into
   area-weighted normals. Major-axis planar UV charts use world coordinates;
   UV scale is repeats per world unit, independent of extraction density.
+  `ImplicitTextureMapping` optionally replaces that scalar chart: use
+  `MajorAxis(scale, offset)` for independent U/V repeats and offsets, or
+  `Basis(uAxis, vAxis, scale, offset)` for an orthonormal U/V orientation in
+  the field's extraction coordinates. Its scale is repeats per projected world
+  unit and its offset is added after scaling. `RecipeSurface.Placement` is
+  applied after extraction and does not reproject UVs. Leaving the mapping at
+  its default preserves the legacy major-axis UV output exactly.
 - The short request constructor keeps `ImplicitMaterialBoundaryMode.Centroid`:
   each triangle uses the first region containing its centroid, or the default
   material. Select `MaterialBoundaryMode: ImplicitMaterialBoundaryMode.Interpolated`
@@ -825,6 +832,33 @@ layered walls, masonry courses, passages, chambers, joins, and enclosed carving
 with explicit portals. Products retain layouts, seeds, materials, artistic
 choices, stage ordering, and publication policy. These helpers do not own a
 renderer, evaluator, scene registry, or serialization format.
+
+`PlanarRecipes.ConvexPrism` accepts either winding of a finite, strictly convex
+XZ contour. It rejects concavity, self-intersections and degenerate edges before
+adding field nodes. `PlanarRecipes.Walkway` unions square-capped segments and
+preflights the whole centerline before construction. These are composition
+helpers over the existing Engine field operations, not another evaluator.
+
+`RoomRecipes.Shell` emits floor, wall and ceiling solids from one interior box,
+wall thickness and named portal boxes. Optional floor platforms and ceiling
+soffits union into their owning slabs. The returned `RecipeRoomContinuity`
+contains expected wall/slab contacts (excluding doorway intervals), the same
+portal boxes and an interior seed. Resolve its named `RecipeJoin` surfaces to
+captured audit IDs, then use `Request` with the existing `ReadExpectedJoin` or
+`ReadEnclosure` services. Products choose budgets and interpret completeness;
+declarations express intent, not a guarantee of a clean extracted mesh.
+
+Keep geometry and declarations in the same coordinate frame. Individual joins
+support affine placement; room enclosure caps require axis-preserving placement
+because the underlying cap contract uses axis-aligned boxes. Arbitrary rotated
+caps are rejected rather than silently enlarged. Mesh generation and audit
+capture must still happen synchronously before a recipe field is disposed.
+
+The [architectural room example](../fixtures/csharp-architectural-room/README.md)
+shows a recessed floor, stepped ceiling, windows, door and adjoining passage
+through the ordinary packaged C# path. The source measurements → editable
+suggestions → manual composition workflow in Loading Bay is a useful authoring
+pattern; these helpers do not import source levels or prescribe their layout.
 
 ### Retained sampled densities
 

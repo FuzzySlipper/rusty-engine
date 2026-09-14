@@ -37,6 +37,8 @@ include = [
     "NativeSampledVolumeGenerateRequest",
     "NativeImplicitMaterialRegion",
     "NativeImplicitMaterialBoundaryMode",
+    "NativeImplicitTextureProjection",
+    "NativeImplicitTextureMapping",
     "NativeImplicitGenerateRequest",
     "NativeImplicitGenerationReadout",
     "NativeCreateImplicitField",

@@ -35,6 +35,7 @@ if [[ "$verify_aot" == true ]]; then
 fi
 "$REPO_ROOT/scripts/test-csharp-sdk-package.sh" "${package_arguments[@]}"
 dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Content.Example" --configuration Release
+dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Implicit.Example" --configuration Release
 
 if [[ "$verify_aot" != true ]]; then
   echo "generated C# SDK package, CoreCLR Product staging, and Rust host lifecycle smoke passed"

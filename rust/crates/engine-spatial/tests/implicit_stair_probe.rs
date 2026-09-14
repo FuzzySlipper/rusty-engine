@@ -61,7 +61,7 @@ fn stairs(bevelled: bool, cell_size: f32) -> (StaticMesh, StaticMesh) {
         &[],
         SurfaceOptions {
             crease_angle_degrees: 38.0,
-            uv_scale: 1.0,
+            texture_mapping: svc_implicit::surface::TextureMapping::legacy(1.0),
             default_slot: 0,
             material_boundary_mode: svc_implicit::surface::MaterialBoundaryMode::Centroid,
             material_sampling: None,

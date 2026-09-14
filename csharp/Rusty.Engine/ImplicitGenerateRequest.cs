@@ -24,5 +24,14 @@ public readonly partial record struct ImplicitGenerateRequest
         float UvScale, Material DefaultMaterial, ReadOnlyMemory<ImplicitMaterialRegion> Regions,
         ImplicitMaterialBoundaryMode MaterialBoundaryMode, float MaterialSampleSpacing)
         : this(Field, Source, Minimum, Maximum, CellSize, CreaseAngleDegrees,
-            UvScale, DefaultMaterial, Regions, MaterialBoundaryMode, MaterialSampleSpacing, 0, 0) { }
+            UvScale, default, DefaultMaterial, Regions, MaterialBoundaryMode, MaterialSampleSpacing, 0, 0) { }
+    /// <summary>Uses explicit extraction budgets with the established major-axis texture mapping.</summary>
+    public ImplicitGenerateRequest(ImplicitField Field, ImplicitNode Source,
+        Vector3 Minimum, Vector3 Maximum, float CellSize, float CreaseAngleDegrees,
+        float UvScale, Material DefaultMaterial, ReadOnlyMemory<ImplicitMaterialRegion> Regions,
+        ImplicitMaterialBoundaryMode MaterialBoundaryMode, float MaterialSampleSpacing,
+        uint MaxExtractionVertices, uint MaxExtractionTriangles)
+        : this(Field, Source, Minimum, Maximum, CellSize, CreaseAngleDegrees,
+            UvScale, default, DefaultMaterial, Regions, MaterialBoundaryMode, MaterialSampleSpacing,
+            MaxExtractionVertices, MaxExtractionTriangles) { }
 }

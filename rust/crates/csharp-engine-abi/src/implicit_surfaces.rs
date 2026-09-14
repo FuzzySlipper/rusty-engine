@@ -244,6 +244,36 @@ pub enum NativeImplicitMaterialBoundaryMode {
     Interpolated = 1,
 }
 
+/// Selects the world-space coordinates used for implicit-surface texture UVs.
+/// MajorAxis retains the established per-face dominant-normal charts. Basis
+/// projects every position onto the caller's orthonormal U/V axes.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeImplicitTextureProjection {
+    MajorAxis = 0,
+    Basis = 1,
+}
+
+impl Default for NativeImplicitTextureProjection {
+    fn default() -> Self {
+        Self::MajorAxis
+    }
+}
+
+/// Optional world-space mapping for implicit-surface texture coordinates.
+/// When disabled, the legacy `uv_scale` projection is retained so older
+/// managed request constructors preserve their exact UV output.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeImplicitTextureMapping {
+    pub enabled: bool,
+    pub projection: NativeImplicitTextureProjection,
+    pub u_axis: NativeVec3,
+    pub v_axis: NativeVec3,
+    pub scale: NativeVec2,
+    pub offset: NativeVec2,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitGenerateRequest {
@@ -253,7 +283,10 @@ pub struct NativeImplicitGenerateRequest {
     pub maximum: NativeVec3,
     pub cell_size: f32,
     pub crease_angle_degrees: f32,
+    /// Legacy uniform repeats-per-world-unit scale. Used only when
+    /// `texture_mapping` is disabled.
     pub uv_scale: f32,
+    pub texture_mapping: NativeImplicitTextureMapping,
     pub default_material: NativeMaterialHandle,
     pub regions: *const NativeImplicitMaterialRegion,
     pub regions_len: usize,

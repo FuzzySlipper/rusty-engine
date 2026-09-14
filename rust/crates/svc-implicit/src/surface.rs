@@ -43,11 +43,40 @@ pub struct SurfaceOptions {
     /// The largest angle between a face and an incident face that contributes
     /// to its area-weighted vertex normal. Zero keeps every face flat.
     pub crease_angle_degrees: f32,
-    /// World units per UV unit multiplier for planar charts.
-    pub uv_scale: f32,
+    /// Field-extraction-space texture projection and per-axis UV transform.
+    pub texture_mapping: TextureMapping,
     pub default_slot: u32,
     pub material_boundary_mode: MaterialBoundaryMode,
     pub material_sampling: Option<MaterialSampling>,
+}
+
+/// Selects the source coordinates for a texture mapping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextureProjection {
+    /// Use the established dominant-normal chart on each face.
+    MajorAxis,
+    /// Use caller-selected orthonormal extraction-space axes on every face.
+    Basis { u_axis: [f32; 3], v_axis: [f32; 3] },
+}
+
+/// A texture coordinate transform evaluated while implicit mesh attributes
+/// are assembled. Scale is repeats per projected world unit; offset is added
+/// after scaling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextureMapping {
+    pub projection: TextureProjection,
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+}
+
+impl TextureMapping {
+    pub const fn legacy(uv_scale: f32) -> Self {
+        Self {
+            projection: TextureProjection::MajorAxis,
+            scale: [uv_scale, uv_scale],
+            offset: [0.0, 0.0],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,7 +176,12 @@ pub fn assemble(
     }
     let incidents = incident_faces(geometry.positions.len(), &faces);
     let normals = corner_normals(&faces, &incidents, options.crease_angle_degrees);
-    let surface = emit_surface(&geometry.positions, &faces, &normals, options.uv_scale)?;
+    let surface = emit_surface(
+        &geometry.positions,
+        &faces,
+        &normals,
+        options.texture_mapping,
+    )?;
     if options.material_boundary_mode == MaterialBoundaryMode::Interpolated && !regions.is_empty() {
         let surface = if let Some(sampling) = options.material_sampling {
             refinement::refine(surface, sampling)?
@@ -191,8 +225,36 @@ fn validate_options(options: SurfaceOptions) -> Result<(), Error> {
             "crease angle must be finite and between 0 and 180 degrees".into(),
         ));
     }
-    if !options.uv_scale.is_finite() || options.uv_scale <= 0.0 {
-        return Err(Error("UV scale must be finite and positive".into()));
+    if options
+        .texture_mapping
+        .scale
+        .iter()
+        .any(|value| !value.is_finite() || *value == 0.0)
+        || options
+            .texture_mapping
+            .offset
+            .iter()
+            .any(|value| !value.is_finite())
+    {
+        return Err(Error(
+            "texture mapping scale must be finite and nonzero and offset must be finite".into(),
+        ));
+    }
+    if let TextureProjection::Basis { u_axis, v_axis } = options.texture_mapping.projection {
+        let u_length = dot(u_axis, u_axis);
+        let v_length = dot(v_axis, v_axis);
+        if u_axis
+            .iter()
+            .chain(v_axis.iter())
+            .any(|value| !value.is_finite())
+            || (u_length - 1.0).abs() > 0.0001
+            || (v_length - 1.0).abs() > 0.0001
+            || dot(u_axis, v_axis).abs() > 0.0001
+        {
+            return Err(Error(
+                "texture projection basis must contain finite orthonormal U and V axes".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -278,7 +340,7 @@ fn emit_surface(
     source_positions: &[[f32; 3]],
     faces: &[Face],
     normals: &[[[f32; 3]; 3]],
-    uv_scale: f32,
+    texture_mapping: TextureMapping,
 ) -> Result<Surface, Error> {
     let mut positions = Vec::new();
     let mut output_normals = Vec::new();
@@ -307,7 +369,7 @@ fn emit_surface(
                     existing
                 } else {
                     let position = source_positions[face.vertices[corner] as usize];
-                    let uv = project(position, face.projection_axis, uv_scale);
+                    let uv = project(position, face.projection_axis, texture_mapping);
                     if uv.iter().any(|value| !value.is_finite()) {
                         return Err(Error("UV projection must remain finite".into()));
                     }
@@ -349,12 +411,21 @@ fn major_axis(normal: [f32; 3]) -> u8 {
     axis as u8
 }
 
-fn project(position: [f32; 3], axis: u8, scale_factor: f32) -> [f32; 2] {
-    match axis {
-        0 => [position[1] * scale_factor, position[2] * scale_factor],
-        1 => [position[0] * scale_factor, position[2] * scale_factor],
-        _ => [position[0] * scale_factor, position[1] * scale_factor],
-    }
+fn project(position: [f32; 3], axis: u8, mapping: TextureMapping) -> [f32; 2] {
+    let source = match mapping.projection {
+        TextureProjection::MajorAxis => match axis {
+            0 => [position[1], position[2]],
+            1 => [position[0], position[2]],
+            _ => [position[0], position[1]],
+        },
+        TextureProjection::Basis { u_axis, v_axis } => {
+            [dot(position, u_axis), dot(position, v_axis)]
+        }
+    };
+    [
+        source[0] * mapping.scale[0] + mapping.offset[0],
+        source[1] * mapping.scale[1] + mapping.offset[1],
+    ]
 }
 
 fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -410,10 +481,88 @@ mod tests {
     fn options(crease_angle_degrees: f32) -> SurfaceOptions {
         SurfaceOptions {
             crease_angle_degrees,
-            uv_scale: 1.0,
+            texture_mapping: TextureMapping::legacy(1.0),
             default_slot: 2,
             material_boundary_mode: MaterialBoundaryMode::Centroid,
             material_sampling: None,
+        }
+    }
+
+    #[test]
+    fn texture_mapping_preserves_legacy_charts_and_accepts_oriented_basis_transforms() {
+        let field = Field::new();
+        let geometry = geometry(
+            vec![[2.0, 3.0, 5.0], [4.0, 3.0, 5.0], [2.0, 7.0, 5.0]],
+            vec![[0, 1, 2]],
+        );
+        let legacy = assemble(
+            &field,
+            &geometry,
+            &[],
+            SurfaceOptions {
+                texture_mapping: TextureMapping::legacy(0.5),
+                ..options(0.0)
+            },
+        )
+        .unwrap();
+        for (position, uv) in legacy.positions.iter().zip(&legacy.uvs) {
+            assert_eq!(*uv, [position[0] * 0.5, position[1] * 0.5]);
+        }
+
+        let mapped = assemble(
+            &field,
+            &geometry,
+            &[],
+            SurfaceOptions {
+                texture_mapping: TextureMapping {
+                    projection: TextureProjection::Basis {
+                        u_axis: [0.0, 1.0, 0.0],
+                        v_axis: [-1.0, 0.0, 0.0],
+                    },
+                    scale: [0.25, -0.5],
+                    offset: [1.0, -2.0],
+                },
+                ..options(0.0)
+            },
+        )
+        .unwrap();
+        for (position, uv) in mapped.positions.iter().zip(&mapped.uvs) {
+            assert_eq!(*uv, [position[1] * 0.25 + 1.0, position[0] * 0.5 - 2.0]);
+        }
+    }
+
+    #[test]
+    fn texture_mapping_rejects_non_orthonormal_basis_and_zero_scale() {
+        let field = Field::new();
+        let geometry = geometry(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![[0, 1, 2]],
+        );
+        for mapping in [
+            TextureMapping {
+                projection: TextureProjection::Basis {
+                    u_axis: [1.0, 0.0, 0.0],
+                    v_axis: [1.0, 0.0, 0.0],
+                },
+                scale: [1.0, 1.0],
+                offset: [0.0, 0.0],
+            },
+            TextureMapping {
+                projection: TextureProjection::MajorAxis,
+                scale: [0.0, 1.0],
+                offset: [0.0, 0.0],
+            },
+        ] {
+            assert!(assemble(
+                &field,
+                &geometry,
+                &[],
+                SurfaceOptions {
+                    texture_mapping: mapping,
+                    ..options(0.0)
+                },
+            )
+            .is_err());
         }
     }
 
