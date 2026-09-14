@@ -2,7 +2,7 @@ import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { type RendererSurface, type RendererSurfaceDiagnosticsReadout, type RendererSurfaceOptions, type RendererSurfaceResourceOptions } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent, type RustyApplicationResource } from './application-content.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
-import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
+import { type RustyApplicationInputPort, type RustyApplicationInterfaceInputObservation, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
 import { type RustyApplicationUiProjectionOptions, type RustyApplicationUiProjectionPort, type RustyApplicationUiProjectionReadout, type RustyApplicationUiProjectionView } from './ui-projection.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
@@ -309,6 +309,12 @@ export interface RustyApplicationUiContext {
     readonly projection?: RustyApplicationUiProjectionView;
     /** Claim-only adapter for the shared ordered Engine input lane. */
     readonly intents?: RustyApplicationUiIntentsPort;
+    /** Read-only controller observations owned exclusively by interface mode. */
+    readonly input?: RustyApplicationUiInputPort;
+}
+export interface RustyApplicationUiInputPort {
+    /** Synchronous observation on the host cadence; returns an unsubscribe function. */
+    readonly subscribe: (observer: (input: RustyApplicationInterfaceInputObservation) => void) => () => void;
 }
 export interface RustyApplicationUiOwner {
     readonly dispose: () => void | Promise<void>;

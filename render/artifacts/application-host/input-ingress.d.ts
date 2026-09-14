@@ -71,6 +71,13 @@ export interface RustyApplicationRuntimeInputIngress {
     readonly context: string;
     readonly fact: RustyApplicationRuntimeInputFact;
 }
+/** UI-owned observations from the existing selected-controller sampler. */
+export interface RustyApplicationInterfaceInputObservation {
+    readonly context: 'interface';
+    readonly fact: Extract<RustyApplicationRuntimeInputFact, {
+        readonly kind: 'controller-button' | 'controller-axis' | 'controller-button-value';
+    }>;
+}
 export type RustyApplicationRuntimeIntentValue = {
     readonly kind: 'digital';
     readonly active: boolean;
@@ -149,6 +156,8 @@ interface RustyApplicationInputIngressEnvironment {
     readonly active: () => boolean;
     readonly focusGameplay: () => void;
     readonly gamepads: () => readonly (Gamepad | null)[];
+    /** Exclusive interface delivery; these observations never enter the gameplay queue. */
+    readonly observeInterfaceInput?: (observation: RustyApplicationInterfaceInputObservation) => void;
 }
 export interface RustyApplicationInputQueue {
     readonly bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => boolean;
@@ -163,6 +172,8 @@ export interface RustyApplicationInputQueue {
     readonly drain: () => readonly RustyApplicationRuntimeInputEnvelope[];
 }
 export interface RustyApplicationManagedInputIngress extends RustyApplicationInputPort {
+    /** Clear the old owner and adopt held controller state without replaying its press. */
+    readonly interactionModeChanged: () => void;
     /** Application-host lifecycle seam for transactional renderer canvas replacement. */
     readonly rebindCanvas: (canvas: HTMLCanvasElement) => void;
     /** Application-host lifecycle seam; product callers use the owning host disposal instead. */
