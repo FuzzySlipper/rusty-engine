@@ -26,6 +26,15 @@ internal static class ContinuityExercise
         bool rejected = false;
         try { room.Placed(Matrix4x4.CreateRotationY(.3f)); } catch (ArgumentException) { rejected = true; }
         Require(rejected, "Rotated portal must not silently enlarge its enclosure cap");
+        Transform roomPlacement = new(new Vector3(12, 1, -3), Quaternion.Identity, Vector3.One);
+        int firstPlacedSurface = surfaces.Count;
+        var jointlyPlaced = RoomRecipes.Shell(writer, "placed", new(new(new(0, 0, 0), new(4, 3, 6)), .5f), default, roomPlacement);
+        Require(surfaces.Skip(firstPlacedSurface).All(surface => surface.Placement == roomPlacement), "Room geometry did not receive declaration placement");
+        Require(jointlyPlaced.Interior == new Vector3(14, 2.5f, 0), "Room declarations did not receive geometry placement");
+        Matrix4x4 shear = Matrix4x4.Identity; shear.M31 = .5f;
+        rejected = false;
+        try { room.Joins.Span[0].Placed(shear); } catch (ArgumentException) { rejected = true; }
+        Require(rejected, "Sheared join cannot be represented by rectangular native contact axes");
         Console.WriteLine("Recipe continuity dimensions, portal exclusions and placement passed.");
     }
 }

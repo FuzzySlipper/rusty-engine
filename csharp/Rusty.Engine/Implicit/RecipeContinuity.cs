@@ -6,12 +6,17 @@ namespace Rusty.Engine.Implicit;
 public readonly record struct RecipeJoin(string Name, string SurfaceA, string SurfaceB,
     Vector3 Center, Vector3 HalfU, Vector3 HalfV)
 {
-    public RecipeJoin Placed(Matrix4x4 placement) => this with
+    public RecipeJoin Placed(Matrix4x4 placement)
     {
-        Center = Vector3.Transform(Center, placement),
-        HalfU = Vector3.TransformNormal(HalfU, placement),
-        HalfV = Vector3.TransformNormal(HalfV, placement),
-    };
+        Vector3 center = Vector3.Transform(Center, placement), u = Vector3.TransformNormal(HalfU, placement), v = Vector3.TransformNormal(HalfV, placement);
+        float uLength = u.Length(), vLength = v.Length();
+        if (!float.IsFinite(center.X) || !float.IsFinite(center.Y) || !float.IsFinite(center.Z)
+            || !float.IsFinite(uLength) || !float.IsFinite(vLength) || uLength <= 0 || vLength <= 0
+            || MathF.Abs(Vector3.Dot(u / uLength, v / vLength)) > 1e-5f
+            || placement.M14 != 0 || placement.M24 != 0 || placement.M34 != 0 || placement.M44 != 1)
+            throw new ArgumentException("Join placement must preserve a finite rectangular contact patch.", nameof(placement));
+        return this with { Center = center, HalfU = u, HalfV = v };
+    }
 
     /// <summary>Resolve names against meshes captured by the caller in this audit.</summary>
     public ImplicitJoinRequest Request(ImplicitAudit audit, Func<string, ulong> resolve,
@@ -31,7 +36,7 @@ public sealed record RecipeRoomContinuity(string Name, ImplicitBounds Bounds, Ve
     ReadOnlyMemory<RecipeJoin> Joins, ReadOnlyMemory<RecipeOpening> Openings)
 {
     /// <summary>
-    /// Joins support any affine placement. Enclosure caps are axis-aligned in the
+    /// Joins support affine placements that preserve rectangular contact patches. Enclosure caps are axis-aligned in the
     /// Engine, so room placement must preserve coordinate axes (including reflections).
     /// Arbitrarily rotated rooms can still use their individual placed joins.
     /// </summary>

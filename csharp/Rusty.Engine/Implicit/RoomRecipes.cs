@@ -13,15 +13,20 @@ public readonly record struct RoomShellOptions(ImplicitBounds Interior, float Th
 public static class RoomRecipes
 {
     /// <summary>
-    /// Emits three named solids synchronously in local coordinates, then returns
-    /// their declared joins and portals. Keep the returned declarations with the
+    /// Emits three named solids synchronously with the selected placement, then returns
+    /// their correspondingly placed joins and portals. Keep the returned declarations with the
     /// emitted meshes. Moving doors and publication remain product-owned.
     /// </summary>
     public static RecipeRoomContinuity Shell(RecipeWriter writer, string name, RoomShellOptions options,
-        RoomMaterials materials)
+        RoomMaterials materials, Transform? placement = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        Transform surfacePlacement = placement ?? new(Vector3.Zero, Quaternion.Identity, Vector3.One);
+        Matrix4x4 matrix = Matrix4x4.CreateScale(surfacePlacement.Scale) * Matrix4x4.CreateFromQuaternion(surfacePlacement.Rotation)
+            * Matrix4x4.CreateTranslation(surfacePlacement.Translation);
+        // Validate the joint geometry/declaration placement before emitting any surfaces.
+        _ = new RecipeRoomContinuity(name, options.Interior, Vector3.Zero, default, default).Placed(matrix);
         Vector3 min = options.Interior.Minimum, max = options.Interior.Maximum;
         float t = options.Thickness, margin = options.ExtractionMargin;
         static bool Finite(Vector3 p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z);
@@ -45,7 +50,6 @@ public static class RoomRecipes
         foreach (var b in platforms) ValidateRelief(b, true);
         foreach (var b in soffits) ValidateRelief(b, false);
         Vector3 outerMin = min - new Vector3(t), outerMax = max + new Vector3(t);
-        Transform identity = new(Vector3.Zero, Quaternion.Identity, Vector3.One);
         void Emit(string suffix, Vector3 lo, Vector3 hi, Material material, bool hollow)
         {
             using ImplicitRecipe field = writer.Begin();
@@ -59,7 +63,7 @@ public static class RoomRecipes
             }
             foreach (var opening in openings)
                 solid = field.Subtract(solid, field.Box(opening.Bounds.Minimum, opening.Bounds.Maximum));
-            writer.Surface(name + suffix, field, solid, lo - new Vector3(margin), hi + new Vector3(margin), material, identity);
+            writer.Surface(name + suffix, field, solid, lo - new Vector3(margin), hi + new Vector3(margin), material, surfacePlacement);
         }
         Emit("/floor", outerMin, new(outerMax.X, min.Y, outerMax.Z), materials.Floor, false);
         Emit("/walls", new(outerMin.X, min.Y, outerMin.Z), new(outerMax.X, max.Y, outerMax.Z), materials.Walls, true);
@@ -102,7 +106,7 @@ public static class RoomRecipes
             Edge(false, min.Z - t / 2, min.X, max.X, y, slab, "south");
             Edge(false, max.Z + t / 2, min.X, max.X, y, slab, "north");
         }
-        return new(name, new(outerMin - new Vector3(margin), outerMax + new Vector3(margin)),
-            (min + max) / 2, joins.ToArray(), openings);
+        return new RecipeRoomContinuity(name, new(outerMin - new Vector3(margin), outerMax + new Vector3(margin)),
+            (min + max) / 2, joins.ToArray(), openings).Placed(matrix);
     }
 }

@@ -848,8 +848,9 @@ captured audit IDs, then use `Request` with the existing `ReadExpectedJoin` or
 `ReadEnclosure` services. Products choose budgets and interpret completeness;
 declarations express intent, not a guarantee of a clean extracted mesh.
 
-Keep geometry and declarations in the same coordinate frame. Individual joins
-support affine placement; room enclosure caps require axis-preserving placement
+The optional `RoomRecipes.Shell` placement transforms emitted surfaces and their
+declarations together. Individual joins support placements preserving a rectangular
+contact patch; room enclosure caps require axis-preserving placement
 because the underlying cap contract uses axis-aligned boxes. Arbitrary rotated
 caps are rejected rather than silently enlarged. Mesh generation and audit
 capture must still happen synchronously before a recipe field is disposed.

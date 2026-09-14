@@ -72,7 +72,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string AuditArchitecture()
     {
         WorldAudit report = RunAudit();
-        string text = $"allComplete={report.AllComplete}; joins={report.ExpectedJoins}; joinSamples={report.JoinSamples}; joinDiagnostics={report.JoinDiagnostics}; enclosureSamples={report.EnclosureSamples}; enclosureDiagnostics={report.EnclosureDiagnostics}";
+        string text = $"allComplete={report.AllComplete}; joins={report.ExpectedJoins}; joinSamples={report.JoinSamples}; joinDiagnostics={report.JoinDiagnostics}; enclosureSamples={report.EnclosureSamples}; enclosureDiagnostics={report.EnclosureDiagnostics}; classifications={report.EnclosureClassifications}";
         Console.WriteLine($"C# architectural room audit: {text}");
         return text;
     }
@@ -130,7 +130,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ImplicitAnalysisReportLeaseReceipt enclosure = _engine.ImplicitSurfaces.ReadEnclosure(
             main.Request(audit, AuditSampleSpacing, AuditBudget));
         return new WorldAudit(main.Joins.Length, joinSamples, joinDiagnostics, joinsComplete,
-            enclosure.Sampled, enclosure.Diagnostics.Length, enclosure.Complete != 0);
+            enclosure.Sampled, enclosure.Diagnostics.Length, enclosure.Complete != 0,
+            string.Join(",", enclosure.Diagnostics.ToArray().Select(d => d.Classification).Distinct()));
     }
 
     private RecipeWriter CreateWriter(ImplicitAudit? audit, Dictionary<string, ulong>? pieces)
@@ -264,7 +265,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     private readonly record struct WorldAudit(
         int ExpectedJoins, int JoinSamples, int JoinDiagnostics, bool JoinsComplete,
-        ulong EnclosureSamples, int EnclosureDiagnostics, bool EnclosureComplete)
+        ulong EnclosureSamples, int EnclosureDiagnostics, bool EnclosureComplete, string EnclosureClassifications)
     {
         public bool AllComplete => JoinsComplete && EnclosureComplete;
     }
