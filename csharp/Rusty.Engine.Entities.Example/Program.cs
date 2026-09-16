@@ -915,6 +915,9 @@ sealed class GraphicsServiceFake : IGraphicsService
     public Material ReplaceMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();
     public Appearance CreatePrimitive(PrimitiveAppearanceRequest arg0) => throw new NotSupportedException();
     public Appearance ReplacePrimitive(PrimitiveAppearanceReplaceRequest arg0) => throw new NotSupportedException();
+    public MeshPartition PartitionMesh(MeshPartitionRequest request) => throw new NotSupportedException();
+    public MeshPartitionReadout ReadMeshPartition(MeshPartition partition) => throw new NotSupportedException();
+    public MeshResource TakeMeshPartitionPart(MeshPartitionPartRequest request) => throw new NotSupportedException();
     public MeshResource CreateMeshResource(MeshResourceCreateRequest arg0) => throw new NotSupportedException();
     public Appearance CreateMeshAppearance(MeshResource arg0) => throw new NotSupportedException();
     public Appearance CreateStaticMesh(StaticMeshAppearanceRequest arg0) => throw new NotSupportedException();
@@ -965,6 +968,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IContentService Content => throw new NotSupportedException();
     public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
     public IGraphicsService Graphics => throw new NotSupportedException();
+    public IImplicitSurfacesService ImplicitSurfaces => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
