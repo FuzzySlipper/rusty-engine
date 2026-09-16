@@ -654,9 +654,8 @@ pieces:
 | Package | Current role |
 | --- | --- |
 | [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Product component keys, managed entity stores, snapshots, batches, and managed adapters around Engine mechanisms, compiled into `Rusty.Engine`. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Product-state codecs, stores, restoration plans, and entity-world persistence helpers, compiled into `Rusty.Engine`. |
-| [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine/Resolution) | Structural resolution sessions and typed product transaction coordination inside the default `Rusty.Engine` assembly. |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, scoped value edits, and managed adapters around Engine mechanisms, compiled into `Rusty.Engine`. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product-state codecs, stores, and migrations, compiled into `Rusty.Engine`. |
 
 Use a helper when it fits the product's real domain. A product may compose its
 own ordinary C# architecture instead. None of these packages implies a hidden
@@ -704,9 +703,8 @@ continues to mean the spatial coordinate origin. Neither is a managed entity
 store. The Rust spatial implementation's internal physics type is unchanged.
 
 `EntityStore` now accepts ordinary classes and value components in the same
-store. The legacy `EntityWorldSnapshot`, restore plans/candidates, batch candidates
-and `EntityWorldProductStateStore` retain their names pending the separate
-state-API cleanup. Their detached operations are explicit, not ordinary access.
+store. Unused whole-store snapshot/restore, callback mutation batches, component
+copy codecs and entity-persistence wrappers have been retired.
 During the campaign, use coordinated contributor proving copies. The final
 SDK/runtime release and downstream rollout happen together; do not combine a
 renamed SDK with a previously published runtime merely because layouts look
@@ -766,28 +764,35 @@ Versions describe explicit attachment, removal, replacement and lifecycle
 changes. They do not observe fields or methods on a returned object, and replacing
 a class with the same instance is a no-op. Destroy releases entity/component rows
 and containment edges; it detaches children without destroying them. IDs stay
-nonzero and monotonic, with no reuse. Explicit legacy restore preserves the live
-allocator high-watermark and drops imported tombstone rows.
+nonzero and monotonic, with no reuse.
 
-### Explicit edits and capture during the campaign
+### Explicit edits and persistence
 
-Ordinary access never deep-copies components. A legacy `Snapshot`, callback batch
-or detached component capture needs an explicit copy codec for reference-bearing
-values; unsupported capture fails before running mutation callbacks. These
-facilities do not provide automatic class-graph persistence or rollback.
+Ordinary access never deep-copies components. Direct gameplay methods need no
+transaction session or receipt graph. The unused `Rusty.Engine.Resolution`
+module has been removed; optional Application and StateMachine helpers remain.
 
-For an existing caller that needs prepared value replacements, `EntityBatch.Set`
-and `EntityBatch.Create` stage known operations without a caller mutation callback.
-They copy membership/value slots and retain attached class references. Preparation
-validates the operations, and publication checks the store's structural revision;
-it does not claim that class internals were frozen. D20 uses this narrow path for
-its immutable value facts while owning its effect planning and detached save
-rebuild. Do not mutate nested references expecting an edit to roll them back.
+For callers that need prepared value replacements, `EntityBatch.Set` and
+`EntityBatch.Create` describe closed operations. `EntityStore.PrepareBatch`
+returns a disposable `EntityEdit`. Preparation copies index maps and only the
+value families it changes; unrelated attached classes retain their identity.
+Publication checks the store's structural revision. It does not freeze class
+internals or roll back nested references or external owners. A failed or disposed
+edit cannot publish; successful publication is idempotent. Receipts report
+structural revisions, not an ambiguous mutation count.
 
-The existing entity adapters still need the separate class-aware guard migration
-before the campaign release. A callback-based adapter may reject an attached class
-without an explicit copy codec. Do not add a dummy codec to conceal that limitation.
-Explicit save/debug cleanup and adapter adoption remain campaign follow-ups.
+D20 uses this path for value facts. Entity/native adapters use typed replacements
+to preflight their selected values before native commits. Their native lifetime
+and failure rules remain in force; class-aware adapter guards are a separate
+campaign task. No arbitrary mutation callback or whole-store restore is offered.
+
+`InventoryEdit` retains detached planning required by inventory operations.
+Failed operations, stale publication, cancellation and disposal close the edit;
+none can publish earlier partially staged operations afterward.
+
+Explicit saves use `ProductStateStore<T>` with a product-defined codec and data.
+The product decides what to capture, validates/rebuilds a candidate when needed,
+and adopts it. Bounded debug snapshots remain observations, not live state owners.
 
 ## Recommended product architecture, not a framework contract
 

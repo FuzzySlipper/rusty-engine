@@ -899,10 +899,10 @@ public sealed partial class InventoryStore
 /// Detached managed inventory candidate. Mutations are applied to the detached
 /// copy and become live only when <see cref="Publish"/> succeeds.
 /// </summary>
-public sealed partial class InventoryEdit
+public sealed partial class InventoryEdit : IDisposable
 {
     private readonly InventoryStore _owner;
-    private readonly InventoryStore _working;
+    private InventoryStore? _working;
     private readonly ulong _expectedOwnerRevision;
     private bool _published;
 
@@ -918,105 +918,106 @@ public sealed partial class InventoryEdit
 
     public ulong Revision
     {
-        get
-        {
-            EnsureOpen();
-            return _working.Revision;
-        }
+        get => Execute(static working => working.Revision);
     }
 
-    public InventoryView View(EntityId owner)
-    {
-        EnsureOpen();
-        return _working.View(owner);
-    }
+    public InventoryView View(EntityId owner) => Execute(working => working.View(owner));
 
-    public void Validate()
-    {
-        EnsureOpen();
-        _working.ValidateStore();
-    }
+    public void Validate() => Execute(static working => working.ValidateStore());
 
     public void Publish()
     {
-        EnsureOpen();
-        _working.ValidateStore();
-        _owner.PublishCandidate(_working, _expectedOwnerRevision);
-        _published = true;
+        InventoryStore working = EnsureOpen();
+        try
+        {
+            working.ValidateStore();
+            _owner.PublishCandidate(working, _expectedOwnerRevision);
+            _published = true;
+        }
+        finally
+        {
+            Discard();
+        }
     }
 
-    public InventoryMutationReceipt Grant(EntityId owner, ItemDefinition definition, ulong quantity)
-    {
-        EnsureOpen();
-        return _working.GrantCore(owner, definition, quantity);
-    }
+    /// <summary>Discards this detached edit without changing its owner.</summary>
+    public void Cancel() => Discard();
 
-    public InventoryMutationReceipt Consume(EntityId owner, ItemDefinition definition, ulong quantity)
-    {
-        EnsureOpen();
-        return _working.ConsumeCore(owner, definition, quantity);
-    }
+    /// <summary>Discards this detached edit without changing its owner.</summary>
+    public void Dispose() => Discard();
+
+    public InventoryMutationReceipt Grant(EntityId owner, ItemDefinition definition, ulong quantity) =>
+        Execute(working => working.GrantCore(owner, definition, quantity));
+
+    public InventoryMutationReceipt Consume(EntityId owner, ItemDefinition definition, ulong quantity) =>
+        Execute(working => working.ConsumeCore(owner, definition, quantity));
 
     public InventoryTransferReceipt TransferFungible(
         EntityId fromOwner,
         EntityId toOwner,
         ItemDefinition definition,
         ulong quantity)
-    {
-        EnsureOpen();
-        return _working.TransferFungibleCore(fromOwner, toOwner, definition, quantity);
-    }
+        => Execute(working => working.TransferFungibleCore(fromOwner, toOwner, definition, quantity));
 
-    public ItemMaterializationReceipt MaterializeUnique(ItemState item, EntityId owner)
-    {
-        EnsureOpen();
-        return _working.MaterializeUniqueCore(item, owner);
-    }
+    public ItemMaterializationReceipt MaterializeUnique(ItemState item, EntityId owner) =>
+        Execute(working => working.MaterializeUniqueCore(item, owner));
 
-    public ItemTransferReceipt TransferUnique(EntityId item, EntityId fromOwner, EntityId toOwner)
-    {
-        EnsureOpen();
-        return _working.TransferUniqueCore(item, fromOwner, toOwner);
-    }
+    public ItemTransferReceipt TransferUnique(EntityId item, EntityId fromOwner, EntityId toOwner) =>
+        Execute(working => working.TransferUniqueCore(item, fromOwner, toOwner));
 
-    public ItemDestroyReceipt DestroyUnique(EntityId item)
-    {
-        EnsureOpen();
-        return _working.DestroyUniqueCore(item);
-    }
+    public ItemDestroyReceipt DestroyUnique(EntityId item) =>
+        Execute(working => working.DestroyUniqueCore(item));
 
     public EquipmentMutationReceipt Equip(
         EntityId owner,
         EntityId item,
         IEnumerable<EquipmentSlotDefinition> slots)
-    {
-        EnsureOpen();
-        return _working.EquipCore(owner, item, slots);
-    }
+        => Execute(working => working.EquipCore(owner, item, slots));
 
-    public EquipmentMutationReceipt Unequip(EntityId owner, EntityId item)
-    {
-        EnsureOpen();
-        return _working.UnequipCore(owner, item);
-    }
+    public EquipmentMutationReceipt Unequip(EntityId owner, EntityId item) =>
+        Execute(working => working.UnequipCore(owner, item));
 
     public EquipmentMutationReceipt Swap(
         EntityId owner,
         EntityId outgoingItem,
         EntityId incomingItem,
         IEnumerable<EquipmentSlotDefinition> slots)
-    {
-        EnsureOpen();
-        return _working.SwapCore(owner, outgoingItem, incomingItem, slots);
-    }
+        => Execute(working => working.SwapCore(owner, outgoingItem, incomingItem, slots));
 
-    private void EnsureOpen()
+    private T Execute<T>(Func<InventoryStore, T> operation)
     {
-        if (_published)
+        InventoryStore working = EnsureOpen();
+        try
         {
-            throw new InvalidOperationException("An inventory candidate cannot be used after publication.");
+            return operation(working);
+        }
+        catch
+        {
+            Discard();
+            throw;
         }
     }
+
+    private void Execute(Action<InventoryStore> operation)
+    {
+        InventoryStore working = EnsureOpen();
+        try
+        {
+            operation(working);
+        }
+        catch
+        {
+            Discard();
+            throw;
+        }
+    }
+
+    private InventoryStore EnsureOpen() => _working ?? throw new InvalidOperationException(
+        _published
+            ? "An inventory candidate cannot be used after publication."
+            : "An inventory candidate cannot be used after it was discarded.");
+
+    private void Discard() => _working = null;
 }
 
 /// <summary>Convenience entry points for the managed inventory mechanisms.</summary>

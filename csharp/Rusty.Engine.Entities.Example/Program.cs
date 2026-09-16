@@ -4,11 +4,8 @@ using Rusty.Engine;
 using Rusty.Engine.Entities;
 using Rusty.Engine.Mechanics;
 using Rusty.Engine.Persistence;
-using Rusty.Engine.Resolution;
 using Rusty.Engine.StateMachine;
 using MechanicsStackingPolicy = Rusty.Engine.Mechanics.MechanicsStackingPolicy;
-using ResolutionCommitStatus = Rusty.Engine.Resolution.ResolutionCommitStatus;
-using ResolutionMode = Rusty.Engine.Resolution.ResolutionMode;
 using StateMachineDefinition = Rusty.Engine.StateMachine.StateMachineDefinition;
 using StateMachineInstance = Rusty.Engine.StateMachine.StateMachineInstance;
 using StateMachineTransition = Rusty.Engine.StateMachine.StateMachineTransition;
@@ -36,44 +33,39 @@ Require(contained.Changed && world.TryGetContainedIn(pouch, out EntityId contain
     "canonical containment did not preserve its parent");
 Require(world.ContainedEntities(pack).SequenceEqual([pouch]), "reverse containment was not deterministic");
 Throws(() => world.SetContainment(pack, pouch), "containment cycle was not rejected");
-EntityWorldSnapshot relationshipSnapshot = world.Snapshot();
 world.ClearContainment(pouch);
-world.Restore(relationshipSnapshot);
-Require(world.TryGetContainedIn(pouch, out container) && container == pack, "snapshot restore lost containment");
+world.SetContainment(pouch, pack);
+Require(world.TryGetContainedIn(pouch, out container) && container == pack, "explicit reparenting lost containment");
 world.Set(actor, health, new Health(InitialHealth));
 Throws(() => world.Set(actor, health, new Health(-1)), "typed component validator did not reject invalid state");
 world.Set(actor, armor, new Armor(InitialArmor));
 ComponentRevision healthRevision = world.GetComponentRevision(actor, health);
 
-EntityWorldSnapshot snapshot = world.Snapshot();
+ulong revisionBeforeEdit = world.Revision;
 EntityBatchReceipt receipt = world.Commit(new EntityBatch()
-    .Mutate(staged => staged.Set(actor, health, new Health(6), healthRevision))
-    .Mutate(staged => staged.SetLifecycle(actor, EntityLifecycle.Disabled)), expectedRevision: snapshot.Revision);
-
-Require(receipt.RevisionAfter == snapshot.Revision + 1, "a successful batch must advance the world revision exactly once");
+    .Set(actor, health, new Health(6), healthRevision), expectedRevision: revisionBeforeEdit);
+Require(receipt.RevisionAfter == revisionBeforeEdit + 1, "a prepared edit should publish one structural version");
+world.SetLifecycle(actor, EntityLifecycle.Disabled);
 Require(world.Query(health).Count == 0, "disabled entities are omitted from normal queries");
-Require(world.Query(health, includeDisabled: true).Single().Value.Current == 6, "typed batch mutation did not commit");
+Require(world.Query(health, includeDisabled: true).Single().Value.Current == 6, "typed replacement did not commit");
 Require(world.Query(health, armor, includeDisabled: true).Single().Second.Current == InitialArmor, "two-component query did not join typed columns");
-
+ulong beforeRejectedEdit = world.Revision;
 Throws(
     () => world.Commit(new EntityBatch()
-        .Mutate(staged => staged.Set(actor, health, new Health(4)))
-        .Mutate(staged => staged.Set(new EntityId(999), health, new Health(1))), expectedRevision: receipt.RevisionAfter),
-    "a rejected batch must report its invalid staged mutation");
-Require(world.Get(actor, health).Current == 6 && world.Revision == receipt.RevisionAfter, "a rejected batch changed live state");
-
-world.Restore(snapshot, expectedRevision: receipt.RevisionAfter);
-Require(world.Get(actor, health).Current == InitialHealth, "in-memory snapshot restore did not recover the typed value");
-Throws(() => world.Set(actor, health, new Health(9), healthRevision), "snapshot restore must invalidate old component guards");
+        .Set(actor, health, new Health(4))
+        .Set(new EntityId(999), health, new Health(1))),
+    "a rejected edit must report its invalid value replacement");
+Require(world.Get(actor, health).Current == 6 && world.Revision == beforeRejectedEdit, "a rejected edit changed live state");
+world.SetLifecycle(actor, EntityLifecycle.Active);
+world.Set(actor, health, new Health(InitialHealth));
+Throws(() => world.Set(actor, health, new Health(9), healthRevision), "an old component guard accepted an explicit replacement");
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
 ClassComponentExercise.Run();
-ExerciseEntityWorldCandidateAndCopyContracts();
-ExerciseManagedRestorePlan(world, actor, pack, health, armor);
+ExercisePreparedValueEdits();
 ExerciseEntityPersistence(world, actor, health);
 ExerciseManagedMechanics();
 ExerciseManagedStateMachine();
-ExerciseManagedResolution();
 
 ExerciseSpatialEntityProjection();
 ExerciseCharacterEntityComposition();
@@ -104,87 +96,44 @@ static void Throws(Action action, string message)
     throw new InvalidOperationException(message);
 }
 
-static void ExerciseEntityWorldCandidateAndCopyContracts()
+static void ExercisePreparedValueEdits()
 {
-    const uint ReferenceValueLocalComponentId = 90;
-    const uint ValueLocalComponentId = 91;
-    const uint BatchRegistrationLocalComponentId = 93;
-    const uint RestoreRegistrationLocalComponentId = 94;
-    ComponentType<ReferenceComponent> referenceValues = ComponentType<ReferenceComponent>.Create(
-        ProductComponentKeys.Create(ReferenceValueLocalComponentId),
-        snapshotCodec: static (in ReferenceComponent value) => new ReferenceComponent([.. value.Values]));
-    ComponentType<int> values = ComponentType<int>.Create(ProductComponentKeys.Create(ValueLocalComponentId));
-
-    _ = ComponentType<ReferenceComponent>.Create(ProductComponentKeys.Create(92));
-
-    using var world = new EntityStore([referenceValues, values]);
-    EntityId entity = world.Create();
+    ComponentType<ReferenceComponent> references = ComponentType<ReferenceComponent>.Create(ProductComponentKeys.Create(90));
+    ComponentType<int> values = ComponentType<int>.Create(ProductComponentKeys.Create(91));
+    using var store = new EntityStore([references, values]);
+    EntityId entity = store.Create();
     int[] source = [1];
-    world.Set(entity, referenceValues, new ReferenceComponent(source));
+    store.Set(entity, references, new ReferenceComponent(source));
     source[0] = 99;
-    Require(world.Get(entity, referenceValues).Values[0] == 99,
-        "ordinary value attachment should use C# shallow-copy semantics");
+    Require(store.Get(entity, references).Values[0] == 99, "ordinary values must retain C# nested reference semantics");
+    store.Set(entity, values, 1);
 
-    EntityWorldSnapshot snapshot = world.Snapshot();
-    ReferenceComponent read = world.Get(entity, referenceValues);
-    read.Values[0] = 77;
-    Require(world.Get(entity, referenceValues).Values[0] == 77,
-        "ordinary value reads should retain nested reference identity");
-    world.Set(entity, referenceValues, new ReferenceComponent([3]));
-    world.Restore(snapshot, world.Revision);
-    Require(world.Get(entity, referenceValues).Values[0] == 99,
-        "snapshot retained a mutable nested component reference");
-
-    EntityWorldBatchCandidate staged = world.PrepareBatch(new EntityBatch()
-        .Mutate(candidate => candidate.Set(entity, referenceValues, new ReferenceComponent([2]))));
-    ComponentType<long> batchRegistration = ComponentType<long>.Create(
-        ProductComponentKeys.Create(BatchRegistrationLocalComponentId));
-    world.Register(batchRegistration);
-    Throws(() => staged.Publish(), "stale batch candidate overwrote a later component registration");
-    Throws(() => staged.Publish(), "stale batch candidate was marked published after its first failed attempt");
-    world.Set(entity, batchRegistration, 93L);
-    world.Set(entity, values, 1);
-    Require(world.Get(entity, referenceValues).Values[0] == 99 && world.Get(entity, values) == 1,
-        "stale batch candidate discarded live component state");
-
-    EntityWorldRestorePlan restorePlan = new(world.Revision, world.NextEntityValue);
-    foreach (EntityWorldEntityState state in world.CaptureEntities())
+    using EntityEdit stale = store.PrepareBatch(new EntityBatch().Set(entity, values, 2));
+    store.Register(ComponentType<long>.Create(ProductComponentKeys.Create(93)));
+    Throws(() => stale.Publish(), "stale edit overwrote a later registration");
+    try
     {
-        restorePlan.AddEntity(state);
+        stale.Publish();
+        throw new Exception("failed edit was reusable");
     }
-    restorePlan.AddComponentFamily(referenceValues, world.CaptureComponentFamily(referenceValues));
-    restorePlan.AddComponentFamily(values, world.CaptureComponentFamily(values));
-    restorePlan.AddComponentFamily(batchRegistration, world.CaptureComponentFamily(batchRegistration));
-    EntityWorldRestoreCandidate restore = world.PrepareRestore(restorePlan, world.Revision);
-    ComponentType<double> restoreRegistration = ComponentType<double>.Create(
-        ProductComponentKeys.Create(RestoreRegistrationLocalComponentId));
-    world.Register(restoreRegistration);
-    Throws(() => restore.Publish(), "stale restore candidate overwrote a later component registration");
-    Throws(() => restore.Publish(), "stale restore candidate was marked published after its first failed attempt");
-    world.Set(entity, restoreRegistration, 94d);
-    world.Set(entity, values, 2);
-    Require(world.Get(entity, referenceValues).Values[0] == 99 && world.Get(entity, values) == 2,
-        "stale restore candidate discarded live state");
+    catch (InvalidOperationException error)
+    {
+        Require(error.Message.Contains("failed or been disposed", StringComparison.Ordinal), "failed edit did not become terminal");
+    }
+    Require(store.Get(entity, values) == 1, "stale edit discarded live state");
 
-    EntityWorldBatchCandidate published = world.PrepareBatch(new EntityBatch()
-        .Mutate(candidate => candidate.Set(entity, values, 3)));
+    using EntityEdit canceled = store.PrepareBatch(new EntityBatch().Set(entity, values, 3));
+    canceled.Dispose();
+    Throws(() => canceled.Publish(), "disposed edit was reusable");
+    using EntityEdit published = store.PrepareBatch(new EntityBatch().Set(entity, values, 4));
     published.Publish();
-    ulong revisionAfterFirstPublish = world.Revision;
+    ulong afterPublish = store.Revision;
     published.Publish();
-    Require(world.Revision == revisionAfterFirstPublish && world.Get(entity, values) == 3,
-        "published batch candidate was not idempotent");
-
-    EntityWorldBatchCandidate concurrentlyPublished = world.PrepareBatch(new EntityBatch()
-        .Mutate(candidate => candidate.Set(entity, values, 4)));
-    ulong revisionBeforeConcurrentPublish = world.Revision;
-    Parallel.For(0, 8, _ => concurrentlyPublished.Publish());
-    Require(world.Revision == revisionBeforeConcurrentPublish + 1 && world.Get(entity, values) == 4,
-        "concurrent batch publication was not idempotent");
-
-    Throws(() => world.Create((EntityLifecycle)99), "create admitted an undeclared lifecycle value");
-    Throws(() => world.SetLifecycle(entity, (EntityLifecycle)99), "set lifecycle admitted an undeclared lifecycle value");
-    world.Dispose();
-    Throws(() => world.Diagnostics(), "disposed diagnostics did not follow the world disposal contract");
+    Require(store.Revision == afterPublish && store.Get(entity, values) == 4, "successful publication was not idempotent");
+    Require(ReferenceEquals(store.Get(entity, references).Values, source), "prepared value edit copied an unrelated family");
+    Throws(() => store.Create((EntityLifecycle)99), "create admitted an undeclared lifecycle");
+    store.Dispose();
+    Throws(() => store.Diagnostics(), "disposed store allowed diagnostics");
 }
 
 static void ValidateHealth(in Health health)
@@ -201,21 +150,18 @@ static void ExerciseEntityPersistence(
     ComponentType<Health> health)
 {
     var persistence = new InMemoryPersistenceService();
-    using var store = new EntityWorldProductStateStore<EntityCheckpoint>(
-        world,
-        current => new EntityCheckpoint(current.Get(actor, health).Current),
-        (target, state) => target.Set(actor, health, new Health(state.Health)),
-        new PersistenceEngineContext(persistence),
-        "entities-example",
-        new EntityCheckpointCodec());
-
-    store.Save("checkpoint");
+    using var store = new ProductStateStore<EntityCheckpoint>(
+        new PersistenceEngineContext(persistence), "entities-example", new EntityCheckpointCodec());
+    store.Save("checkpoint", new EntityCheckpoint(world.Get(actor, health).Current));
     world.Set(actor, health, new Health(4));
-    ProductStateLoad<EntityCheckpoint> loaded = store.LoadAndRestore("checkpoint");
-    Require(loaded.Present && loaded.State is EntityCheckpoint state && state.Health == InitialHealth,
-        "product-owned EntityStore persistence did not restore the selected typed state");
+    ProductStateLoad<EntityCheckpoint> loaded = store.Load("checkpoint");
+    Require(loaded.Present && loaded.State.Health == InitialHealth,
+        "product-owned persistence did not decode the selected value");
+    // This product owns the adoption. For a multi-object save, build and validate
+    // a replacement graph before swapping its owner; the byte store never rolls back gameplay.
+    world.Set(actor, health, new Health(loaded.State.Health));
     Require(world.Get(actor, health).Current == InitialHealth,
-        "EntityStore persistence restore did not publish through the product callback");
+        "explicit product adoption did not apply the loaded value");
 }
 
 static void ExerciseManagedMechanics()
@@ -371,26 +317,6 @@ static void ExerciseManagedStateMachine()
         "managed state-machine accepted a transition from a mismatched current state");
 }
 
-static void ExerciseManagedResolution()
-{
-    const ulong ResolutionId = 1;
-    const ulong CorrelationId = 42;
-    var session = new StructuralResolutionSession(
-        ResolutionId,
-        CorrelationId,
-        ResolutionMode.Apply);
-    session.Root.Record(work: 1, effects: 1, events: 1);
-    session.Root.Complete();
-
-    var transaction = new RecordingResolutionTransaction();
-    ResolutionReceipt receipt = session.Finalize(transaction);
-    Require(receipt.Commit == ResolutionCommitStatus.Applied
-        && transaction.Staged
-        && transaction.Committed
-        && !transaction.Aborted,
-        "direct managed resolution did not finalize its product transaction");
-}
-
 static void ExerciseWorldOriginEntityComposition()
 {
     const uint GlobalPositionLocalComponentId = 40;
@@ -410,7 +336,6 @@ static void ExerciseWorldOriginEntityComposition()
         "world-origin prepare did not retain one deterministic root fact");
     EntityOriginRebaserCommitReceipt committed = prepared.Commit();
     Require(committed.Native.OriginAfterCellX == 100
-        && committed.Managed.MutationCount == 1
         && world.Get(entity, EngineComponentTypes.Transform).Translation.X == 0.0f,
         "world-origin commit did not pair the native receipt with one managed transform batch");
 
@@ -440,7 +365,6 @@ static void ExerciseMotionEntityComposition()
 
     EntityMotionResolverReceipt moved = adapter.Resolve(mover, new Vector3(1.0f, 0.0f, 0.0f), maximumEntities: 2);
     Require(moved.Resolution.Outcome == MotionOutcome.Moved
-        && moved.Managed.MutationCount == 1
         && world.Get(mover, EngineComponentTypes.Transform).Translation.X == 1.0f,
         "motion adapter did not apply the pure candidate transform in one managed batch");
 
@@ -715,61 +639,6 @@ static void ExerciseAppearanceEntityComposition()
     Require(graphics.PublishCalls == 1,
         "stale appearance managed state reached the generated service");
 }
-
-static void ExerciseManagedRestorePlan(
-    EntityStore world,
-    EntityId actor,
-    EntityId pack,
-    ComponentType<Health> health,
-    ComponentType<Armor> armor)
-{
-    ulong revisionBefore = world.Revision;
-    ComponentRevision absentHealthRevision = world.GetComponentRevision(pack, health);
-    EntityWorldRestorePlan plan = new(world.Revision, world.NextEntityValue);
-    foreach (EntityWorldEntityState entity in world.CaptureEntities())
-    {
-        plan.AddEntity(entity);
-    }
-    foreach (EntityWorldContainmentState relation in world.CaptureContainment())
-    {
-        plan.AddContainment(relation);
-    }
-    plan.AddComponentFamily(EngineComponentTypes.Transform, world.CaptureComponentFamily(EngineComponentTypes.Transform));
-    plan.AddComponentFamily(EngineComponentTypes.CharacterMotion, world.CaptureComponentFamily(EngineComponentTypes.CharacterMotion));
-    plan.AddComponentFamily(health, world.CaptureComponentFamily(health));
-    plan.AddComponentFamily(armor, world.CaptureComponentFamily(armor));
-
-    EntityWorldRestoreCandidate candidate = world.PrepareRestore(plan, revisionBefore);
-    candidate.Publish();
-    candidate.Publish();
-    Require(world.Revision == revisionBefore + 1, "managed restore candidate did not publish exactly once");
-    Throws(
-        () => world.Set(pack, health, new Health(3), absentHealthRevision),
-        "absent component revision was not rebased during managed restore");
-
-    EntityWorldRestorePlan invalid = new(world.Revision, world.NextEntityValue);
-    foreach (EntityWorldEntityState entity in world.CaptureEntities())
-    {
-        invalid.AddEntity(entity);
-    }
-    foreach (EntityWorldContainmentState relation in world.CaptureContainment())
-    {
-        invalid.AddContainment(relation);
-    }
-    invalid.AddComponentFamily(EngineComponentTypes.Transform, world.CaptureComponentFamily(EngineComponentTypes.Transform));
-    invalid.AddComponentFamily(EngineComponentTypes.CharacterMotion, world.CaptureComponentFamily(EngineComponentTypes.CharacterMotion));
-    invalid.AddComponentFamily(
-        health,
-        world.CaptureComponentFamily(health)
-            .Select(slot => slot.Entity == actor ? slot with { Present = true, Value = new Health(-1) } : slot)
-            .ToArray());
-    invalid.AddComponentFamily(armor, world.CaptureComponentFamily(armor));
-    Throws(
-        () => world.PrepareRestore(invalid, world.Revision),
-        "invalid managed restore input was accepted");
-    Require(world.Get(actor, health).Current == 10, "rejected managed restore input changed live state");
-}
-
 
 sealed class SpatialServiceFake : ISpatialService
 {
@@ -1267,15 +1136,4 @@ sealed class EntityCheckpointCodec : IProductStateCodec<EntityCheckpoint>
         => payload.Length == PayloadLength
             ? new EntityCheckpoint(payload[0])
             : throw new InvalidOperationException("entity checkpoint payload had an unexpected length");
-}
-
-sealed class RecordingResolutionTransaction : IResolutionTransaction
-{
-    public bool Staged { get; private set; }
-    public bool Committed { get; private set; }
-    public bool Aborted { get; private set; }
-
-    public void Stage() => Staged = true;
-    public void Commit() => Committed = true;
-    public void Abort() => Aborted = true;
 }

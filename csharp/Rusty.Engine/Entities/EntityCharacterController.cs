@@ -83,18 +83,18 @@ public sealed class EntityCharacterController
             Scale = transform.Scale,
         };
 
-        EntityWorldBatchCandidate managed = _entities.PrepareBatch(
+        EntityEdit managed = _entities.PrepareBatch(
             new EntityBatch()
-                .Mutate(world => world.Set(
+                .Set(
                     entity,
                     EngineComponentTypes.Transform,
                     managedTransform,
-                    guard.TransformRevision))
-                .Mutate(world => world.Set(
+                    guard.TransformRevision)
+                .Set(
                     entity,
                     EngineComponentTypes.CharacterMotion,
                     native.Motion,
-                    guard.MotionRevision)),
+                    guard.MotionRevision),
             guard.StoreRevision);
         managed.Publish();
         return new EntityCharacterControllerReceipt(entity, native, managed.Receipt, guard);

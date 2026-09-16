@@ -616,6 +616,40 @@ static void ExerciseManagedInventory()
         && world.TryGetContainer(new EntityId(RifleEntity), out EntityId newOwner)
         && newOwner == new EntityId(SecondOwner),
         "detached unequip and transfer did not publish together");
+    ExpectInvalidOperation(
+        () => transfer.View(new EntityId(SecondOwner)),
+        "published inventory edit retained its detached state");
+
+    InventoryEdit rejectedEdit = world.Prepare();
+    rejectedEdit.Grant(new EntityId(Owner), ammunition, 1);
+    ExpectMechanicsError(
+        () => rejectedEdit.Consume(new EntityId(Owner), ammunition, 10),
+        "rejected edit operation was accepted");
+    ExpectInvalidOperation(
+        rejectedEdit.Publish,
+        "failed inventory edit published staged changes");
+    Require(world.View(new EntityId(Owner)).Stacks.Single().Quantity == 5,
+        "failed inventory edit changed the live owner");
+
+    InventoryEdit staleEdit = world.Prepare();
+    staleEdit.Grant(new EntityId(Owner), ammunition, 1);
+    world.Grant(new EntityId(Owner), ammunition, 1);
+    ExpectMechanicsError(staleEdit.Publish, "stale inventory edit was published");
+    ExpectInvalidOperation(staleEdit.Publish, "stale inventory edit was retried");
+    Require(world.View(new EntityId(Owner)).Stacks.Single().Quantity == 6,
+        "stale inventory edit overwrote current state");
+
+    InventoryEdit discardedEdit = world.Prepare();
+    discardedEdit.Dispose();
+    ExpectInvalidOperation(
+        () => discardedEdit.Grant(new EntityId(Owner), ammunition, 1),
+        "disposed inventory edit remained usable");
+
+    InventoryEdit cancelledEdit = world.Prepare();
+    cancelledEdit.Cancel();
+    ExpectInvalidOperation(
+        () => cancelledEdit.View(new EntityId(Owner)),
+        "cancelled inventory edit retained its detached state");
 
     EquipmentService.Equip(
         world,

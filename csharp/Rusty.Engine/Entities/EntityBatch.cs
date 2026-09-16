@@ -3,7 +3,6 @@ namespace Rusty.Engine.Entities;
 /// <summary>
 /// Explicit preparation of membership and value-fact replacements. Typed operations preserve
 /// attached class references; they do not snapshot or roll back mutable object graphs.
-/// Legacy callback batches require detached copies and must not mutate external captures.
 /// </summary>
 public sealed class EntityBatch
 {
@@ -32,18 +31,7 @@ public sealed class EntityBatch
         return this;
     }
 
-    /// <summary>Legacy detached callback edit. Uncopiable reference components reject preparation.</summary>
-    public EntityBatch Mutate(Action<EntityStore> mutation)
-    {
-        ArgumentNullException.ThrowIfNull(mutation);
-        HasCallbacks = true;
-        _mutations.Add(mutation);
-        return this;
-    }
-
-    internal bool HasCallbacks { get; private set; }
-
     internal IReadOnlyList<Action<EntityStore>> Mutations => _mutations;
 }
 
-public readonly record struct EntityBatchReceipt(ulong RevisionBefore, ulong RevisionAfter, int MutationCount);
+public readonly record struct EntityBatchReceipt(ulong RevisionBefore, ulong RevisionAfter);

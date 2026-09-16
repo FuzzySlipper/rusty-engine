@@ -118,7 +118,7 @@ public sealed class EntityDynamicsAdapter
 
         ValidateGuard(guard, CaptureGuard(projectedBindings));
         ValidateNativeReceipt(projectedBindings, native);
-        EntityWorldBatchCandidate managed = _entities.PrepareBatch(BuildBatch(guard, native), guard.StoreRevision);
+        EntityEdit managed = _entities.PrepareBatch(BuildBatch(guard, native), guard.StoreRevision);
         managed.Publish();
         return new EntityDynamicsAdapterReceipt(native, managed.Receipt, guard);
     }
@@ -254,19 +254,8 @@ public sealed class EntityDynamicsAdapter
                 readout.LinearVelocity,
                 readout.AngularVelocity,
                 readout.Sleeping);
-            batch.Mutate(world =>
-            {
-                world.Set(
-                    component.Entity,
-                    EngineComponentTypes.Transform,
-                    transform,
-                    component.TransformRevision);
-                world.Set(
-                    component.Entity,
-                    EngineComponentTypes.DynamicsMotion,
-                    motion,
-                    component.MotionRevision);
-            });
+            batch.Set(component.Entity, EngineComponentTypes.Transform, transform, component.TransformRevision)
+                .Set(component.Entity, EngineComponentTypes.DynamicsMotion, motion, component.MotionRevision);
         }
         return batch;
     }

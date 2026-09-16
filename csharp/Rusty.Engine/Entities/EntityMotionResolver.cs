@@ -76,12 +76,12 @@ public sealed class EntityMotionResolver
             throw new InvalidOperationException($"Motion target {target.Value} is not an active Transform/collider entity.");
         }
 
-        var batch = new EntityBatch().Mutate(world => world.Set(
+        var batch = new EntityBatch().Set(
             target,
             EngineComponentTypes.Transform,
             resolution.CandidateTransform,
-            targetGuard.TransformRevision));
-        EntityWorldBatchCandidate prepared = _entities.PrepareBatch(batch, guard.StoreRevision);
+            targetGuard.TransformRevision);
+        EntityEdit prepared = _entities.PrepareBatch(batch, guard.StoreRevision);
         prepared.Publish();
         return new EntityMotionResolverReceipt(resolution, prepared.Receipt, guard);
     }

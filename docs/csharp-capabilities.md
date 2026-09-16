@@ -136,10 +136,9 @@ native services or mandatory framework layers:
 | Namespace | Current role |
 | --- | --- |
 | [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | Optional update-pipeline and admitted-step scheduling helpers. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Product-owned entity/component storage, revisions, batches, snapshots, and selected Engine adapters. |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, scoped value edits, and selected Engine adapters. |
 | [`Rusty.Engine.Mechanics`](../csharp/Rusty.Engine/Mechanics) | Reusable managed values, stats, tracks, sources, effects, inventory, and equipment mechanisms. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Product codecs, stores, restore plans, and entity-world persistence composition. |
-| [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine/Resolution) | Ordinary managed structural coordination and transaction helpers. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product codecs, stores, and migrations. |
 | [`Rusty.Engine.StateMachine`](../csharp/Rusty.Engine/StateMachine) | Product-owned managed state-machine definitions and instances. |
 
 Using one of these namespaces is optional. A product may organize its own
@@ -187,7 +186,7 @@ presentation intent remains in Rust; gameplay decisions remain in C#.
 
 The supported downstream path does not include compiled TypeScript gameplay,
 JSON-authored gameplay packages, a downstream Rust SDK facade, or native
-Rules, Mechanics, Resolution, and State Machine service families. Git history
+Rules, Mechanics, and State Machine service families. Git history
 retains their implementation and migration rationale when historical evidence
 is needed; current products should not carry compatibility adapters for them.
 

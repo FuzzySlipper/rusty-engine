@@ -15,6 +15,7 @@ public sealed class EntityStore : IDisposable
     private StoreState _state;
     private bool _isDisposed;
     private bool _staging;
+    private readonly HashSet<Type> _editedFamilies = [];
 
     public EntityStore(IEnumerable<ComponentType>? componentTypes = null)
     {
@@ -361,6 +362,7 @@ public sealed class EntityStore : IDisposable
         RequireAlive(entity);
         ComponentTable<T> table = GetTable(componentType);
         EnsureComponentRevision(entity, componentType, table, expectedRevision);
+        table = WritableTable(table);
         if (!table.Set(entity, value))
         {
             return;
@@ -426,17 +428,17 @@ public sealed class EntityStore : IDisposable
 
     public EntityBatchReceipt Commit(EntityBatch batch, ulong? expectedRevision = null)
     {
-        EntityWorldBatchCandidate prepared = PrepareBatch(batch, expectedRevision);
+        EntityEdit prepared = PrepareBatch(batch, expectedRevision);
         prepared.Publish();
         return prepared.Receipt;
     }
 
     /// <summary>
     /// Validates and stages one batch without changing the live store. This is
-    /// the managed half of a synchronous cross-owner transaction: callers
-    /// publish it only after their other owner has committed successfully.
+    /// a scoped set of value replacements. Callers coordinating another owner
+    /// must manage its commit order; this edit cannot roll that owner back.
     /// </summary>
-    public EntityWorldBatchCandidate PrepareBatch(EntityBatch batch, ulong? expectedRevision = null)
+    public EntityEdit PrepareBatch(EntityBatch batch, ulong? expectedRevision = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(batch);
@@ -446,7 +448,7 @@ public sealed class EntityStore : IDisposable
         }
 
         ulong revisionBefore = _state.Revision;
-        StoreState stagedState = _state.Clone(detached: batch.HasCallbacks);
+        StoreState stagedState = _state.ForkForEdit();
         var staged = new EntityStore(stagedState, staging: true);
         foreach (Action<EntityStore> mutation in batch.Mutations)
         {
@@ -457,98 +459,11 @@ public sealed class EntityStore : IDisposable
         {
             staged._state.Revision = checked(revisionBefore + 1);
         }
-        return new EntityWorldBatchCandidate(
+        return new EntityEdit(
             this,
             staged._state,
             revisionBefore,
-            new EntityBatchReceipt(revisionBefore, staged._state.Revision, batch.Mutations.Count));
-    }
-
-    /// <summary>Legacy explicit detached capture. Reference-bearing values require opt-in copy codecs.</summary>
-    public EntityWorldSnapshot Snapshot()
-    {
-        ThrowIfDisposed();
-        return new EntityWorldSnapshot(_state.Clone());
-    }
-
-    /// <summary>Returns copied entity lifecycle and revision evidence in entity-id order.</summary>
-    public IReadOnlyList<EntityWorldEntityState> CaptureEntities()
-    {
-        ThrowIfDisposed();
-        return _state.Entities
-            .Select(entry => new EntityWorldEntityState(
-                new EntityId(entry.Key),
-                entry.Value.Lifecycle,
-                entry.Value.Revision))
-            .ToArray();
-    }
-
-    /// <summary>Returns copied canonical containment evidence in child-id order.</summary>
-    public IReadOnlyList<EntityWorldContainmentState> CaptureContainment()
-    {
-        ThrowIfDisposed();
-        return _state.Containment
-            .Select(entry => new EntityWorldContainmentState(new EntityId(entry.Key), new EntityId(entry.Value)))
-            .ToArray();
-    }
-
-    /// <summary>
-    /// Returns copied present/absent evidence for every known entity in one registered typed
-    /// component family. The product owns how this evidence is encoded durably.
-    /// </summary>
-    public IReadOnlyList<EntityWorldComponentSlot<T>> CaptureComponentFamily<T>(ComponentType<T> componentType)
-        where T : notnull
-    {
-        ThrowIfDisposed();
-        return GetTable(componentType).CaptureSlots(_state.Entities.Keys.Select(value => new EntityId(value)));
-    }
-
-    public void Restore(EntityWorldSnapshot snapshot, ulong? expectedRevision = null)
-    {
-        PrepareRestore(snapshot, expectedRevision).Publish();
-    }
-
-    /// <summary>
-    /// Builds a fully validated in-process restore candidate. This lets a narrow composition
-    /// surface coordinate managed validation with an Engine-owned prepared candidate before either
-    /// store is published.
-    /// </summary>
-    internal EntityWorldRestoreCandidate PrepareRestore(EntityWorldSnapshot snapshot, ulong? expectedRevision)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(snapshot);
-        if (expectedRevision is ulong expected && expected != _state.Revision)
-        {
-            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
-        }
-        EnsureSameRegistrations(snapshot.State);
-        ulong revisionBefore = _state.Revision;
-        StoreState restored = snapshot.State.Clone();
-        restored.ValidateComponents();
-        restored.ValidateContainment();
-        restored.RebaseRevisionsAfter(_state);
-        return new EntityWorldRestoreCandidate(this, restored, revisionBefore);
-    }
-
-    /// <summary>
-    /// Prepares a fully validated detached candidate from product-decoded semantic evidence.
-    /// Durable schema, codec, and migration ownership remain with the product.
-    /// </summary>
-    public EntityWorldRestoreCandidate PrepareRestore(
-        EntityWorldRestorePlan plan,
-        ulong? expectedRevision = null)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(plan);
-        if (expectedRevision is ulong expected && expected != _state.Revision)
-        {
-            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
-        }
-
-        ulong revisionBefore = _state.Revision;
-        StoreState restored = BuildRestoreState(plan);
-        restored.RebaseRevisionsAfter(_state);
-        return new EntityWorldRestoreCandidate(this, restored, revisionBefore);
+            new EntityBatchReceipt(revisionBefore, staged._state.Revision));
     }
 
     public EntityStoreDiagnostics Diagnostics(int maxEntitySample = MaximumDiagnosticSample)
@@ -789,7 +704,25 @@ public sealed class EntityStore : IDisposable
         }
     }
 
-    private void TouchEntity(EntityId entity) => RequireEntity(entity).Revision++;
+    private void TouchEntity(EntityId entity)
+    {
+        EntityRecord record = RequireEntity(entity);
+        if (_staging)
+        {
+            record = record.Clone();
+            _state.Entities[entity.Value] = record;
+        }
+        record.Revision++;
+    }
+
+    private ComponentTable<T> WritableTable<T>(ComponentTable<T> table) where T : notnull
+    {
+        if (!_staging || !_editedFamilies.Add(typeof(T))) return table;
+        var copy = (ComponentTable<T>)table.CopySlots();
+        _state.Tables[copy.Descriptor.Key] = copy;
+        _state.Families[typeof(T)] = copy;
+        return copy;
+    }
 
     private void Mutated()
     {
@@ -797,129 +730,6 @@ public sealed class EntityStore : IDisposable
         {
             _state.Revision = checked(_state.Revision + 1);
         }
-    }
-
-    private void EnsureSameRegistrations(StoreState snapshot)
-    {
-        if (_state.Tables.Count != snapshot.Tables.Count || _state.Tables.Keys.Except(snapshot.Tables.Keys).Any())
-        {
-            throw new InvalidOperationException("Snapshot component registrations do not match this store.");
-        }
-        foreach ((ComponentTypeKey key, ComponentTable table) in _state.Tables)
-        {
-            if (snapshot.Tables[key].Descriptor != table.Descriptor)
-            {
-                throw new InvalidOperationException($"Snapshot component descriptor for key {key.Value} does not match this store.");
-            }
-        }
-    }
-
-    private StoreState BuildRestoreState(EntityWorldRestorePlan plan)
-    {
-        if (plan.SavedNextEntityValue == 0)
-        {
-            throw new InvalidOperationException("Restore next-entity high-watermark must be non-zero.");
-        }
-        EntityWorldRestorePlan.ValidateRevision(plan.SavedRevision, "store");
-
-        Dictionary<ulong, EntityWorldEntityState> entities = [];
-        foreach (EntityWorldEntityState state in plan.Entities)
-        {
-            if (state.Id.Value == 0 || state.Id.Value >= plan.SavedNextEntityValue)
-            {
-                throw new InvalidOperationException(
-                    $"Restore entity identity {state.Id.Value} is outside its saved high-watermark.");
-            }
-            if (!entities.TryAdd(state.Id.Value, state))
-            {
-                throw new InvalidOperationException($"Restore contains duplicate entity {state.Id.Value}.");
-            }
-            EntityWorldRestorePlan.ValidateRevision(state.Revision, $"entity {state.Id.Value}");
-            EntityLifecycleValidation.EnsureDefined(state.Lifecycle, nameof(state.Lifecycle));
-        }
-
-        HashSet<ulong> containmentChildren = [];
-        foreach (EntityWorldContainmentState relation in plan.Containment)
-        {
-            if (relation.Child.Value == 0 || relation.Container.Value == 0)
-            {
-                throw new InvalidOperationException("Restore containment identities must be non-zero.");
-            }
-            if (!entities.ContainsKey(relation.Child.Value) || !entities.ContainsKey(relation.Container.Value))
-            {
-                throw new InvalidOperationException("Restore containment references an unknown entity.");
-            }
-            if (!containmentChildren.Add(relation.Child.Value))
-            {
-                throw new InvalidOperationException($"Restore contains duplicate containment for child {relation.Child.Value}.");
-            }
-        }
-
-        if (plan.ComponentFamilies.Count != _state.Tables.Count)
-        {
-            throw new InvalidOperationException("Restore must declare every registered component family exactly once.");
-        }
-        HashSet<ComponentTypeKey> familyKeys = [];
-        foreach (EntityWorldRestorePlan.ComponentFamilyPlan family in plan.ComponentFamilies)
-        {
-            if (!familyKeys.Add(family.Descriptor.Key))
-            {
-                throw new InvalidOperationException($"Restore contains duplicate component family {family.Descriptor.Key.Value}.");
-            }
-            family.Validate(_state.Tables, entities);
-        }
-
-        StoreState restored = new()
-        {
-            Revision = plan.SavedRevision,
-            NextEntityValue = plan.SavedNextEntityValue,
-        };
-        foreach ((ComponentTypeKey key, ComponentTable table) in _state.Tables)
-        {
-            restored.AddTable(table.CreateEmpty());
-        }
-        foreach ((ulong id, EntityWorldEntityState state) in entities)
-        {
-            restored.Entities.Add(id, new EntityRecord(state.Lifecycle, state.Revision));
-        }
-        foreach (EntityWorldContainmentState relation in plan.Containment)
-        {
-            restored.Containment.Add(relation.Child.Value, relation.Container.Value);
-        }
-        restored.RebuildContainmentReverseIndex();
-        foreach (EntityWorldRestorePlan.ComponentFamilyPlan family in plan.ComponentFamilies)
-        {
-            family.Import(restored);
-        }
-
-        restored.ValidateComponents();
-        restored.ValidateContainment();
-        // Older explicit saves may contain tombstones. Keep only their allocator high-watermark.
-        foreach (ulong id in restored.Entities.Where(entry => entry.Value.Lifecycle == EntityLifecycle.Tombstoned).Select(entry => entry.Key).ToArray())
-        {
-            restored.Entities.Remove(id);
-            foreach (ComponentTable table in restored.Tables.Values)
-            {
-                table.Forget(new EntityId(id));
-            }
-        }
-        return restored;
-    }
-
-    private static ulong RebaseRevision(ulong saved, ulong current)
-    {
-        if (saved == ulong.MaxValue || current == ulong.MaxValue)
-        {
-            throw new InvalidOperationException("Restore revision cannot be rebased without overflow.");
-        }
-        return Math.Max(saved, current) + 1;
-    }
-
-    internal void PublishPreparedRestore(StoreState restored, ulong preparedRevision)
-    {
-        ThrowIfDisposed();
-        EnsureStoreRevision(preparedRevision);
-        _state = restored;
     }
 
     internal void PublishPreparedBatch(StoreState state, ulong preparedRevision)
@@ -936,127 +746,33 @@ public sealed class EntityStore : IDisposable
         internal SortedDictionary<ulong, EntityRecord> Entities { get; } = [];
         internal SortedDictionary<ComponentTypeKey, ComponentTable> Tables { get; } = [];
         internal Dictionary<Type, ComponentTable> Families { get; } = [];
+        internal SortedDictionary<ulong, ulong> Containment { get; private init; } = [];
+        internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; private init; } = [];
 
         internal void AddTable(ComponentTable table)
         {
             Tables.Add(table.Descriptor.Key, table);
             Families.Add(table.Descriptor.Family, table);
         }
-        internal SortedDictionary<ulong, ulong> Containment { get; } = [];
-        internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; } = [];
 
-        internal StoreState Clone(bool detached = true)
+        // Only Create and typed Set can run on an edit's private store. They do not
+        // change relations. Entity records copy on write and value families on first write;
+        // unrelated classes remain the exact same attachments, never graph copies.
+        internal StoreState ForkForEdit()
         {
-            var result = new StoreState { Revision = Revision, NextEntityValue = NextEntityValue };
+            var result = new StoreState
+            {
+                Revision = Revision,
+                NextEntityValue = NextEntityValue,
+                Containment = Containment,
+                ContainedChildren = ContainedChildren,
+            };
             foreach ((ulong id, EntityRecord entity) in Entities)
-            {
-                result.Entities.Add(id, entity.Clone());
-            }
-            foreach ((ComponentTypeKey key, ComponentTable table) in Tables)
-            {
-                result.AddTable(table.Clone(detached));
-            }
-            foreach ((ulong child, ulong container) in Containment)
-            {
-                result.Containment.Add(child, container);
-            }
-            foreach ((ulong container, SortedSet<ulong> children) in ContainedChildren)
-            {
-                result.ContainedChildren.Add(container, [.. children]);
-            }
+                result.Entities.Add(id, entity);
+            foreach (ComponentTable table in Tables.Values)
+                result.AddTable(table);
             return result;
         }
-
-        internal void RebaseRevisionsAfter(StoreState current)
-        {
-            // Entity identities are monotonic across an in-process restore. A captured next-id
-            // cursor must never roll back below a current-only entity and permit ABA reuse.
-            NextEntityValue = Math.Max(NextEntityValue, current.NextEntityValue);
-            foreach ((ulong id, EntityRecord entity) in Entities)
-            {
-                ulong currentRevision = current.Entities.TryGetValue(id, out EntityRecord? value) ? value.Revision : 0;
-                entity.Revision = RebaseRevision(entity.Revision, currentRevision);
-            }
-            foreach (ComponentTable table in Tables.Values)
-            {
-                if (!current.Tables.TryGetValue(table.Descriptor.Key, out ComponentTable? currentTable))
-                {
-                    throw new InvalidOperationException("Component registrations changed while a restore was prepared.");
-                }
-                table.RebaseRevisionsAfter(currentTable, Entities.Keys.Select(value => new EntityId(value)));
-            }
-            Revision = RebaseRevision(Revision, current.Revision);
-        }
-
-        internal void ValidateComponents()
-        {
-            foreach (ComponentTable table in Tables.Values)
-            {
-                table.ValidateValues();
-            }
-        }
-
-
-        internal void ValidateContainment()
-        {
-            foreach ((ulong child, ulong container) in Containment)
-            {
-                if (child == container || !IsAlive(child) || !IsAlive(container)
-                    || !ContainedChildren.TryGetValue(container, out SortedSet<ulong>? children)
-                    || !children.Contains(child))
-                {
-                    throw new InvalidOperationException("Snapshot containment is inconsistent.");
-                }
-                var visited = new HashSet<ulong> { child };
-                for (ulong current = container; Containment.TryGetValue(current, out ulong next); current = next)
-                {
-                    if (!visited.Add(current) || next == child)
-                    {
-                        throw new InvalidOperationException("Snapshot containment contains a cycle.");
-                    }
-                }
-            }
-            foreach ((ulong container, SortedSet<ulong> children) in ContainedChildren)
-            {
-                if (!IsAlive(container) || children.Any(child => !IsAlive(child)
-                    || !Containment.TryGetValue(child, out ulong owner) || owner != container))
-                {
-                    throw new InvalidOperationException("Snapshot containment reverse index is inconsistent.");
-                }
-            }
-        }
-
-        internal void RebuildContainmentReverseIndex()
-        {
-            ContainedChildren.Clear();
-            foreach ((ulong child, ulong container) in Containment)
-            {
-                if (!ContainedChildren.TryGetValue(container, out SortedSet<ulong>? children))
-                {
-                    children = [];
-                    ContainedChildren.Add(container, children);
-                }
-                children.Add(child);
-            }
-        }
-
-        internal void ImportComponentFamily<T>(
-            ComponentType<T> descriptor,
-            IReadOnlyList<EntityWorldComponentSlot<T>> slots)
-            where T : notnull
-        {
-            if (!Tables.TryGetValue(descriptor.Key, out ComponentTable? table)
-                || table is not ComponentTable<T> typedTable
-                || !ReferenceEquals(table.Descriptor, descriptor))
-            {
-                throw new InvalidOperationException(
-                    $"Restore component family {descriptor.Key.Value} is not registered with this store.");
-            }
-            typedTable.ImportSlots(slots);
-        }
-
-        private bool IsAlive(ulong entity) => Entities.TryGetValue(entity, out EntityRecord? record)
-            && record.Lifecycle != EntityLifecycle.Tombstoned;
     }
 
     internal sealed class EntityRecord(EntityLifecycle lifecycle, ulong revision)
@@ -1070,17 +786,13 @@ public sealed class EntityStore : IDisposable
     {
         protected ComponentTable(ComponentType descriptor) => Descriptor = descriptor;
         internal ComponentType Descriptor { get; private protected set; }
-        internal abstract ComponentTable Clone(bool detached);
+        internal abstract ComponentTable CopySlots();
         internal abstract void BindDescriptor(ComponentType descriptor);
         internal abstract void RelocateAutomaticDescriptor(ComponentTypeKey key);
         internal abstract void Forget(EntityId entity);
-        internal abstract ComponentTable CreateEmpty();
         internal abstract bool Contains(EntityId entity);
         internal abstract ulong RevisionFor(EntityId entity);
         internal abstract bool Remove(EntityId entity);
-        internal abstract void InvalidateRevisions();
-        internal abstract void RebaseRevisionsAfter(ComponentTable current, IEnumerable<EntityId> entities);
-        internal abstract void ValidateValues();
         internal abstract ComponentTypeDiagnostics Diagnostics(int maxEntitySample);
     }
 
@@ -1091,13 +803,11 @@ public sealed class EntityStore : IDisposable
 
         public ComponentTable(ComponentType<T> descriptor) : base(descriptor) { }
 
-        private ComponentTable(ComponentTable<T> source, bool detached) : base(source.TypedDescriptor)
+        private ComponentTable(ComponentTable<T> source) : base(source.TypedDescriptor)
         {
             foreach ((ulong entity, T value) in source._values)
             {
-                T copied = detached ? TypedDescriptor.CopyForDetachedUse(in value) : value;
-                if (detached) TypedDescriptor.Validate(in copied);
-                _values.Add(entity, copied);
+                _values.Add(entity, value);
             }
             foreach ((ulong entity, ulong revision) in source._revisions)
             {
@@ -1107,7 +817,7 @@ public sealed class EntityStore : IDisposable
 
         private ComponentType<T> TypedDescriptor => (ComponentType<T>)Descriptor;
 
-        internal override ComponentTable Clone(bool detached) => new ComponentTable<T>(this, detached);
+        internal override ComponentTable CopySlots() => new ComponentTable<T>(this);
 
         internal override void RelocateAutomaticDescriptor(ComponentTypeKey key)
             => Descriptor = ComponentType<T>.CreateAutomatic(key);
@@ -1127,8 +837,6 @@ public sealed class EntityStore : IDisposable
             _values.Remove(entity.Value);
             _revisions.Remove(entity.Value);
         }
-
-        internal override ComponentTable CreateEmpty() => new ComponentTable<T>(TypedDescriptor);
 
         internal override bool Contains(EntityId entity) => _values.ContainsKey(entity.Value);
 
@@ -1160,64 +868,6 @@ public sealed class EntityStore : IDisposable
         }
 
         internal override ulong RevisionFor(EntityId entity) => _revisions.GetValueOrDefault(entity.Value);
-
-        internal IReadOnlyList<EntityWorldComponentSlot<T>> CaptureSlots(IEnumerable<EntityId> entities)
-        {
-            List<EntityWorldComponentSlot<T>> result = [];
-            foreach (EntityId entity in entities)
-            {
-                bool present = _values.TryGetValue(entity.Value, out T? value);
-                if (present)
-                {
-                    value = TypedDescriptor.CopyForDetachedUse(value!);
-                }
-                result.Add(new EntityWorldComponentSlot<T>(entity, present, value, RevisionFor(entity)));
-            }
-            return result;
-        }
-
-        internal void ImportSlots(IReadOnlyList<EntityWorldComponentSlot<T>> slots)
-        {
-            foreach (EntityWorldComponentSlot<T> slot in slots)
-            {
-                if (slot.Present)
-                {
-                    T value = slot.Value!;
-                    T copied = TypedDescriptor.CopyForDetachedUse(in value);
-                    TypedDescriptor.Validate(in copied);
-                    _values.Add(slot.Entity.Value, copied);
-                }
-                _revisions.Add(slot.Entity.Value, slot.Revision);
-            }
-        }
-
-        internal override void InvalidateRevisions()
-        {
-            foreach (ulong entity in _revisions.Keys.ToArray())
-            {
-                _revisions[entity] = checked(_revisions[entity] + 1);
-            }
-        }
-
-        internal override void RebaseRevisionsAfter(ComponentTable current, IEnumerable<EntityId> entities)
-        {
-            if (current is not ComponentTable<T> typedCurrent)
-            {
-                throw new InvalidOperationException("Component registrations changed while a restore was prepared.");
-            }
-            foreach (EntityId entity in entities)
-            {
-                _revisions[entity.Value] = RebaseRevision(RevisionFor(entity), typedCurrent.RevisionFor(entity));
-            }
-        }
-
-        internal override void ValidateValues()
-        {
-            foreach (T value in _values.Values)
-            {
-                TypedDescriptor.Validate(in value);
-            }
-        }
 
         internal IEnumerable<(EntityId Entity, T Value)> Values()
         {

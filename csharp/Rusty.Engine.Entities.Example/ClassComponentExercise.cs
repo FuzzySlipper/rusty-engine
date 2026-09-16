@@ -6,7 +6,6 @@ internal static class ClassComponentExercise
     public static void Run()
     {
         ExerciseAutomaticKeyPromotion();
-        ExerciseRestoreHighWatermark();
         using var store = new EntityStore();
         EntityId actor = store.Create();
         EntityId other = store.Create();
@@ -78,14 +77,8 @@ internal static class ClassComponentExercise
             "class debug projection cached by structural revision");
         store.Replace(actor, state);
         Require(store.GetComponentRevision(actor, explicitState) == slot, "slot revision tracked object internals");
-        Throws(() => store.Snapshot(), "whole-store capture silently shallow-copied a class graph");
-        bool callbackRan = false;
-        Throws(() => store.PrepareBatch(new EntityBatch().Mutate(_ => callbackRan = true)),
-            "legacy callback preparation accepted an uncopiable class graph");
-        Require(!callbackRan, "unsupported detached preparation ran the mutation callback");
-
         // Typed preparation replaces selected value slots only. Class identity/state remains live.
-        EntityWorldBatchCandidate edit = store.PrepareBatch(new EntityBatch().Set(actor, facts, new Position(9)), store.Revision);
+        EntityEdit edit = store.PrepareBatch(new EntityBatch().Set(actor, facts, new Position(9)), store.Revision);
         state.Health = 2;
         edit.Publish();
         Require(ReferenceEquals(store.Get<ActorState>(actor), state) && state.Health == 2
@@ -104,7 +97,7 @@ internal static class ClassComponentExercise
             "destroy cascaded into children or retained relations");
         Require(!state.Disposed && state.Health == 2 && store.Get<ActorState>(other).Health == 2,
             "destroy disposed or invalidated shared references");
-        Require(store.Diagnostics().TombstonedCount == 0 && store.CaptureEntities().All(row => row.Id != actor),
+        Require(store.Diagnostics().TombstonedCount == 0 && store.Diagnostics().EntityCount == 2,
             "destroy retained a tombstone record");
         Throws(() => store.Get<ActorState>(actor), "destroyed entity lookup succeeded");
         EntityId next = store.Create();
@@ -131,25 +124,6 @@ internal static class ClassComponentExercise
         store.Register(explicitState); // Promotion also works at the family's own automatic key.
         Require(ReferenceEquals(store.Get(entity, explicitState), state) && store.Get<Position>(entity).X == 1,
             "automatic diagnostic keys blocked explicit descriptor registration");
-    }
-
-    private static void ExerciseRestoreHighWatermark()
-    {
-        using var store = new EntityStore();
-        EntityId first = store.Create();
-        EntityWorldSnapshot before = store.Snapshot();
-        EntityId later = store.Create();
-        store.Destroy(later);
-        store.Restore(before);
-        EntityId afterRestore = store.Create();
-        Require(afterRestore.Value > later.Value, "in-place restore reused a destroyed ID");
-
-        var legacy = new EntityWorldRestorePlan(0, later.Value + 1);
-        legacy.AddEntity(new EntityWorldEntityState(first, EntityLifecycle.Active, 1));
-        legacy.AddEntity(new EntityWorldEntityState(later, EntityLifecycle.Tombstoned, 1));
-        store.PrepareRestore(legacy).Publish();
-        Require(store.Diagnostics().EntityCount == 1 && !store.IsAlive(later), "restore retained old tombstone rows");
-        Require(store.Create().Value > afterRestore.Value, "explicit restore lowered the live allocator high-watermark");
     }
 
     private static void Require(bool condition, string message)

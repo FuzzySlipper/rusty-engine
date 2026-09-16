@@ -151,10 +151,10 @@ public sealed class EntityOriginRebaser
         EntityOriginRebaserPrepareReceipt prepared)
     {
         // Recheck all product-owned facts immediately before the native call.
-        // PrepareBatch then evaluates every managed mutation and validator into
-        // a detached state, leaving no fallible action after Engine commits.
+        // PrepareBatch validates the selected value replacements before native
+        // commit. It does not snapshot or promise rollback of class internals.
         ValidateGuard(prepared.Guard, CaptureGuard());
-        EntityWorldBatchCandidate managed = _entities.PrepareBatch(
+        EntityEdit managed = _entities.PrepareBatch(
             TransformBatch(prepared.Affected.Span, prepared.Guard.Components.Span),
             prepared.Guard.StoreRevision);
         WorldOriginCommitReceipt nativeReceipt = _worldOrigins.Commit(new WorldOriginCommitRequest(native));
@@ -179,11 +179,11 @@ public sealed class EntityOriginRebaser
             {
                 throw new InvalidOperationException("WorldOrigin prepared transform facts no longer match their managed entities.");
             }
-            batch.Mutate(world => world.Set(
+            batch.Set(
                 guard.Entity,
                 EngineComponentTypes.Transform,
                 fact.LocalTransform,
-                guard.TransformRevision));
+                guard.TransformRevision);
         }
         return batch;
     }
@@ -260,12 +260,9 @@ public sealed class EntityOriginRebaserPrepared : IDisposable
     /// </summary>
     public EntityOriginRebaserCommitReceipt Commit()
     {
-        WorldOriginPrepared native = _native
+        using WorldOriginPrepared native = Interlocked.Exchange(ref _native, null)
             ?? throw new ObjectDisposedException(nameof(EntityOriginRebaserPrepared));
-        EntityOriginRebaserCommitReceipt receipt = _owner.CommitPrepared(native, Receipt);
-        native.Dispose();
-        _native = null;
-        return receipt;
+        return _owner.CommitPrepared(native, Receipt);
     }
 
     public void Dispose()

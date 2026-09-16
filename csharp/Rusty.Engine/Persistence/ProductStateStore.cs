@@ -1,5 +1,4 @@
 using System.Buffers;
-using Rusty.Engine.Entities;
 
 namespace Rusty.Engine.Persistence;
 
@@ -116,47 +115,4 @@ public sealed class ProductStateStore<TState> : IDisposable
         }
         return _codec.Decode(payload);
     }
-}
-
-/// <summary>
-/// Product composition that checkpoints an in-process <see cref="EntityStore"/>
-/// only through product-supplied capture/restore delegates. It intentionally
-/// adds no native entity authority and no generic entity serialization schema.
-/// </summary>
-public sealed class EntityWorldProductStateStore<TState> : IDisposable
-{
-    private readonly EntityStore _world;
-    private readonly Func<EntityStore, TState> _capture;
-    private readonly Action<EntityStore, TState> _restore;
-    private readonly ProductStateStore<TState> _state;
-
-    public EntityWorldProductStateStore(
-        EntityStore world,
-        Func<EntityStore, TState> capture,
-        Action<EntityStore, TState> restore,
-        IEngineContext engine,
-        string scope,
-        IProductStateCodec<TState> codec,
-        IReadOnlyList<IProductStateMigration>? migrations = null)
-    {
-        _world = world ?? throw new ArgumentNullException(nameof(world));
-        _capture = capture ?? throw new ArgumentNullException(nameof(capture));
-        _restore = restore ?? throw new ArgumentNullException(nameof(restore));
-        _state = new ProductStateStore<TState>(engine, scope, codec, migrations);
-    }
-
-    public PersistenceSaveReceipt Save(string key, PersistenceRevisionGuard guard = PersistenceRevisionGuard.Any, ulong expectedRevision = 0) =>
-        _state.Save(key, _capture(_world), guard, expectedRevision);
-
-    public ProductStateLoad<TState> LoadAndRestore(string key)
-    {
-        ProductStateLoad<TState> loaded = _state.Load(key);
-        if (loaded.Present && loaded.State is not null)
-        {
-            _restore(_world, loaded.State);
-        }
-        return loaded;
-    }
-
-    public void Dispose() => _state.Dispose();
 }

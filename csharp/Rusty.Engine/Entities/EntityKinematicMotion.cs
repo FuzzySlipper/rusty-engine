@@ -65,11 +65,11 @@ public sealed class EntityKinematicMotionPrepared
         {
             throw new InvalidOperationException("A Kinematic phase candidate can only be applied once.");
         }
-        EntityKinematicMotion.ValidateGuard(Guard, EntityKinematicMotion.CaptureGuard(_entities, _colliders, checked((int)Guard.Components.Length)));
-        EntityBatch batch = EntityKinematicMotion.BuildBatch(Guard, Motion);
-        EntityWorldBatchCandidate staged = _entities.PrepareBatch(batch, Guard.StoreRevision);
-        staged.Publish();
         _applied = true;
+        EntityKinematicMotion.ValidateGuard(Guard, EntityKinematicMotion.CaptureGuard(_entities, _colliders, checked((int)Guard.Components.Length)));
+        EntityBatch batch = EntityKinematicMotion.BuildBatch(_entities, Guard, Motion);
+        EntityEdit staged = _entities.PrepareBatch(batch, Guard.StoreRevision);
+        staged.Publish();
         return new EntityKinematicMotionReceipt(Motion, staged.Receipt, Guard);
     }
 }
@@ -190,7 +190,7 @@ public sealed class EntityKinematicMotion
         }
     }
 
-    internal static EntityBatch BuildBatch(EntityKinematicMotionGuard guard, KinematicMotionLeaseReceipt motion)
+    internal static EntityBatch BuildBatch(EntityStore entities, EntityKinematicMotionGuard guard, KinematicMotionLeaseReceipt motion)
     {
         var batch = new EntityBatch();
         foreach (KinematicMotionCandidate candidate in motion.Candidates.Span)
@@ -202,22 +202,16 @@ public sealed class EntityKinematicMotion
             {
                 throw new InvalidOperationException($"Kinematic candidate {candidate.EntityId} did not change managed state.");
             }
-            batch.Mutate(world =>
+            if (transformChanged)
             {
-                if (transformChanged)
-                {
-                    world.Set(component.Entity, EngineComponentTypes.Transform, candidate.AfterTransform, component.TransformRevision);
-                }
-                if (velocityChanged)
-                {
-                    Kinematic current = world.Get(component.Entity, EngineComponentTypes.Kinematic);
-                    world.Set(
-                        component.Entity,
-                        EngineComponentTypes.Kinematic,
-                        new Kinematic(current.HalfExtents, candidate.AfterVelocity),
-                        component.KinematicRevision);
-                }
-            });
+                batch.Set(component.Entity, EngineComponentTypes.Transform, candidate.AfterTransform, component.TransformRevision);
+            }
+            if (velocityChanged)
+            {
+                Kinematic current = entities.Get(component.Entity, EngineComponentTypes.Kinematic);
+                batch.Set(component.Entity, EngineComponentTypes.Kinematic,
+                    new Kinematic(current.HalfExtents, candidate.AfterVelocity), component.KinematicRevision);
+            }
         }
         return batch;
     }
