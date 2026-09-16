@@ -11,38 +11,38 @@ namespace Rusty.Engine.Entities;
 public readonly record struct Kinematic(Vector3 HalfExtents, Vector3 Velocity);
 
 /// <summary>Exact managed revision evidence for one projected Kinematic row.</summary>
-public readonly record struct KinematicEntityWorldComponentGuard(
+public readonly record struct EntityKinematicMotionComponentGuard(
     EntityId Entity,
     ComponentRevision TransformRevision,
     ComponentRevision KinematicRevision,
     ComponentRevision ColliderRevision);
 
 /// <summary>Copied managed evidence that must still hold before applying a phase candidate.</summary>
-public readonly record struct KinematicEntityWorldGuard(
-    ulong WorldRevision,
-    ReadOnlyMemory<KinematicEntityWorldComponentGuard> Components);
+public readonly record struct EntityKinematicMotionGuard(
+    ulong StoreRevision,
+    ReadOnlyMemory<EntityKinematicMotionComponentGuard> Components);
 
 /// <summary>One completed pure phase plus its one managed publication receipt.</summary>
-public readonly record struct KinematicEntityWorldReceipt(
+public readonly record struct EntityKinematicMotionReceipt(
     KinematicMotionLeaseReceipt Motion,
     EntityBatchReceipt Managed,
-    KinematicEntityWorldGuard Guard);
+    EntityKinematicMotionGuard Guard);
 
 /// <summary>
 /// A copied, call-local Kinematic phase result. No native state remains after
-/// <see cref="KinematicEntityWorld.Prepare"/> returns; <see cref="Apply"/>
+/// <see cref="EntityKinematicMotion.Prepare"/> returns; <see cref="Apply"/>
 /// only rechecks and assigns canonical managed component state.
 /// </summary>
-public sealed class KinematicEntityWorldPrepared
+public sealed class EntityKinematicMotionPrepared
 {
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly ComponentType<SpatialCollider> _colliders;
     private bool _applied;
 
-    internal KinematicEntityWorldPrepared(
-        EntityWorld entities,
+    internal EntityKinematicMotionPrepared(
+        EntityStore entities,
         ComponentType<SpatialCollider> colliders,
-        KinematicEntityWorldGuard guard,
+        EntityKinematicMotionGuard guard,
         KinematicMotionLeaseReceipt motion)
     {
         _entities = entities;
@@ -51,26 +51,26 @@ public sealed class KinematicEntityWorldPrepared
         Motion = motion;
     }
 
-    public KinematicEntityWorldGuard Guard { get; }
+    public EntityKinematicMotionGuard Guard { get; }
 
     public KinematicMotionLeaseReceipt Motion { get; }
 
     /// <summary>
     /// Rechecks the copied projection, then publishes all changed Transform
-    /// and Kinematic values in exactly one assignment-only EntityWorld batch.
+    /// and Kinematic values in exactly one assignment-only EntityStore batch.
     /// </summary>
-    public KinematicEntityWorldReceipt Apply()
+    public EntityKinematicMotionReceipt Apply()
     {
         if (_applied)
         {
             throw new InvalidOperationException("A Kinematic phase candidate can only be applied once.");
         }
-        KinematicEntityWorld.ValidateGuard(Guard, KinematicEntityWorld.CaptureGuard(_entities, _colliders, checked((int)Guard.Components.Length)));
-        EntityBatch batch = KinematicEntityWorld.BuildBatch(Guard, Motion);
-        EntityWorldBatchCandidate staged = _entities.PrepareBatch(batch, Guard.WorldRevision);
+        EntityKinematicMotion.ValidateGuard(Guard, EntityKinematicMotion.CaptureGuard(_entities, _colliders, checked((int)Guard.Components.Length)));
+        EntityBatch batch = EntityKinematicMotion.BuildBatch(Guard, Motion);
+        EntityWorldBatchCandidate staged = _entities.PrepareBatch(batch, Guard.StoreRevision);
         staged.Publish();
         _applied = true;
-        return new KinematicEntityWorldReceipt(Motion, staged.Receipt, Guard);
+        return new EntityKinematicMotionReceipt(Motion, staged.Receipt, Guard);
     }
 }
 
@@ -79,16 +79,16 @@ public sealed class KinematicEntityWorldPrepared
 /// Kinematic motion family. Optional SpatialCollider values control dynamic
 /// blocking; an absent collider truthfully becomes disabled for that call.
 /// </summary>
-public sealed class KinematicEntityWorld
+public sealed class EntityKinematicMotion
 {
     private const int MinimumMaximumEntities = 1;
 
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly IKinematicService _kinematic;
     private readonly ComponentType<SpatialCollider> _colliders;
 
-    public KinematicEntityWorld(
-        EntityWorld entities,
+    public EntityKinematicMotion(
+        EntityStore entities,
         IKinematicService kinematic,
         ComponentType<SpatialCollider> colliders)
     {
@@ -103,12 +103,12 @@ public sealed class KinematicEntityWorld
     /// A null selection runs every projected body; an empty selection is an
     /// explicit selected phase that advances none.
     /// </summary>
-    public KinematicEntityWorldPrepared Prepare(
+    public EntityKinematicMotionPrepared Prepare(
         SpatialSession session,
         float deltaSeconds,
         int maximumEntities,
         ReadOnlyMemory<EntityId>? selection = null,
-        KinematicEntityWorldGuard? expectedGuard = null)
+        EntityKinematicMotionGuard? expectedGuard = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         if (maximumEntities < MinimumMaximumEntities)
@@ -116,8 +116,8 @@ public sealed class KinematicEntityWorld
             throw new ArgumentOutOfRangeException(nameof(maximumEntities));
         }
 
-        KinematicEntityWorldGuard guard = CaptureGuard(_entities, _colliders, maximumEntities);
-        if (expectedGuard is KinematicEntityWorldGuard expected)
+        EntityKinematicMotionGuard guard = CaptureGuard(_entities, _colliders, maximumEntities);
+        if (expectedGuard is EntityKinematicMotionGuard expected)
         {
             ValidateGuard(expected, guard);
         }
@@ -138,11 +138,11 @@ public sealed class KinematicEntityWorld
             selectedIds));
         ValidateGuard(guard, CaptureGuard(_entities, _colliders, maximumEntities));
         ValidateMotionReceipt(guard, motion, selectedIds, selection.HasValue);
-        return new KinematicEntityWorldPrepared(_entities, _colliders, guard, motion);
+        return new EntityKinematicMotionPrepared(_entities, _colliders, guard, motion);
     }
 
-    internal static KinematicEntityWorldGuard CaptureGuard(
-        EntityWorld entities,
+    internal static EntityKinematicMotionGuard CaptureGuard(
+        EntityStore entities,
         ComponentType<SpatialCollider> colliders,
         int maximumEntities)
     {
@@ -154,28 +154,28 @@ public sealed class KinematicEntityWorld
             throw new InvalidOperationException(
                 $"Kinematic has {joined.Count} active rows, exceeding its explicit batch bound {maximumEntities}.");
         }
-        var guards = new KinematicEntityWorldComponentGuard[joined.Count];
+        var guards = new EntityKinematicMotionComponentGuard[joined.Count];
         for (int index = 0; index < joined.Count; index++)
         {
             EntityId entity = joined[index].Entity;
-            guards[index] = new KinematicEntityWorldComponentGuard(
+            guards[index] = new EntityKinematicMotionComponentGuard(
                 entity,
                 entities.GetComponentRevision(entity, EngineComponentTypes.Transform),
                 entities.GetComponentRevision(entity, EngineComponentTypes.Kinematic),
                 entities.GetComponentRevision(entity, colliders));
         }
-        return new KinematicEntityWorldGuard(entities.Revision, guards);
+        return new EntityKinematicMotionGuard(entities.Revision, guards);
     }
 
-    internal static void ValidateGuard(KinematicEntityWorldGuard expected, KinematicEntityWorldGuard observed)
+    internal static void ValidateGuard(EntityKinematicMotionGuard expected, EntityKinematicMotionGuard observed)
     {
-        if (expected.WorldRevision != observed.WorldRevision)
+        if (expected.StoreRevision != observed.StoreRevision)
         {
             throw new InvalidOperationException(
-                $"Kinematic managed world revision is stale: expected {expected.WorldRevision}, actual {observed.WorldRevision}.");
+                $"Kinematic managed store revision is stale: expected {expected.StoreRevision}, actual {observed.StoreRevision}.");
         }
-        ReadOnlySpan<KinematicEntityWorldComponentGuard> expectedComponents = expected.Components.Span;
-        ReadOnlySpan<KinematicEntityWorldComponentGuard> observedComponents = observed.Components.Span;
+        ReadOnlySpan<EntityKinematicMotionComponentGuard> expectedComponents = expected.Components.Span;
+        ReadOnlySpan<EntityKinematicMotionComponentGuard> observedComponents = observed.Components.Span;
         if (expectedComponents.Length != observedComponents.Length)
         {
             throw new InvalidOperationException("Kinematic managed row set is stale.");
@@ -190,12 +190,12 @@ public sealed class KinematicEntityWorld
         }
     }
 
-    internal static EntityBatch BuildBatch(KinematicEntityWorldGuard guard, KinematicMotionLeaseReceipt motion)
+    internal static EntityBatch BuildBatch(EntityKinematicMotionGuard guard, KinematicMotionLeaseReceipt motion)
     {
         var batch = new EntityBatch();
         foreach (KinematicMotionCandidate candidate in motion.Candidates.Span)
         {
-            KinematicEntityWorldComponentGuard component = FindGuard(guard.Components.Span, new EntityId(candidate.EntityId));
+            EntityKinematicMotionComponentGuard component = FindGuard(guard.Components.Span, new EntityId(candidate.EntityId));
             bool transformChanged = candidate.BeforeTransform != candidate.AfterTransform;
             bool velocityChanged = candidate.BeforeVelocity != candidate.AfterVelocity;
             if (!transformChanged && !velocityChanged)
@@ -222,7 +222,7 @@ public sealed class KinematicEntityWorld
         return batch;
     }
 
-    private KinematicMotionEntityRow[] ProjectRows(ReadOnlySpan<KinematicEntityWorldComponentGuard> guards)
+    private KinematicMotionEntityRow[] ProjectRows(ReadOnlySpan<EntityKinematicMotionComponentGuard> guards)
     {
         var rows = new KinematicMotionEntityRow[guards.Length];
         for (int index = 0; index < guards.Length; index++)
@@ -264,12 +264,12 @@ public sealed class KinematicEntityWorld
     }
 
     private void ValidateMotionReceipt(
-        KinematicEntityWorldGuard guard,
+        EntityKinematicMotionGuard guard,
         KinematicMotionLeaseReceipt motion,
         ReadOnlySpan<ulong> selectedIds,
         bool selectionPresent)
     {
-        ReadOnlySpan<KinematicEntityWorldComponentGuard> components = guard.Components.Span;
+        ReadOnlySpan<EntityKinematicMotionComponentGuard> components = guard.Components.Span;
         if (motion.BodiesConsidered > (ulong)components.Length
             || motion.MovedBodies > motion.BodiesConsidered
             || motion.BlockedAxes > (ulong)motion.Facts.Length
@@ -281,7 +281,7 @@ public sealed class KinematicEntityWorld
         }
         var allowed = new HashSet<ulong>(selectionPresent ? selectedIds.ToArray() : components.ToArray().Select(component => component.Entity.Value));
         ulong expectedBodies = 0;
-        foreach (KinematicEntityWorldComponentGuard component in components)
+        foreach (EntityKinematicMotionComponentGuard component in components)
         {
             if (allowed.Contains(component.Entity.Value))
             {
@@ -299,7 +299,7 @@ public sealed class KinematicEntityWorld
         {
             if ((candidates.Count != 0 && candidate.EntityId <= previousCandidate)
                 || !allowed.Contains(candidate.EntityId)
-                || !TryFindGuard(components, new EntityId(candidate.EntityId), out KinematicEntityWorldComponentGuard component)
+                || !TryFindGuard(components, new EntityId(candidate.EntityId), out EntityKinematicMotionComponentGuard component)
                 || candidate.BeforeTransform != CurrentTransform(component)
                 || candidate.BeforeVelocity != CurrentVelocity(component)
                 || (candidate.BeforeTransform == candidate.AfterTransform && candidate.BeforeVelocity == candidate.AfterVelocity)
@@ -310,17 +310,17 @@ public sealed class KinematicEntityWorld
             previousCandidate = candidate.EntityId;
         }
 
-        Transform CurrentTransform(KinematicEntityWorldComponentGuard component)
+        Transform CurrentTransform(EntityKinematicMotionComponentGuard component)
             => _entities.Get(component.Entity, EngineComponentTypes.Transform);
-        Vector3 CurrentVelocity(KinematicEntityWorldComponentGuard component)
+        Vector3 CurrentVelocity(EntityKinematicMotionComponentGuard component)
             => _entities.Get(component.Entity, EngineComponentTypes.Kinematic).Velocity;
     }
 
-    private static KinematicEntityWorldComponentGuard FindGuard(
-        ReadOnlySpan<KinematicEntityWorldComponentGuard> guards,
+    private static EntityKinematicMotionComponentGuard FindGuard(
+        ReadOnlySpan<EntityKinematicMotionComponentGuard> guards,
         EntityId entity)
     {
-        if (TryFindGuard(guards, entity, out KinematicEntityWorldComponentGuard result))
+        if (TryFindGuard(guards, entity, out EntityKinematicMotionComponentGuard result))
         {
             return result;
         }
@@ -328,11 +328,11 @@ public sealed class KinematicEntityWorld
     }
 
     private static bool TryFindGuard(
-        ReadOnlySpan<KinematicEntityWorldComponentGuard> guards,
+        ReadOnlySpan<EntityKinematicMotionComponentGuard> guards,
         EntityId entity,
-        out KinematicEntityWorldComponentGuard result)
+        out EntityKinematicMotionComponentGuard result)
     {
-        foreach (KinematicEntityWorldComponentGuard guard in guards)
+        foreach (EntityKinematicMotionComponentGuard guard in guards)
         {
             if (guard.Entity == entity)
             {

@@ -55,7 +55,7 @@ impl RuntimeSpatialBridge {
                     WorldOriginRebaseRequest {
                         expected_origin_revision: request.expected_origin_revision,
                         // The EntityState above exists only inside this call.
-                        // Managed EntityWorld revision ownership is deliberately
+                        // Managed EntityStore revision ownership is deliberately
                         // left to its adapter rather than fabricated here.
                         expected_entity_revision: entities.revision(),
                         expected_voxel_source_revision: request.expected_voxel_source_revision,

@@ -151,7 +151,7 @@ include = [
     "NativeKinematicCollisionMode",
     "NativeKinematicErrorStatus",
     "NativePhysicsStep",
-    "NativePhysicsWorld",
+    "NativePhysicsSettings",
     "NativeKinematicBody",
     "NativeKinematicShape",
     "NativeKinematicIntegrationRequest",

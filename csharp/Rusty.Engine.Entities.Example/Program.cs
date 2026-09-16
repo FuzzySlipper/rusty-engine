@@ -26,7 +26,7 @@ var health = ComponentType<Health>.Create(
     ProductComponentKeys.Create(HealthLocalComponentId),
     validator: ValidateHealth);
 var armor = ComponentType<Armor>.Create(ProductComponentKeys.Create(ArmorLocalComponentId));
-using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion, health, armor]);
+using var world = new EntityStore([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion, health, armor]);
 
 EntityId actor = world.Create();
 EntityId pack = world.Create();
@@ -118,7 +118,7 @@ static void ExerciseEntityWorldCandidateAndCopyContracts()
         () => ComponentType<ReferenceComponent>.Create(ProductComponentKeys.Create(92)),
         "reference-containing component registration did not require a deep-copy codec");
 
-    using var world = new EntityWorld([referenceValues, values]);
+    using var world = new EntityStore([referenceValues, values]);
     EntityId entity = world.Create();
     int[] source = [1];
     world.Set(entity, referenceValues, new ReferenceComponent(source));
@@ -197,7 +197,7 @@ static void ValidateHealth(in Health health)
 }
 
 static void ExerciseEntityPersistence(
-    EntityWorld world,
+    EntityStore world,
     EntityId actor,
     ComponentType<Health> health)
 {
@@ -214,9 +214,9 @@ static void ExerciseEntityPersistence(
     world.Set(actor, health, new Health(4));
     ProductStateLoad<EntityCheckpoint> loaded = store.LoadAndRestore("checkpoint");
     Require(loaded.Present && loaded.State is EntityCheckpoint state && state.Health == InitialHealth,
-        "product-owned EntityWorld persistence did not restore the selected typed state");
+        "product-owned EntityStore persistence did not restore the selected typed state");
     Require(world.Get(actor, health).Current == InitialHealth,
-        "EntityWorld persistence restore did not publish through the product callback");
+        "EntityStore persistence restore did not publish through the product callback");
 }
 
 static void ExerciseManagedMechanics()
@@ -295,7 +295,7 @@ static void ExerciseManagedMechanics()
     Require(Math.Abs(staminaSpend.After.Value - (StartingStamina - StaminaSpend)) < 0.0001,
         "direct managed continuous-track mutation did not update product-owned state");
 
-    var inventory = new InventoryWorld();
+    var inventory = new InventoryStore();
     EntityId hero = new(1);
     EntityId chest = new(2);
     EntityId swordEntity = new(3);
@@ -344,7 +344,7 @@ static void ExerciseManagedMechanics()
         && inventory.View(chest).UniqueItems.Single().Entity == swordEntity,
         "managed inventory did not transfer the unequipped unique item");
 
-    InventoryWorldCandidate candidate = inventory.Prepare(inventory.Revision);
+    InventoryEdit candidate = inventory.Prepare(inventory.Revision);
     InventoryMutationReceipt chestPotions = candidate.Grant(chest, potion, 2);
     candidate.Publish();
     Require(chestPotions.AfterQuantity == 2 && inventory.View(chest).Stacks.Single().Quantity == 2,
@@ -397,25 +397,25 @@ static void ExerciseWorldOriginEntityComposition()
     const uint GlobalPositionLocalComponentId = 40;
     var globalPositions = ComponentType<WorldOriginGlobalPosition>.Create(
         ProductComponentKeys.Create(GlobalPositionLocalComponentId));
-    using var world = new EntityWorld([EngineComponentTypes.Transform, globalPositions]);
+    using var world = new EntityStore([EngineComponentTypes.Transform, globalPositions]);
     EntityId entity = world.Create();
     world.Set(entity, EngineComponentTypes.Transform, new Transform(
         new Vector3(100.0f, 2.0f, -3.0f), Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
     world.Set(entity, globalPositions, new WorldOriginGlobalPosition(100, 2, -3, 0.0, 0.0, 0.0));
     var service = new WorldOriginServiceFake();
-    var adapter = new WorldOriginEntityWorld(world, service, service.Session, globalPositions);
+    var adapter = new EntityOriginRebaser(world, service, service.Session, globalPositions);
 
-    using WorldOriginEntityWorldPrepared prepared = adapter.Prepare(100, 0, 0, maximumEntities: 1);
+    using EntityOriginRebaserPrepared prepared = adapter.Prepare(100, 0, 0, maximumEntities: 1);
     Require(prepared.Receipt.Native.AffectedEntityCount == 1
         && prepared.Receipt.Affected.Span[0].EntityId == entity.Value,
         "world-origin prepare did not retain one deterministic root fact");
-    WorldOriginEntityWorldCommitReceipt committed = prepared.Commit();
+    EntityOriginRebaserCommitReceipt committed = prepared.Commit();
     Require(committed.Native.OriginAfterCellX == 100
         && committed.Managed.MutationCount == 1
         && world.Get(entity, EngineComponentTypes.Transform).Translation.X == 0.0f,
         "world-origin commit did not pair the native receipt with one managed transform batch");
 
-    using WorldOriginEntityWorldPrepared stale = adapter.Prepare(200, 0, 0, maximumEntities: 1);
+    using EntityOriginRebaserPrepared stale = adapter.Prepare(200, 0, 0, maximumEntities: 1);
     world.Set(entity, EngineComponentTypes.Transform, new Transform(
         new Vector3(1.0f, 2.0f, -3.0f), Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
     Throws(() => stale.Commit(), "world-origin candidate did not reject stale managed transform state");
@@ -425,7 +425,7 @@ static void ExerciseWorldOriginEntityComposition()
 
 static void ExerciseMotionEntityComposition()
 {
-    using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.SpatialCollider]);
+    using var world = new EntityStore([EngineComponentTypes.Transform, EngineComponentTypes.SpatialCollider]);
     EntityId mover = world.Create();
     EntityId wall = world.Create();
     world.Set(mover, EngineComponentTypes.Transform, new Transform(
@@ -437,9 +437,9 @@ static void ExerciseMotionEntityComposition()
     world.Set(wall, EngineComponentTypes.SpatialCollider, new SpatialCollider(
         new Vector3(-0.5f), new Vector3(0.5f), 0, 0, true, true, false));
     var service = new MotionServiceFake();
-    var adapter = new MotionEntityWorld(world, service, EngineComponentTypes.SpatialCollider);
+    var adapter = new EntityMotionResolver(world, service, EngineComponentTypes.SpatialCollider);
 
-    MotionEntityWorldReceipt moved = adapter.Resolve(mover, new Vector3(1.0f, 0.0f, 0.0f), maximumEntities: 2);
+    EntityMotionResolverReceipt moved = adapter.Resolve(mover, new Vector3(1.0f, 0.0f, 0.0f), maximumEntities: 2);
     Require(moved.Resolution.Outcome == MotionOutcome.Moved
         && moved.Managed.MutationCount == 1
         && world.Get(mover, EngineComponentTypes.Transform).Translation.X == 1.0f,
@@ -459,7 +459,7 @@ static void ExerciseMotionEntityComposition()
 
 static void ExerciseKinematicEntityComposition()
 {
-    using var world = new EntityWorld([
+    using var world = new EntityStore([
         EngineComponentTypes.Transform,
         EngineComponentTypes.Kinematic,
         EngineComponentTypes.SpatialCollider]);
@@ -476,10 +476,10 @@ static void ExerciseKinematicEntityComposition()
     world.Set(blocker, EngineComponentTypes.Kinematic, new Kinematic(new Vector3(0.4f), Vector3.Zero));
     world.Set(blocker, EngineComponentTypes.SpatialCollider, new SpatialCollider(new Vector3(-0.4f), new Vector3(0.4f), 0, 0, true, false, false));
     var service = new KinematicServiceFake();
-    var adapter = new KinematicEntityWorld(world, service, EngineComponentTypes.SpatialCollider);
+    var adapter = new EntityKinematicMotion(world, service, EngineComponentTypes.SpatialCollider);
 
     ulong before = world.Revision;
-    KinematicEntityWorldPrepared prepared = adapter.Prepare(
+    EntityKinematicMotionPrepared prepared = adapter.Prepare(
         service.Session,
         deltaSeconds: 1.0f,
         maximumEntities: 3,
@@ -492,7 +492,7 @@ static void ExerciseKinematicEntityComposition()
         && prepared.Motion.Facts.Span[1].Kind == KinematicMotionFactKind.Moved
         && prepared.Motion.Facts.Span[1].EntityId == mover.Value,
         "Kinematic prepare did not preserve deterministic selected blocked and moved facts");
-    KinematicEntityWorldReceipt applied = prepared.Apply();
+    EntityKinematicMotionReceipt applied = prepared.Apply();
     Require(applied.Managed.RevisionBefore == before
         && applied.Managed.RevisionAfter == before + 1
         && world.Get(mover, EngineComponentTypes.Transform).Translation == new Vector3(2.0f, 0.0f, 0.0f)
@@ -510,7 +510,7 @@ static void ExerciseKinematicEntityComposition()
         "Kinematic stale managed guard reached the generated service");
 
     ulong noOpBefore = world.Revision;
-    KinematicEntityWorldReceipt noOp = adapter.Prepare(
+    EntityKinematicMotionReceipt noOp = adapter.Prepare(
         service.Session,
         1.0f,
         3,
@@ -521,7 +521,7 @@ static void ExerciseKinematicEntityComposition()
 
 static void ExerciseDynamicsEntityComposition()
 {
-    using var entities = new EntityWorld([
+    using var entities = new EntityStore([
         EngineComponentTypes.Transform,
         EngineComponentTypes.DynamicsMotion]);
     EntityId entity = entities.Create();
@@ -530,10 +530,10 @@ static void ExerciseDynamicsEntityComposition()
     var service = new DynamicsServiceFake();
     using var dynamicsWorld = new DynamicsWorld(new DynamicsWorldHandle(10), static () => { });
     using var body = new DynamicsBody(new DynamicsBodyHandle(20), static () => { });
-    var adapter = new DynamicsEntityWorld(entities, service, dynamicsWorld);
+    var adapter = new EntityDynamicsAdapter(entities, service, dynamicsWorld);
 
     ulong before = entities.Revision;
-    DynamicsEntityWorldReceipt receipt = adapter.Step(
+    EntityDynamicsAdapterReceipt receipt = adapter.Step(
         stepSeconds: 1.0f / 60.0f,
         steps: 1,
         bindings: new[] { new DynamicsEntityBinding(entity, body) },
@@ -565,10 +565,10 @@ static void ExerciseDynamicsEntityComposition()
 
 static void ExerciseSpatialEntityProjection()
 {
-    using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.SpatialCollider]);
+    using var world = new EntityStore([EngineComponentTypes.Transform, EngineComponentTypes.SpatialCollider]);
     var spatial = new SpatialServiceFake();
     using var session = new SpatialSession(new SpatialSessionHandle(1), () => { });
-    var adapter = new SpatialEntityWorld(world, spatial, session, EngineComponentTypes.SpatialCollider);
+    var adapter = new EntityTriggerProjection(world, spatial, session, EngineComponentTypes.SpatialCollider);
     EntityId actor = world.Create();
     world.Set(actor, EngineComponentTypes.Transform, new Transform(
         new Vector3(10f, 2f, -3f),
@@ -584,7 +584,7 @@ static void ExerciseSpatialEntityProjection()
             StaticCollider: false,
             Trigger: true));
 
-    SpatialEntityWorldReconcileReceipt receipt = adapter.ReconcileTriggers(
+    EntityTriggerProjectionReconcileReceipt receipt = adapter.ReconcileTriggers(
         tick: 7,
         cause: SpatialTriggerCause.Movement,
         maximumEntities: 4,
@@ -610,7 +610,7 @@ static void ExerciseSpatialEntityProjection()
     Throws(
         () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, receipt.Guard),
         "stale spatial world guard was accepted");
-    SpatialEntityWorldGuard staleComponentGuard = receipt.Guard with { WorldRevision = world.Revision };
+    EntityTriggerProjectionGuard staleComponentGuard = receipt.Guard with { StoreRevision = world.Revision };
     Throws(
         () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, staleComponentGuard),
         "stale spatial component guard was accepted");
@@ -619,7 +619,7 @@ static void ExerciseSpatialEntityProjection()
 
 static void ExerciseCharacterEntityComposition()
 {
-    using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion]);
+    using var world = new EntityStore([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion]);
     _ = world.Create();
     EntityId actor = world.Create();
     Quaternion actorRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2.0f);
@@ -644,12 +644,12 @@ static void ExerciseCharacterEntityComposition()
         0,
         0));
     var spatial = new SpatialServiceFake();
-    var adapter = new CharacterEntityWorld(world, spatial);
+    var adapter = new EntityCharacterController(world, spatial);
     var command = new CharacterControllerCommand(
         Vector2.Zero, 0, false, false, false, Vector3.Zero, Vector3.Zero, 1.0f / 60.0f, 7);
 
     ulong before = world.Revision;
-    CharacterEntityWorldReceipt receipt = adapter.Step(
+    EntityCharacterControllerReceipt receipt = adapter.Step(
         actor,
         spatial.Session,
         default,
@@ -677,7 +677,7 @@ static void ExerciseCharacterEntityComposition()
 
 static void ExerciseAppearanceEntityComposition()
 {
-    using var world = new EntityWorld([EngineComponentTypes.Transform]);
+    using var world = new EntityStore([EngineComponentTypes.Transform]);
     EntityId first = world.Create();
     EntityId second = world.Create();
     world.Set(first, EngineComponentTypes.Transform, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One));
@@ -685,14 +685,14 @@ static void ExerciseAppearanceEntityComposition()
     var graphics = new GraphicsServiceFake();
     using var firstHandle = new Appearance(new AppearanceHandle(10), () => { });
     using var secondHandle = new Appearance(new AppearanceHandle(20), () => { });
-    var adapter = new AppearanceEntityWorld(world, graphics);
-    AppearanceEntityWorldEntry[] entries =
+    var adapter = new EntityGraphicsProjection(world, graphics);
+    EntityGraphicsProjectionEntry[] entries =
     [
         new(second, secondHandle, true, RenderLayer.Debug, first),
         new(first, firstHandle, true, RenderLayer.Scene),
     ];
 
-    AppearanceEntityWorldReceipt receipt = adapter.Publish(entries, maximumEntities: 2);
+    EntityGraphicsProjectionReceipt receipt = adapter.Publish(entries, maximumEntities: 2);
     Require(graphics.PublishCalls == 1
         && receipt.Facts.Span.Length == 2
         && graphics.LastSnapshot.Span[0].ObjectId == first.Value
@@ -705,7 +705,7 @@ static void ExerciseAppearanceEntityComposition()
 
     Throws(
         () => adapter.Publish(
-            new AppearanceEntityWorldEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) },
+            new EntityGraphicsProjectionEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) },
             maximumEntities: 1),
         "graphics adapter accepted a parent that was absent from its complete snapshot");
 
@@ -718,7 +718,7 @@ static void ExerciseAppearanceEntityComposition()
 }
 
 static void ExerciseManagedRestorePlan(
-    EntityWorld world,
+    EntityStore world,
     EntityId actor,
     EntityId pack,
     ComponentType<Health> health,

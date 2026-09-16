@@ -157,7 +157,7 @@ public sealed class EquipmentMutationReceipt
     public IReadOnlyList<EquipmentSourceActivation> SourceActivations { get; }
 }
 
-public sealed partial class InventoryWorld
+public sealed partial class InventoryStore
 {
     internal EquipmentMutationReceipt EquipCore(
         EntityId owner,
@@ -191,7 +191,7 @@ public sealed partial class InventoryWorld
         IReadOnlyList<EquipmentSlotChange> changes = Changes(equipment, candidate);
         candidate.SetRevision(checked(candidate.Revision + 1));
         _equipment[owner] = candidate;
-        TouchWorld();
+        TouchStore();
         return new EquipmentMutationReceipt(
             EquipmentMutationKind.Equip,
             owner,
@@ -221,7 +221,7 @@ public sealed partial class InventoryWorld
         IReadOnlyList<EquipmentSlotChange> changes = Changes(equipment, candidate);
         candidate.SetRevision(checked(candidate.Revision + 1));
         _equipment[owner] = candidate;
-        TouchWorld();
+        TouchStore();
         return new EquipmentMutationReceipt(
             EquipmentMutationKind.Unequip,
             owner,
@@ -280,7 +280,7 @@ public sealed partial class InventoryWorld
         IReadOnlyList<EquipmentSlotChange> changes = Changes(equipment, candidate);
         candidate.SetRevision(checked(candidate.Revision + 1));
         _equipment[owner] = candidate;
-        TouchWorld();
+        TouchStore();
         return new EquipmentMutationReceipt(
             EquipmentMutationKind.Swap,
             owner,
@@ -439,39 +439,39 @@ public sealed partial class InventoryWorld
 public static class EquipmentService
 {
     public static EquipmentMutationReceipt Equip(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId owner,
         EntityId item,
         IEnumerable<EquipmentSlotDefinition> slots)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        InventoryWorldCandidate candidate = world.Prepare();
+        ArgumentNullException.ThrowIfNull(store);
+        InventoryEdit candidate = store.Prepare();
         EquipmentMutationReceipt receipt = candidate.Equip(owner, item, slots);
         candidate.Publish();
         return receipt;
     }
 
     public static EquipmentMutationReceipt Unequip(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId owner,
         EntityId item)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        InventoryWorldCandidate candidate = world.Prepare();
+        ArgumentNullException.ThrowIfNull(store);
+        InventoryEdit candidate = store.Prepare();
         EquipmentMutationReceipt receipt = candidate.Unequip(owner, item);
         candidate.Publish();
         return receipt;
     }
 
     public static EquipmentMutationReceipt Swap(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId owner,
         EntityId outgoingItem,
         EntityId incomingItem,
         IEnumerable<EquipmentSlotDefinition> slots)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        InventoryWorldCandidate candidate = world.Prepare();
+        ArgumentNullException.ThrowIfNull(store);
+        InventoryEdit candidate = store.Prepare();
         EquipmentMutationReceipt receipt = candidate.Swap(owner, outgoingItem, incomingItem, slots);
         candidate.Publish();
         return receipt;

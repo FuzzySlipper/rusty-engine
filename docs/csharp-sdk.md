@@ -355,7 +355,7 @@ names a selected visual resource. `AppearanceFact` carries `ObjectId`,
 `HasParentObject`, `ParentObjectId`, local `Transform`, `Appearance`, `Visible`,
 and `Layer`. A complete snapshot may contain parents and children in either
 input order; the Engine validates the hierarchy and publishes parents first.
-`AppearanceEntityWorld` also accepts an optional parent `EntityId`.
+`EntityGraphicsProjection` also accepts an optional parent `EntityId`.
 
 - Attached equipment: publish the actor and equipment as ordinary facts, with
   the equipment parent naming the actor. Product code selects equipment and
@@ -654,7 +654,7 @@ pieces:
 | Package | Current role |
 | --- | --- |
 | [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Product component keys, managed entity worlds, snapshots, batches, and managed adapters around Engine mechanisms, compiled into `Rusty.Engine`. |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Product component keys, managed entity stores, snapshots, batches, and managed adapters around Engine mechanisms, compiled into `Rusty.Engine`. |
 | [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Product-state codecs, stores, restoration plans, and entity-world persistence helpers, compiled into `Rusty.Engine`. |
 | [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine/Resolution) | Structural resolution sessions and typed product transaction coordination inside the default `Rusty.Engine` assembly. |
 
@@ -663,6 +663,55 @@ own ordinary C# architecture instead. None of these packages implies a hidden
 `ProductApplication`, `ProductBuilder`, `IProductModule`, analyzer suite,
 typed-content framework, or projection framework: those names are not current
 SDK APIs.
+
+### Entity stores, mechanics stores and Engine adapters
+
+`EntityStore` holds managed entity/component facts; `InventoryStore` holds the
+inventory, item and equipment ledger. Their identities and revisions are local
+to their owning stores. The entity adapters read those facts and call named
+Engine mechanisms; they do not create another entity world or own native
+resources supplied by the caller.
+
+The campaign naming migration is source-breaking:
+
+| Previous name | Current name / responsibility |
+| --- | --- |
+| `EntityWorld` | `EntityStore` — managed entity/component storage |
+| `InventoryWorld` | `InventoryStore` — inventory/item/equipment storage |
+| `InventoryWorldCandidate` | `InventoryEdit` — detached inventory edit |
+| `AppearanceEntityWorld` | `EntityGraphicsProjection` |
+| `SpatialEntityWorld` | `EntityTriggerProjection` |
+| `MotionEntityWorld` | `EntityMotionResolver` |
+| `KinematicEntityWorld` | `EntityKinematicMotion` |
+| `CharacterEntityWorld` | `EntityCharacterController` |
+| `DynamicsEntityWorld` | `EntityDynamicsAdapter` |
+| `WorldOriginEntityWorld` | `EntityOriginRebaser` |
+| `EntityWorldDebug*` | `EntityStoreDebug*` — module, selector, projection and debug snapshot types |
+| `EntityWorldDiagnostics` | `EntityStoreDiagnostics` |
+| `PhysicsWorld` (C# configuration) | `PhysicsSettings` |
+
+Related adapter guards/results follow their owning adapter name and use
+`StoreRevision`. `InventoryView.StoreRevision` identifies the whole inventory
+store revision; its existing `InventoryRevision` identifies the individual owner
+inventory revision. Item receipts use `InventoryRevisionBefore` and
+`InventoryRevisionAfter`. Kinematic integration requests name their configuration
+`Settings`. Debug registration uses
+`RegisterStore`, `ReplaceStore` and `UnregisterStore`; `entity.stores` lists
+registrations and debug output identifies them with `store=` / `stores=`.
+
+`DynamicsWorld` remains a disposable native simulation owner. `WorldOrigin`
+continues to mean the spatial coordinate origin. Neither is a managed entity
+store. The Rust spatial implementation's internal physics type is unchanged.
+
+This naming step preserves behavior: components still use the existing typed
+value/copy contracts. `EntityWorldSnapshot`, restore plans/candidates, batch
+candidates and `EntityWorldProductStateStore` keep their existing names pending
+the separate state-API cleanup; they are not aliases for new implementations.
+Class components and simplified mechanics belong to subsequent campaign work.
+During the campaign, use coordinated contributor proving copies. The final
+SDK/runtime release and downstream rollout happen together; do not combine a
+renamed SDK with a previously published runtime merely because layouts look
+similar.
 
 ## Recommended product architecture, not a framework contract
 

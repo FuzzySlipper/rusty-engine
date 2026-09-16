@@ -3,7 +3,7 @@ using Rusty.Engine;
 namespace Rusty.Engine.Entities;
 
 /// <summary>Exact managed revision evidence for one root supplied to WorldOrigin.</summary>
-public readonly record struct WorldOriginEntityWorldComponentGuard(
+public readonly record struct EntityOriginRebaserComponentGuard(
     EntityId Entity,
     ComponentRevision TransformRevision,
     ComponentRevision GlobalPositionRevision);
@@ -11,40 +11,40 @@ public readonly record struct WorldOriginEntityWorldComponentGuard(
 /// <summary>
 /// A deterministic product-world snapshot guard. The native WorldOrigin
 /// service owns only origin and collision-scene guards; this guard remains
-/// managed because <see cref="EntityWorld"/> is the product's canonical state.
+/// managed because <see cref="EntityStore"/> is the product's canonical state.
 /// </summary>
-public readonly record struct WorldOriginEntityWorldGuard(
-    ulong WorldRevision,
-    ReadOnlyMemory<WorldOriginEntityWorldComponentGuard> Components);
+public readonly record struct EntityOriginRebaserGuard(
+    ulong StoreRevision,
+    ReadOnlyMemory<EntityOriginRebaserComponentGuard> Components);
 
 /// <summary>Copied bounded facts from a prepared rebase before either owner publishes it.</summary>
-public readonly record struct WorldOriginEntityWorldPrepareReceipt(
+public readonly record struct EntityOriginRebaserPrepareReceipt(
     WorldOriginPreparedReadout Native,
-    WorldOriginEntityWorldGuard Guard,
+    EntityOriginRebaserGuard Guard,
     ReadOnlyMemory<WorldOriginAffectedAtReceipt> Affected);
 
 /// <summary>One paired native-origin and managed-transform publication result.</summary>
-public readonly record struct WorldOriginEntityWorldCommitReceipt(
+public readonly record struct EntityOriginRebaserCommitReceipt(
     WorldOriginCommitReceipt Native,
     EntityBatchReceipt Managed);
 
 /// <summary>
-/// Explicitly composes product-owned <see cref="EntityWorld"/> transform and
+/// Explicitly composes product-owned <see cref="EntityStore"/> transform and
 /// global-position facts with the generated Engine WorldOrigin service. It is
 /// a call-time projection only: global-position policy remains in C#, and no
 /// native entity-world mirror is retained.
 /// </summary>
-public sealed class WorldOriginEntityWorld
+public sealed class EntityOriginRebaser
 {
     private const int MinimumMaximumEntities = 1;
 
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly IWorldOriginService _worldOrigins;
     private readonly SpatialSession _session;
     private readonly ComponentType<WorldOriginGlobalPosition> _globalPositions;
 
-    public WorldOriginEntityWorld(
-        EntityWorld entities,
+    public EntityOriginRebaser(
+        EntityStore entities,
         IWorldOriginService worldOrigins,
         SpatialSession session,
         ComponentType<WorldOriginGlobalPosition> globalPositions)
@@ -61,12 +61,12 @@ public sealed class WorldOriginEntityWorld
     /// origin and collision scene. Product code chooses when and where to
     /// rebase by passing the target cell explicitly.
     /// </summary>
-    public WorldOriginEntityWorldPrepared Prepare(
+    public EntityOriginRebaserPrepared Prepare(
         long targetCellX,
         long targetCellY,
         long targetCellZ,
         int maximumEntities,
-        WorldOriginEntityWorldGuard? expectedGuard = null)
+        EntityOriginRebaserGuard? expectedGuard = null)
     {
         if (maximumEntities < MinimumMaximumEntities)
         {
@@ -74,11 +74,11 @@ public sealed class WorldOriginEntityWorld
         }
 
         WorldOriginReadout origin = _worldOrigins.Read(new WorldOriginReadRequest(_session));
-        ulong worldRevision = _entities.Revision;
-        if (expectedGuard is WorldOriginEntityWorldGuard expected && expected.WorldRevision != worldRevision)
+        ulong storeRevision = _entities.Revision;
+        if (expectedGuard is EntityOriginRebaserGuard expected && expected.StoreRevision != storeRevision)
         {
             throw new InvalidOperationException(
-                $"WorldOrigin managed world revision is stale: expected {expected.WorldRevision}, actual {worldRevision}.");
+                $"WorldOrigin managed store revision is stale: expected {expected.StoreRevision}, actual {storeRevision}.");
         }
 
         IReadOnlyList<EntityComponents<Transform, WorldOriginGlobalPosition>> joined = _entities.Query(
@@ -91,19 +91,19 @@ public sealed class WorldOriginEntityWorld
         }
 
         var rows = new WorldOriginEntityRow[joined.Count];
-        var guards = new WorldOriginEntityWorldComponentGuard[joined.Count];
+        var guards = new EntityOriginRebaserComponentGuard[joined.Count];
         for (int index = 0; index < joined.Count; index++)
         {
             EntityComponents<Transform, WorldOriginGlobalPosition> row = joined[index];
             rows[index] = new WorldOriginEntityRow(row.Entity.Value, row.First, row.Second);
-            guards[index] = new WorldOriginEntityWorldComponentGuard(
+            guards[index] = new EntityOriginRebaserComponentGuard(
                 row.Entity,
                 _entities.GetComponentRevision(row.Entity, EngineComponentTypes.Transform),
                 _entities.GetComponentRevision(row.Entity, _globalPositions));
         }
 
-        var guard = new WorldOriginEntityWorldGuard(worldRevision, guards);
-        if (expectedGuard is WorldOriginEntityWorldGuard supplied)
+        var guard = new EntityOriginRebaserGuard(storeRevision, guards);
+        if (expectedGuard is EntityOriginRebaserGuard supplied)
         {
             ValidateGuard(supplied, guard);
         }
@@ -137,7 +137,7 @@ public sealed class WorldOriginEntityWorld
                 }
                 affected[index] = fact;
             }
-            return new WorldOriginEntityWorldPrepared(this, native, new WorldOriginEntityWorldPrepareReceipt(summary, guard, affected));
+            return new EntityOriginRebaserPrepared(this, native, new EntityOriginRebaserPrepareReceipt(summary, guard, affected));
         }
         catch
         {
@@ -146,9 +146,9 @@ public sealed class WorldOriginEntityWorld
         }
     }
 
-    internal WorldOriginEntityWorldCommitReceipt CommitPrepared(
+    internal EntityOriginRebaserCommitReceipt CommitPrepared(
         WorldOriginPrepared native,
-        WorldOriginEntityWorldPrepareReceipt prepared)
+        EntityOriginRebaserPrepareReceipt prepared)
     {
         // Recheck all product-owned facts immediately before the native call.
         // PrepareBatch then evaluates every managed mutation and validator into
@@ -156,15 +156,15 @@ public sealed class WorldOriginEntityWorld
         ValidateGuard(prepared.Guard, CaptureGuard());
         EntityWorldBatchCandidate managed = _entities.PrepareBatch(
             TransformBatch(prepared.Affected.Span, prepared.Guard.Components.Span),
-            prepared.Guard.WorldRevision);
+            prepared.Guard.StoreRevision);
         WorldOriginCommitReceipt nativeReceipt = _worldOrigins.Commit(new WorldOriginCommitRequest(native));
         managed.Publish();
-        return new WorldOriginEntityWorldCommitReceipt(nativeReceipt, managed.Receipt);
+        return new EntityOriginRebaserCommitReceipt(nativeReceipt, managed.Receipt);
     }
 
     private EntityBatch TransformBatch(
         ReadOnlySpan<WorldOriginAffectedAtReceipt> affected,
-        ReadOnlySpan<WorldOriginEntityWorldComponentGuard> guards)
+        ReadOnlySpan<EntityOriginRebaserComponentGuard> guards)
     {
         if (affected.Length != guards.Length)
         {
@@ -174,7 +174,7 @@ public sealed class WorldOriginEntityWorld
         for (int index = 0; index < affected.Length; index++)
         {
             WorldOriginAffectedAtReceipt fact = affected[index];
-            WorldOriginEntityWorldComponentGuard guard = guards[index];
+            EntityOriginRebaserComponentGuard guard = guards[index];
             if (!fact.Present || fact.EntityId != guard.Entity.Value)
             {
                 throw new InvalidOperationException("WorldOrigin prepared transform facts no longer match their managed entities.");
@@ -188,34 +188,34 @@ public sealed class WorldOriginEntityWorld
         return batch;
     }
 
-    private WorldOriginEntityWorldGuard CaptureGuard()
+    private EntityOriginRebaserGuard CaptureGuard()
     {
         IReadOnlyList<EntityComponents<Transform, WorldOriginGlobalPosition>> joined = _entities.Query(
             EngineComponentTypes.Transform,
             _globalPositions);
-        var guards = new WorldOriginEntityWorldComponentGuard[joined.Count];
+        var guards = new EntityOriginRebaserComponentGuard[joined.Count];
         for (int index = 0; index < joined.Count; index++)
         {
             EntityComponents<Transform, WorldOriginGlobalPosition> row = joined[index];
-            guards[index] = new WorldOriginEntityWorldComponentGuard(
+            guards[index] = new EntityOriginRebaserComponentGuard(
                 row.Entity,
                 _entities.GetComponentRevision(row.Entity, EngineComponentTypes.Transform),
                 _entities.GetComponentRevision(row.Entity, _globalPositions));
         }
-        return new WorldOriginEntityWorldGuard(_entities.Revision, guards);
+        return new EntityOriginRebaserGuard(_entities.Revision, guards);
     }
 
     private static void ValidateGuard(
-        WorldOriginEntityWorldGuard expected,
-        WorldOriginEntityWorldGuard observed)
+        EntityOriginRebaserGuard expected,
+        EntityOriginRebaserGuard observed)
     {
-        if (expected.WorldRevision != observed.WorldRevision)
+        if (expected.StoreRevision != observed.StoreRevision)
         {
             throw new InvalidOperationException(
-                $"WorldOrigin managed world revision is stale: expected {expected.WorldRevision}, actual {observed.WorldRevision}.");
+                $"WorldOrigin managed store revision is stale: expected {expected.StoreRevision}, actual {observed.StoreRevision}.");
         }
-        ReadOnlySpan<WorldOriginEntityWorldComponentGuard> expectedComponents = expected.Components.Span;
-        ReadOnlySpan<WorldOriginEntityWorldComponentGuard> observedComponents = observed.Components.Span;
+        ReadOnlySpan<EntityOriginRebaserComponentGuard> expectedComponents = expected.Components.Span;
+        ReadOnlySpan<EntityOriginRebaserComponentGuard> observedComponents = observed.Components.Span;
         if (expectedComponents.Length != observedComponents.Length)
         {
             throw new InvalidOperationException("WorldOrigin managed root set is stale.");
@@ -236,33 +236,33 @@ public sealed class WorldOriginEntityWorld
 /// Disposing before <see cref="Commit"/> cancels the Engine candidate without
 /// changing either live owner.
 /// </summary>
-public sealed class WorldOriginEntityWorldPrepared : IDisposable
+public sealed class EntityOriginRebaserPrepared : IDisposable
 {
-    private readonly WorldOriginEntityWorld _owner;
+    private readonly EntityOriginRebaser _owner;
     private WorldOriginPrepared? _native;
 
-    internal WorldOriginEntityWorldPrepared(
-        WorldOriginEntityWorld owner,
+    internal EntityOriginRebaserPrepared(
+        EntityOriginRebaser owner,
         WorldOriginPrepared native,
-        WorldOriginEntityWorldPrepareReceipt receipt)
+        EntityOriginRebaserPrepareReceipt receipt)
     {
         _owner = owner;
         _native = native;
         Receipt = receipt;
     }
 
-    public WorldOriginEntityWorldPrepareReceipt Receipt { get; }
+    public EntityOriginRebaserPrepareReceipt Receipt { get; }
 
     /// <summary>
     /// Commits Engine's prepared origin/scene, then assigns an already
     /// validated managed transform candidate. The adapter's synchronous
-    /// contract forbids concurrent EntityWorld mutation during this call.
+    /// contract forbids concurrent EntityStore mutation during this call.
     /// </summary>
-    public WorldOriginEntityWorldCommitReceipt Commit()
+    public EntityOriginRebaserCommitReceipt Commit()
     {
         WorldOriginPrepared native = _native
-            ?? throw new ObjectDisposedException(nameof(WorldOriginEntityWorldPrepared));
-        WorldOriginEntityWorldCommitReceipt receipt = _owner.CommitPrepared(native, Receipt);
+            ?? throw new ObjectDisposedException(nameof(EntityOriginRebaserPrepared));
+        EntityOriginRebaserCommitReceipt receipt = _owner.CommitPrepared(native, Receipt);
         native.Dispose();
         _native = null;
         return receipt;

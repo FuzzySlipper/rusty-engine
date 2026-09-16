@@ -310,7 +310,7 @@ public sealed class Product : IEngineProduct
                 new Vector3(0, 4, 0),
                 0,
                 KinematicCollisionMode.None),
-            new PhysicsWorld(Vector3.Zero),
+            new PhysicsSettings(Vector3.Zero),
             new PhysicsStep(2, 0.25f)));
         Require(pureKinematic.NextPosition == new Vector3(2, 3, 2.5f)
             && pureKinematic.NextVelocity == new Vector3(2, 2, -1)
@@ -324,7 +324,7 @@ public sealed class Product : IEngineProduct
                 Vector3.Zero,
                 1,
                 KinematicCollisionMode.SpatialSession),
-            new PhysicsWorld(Vector3.Zero),
+            new PhysicsSettings(Vector3.Zero),
             new PhysicsStep(1, 0.5f),
             new KinematicShape(new Vector3(0.4f))));
         Require(blockedKinematic.BlockedX && !blockedKinematic.BlockedY && !blockedKinematic.BlockedZ
@@ -335,7 +335,7 @@ public sealed class Product : IEngineProduct
         {
             _engine.Kinematic.Integrate(new KinematicIntegrationRequest(
                 new KinematicBody(Vector3.Zero, Vector3.Zero, Vector3.Zero, 1, KinematicCollisionMode.SpatialSession),
-                new PhysicsWorld(Vector3.Zero),
+                new PhysicsSettings(Vector3.Zero),
                 new PhysicsStep(1, 1)));
             throw new InvalidOperationException("no-collision Kinematic integration accepted a Spatial-session collision mode");
         }

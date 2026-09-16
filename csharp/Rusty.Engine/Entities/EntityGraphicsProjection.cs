@@ -4,9 +4,9 @@ namespace Rusty.Engine.Entities;
 
 /// <summary>
 /// A caller-owned Appearance handle attached to one managed entity for a single snapshot. It is
-/// intentionally not an EntityWorld component: handle lifetime remains with the caller.
+/// intentionally not an EntityStore component: handle lifetime remains with the caller.
 /// </summary>
-public readonly record struct AppearanceEntityWorldEntry(
+public readonly record struct EntityGraphicsProjectionEntry(
     EntityId Entity,
     Appearance Appearance,
     bool Visible,
@@ -14,7 +14,7 @@ public readonly record struct AppearanceEntityWorldEntry(
     EntityId? Parent = null);
 
 /// <summary>Exact managed and caller-supplied facts captured for one Appearance snapshot.</summary>
-public readonly record struct AppearanceEntityWorldEntryGuard(
+public readonly record struct EntityGraphicsProjectionEntryGuard(
     EntityId Entity,
     ComponentRevision TransformRevision,
     AppearanceHandle Appearance,
@@ -23,25 +23,25 @@ public readonly record struct AppearanceEntityWorldEntryGuard(
     EntityId? Parent);
 
 /// <summary>Copied evidence used to reject a stale Appearance projection before publishing.</summary>
-public readonly record struct AppearanceEntityWorldGuard(
-    ulong WorldRevision,
-    ReadOnlyMemory<AppearanceEntityWorldEntryGuard> Entries);
+public readonly record struct EntityGraphicsProjectionGuard(
+    ulong StoreRevision,
+    ReadOnlyMemory<EntityGraphicsProjectionEntryGuard> Entries);
 
 /// <summary>A copied deterministic snapshot published through the generated Graphics family.</summary>
-public readonly record struct AppearanceEntityWorldReceipt(
-    AppearanceEntityWorldGuard Guard,
+public readonly record struct EntityGraphicsProjectionReceipt(
+    EntityGraphicsProjectionGuard Guard,
     ReadOnlyMemory<AppearanceFact> Facts);
 
 /// <summary>
 /// Projects active managed Transform values and caller-owned Appearance handles into one
 /// generated Graphics snapshot. It retains neither an Appearance component nor a handle ownership mirror.
 /// </summary>
-public sealed class AppearanceEntityWorld
+public sealed class EntityGraphicsProjection
 {
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly IGraphicsService _graphics;
 
-    public AppearanceEntityWorld(EntityWorld entities, IGraphicsService graphics)
+    public EntityGraphicsProjection(EntityStore entities, IGraphicsService graphics)
     {
         _entities = entities ?? throw new ArgumentNullException(nameof(entities));
         _graphics = graphics ?? throw new ArgumentNullException(nameof(graphics));
@@ -52,10 +52,10 @@ public sealed class AppearanceEntityWorld
     /// must currently be active with Transform; duplicate entity bindings are rejected before
     /// the single generated family crossing.
     /// </summary>
-    public AppearanceEntityWorldReceipt Publish(
-        ReadOnlyMemory<AppearanceEntityWorldEntry> entries,
+    public EntityGraphicsProjectionReceipt Publish(
+        ReadOnlyMemory<EntityGraphicsProjectionEntry> entries,
         int maximumEntities,
-        AppearanceEntityWorldGuard? expectedGuard = null)
+        EntityGraphicsProjectionGuard? expectedGuard = null)
     {
         if (maximumEntities < 0)
         {
@@ -67,9 +67,9 @@ public sealed class AppearanceEntityWorld
                 $"Appearance snapshot has {entries.Length} entities, exceeding its explicit batch bound {maximumEntities}.");
         }
 
-        AppearanceEntityWorldEntry[] ordered = OrderEntries(entries.Span);
-        AppearanceEntityWorldGuard guard = CaptureGuard(ordered);
-        if (expectedGuard is AppearanceEntityWorldGuard expected)
+        EntityGraphicsProjectionEntry[] ordered = OrderEntries(entries.Span);
+        EntityGraphicsProjectionGuard guard = CaptureGuard(ordered);
+        if (expectedGuard is EntityGraphicsProjectionGuard expected)
         {
             ValidateGuard(expected, guard);
         }
@@ -77,10 +77,10 @@ public sealed class AppearanceEntityWorld
         AppearanceFact[] facts = ProjectFacts(ordered);
         ValidateGuard(guard, CaptureGuard(ordered));
         _graphics.PublishSnapshot(facts);
-        return new AppearanceEntityWorldReceipt(guard, facts);
+        return new EntityGraphicsProjectionReceipt(guard, facts);
     }
 
-    private AppearanceEntityWorldGuard CaptureGuard(ReadOnlySpan<AppearanceEntityWorldEntry> entries)
+    private EntityGraphicsProjectionGuard CaptureGuard(ReadOnlySpan<EntityGraphicsProjectionEntry> entries)
     {
         var activeTransforms = new Dictionary<EntityId, Transform>();
         foreach (EntityComponent<Transform> row in _entities.Query(EngineComponentTypes.Transform))
@@ -88,10 +88,10 @@ public sealed class AppearanceEntityWorld
             activeTransforms.Add(row.Entity, row.Value);
         }
 
-        var guards = new AppearanceEntityWorldEntryGuard[entries.Length];
+        var guards = new EntityGraphicsProjectionEntryGuard[entries.Length];
         for (int index = 0; index < entries.Length; index++)
         {
-            AppearanceEntityWorldEntry entry = entries[index];
+            EntityGraphicsProjectionEntry entry = entries[index];
             if (entry.Appearance is null)
             {
                 throw new ArgumentNullException(nameof(entries), $"Appearance entity {entry.Entity.Value} has no caller-owned handle.");
@@ -101,7 +101,7 @@ public sealed class AppearanceEntityWorld
                 throw new InvalidOperationException(
                     $"Appearance entity {entry.Entity.Value} must be active with a Transform component.");
             }
-            guards[index] = new AppearanceEntityWorldEntryGuard(
+            guards[index] = new EntityGraphicsProjectionEntryGuard(
                 entry.Entity,
                 _entities.GetComponentRevision(entry.Entity, EngineComponentTypes.Transform),
                 entry.Appearance.Handle,
@@ -110,15 +110,15 @@ public sealed class AppearanceEntityWorld
                 entry.Parent);
         }
 
-        return new AppearanceEntityWorldGuard(_entities.Revision, guards);
+        return new EntityGraphicsProjectionGuard(_entities.Revision, guards);
     }
 
-    private AppearanceFact[] ProjectFacts(ReadOnlySpan<AppearanceEntityWorldEntry> entries)
+    private AppearanceFact[] ProjectFacts(ReadOnlySpan<EntityGraphicsProjectionEntry> entries)
     {
         var facts = new AppearanceFact[entries.Length];
         for (int index = 0; index < entries.Length; index++)
         {
-            AppearanceEntityWorldEntry entry = entries[index];
+            EntityGraphicsProjectionEntry entry = entries[index];
             facts[index] = new AppearanceFact(
                 entry.Entity.Value,
                 entry.Parent is not null,
@@ -131,9 +131,9 @@ public sealed class AppearanceEntityWorld
         return facts;
     }
 
-    private static AppearanceEntityWorldEntry[] OrderEntries(ReadOnlySpan<AppearanceEntityWorldEntry> entries)
+    private static EntityGraphicsProjectionEntry[] OrderEntries(ReadOnlySpan<EntityGraphicsProjectionEntry> entries)
     {
-        AppearanceEntityWorldEntry[] ordered = entries.ToArray();
+        EntityGraphicsProjectionEntry[] ordered = entries.ToArray();
         Array.Sort(ordered, static (left, right) => left.Entity.CompareTo(right.Entity));
         for (int index = 1; index < ordered.Length; index++)
         {
@@ -151,7 +151,7 @@ public sealed class AppearanceEntityWorld
         }
         var depths = new Dictionary<EntityId, int>(ordered.Length);
         var visiting = new HashSet<EntityId>();
-        foreach (AppearanceEntityWorldEntry entry in ordered)
+        foreach (EntityGraphicsProjectionEntry entry in ordered)
         {
             GetDepth(entry.Entity, ordered, positions, depths, visiting);
         }
@@ -165,7 +165,7 @@ public sealed class AppearanceEntityWorld
 
     private static int GetDepth(
         EntityId entity,
-        ReadOnlySpan<AppearanceEntityWorldEntry> entries,
+        ReadOnlySpan<EntityGraphicsProjectionEntry> entries,
         IReadOnlyDictionary<EntityId, int> positions,
         IDictionary<EntityId, int> depths,
         ISet<EntityId> visiting)
@@ -175,7 +175,7 @@ public sealed class AppearanceEntityWorld
         {
             throw new ArgumentException($"Appearance snapshot has a parent cycle at entity {entity.Value}.", nameof(entries));
         }
-        AppearanceEntityWorldEntry entry = entries[positions[entity]];
+        EntityGraphicsProjectionEntry entry = entries[positions[entity]];
         int depth = 0;
         if (entry.Parent is EntityId parent)
         {
@@ -192,15 +192,15 @@ public sealed class AppearanceEntityWorld
         return depth;
     }
 
-    private static void ValidateGuard(AppearanceEntityWorldGuard expected, AppearanceEntityWorldGuard observed)
+    private static void ValidateGuard(EntityGraphicsProjectionGuard expected, EntityGraphicsProjectionGuard observed)
     {
-        if (expected.WorldRevision != observed.WorldRevision)
+        if (expected.StoreRevision != observed.StoreRevision)
         {
             throw new InvalidOperationException(
-                $"Appearance managed world revision is stale: expected {expected.WorldRevision}, actual {observed.WorldRevision}.");
+                $"Appearance managed store revision is stale: expected {expected.StoreRevision}, actual {observed.StoreRevision}.");
         }
-        ReadOnlySpan<AppearanceEntityWorldEntryGuard> expectedEntries = expected.Entries.Span;
-        ReadOnlySpan<AppearanceEntityWorldEntryGuard> observedEntries = observed.Entries.Span;
+        ReadOnlySpan<EntityGraphicsProjectionEntryGuard> expectedEntries = expected.Entries.Span;
+        ReadOnlySpan<EntityGraphicsProjectionEntryGuard> observedEntries = observed.Entries.Span;
         if (!expectedEntries.SequenceEqual(observedEntries))
         {
             throw new InvalidOperationException("Appearance managed projection is stale.");

@@ -1,6 +1,6 @@
 namespace Rusty.Engine.Entities;
 
-/// <summary>Identity allocated deterministically by one <see cref="EntityWorld"/>.</summary>
+/// <summary>Identity allocated deterministically by one <see cref="EntityStore"/>.</summary>
 public readonly record struct EntityId(ulong Value) : IComparable<EntityId>
 {
     public int CompareTo(EntityId other) => Value.CompareTo(other.Value);

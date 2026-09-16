@@ -56,14 +56,14 @@ public sealed class InventoryView
 {
     internal InventoryView(
         EntityId owner,
-        ulong worldRevision,
+        ulong storeRevision,
         ulong inventoryRevision,
         IReadOnlyList<InventoryStack> stacks,
         IReadOnlyList<UniqueInventoryItem> uniqueItems,
         IReadOnlyList<CapacityUsage> capacity)
     {
         Owner = owner;
-        WorldRevision = worldRevision;
+        StoreRevision = storeRevision;
         InventoryRevision = inventoryRevision;
         Stacks = stacks;
         UniqueItems = uniqueItems;
@@ -72,7 +72,7 @@ public sealed class InventoryView
 
     public EntityId Owner { get; }
 
-    public ulong WorldRevision { get; }
+    public ulong StoreRevision { get; }
 
     public ulong InventoryRevision { get; }
 
@@ -212,7 +212,7 @@ public sealed class InventoryTransferReceipt
 
 /// <summary>
 /// Product-owned fungible inventory state. It is useful on its own when a
-/// product does not need the composed <see cref="InventoryWorld"/> helper.
+/// product does not need the composed <see cref="InventoryStore"/> helper.
 /// </summary>
 public sealed class InventoryState
 {
@@ -336,7 +336,7 @@ public sealed class InventoryState
 /// item meaning remain caller-owned; this helper only maintains the mechanical
 /// relationships needed by the selected operations.
 /// </summary>
-public sealed partial class InventoryWorld
+public sealed partial class InventoryStore
 {
     private readonly Dictionary<EntityId, InventoryState> _inventories = [];
     private readonly Dictionary<EntityId, ItemState> _items = [];
@@ -361,7 +361,7 @@ public sealed partial class InventoryWorld
             throw new MechanicsException($"Inventory owner {state.Owner.Value} is already registered.");
         }
 
-        TouchWorld();
+        TouchStore();
     }
 
     public void RegisterEquipment(EquipmentState state)
@@ -376,7 +376,7 @@ public sealed partial class InventoryWorld
             throw new MechanicsException($"Equipment owner {state.Owner.Value} is already registered.");
         }
 
-        TouchWorld();
+        TouchStore();
     }
 
     public bool TryGetInventory(EntityId owner, out InventoryState? state)
@@ -429,15 +429,15 @@ public sealed partial class InventoryWorld
         return BuildView(owner, inventory, ComputeCapacity(owner, inventory));
     }
 
-    public InventoryWorldCandidate Prepare(ulong? expectedRevision = null)
+    public InventoryEdit Prepare(ulong? expectedRevision = null)
     {
         if (expectedRevision is ulong expected && expected != _revision)
         {
             throw new MechanicsException(
-                $"Inventory world revision is stale: expected {expected}, actual {_revision}.");
+                $"Inventory store revision is stale: expected {expected}, actual {_revision}.");
         }
 
-        return new InventoryWorldCandidate(this, Clone(), _revision);
+        return new InventoryEdit(this, Clone(), _revision);
     }
 
     public InventoryMutationReceipt Grant(EntityId owner, ItemDefinition definition, ulong quantity) =>
@@ -481,14 +481,14 @@ public sealed partial class InventoryWorld
                 $"Item {definition.Id} cannot exceed quantity {definition.MaximumQuantity}; attempted {after}.");
         }
 
-        ulong worldRevisionBefore = _revision;
+        ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> capacityBefore = ComputeCapacity(owner, inventory);
         InventoryState candidate = inventory.Clone();
         candidate.SetEntry(definition, after);
         IReadOnlyList<CapacityUsage> capacityAfter = ComputeCapacity(owner, candidate);
         candidate.SetRevision(checked(candidate.Revision + 1));
         _inventories[owner] = candidate;
-        TouchWorld();
+        TouchStore();
         return new InventoryMutationReceipt(
             InventoryMutationKind.Grant,
             owner,
@@ -520,14 +520,14 @@ public sealed partial class InventoryWorld
         }
 
         ulong after = before - quantity;
-        ulong worldRevisionBefore = _revision;
+        ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> capacityBefore = ComputeCapacity(owner, inventory);
         InventoryState candidate = inventory.Clone();
         candidate.SetEntry(definition, after);
         IReadOnlyList<CapacityUsage> capacityAfter = ComputeCapacity(owner, candidate);
         candidate.SetRevision(checked(candidate.Revision + 1));
         _inventories[owner] = candidate;
-        TouchWorld();
+        TouchStore();
         return new InventoryMutationReceipt(
             InventoryMutationKind.Consume,
             owner,
@@ -582,7 +582,7 @@ public sealed partial class InventoryWorld
         }
 
         ulong fromAfter = fromBefore - quantity;
-        ulong worldRevisionBefore = _revision;
+        ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> fromCapacityBefore = ComputeCapacity(fromOwner, from);
         IReadOnlyList<CapacityUsage> toCapacityBefore = ComputeCapacity(toOwner, to);
         InventoryState fromCandidate = from.Clone();
@@ -595,7 +595,7 @@ public sealed partial class InventoryWorld
         toCandidate.SetRevision(checked(toCandidate.Revision + 1));
         _inventories[fromOwner] = fromCandidate;
         _inventories[toOwner] = toCandidate;
-        TouchWorld();
+        TouchStore();
         return new InventoryTransferReceipt(
             fromOwner,
             toOwner,
@@ -615,9 +615,9 @@ public sealed partial class InventoryWorld
             toCapacityAfter);
     }
 
-    internal InventoryWorld Clone()
+    internal InventoryStore Clone()
     {
-        var result = new InventoryWorld { _revision = _revision };
+        var result = new InventoryStore { _revision = _revision };
         foreach ((EntityId owner, InventoryState state) in _inventories)
         {
             result._inventories.Add(owner, state.Clone());
@@ -642,15 +642,15 @@ public sealed partial class InventoryWorld
         return result;
     }
 
-    internal void PublishCandidate(InventoryWorld candidate, ulong expectedRevision)
+    internal void PublishCandidate(InventoryStore candidate, ulong expectedRevision)
     {
         if (_revision != expectedRevision)
         {
             throw new MechanicsException(
-                $"Inventory world changed while a candidate was prepared: expected {expectedRevision}, actual {_revision}.");
+                $"Inventory store changed while a candidate was prepared: expected {expectedRevision}, actual {_revision}.");
         }
 
-        candidate.ValidateWorld();
+        candidate.ValidateStore();
         _inventories.Clear();
         foreach ((EntityId owner, InventoryState state) in candidate._inventories)
         {
@@ -679,15 +679,15 @@ public sealed partial class InventoryWorld
         _revision = candidate._revision;
     }
 
-    private T Commit<T>(Func<InventoryWorldCandidate, T> operation)
+    private T Commit<T>(Func<InventoryEdit, T> operation)
     {
-        InventoryWorldCandidate candidate = Prepare();
+        InventoryEdit candidate = Prepare();
         T receipt = operation(candidate);
         candidate.Publish();
         return receipt;
     }
 
-    private void TouchWorld() => _revision = checked(_revision + 1);
+    private void TouchStore() => _revision = checked(_revision + 1);
 
     private InventoryState RequireInventory(EntityId owner) =>
         _inventories.TryGetValue(owner, out InventoryState? state)
@@ -803,7 +803,7 @@ public sealed partial class InventoryWorld
         }
     }
 
-    internal void ValidateWorld()
+    internal void ValidateStore()
     {
         foreach ((EntityId owner, InventoryState inventory) in _inventories)
         {
@@ -859,7 +859,7 @@ public sealed partial class InventoryWorld
         if (!expected.Matches(actual))
         {
             throw new MechanicsException(
-                $"Item definition {expected.Id} conflicts with the definition already stored in this world.");
+                $"Item definition {expected.Id} conflicts with the definition already stored in this store.");
         }
     }
 
@@ -899,16 +899,16 @@ public sealed partial class InventoryWorld
 /// Detached managed inventory candidate. Mutations are applied to the detached
 /// copy and become live only when <see cref="Publish"/> succeeds.
 /// </summary>
-public sealed partial class InventoryWorldCandidate
+public sealed partial class InventoryEdit
 {
-    private readonly InventoryWorld _owner;
-    private readonly InventoryWorld _working;
+    private readonly InventoryStore _owner;
+    private readonly InventoryStore _working;
     private readonly ulong _expectedOwnerRevision;
     private bool _published;
 
-    internal InventoryWorldCandidate(
-        InventoryWorld owner,
-        InventoryWorld working,
+    internal InventoryEdit(
+        InventoryStore owner,
+        InventoryStore working,
         ulong expectedOwnerRevision)
     {
         _owner = owner;
@@ -934,13 +934,13 @@ public sealed partial class InventoryWorldCandidate
     public void Validate()
     {
         EnsureOpen();
-        _working.ValidateWorld();
+        _working.ValidateStore();
     }
 
     public void Publish()
     {
         EnsureOpen();
-        _working.ValidateWorld();
+        _working.ValidateStore();
         _owner.PublishCandidate(_working, _expectedOwnerRevision);
         _published = true;
     }
@@ -1022,40 +1022,40 @@ public sealed partial class InventoryWorldCandidate
 /// <summary>Convenience entry points for the managed inventory mechanisms.</summary>
 public static class InventoryService
 {
-    public static InventoryView Read(InventoryWorld world, EntityId owner)
+    public static InventoryView Read(InventoryStore store, EntityId owner)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.View(owner);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.View(owner);
     }
 
     public static InventoryMutationReceipt Grant(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId owner,
         ItemDefinition definition,
         ulong quantity)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.Grant(owner, definition, quantity);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.Grant(owner, definition, quantity);
     }
 
     public static InventoryMutationReceipt Consume(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId owner,
         ItemDefinition definition,
         ulong quantity)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.Consume(owner, definition, quantity);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.Consume(owner, definition, quantity);
     }
 
     public static InventoryTransferReceipt TransferFungible(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId fromOwner,
         EntityId toOwner,
         ItemDefinition definition,
         ulong quantity)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.TransferFungible(fromOwner, toOwner, definition, quantity);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.TransferFungible(fromOwner, toOwner, definition, quantity);
     }
 }

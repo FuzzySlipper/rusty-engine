@@ -119,21 +119,21 @@ public sealed class ProductStateStore<TState> : IDisposable
 }
 
 /// <summary>
-/// Product composition that checkpoints an in-process <see cref="EntityWorld"/>
+/// Product composition that checkpoints an in-process <see cref="EntityStore"/>
 /// only through product-supplied capture/restore delegates. It intentionally
 /// adds no native entity authority and no generic entity serialization schema.
 /// </summary>
 public sealed class EntityWorldProductStateStore<TState> : IDisposable
 {
-    private readonly EntityWorld _world;
-    private readonly Func<EntityWorld, TState> _capture;
-    private readonly Action<EntityWorld, TState> _restore;
+    private readonly EntityStore _world;
+    private readonly Func<EntityStore, TState> _capture;
+    private readonly Action<EntityStore, TState> _restore;
     private readonly ProductStateStore<TState> _state;
 
     public EntityWorldProductStateStore(
-        EntityWorld world,
-        Func<EntityWorld, TState> capture,
-        Action<EntityWorld, TState> restore,
+        EntityStore world,
+        Func<EntityStore, TState> capture,
+        Action<EntityStore, TState> restore,
         IEngineContext engine,
         string scope,
         IProductStateCodec<TState> codec,

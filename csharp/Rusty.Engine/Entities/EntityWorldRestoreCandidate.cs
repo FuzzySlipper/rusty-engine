@@ -6,13 +6,13 @@ namespace Rusty.Engine.Entities;
 /// </summary>
 public sealed class EntityWorldRestoreCandidate
 {
-    private readonly EntityWorld _world;
-    private readonly EntityWorld.WorldState _state;
+    private readonly EntityStore _world;
+    private readonly EntityStore.StoreState _state;
     private readonly ulong _preparedRevision;
     // 0 is unconsumed, 1 is one caller publishing, and 2 is successfully published.
     private int _publicationState;
 
-    internal EntityWorldRestoreCandidate(EntityWorld world, EntityWorld.WorldState state, ulong preparedRevision)
+    internal EntityWorldRestoreCandidate(EntityStore world, EntityStore.StoreState state, ulong preparedRevision)
     {
         _world = world;
         _state = state;

@@ -28,36 +28,36 @@ public readonly record struct DynamicsEntityAction(
     bool Wake);
 
 /// <summary>Exact managed revision evidence for one Dynamics publication row.</summary>
-public readonly record struct DynamicsEntityWorldComponentGuard(
+public readonly record struct EntityDynamicsAdapterComponentGuard(
     EntityId Entity,
     ComponentRevision TransformRevision,
     ComponentRevision MotionRevision,
     DynamicsBodyHandle Body);
 
 /// <summary>Copied managed evidence required before and after one Dynamics crossing.</summary>
-public readonly record struct DynamicsEntityWorldGuard(
-    ulong WorldRevision,
-    ReadOnlyMemory<DynamicsEntityWorldComponentGuard> Components);
+public readonly record struct EntityDynamicsAdapterGuard(
+    ulong StoreRevision,
+    ReadOnlyMemory<EntityDynamicsAdapterComponentGuard> Components);
 
 /// <summary>One native coherent step/read and its one canonical managed batch.</summary>
-public readonly record struct DynamicsEntityWorldReceipt(
+public readonly record struct EntityDynamicsAdapterReceipt(
     DynamicsStepAndReadLeaseReceipt Native,
     EntityBatchReceipt Managed,
-    DynamicsEntityWorldGuard Guard);
+    EntityDynamicsAdapterGuard Guard);
 
 /// <summary>
 /// Composes caller-owned EntityId-to-DynamicsBody bindings with canonical
 /// managed Transform and copied DynamicsMotion values. It retains neither a
 /// native entity mirror nor a parallel physics state.
 /// </summary>
-public sealed class DynamicsEntityWorld
+public sealed class EntityDynamicsAdapter
 {
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly IDynamicsService _dynamics;
     private readonly DynamicsWorld _world;
 
-    public DynamicsEntityWorld(
-        EntityWorld entities,
+    public EntityDynamicsAdapter(
+        EntityStore entities,
         IDynamicsService dynamics,
         DynamicsWorld world)
     {
@@ -72,14 +72,14 @@ public sealed class DynamicsEntityWorld
     /// returned Transform/DynamicsMotion pair in exactly one EntityBatch.
     /// Binding and action order are explicit and preserved by the native lease.
     /// </summary>
-    public DynamicsEntityWorldReceipt Step(
+    public EntityDynamicsAdapterReceipt Step(
         float stepSeconds,
         uint steps,
         ReadOnlyMemory<DynamicsEntityBinding> bindings,
         ReadOnlyMemory<DynamicsEntityAction> actions,
         int maximumBodies,
         int maximumActions,
-        DynamicsEntityWorldGuard? expectedGuard = null)
+        EntityDynamicsAdapterGuard? expectedGuard = null)
     {
         if (maximumBodies < 0)
         {
@@ -101,8 +101,8 @@ public sealed class DynamicsEntityWorld
         }
 
         DynamicsEntityBinding[] projectedBindings = bindings.ToArray();
-        DynamicsEntityWorldGuard guard = CaptureGuard(projectedBindings);
-        if (expectedGuard is DynamicsEntityWorldGuard expected)
+        EntityDynamicsAdapterGuard guard = CaptureGuard(projectedBindings);
+        if (expectedGuard is EntityDynamicsAdapterGuard expected)
         {
             ValidateGuard(expected, guard);
         }
@@ -118,19 +118,19 @@ public sealed class DynamicsEntityWorld
 
         ValidateGuard(guard, CaptureGuard(projectedBindings));
         ValidateNativeReceipt(projectedBindings, native);
-        EntityWorldBatchCandidate managed = _entities.PrepareBatch(BuildBatch(guard, native), guard.WorldRevision);
+        EntityWorldBatchCandidate managed = _entities.PrepareBatch(BuildBatch(guard, native), guard.StoreRevision);
         managed.Publish();
-        return new DynamicsEntityWorldReceipt(native, managed.Receipt, guard);
+        return new EntityDynamicsAdapterReceipt(native, managed.Receipt, guard);
     }
 
-    private DynamicsEntityWorldGuard CaptureGuard(ReadOnlySpan<DynamicsEntityBinding> bindings)
+    private EntityDynamicsAdapterGuard CaptureGuard(ReadOnlySpan<DynamicsEntityBinding> bindings)
     {
         var active = new HashSet<EntityId>(_entities.Query(
             EngineComponentTypes.Transform,
             EngineComponentTypes.DynamicsMotion).Select(row => row.Entity));
         var entities = new HashSet<ulong>();
         var bodies = new HashSet<ulong>();
-        var guards = new DynamicsEntityWorldComponentGuard[bindings.Length];
+        var guards = new EntityDynamicsAdapterComponentGuard[bindings.Length];
         for (int index = 0; index < bindings.Length; index++)
         {
             DynamicsEntityBinding binding = bindings[index];
@@ -151,13 +151,13 @@ public sealed class DynamicsEntityWorld
                 throw new InvalidOperationException(
                     $"Dynamics entity {binding.Entity.Value} must be active with Transform and DynamicsMotion components.");
             }
-            guards[index] = new DynamicsEntityWorldComponentGuard(
+            guards[index] = new EntityDynamicsAdapterComponentGuard(
                 binding.Entity,
                 _entities.GetComponentRevision(binding.Entity, EngineComponentTypes.Transform),
                 _entities.GetComponentRevision(binding.Entity, EngineComponentTypes.DynamicsMotion),
                 binding.Body.Handle);
         }
-        return new DynamicsEntityWorldGuard(_entities.Revision, guards);
+        return new EntityDynamicsAdapterGuard(_entities.Revision, guards);
     }
 
     private static DynamicsAction[] ProjectActions(
@@ -190,16 +190,16 @@ public sealed class DynamicsEntityWorld
     }
 
     private static void ValidateGuard(
-        DynamicsEntityWorldGuard expected,
-        DynamicsEntityWorldGuard observed)
+        EntityDynamicsAdapterGuard expected,
+        EntityDynamicsAdapterGuard observed)
     {
-        if (expected.WorldRevision != observed.WorldRevision)
+        if (expected.StoreRevision != observed.StoreRevision)
         {
             throw new InvalidOperationException(
-                $"Dynamics managed world revision is stale: expected {expected.WorldRevision}, actual {observed.WorldRevision}.");
+                $"Dynamics managed store revision is stale: expected {expected.StoreRevision}, actual {observed.StoreRevision}.");
         }
-        ReadOnlySpan<DynamicsEntityWorldComponentGuard> expectedRows = expected.Components.Span;
-        ReadOnlySpan<DynamicsEntityWorldComponentGuard> observedRows = observed.Components.Span;
+        ReadOnlySpan<EntityDynamicsAdapterComponentGuard> expectedRows = expected.Components.Span;
+        ReadOnlySpan<EntityDynamicsAdapterComponentGuard> observedRows = observed.Components.Span;
         if (expectedRows.Length != observedRows.Length)
         {
             throw new InvalidOperationException("Dynamics managed binding set is stale.");
@@ -233,15 +233,15 @@ public sealed class DynamicsEntityWorld
     }
 
     private EntityBatch BuildBatch(
-        DynamicsEntityWorldGuard guard,
+        EntityDynamicsAdapterGuard guard,
         DynamicsStepAndReadLeaseReceipt native)
     {
         var batch = new EntityBatch();
-        ReadOnlySpan<DynamicsEntityWorldComponentGuard> components = guard.Components.Span;
+        ReadOnlySpan<EntityDynamicsAdapterComponentGuard> components = guard.Components.Span;
         ReadOnlySpan<DynamicsStepAndReadBody> rows = native.Bodies.Span;
         for (int index = 0; index < rows.Length; index++)
         {
-            DynamicsEntityWorldComponentGuard component = components[index];
+            EntityDynamicsAdapterComponentGuard component = components[index];
             DynamicsReadout readout = rows[index].Readout;
             Transform transform = readout.Transform with
             {

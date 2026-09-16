@@ -21,10 +21,10 @@ pub struct NativePhysicsStep {
     pub seconds_per_tick: f32,
 }
 
-/// Call-local world facts used by a kinematic integration.
+/// Call-local physics settings used by a kinematic integration.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativePhysicsWorld {
+pub struct NativePhysicsSettings {
     pub gravity: NativeVec3,
 }
 
@@ -52,7 +52,7 @@ pub struct NativeKinematicShape {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeKinematicIntegrationRequest {
     pub body: NativeKinematicBody,
-    pub world: NativePhysicsWorld,
+    pub settings: NativePhysicsSettings,
     pub step: NativePhysicsStep,
 }
 
@@ -63,7 +63,7 @@ pub struct NativeKinematicIntegrationRequest {
 pub struct NativeKinematicSpatialIntegrationRequest {
     pub session: NativeSpatialSessionHandle,
     pub body: NativeKinematicBody,
-    pub world: NativePhysicsWorld,
+    pub settings: NativePhysicsSettings,
     pub step: NativePhysicsStep,
     pub shape: NativeKinematicShape,
 }

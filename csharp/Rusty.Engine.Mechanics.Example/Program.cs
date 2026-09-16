@@ -552,7 +552,7 @@ static void ExerciseManagedInventory()
         EquipmentSlotId.Parse("shield-hand"),
         [ItemClassificationId.Parse("shield")]);
 
-    var world = new InventoryWorld();
+    var world = new InventoryStore();
     world.RegisterInventory(new InventoryState(
         new EntityId(Owner),
         [new InventoryCapacityLimit(mass, 18)]));
@@ -605,7 +605,7 @@ static void ExerciseManagedInventory()
         && owner == new EntityId(Owner),
         "rejected equipped transfer changed containment");
 
-    InventoryWorldCandidate transfer = world.Prepare();
+    InventoryEdit transfer = world.Prepare();
     transfer.Unequip(new EntityId(Owner), new EntityId(RifleEntity));
     ItemTransferReceipt moved = transfer.TransferUnique(
         new EntityId(RifleEntity),
@@ -646,7 +646,7 @@ static void ExerciseManagedInventory()
         && !world.TryGetItem(new EntityId(ShieldEntity), out _),
         "explicit unique destruction did not remove the item");
 
-    var boundedWorld = new InventoryWorld();
+    var boundedWorld = new InventoryStore();
     EntityId boundedOwner = new(100);
     boundedWorld.RegisterInventory(new InventoryState(boundedOwner));
     for (int index = 0; index < ManagedInventoryLimits.MaximumStacksPerInventory; index++)

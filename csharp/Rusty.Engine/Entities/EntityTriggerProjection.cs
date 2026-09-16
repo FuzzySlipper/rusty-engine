@@ -5,7 +5,7 @@ namespace Rusty.Engine.Entities;
 
 /// <summary>
 /// Local-space collision facts for one canonical managed entity. The generated Spatial value
-/// carries an entity id, but that id is deliberately omitted here: <see cref="EntityWorld"/>
+/// carries an entity id, but that id is deliberately omitted here: <see cref="EntityStore"/>
 /// supplies it when a named Spatial projection is requested.
 /// </summary>
 public readonly record struct SpatialCollider(
@@ -18,7 +18,7 @@ public readonly record struct SpatialCollider(
     bool Trigger);
 
 /// <summary>One exact managed-state guard for a Spatial projection row.</summary>
-public readonly record struct SpatialEntityWorldComponentGuard(
+public readonly record struct EntityTriggerProjectionComponentGuard(
     EntityId Entity,
     ComponentRevision TransformRevision,
     ComponentRevision ColliderRevision);
@@ -27,17 +27,17 @@ public readonly record struct SpatialEntityWorldComponentGuard(
 /// Copied managed revision evidence for a Spatial projection. Supplying it on a later call
 /// rejects a changed world or changed participating component before crossing into Spatial.
 /// </summary>
-public readonly record struct SpatialEntityWorldGuard(
-    ulong WorldRevision,
-    ReadOnlyMemory<SpatialEntityWorldComponentGuard> Components);
+public readonly record struct EntityTriggerProjectionGuard(
+    ulong StoreRevision,
+    ReadOnlyMemory<EntityTriggerProjectionComponentGuard> Components);
 
 /// <summary>
 /// A copied result from one coherent trigger reconciliation. Facts are read immediately from the
 /// generated bounded indexed readback while the reconciliation result is still current.
 /// </summary>
-public readonly record struct SpatialEntityWorldReconcileReceipt(
+public readonly record struct EntityTriggerProjectionReconcileReceipt(
     SpatialTriggerReceipt Trigger,
-    SpatialEntityWorldGuard Guard,
+    EntityTriggerProjectionGuard Guard,
     ReadOnlyMemory<SpatialEntityCollider> Entities,
     ReadOnlyMemory<SpatialTriggerFactAtReceipt> Facts,
     bool FactsTruncated);
@@ -47,15 +47,15 @@ public readonly record struct SpatialEntityWorldReconcileReceipt(
 /// Spatial trigger reconciliation. It is a call-time projection only; it retains no second
 /// spatial world or product component mirror.
 /// </summary>
-public sealed class SpatialEntityWorld
+public sealed class EntityTriggerProjection
 {
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly ISpatialService _spatial;
     private readonly SpatialSession _session;
     private readonly ComponentType<SpatialCollider> _colliders;
 
-    public SpatialEntityWorld(
-        EntityWorld entities,
+    public EntityTriggerProjection(
+        EntityStore entities,
         ISpatialService spatial,
         SpatialSession session,
         ComponentType<SpatialCollider> colliders)
@@ -71,12 +71,12 @@ public sealed class SpatialEntityWorld
     /// caller supplies explicit bounds for both admission and copied fact readback; oversized
     /// projections are rejected before the native call instead of silently becoming partial.
     /// </summary>
-    public SpatialEntityWorldReconcileReceipt ReconcileTriggers(
+    public EntityTriggerProjectionReconcileReceipt ReconcileTriggers(
         ulong tick,
         SpatialTriggerCause cause,
         int maximumEntities,
         int maximumFactReadback,
-        SpatialEntityWorldGuard? expectedGuard = null)
+        EntityTriggerProjectionGuard? expectedGuard = null)
     {
         if (maximumEntities < 1)
         {
@@ -87,11 +87,11 @@ public sealed class SpatialEntityWorld
             throw new ArgumentOutOfRangeException(nameof(maximumFactReadback));
         }
 
-        ulong worldRevision = _entities.Revision;
-        if (expectedGuard is SpatialEntityWorldGuard expected && expected.WorldRevision != worldRevision)
+        ulong storeRevision = _entities.Revision;
+        if (expectedGuard is EntityTriggerProjectionGuard expected && expected.StoreRevision != storeRevision)
         {
             throw new InvalidOperationException(
-                $"Spatial projection world revision is stale: expected {expected.WorldRevision}, actual {worldRevision}.");
+                $"Spatial projection store revision is stale: expected {expected.StoreRevision}, actual {storeRevision}.");
         }
 
         IReadOnlyList<EntityComponents<Transform, SpatialCollider>> joined = _entities.Query(
@@ -104,18 +104,18 @@ public sealed class SpatialEntityWorld
         }
 
         var projected = new SpatialEntityCollider[joined.Count];
-        var guards = new SpatialEntityWorldComponentGuard[joined.Count];
+        var guards = new EntityTriggerProjectionComponentGuard[joined.Count];
         for (int index = 0; index < joined.Count; index++)
         {
             EntityComponents<Transform, SpatialCollider> row = joined[index];
             projected[index] = Project(row.Entity, row.First, row.Second);
-            guards[index] = new SpatialEntityWorldComponentGuard(
+            guards[index] = new EntityTriggerProjectionComponentGuard(
                 row.Entity,
                 _entities.GetComponentRevision(row.Entity, EngineComponentTypes.Transform),
                 _entities.GetComponentRevision(row.Entity, _colliders));
         }
 
-        if (expectedGuard is SpatialEntityWorldGuard supplied)
+        if (expectedGuard is EntityTriggerProjectionGuard supplied)
         {
             ValidateComponentGuards(supplied, guards);
         }
@@ -132,19 +132,19 @@ public sealed class SpatialEntityWorld
             facts[index] = _spatial.ReadTriggerFactAt(new SpatialTriggerFactAtRequest(_session, index));
         }
 
-        return new SpatialEntityWorldReconcileReceipt(
+        return new EntityTriggerProjectionReconcileReceipt(
             trigger,
-            new SpatialEntityWorldGuard(worldRevision, guards),
+            new EntityTriggerProjectionGuard(storeRevision, guards),
             projected,
             facts,
             factCount > readCount);
     }
 
     private static void ValidateComponentGuards(
-        SpatialEntityWorldGuard expected,
-        IReadOnlyList<SpatialEntityWorldComponentGuard> observed)
+        EntityTriggerProjectionGuard expected,
+        IReadOnlyList<EntityTriggerProjectionComponentGuard> observed)
     {
-        ReadOnlySpan<SpatialEntityWorldComponentGuard> supplied = expected.Components.Span;
+        ReadOnlySpan<EntityTriggerProjectionComponentGuard> supplied = expected.Components.Span;
         if (supplied.Length != observed.Count)
         {
             throw new InvalidOperationException("Spatial projection component set is stale.");

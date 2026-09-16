@@ -4,19 +4,19 @@ namespace Rusty.Engine.Entities;
 /// Engine-maintained managed storage for product-owned typed entity facts.
 ///
 /// It is intentionally independent of the host update pipeline and is not a projection of Rust
-/// entity-state. Rust mechanisms remain reachable through their generated services; this world
+/// entity-state. Rust mechanisms remain reachable through their generated services; this store
 /// avoids a native crossing for every ordinary product component read or write.
 /// </summary>
-public sealed class EntityWorld : IDisposable
+public sealed class EntityStore : IDisposable
 {
     private const int MaximumDiagnosticSample = 64;
-    private WorldState _state;
+    private StoreState _state;
     private bool _isDisposed;
     private bool _staging;
 
-    public EntityWorld(IEnumerable<ComponentType>? componentTypes = null)
+    public EntityStore(IEnumerable<ComponentType>? componentTypes = null)
     {
-        _state = new WorldState();
+        _state = new StoreState();
         if (componentTypes is null)
         {
             return;
@@ -28,7 +28,7 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
-    private EntityWorld(WorldState state, bool staging)
+    private EntityStore(StoreState state, bool staging)
     {
         _state = state;
         _staging = staging;
@@ -43,7 +43,7 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
-    /// <summary>The next identity cursor admitted by this world.</summary>
+    /// <summary>The next identity cursor admitted by this store.</summary>
     public ulong NextEntityValue
     {
         get
@@ -162,7 +162,7 @@ public sealed class EntityWorld : IDisposable
     public ContainmentReceipt SetContainment(EntityId child, EntityId container, ulong? expectedRevision = null)
     {
         ThrowIfDisposed();
-        EnsureWorldRevision(expectedRevision);
+        EnsureStoreRevision(expectedRevision);
         RequireAlive(child);
         RequireAlive(container);
         if (child == container)
@@ -200,7 +200,7 @@ public sealed class EntityWorld : IDisposable
     public ContainmentReceipt ClearContainment(EntityId child, ulong? expectedRevision = null)
     {
         ThrowIfDisposed();
-        EnsureWorldRevision(expectedRevision);
+        EnsureStoreRevision(expectedRevision);
         RequireAlive(child);
         ulong revisionBefore = _state.Revision;
         if (!_state.Containment.Remove(child.Value, out ulong container))
@@ -338,7 +338,7 @@ public sealed class EntityWorld : IDisposable
     }
 
     /// <summary>
-    /// Validates and stages one batch without changing the live world. This is
+    /// Validates and stages one batch without changing the live store. This is
     /// the managed half of a synchronous cross-owner transaction: callers
     /// publish it only after their other owner has committed successfully.
     /// </summary>
@@ -348,13 +348,13 @@ public sealed class EntityWorld : IDisposable
         ArgumentNullException.ThrowIfNull(batch);
         if (expectedRevision is ulong expected && expected != _state.Revision)
         {
-            throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
+            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
         }
 
         ulong revisionBefore = _state.Revision;
-        WorldState stagedState = _state.Clone();
-        var staged = new EntityWorld(stagedState, staging: true);
-        foreach (Action<EntityWorld> mutation in batch.Mutations)
+        StoreState stagedState = _state.Clone();
+        var staged = new EntityStore(stagedState, staging: true);
+        foreach (Action<EntityStore> mutation in batch.Mutations)
         {
             mutation(staged);
         }
@@ -416,7 +416,7 @@ public sealed class EntityWorld : IDisposable
     /// <summary>
     /// Builds a fully validated in-process restore candidate. This lets a narrow composition
     /// surface coordinate managed validation with an Engine-owned prepared candidate before either
-    /// world is published.
+    /// store is published.
     /// </summary>
     internal EntityWorldRestoreCandidate PrepareRestore(EntityWorldSnapshot snapshot, ulong? expectedRevision)
     {
@@ -424,11 +424,11 @@ public sealed class EntityWorld : IDisposable
         ArgumentNullException.ThrowIfNull(snapshot);
         if (expectedRevision is ulong expected && expected != _state.Revision)
         {
-            throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
+            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
         }
         EnsureSameRegistrations(snapshot.State);
         ulong revisionBefore = _state.Revision;
-        WorldState restored = snapshot.State.Clone();
+        StoreState restored = snapshot.State.Clone();
         restored.ValidateComponents();
         restored.ValidateContainment();
         restored.RebaseRevisionsAfter(_state);
@@ -447,16 +447,16 @@ public sealed class EntityWorld : IDisposable
         ArgumentNullException.ThrowIfNull(plan);
         if (expectedRevision is ulong expected && expected != _state.Revision)
         {
-            throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
+            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
         }
 
         ulong revisionBefore = _state.Revision;
-        WorldState restored = BuildRestoreState(plan);
+        StoreState restored = BuildRestoreState(plan);
         restored.RebaseRevisionsAfter(_state);
         return new EntityWorldRestoreCandidate(this, restored, revisionBefore);
     }
 
-    public EntityWorldDiagnostics Diagnostics(int maxEntitySample = MaximumDiagnosticSample)
+    public EntityStoreDiagnostics Diagnostics(int maxEntitySample = MaximumDiagnosticSample)
     {
         ThrowIfDisposed();
         if (maxEntitySample is < 0 or > MaximumDiagnosticSample)
@@ -479,27 +479,27 @@ public sealed class EntityWorld : IDisposable
         IReadOnlyList<ComponentTypeDiagnostics> components = _state.Tables.Values
             .Select(table => table.Diagnostics(maxEntitySample))
             .ToArray();
-        return new EntityWorldDiagnostics(_state.Revision, _state.NextEntityValue, _state.Entities.Count, active, disabled, tombstoned, components);
+        return new EntityStoreDiagnostics(_state.Revision, _state.NextEntityValue, _state.Entities.Count, active, disabled, tombstoned, components);
     }
 
     /// <summary>
     /// Captures the identity, relation, revision, and component-presence facts needed by the
     /// Engine-managed live debug module. This deliberately excludes component values and is
-    /// internal so it cannot become a general untyped EntityWorld access surface.
+    /// internal so it cannot become a general untyped EntityStore access surface.
     /// </summary>
-    internal EntityWorldDebugSnapshot CaptureDebugSnapshot()
+    internal EntityStoreDebugSnapshot CaptureDebugSnapshot()
     {
         ThrowIfDisposed();
-        var entities = new List<EntityWorldDebugEntitySnapshot>(_state.Entities.Count);
+        var entities = new List<EntityStoreDebugEntitySnapshot>(_state.Entities.Count);
         foreach ((ulong value, EntityRecord record) in _state.Entities)
         {
             EntityId entity = new(value);
-            var components = new List<EntityWorldDebugComponentPresence>();
+            var components = new List<EntityStoreDebugComponentPresence>();
             foreach (ComponentTable table in _state.Tables.Values)
             {
                 if (table.Contains(entity))
                 {
-                    components.Add(new EntityWorldDebugComponentPresence(
+                    components.Add(new EntityStoreDebugComponentPresence(
                         table.Descriptor.Key,
                         table.Descriptor,
                         table.RevisionFor(entity)));
@@ -512,13 +512,13 @@ public sealed class EntityWorld : IDisposable
             IReadOnlyList<EntityId> children = _state.ContainedChildren.TryGetValue(value, out SortedSet<ulong>? contained)
                 ? contained.Select(child => new EntityId(child)).ToArray()
                 : [];
-            entities.Add(new EntityWorldDebugEntitySnapshot(entity, record.Lifecycle, record.Revision, container, children, components.ToArray()));
+            entities.Add(new EntityStoreDebugEntitySnapshot(entity, record.Lifecycle, record.Revision, container, children, components.ToArray()));
         }
 
-        EntityWorldDebugComponentFamily[] componentFamilies = _state.Tables.Values
-            .Select(table => new EntityWorldDebugComponentFamily(table.Descriptor.Key, table.Descriptor))
+        EntityStoreDebugComponentFamily[] componentFamilies = _state.Tables.Values
+            .Select(table => new EntityStoreDebugComponentFamily(table.Descriptor.Key, table.Descriptor))
             .ToArray();
-        return new EntityWorldDebugSnapshot(_state.Revision, _state.NextEntityValue, entities.ToArray(), componentFamilies);
+        return new EntityStoreDebugSnapshot(_state.Revision, _state.NextEntityValue, entities.ToArray(), componentFamilies);
     }
 
     internal void ValidateDebugRegistration() => ThrowIfDisposed();
@@ -527,7 +527,7 @@ public sealed class EntityWorld : IDisposable
     {
         if (_staging)
         {
-            throw new InvalidOperationException("A batch cannot dispose its staging world.");
+            throw new InvalidOperationException("A batch cannot dispose its staging store.");
         }
         if (_isDisposed)
         {
@@ -545,7 +545,7 @@ public sealed class EntityWorld : IDisposable
         ArgumentNullException.ThrowIfNull(componentType);
         if (_state.Tables.ContainsKey(componentType.Key))
         {
-            throw new InvalidOperationException($"Component key {componentType.Key.Value} is already registered in this world.");
+            throw new InvalidOperationException($"Component key {componentType.Key.Value} is already registered in this store.");
         }
         _state.Tables.Add(componentType.Key, componentType.CreateTable());
     }
@@ -555,7 +555,7 @@ public sealed class EntityWorld : IDisposable
         ArgumentNullException.ThrowIfNull(componentType);
         if (!_state.Tables.TryGetValue(componentType.Key, out ComponentTable? table))
         {
-            throw new InvalidOperationException($"Component key {componentType.Key.Value} is not registered in this world.");
+            throw new InvalidOperationException($"Component key {componentType.Key.Value} is not registered in this store.");
         }
         return table as ComponentTable<T>
             ?? throw new InvalidOperationException($"Component key {componentType.Key.Value} is registered with a different component type.");
@@ -573,11 +573,11 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
-    private void EnsureWorldRevision(ulong? expectedRevision)
+    private void EnsureStoreRevision(ulong? expectedRevision)
     {
         if (expectedRevision is ulong expected && expected != _state.Revision)
         {
-            throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
+            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
         }
     }
 
@@ -648,28 +648,28 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
-    private void EnsureSameRegistrations(WorldState snapshot)
+    private void EnsureSameRegistrations(StoreState snapshot)
     {
         if (_state.Tables.Count != snapshot.Tables.Count || _state.Tables.Keys.Except(snapshot.Tables.Keys).Any())
         {
-            throw new InvalidOperationException("Snapshot component registrations do not match this world.");
+            throw new InvalidOperationException("Snapshot component registrations do not match this store.");
         }
         foreach ((ComponentTypeKey key, ComponentTable table) in _state.Tables)
         {
             if (snapshot.Tables[key].Descriptor != table.Descriptor)
             {
-                throw new InvalidOperationException($"Snapshot component descriptor for key {key.Value} does not match this world.");
+                throw new InvalidOperationException($"Snapshot component descriptor for key {key.Value} does not match this store.");
             }
         }
     }
 
-    private WorldState BuildRestoreState(EntityWorldRestorePlan plan)
+    private StoreState BuildRestoreState(EntityWorldRestorePlan plan)
     {
         if (plan.SavedNextEntityValue == 0)
         {
             throw new InvalidOperationException("Restore next-entity high-watermark must be non-zero.");
         }
-        EntityWorldRestorePlan.ValidateRevision(plan.SavedRevision, "world");
+        EntityWorldRestorePlan.ValidateRevision(plan.SavedRevision, "store");
 
         Dictionary<ulong, EntityWorldEntityState> entities = [];
         foreach (EntityWorldEntityState state in plan.Entities)
@@ -718,7 +718,7 @@ public sealed class EntityWorld : IDisposable
             family.Validate(_state.Tables, entities);
         }
 
-        WorldState restored = new()
+        StoreState restored = new()
         {
             Revision = plan.SavedRevision,
             NextEntityValue = plan.SavedNextEntityValue,
@@ -755,21 +755,21 @@ public sealed class EntityWorld : IDisposable
         return Math.Max(saved, current) + 1;
     }
 
-    internal void PublishPreparedRestore(WorldState restored, ulong preparedRevision)
+    internal void PublishPreparedRestore(StoreState restored, ulong preparedRevision)
     {
         ThrowIfDisposed();
-        EnsureWorldRevision(preparedRevision);
+        EnsureStoreRevision(preparedRevision);
         _state = restored;
     }
 
-    internal void PublishPreparedBatch(WorldState state, ulong preparedRevision)
+    internal void PublishPreparedBatch(StoreState state, ulong preparedRevision)
     {
         ThrowIfDisposed();
-        EnsureWorldRevision(preparedRevision);
+        EnsureStoreRevision(preparedRevision);
         _state = state;
     }
 
-    internal sealed class WorldState
+    internal sealed class StoreState
     {
         internal ulong Revision;
         internal ulong NextEntityValue = 1;
@@ -778,9 +778,9 @@ public sealed class EntityWorld : IDisposable
         internal SortedDictionary<ulong, ulong> Containment { get; } = [];
         internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; } = [];
 
-        internal WorldState Clone()
+        internal StoreState Clone()
         {
-            var result = new WorldState { Revision = Revision, NextEntityValue = NextEntityValue };
+            var result = new StoreState { Revision = Revision, NextEntityValue = NextEntityValue };
             foreach ((ulong id, EntityRecord entity) in Entities)
             {
                 result.Entities.Add(id, entity.Clone());
@@ -800,7 +800,7 @@ public sealed class EntityWorld : IDisposable
             return result;
         }
 
-        internal void RebaseRevisionsAfter(WorldState current)
+        internal void RebaseRevisionsAfter(StoreState current)
         {
             // Entity identities are monotonic across an in-process restore. A captured next-id
             // cursor must never roll back below a current-only entity and permit ABA reuse.
@@ -883,7 +883,7 @@ public sealed class EntityWorld : IDisposable
                 || !ReferenceEquals(table.Descriptor, descriptor))
             {
                 throw new InvalidOperationException(
-                    $"Restore component family {descriptor.Key.Value} is not registered with this world.");
+                    $"Restore component family {descriptor.Key.Value} is not registered with this store.");
             }
             typedTable.ImportSlots(slots);
         }

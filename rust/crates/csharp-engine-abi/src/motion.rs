@@ -33,7 +33,7 @@ pub struct NativeMotionResolveRequest {
 }
 
 /// Pure resolution facts. `candidate_transform` is never committed natively;
-/// product code chooses whether to publish it into its canonical EntityWorld.
+/// product code chooses whether to publish it into its canonical EntityStore.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMotionResolveReceipt {

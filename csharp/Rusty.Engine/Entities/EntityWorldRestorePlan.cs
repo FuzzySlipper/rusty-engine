@@ -26,7 +26,7 @@ public readonly record struct EntityWorldComponentSlot<T>(
     where T : struct;
 
 /// <summary>
-/// Transient typed input for a managed EntityWorld restore.
+/// Transient typed input for a managed EntityStore restore.
 ///
 /// The product decodes and migrates its own durable format, then supplies the resulting semantic
 /// evidence here. This type intentionally defines no serialization envelope, schema, codec, or
@@ -75,10 +75,10 @@ public sealed class EntityWorldRestorePlan
         internal abstract int SlotCount { get; }
 
         internal abstract void Validate(
-            IReadOnlyDictionary<ComponentTypeKey, EntityWorld.ComponentTable> registrations,
+            IReadOnlyDictionary<ComponentTypeKey, EntityStore.ComponentTable> registrations,
             IReadOnlyDictionary<ulong, EntityWorldEntityState> entities);
 
-        internal abstract void Import(EntityWorld.WorldState state);
+        internal abstract void Import(EntityStore.StoreState state);
     }
 
     private sealed class ComponentFamilyPlan<T>(
@@ -93,10 +93,10 @@ public sealed class EntityWorldRestorePlan
         internal override int SlotCount => _slots.Count;
 
         internal override void Validate(
-            IReadOnlyDictionary<ComponentTypeKey, EntityWorld.ComponentTable> registrations,
+            IReadOnlyDictionary<ComponentTypeKey, EntityStore.ComponentTable> registrations,
             IReadOnlyDictionary<ulong, EntityWorldEntityState> entities)
         {
-            if (!registrations.TryGetValue(descriptor.Key, out EntityWorld.ComponentTable? table)
+            if (!registrations.TryGetValue(descriptor.Key, out EntityStore.ComponentTable? table)
                 || !ReferenceEquals(table.Descriptor, descriptor))
             {
                 throw new InvalidOperationException(
@@ -137,7 +137,7 @@ public sealed class EntityWorldRestorePlan
             }
         }
 
-        internal override void Import(EntityWorld.WorldState state)
+        internal override void Import(EntityStore.StoreState state)
             => state.ImportComponentFamily(descriptor, _slots);
     }
 

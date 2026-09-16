@@ -7,15 +7,15 @@ namespace Rusty.Engine.Entities;
 /// </summary>
 public sealed class EntityWorldBatchCandidate
 {
-    private readonly EntityWorld _world;
-    private readonly EntityWorld.WorldState _state;
+    private readonly EntityStore _world;
+    private readonly EntityStore.StoreState _state;
     private readonly ulong _preparedRevision;
     // 0 is unconsumed, 1 is one caller publishing, and 2 is successfully published.
     private int _publicationState;
 
     internal EntityWorldBatchCandidate(
-        EntityWorld world,
-        EntityWorld.WorldState state,
+        EntityStore world,
+        EntityStore.StoreState state,
         ulong preparedRevision,
         EntityBatchReceipt receipt)
     {

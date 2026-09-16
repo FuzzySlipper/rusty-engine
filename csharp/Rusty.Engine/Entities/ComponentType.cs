@@ -23,7 +23,7 @@ public readonly record struct ComponentTypeKey : IComparable<ComponentTypeKey>
 }
 
 /// <summary>
-/// Creates a detached component value whenever <see cref="EntityWorld"/> stores, stages,
+/// Creates a detached component value whenever <see cref="EntityStore"/> stores, stages,
 /// snapshots, restores, or captures that component. For a value containing managed references,
 /// the codec must copy the reachable mutable state rather than return the original references.
 /// </summary>
@@ -71,14 +71,14 @@ public abstract class ComponentType
 
     public ComponentTypeKey Key { get; }
 
-    internal abstract EntityWorld.ComponentTable CreateTable();
+    internal abstract EntityStore.ComponentTable CreateTable();
 }
 
 /// <summary>
 /// A compile-time-safe descriptor for one component value type.
 ///
 /// Product code keeps descriptors as ordinary static values and registers them with an
-/// <see cref="EntityWorld"/>. There is no string lookup, reflection registration, or global
+/// <see cref="EntityStore"/>. There is no string lookup, reflection registration, or global
 /// component registry.
 /// </summary>
 public sealed class ComponentType<T> : ComponentType where T : struct
@@ -125,7 +125,7 @@ public sealed class ComponentType<T> : ComponentType where T : struct
     internal T CopyForDetachedUse(in T value)
         => SnapshotCodec is ComponentSnapshotCodec<T> codec ? codec(in value) : value;
 
-    internal override EntityWorld.ComponentTable CreateTable() => new EntityWorld.ComponentTable<T>(this);
+    internal override EntityStore.ComponentTable CreateTable() => new EntityStore.ComponentTable<T>(this);
 
     private static void RequireDetachedCopyCodec(ComponentSnapshotCodec<T>? snapshotCodec)
     {

@@ -24,7 +24,7 @@ public static class EngineComponentTypes
 
     /// <summary>
     /// A local-space collider shape projected with the canonical <see cref="Transform"/> into
-    /// the generated Spatial trigger batch. Entity identity remains owned by <see cref="EntityWorld"/>.
+    /// the generated Spatial trigger batch. Entity identity remains owned by <see cref="EntityStore"/>.
     /// </summary>
     public static ComponentType<SpatialCollider> SpatialCollider { get; } = ComponentType<SpatialCollider>.CreateEngine(
         EngineComponentKeys.Create(3),

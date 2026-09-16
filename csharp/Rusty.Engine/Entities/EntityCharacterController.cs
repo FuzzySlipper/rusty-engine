@@ -4,9 +4,9 @@ using Rusty.Engine;
 namespace Rusty.Engine.Entities;
 
 /// <summary>Exact managed revision evidence for the one call-local Character projection.</summary>
-public readonly record struct CharacterEntityWorldGuard(
+public readonly record struct EntityCharacterControllerGuard(
     EntityId Entity,
-    ulong WorldRevision,
+    ulong StoreRevision,
     ComponentRevision TransformRevision,
     ComponentRevision MotionRevision);
 
@@ -15,11 +15,11 @@ public readonly record struct CharacterEntityWorldGuard(
 /// receipt always identifies its temporary native character as entity 1; <see cref="Entity"/>
 /// is therefore preserved explicitly rather than hidden behind a managed mirror.
 /// </summary>
-public readonly record struct CharacterEntityWorldReceipt(
+public readonly record struct EntityCharacterControllerReceipt(
     EntityId Entity,
     CharacterStepReceipt Native,
     EntityBatchReceipt Managed,
-    CharacterEntityWorldGuard Guard);
+    EntityCharacterControllerGuard Guard);
 
 /// <summary>
 /// Projects the canonical managed Transform and CharacterMotion pair through the generated
@@ -27,14 +27,14 @@ public readonly record struct CharacterEntityWorldReceipt(
 /// <c>EntityId(1)</c>; optional active obstacles are likewise borrowed for one proposal. That
 /// temporary identity is validated on readback and never becomes a managed binding or mirror.
 /// </summary>
-public sealed class CharacterEntityWorld
+public sealed class EntityCharacterController
 {
     private const ulong NativeCharacterEntityId = 1;
 
-    private readonly EntityWorld _entities;
+    private readonly EntityStore _entities;
     private readonly ISpatialService _spatial;
 
-    public CharacterEntityWorld(EntityWorld entities, ISpatialService spatial)
+    public EntityCharacterController(EntityStore entities, ISpatialService spatial)
     {
         _entities = entities ?? throw new ArgumentNullException(nameof(entities));
         _spatial = spatial ?? throw new ArgumentNullException(nameof(spatial));
@@ -46,19 +46,19 @@ public sealed class CharacterEntityWorld
     /// Transform rotation and scale while applying the returned translation; optional obstacle
     /// values are borrowed by the generated proposal only.
     /// </summary>
-    public CharacterEntityWorldReceipt Step(
+    public EntityCharacterControllerReceipt Step(
         EntityId entity,
         SpatialSession session,
         CharacterSupport support,
         CharacterControllerConfig config,
         CharacterControllerCommand command,
-        CharacterEntityWorldGuard? expectedGuard = null,
+        EntityCharacterControllerGuard? expectedGuard = null,
         ReadOnlyMemory<CharacterObstacle> obstacles = default)
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        CharacterEntityWorldGuard guard = CaptureGuard(entity);
-        if (expectedGuard is CharacterEntityWorldGuard expected)
+        EntityCharacterControllerGuard guard = CaptureGuard(entity);
+        if (expectedGuard is EntityCharacterControllerGuard expected)
         {
             ValidateGuard(expected, guard);
         }
@@ -95,12 +95,12 @@ public sealed class CharacterEntityWorld
                     EngineComponentTypes.CharacterMotion,
                     native.Motion,
                     guard.MotionRevision)),
-            guard.WorldRevision);
+            guard.StoreRevision);
         managed.Publish();
-        return new CharacterEntityWorldReceipt(entity, native, managed.Receipt, guard);
+        return new EntityCharacterControllerReceipt(entity, native, managed.Receipt, guard);
     }
 
-    private CharacterEntityWorldGuard CaptureGuard(EntityId entity)
+    private EntityCharacterControllerGuard CaptureGuard(EntityId entity)
     {
         foreach (EntityComponents<Transform, CharacterMotion> row in _entities.Query(
                      EngineComponentTypes.Transform,
@@ -108,7 +108,7 @@ public sealed class CharacterEntityWorld
         {
             if (row.Entity == entity)
             {
-                return new CharacterEntityWorldGuard(
+                return new EntityCharacterControllerGuard(
                     entity,
                     _entities.Revision,
                     _entities.GetComponentRevision(entity, EngineComponentTypes.Transform),
@@ -120,7 +120,7 @@ public sealed class CharacterEntityWorld
             $"Character entity {entity.Value} must be active with Transform and CharacterMotion components.");
     }
 
-    private static void ValidateGuard(CharacterEntityWorldGuard expected, CharacterEntityWorldGuard observed)
+    private static void ValidateGuard(EntityCharacterControllerGuard expected, EntityCharacterControllerGuard observed)
     {
         if (expected != observed)
         {

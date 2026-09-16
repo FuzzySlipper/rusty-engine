@@ -36,16 +36,16 @@ public sealed class ItemMaterializationReceipt
         EntityId item,
         ItemDefinitionId definition,
         EntityId container,
-        ulong worldRevisionBefore,
-        ulong worldRevisionAfter,
+        ulong inventoryRevisionBefore,
+        ulong inventoryRevisionAfter,
         IReadOnlyList<CapacityUsage> capacityBefore,
         IReadOnlyList<CapacityUsage> capacityAfter)
     {
         Item = item;
         Definition = definition;
         Container = container;
-        WorldRevisionBefore = worldRevisionBefore;
-        WorldRevisionAfter = worldRevisionAfter;
+        InventoryRevisionBefore = inventoryRevisionBefore;
+        InventoryRevisionAfter = inventoryRevisionAfter;
         CapacityBefore = capacityBefore;
         CapacityAfter = capacityAfter;
     }
@@ -56,9 +56,9 @@ public sealed class ItemMaterializationReceipt
 
     public EntityId Container { get; }
 
-    public ulong WorldRevisionBefore { get; }
+    public ulong InventoryRevisionBefore { get; }
 
-    public ulong WorldRevisionAfter { get; }
+    public ulong InventoryRevisionAfter { get; }
 
     public IReadOnlyList<CapacityUsage> CapacityBefore { get; }
 
@@ -73,8 +73,8 @@ public sealed class ItemTransferReceipt
         ItemDefinitionId definition,
         EntityId fromOwner,
         EntityId toOwner,
-        ulong worldRevisionBefore,
-        ulong worldRevisionAfter,
+        ulong inventoryRevisionBefore,
+        ulong inventoryRevisionAfter,
         IReadOnlyList<CapacityUsage> fromCapacityBefore,
         IReadOnlyList<CapacityUsage> fromCapacityAfter,
         IReadOnlyList<CapacityUsage> toCapacityBefore,
@@ -84,8 +84,8 @@ public sealed class ItemTransferReceipt
         Definition = definition;
         FromOwner = fromOwner;
         ToOwner = toOwner;
-        WorldRevisionBefore = worldRevisionBefore;
-        WorldRevisionAfter = worldRevisionAfter;
+        InventoryRevisionBefore = inventoryRevisionBefore;
+        InventoryRevisionAfter = inventoryRevisionAfter;
         FromCapacityBefore = fromCapacityBefore;
         FromCapacityAfter = fromCapacityAfter;
         ToCapacityBefore = toCapacityBefore;
@@ -100,9 +100,9 @@ public sealed class ItemTransferReceipt
 
     public EntityId ToOwner { get; }
 
-    public ulong WorldRevisionBefore { get; }
+    public ulong InventoryRevisionBefore { get; }
 
-    public ulong WorldRevisionAfter { get; }
+    public ulong InventoryRevisionAfter { get; }
 
     public IReadOnlyList<CapacityUsage> FromCapacityBefore { get; }
 
@@ -120,14 +120,14 @@ public sealed class ItemDestroyReceipt
         EntityId item,
         ItemDefinitionId definition,
         EntityId? formerOwner,
-        ulong worldRevisionBefore,
-        ulong worldRevisionAfter)
+        ulong inventoryRevisionBefore,
+        ulong inventoryRevisionAfter)
     {
         Item = item;
         Definition = definition;
         FormerOwner = formerOwner;
-        WorldRevisionBefore = worldRevisionBefore;
-        WorldRevisionAfter = worldRevisionAfter;
+        InventoryRevisionBefore = inventoryRevisionBefore;
+        InventoryRevisionAfter = inventoryRevisionAfter;
     }
 
     public EntityId Item { get; }
@@ -136,12 +136,12 @@ public sealed class ItemDestroyReceipt
 
     public EntityId? FormerOwner { get; }
 
-    public ulong WorldRevisionBefore { get; }
+    public ulong InventoryRevisionBefore { get; }
 
-    public ulong WorldRevisionAfter { get; }
+    public ulong InventoryRevisionAfter { get; }
 }
 
-public sealed partial class InventoryWorld
+public sealed partial class InventoryStore
 {
     public ItemMaterializationReceipt MaterializeUnique(ItemState item, EntityId owner) =>
         Commit(candidate => candidate.MaterializeUnique(item, owner));
@@ -169,7 +169,7 @@ public sealed partial class InventoryWorld
             owner,
             adding: true);
 
-        ulong worldRevisionBefore = _revision;
+        ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> before = ComputeCapacity(owner, inventory);
         IReadOnlyList<CapacityUsage> after = ComputeCapacity(owner, inventory, includedItem: item.Entity, includedState: item);
 
@@ -178,12 +178,12 @@ public sealed partial class InventoryWorld
         InventoryState updated = inventory.Clone();
         updated.SetRevision(checked(updated.Revision + 1));
         _inventories[owner] = updated;
-        TouchWorld();
+        TouchStore();
         return new ItemMaterializationReceipt(
             item.Entity,
             item.Definition.Id,
             owner,
-            worldRevisionBefore,
+            inventoryRevisionBefore,
             _revision,
             before,
             after);
@@ -220,7 +220,7 @@ public sealed partial class InventoryWorld
             toOwner,
             adding: true);
 
-        ulong worldRevisionBefore = _revision;
+        ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> fromBefore = ComputeCapacity(fromOwner, fromInventory);
         IReadOnlyList<CapacityUsage> toBefore = ComputeCapacity(toOwner, toInventory);
         IReadOnlyList<CapacityUsage> fromAfter = ComputeCapacity(
@@ -240,13 +240,13 @@ public sealed partial class InventoryWorld
         updatedTo.SetRevision(checked(updatedTo.Revision + 1));
         _inventories[fromOwner] = updatedFrom;
         _inventories[toOwner] = updatedTo;
-        TouchWorld();
+        TouchStore();
         return new ItemTransferReceipt(
             item,
             itemState.Definition.Id,
             fromOwner,
             toOwner,
-            worldRevisionBefore,
+            inventoryRevisionBefore,
             _revision,
             fromBefore,
             fromAfter,
@@ -263,7 +263,7 @@ public sealed partial class InventoryWorld
                 $"Unique item {item.Value} must be unequipped before destruction.");
         }
 
-        ulong worldRevisionBefore = _revision;
+        ulong inventoryRevisionBefore = _revision;
         EntityId? formerOwner = null;
         if (_containment.TryGetValue(item, out EntityId owner))
         {
@@ -275,12 +275,12 @@ public sealed partial class InventoryWorld
         }
 
         _items.Remove(item);
-        TouchWorld();
+        TouchStore();
         return new ItemDestroyReceipt(
             item,
             itemState.Definition.Id,
             formerOwner,
-            worldRevisionBefore,
+            inventoryRevisionBefore,
             _revision);
     }
 
@@ -325,27 +325,27 @@ public sealed partial class InventoryWorld
 public static class ItemService
 {
     public static ItemMaterializationReceipt MaterializeUnique(
-        InventoryWorld world,
+        InventoryStore store,
         ItemState item,
         EntityId owner)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.MaterializeUnique(item, owner);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.MaterializeUnique(item, owner);
     }
 
     public static ItemTransferReceipt TransferUnique(
-        InventoryWorld world,
+        InventoryStore store,
         EntityId item,
         EntityId fromOwner,
         EntityId toOwner)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.TransferUnique(item, fromOwner, toOwner);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.TransferUnique(item, fromOwner, toOwner);
     }
 
-    public static ItemDestroyReceipt DestroyUnique(InventoryWorld world, EntityId item)
+    public static ItemDestroyReceipt DestroyUnique(InventoryStore store, EntityId item)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        return world.DestroyUnique(item);
+        ArgumentNullException.ThrowIfNull(store);
+        return store.DestroyUnique(item);
     }
 }

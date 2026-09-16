@@ -51,7 +51,7 @@ fn native_step(value: NativePhysicsStep) -> Result<PhysicsStep, PhysicsError> {
     PhysicsStep::new(TickDelta::new(value.ticks), value.seconds_per_tick)
 }
 
-fn native_world(value: NativePhysicsWorld) -> PhysicsWorld {
+fn native_settings(value: NativePhysicsSettings) -> PhysicsWorld {
     PhysicsWorld {
         gravity: native_vec3_value(value.gravity),
     }
@@ -247,7 +247,11 @@ unsafe extern "C" fn integrate(
         return 0;
     }
     let value = native_step(request.step).and_then(|step| {
-        integrate_kinematic(native_body(request.body), native_world(request.world), step)
+        integrate_kinematic(
+            native_body(request.body),
+            native_settings(request.settings),
+            step,
+        )
     });
     match value {
         Ok(value) => {
@@ -277,7 +281,7 @@ unsafe extern "C" fn integrate_spatial(
         native_shape(request.shape).and_then(|shape| {
             integrate_kinematic_with_query(
                 native_body(request.body),
-                native_world(request.world),
+                native_settings(request.settings),
                 step,
                 shape,
                 scene.as_ref(),
@@ -473,7 +477,7 @@ mod tests {
                             NativeVec3::default(),
                             NativeKinematicCollisionMode::None,
                         ),
-                        world: NativePhysicsWorld {
+                        settings: NativePhysicsSettings {
                             gravity: NativeVec3 {
                                 x: 0.0,
                                 y: -9.8,
@@ -559,7 +563,7 @@ mod tests {
                             },
                             NativeKinematicCollisionMode::SpatialSession,
                         ),
-                        world: NativePhysicsWorld::default(),
+                        settings: NativePhysicsSettings::default(),
                         step: step(1, 0.5),
                         shape: NativeKinematicShape {
                             half_extents: NativeVec3 {
@@ -605,7 +609,7 @@ mod tests {
                 NativeVec3::default(),
                 NativeKinematicCollisionMode::None,
             ),
-            world: NativePhysicsWorld::default(),
+            settings: NativePhysicsSettings::default(),
             step: step(1, 1.0),
         };
         let mut result = NativeIntegrationResult::default();
@@ -660,7 +664,7 @@ mod tests {
                 NativeVec3::default(),
                 NativeKinematicCollisionMode::SpatialSession,
             ),
-            world: NativePhysicsWorld::default(),
+            settings: NativePhysicsSettings::default(),
             step: step(1, 1.0),
             shape: NativeKinematicShape {
                 half_extents: NativeVec3::default(),

@@ -4,18 +4,18 @@ using Rusty.Engine.Debugging;
 using Rusty.Engine.Entities;
 using Rusty.Engine.NativeProduct;
 
-[assembly: EngineProduct(typeof(EntityWorldDebugFixture.Product))]
+[assembly: EngineProduct(typeof(EntityStoreDebugFixture.Product))]
 
-namespace EntityWorldDebugFixture;
+namespace EntityStoreDebugFixture;
 
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource
 {
     private static readonly ComponentType<Health> Health = ComponentType<Health>.Create(ProductComponentKeys.Create(1));
     private static readonly ComponentType<HiddenFact> Hidden = ComponentType<HiddenFact>.Create(ProductComponentKeys.Create(2));
     private static readonly ComponentType<ExplosiveFact> Explosive = ComponentType<ExplosiveFact>.Create(ProductComponentKeys.Create(3));
-    private readonly EntityWorld _world = new([Health, Hidden, Explosive]);
-    private readonly EntityWorld _secondary = new([Health]);
-    private readonly EntityWorldDebugModule _entities = new();
+    private readonly EntityStore _world = new([Health, Hidden, Explosive]);
+    private readonly EntityStore _secondary = new([Health]);
+    private readonly EntityStoreDebugModule _entities = new();
     private readonly MutationModule _mutation;
     private readonly EntityId _actor;
 
@@ -32,8 +32,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource
         _world.SetContainment(disabled, _actor);
         _world.Destroy(tombstoned);
 
-        _entities.RegisterWorld("alpha", _world);
-        _entities.RegisterWorld("beta", _secondary);
+        _entities.RegisterStore("alpha", _world);
+        _entities.RegisterStore("beta", _secondary);
         _entities.RegisterProjection(Health, static (in Health value) => $"current={value.Current}");
         _entities.RegisterProjection(Explosive, static (in ExplosiveFact _) => throw new InvalidOperationException("formatter must be contained"));
         _mutation = new MutationModule(_world, _actor);
@@ -71,7 +71,7 @@ public readonly record struct Health(int Current);
 public readonly record struct HiddenFact(int Value);
 public readonly record struct ExplosiveFact(int Value);
 
-public sealed class MutationModule(EntityWorld world, EntityId actor) : IDebugCommandModule
+public sealed class MutationModule(EntityStore world, EntityId actor) : IDebugCommandModule
 {
     [DebugCommand("fixture.damage")]
     public DebugCommandResult Damage(int amount)
@@ -89,8 +89,8 @@ internal static class Program
         var product = new Product();
         IDebugCommandCatalog catalog = GeneratedDebugCommandCatalogFactory.Create(product);
 
-        Require(catalog.Execute("entity.worlds") is { Succeeded: true, Message: var worlds }
-            && worlds == "worlds=2;name=alpha;name=beta", "world registration did not reach the generated catalog deterministically");
+        Require(catalog.Execute("entity.stores") is { Succeeded: true, Message: var worlds }
+            && worlds == "stores=2;name=alpha;name=beta", "world registration did not reach the generated catalog deterministically");
         Require(catalog.Execute("entity.summary alpha") is { Succeeded: true, Message: var summary }
             && summary.Contains("active=1", StringComparison.Ordinal)
             && summary.Contains("disabled=1", StringComparison.Ordinal)
@@ -123,40 +123,40 @@ internal static class Program
         Require(catalog.Execute("entity.component alpha 1 1024") is { Succeeded: true, Message: var after }
             && after.Contains("value=current=5", StringComparison.Ordinal), "inspection did not observe an ordinary named mutation");
 
-        var direct = new EntityWorldDebugModule();
-        var standalone = new EntityWorld([Product.HealthForFixture]);
-        direct.RegisterWorld("standalone", standalone);
+        var direct = new EntityStoreDebugModule();
+        var standalone = new EntityStore([Product.HealthForFixture]);
+        direct.RegisterStore("standalone", standalone);
         direct.RegisterProjection(Product.HealthForFixture, static (in Health value) => new string('x', value.Current));
-        RequireThrows(() => direct.RegisterWorld("standalone", standalone), "duplicate world name was accepted");
-        RequireThrows(() => direct.RegisterWorld("not valid", standalone), "invalid world name was accepted");
-        RequireThrows(() => direct.RegisterWorld(new string('x', EntityWorldDebugModule.MaximumWorldNameLength + 1), standalone), "oversized world name was accepted");
+        RequireThrows(() => direct.RegisterStore("standalone", standalone), "duplicate world name was accepted");
+        RequireThrows(() => direct.RegisterStore("not valid", standalone), "invalid world name was accepted");
+        RequireThrows(() => direct.RegisterStore(new string('x', EntityStoreDebugModule.MaximumStoreNameLength + 1), standalone), "oversized world name was accepted");
         RequireThrows(() => direct.RegisterProjection(Product.HealthForFixture, static (in Health _) => "duplicate"), "duplicate projection key was accepted");
         EntityId oversizedEntity = standalone.Create();
-        standalone.Set(oversizedEntity, Product.HealthForFixture, new Health(EntityWorldDebugModule.MaximumResultLength));
+        standalone.Set(oversizedEntity, Product.HealthForFixture, new Health(EntityStoreDebugModule.MaximumResultLength));
         Require(direct.GetComponent("standalone", oversizedEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var oversized }
-            && oversized.Length == EntityWorldDebugModule.MaximumResultLength, "oversized projection output was not bounded");
+            && oversized.Length == EntityStoreDebugModule.MaximumResultLength, "oversized projection output was not bounded");
         standalone.Dispose();
         Require(direct.Summary("standalone").Status == DebugCommandStatus.Failed, "disposed world did not report a bounded failure");
 
-        var generations = new EntityWorldDebugModule();
-        var original = new EntityWorld([Product.HealthForFixture]);
+        var generations = new EntityStoreDebugModule();
+        var original = new EntityStore([Product.HealthForFixture]);
         EntityId originalEntity = original.Create();
         original.Set(originalEntity, Product.HealthForFixture, new Health(11));
-        generations.RegisterWorld("current", original);
+        generations.RegisterStore("current", original);
         generations.RegisterProjection(Product.HealthForFixture, static (in Health value) => $"current={value.Current}");
 
-        var disposedReplacement = new EntityWorld([Product.HealthForFixture]);
+        var disposedReplacement = new EntityStore([Product.HealthForFixture]);
         disposedReplacement.Dispose();
-        RequireThrows(() => generations.ReplaceWorld("current", disposedReplacement), "disposed replacement world was accepted");
+        RequireThrows(() => generations.ReplaceStore("current", disposedReplacement), "disposed replacement world was accepted");
         Require(generations.GetComponent("current", originalEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var preserved }
             && preserved.Contains("value=current=11", StringComparison.Ordinal), "failed replacement corrupted the existing registration");
 
-        var replacement = new EntityWorld([Product.HealthForFixture]);
+        var replacement = new EntityStore([Product.HealthForFixture]);
         EntityId replacementEntity = replacement.Create();
         EntityId replacementOnlyEntity = replacement.Create();
         replacement.Set(replacementEntity, Product.HealthForFixture, new Health(22));
-        RequireThrows(() => generations.ReplaceWorld("missing", replacement), "unknown replacement name was accepted");
-        generations.ReplaceWorld("current", replacement);
+        RequireThrows(() => generations.ReplaceStore("missing", replacement), "unknown replacement name was accepted");
+        generations.ReplaceStore("current", replacement);
         Require(generations.GetComponent("current", replacementEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var replaced }
             && replaced.Contains("value=current=22", StringComparison.Ordinal)
             && !replaced.Contains("value=current=11", StringComparison.Ordinal), "replacement reads did not use only the current generation");
@@ -167,10 +167,10 @@ internal static class Program
         original.Dispose();
         Require(generations.Summary("current").Succeeded, "retired world disposal affected the replacement registration");
 
-        RequireThrows(() => generations.UnregisterWorld("missing"), "unknown unregister name was accepted");
+        RequireThrows(() => generations.UnregisterStore("missing"), "unknown unregister name was accepted");
         Require(generations.Summary("current").Succeeded, "failed unregister corrupted the existing registration");
-        generations.UnregisterWorld("current");
-        Require(generations.ListWorlds() == DebugCommandResult.Success("worlds=0"), "unregister did not remove the world deterministically");
+        generations.UnregisterStore("current");
+        Require(generations.ListStores() == DebugCommandResult.Success("stores=0"), "unregister did not remove the world deterministically");
         Require(generations.Summary("current").Status == DebugCommandStatus.InvalidArguments, "unregistered world remained queryable");
         return 0;
     }

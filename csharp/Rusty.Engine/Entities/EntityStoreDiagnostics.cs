@@ -1,6 +1,6 @@
 namespace Rusty.Engine.Entities;
 
-public sealed record EntityWorldDiagnostics(
+public sealed record EntityStoreDiagnostics(
     ulong Revision,
     ulong NextEntityValue,
     int EntityCount,
