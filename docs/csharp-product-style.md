@@ -35,10 +35,12 @@ This is a layout convention, not runtime module registration. Avoid horizontal
 catch-all directories such as `Helpers`, `Managers`, `Utils`, `Processors`, or
 `Gameplay` that distribute one domain across the repository.
 
-Each mutable state family has one semantic owner. Give the owner controlled
-mutation methods and a clear snapshot/restore representation when the product
-needs persistence. Other domains read a shaped view or ask the owner to make a
-change; they do not keep mutable references and edit state from the side.
+Each mutable state family has one semantic owner. Ordinary classes, direct
+references and domain methods are the baseline; an attached EntityStore component
+is the same object the product constructed. Use domain methods where they preserve
+useful invariants. Add a shaped view or request when an ownership boundary benefits
+from it, and an explicit capture/rebuild representation when persistence is needed.
+Sharing references is deliberate C# aliasing, not an Engine permission boundary.
 
 ## Keep coordination thin
 
@@ -62,7 +64,7 @@ Useful names are descriptive rather than ceremonial:
 
 | Name | Use it for |
 | --- | --- |
-| `State` | Mutable durable domain state. |
+| `State` | Mutable domain state; persistence is optional. |
 | `View` | Deliberate read-only model of owned state. |
 | `Request` | Typed ask for a state owner to perform an operation. |
 | `Receipt` | Accepted/rejected result of an operation. |

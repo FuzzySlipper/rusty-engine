@@ -23,14 +23,14 @@ public readonly record struct ComponentTypeKey : IComparable<ComponentTypeKey>
 }
 
 /// <summary>
-/// Creates a detached component value whenever <see cref="EntityStore"/> stores, stages,
-/// snapshots, restores, or captures that component. For a value containing managed references,
+/// Opt-in copy operation for explicit legacy snapshots, restores and detached captures.
+/// Ordinary attachment, reads and queries never invoke it. For a value containing managed references,
 /// the codec must copy the reachable mutable state rather than return the original references.
 /// </summary>
-public delegate T ComponentSnapshotCodec<T>(in T value) where T : struct;
+public delegate T ComponentSnapshotCodec<T>(in T value) where T : notnull;
 
-/// <summary>Rejects one component value before it reaches live world state.</summary>
-public delegate void ComponentValidator<T>(in T value) where T : struct;
+/// <summary>Rejects one component value before it reaches live store state.</summary>
+public delegate void ComponentValidator<T>(in T value) where T : notnull;
 
 /// <summary>Creates product component keys outside the Engine-reserved key range.</summary>
 public static class ProductComponentKeys
@@ -61,7 +61,7 @@ internal static class EngineComponentKeys
     }
 }
 
-/// <summary>Non-generic identity used only by the Engine-maintained world storage.</summary>
+/// <summary>Non-generic identity used only by the Engine-maintained store storage.</summary>
 public abstract class ComponentType
 {
     internal ComponentType(ComponentTypeKey key)
@@ -71,17 +71,19 @@ public abstract class ComponentType
 
     public ComponentTypeKey Key { get; }
 
+    internal abstract Type Family { get; }
+
+    internal bool IsAutomatic { get; init; }
+
     internal abstract EntityStore.ComponentTable CreateTable();
 }
 
 /// <summary>
-/// A compile-time-safe descriptor for one component value type.
-///
-/// Product code keeps descriptors as ordinary static values and registers them with an
-/// <see cref="EntityStore"/>. There is no string lookup, reflection registration, or global
-/// component registry.
+/// Optional descriptor for a typed family that needs explicit validation, debug identity or
+/// legacy detached capture. Ordinary Add/Get/Query require no descriptor. A descriptor and
+/// generic access share the same store-local family; there is no global component registry.
 /// </summary>
-public sealed class ComponentType<T> : ComponentType where T : struct
+public sealed class ComponentType<T> : ComponentType where T : notnull
 {
     private ComponentType(ComponentTypeKey key, ComponentSnapshotCodec<T>? snapshotCodec, ComponentValidator<T>? validator)
         : base(key)
@@ -103,7 +105,6 @@ public sealed class ComponentType<T> : ComponentType where T : struct
         {
             throw new ArgumentOutOfRangeException(nameof(key), "Product descriptors must use ProductComponentKeys.Create.");
         }
-        RequireDetachedCopyCodec(snapshotCodec);
         return new(key, snapshotCodec, validator);
     }
 
@@ -116,25 +117,32 @@ public sealed class ComponentType<T> : ComponentType where T : struct
         {
             throw new ArgumentOutOfRangeException(nameof(key));
         }
-        RequireDetachedCopyCodec(snapshotCodec);
         return new(key, snapshotCodec, validator);
     }
 
     internal void Validate(in T value) => Validator?.Invoke(in value);
 
     internal T CopyForDetachedUse(in T value)
-        => SnapshotCodec is ComponentSnapshotCodec<T> codec ? codec(in value) : value;
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (SnapshotCodec is ComponentSnapshotCodec<T> codec)
+        {
+            T copied = codec(in value);
+            ArgumentNullException.ThrowIfNull(copied);
+            return copied;
+        }
+        if (System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            throw new InvalidOperationException(
+                $"Explicit detached capture of {typeof(T).Name} requires a copy codec. Ordinary attachment and reads do not.");
+        }
+        return value;
+    }
 
     internal override EntityStore.ComponentTable CreateTable() => new EntityStore.ComponentTable<T>(this);
 
-    private static void RequireDetachedCopyCodec(ComponentSnapshotCodec<T>? snapshotCodec)
-    {
-        if (System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<T>()
-            && snapshotCodec is null)
-        {
-            throw new ArgumentException(
-                $"Component type {typeof(T).FullName} contains managed references and requires a deep-copy snapshot codec.",
-                nameof(snapshotCodec));
-        }
-    }
+    internal override Type Family => typeof(T);
+
+    internal static ComponentType<T> CreateAutomatic(ComponentTypeKey key)
+        => new(key, null, null) { IsAutomatic = true };
 }

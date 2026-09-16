@@ -1,9 +1,9 @@
 namespace Rusty.Engine.Entities;
 
 /// <summary>
-/// A validated managed batch ready for a synchronous cross-owner composition.
-/// It may publish only while the world remains at the revision from which it was
-/// prepared, so it cannot overwrite an intervening live mutation.
+/// A validated managed edit ready for a synchronous cross-owner composition.
+/// Publication checks the store's structural version. Class internals remain live;
+/// this is not a checkpoint or rollback mechanism for mutable component graphs.
 /// </summary>
 public sealed class EntityWorldBatchCandidate
 {

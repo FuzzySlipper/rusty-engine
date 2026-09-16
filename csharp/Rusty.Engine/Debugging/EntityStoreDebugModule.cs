@@ -14,7 +14,7 @@ public enum EntityStoreDebugSelector
 }
 
 /// <summary>Renders one explicitly opted-in component value for live debug output.</summary>
-public delegate string EntityStoreDebugProjection<T>(in T value) where T : struct;
+public delegate string EntityStoreDebugProjection<T>(in T value) where T : notnull;
 
 /// <summary>
 /// Read-only live inspection for explicitly product-registered <see cref="EntityStore"/>
@@ -68,7 +68,7 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
     }
 
     public void RegisterProjection<T>(ComponentType<T> componentType, EntityStoreDebugProjection<T> projection)
-        where T : struct
+        where T : notnull
     {
         ArgumentNullException.ThrowIfNull(componentType);
         ArgumentNullException.ThrowIfNull(projection);
@@ -262,13 +262,13 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
     }
 
     private sealed class Projection<T>(ComponentType<T> descriptor, EntityStoreDebugProjection<T> formatter) : Projection(descriptor)
-        where T : struct
+        where T : notnull
     {
         internal override DebugCommandResult Project(EntityStore store, EntityId entity, string storeName, EntityStoreDebugComponentPresence component)
         {
             try
             {
-                if (!store.TryGet(entity, descriptor, out T value))
+                if (!store.TryGet(entity, descriptor, out T? value))
                 {
                     return DebugCommandResult.Success($"store={storeName};entity={entity.Value};component={component.Key.Value};present=false");
                 }

@@ -67,6 +67,7 @@ Require(world.Get(actor, health).Current == InitialHealth, "in-memory snapshot r
 Throws(() => world.Set(actor, health, new Health(9), healthRevision), "snapshot restore must invalidate old component guards");
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
+ClassComponentExercise.Run();
 ExerciseEntityWorldCandidateAndCopyContracts();
 ExerciseManagedRestorePlan(world, actor, pack, health, armor);
 ExerciseEntityPersistence(world, actor, health);
@@ -114,38 +115,36 @@ static void ExerciseEntityWorldCandidateAndCopyContracts()
         snapshotCodec: static (in ReferenceComponent value) => new ReferenceComponent([.. value.Values]));
     ComponentType<int> values = ComponentType<int>.Create(ProductComponentKeys.Create(ValueLocalComponentId));
 
-    Throws(
-        () => ComponentType<ReferenceComponent>.Create(ProductComponentKeys.Create(92)),
-        "reference-containing component registration did not require a deep-copy codec");
+    _ = ComponentType<ReferenceComponent>.Create(ProductComponentKeys.Create(92));
 
     using var world = new EntityStore([referenceValues, values]);
     EntityId entity = world.Create();
     int[] source = [1];
     world.Set(entity, referenceValues, new ReferenceComponent(source));
     source[0] = 99;
-    Require(world.Get(entity, referenceValues).Values[0] == 1,
-        "component ingress retained a caller-owned reference");
+    Require(world.Get(entity, referenceValues).Values[0] == 99,
+        "ordinary value attachment should use C# shallow-copy semantics");
 
     EntityWorldSnapshot snapshot = world.Snapshot();
     ReferenceComponent read = world.Get(entity, referenceValues);
     read.Values[0] = 77;
-    Require(world.Get(entity, referenceValues).Values[0] == 1,
-        "component reads leaked a mutable nested reference into live state");
+    Require(world.Get(entity, referenceValues).Values[0] == 77,
+        "ordinary value reads should retain nested reference identity");
     world.Set(entity, referenceValues, new ReferenceComponent([3]));
     world.Restore(snapshot, world.Revision);
-    Require(world.Get(entity, referenceValues).Values[0] == 1,
+    Require(world.Get(entity, referenceValues).Values[0] == 99,
         "snapshot retained a mutable nested component reference");
 
     EntityWorldBatchCandidate staged = world.PrepareBatch(new EntityBatch()
         .Mutate(candidate => candidate.Set(entity, referenceValues, new ReferenceComponent([2]))));
-    ComponentType<int> batchRegistration = ComponentType<int>.Create(
+    ComponentType<long> batchRegistration = ComponentType<long>.Create(
         ProductComponentKeys.Create(BatchRegistrationLocalComponentId));
     world.Register(batchRegistration);
     Throws(() => staged.Publish(), "stale batch candidate overwrote a later component registration");
     Throws(() => staged.Publish(), "stale batch candidate was marked published after its first failed attempt");
-    world.Set(entity, batchRegistration, 93);
+    world.Set(entity, batchRegistration, 93L);
     world.Set(entity, values, 1);
-    Require(world.Get(entity, referenceValues).Values[0] == 1 && world.Get(entity, values) == 1,
+    Require(world.Get(entity, referenceValues).Values[0] == 99 && world.Get(entity, values) == 1,
         "stale batch candidate discarded live component state");
 
     EntityWorldRestorePlan restorePlan = new(world.Revision, world.NextEntityValue);
@@ -157,14 +156,14 @@ static void ExerciseEntityWorldCandidateAndCopyContracts()
     restorePlan.AddComponentFamily(values, world.CaptureComponentFamily(values));
     restorePlan.AddComponentFamily(batchRegistration, world.CaptureComponentFamily(batchRegistration));
     EntityWorldRestoreCandidate restore = world.PrepareRestore(restorePlan, world.Revision);
-    ComponentType<int> restoreRegistration = ComponentType<int>.Create(
+    ComponentType<double> restoreRegistration = ComponentType<double>.Create(
         ProductComponentKeys.Create(RestoreRegistrationLocalComponentId));
     world.Register(restoreRegistration);
     Throws(() => restore.Publish(), "stale restore candidate overwrote a later component registration");
     Throws(() => restore.Publish(), "stale restore candidate was marked published after its first failed attempt");
-    world.Set(entity, restoreRegistration, 94);
+    world.Set(entity, restoreRegistration, 94d);
     world.Set(entity, values, 2);
-    Require(world.Get(entity, referenceValues).Values[0] == 1 && world.Get(entity, values) == 2,
+    Require(world.Get(entity, referenceValues).Values[0] == 99 && world.Get(entity, values) == 2,
         "stale restore candidate discarded live state");
 
     EntityWorldBatchCandidate published = world.PrepareBatch(new EntityBatch()

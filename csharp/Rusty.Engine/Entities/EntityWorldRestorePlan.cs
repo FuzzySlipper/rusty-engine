@@ -21,9 +21,9 @@ public readonly record struct EntityWorldContainmentState(EntityId Child, Entity
 public readonly record struct EntityWorldComponentSlot<T>(
     EntityId Entity,
     bool Present,
-    T Value,
+    T? Value,
     ulong Revision)
-    where T : struct;
+    where T : notnull;
 
 /// <summary>
 /// Transient typed input for a managed EntityStore restore.
@@ -55,7 +55,7 @@ public sealed class EntityWorldRestorePlan
     public void AddComponentFamily<T>(
         ComponentType<T> componentType,
         IReadOnlyList<EntityWorldComponentSlot<T>> slots)
-        where T : struct
+        where T : notnull
     {
         ArgumentNullException.ThrowIfNull(componentType);
         ArgumentNullException.ThrowIfNull(slots);
@@ -84,7 +84,7 @@ public sealed class EntityWorldRestorePlan
     private sealed class ComponentFamilyPlan<T>(
         ComponentType<T> descriptor,
         IReadOnlyList<EntityWorldComponentSlot<T>> slots) : ComponentFamilyPlan
-        where T : struct
+        where T : notnull
     {
         private readonly IReadOnlyList<EntityWorldComponentSlot<T>> _slots = slots;
 

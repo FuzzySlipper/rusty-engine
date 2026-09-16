@@ -703,15 +703,91 @@ registrations and debug output identifies them with `store=` / `stores=`.
 continues to mean the spatial coordinate origin. Neither is a managed entity
 store. The Rust spatial implementation's internal physics type is unchanged.
 
-This naming step preserves behavior: components still use the existing typed
-value/copy contracts. `EntityWorldSnapshot`, restore plans/candidates, batch
-candidates and `EntityWorldProductStateStore` keep their existing names pending
-the separate state-API cleanup; they are not aliases for new implementations.
-Class components and simplified mechanics belong to subsequent campaign work.
+`EntityStore` now accepts ordinary classes and value components in the same
+store. The legacy `EntityWorldSnapshot`, restore plans/candidates, batch candidates
+and `EntityWorldProductStateStore` retain their names pending the separate
+state-API cleanup. Their detached operations are explicit, not ordinary access.
 During the campaign, use coordinated contributor proving copies. The final
 SDK/runtime release and downstream rollout happen together; do not combine a
 renamed SDK with a previously published runtime merely because layouts look
 similar.
+
+### Ordinary component attachment
+
+```csharp
+using var entities = new EntityStore();
+EntityId actor = entities.Create();
+var health = new Health { Current = 10 };
+entities.Add(actor, health);
+entities.Get<Health>(actor).Current -= 2;
+// health.Current is now 8: this is the same attached object.
+foreach (var row in entities.Query<Health>())
+    Console.WriteLine($"{row.Entity.Value}: {row.Value.Current}");
+
+sealed class Health
+{
+    public int Current { get; set; }
+}
+```
+
+No component base class, interface, numeric key, registration or codec is required.
+The explicit generic `T` selects one family per entity: `Add` rejects an occupied
+slot, `Replace` requires an existing slot, and `Remove<T>` returns false when absent.
+Null components are rejected. `Has<T>` and `TryGet<T>` inspect membership without
+registering a family. An interface/base family is available by explicitly choosing
+that generic type; the store does not scan an object's inheritance hierarchy.
+
+`Get` and query rows return the actual class instance. The normal C# aliasing rules
+apply: components usually have one semantic owner, but deliberate sharing is
+allowed. Removal, replacement, entity destruction and store disposal release
+attachments without invalidating references already held by product code and
+without disposing the component or its native resources. Product owners perform
+any necessary cleanup. Store IDs are local to one store lifetime.
+
+Queries capture membership immediately, in increasing entity-ID order. Adding,
+removing, replacing or destroying attachments afterward does not change that
+returned list. Class objects within the list remain live references, including
+objects subsequently detached from the store. Disabled entities are excluded
+unless `includeDisabled: true`; two-family `Query<TFirst, TSecond>` joins use the
+same rules. Use the store at the product's normal execution boundary, not as a
+concurrent object database.
+
+Useful value facts remain structs. `Set(entity, value)` explicitly inserts or
+replaces a struct; `Add`/`Replace` also work for them. Value reads are ordinary C#
+copies, so nested references are shared unless the product explicitly copies
+them. Prefer a class for mutable reference-bearing state. Existing registered
+`ComponentType<T>` descriptors and generic access address the same family, not
+parallel storage. A descriptor can be registered after generic attachment; a
+second explicit descriptor for that same `T` is rejected. Descriptor keys used
+by diagnostics for automatically attached families are store-local implementation
+details, not durable serialization identities.
+
+Versions describe explicit attachment, removal, replacement and lifecycle
+changes. They do not observe fields or methods on a returned object, and replacing
+a class with the same instance is a no-op. Destroy releases entity/component rows
+and containment edges; it detaches children without destroying them. IDs stay
+nonzero and monotonic, with no reuse. Explicit legacy restore preserves the live
+allocator high-watermark and drops imported tombstone rows.
+
+### Explicit edits and capture during the campaign
+
+Ordinary access never deep-copies components. A legacy `Snapshot`, callback batch
+or detached component capture needs an explicit copy codec for reference-bearing
+values; unsupported capture fails before running mutation callbacks. These
+facilities do not provide automatic class-graph persistence or rollback.
+
+For an existing caller that needs prepared value replacements, `EntityBatch.Set`
+and `EntityBatch.Create` stage known operations without a caller mutation callback.
+They copy membership/value slots and retain attached class references. Preparation
+validates the operations, and publication checks the store's structural revision;
+it does not claim that class internals were frozen. D20 uses this narrow path for
+its immutable value facts while owning its effect planning and detached save
+rebuild. Do not mutate nested references expecting an edit to roll them back.
+
+The existing entity adapters still need the separate class-aware guard migration
+before the campaign release. A callback-based adapter may reject an attached class
+without an explicit copy codec. Do not add a dummy codec to conceal that limitation.
+Explicit save/debug cleanup and adapter adoption remain campaign follow-ups.
 
 ## Recommended product architecture, not a framework contract
 

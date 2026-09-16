@@ -1,19 +1,47 @@
 namespace Rusty.Engine.Entities;
 
 /// <summary>
-/// Stages mutations that <see cref="EntityStore"/> validates and commits atomically.
-/// Atomicity covers only the world's state: delegates must not rely on rollback of external captures.
+/// Explicit preparation of membership and value-fact replacements. Typed operations preserve
+/// attached class references; they do not snapshot or roll back mutable object graphs.
+/// Legacy callback batches require detached copies and must not mutate external captures.
 /// </summary>
 public sealed class EntityBatch
 {
     private readonly List<Action<EntityStore>> _mutations = [];
 
+    /// <summary>Stages one value-fact replacement without running a caller callback.</summary>
+    public EntityBatch Set<T>(EntityId entity, ComponentType<T> componentType, T value, ComponentRevision? expectedRevision = null)
+        where T : struct
+    {
+        ArgumentNullException.ThrowIfNull(componentType);
+        _mutations.Add(store => store.Set(entity, componentType, value, expectedRevision));
+        return this;
+    }
+
+    /// <summary>Creates the next local ID, rejecting a changed allocator before publication.</summary>
+    public EntityBatch Create(EntityId expectedId, EntityLifecycle lifecycle = EntityLifecycle.Active)
+    {
+        _mutations.Add(store =>
+        {
+            if (store.NextEntityValue != expectedId.Value)
+            {
+                throw new InvalidOperationException("Entity identity changed while preparing creation.");
+            }
+            store.Create(lifecycle);
+        });
+        return this;
+    }
+
+    /// <summary>Legacy detached callback edit. Uncopiable reference components reject preparation.</summary>
     public EntityBatch Mutate(Action<EntityStore> mutation)
     {
         ArgumentNullException.ThrowIfNull(mutation);
+        HasCallbacks = true;
         _mutations.Add(mutation);
         return this;
     }
+
+    internal bool HasCallbacks { get; private set; }
 
     internal IReadOnlyList<Action<EntityStore>> Mutations => _mutations;
 }

@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Rusty.Engine.Entities;
 
 /// <summary>
@@ -34,6 +36,7 @@ public sealed class EntityStore : IDisposable
         _staging = staging;
     }
 
+    /// <summary>Explicit structural/replacement version; does not track fields inside attached objects.</summary>
     public ulong Revision
     {
         get
@@ -53,7 +56,7 @@ public sealed class EntityStore : IDisposable
         }
     }
 
-    public void Register<T>(ComponentType<T> componentType) where T : struct
+    public void Register<T>(ComponentType<T> componentType) where T : notnull
     {
         ThrowIfDisposed();
         if (_staging)
@@ -90,7 +93,7 @@ public sealed class EntityStore : IDisposable
         return new EntityRevision(entity, RequireEntity(entity).Revision);
     }
 
-    public ComponentRevision GetComponentRevision<T>(EntityId entity, ComponentType<T> componentType) where T : struct
+    public ComponentRevision GetComponentRevision<T>(EntityId entity, ComponentType<T> componentType) where T : notnull
     {
         ThrowIfDisposed();
         RequireEntity(entity);
@@ -147,11 +150,10 @@ public sealed class EntityStore : IDisposable
 
         foreach (ComponentTable table in _state.Tables.Values)
         {
-            table.Remove(entity);
+            table.Forget(entity);
         }
         RemoveContainmentForDestroy(entity);
-        record.Lifecycle = EntityLifecycle.Tombstoned;
-        record.Revision++;
+        _state.Entities.Remove(entity.Value);
         Mutated();
     }
 
@@ -237,46 +239,138 @@ public sealed class EntityStore : IDisposable
             : [];
     }
 
-    public bool Has<T>(EntityId entity, ComponentType<T> componentType) where T : struct
+    /// <summary>Attaches one instance/value under the explicit generic family T.</summary>
+    public void Add<T>(EntityId entity, T value) where T : notnull
+    {
+        ThrowIfDisposed();
+        RequireAlive(entity);
+        ArgumentNullException.ThrowIfNull(value);
+        ComponentTable<T> table = GetOrCreateTable<T>();
+        if (table.Contains(entity))
+        {
+            throw new InvalidOperationException($"Entity {entity.Value} already has component {typeof(T).Name}.");
+        }
+        Set(entity, (ComponentType<T>)table.Descriptor, value);
+    }
+
+    /// <summary>Replaces an attached value. Replacing a class with the same instance is a no-op.</summary>
+    public void Replace<T>(EntityId entity, T value) where T : notnull
+    {
+        ThrowIfDisposed();
+        RequireAlive(entity);
+        ArgumentNullException.ThrowIfNull(value);
+        ComponentTable<T>? table = FindTable<T>();
+        if (table is null || !table.Contains(entity))
+        {
+            throw new InvalidOperationException($"Entity {entity.Value} does not have component {typeof(T).Name}.");
+        }
+        Set(entity, (ComponentType<T>)table.Descriptor, value);
+    }
+
+    /// <summary>Explicit value-fact insertion/replacement; class callers use Add or Replace.</summary>
+    public void Set<T>(EntityId entity, T value) where T : struct
+    {
+        ThrowIfDisposed();
+        RequireAlive(entity);
+        ComponentTable<T> table = GetOrCreateTable<T>();
+        Set(entity, (ComponentType<T>)table.Descriptor, value);
+    }
+
+    public bool Has<T>(EntityId entity) where T : notnull
+    {
+        ThrowIfDisposed();
+        return _state.Entities.ContainsKey(entity.Value) && FindTable<T>()?.Contains(entity) == true;
+    }
+
+    public bool TryGet<T>(EntityId entity, [NotNullWhen(true)] out T? value) where T : notnull
+    {
+        ThrowIfDisposed();
+        if (_state.Entities.ContainsKey(entity.Value) && FindTable<T>() is ComponentTable<T> table)
+        {
+            return table.TryGet(entity, out value);
+        }
+        value = default;
+        return false;
+    }
+
+    /// <summary>Returns the attached class instance, or an ordinary C# copy of a value component.</summary>
+    public T Get<T>(EntityId entity) where T : notnull
+    {
+        ThrowIfDisposed();
+        RequireAlive(entity);
+        return TryGet<T>(entity, out T? value) ? value
+            : throw new InvalidOperationException($"Entity {entity.Value} does not have component {typeof(T).Name}.");
+    }
+
+    public bool Remove<T>(EntityId entity) where T : notnull
+    {
+        ThrowIfDisposed();
+        if (!_state.Entities.ContainsKey(entity.Value) || FindTable<T>() is not ComponentTable<T> table)
+        {
+            return false;
+        }
+        return Remove(entity, (ComponentType<T>)table.Descriptor);
+    }
+
+    /// <summary>Captures ordered membership now; returned class objects remain live references.</summary>
+    public IReadOnlyList<EntityComponent<T>> Query<T>(bool includeDisabled = false) where T : notnull
+    {
+        ThrowIfDisposed();
+        return FindTable<T>() is ComponentTable<T> table
+            ? Query((ComponentType<T>)table.Descriptor, includeDisabled) : [];
+    }
+
+    public IReadOnlyList<EntityComponents<TFirst, TSecond>> Query<TFirst, TSecond>(bool includeDisabled = false)
+        where TFirst : notnull where TSecond : notnull
+    {
+        ThrowIfDisposed();
+        return FindTable<TFirst>() is ComponentTable<TFirst> first && FindTable<TSecond>() is ComponentTable<TSecond> second
+            ? Query((ComponentType<TFirst>)first.Descriptor, (ComponentType<TSecond>)second.Descriptor, includeDisabled) : [];
+    }
+
+    public bool Has<T>(EntityId entity, ComponentType<T> componentType) where T : notnull
     {
         ThrowIfDisposed();
         return _state.Entities.ContainsKey(entity.Value) && GetTable(componentType).Contains(entity);
     }
 
-    public bool TryGet<T>(EntityId entity, ComponentType<T> componentType, out T value) where T : struct
+    public bool TryGet<T>(EntityId entity, ComponentType<T> componentType, [MaybeNullWhen(false)] out T value) where T : notnull
     {
         ThrowIfDisposed();
         if (!_state.Entities.ContainsKey(entity.Value))
         {
-            value = default;
+            value = default!;
             return false;
         }
         return GetTable(componentType).TryGet(entity, out value);
     }
 
-    public T Get<T>(EntityId entity, ComponentType<T> componentType) where T : struct
+    public T Get<T>(EntityId entity, ComponentType<T> componentType) where T : notnull
     {
         ThrowIfDisposed();
         RequireEntity(entity);
-        return GetTable(componentType).TryGet(entity, out T value)
+        return GetTable(componentType).TryGet(entity, out T? value)
             ? value
             : throw new InvalidOperationException($"Entity {entity.Value} does not have component {componentType.Key.Value}.");
     }
 
     public void Set<T>(EntityId entity, ComponentType<T> componentType, T value, ComponentRevision? expectedRevision = null)
-        where T : struct
+        where T : notnull
     {
         ThrowIfDisposed();
         RequireAlive(entity);
         ComponentTable<T> table = GetTable(componentType);
         EnsureComponentRevision(entity, componentType, table, expectedRevision);
-        table.Set(entity, value);
+        if (!table.Set(entity, value))
+        {
+            return;
+        }
         TouchEntity(entity);
         Mutated();
     }
 
     public bool Remove<T>(EntityId entity, ComponentType<T> componentType, ComponentRevision? expectedRevision = null)
-        where T : struct
+        where T : notnull
     {
         ThrowIfDisposed();
         RequireAlive(entity);
@@ -292,7 +386,7 @@ public sealed class EntityStore : IDisposable
     }
 
     public IReadOnlyList<EntityComponent<T>> Query<T>(ComponentType<T> componentType, bool includeDisabled = false)
-        where T : struct
+        where T : notnull
     {
         ThrowIfDisposed();
         List<EntityComponent<T>> result = [];
@@ -312,8 +406,8 @@ public sealed class EntityStore : IDisposable
         ComponentType<TFirst> first,
         ComponentType<TSecond> second,
         bool includeDisabled = false)
-        where TFirst : struct
-        where TSecond : struct
+        where TFirst : notnull
+        where TSecond : notnull
     {
         ThrowIfDisposed();
         List<EntityComponents<TFirst, TSecond>> result = [];
@@ -322,7 +416,7 @@ public sealed class EntityStore : IDisposable
         {
             if (_state.Entities.TryGetValue(entity.Value, out EntityRecord? record)
                 && (record.Lifecycle == EntityLifecycle.Active || includeDisabled && record.Lifecycle == EntityLifecycle.Disabled)
-                && secondTable.TryGet(entity, out TSecond secondValue))
+                && secondTable.TryGet(entity, out TSecond? secondValue))
             {
                 result.Add(new EntityComponents<TFirst, TSecond>(entity, firstValue, secondValue));
             }
@@ -352,7 +446,7 @@ public sealed class EntityStore : IDisposable
         }
 
         ulong revisionBefore = _state.Revision;
-        StoreState stagedState = _state.Clone();
+        StoreState stagedState = _state.Clone(detached: batch.HasCallbacks);
         var staged = new EntityStore(stagedState, staging: true);
         foreach (Action<EntityStore> mutation in batch.Mutations)
         {
@@ -370,6 +464,7 @@ public sealed class EntityStore : IDisposable
             new EntityBatchReceipt(revisionBefore, staged._state.Revision, batch.Mutations.Count));
     }
 
+    /// <summary>Legacy explicit detached capture. Reference-bearing values require opt-in copy codecs.</summary>
     public EntityWorldSnapshot Snapshot()
     {
         ThrowIfDisposed();
@@ -402,7 +497,7 @@ public sealed class EntityStore : IDisposable
     /// component family. The product owns how this evidence is encoded durably.
     /// </summary>
     public IReadOnlyList<EntityWorldComponentSlot<T>> CaptureComponentFamily<T>(ComponentType<T> componentType)
-        where T : struct
+        where T : notnull
     {
         ThrowIfDisposed();
         return GetTable(componentType).CaptureSlots(_state.Entities.Keys.Select(value => new EntityId(value)));
@@ -534,6 +629,7 @@ public sealed class EntityStore : IDisposable
             return;
         }
         _state.Tables.Clear();
+        _state.Families.Clear();
         _state.Entities.Clear();
         _state.Containment.Clear();
         _state.ContainedChildren.Clear();
@@ -543,22 +639,77 @@ public sealed class EntityStore : IDisposable
     private void RegisterUntyped(ComponentType componentType)
     {
         ArgumentNullException.ThrowIfNull(componentType);
-        if (_state.Tables.ContainsKey(componentType.Key))
+        _state.Families.TryGetValue(componentType.Family, out ComponentTable? existing);
+        if (existing is not null && !existing.Descriptor.IsAutomatic)
+        {
+            throw new InvalidOperationException($"Component family {componentType.Family.Name} is already registered in this store.");
+        }
+        _state.Tables.TryGetValue(componentType.Key, out ComponentTable? occupied);
+        if (occupied is not null && !occupied.Descriptor.IsAutomatic)
         {
             throw new InvalidOperationException($"Component key {componentType.Key.Value} is already registered in this store.");
         }
-        _state.Tables.Add(componentType.Key, componentType.CreateTable());
+
+        ComponentTypeKey oldKey = existing?.Descriptor.Key ?? default;
+        // Validate any attached values before changing indexes or moving an automatic key.
+        ComponentTable table = existing ?? componentType.CreateTable();
+        existing?.BindDescriptor(componentType);
+        if (occupied is not null && !ReferenceEquals(occupied, existing))
+        {
+            ComponentTypeKey relocatedKey = FindAutomaticKey();
+            occupied.RelocateAutomaticDescriptor(relocatedKey);
+            _state.Tables.Remove(componentType.Key);
+            _state.Tables.Add(relocatedKey, occupied);
+        }
+        if (existing is not null)
+        {
+            _state.Tables.Remove(oldKey);
+            _state.Tables.Add(componentType.Key, table);
+        }
+        else
+        {
+            _state.AddTable(table);
+        }
     }
 
-    private ComponentTable<T> GetTable<T>(ComponentType<T> componentType) where T : struct
+    private ComponentTypeKey FindAutomaticKey()
+    {
+        uint key = uint.MaxValue;
+        while (_state.Tables.ContainsKey(new ComponentTypeKey(key)))
+        {
+            key = checked(key - 1);
+        }
+        return new ComponentTypeKey(key);
+    }
+
+    private ComponentTable<T> GetTable<T>(ComponentType<T> componentType) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(componentType);
-        if (!_state.Tables.TryGetValue(componentType.Key, out ComponentTable? table))
+        if (!_state.Tables.TryGetValue(componentType.Key, out ComponentTable? table)
+            || !ReferenceEquals(table.Descriptor, componentType))
         {
-            throw new InvalidOperationException($"Component key {componentType.Key.Value} is not registered in this store.");
+            throw new InvalidOperationException($"Component key {componentType.Key.Value} is not the registered descriptor in this store.");
         }
-        return table as ComponentTable<T>
-            ?? throw new InvalidOperationException($"Component key {componentType.Key.Value} is registered with a different component type.");
+        return (ComponentTable<T>)table;
+    }
+
+    private ComponentTable<T>? FindTable<T>() where T : notnull
+        => _state.Families.TryGetValue(typeof(T), out ComponentTable? table) ? (ComponentTable<T>)table : null;
+
+    private ComponentTable<T> GetOrCreateTable<T>() where T : notnull
+    {
+        if (FindTable<T>() is ComponentTable<T> existing)
+        {
+            return existing;
+        }
+        if (_staging)
+        {
+            throw new InvalidOperationException("Register new component families before preparing a legacy edit.");
+        }
+        // These keys support legacy diagnostics only. Ordinary callers never allocate keys.
+        var table = new ComponentTable<T>(ComponentType<T>.CreateAutomatic(FindAutomaticKey()));
+        _state.AddTable(table);
+        return table;
     }
 
     private EntityRecord RequireEntity(EntityId entity) => _state.Entities.TryGetValue(entity.Value, out EntityRecord? record)
@@ -629,7 +780,7 @@ public sealed class EntityStore : IDisposable
     }
 
     private static void EnsureComponentRevision<T>(EntityId entity, ComponentType<T> componentType, ComponentTable<T> table, ComponentRevision? expected)
-        where T : struct
+        where T : notnull
     {
         if (expected is ComponentRevision guard
             && (guard.Entity != entity || guard.Component != componentType.Key || guard.Revision != table.RevisionFor(entity)))
@@ -725,7 +876,7 @@ public sealed class EntityStore : IDisposable
         };
         foreach ((ComponentTypeKey key, ComponentTable table) in _state.Tables)
         {
-            restored.Tables.Add(key, table.CreateEmpty());
+            restored.AddTable(table.CreateEmpty());
         }
         foreach ((ulong id, EntityWorldEntityState state) in entities)
         {
@@ -743,6 +894,15 @@ public sealed class EntityStore : IDisposable
 
         restored.ValidateComponents();
         restored.ValidateContainment();
+        // Older explicit saves may contain tombstones. Keep only their allocator high-watermark.
+        foreach (ulong id in restored.Entities.Where(entry => entry.Value.Lifecycle == EntityLifecycle.Tombstoned).Select(entry => entry.Key).ToArray())
+        {
+            restored.Entities.Remove(id);
+            foreach (ComponentTable table in restored.Tables.Values)
+            {
+                table.Forget(new EntityId(id));
+            }
+        }
         return restored;
     }
 
@@ -775,10 +935,17 @@ public sealed class EntityStore : IDisposable
         internal ulong NextEntityValue = 1;
         internal SortedDictionary<ulong, EntityRecord> Entities { get; } = [];
         internal SortedDictionary<ComponentTypeKey, ComponentTable> Tables { get; } = [];
+        internal Dictionary<Type, ComponentTable> Families { get; } = [];
+
+        internal void AddTable(ComponentTable table)
+        {
+            Tables.Add(table.Descriptor.Key, table);
+            Families.Add(table.Descriptor.Family, table);
+        }
         internal SortedDictionary<ulong, ulong> Containment { get; } = [];
         internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; } = [];
 
-        internal StoreState Clone()
+        internal StoreState Clone(bool detached = true)
         {
             var result = new StoreState { Revision = Revision, NextEntityValue = NextEntityValue };
             foreach ((ulong id, EntityRecord entity) in Entities)
@@ -787,7 +954,7 @@ public sealed class EntityStore : IDisposable
             }
             foreach ((ComponentTypeKey key, ComponentTable table) in Tables)
             {
-                result.Tables.Add(key, table.Clone());
+                result.AddTable(table.Clone(detached));
             }
             foreach ((ulong child, ulong container) in Containment)
             {
@@ -876,7 +1043,7 @@ public sealed class EntityStore : IDisposable
         internal void ImportComponentFamily<T>(
             ComponentType<T> descriptor,
             IReadOnlyList<EntityWorldComponentSlot<T>> slots)
-            where T : struct
+            where T : notnull
         {
             if (!Tables.TryGetValue(descriptor.Key, out ComponentTable? table)
                 || table is not ComponentTable<T> typedTable
@@ -902,8 +1069,11 @@ public sealed class EntityStore : IDisposable
     internal abstract class ComponentTable
     {
         protected ComponentTable(ComponentType descriptor) => Descriptor = descriptor;
-        internal ComponentType Descriptor { get; }
-        internal abstract ComponentTable Clone();
+        internal ComponentType Descriptor { get; private protected set; }
+        internal abstract ComponentTable Clone(bool detached);
+        internal abstract void BindDescriptor(ComponentType descriptor);
+        internal abstract void RelocateAutomaticDescriptor(ComponentTypeKey key);
+        internal abstract void Forget(EntityId entity);
         internal abstract ComponentTable CreateEmpty();
         internal abstract bool Contains(EntityId entity);
         internal abstract ulong RevisionFor(EntityId entity);
@@ -914,19 +1084,19 @@ public sealed class EntityStore : IDisposable
         internal abstract ComponentTypeDiagnostics Diagnostics(int maxEntitySample);
     }
 
-    internal sealed class ComponentTable<T> : ComponentTable where T : struct
+    internal sealed class ComponentTable<T> : ComponentTable where T : notnull
     {
         private readonly SortedDictionary<ulong, T> _values = [];
         private readonly SortedDictionary<ulong, ulong> _revisions = [];
 
         public ComponentTable(ComponentType<T> descriptor) : base(descriptor) { }
 
-        private ComponentTable(ComponentTable<T> source) : base(source.TypedDescriptor)
+        private ComponentTable(ComponentTable<T> source, bool detached) : base(source.TypedDescriptor)
         {
             foreach ((ulong entity, T value) in source._values)
             {
-                T copied = TypedDescriptor.CopyForDetachedUse(in value);
-                TypedDescriptor.Validate(in copied);
+                T copied = detached ? TypedDescriptor.CopyForDetachedUse(in value) : value;
+                if (detached) TypedDescriptor.Validate(in copied);
                 _values.Add(entity, copied);
             }
             foreach ((ulong entity, ulong revision) in source._revisions)
@@ -937,29 +1107,46 @@ public sealed class EntityStore : IDisposable
 
         private ComponentType<T> TypedDescriptor => (ComponentType<T>)Descriptor;
 
-        internal override ComponentTable Clone() => new ComponentTable<T>(this);
+        internal override ComponentTable Clone(bool detached) => new ComponentTable<T>(this, detached);
+
+        internal override void RelocateAutomaticDescriptor(ComponentTypeKey key)
+            => Descriptor = ComponentType<T>.CreateAutomatic(key);
+
+        internal override void BindDescriptor(ComponentType descriptor)
+        {
+            var typed = (ComponentType<T>)descriptor;
+            foreach (T value in _values.Values)
+            {
+                typed.Validate(in value);
+            }
+            Descriptor = descriptor;
+        }
+
+        internal override void Forget(EntityId entity)
+        {
+            _values.Remove(entity.Value);
+            _revisions.Remove(entity.Value);
+        }
 
         internal override ComponentTable CreateEmpty() => new ComponentTable<T>(TypedDescriptor);
 
         internal override bool Contains(EntityId entity) => _values.ContainsKey(entity.Value);
 
-        internal bool TryGet(EntityId entity, out T value)
+        internal bool TryGet(EntityId entity, [MaybeNullWhen(false)] out T value)
+            => _values.TryGetValue(entity.Value, out value);
+
+        internal bool Set(EntityId entity, T value)
         {
-            if (!_values.TryGetValue(entity.Value, out T stored))
+            ArgumentNullException.ThrowIfNull(value);
+            if (!typeof(T).IsValueType && _values.TryGetValue(entity.Value, out T? current)
+                && ReferenceEquals(current, value))
             {
-                value = default;
                 return false;
             }
-            value = TypedDescriptor.CopyForDetachedUse(in stored);
-            return true;
-        }
-
-        internal void Set(EntityId entity, T value)
-        {
-            T copied = TypedDescriptor.CopyForDetachedUse(in value);
-            TypedDescriptor.Validate(in copied);
-            _values[entity.Value] = copied;
+            TypedDescriptor.Validate(in value);
+            _values[entity.Value] = value;
             BumpRevision(entity);
+            return true;
         }
 
         internal override bool Remove(EntityId entity)
@@ -979,10 +1166,10 @@ public sealed class EntityStore : IDisposable
             List<EntityWorldComponentSlot<T>> result = [];
             foreach (EntityId entity in entities)
             {
-                bool present = _values.TryGetValue(entity.Value, out T value);
+                bool present = _values.TryGetValue(entity.Value, out T? value);
                 if (present)
                 {
-                    value = TypedDescriptor.CopyForDetachedUse(in value);
+                    value = TypedDescriptor.CopyForDetachedUse(value!);
                 }
                 result.Add(new EntityWorldComponentSlot<T>(entity, present, value, RevisionFor(entity)));
             }
@@ -995,7 +1182,7 @@ public sealed class EntityStore : IDisposable
             {
                 if (slot.Present)
                 {
-                    T value = slot.Value;
+                    T value = slot.Value!;
                     T copied = TypedDescriptor.CopyForDetachedUse(in value);
                     TypedDescriptor.Validate(in copied);
                     _values.Add(slot.Entity.Value, copied);
@@ -1036,8 +1223,7 @@ public sealed class EntityStore : IDisposable
         {
             foreach ((ulong entity, T value) in _values)
             {
-                T copied = TypedDescriptor.CopyForDetachedUse(in value);
-                yield return (new EntityId(entity), copied);
+                yield return (new EntityId(entity), value);
             }
         }
 

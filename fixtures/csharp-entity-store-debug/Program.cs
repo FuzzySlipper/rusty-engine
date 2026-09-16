@@ -94,7 +94,7 @@ internal static class Program
         Require(catalog.Execute("entity.summary alpha") is { Succeeded: true, Message: var summary }
             && summary.Contains("active=1", StringComparison.Ordinal)
             && summary.Contains("disabled=1", StringComparison.Ordinal)
-            && summary.Contains("tombstoned=1", StringComparison.Ordinal), "world lifecycle summary was incomplete");
+            && summary.Contains("tombstoned=0", StringComparison.Ordinal), "world lifecycle summary was incomplete");
         Require(catalog.Execute("entity.list alpha All 0 2") is { Succeeded: true, Message: var page }
             && page.Contains("entity=1:lifecycle=Active", StringComparison.Ordinal)
             && page.Contains("entity=2:lifecycle=Disabled", StringComparison.Ordinal), "entity page was not deterministic");

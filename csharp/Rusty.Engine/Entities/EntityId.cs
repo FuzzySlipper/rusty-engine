@@ -36,8 +36,8 @@ public readonly record struct ContainmentReceipt(
 
 public readonly record struct ComponentRevision(EntityId Entity, ComponentTypeKey Component, ulong Revision);
 
-public readonly record struct EntityComponent<T>(EntityId Entity, T Value) where T : struct;
+public readonly record struct EntityComponent<T>(EntityId Entity, T Value) where T : notnull;
 
 public readonly record struct EntityComponents<TFirst, TSecond>(EntityId Entity, TFirst First, TSecond Second)
-    where TFirst : struct
-    where TSecond : struct;
+    where TFirst : notnull
+    where TSecond : notnull;
