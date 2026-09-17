@@ -986,7 +986,7 @@ export class ThreeRenderer {
         } else if (operation.op === 'defineMaterial') {
           materialDescriptors.set(operation.material.id, structuredClone(operation.material));
         } else if (operation.op === 'defineAnimatedMesh') {
-          // Validate the exact source/hash/clip contract without allocating the
+          // Validate the source/clip contract without allocating the
           // asset-scoped render template before the retained mutation.
           this.#animatedMeshes.validateDefinition(operation.asset);
           frameAnimatedDefinitions.set(operation.asset.asset, operation.asset);

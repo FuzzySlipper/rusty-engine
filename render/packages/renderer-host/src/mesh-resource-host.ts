@@ -1,7 +1,5 @@
 import type { MeshResourceSource } from '@rusty-engine/renderer-three/backend';
 
-import { rendererResourceContentHash } from './resource-content-hash.js';
-
 const MAX_RMESH_BYTE_LENGTH = 4_294_967_295;
 
 export interface RendererMeshResourceDescriptor {
@@ -27,9 +25,7 @@ export class RendererMutableMeshResourceSource implements MeshResourceSource {
     validateManifest({ kind: 'rusty_renderer_mesh_resources.v1', resources: [{
       resource, contentHash, byteLength: data.byteLength,
     }] });
-    const bytes = new Uint8Array(data.slice(0));
-    const actual = await rendererResourceContentHash(bytes.buffer, contentHash);
-    if (actual !== contentHash) throw resourceError('mesh_resource_content_hash_mismatch', resource, 'immutable body hash mismatch');
+    const bytes = new Uint8Array(data);
     const existing = this.#resources.get(resource);
     if (existing !== undefined && existing.contentHash !== contentHash) {
       throw resourceError('mesh_resource_manifest_invalid', resource, 'resource identity was admitted with a different hash');
@@ -56,8 +52,7 @@ export class RendererMutableMeshResourceSource implements MeshResourceSource {
 export type RendererMeshResourceErrorCode =
   | 'mesh_resource_manifest_invalid'
   | 'mesh_resource_unavailable'
-  | 'mesh_resource_byte_length_mismatch'
-  | 'mesh_resource_content_hash_mismatch';
+  | 'mesh_resource_byte_length_mismatch';
 
 export class RendererMeshResourceError extends Error {
   constructor(
@@ -82,28 +77,16 @@ export async function loadRendererMeshResourceSource(
     } catch (cause) {
       throw resourceError('mesh_resource_unavailable', descriptor.resource, cause);
     }
-    // The resolver owns `data` and may retain or mutate it after settlement.
-    // Snapshot synchronously before the first admission await, then validate
-    // and retain only these host-owned bytes under the content identity.
-    const admitted = data.slice(0);
-    if (admitted.byteLength !== descriptor.byteLength) {
+    if (data.byteLength !== descriptor.byteLength) {
       throw resourceError(
         'mesh_resource_byte_length_mismatch',
         descriptor.resource,
-        `expected ${String(descriptor.byteLength)} bytes, received ${String(admitted.byteLength)}`,
-      );
-    }
-    const actualHash = await rendererResourceContentHash(admitted, descriptor.contentHash);
-    if (actualHash !== descriptor.contentHash) {
-      throw resourceError(
-        'mesh_resource_content_hash_mismatch',
-        descriptor.resource,
-        `expected ${descriptor.contentHash}, received ${actualHash}`,
+        `expected ${String(descriptor.byteLength)} bytes, received ${String(data.byteLength)}`,
       );
     }
     return [descriptor.resource, {
       descriptor,
-      bytes: new Uint8Array(admitted),
+      bytes: new Uint8Array(data),
     }] as const;
   }));
   const resources = new Map(loaded);

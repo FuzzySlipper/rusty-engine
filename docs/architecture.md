@@ -64,6 +64,16 @@ They should not accidentally become an uncertain product callback or a dead
 session. Preserve actual ABI/lifetime invariants and canonical-state
 uncertainty, including the prohibition on replaying possibly committed work.
 
+## Trusted runtime resource delivery
+
+Engine-owned resource delivery trusts the supplied identity and bytes. Browser
+loading and renderer admission do not rehash bodies or repeat format checks;
+the consuming decoder handles the format. Resource buffers are immutable by
+contract and may be borrowed. Copy only where an API needs its own storage
+(for example, audio decoding that detaches its input) or an exact buffer range.
+Build/import content identity and cache invalidation remain separate concerns.
+Add runtime verification only for a concrete identified requirement.
+
 ## Lifecycle and data movement
 
 1. The packaged Rust runtime loads the staged Product through CoreCLR during

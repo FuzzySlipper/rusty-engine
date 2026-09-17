@@ -1,4 +1,4 @@
-import { type RustyApplicationContent } from '@rusty-engine/application-host';
+import type { RustyApplicationContent } from '@rusty-engine/application-host';
 /**
  * Loads the immutable renderer resources selected during Product Create.
  *

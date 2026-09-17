@@ -676,7 +676,7 @@ void test('missing audio host returns an explicit typed domain diagnostic', asyn
   assert.equal(audioReceipt?.diagnostics[0]?.sequence, 0);
 });
 
-void test('audio host hashes resolved bytes before decode and reports catalog drift', async () => {
+void test('audio host decodes trusted resource bytes under the declared identity', async () => {
   const context = new FakeContext();
   const audio = host(context);
   const badDescriptor = {
@@ -697,11 +697,11 @@ void test('audio host hashes resolved bytes before decode and reports catalog dr
     ]),
   );
 
-  assert.equal(receipt.applied, 0);
-  assert.equal(receipt.diagnostics[0]?.code, 'contentHashMismatch');
-  assert.equal(receipt.readout.cachedClips, 0);
-  assert.equal(receipt.readout.emittedSignals, 0);
-  assert.equal(context.decodeCount, 0);
+  assert.equal(receipt.applied, 1);
+  assert.deepEqual(receipt.diagnostics, []);
+  assert.equal(receipt.readout.cachedClips, 1);
+  assert.equal(receipt.readout.emittedSignals, 1);
+  assert.equal(context.decodeCount, 1);
 });
 
 void test('audio host accepts a manifest-native FNV content hash', async () => {

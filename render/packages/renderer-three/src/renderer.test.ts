@@ -3280,10 +3280,32 @@ void test('retains more than 256 textures and releases them on disposal', () => 
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
+void test('trusted PNG delivery decodes without rechecking content identity or chunk CRCs', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  bytes[bytes.length - 1] = (bytes[bytes.length - 1] ?? 0) ^ 1;
+  const descriptor = textureDescriptor(bytes);
+  const trustedIdentity = `sha256:${'0'.repeat(64)}`;
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [{
+    op: 'defineTexture',
+    texture: {
+      ...descriptor,
+      contentHash: trustedIdentity,
+      payload: {
+        ...descriptor.payload!,
+        contentHash: trustedIdentity,
+        byteLength: bytes.byteLength + 1,
+      },
+    },
+  }] });
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 1);
+  renderer.dispose();
+});
+
 void test('malformed texture bytes reject the complete frame and release the resource borrow', () => {
   const expected = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const corrupt = expected.slice();
-  corrupt[corrupt.length - 1] = (corrupt[corrupt.length - 1] ?? 0) ^ 1;
+  corrupt[0] = 0;
   const released: string[] = [];
   const source: TextureResourceSource = {
     acquireResource: () => ({ bytes: corrupt }),
@@ -3298,7 +3320,7 @@ void test('malformed texture bytes reject the complete frame and release the res
       createDiff(2, cubeNode('must-not-commit')),
       { op: 'defineTexture', texture: descriptor },
     ] }),
-    /content hash mismatch/u,
+    /invalid PNG signature/u,
   );
   assert.equal(renderer.snapshot(), before);
   assert.equal(renderer.has(renderHandle(2)), false);
@@ -4998,11 +5020,15 @@ void test('animated mesh adapter fails closed for missing resources and clips', 
     /exactly one clip named run/,
   );
 
-  const wrongHash = new ThreeRenderer({ animatedMeshSource: testAnimatedMeshSource(asset) });
-  assert.throws(
-    () => wrongHash.applyDiff({ op: 'defineAnimatedMesh', asset: animatedMeshAsset({ contentHash: 'sha256:wrong' }) }),
-    /content hash mismatch/,
-  );
+});
+
+void test('animated mesh accepts the resource selected by its asset identity', () => {
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({ animatedMeshSource: testAnimatedMeshSource(asset) });
+  assert.doesNotThrow(() => renderer.applyDiff({
+    op: 'defineAnimatedMesh',
+    asset: animatedMeshAsset({ contentHash: 'sha256:replacement' }),
+  }));
 });
 
 void test('frame rollback does not publish an animated definition or instance after invalid initial playback', () => {

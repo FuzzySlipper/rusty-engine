@@ -13,7 +13,6 @@ import type {
   PresentationFrameDiff,
   PresentationOp,
 } from '@rusty-engine/render-contracts';
-import { rendererResourceContentHash } from './resource-content-hash.js';
 import type {
   ParticleProjectionDiagnostic,
   ParticleProjectionReadout,
@@ -569,12 +568,6 @@ export class RendererParticleHost {
         'spriteLoadFailed', `particle sprite ${sprite.asset} is unavailable`,
       );
     }
-    try {
-      await validateResourceHash(resource.bytes, sprite.contentHash);
-    } catch (error) {
-      releaseParticleResource(resource.release);
-      throw error;
-    }
     const duplicate = this.#spriteResources.get(key);
     if (duplicate !== undefined) {
       releaseParticleResource(resource.release);
@@ -1003,20 +996,6 @@ function spriteKey(sprite: ParticleSpriteRef): string {
   return `${sprite.asset}:${sprite.contentHash}`;
 }
 
-async function validateResourceHash(bytes: ArrayBuffer, expected: string): Promise<void> {
-  const actual = await rendererResourceContentHash(bytes, expected).catch((error: unknown) => {
-    throw new RendererParticleResourceError(
-      'contentHashMismatch',
-      error instanceof Error ? error.message : String(error),
-    );
-  });
-  if (actual !== expected) {
-    throw new RendererParticleResourceError(
-      'contentHashMismatch', `particle sprite hash ${actual} does not match ${expected}`,
-    );
-  }
-}
-
 function particleResourceLease(
   url: string,
   retain: () => ParticleResourceLease,
@@ -1044,7 +1023,7 @@ function releaseParticleResource(release: (() => void) | undefined): void {
 
 class RendererParticleResourceError extends Error {
   constructor(
-    readonly code: 'contentHashMismatch' | 'spriteLoadFailed',
+    readonly code: 'spriteLoadFailed',
     message: string,
   ) {
     super(message);

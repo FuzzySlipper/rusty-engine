@@ -99,3 +99,17 @@ test('renderer preload admits texture and audio descriptors beyond retired byte,
   );
   assert.equal(requests.count, resources.length + 1, 'all admitted descriptors reach resource loading');
 });
+
+test('preload passes trusted metadata and response storage directly to the renderer', async () => {
+  const body = new Uint8Array([1, 2, 3]).buffer;
+  const resource = textureResource(1, 99);
+  const fetched: string[] = [];
+  const content = await loadProductBrowserRendererInitialContent(MODULE_URL, async (input) => {
+    fetched.push(String(input));
+    if (String(input).endsWith('renderer-preload.json')) return descriptorResponse([resource]);
+    return { ok: true, arrayBuffer: async () => body } as Response;
+  });
+  assert.equal(content.resources?.[0]?.bytes.buffer, body, 'no verification copy');
+  assert.equal(content.resources?.[0]?.contentHash, resource['contentHash']);
+  assert.equal(fetched.length, 2);
+});

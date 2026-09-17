@@ -341,7 +341,7 @@ void test('pending async resource admission cannot resurrect a billboard after c
   assert.equal(container.elements.length, 0);
 });
 
-void test('font and icon resources are SHA-256 validated cached and fail with typed diagnostics', async () => {
+void test('font and icon resources use declared identities to cache trusted delivery', async () => {
   const fontBytes = new Uint8Array([1, 2, 3]).buffer;
   const iconBytes = new Uint8Array([4, 5, 6]).buffer;
   const fontHash = await sha256(fontBytes);
@@ -376,7 +376,7 @@ void test('font and icon resources are SHA-256 validated cached and fail with ty
   assert.equal(receipt.readout.loadedIcons, 1);
   assert.equal(fontLoads, 1);
 
-  const bad = await host.applyPresentation(presentation([
+  const independentlyIdentified = await host.applyPresentation(presentation([
     operation(0, {
       op: 'create',
       handle: billboardHandle(3),
@@ -386,8 +386,8 @@ void test('font and icon resources are SHA-256 validated cached and fail with ty
       },
     }),
   ]));
-  assert.equal(bad.applied, 0);
-  assert.equal(bad.diagnostics[0]?.code, 'contentHashMismatch');
+  assert.equal(independentlyIdentified.applied, 1);
+  assert.deepEqual(independentlyIdentified.diagnostics, []);
 
   const missingFontHost = new RendererBillboardHost({
     container: new FakeContainer(),

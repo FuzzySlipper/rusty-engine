@@ -22,6 +22,7 @@ export interface RustyApplicationResource {
   readonly identity: string;
   readonly contentHash: string;
   readonly mediaType: string;
+  /** Engine-owned immutable bytes; callers must not mutate after publication. */
   readonly bytes: Uint8Array;
 }
 
@@ -31,12 +32,7 @@ export interface RustyApplicationContent {
   readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
 }
 
-export type RustyApplicationContentDiagnosticCode =
-  | 'content_invalid'
-  | 'resource_duplicate'
-  | 'resource_identity_invalid'
-  | 'resource_limit_exceeded'
-  | 'resource_media_type_unsupported';
+export type RustyApplicationContentDiagnosticCode = 'content_invalid';
 
 export class RustyApplicationContentError extends Error {
   constructor(
@@ -79,9 +75,6 @@ export interface RustyApplicationSurfaceResourceOptions {
   ) => Promise<ArrayBuffer>;
 }
 
-const SHA256_IDENTITY = /^(?:(animated-mesh|audio|mesh|clip-pack|texture)-resource|font)\/([0-9a-f]{64})$/u;
-const MAX_U32_BYTE_LENGTH = 4_294_967_295;
-
 export function prepareRustyApplicationContent(
   content: RustyApplicationContent,
 ): PreparedRustyApplicationContent {
@@ -94,117 +87,23 @@ export function prepareRustyApplicationContent(
   }
   const frame = structuredClone(content.frame);
   const publicationFrontiers = structuredClone(content.publicationFrontiers ?? []);
-  const identities = new Set<string>();
-  const resources = (content.resources ?? []).map((resource, index) => {
-    if (typeof resource !== 'object' || resource === null
-      || typeof resource.identity !== 'string'
-      || typeof resource.contentHash !== 'string'
-      || typeof resource.mediaType !== 'string'
-      || !(resource.bytes instanceof Uint8Array)) {
-      throw contentError(
-        'content_invalid',
-        null,
-        `application content resource ${String(index)} is malformed`,
-      );
-    }
-    const match = SHA256_IDENTITY.exec(resource.identity);
-    const digest = /^sha256:([0-9a-f]{64})$/u.exec(resource.contentHash)?.[1];
-    if (match === null || digest === undefined || match[2] !== digest) {
-      throw contentError(
-        'resource_identity_invalid',
-        resource.identity || null,
-        'application resource identity must match its lowercase SHA-256 content hash',
-      );
-    }
-    if (identities.has(resource.identity)) {
-      throw contentError(
-        'resource_duplicate',
-        resource.identity,
-        'application resource identity is duplicated',
-      );
-    }
-    identities.add(resource.identity);
-    const kind = resource.identity.startsWith('font/') ? 'font'
-      : match[1] === 'clip-pack' ? 'clipPack'
-      : match[1] === 'animated-mesh' ? 'animatedMesh'
-        : match[1] as RustyApplicationResourceKind;
-    if (kind === 'font') {
-      if (resource.mediaType !== 'font/woff2' || resource.bytes.byteLength < 4
-        || resource.bytes[0] !== 0x77 || resource.bytes[1] !== 0x4f
-        || resource.bytes[2] !== 0x46 || resource.bytes[3] !== 0x32) {
-        throw contentError('resource_media_type_unsupported', resource.identity, 'font resources must use WOFF2');
-      }
-    } else if (kind === 'audio') {
-      if (resource.mediaType !== 'audio/wav') {
-        throw contentError(
-          'resource_media_type_unsupported',
-          resource.identity,
-          'audio resources must use audio/wav',
-        );
-      }
-      if (resource.bytes.byteLength < 44) {
-        throw contentError(
-          'resource_limit_exceeded',
-          resource.identity,
-          'audio resource has an invalid WAV byte length',
-        );
-      }
-    } else if (kind === 'texture') {
-      if (resource.mediaType !== 'image/png') {
-        throw contentError(
-          'resource_media_type_unsupported',
-          resource.identity,
-          'texture resources must use image/png',
-        );
-      }
-      if (resource.bytes.byteLength === 0) {
-        throw contentError(
-          'resource_limit_exceeded',
-          resource.identity,
-          'texture resource has an invalid byte length',
-        );
-      }
-    } else if (kind === 'animatedMesh' || kind === 'clipPack') {
-      if (resource.mediaType !== 'model/gltf-binary') {
-        throw contentError(
-          'resource_media_type_unsupported',
-          resource.identity,
-          'animated mesh and clip pack resources must use model/gltf-binary',
-        );
-      }
-      if (resource.bytes.byteLength < 20
-        || resource.bytes[0] !== 0x67
-        || resource.bytes[1] !== 0x6c
-        || resource.bytes[2] !== 0x54
-        || resource.bytes[3] !== 0x46
-        || resource.bytes.byteLength > MAX_U32_BYTE_LENGTH) {
-        throw contentError(
-          'resource_limit_exceeded',
-          resource.identity,
-          'animated mesh or clip pack resource has an invalid GLB byte length',
-        );
-      }
-    } else {
-      if (resource.mediaType !== 'application/octet-stream') {
-        throw contentError(
-          'resource_media_type_unsupported',
-          resource.identity,
-          'mesh resources must use application/octet-stream',
-        );
-      }
-      if (resource.bytes.byteLength < 16 || resource.bytes.byteLength > MAX_U32_BYTE_LENGTH) {
-        throw contentError(
-          'resource_limit_exceeded',
-          resource.identity,
-          'mesh resource has an invalid RMesh byte length',
-        );
-      }
-    }
+  const resources = (content.resources ?? []).map((resource) => {
+    const family = resource.identity.split('/')[0];
+    const kind: RustyApplicationResourceKind = family === 'font' ? 'font'
+      : family === 'clip-pack-resource' ? 'clipPack'
+      : family === 'animated-mesh-resource' ? 'animatedMesh'
+      : family === 'audio-resource' ? 'audio'
+      : family === 'texture-resource' ? 'texture' : 'mesh';
     return Object.freeze({
       identity: resource.identity,
       contentHash: resource.contentHash,
       mediaType: resource.mediaType,
-      bytes: resource.bytes.slice().buffer,
+      // Borrow Engine-owned immutable storage. A subview needs an exact
+      // buffer because the consuming APIs accept ArrayBuffer, not a range.
+      bytes: resource.bytes.buffer instanceof ArrayBuffer
+        && resource.bytes.byteOffset === 0
+        && resource.bytes.byteLength === resource.bytes.buffer.byteLength
+        ? resource.bytes.buffer : resource.bytes.slice().buffer,
       kind,
     });
   });
@@ -286,7 +185,7 @@ export class RustyApplicationResourceCatalog {
     return (clip) => {
       const resource = this.#byHash.get(clip.contentHash);
       return resource?.kind === 'audio'
-        ? Promise.resolve({ bytes: resource.bytes.slice(0), contentHash: resource.contentHash })
+        ? Promise.resolve({ bytes: resource.bytes, contentHash: resource.contentHash })
         : Promise.reject(new Error(`audio resource ${clip.asset} (${clip.contentHash}) is unavailable`));
     };
   }
@@ -305,7 +204,7 @@ export function rustyApplicationAudioResourceResolver(
       ));
     }
     return Promise.resolve({
-      bytes: entry.bytes.slice(0),
+      bytes: entry.bytes,
       contentHash: entry.contentHash,
     });
   };

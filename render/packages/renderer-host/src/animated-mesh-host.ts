@@ -9,12 +9,9 @@ import {
   loadAnimatedMeshGlbResource,
   type AnimatedMeshAssetSource,
 } from '@rusty-engine/renderer-three/backend';
-import { rendererResourceContentHash } from './resource-content-hash.js';
-
 export type RendererHostDiagnosticCode =
   | 'animated_mesh_manifest_invalid'
   | 'animated_mesh_resource_unavailable'
-  | 'animated_mesh_content_hash_mismatch'
   | 'animated_mesh_clip_unavailable'
   | 'animated_mesh_frame_rejected'
   | 'animated_mesh_incompatible_rig'
@@ -94,7 +91,7 @@ export class RendererMutableAnimatedMeshResourceSource extends MapAnimatedMeshAs
   ): Promise<void> {
     const resource = await loadAnimatedMeshGlbResource(
       descriptor.asset,
-      data.slice(0),
+      data,
       descriptor.contentHash,
       descriptor.embeddedMaterialSlots ?? [],
     );
@@ -108,7 +105,7 @@ export class RendererMutableAnimatedMeshResourceSource extends MapAnimatedMeshAs
   ): Promise<void> {
     const resource = await loadAnimationClipPackGlbResource(
       descriptor.asset,
-      data.slice(0),
+      data,
       descriptor.contentHash,
     );
     this.admitAnimationClipPackResource(resource);
@@ -250,19 +247,9 @@ export async function loadRendererAnimatedMeshSource(
     } catch (cause) {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     }
-    const immutableData = data.slice(0);
-    const actualHash = await rendererResourceContentHash(immutableData, descriptor.contentHash);
-    if (actualHash !== descriptor.contentHash) {
-      throw hostError(
-        'animated_mesh_content_hash_mismatch',
-        descriptor.asset,
-        null,
-        `expected ${descriptor.contentHash}, received ${actualHash}`,
-      );
-    }
     const resource = await loadAnimatedMeshGlbResource(
       descriptor.asset,
-      immutableData,
+      data,
       descriptor.contentHash,
       descriptor.embeddedMaterialSlots,
     ).catch((cause: unknown) => {
@@ -282,12 +269,7 @@ export async function loadRendererAnimatedMeshSource(
     try { data = await resolver(descriptor); } catch (cause) {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     }
-    const immutableData = data.slice(0);
-    const actualHash = await rendererResourceContentHash(immutableData, descriptor.contentHash);
-    if (actualHash !== descriptor.contentHash) {
-      throw hostError('animated_mesh_content_hash_mismatch', descriptor.asset, null, `expected ${descriptor.contentHash}, received ${actualHash}`);
-    }
-    const resource = await loadAnimationClipPackGlbResource(descriptor.asset, immutableData, descriptor.contentHash).catch((cause: unknown) => {
+    const resource = await loadAnimationClipPackGlbResource(descriptor.asset, data, descriptor.contentHash).catch((cause: unknown) => {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     });
     const missingClip = missingDeclaredSourceClip(resource.clips, descriptor);

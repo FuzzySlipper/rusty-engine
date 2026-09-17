@@ -740,7 +740,7 @@ export async function mountRustyApplicationWithEnvironment(
         resolveResource: async (identity, contentHash) => {
           const resource = catalog.resource(identity, contentHash);
           if (resource === undefined) return null;
-          const bytes = resource.bytes.slice(0);
+          const bytes = resource.bytes;
           if (resource.kind !== 'texture') return { bytes };
           const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
           presentationUrls.add(url);
@@ -762,7 +762,7 @@ export async function mountRustyApplicationWithEnvironment(
         resolveResource: async (sprite) => {
           const resource = catalog.resource('', sprite.contentHash);
           if (resource?.kind !== 'texture') return null;
-          const bytes = resource.bytes.slice(0);
+          const bytes = resource.bytes;
           const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
           presentationUrls.add(url);
           let released = false;

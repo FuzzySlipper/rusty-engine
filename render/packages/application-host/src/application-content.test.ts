@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { loadRendererTextureResourceSource } from '@rusty-engine/renderer-host';
 
 import {
-  RustyApplicationContentError,
   RustyApplicationResourceCatalog,
   prepareRustyApplicationContent,
   rustyApplicationAudioResourceResolver,
@@ -25,28 +23,22 @@ function textureContent(bytes = new Uint8Array([137, 80, 78, 71])): RustyApplica
   };
 }
 
-void test('application content borrows prepared bytes and renderer admission owns its snapshot', async () => {
-  const expected = new Uint8Array([137, 80, 78, 71]);
-  const source = expected.slice();
+void test('application content borrows immutable Engine storage and normalizes subviews', () => {
+  const source = new Uint8Array([1, 2, 3, 4]);
   const prepared = prepareRustyApplicationContent(textureContent(source));
-  source.fill(0);
-  assert.deepEqual(new Uint8Array(prepared.resources[0]!.bytes), expected);
-  const options = rustyApplicationSurfaceResourceOptions(prepared);
-  const manifest = options.textureResourceManifest;
-  const resolve = options.resolveTextureResource;
-  assert.ok(manifest !== undefined && resolve !== undefined);
-  const descriptor = manifest.resources[0]!;
-  const resolved = await resolve(descriptor);
-  assert.equal(resolved, prepared.resources[0]!.bytes);
-  assert.equal(await resolve(descriptor), resolved);
-  const admitted = await loadRendererTextureResourceSource(manifest, resolve);
-  // Once admitted, later changes by the prepared-content owner cannot change
-  // the renderer's resource under its already-verified identity.
-  new Uint8Array(prepared.resources[0]!.bytes).fill(0);
-  const acquired = admitted.acquireResource(
-    descriptor.resource, descriptor.contentHash, descriptor.byteLength,
-  );
-  assert.deepEqual(acquired.bytes, expected);
+  assert.equal(prepared.resources[0]!.bytes, source.buffer);
+  const subview = prepareRustyApplicationContent(textureContent(source.subarray(1, 3)));
+  assert.deepEqual(new Uint8Array(subview.resources[0]!.bytes), new Uint8Array([2, 3]));
+});
+
+void test('application content trusts resource metadata and leaves decoding to the renderer', () => {
+  const resource = textureContent(new Uint8Array()).resources![0]!;
+  const prepared = prepareRustyApplicationContent({
+    frame: { schemaVersion: 1, ops: [] },
+    resources: [{ ...resource, contentHash: 'engine-key', mediaType: 'image/custom' }],
+  });
+  assert.equal(prepared.resources[0]!.contentHash, 'engine-key');
+  assert.equal(prepared.resources[0]!.mediaType, 'image/custom');
 });
 
 void test('resource catalog prunes a retired dynamic resource and admits its immutable identity again', async () => {
@@ -63,44 +55,6 @@ void test('resource catalog prunes a retired dynamic resource and admits its imm
   await catalog.admit(content.resources!);
   assert.deepEqual(catalog.readout(), { resources: 1, animated: 0, clipPacks: 0 });
   assert.equal(catalog.snapshot()[0]?.identity, content.resources![0]!.identity);
-});
-
-void test('application content rejects duplicated identities without exposing renderer manifests', () => {
-  const content = textureContent();
-  assert.throws(
-    () => prepareRustyApplicationContent({
-      ...content,
-      resources: [content.resources![0]!, content.resources![0]!],
-    }),
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_duplicate',
-  );
-});
-
-void test('application content rejects mismatched hashes, unsupported media, and empty resources', () => {
-  const content = textureContent();
-  const resource = content.resources![0]!;
-  assert.throws(
-    () => prepareRustyApplicationContent({
-      ...content,
-      resources: [{ ...resource, contentHash: `sha256:${'0'.repeat(64)}` }],
-    }),
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_identity_invalid',
-  );
-  assert.throws(
-    () => prepareRustyApplicationContent({
-      ...content,
-      resources: [{ ...resource, mediaType: 'application/octet-stream' }],
-    }),
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_media_type_unsupported',
-  );
-  assert.throws(
-    () => prepareRustyApplicationContent(textureContent(new Uint8Array())),
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_limit_exceeded',
-  );
 });
 
 void test('application content admits closed resource families beyond retired texture and audio count caps', () => {
@@ -162,12 +116,11 @@ void test('application content admits bounded WAV resources and resolves immutab
       bytes: source,
     }],
   });
-  source.fill(0);
   const resolver = rustyApplicationAudioResourceResolver(prepared);
   assert.ok(resolver !== null);
   const resolved = await resolver({ asset: 'audio/test-swing', contentHash: `sha256:${digest}` });
   assert.deepEqual(new Uint8Array(resolved.bytes).slice(0, 4), new Uint8Array([82, 73, 70, 70]));
-  new Uint8Array(resolved.bytes).fill(0);
+  assert.equal(resolved.bytes, prepared.resources[0]!.bytes);
   const resolvedAgain = await resolver({
     asset: 'audio/test-swing',
     contentHash: `sha256:${digest}`,
@@ -186,42 +139,6 @@ void test('audio resolver remains available for bus-only products without admitt
   await assert.rejects(
     resolver({ asset: 'audio/missing', contentHash: `sha256:${'0'.repeat(64)}` }),
     /audio resource audio\/missing .* is unavailable/u,
-  );
-});
-
-void test('application content rejects unsupported and undersized audio resources', () => {
-  const bytes = new Uint8Array(44);
-  const digest = createHash('sha256').update(bytes).digest('hex');
-  const resource = {
-    identity: `audio-resource/${digest}`,
-    contentHash: `sha256:${digest}`,
-    mediaType: 'audio/mpeg',
-    bytes,
-  };
-  assert.throws(
-    () => prepareRustyApplicationContent({
-      frame: { schemaVersion: 1, ops: [] },
-      resources: [resource],
-    }),
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_media_type_unsupported',
-  );
-  assert.throws(
-    () => {
-      const shortBytes = new Uint8Array(43);
-      const shortDigest = createHash('sha256').update(shortBytes).digest('hex');
-      return prepareRustyApplicationContent({
-        frame: { schemaVersion: 1, ops: [] },
-        resources: [{
-          identity: `audio-resource/${shortDigest}`,
-          contentHash: `sha256:${shortDigest}`,
-          mediaType: 'audio/wav',
-          bytes: shortBytes,
-        }],
-      });
-    },
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_limit_exceeded',
   );
 });
 

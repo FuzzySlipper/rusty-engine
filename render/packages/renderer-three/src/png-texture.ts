@@ -1,5 +1,3 @@
-import { bytesToHex } from '@noble/hashes/utils.js';
-import { sha256 } from '@noble/hashes/sha2.js';
 import { unzlibSync } from 'fflate';
 
 import type { TextureDescriptor } from '@rusty-engine/render-contracts';
@@ -21,15 +19,7 @@ export function decodeAdmittedPngTexture(
   descriptor: TextureDescriptor,
   bytes: Uint8Array,
 ): DecodedPngTexture {
-  const payload = descriptor.payload;
-  if (payload === undefined) throw new PngTextureError('texture has no retained payload');
-  if (bytes.byteLength !== payload.byteLength) {
-    throw new PngTextureError(`encoded byte length ${String(bytes.byteLength)} does not match ${String(payload.byteLength)}`);
-  }
-  const actualHash = `sha256:${bytesToHex(sha256(bytes))}`;
-  if (actualHash !== payload.contentHash || descriptor.contentHash !== actualHash) {
-    throw new PngTextureError(`content hash mismatch: expected ${payload.contentHash}, received ${actualHash}`);
-  }
+  if (descriptor.payload === undefined) throw new PngTextureError('texture has no retained payload');
   return decodePngRgba8(bytes, descriptor.width, descriptor.height);
 }
 
@@ -54,10 +44,6 @@ function decodePngRgba8(bytes: Uint8Array, width: number, height: number): Decod
       throw new PngTextureError('PNG chunk exceeds encoded bytes');
     }
     const type = String.fromCharCode(...bytes.subarray(typeOffset, dataOffset));
-    const expectedCrc = view.getUint32(dataEnd, false);
-    if (crc32(bytes.subarray(typeOffset, dataEnd)) !== expectedCrc) {
-      throw new PngTextureError(`PNG ${type} CRC mismatch`);
-    }
     if (type === 'IHDR') {
       if (sawHeader || offset !== 8 || length !== 13) throw new PngTextureError('invalid PNG IHDR');
       const actualWidth = view.getUint32(dataOffset, false);
@@ -73,7 +59,7 @@ function decodePngRgba8(bytes: Uint8Array, width: number, height: number): Decod
       sawHeader = true;
     } else if (type === 'IDAT') {
       if (!sawHeader || sawEnd) throw new PngTextureError('PNG IDAT ordering is invalid');
-      idat.push(bytes.slice(dataOffset, dataEnd));
+      idat.push(bytes.subarray(dataOffset, dataEnd));
     } else if (type === 'IEND') {
       if (!sawHeader || idat.length === 0 || sawEnd || length !== 0 || chunkEnd !== bytes.byteLength) {
         throw new PngTextureError('invalid PNG IEND');
@@ -140,15 +126,4 @@ function paeth(left: number, above: number, upperLeft: number): number {
   const upperLeftDistance = Math.abs(estimate - upperLeft);
   if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left;
   return aboveDistance <= upperLeftDistance ? above : upperLeft;
-}
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffff_ffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) {
-      crc = (crc & 1) === 0 ? crc >>> 1 : (crc >>> 1) ^ 0xedb8_8320;
-    }
-  }
-  return (crc ^ 0xffff_ffff) >>> 0;
 }

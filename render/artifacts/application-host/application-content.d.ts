@@ -6,6 +6,7 @@ export interface RustyApplicationResource {
     readonly identity: string;
     readonly contentHash: string;
     readonly mediaType: string;
+    /** Engine-owned immutable bytes; callers must not mutate after publication. */
     readonly bytes: Uint8Array;
 }
 export interface RustyApplicationContent {
@@ -13,7 +14,7 @@ export interface RustyApplicationContent {
     readonly resources?: readonly RustyApplicationResource[];
     readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
 }
-export type RustyApplicationContentDiagnosticCode = 'content_invalid' | 'resource_duplicate' | 'resource_identity_invalid' | 'resource_limit_exceeded' | 'resource_media_type_unsupported';
+export type RustyApplicationContentDiagnosticCode = 'content_invalid';
 export declare class RustyApplicationContentError extends Error {
     readonly code: RustyApplicationContentDiagnosticCode;
     readonly resource: string | null;

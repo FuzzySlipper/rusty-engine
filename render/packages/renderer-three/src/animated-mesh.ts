@@ -260,18 +260,10 @@ export class MapAnimatedMeshAssetSource implements AnimatedMeshAssetSource {
   }
 
   admitAnimatedMeshResource(resource: AnimatedMeshResource): void {
-    const existing = this.#resources.get(resource.asset);
-    if (existing !== undefined && existing.contentHash !== resource.contentHash) {
-      throw new AnimatedMeshApplyError(`animated mesh resource ${resource.asset} changed immutable content`);
-    }
     this.#resources.set(resource.asset, resource);
   }
 
   admitAnimationClipPackResource(resource: AnimationClipPackResource): void {
-    const existing = this.#packs.get(resource.asset);
-    if (existing !== undefined && existing.contentHash !== resource.contentHash) {
-      throw new AnimatedMeshApplyError(`animation clip pack ${resource.asset} changed immutable content`);
-    }
     this.#packs.set(resource.asset, resource);
   }
 
@@ -561,11 +553,6 @@ export class AnimatedMeshRegistry {
     if (!resource) {
       throw new AnimatedMeshApplyError(`defineAnimatedMesh: missing animated mesh resource ${asset.asset}`);
     }
-    if (resource.contentHash !== undefined && resource.contentHash !== asset.contentHash) {
-      throw new AnimatedMeshApplyError(
-        `defineAnimatedMesh: content hash mismatch for ${asset.asset}; expected ${resource.contentHash}, received ${asset.contentHash}`,
-      );
-    }
     const requestedEmbeddedSlots = asset.embeddedMaterialSlots ?? [];
     const resolvedEmbeddedSlots = resource.embeddedMaterialSlots
       ?? new Map<number, AnimatedMeshEmbeddedMaterial>();
@@ -581,9 +568,6 @@ export class AnimatedMeshRegistry {
     const packs = (asset.clipPacks ?? []).map((pack) => {
       const clipPack = this.#assetSource?.getAnimationClipPackResource(pack);
       if (!clipPack) throw new AnimatedMeshApplyError(`defineAnimatedMesh: missing animation clip pack resource ${pack.asset}`);
-      if (clipPack.contentHash !== undefined && clipPack.contentHash !== pack.contentHash) {
-        throw new AnimatedMeshApplyError(`defineAnimatedMesh: clip pack content hash mismatch for ${pack.asset}`);
-      }
       assertClipPack(pack, resource.scene, clipPack);
       return clipPack;
     });

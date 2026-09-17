@@ -1,5 +1,3 @@
-import { rendererResourceContentHash as rendererHostResourceContentHash } from '@rusty-engine/renderer-host';
-
 export {
   RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
   RustyApplicationHostError,
@@ -8,12 +6,6 @@ export {
 export {
   RustyApplicationContentError,
 } from './application-content.js';
-export function rendererResourceContentHash(
-  data: ArrayBuffer,
-  expected: string,
-): Promise<string> {
-  return rendererHostResourceContentHash(data, expected);
-}
 export type {
   RustyApplicationAudioResumeReceipt,
   RustyApplicationAudioDiagnostic,

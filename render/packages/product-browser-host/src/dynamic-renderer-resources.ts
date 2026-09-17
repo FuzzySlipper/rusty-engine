@@ -1,7 +1,4 @@
-import {
-  rendererResourceContentHash,
-  type RustyApplicationResource,
-} from '@rusty-engine/application-host';
+import type { RustyApplicationResource } from '@rusty-engine/application-host';
 
 const RESOURCE_ROUTE = '/__rusty/product/runtime/resource';
 const RESOURCE_IDENTITY = /^(animated-mesh|audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u;
@@ -36,18 +33,12 @@ export class ProductBrowserDynamicRendererResources {
     identities: readonly string[],
     generation: string,
   ): Promise<readonly RustyApplicationResource[]> {
-    if (!isCanonicalU64(generation)) {
-      throw new Error('renderer resource generation is not a canonical unsigned integer');
-    }
     if (this.#generation !== generation) {
       this.#generation = generation;
       this.#loaded.clear();
       this.#inFlight.clear();
     }
     const unique = [...new Set(identities)];
-    if (unique.length !== identities.length) {
-      throw new Error('renderer resource identities are duplicated');
-    }
     return Promise.all(unique.map((identity) => this.#ensureOne(identity, generation)));
   }
 
@@ -114,12 +105,6 @@ async function loadResource(
   if (!response.ok) throw new Error(`renderer resource ${identity} is unavailable`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   const expectedHash = `sha256:${descriptor.hash}`;
-  if (await rendererResourceContentHash(bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength,
-  ), expectedHash) !== expectedHash) {
-    throw new Error(`renderer resource ${identity} hash mismatch`);
-  }
   return Object.freeze({
     identity,
     contentHash: expectedHash,
@@ -140,9 +125,4 @@ function resourceDescriptor(identity: string): { readonly hash: string; readonly
   const font = FONT_IDENTITY.exec(identity);
   if (font !== null) return { hash: font[1]!, mediaType: 'font/woff2' };
   throw new Error(`renderer resource identity ${identity} is invalid`);
-}
-
-function isCanonicalU64(value: string): boolean {
-  return /^(?:0|[1-9][0-9]{0,19})$/u.test(value)
-    && BigInt(value) <= 18_446_744_073_709_551_615n;
 }

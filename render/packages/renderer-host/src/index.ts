@@ -120,7 +120,6 @@ export {
   RendererMutableTextureResourceSource,
   loadRendererTextureResourceSource,
 } from './texture-resource-host.js';
-export { rendererResourceContentHash } from './resource-content-hash.js';
 export type {
   RendererTextureResourceDescriptor,
   RendererTextureResourceErrorCode,

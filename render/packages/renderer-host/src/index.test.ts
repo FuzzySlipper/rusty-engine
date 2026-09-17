@@ -221,7 +221,7 @@ void test('mesh resource host admits a descriptor beyond retired per-resource an
   assert.equal(resolverCalls, 1);
 });
 
-void test('mesh resource host snapshots resolver-owned bytes before admission', async () => {
+void test('mesh resource host borrows immutable resolver bytes under the declared identity', async () => {
   const expected = new Uint8Array(16);
   expected.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]);
   const header = new DataView(expected.buffer);
@@ -237,32 +237,25 @@ void test('mesh resource host snapshots resolver-owned bytes before admission', 
     }],
   };
   const resolverOwned = expected.buffer.slice(0);
-  const loading = loadRendererMeshResourceSource(
+  const source = await loadRendererMeshResourceSource(
     manifest,
     () => Promise.resolve(resolverOwned),
   );
-
-  // The loader resumes first, snapshots and hashes, then yields while settling
-  // the asynchronous admission. Mutation in that window must not change the
-  // bytes retained under the admitted content identity.
-  queueMicrotask(() => {
-    new Uint8Array(resolverOwned)[0] = 0;
-  });
-  const source = await loading;
   const acquired = source.acquireResource(
     manifest.resources[0]!.resource,
     manifest.resources[0]!.contentHash,
     expected.byteLength,
   );
+  assert.equal(acquired.bytes.buffer, resolverOwned);
   assert.deepEqual(acquired.bytes, expected);
 
-  // Nor may later mutation of the resolver's original buffer affect the
-  // already-admitted host resource.
+  // Engine resource bytes are immutable after publication. The host borrows
+  // that storage rather than making a defensive body copy.
   new Uint8Array(resolverOwned).fill(0);
-  assert.deepEqual(acquired.bytes, expected);
+  assert.equal(acquired.bytes[0], 0);
 });
 
-void test('texture resource host admits canonical bounded bytes and snapshots resolver ownership', async () => {
+void test('texture resource host borrows immutable resolver bytes under the declared identity', async () => {
   const expected = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
   const digest = createHash('sha256').update(expected).digest('hex');
   const manifest: RendererTextureResourceManifest = {
@@ -284,7 +277,8 @@ void test('texture resource host admits canonical bounded bytes and snapshots re
     manifest.resources[0]!.contentHash,
     expected.byteLength,
   );
-  assert.deepEqual(admitted.bytes, expected);
+  assert.equal(admitted.bytes.buffer, resolverOwned);
+  assert.equal(admitted.bytes[0], 0);
   assert.throws(
     () => source.acquireResource(manifest.resources[0]!.resource, 'sha256:wrong', expected.byteLength),
     /does not match the admitted resource manifest/u,
@@ -314,7 +308,7 @@ void test('texture resource host admits descriptors beyond retired byte, aggrega
   assert.equal(resolverCalls, manifest.resources.length);
 });
 
-void test('resource-backed game surface admits resources before backend mount', async () => {
+void test('resource-backed game surface resource source trusts delivered texture bytes', async () => {
   const expected = new Uint8Array([1, 2, 3, 4]);
   const digest = createHash('sha256').update(expected).digest('hex');
   const manifest: RendererTextureResourceManifest = {
@@ -329,9 +323,13 @@ void test('resource-backed game surface admits resources before backend mount', 
     textureResourceManifest: manifest,
     resolveTextureResource: () => Promise.resolve(new Uint8Array([9, 9, 9, 9]).buffer),
   };
-  await assert.rejects(
-    mountRendererSurface({} as HTMLCanvasElement, options),
-    /expected sha256:/u,
+  const source = await loadRendererTextureResourceSource(
+    options.textureResourceManifest!,
+    options.resolveTextureResource!,
+  );
+  assert.deepEqual(
+    source.acquireResource(manifest.resources[0]!.resource, manifest.resources[0]!.contentHash, 4).bytes,
+    new Uint8Array([9, 9, 9, 9]),
   );
 });
 
@@ -505,7 +503,7 @@ void test('renderer-host realizes a checked zero-clip unlit GLB through the esta
   }
 });
 
-void test('animated resources and playback fail closed with typed diagnostics', async () => {
+void test('animated resources trust declared identity while retaining typed decoding diagnostics', async () => {
   const restore = installGltfNodeGlobals();
   try {
     const badManifest: RendererAnimatedMeshResourceManifest = {
@@ -515,10 +513,8 @@ void test('animated resources and playback fail closed with typed diagnostics', 
         contentHash: `sha256:${'0'.repeat(64)}`,
       })),
     };
-    await assert.rejects(
+    await assert.doesNotReject(
       createRendererAnimatedMeshProjection({ manifest: badManifest, resolveResource: fixtureResolver }),
-      (error: unknown) => error instanceof RendererHostError
-        && error.diagnostics[0]?.code === 'animated_mesh_content_hash_mismatch',
     );
     const invalidSlotManifest: RendererAnimatedMeshResourceManifest = {
       ...ANIMATED_MANIFEST,

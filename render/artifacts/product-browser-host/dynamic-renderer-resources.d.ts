@@ -1,4 +1,4 @@
-import { type RustyApplicationResource } from '@rusty-engine/application-host';
+import type { RustyApplicationResource } from '@rusty-engine/application-host';
 export interface ProductBrowserDynamicRendererResourceFetcher {
     (input: string | URL, init?: RequestInit): Promise<Response>;
 }

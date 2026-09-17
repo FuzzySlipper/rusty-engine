@@ -15,7 +15,6 @@ import type {
   BillboardProjectionDiagnostic,
   BillboardProjectionReadout,
 } from './host-types.js';
-import { rendererResourceContentHash } from './resource-content-hash.js';
 
 type Vec3 = readonly [number, number, number];
 type BillboardPresentationOp = Extract<PresentationOp, { readonly domain: 'billboard' }>;
@@ -565,7 +564,6 @@ export class RendererBillboardHost {
     }
     let releaseFont: (() => void) | void;
     try {
-      await validateResourceHash(resource.bytes, font.contentHash);
       releaseFont = await this.#loadFont(font.family, resource.bytes);
     } catch (cause) {
       releaseBillboardResource(resource.release);
@@ -608,12 +606,6 @@ export class RendererBillboardHost {
         'iconLoadFailed',
         `icon resource ${texture.asset} is unavailable or has no host URL`,
       );
-    }
-    try {
-      await validateResourceHash(resource.bytes, texture.contentHash);
-    } catch (cause) {
-      releaseBillboardResource(resource.release);
-      throw cause;
     }
     const duplicate = this.#icons.get(resourceKey);
     if (duplicate !== undefined) {
@@ -1188,7 +1180,7 @@ function releaseBillboardResource(release: (() => void) | undefined): void {
 
 class RendererBillboardResourceError extends Error {
   constructor(
-    readonly code: 'contentHashMismatch' | 'fontLoadFailed' | 'iconLoadFailed' | 'hostFailure',
+    readonly code: 'fontLoadFailed' | 'iconLoadFailed' | 'hostFailure',
     message: string,
   ) {
     super(message);
@@ -1207,19 +1199,4 @@ function classifyBillboardHostError(
     return 'invalidDescriptor';
   }
   return 'hostFailure';
-}
-
-async function validateResourceHash(bytes: ArrayBuffer, expected: string): Promise<void> {
-  const actual = await rendererResourceContentHash(bytes, expected).catch((cause: unknown) => {
-    throw new RendererBillboardResourceError(
-      'contentHashMismatch',
-      cause instanceof Error ? cause.message : String(cause),
-    );
-  });
-  if (actual !== expected) {
-    throw new RendererBillboardResourceError(
-      'contentHashMismatch',
-      `billboard resource hash mismatch: expected ${expected}, got ${actual}`,
-    );
-  }
 }

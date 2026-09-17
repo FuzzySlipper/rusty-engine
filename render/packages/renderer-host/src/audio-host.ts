@@ -14,8 +14,6 @@ import type {
   AudioProjectionDiagnostic,
   AudioProjectionReadout,
 } from './host-types.js';
-import { rendererResourceContentHash } from './resource-content-hash.js';
-
 export interface RendererAudioResource {
   readonly bytes: ArrayBuffer;
   readonly contentHash: string;
@@ -663,26 +661,9 @@ export class RendererAudioHost {
       return existing;
     }
     const decoded = this.#resolveResource(clip).then(async (resource) => {
-      if (resource.contentHash !== clip.contentHash) {
-        throw new RendererAudioResourceError(
-          'contentHashMismatch',
-          'resolved audio content hash does not match the requested clip',
-        );
-      }
-      const actualHash = await rendererResourceContentHash(resource.bytes, clip.contentHash)
-        .catch((error: unknown) => {
-          throw new RendererAudioResourceError(
-            'contentHashMismatch',
-            error instanceof Error ? error.message : String(error),
-          );
-        });
-      if (actualHash !== clip.contentHash) {
-        throw new RendererAudioResourceError(
-          'contentHashMismatch',
-          `audio bytes hash ${actualHash} does not match ${clip.contentHash}`,
-        );
-      }
       try {
+        // Web Audio may detach its input; retain the resolver's bytes for a
+        // later cache miss or other owner.
         return await this.#context.decodeAudioData(resource.bytes.slice(0));
       } catch (error) {
         throw new RendererAudioResourceError(
@@ -811,7 +792,7 @@ class StaleAudioOperation extends Error {}
 
 class RendererAudioResourceError extends Error {
   constructor(
-    readonly code: 'contentHashMismatch' | 'decodeFailed',
+    readonly code: 'decodeFailed',
     message: string,
   ) {
     super(message);
