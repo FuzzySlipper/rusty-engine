@@ -1275,3 +1275,41 @@ individual returned views/lists describe the read that produced them. They do
 not hold another ledger, grant writable access to internal maps, or synchronize
 EntityStore parent relationships. Grouped operations still use the same store's
 `Prepare()` edit. Inventory-only owners need no EntityStore attachment.
+
+### Explicit capture, restore and live inspection
+
+Capture selected durable values into product-owned records on request. Save those
+records through `ProductStateStore<T>.Save`; they should not contain live component
+references, native leases, input state or presentation resources. `Load` reads and
+decodes/migrates product bytes and returns a value; it never changes the live graph.
+Build and validate replacement owners from that value, then install them at the
+product boundary. A failed decode or candidate build leaves the old owners in place.
+This does not promise rollback of independent native work already committed.
+
+Rebuild shared references deliberately. For example, construct one maximum `Stat`,
+put it in `StatsComponent.Stats`, and pass that same object to the restored `Track`.
+D20 restores this graph through participant admission; its save contains numeric
+values and product identities rather than a serialized component graph.
+
+For debug inspection, opt in on the existing product execution boundary:
+
+```csharp
+var debug = new EntityStoreDebugModule();
+debug.RegisterStore("session", session.Entities);
+debug.RegisterMechanicsProjections(maximumEntries: 16);
+// Register this module with the product's debug-command catalog.
+// After adopting a restored session:
+debug.ReplaceStore("session", restoredSession.Entities);
+// Before ending the registration's lifetime:
+debug.UnregisterStore("session");
+```
+
+`RegisterProjection<T>(formatter)` also supports custom class/value projections
+without a numeric descriptor. Descriptor-specific projections remain available
+and take precedence for that descriptor. `entity.get` reports component types and
+keys for `entity.component`. Every command reads the currently registered store
+and current component fields, even when in-place edits leave structural revisions
+unchanged. Mechanics projections limit entries and all projection output remains
+bounded to 4096 characters. Returned debug metadata is an observation, not a save
+or replay checkpoint. Registration is local and explicit; no mechanics discovery
+or structural-version value cache is involved.

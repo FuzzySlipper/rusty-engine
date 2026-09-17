@@ -21,7 +21,7 @@ public delegate string EntityStoreDebugProjection<T>(in T value) where T : notnu
 /// instances. It is a normal generated debug-command module: products create one instance,
 /// register their stores and typed projections, then register that instance with their catalog.
 /// </summary>
-public sealed class EntityStoreDebugModule : IDebugCommandModule
+public sealed partial class EntityStoreDebugModule : IDebugCommandModule
 {
     public const int MaximumPageSize = 64;
     public const int MaximumResultLength = 4096;
@@ -29,6 +29,7 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
 
     private readonly SortedDictionary<string, EntityStore> _stores = new(StringComparer.Ordinal);
     private readonly SortedDictionary<ComponentTypeKey, Projection> _projections = [];
+    private readonly Dictionary<Type, Projection> _typedProjections = [];
 
     /// <summary>Registers one live store under a stable product-selected name.</summary>
     public void RegisterStore(string name, EntityStore store)
@@ -76,6 +77,15 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
         {
             throw new InvalidOperationException($"A debug projection for component {componentType.Key.Value} is already registered.");
         }
+    }
+
+    /// <summary>Opts one component type into inspection without assigning a numeric descriptor.
+    /// The formatter reads the currently attached value on every command, including in a replacement store.</summary>
+    public void RegisterProjection<T>(EntityStoreDebugProjection<T> projection) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        if (!_typedProjections.TryAdd(typeof(T), new Projection<T>(null, projection)))
+            throw new InvalidOperationException($"A debug projection for {typeof(T).Name} is already registered.");
     }
 
     [DebugCommand("entity.stores", Description = "Lists product-registered EntityStore names.")]
@@ -142,7 +152,7 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
             output.Append($"children={string.Join(',', row.Children.Select(child => child.Value.ToString(CultureInfo.InvariantCulture)))}");
             foreach (EntityStoreDebugComponentPresence component in row.Components)
             {
-                output.Append($"component={component.Key.Value}:revision={component.Revision}");
+                output.Append($"component={component.Key.Value}:revision={component.Revision}:type={component.Descriptor.Family.Name}");
             }
             return DebugCommandResult.Success(output.ToString());
         });
@@ -190,9 +200,11 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
             if (!_projections.TryGetValue(component.Key, out Projection? projection)
                 || !ReferenceEquals(component.Descriptor, projection.Descriptor))
             {
-                return DebugCommandResult.Success($"store={name};entity={entity};component={componentKey};present=true;revision={component.Revision};value=projection-unavailable");
+                _typedProjections.TryGetValue(component.Descriptor.Family, out projection);
             }
-            return projection.Project(_stores[name], row.Entity, name, component);
+            return projection is null
+                ? DebugCommandResult.Success($"store={name};entity={entity};component={componentKey};present=true;revision={component.Revision};value=projection-unavailable")
+                : projection.Project(_stores[name], row.Entity, name, component);
         });
 
     private DebugCommandResult WithStore(string name, Func<string, EntityStoreDebugSnapshot, DebugCommandResult> query)
@@ -255,20 +267,24 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
             ? message
             : string.Concat(message.AsSpan(0, MaximumResultLength - 3), "...");
 
-    private abstract class Projection(ComponentType descriptor)
+    private abstract class Projection(ComponentType? descriptor)
     {
-        internal ComponentType Descriptor { get; } = descriptor;
+        internal ComponentType? Descriptor { get; } = descriptor;
         internal abstract DebugCommandResult Project(EntityStore store, EntityId entity, string storeName, EntityStoreDebugComponentPresence component);
     }
 
-    private sealed class Projection<T>(ComponentType<T> descriptor, EntityStoreDebugProjection<T> formatter) : Projection(descriptor)
+    private sealed class Projection<T>(ComponentType<T>? descriptor, EntityStoreDebugProjection<T> formatter) : Projection(descriptor)
         where T : notnull
     {
         internal override DebugCommandResult Project(EntityStore store, EntityId entity, string storeName, EntityStoreDebugComponentPresence component)
         {
             try
             {
-                if (!store.TryGet(entity, descriptor, out T? value))
+                T? value;
+                bool present = descriptor is null
+                    ? store.TryGet<T>(entity, out value)
+                    : store.TryGet(entity, descriptor, out value);
+                if (!present)
                 {
                     return DebugCommandResult.Success($"store={storeName};entity={entity.Value};component={component.Key.Value};present=false");
                 }
@@ -278,7 +294,7 @@ public sealed class EntityStoreDebugModule : IDebugCommandModule
                 output.Append($"component={component.Key.Value}");
                 output.Append("present=true");
                 output.Append($"revision={component.Revision}");
-                output.Append($"value={formatter(in value)}");
+                output.Append($"value={formatter(in value!)}");
                 return DebugCommandResult.Success(output.ToString());
             }
             catch (Exception)

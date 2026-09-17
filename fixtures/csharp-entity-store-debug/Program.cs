@@ -86,6 +86,7 @@ internal static class Program
 {
     private static int Main()
     {
+        MechanicsDebugExercise.Run();
         var product = new Product();
         IDebugCommandCatalog catalog = GeneratedDebugCommandCatalogFactory.Create(product);
 
