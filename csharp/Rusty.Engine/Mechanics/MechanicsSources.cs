@@ -17,40 +17,6 @@ public enum MechanicsDecisionOutcome
     Inapplicable,
 }
 
-/// <summary>
-/// One exact source activation and its typed contributions. The caller owns
-/// the definition collection; this value is just an explicit activation and
-/// never consults a global registry.
-/// </summary>
-public sealed class ExactSource
-{
-    public ExactSource(
-        MechanicsSourceIdentity identity,
-        SourceDefinitionId definition,
-        short priority,
-        IEnumerable<ExactStatContributionDefinition> contributions)
-    {
-        Identity = identity ?? throw new ArgumentNullException(nameof(identity));
-        Definition = definition ?? throw new ArgumentNullException(nameof(definition));
-        Contributions = Copy(contributions, nameof(contributions));
-        Priority = priority;
-    }
-
-    public MechanicsSourceIdentity Identity { get; }
-
-    public SourceDefinitionId Definition { get; }
-
-    public short Priority { get; }
-
-    public IReadOnlyList<ExactStatContributionDefinition> Contributions { get; }
-
-    private static IReadOnlyList<T> Copy<T>(IEnumerable<T> values, string name)
-    {
-        ArgumentNullException.ThrowIfNull(values, name);
-        return Array.AsReadOnly(values.ToArray());
-    }
-}
-
 /// <summary>One source activation emitted by an active effect.</summary>
 public readonly record struct EffectSourceActivation(
     MechanicsSourceIdentity Identity,

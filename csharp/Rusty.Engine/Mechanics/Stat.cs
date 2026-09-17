@@ -24,6 +24,7 @@ public sealed class Stat
     private StatId? _sourceStat;
     private StatSource[] _sources = [];
     private StatEvaluation _evaluation;
+    private readonly List<WeakReference<Track>> _tracks = [];
 
     public Stat(double baseValue, double minimum = double.MinValue, double maximum = double.MaxValue,
         double quantum = 0, MidpointRounding rounding = MidpointRounding.AwayFromZero,
@@ -45,8 +46,9 @@ public sealed class Stat
         set
         {
             var next = Evaluate(value, _minimum, _maximum, _quantum, _rounding, _modifiers, _sourceStat, _sources);
+            var tracks = PrepareTracks(next.Value);
             _baseValue = value;
-            Commit(next);
+            Commit(next, tracks);
         }
     }
     public double Minimum { get => _minimum; set => SetBounds(value, _maximum); }
@@ -58,6 +60,8 @@ public sealed class Stat
         get => _integerRounding;
         set { ValidateRounding(value); _integerRounding = value; }
     }
+    /// <summary>Read-only authored sources currently applied to this stat.</summary>
+    public IReadOnlyList<StatSource> Sources => Array.AsReadOnly(_sources);
     public double Value => _evaluation.Value;
     public float ValueFloat => ToFloat(Value);
     public int ValueInt => checked((int)Math.Round(Value, _integerRounding));
@@ -66,18 +70,20 @@ public sealed class Stat
     public void SetBounds(double minimum, double maximum)
     {
         var next = Evaluate(_baseValue, minimum, maximum, _quantum, _rounding, _modifiers, _sourceStat, _sources);
+        var tracks = PrepareTracks(next.Value);
         _minimum = minimum;
         _maximum = maximum;
-        Commit(next);
+        Commit(next, tracks);
     }
 
     /// <summary>Zero disables quantization. Resolved bounds win over off-grid rounded endpoints.</summary>
     public void SetQuantization(double quantum, MidpointRounding rounding = MidpointRounding.AwayFromZero)
     {
         var next = Evaluate(_baseValue, _minimum, _maximum, quantum, rounding, _modifiers, _sourceStat, _sources);
+        var tracks = PrepareTracks(next.Value);
         _quantum = quantum;
         _rounding = rounding;
-        Commit(next);
+        Commit(next, tracks);
     }
 
     public StatModifierHandle AddModifier(double amount, StatModifierKind kind = StatModifierKind.Add)
@@ -87,8 +93,9 @@ public sealed class Stat
         var handle = new StatModifierHandle();
         List<Modifier> modifiers = [.. _modifiers, new(handle, kind, amount)];
         var next = Evaluate(_baseValue, _minimum, _maximum, _quantum, _rounding, modifiers, _sourceStat, _sources);
+        var tracks = PrepareTracks(next.Value);
         _modifiers = modifiers;
-        Commit(next);
+        Commit(next, tracks);
         return handle;
     }
 
@@ -100,8 +107,9 @@ public sealed class Stat
         List<Modifier> modifiers = [.. _modifiers];
         modifiers.RemoveAt(index);
         var next = Evaluate(_baseValue, _minimum, _maximum, _quantum, _rounding, modifiers, _sourceStat, _sources);
+        var tracks = PrepareTracks(next.Value);
         _modifiers = modifiers;
-        Commit(next);
+        Commit(next, tracks);
         return true;
     }
 
@@ -113,9 +121,10 @@ public sealed class Stat
         var ordered = MechanicsSourceOrdering.Order(sources,
             source => source.Identity, source => source.Definition, source => source.Priority).ToArray();
         var next = Evaluate(_baseValue, _minimum, _maximum, _quantum, _rounding, _modifiers, stat, ordered);
+        var tracks = PrepareTracks(next.Value);
         _sourceStat = stat;
         _sources = ordered;
-        Commit(next);
+        Commit(next, tracks);
     }
 
     public bool RemoveSource(MechanicsSourceIdentity identity)
@@ -129,7 +138,43 @@ public sealed class Stat
     /// <summary>A readout of this evaluation, including selected/suppressed authored contributions.</summary>
     public StatEvaluation Explain() => _evaluation;
 
-    private void Commit(StatEvaluation next) => _evaluation = next;
+    internal void Attach(Track track)
+    {
+        _tracks.RemoveAll(reference => !reference.TryGetTarget(out _));
+        _tracks.Add(new(track));
+    }
+
+    private List<(Track Track, double Current)> PrepareTracks(double maximum)
+    {
+        var updates = new List<(Track, double)>();
+        _tracks.RemoveAll(reference => !reference.TryGetTarget(out _));
+        foreach (var reference in _tracks)
+            if (reference.TryGetTarget(out var track)) updates.Add((track, track.PrepareMaximum(maximum)));
+        return updates;
+    }
+
+    private void Commit(StatEvaluation next, List<(Track Track, double Current)> tracks)
+    {
+        _evaluation = next;
+        foreach (var (track, current) in tracks) track.ApplyMaximum(current);
+    }
+
+    /// <summary>Explicit independent copy for product planning; dependent tracks are not copied.</summary>
+    public Stat Copy() => new(this);
+
+    private Stat(Stat source)
+    {
+        _baseValue = source._baseValue;
+        _minimum = source._minimum;
+        _maximum = source._maximum;
+        _quantum = source._quantum;
+        _rounding = source._rounding;
+        _integerRounding = source._integerRounding;
+        _modifiers = source._modifiers.Select(modifier => modifier with { Handle = new StatModifierHandle() }).ToList();
+        _sourceStat = source._sourceStat;
+        _sources = source._sources;
+        _evaluation = source._evaluation;
+    }
 
     internal static float ToFloat(double value)
     {
@@ -153,7 +198,7 @@ public sealed class Stat
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
     }
 
-    private static double Quantize(double value, double quantum, MidpointRounding rounding)
+    internal static double Quantize(double value, double quantum, MidpointRounding rounding)
     {
         if (quantum == 0) return value;
         double units = value / quantum;

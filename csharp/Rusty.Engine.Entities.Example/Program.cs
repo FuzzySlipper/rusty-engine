@@ -186,25 +186,16 @@ static void ExerciseManagedMechanics()
     Require(speed.Value == BaseSpeed + SpeedBonus,
         "ordinary stat did not retain fractional speed");
 
-    ExactTrack healthTrack = new(
-        new ExactTrackDefinition(
-            TrackId.Parse("health"),
-            ExactValue.Zero,
-            new ExactTrackMaximum.Fixed(new ExactValue(MaximumHealth))),
-        new ExactValue(StartingHealth));
-    ExactTrackMutationReceipt healthSpend = healthTrack.Spend(new ExactValue(HealthSpend));
-    Require(healthSpend.After.Raw == StartingHealth - HealthSpend,
-        "direct managed exact-track mutation did not update product-owned state");
+    var healthTrack = new Track(MaximumHealth, current: StartingHealth);
+    double healthSpent = healthTrack.Spend(HealthSpend);
+    Require(healthTrack.Value == StartingHealth - HealthSpend && healthSpent == HealthSpend,
+        "direct managed track mutation did not update product-owned state");
 
-    ContinuousTrack staminaTrack = new(
-        new ContinuousTrackDefinition(
-            TrackId.Parse("stamina"),
-            ContinuousValue.Zero,
-            new ContinuousTrackMaximum.Fixed(new ContinuousValue(MaximumStamina))),
-        new ContinuousValue(StartingStamina));
-    ContinuousTrackMutationReceipt staminaSpend = staminaTrack.Spend(new ContinuousValue(StaminaSpend));
-    Require(Math.Abs(staminaSpend.After.Value - (StartingStamina - StaminaSpend)) < 0.0001,
-        "direct managed continuous-track mutation did not update product-owned state");
+    var staminaTrack = new Track(MaximumStamina, current: StartingStamina);
+    double staminaSpent = staminaTrack.Spend(StaminaSpend);
+    Require(Math.Abs(staminaTrack.Value - (StartingStamina - StaminaSpend)) < 0.0001
+        && Math.Abs(staminaSpent - StaminaSpend) < 0.0001,
+        "direct managed track mutation did not update product-owned state");
 
     var inventory = new InventoryStore();
     EntityId hero = new(1);

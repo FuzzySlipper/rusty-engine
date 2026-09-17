@@ -812,42 +812,17 @@ public sealed class Product : IEngineProduct
 
     private static void ExerciseManagedMechanics()
     {
-        ManagedMechanics.StatId strength = ManagedMechanics.StatId.Parse("strength");
-        ManagedMechanics.ExactStatDefinition definition = new(
-            strength,
-            new ManagedMechanics.ExactValue(0),
-            new ManagedMechanics.ExactValue(100));
-        ManagedMechanics.ExactSource source = new(
-            new ManagedMechanics.IntrinsicSourceIdentity(
-                new EntityId(41),
-                ManagedMechanics.SourceInstanceId.Parse("trial_bonus_instance")),
-            ManagedMechanics.SourceDefinitionId.Parse("trial_bonus"),
-            0,
-            [
-                new ManagedMechanics.ExactStatContributionDefinition(
-                    strength,
-                    ManagedMechanics.StackingGroupId.Parse("trial_bonus"),
-                    ManagedMechanics.MechanicsStackingPolicy.Sum,
-                    new ManagedMechanics.ExactStatContribution.Add(new ManagedMechanics.ExactValue(2))),
-            ]);
-        ManagedMechanics.ExactStatEvaluation evaluation = ManagedMechanics.ExactStatEvaluator.Evaluate(
-            definition,
-            new ManagedMechanics.ExactValue(10),
-            [source]);
-        Require(evaluation.Value == new ManagedMechanics.ExactValue(12),
-            "managed exact mechanics contribution did not apply");
+        var strength = new ManagedMechanics.Stat(10, minimum: 0, maximum: 100);
+        strength.AddModifier(2);
+        Require(strength.Value == 12, "managed stat contribution did not apply");
 
-        ManagedMechanics.ExactTrackDefinition staminaDefinition = new(
-            ManagedMechanics.TrackId.Parse("stamina"),
-            new ManagedMechanics.ExactValue(0),
-            new ManagedMechanics.ExactTrackMaximum.FromStat(strength));
-        ManagedMechanics.ExactTrack stamina = new(
-            staminaDefinition,
-            new ManagedMechanics.ExactValue(12),
-            staminaDefinition.ResolveBounds(evaluation.Value));
-        ManagedMechanics.ExactTrackMutationReceipt spend = stamina.Spend(new ManagedMechanics.ExactValue(2));
-        Require(spend.After == new ManagedMechanics.ExactValue(10),
-            "managed exact track spend did not preserve the track bound");
+        var fixedTrack = new ManagedMechanics.Track(100, current: 12);
+        Require(fixedTrack.Spend(2) == 2 && fixedTrack.Value == 10,
+            "managed fixed track spend did not preserve the track bound");
+
+        var pairedTrack = new ManagedMechanics.Track(strength, current: 12);
+        Require(pairedTrack.Spend(2) == 2 && pairedTrack.Value == 10 && pairedTrack.MaximumValue == 12,
+            "managed paired track did not follow the stat maximum");
     }
 
     private void ExerciseStateMachine()

@@ -838,11 +838,52 @@ ordinary `AddModifier` needs no source identities or operation records. Local
 modifiers keep insertion order and precede authored contributions within each
 operation phase. Modifier handles are local to their creating stat.
 
-During this campaign, the old exact stat/source types remain only for the existing
-paired track consumers pending #8292. The continuous stat evaluator has been
-retired. The Track and StatsComponent migrations are separate tasks; ordinary
-Stat usage needs neither. Inventory quantities, capacity and entity identities
-remain checked integers and do not pass through floating-point stats.
+Inventory quantities, capacity and entity identities remain checked integers and
+do not pass through floating-point stats. The old Exact/Continuous stat and track
+families have been retired.
+
+## Resource tracks
+
+A `Track` references its actual maximum `Stat` and owns its current value:
+
+```csharp
+var maximum = new Stat(100, minimum: 0);
+var health = new Track(maximum, current: 70);
+health.Spend(10);
+maximum.BaseValue = 120; // health is now 60/120
+health.Restore(200);    // clamps to 120
+bool paid = health.TrySpend(130); // false, current stays 120
+```
+
+The fixed-maximum convenience `new Track(100)` creates a Stat internally. Current
+defaults to the maximum; minimum defaults to zero. `Maximum` returns the same Stat
+object, `MaximumValue` reads its value, and `Current`/`Value` read the track value.
+`ValueFloat`, `ValueInt` and `ValueInt64` provide the same checked conversions as
+Stat. Spending/restoring rejects negative or nonfinite amounts. `Spend` throws on
+insufficient value; `TrySpend` returns false without mutation. `Restore` saturates.
+Spend/Restore return the actual applied amount. `SetCurrent` rejects out-of-bounds
+values unless explicitly called with `clamp: true`.
+
+By default, maximum changes preserve current and clamp it to the new bounds.
+`maximumChangePolicy: TrackMaximumChangePolicy.PreserveMissingAmount` instead
+preserves the missing amount: 70/100 becomes 90/120; 90/100 becomes 70/80.
+All tracks sharing that Stat reconcile synchronously before a Stat mutation
+returns. If a dependent track would have maximum below minimum, the entire Stat
+change is rejected before any dependent changes. Dependencies are weak references;
+abandoned tracks do not keep imposing their minimum or require disposal.
+
+Track quantization/rounding and integer conversion are constructor policies,
+independent of its maximum's policies. Use `quantum: 1` and explicit rounding for
+whole-number rules. Endpoints remain reachable even off the grid. Changing Minimum
+validates first and clamps current as needed. Direct operations need no revision,
+receipt object, candidate or publish step.
+
+For an actual preview, `Stat.Copy()` creates independent numeric state without
+copying dependent tracks. A product can construct a new Track around that copy,
+validate its grouped plan and adopt its chosen state. D20 uses this for action
+planning and Dagger for level-up preflight; this is explicit product orchestration,
+not a promise of automatic graph rollback. Copies receive independent local
+modifier handles; authored source identities remain available for source removal.
 
 ## Recommended product architecture, not a framework contract
 
