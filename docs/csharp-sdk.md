@@ -1217,3 +1217,27 @@ That supported lane disables worker startup/callback deadlines for the session;
 it does not make analysis asynchronous or increase geometric coverage. Keep
 analysis behind an explicit authoring switch or debug command, and stop the
 owned host after the report is collected.
+
+### Entity stats collections
+
+`StatsComponent` holds product-named `StatId → Stat` and `TrackId → Track`
+collections. Use it standalone or attach it like any ordinary class:
+
+```csharp
+var maximumId = StatId.Parse("maximum-health");
+var healthId = TrackId.Parse("health");
+var maximum = new Stat(100, minimum: 0);
+var stats = new StatsComponent();
+stats.AddStat(maximumId, maximum);
+stats.AddTrack(healthId, new Track(maximum));
+entities.Add(entity, stats);
+entities.Get<StatsComponent>(entity).GetTrack(healthId).Spend(10);
+foreach (var (id, track) in stats.Tracks) { /* UI reads track.ValueInt */ }
+```
+
+`Stats` and `Tracks` are live read-only dictionary views; their objects remain
+mutable. Add methods reject duplicate IDs and retain the exact supplied objects.
+`GetStat`/`GetTrack`, `TryGetStat`/`TryGetTrack`, and removal methods operate on
+those collections directly. A track's maximum is registered only if the product
+explicitly adds it. Removing a stat entry does not disconnect tracks referencing
+that stat. IDs, labels, formulas, save schemas, and gameplay policy stay product-owned.

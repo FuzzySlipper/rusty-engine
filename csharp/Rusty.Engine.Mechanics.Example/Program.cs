@@ -4,6 +4,7 @@ using Rusty.Engine.Mechanics;
 ExerciseTypedIds();
 StatExercise.Run();
 TrackExercise.Run();
+StatsComponentExercise.Run();
 ExerciseEffectPolicies();
 ExerciseManagedInventory();
 
