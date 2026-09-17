@@ -794,6 +794,56 @@ Explicit saves use `ProductStateStore<T>` with a product-defined codec and data.
 The product decides what to capture, validates/rebuilds a candidate when needed,
 and adopts it. Bounded debug snapshots remain observations, not live state owners.
 
+## Ordinary numeric stats
+
+`Rusty.Engine.Mechanics.Stat` is one mutable, double-backed object for whole-number
+and fractional gameplay values. It works independently or inside a class component.
+
+```csharp
+var strength = new Stat(40, minimum: 0, maximum: 100);
+var equipment = strength.AddModifier(4);
+strength.AddModifier(1.5, StatModifierKind.Multiply);
+int attackStrength = strength.ValueInt; // (40 + 4) * 1.5 = 66
+strength.RemoveModifier(equipment);
+strength.BaseValue = 42;
+
+var speed = new Stat(1, minimum: 0, maximum: 1);
+var slow = speed.AddModifier(0.4, StatModifierKind.Maximum);
+float movementFactor = speed.ValueFloat;
+speed.RemoveModifier(slow);
+```
+
+`Value` is a double. `ValueFloat`, `ValueInt` and `ValueInt64` are explicit
+conversions; out-of-range conversions throw instead of wrapping or producing
+infinity. Integer getters default to nearest with midpoint away from zero.
+Set `integerRounding: MidpointRounding.ToZero` for rules that truncate; this does
+not round the underlying value. There are no implicit numeric casts.
+
+Base values and contributions must be finite. Default bounds cover finite double
+values, with no fixed gameplay ceiling. `Minimum`/`Maximum` or `SetBounds` change
+bounds. `quantum: 0.25` rounds evaluations to quarter units; zero (the default)
+disables this. `rounding` selects the evaluation rounding mode separately from
+integer conversion. Selected additions precede multipliers, then quantization
+and the final clamp to resolved bounds. Off-grid endpoints win: a rounded 0.5
+with maximum 0.4 produces 0.4. Invalid arithmetic, bounds or modifier changes
+leave the previous valid stat and modifiers unchanged.
+
+For authored provenance, `SetSources(statId, sources)` accepts `StatSource` values
+with typed contributions, priorities and stacking groups. Sources sort by priority,
+identity and definition; equal-strength selections keep the first in that order.
+`UniqueByDefinition` selects the first activation of each source definition.
+`RemoveSource` removes one activation; `Explain()` returns an immutable evaluation
+readout with applied, suppressed and inapplicable decisions. These are optional;
+ordinary `AddModifier` needs no source identities or operation records. Local
+modifiers keep insertion order and precede authored contributions within each
+operation phase. Modifier handles are local to their creating stat.
+
+During this campaign, the old exact stat/source types remain only for the existing
+paired track consumers pending #8292. The continuous stat evaluator has been
+retired. The Track and StatsComponent migrations are separate tasks; ordinary
+Stat usage needs neither. Inventory quantities, capacity and entity identities
+remain checked integers and do not pass through floating-point stats.
+
 ## Recommended product architecture, not a framework contract
 
 [C# product style](csharp-product-style.md) recommends organizing product code

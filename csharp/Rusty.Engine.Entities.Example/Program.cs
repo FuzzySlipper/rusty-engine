@@ -177,48 +177,14 @@ static void ExerciseManagedMechanics()
     const double StartingStamina = 60.0;
     const double StaminaSpend = 12.5;
 
-    StatId strengthId = StatId.Parse("strength");
-    ExactStatDefinition strength = new(strengthId, new ExactValue(0), new ExactValue(MaximumHealth));
-    ExactSource strengthSource = new(
-        new RequestSourceIdentity(OperationId.Parse("example"), SourceInstanceId.Parse("strength-bonus")),
-        SourceDefinitionId.Parse("strength-bonus"),
-        priority: 0,
-        [
-            new ExactStatContributionDefinition(
-                strengthId,
-                StackingGroupId.Parse("strength-additions"),
-                MechanicsStackingPolicy.Sum,
-                new ExactStatContribution.Add(new ExactValue(StrengthBonus))),
-        ]);
-    ExactStatEvaluation strengthResult = ExactStatEvaluator.Evaluate(
-        strength,
-        new ExactValue(BaseStrength),
-        [strengthSource]);
-    Require(strengthResult.Value.Raw == BaseStrength + StrengthBonus,
-        "direct managed exact-stat evaluation did not apply its typed source");
-
-    StatId speedId = StatId.Parse("movement-speed");
-    ContinuousStatDefinition speed = new(
-        speedId,
-        new ContinuousValue(0.0),
-        new ContinuousValue(10.0));
-    ContinuousSource speedSource = new(
-        new RequestSourceIdentity(OperationId.Parse("example"), SourceInstanceId.Parse("speed-bonus")),
-        SourceDefinitionId.Parse("speed-bonus"),
-        priority: 0,
-        [
-            new ContinuousStatContributionDefinition(
-                speedId,
-                StackingGroupId.Parse("speed-additions"),
-                MechanicsStackingPolicy.Sum,
-                new ContinuousStatContribution.Add(new ContinuousValue(SpeedBonus))),
-        ]);
-    ContinuousStatEvaluation speedResult = ContinuousStatEvaluator.Evaluate(
-        speed,
-        new ContinuousValue(BaseSpeed),
-        [speedSource]);
-    Require(Math.Abs(speedResult.Value.Value - (BaseSpeed + SpeedBonus)) < 0.0001,
-        "direct managed continuous-stat evaluation did not apply its typed source");
+    var strength = new Stat(BaseStrength, minimum: 0, maximum: MaximumHealth);
+    strength.AddModifier(StrengthBonus);
+    Require(strength.ValueInt64 == BaseStrength + StrengthBonus,
+        "ordinary strength modifier did not apply");
+    var speed = new Stat(BaseSpeed, minimum: 0, maximum: 10);
+    speed.AddModifier(SpeedBonus);
+    Require(speed.Value == BaseSpeed + SpeedBonus,
+        "ordinary stat did not retain fractional speed");
 
     ExactTrack healthTrack = new(
         new ExactTrackDefinition(

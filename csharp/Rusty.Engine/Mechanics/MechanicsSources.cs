@@ -6,7 +6,7 @@ public enum MechanicsStackingPolicy
     Sum,
     Highest,
     Lowest,
-    UniqueBySource,
+    UniqueByDefinition,
 }
 
 /// <summary>Outcome recorded for a source contribution during evaluation.</summary>
@@ -51,36 +51,6 @@ public sealed class ExactSource
     }
 }
 
-/// <summary>One continuous source activation and its typed contributions.</summary>
-public sealed class ContinuousSource
-{
-    public ContinuousSource(
-        MechanicsSourceIdentity identity,
-        SourceDefinitionId definition,
-        short priority,
-        IEnumerable<ContinuousStatContributionDefinition> contributions)
-    {
-        Identity = identity ?? throw new ArgumentNullException(nameof(identity));
-        Definition = definition ?? throw new ArgumentNullException(nameof(definition));
-        Contributions = Copy(contributions, nameof(contributions));
-        Priority = priority;
-    }
-
-    public MechanicsSourceIdentity Identity { get; }
-
-    public SourceDefinitionId Definition { get; }
-
-    public short Priority { get; }
-
-    public IReadOnlyList<ContinuousStatContributionDefinition> Contributions { get; }
-
-    private static IReadOnlyList<T> Copy<T>(IEnumerable<T> values, string name)
-    {
-        ArgumentNullException.ThrowIfNull(values, name);
-        return Array.AsReadOnly(values.ToArray());
-    }
-}
-
 /// <summary>One source activation emitted by an active effect.</summary>
 public readonly record struct EffectSourceActivation(
     MechanicsSourceIdentity Identity,
@@ -115,13 +85,11 @@ public static class MechanicsSourceOrdering
             .ThenBy(entry => entry.Definition.Value, StringComparer.Ordinal)
             .ToArray();
 
-        for (int index = 1; index < ordered.Length; index++)
+        var identities = new HashSet<MechanicsSourceIdentity>();
+        foreach (var entry in ordered)
         {
-            if (ordered[index - 1].Identity == ordered[index].Identity)
-            {
-                throw new MechanicsException(
-                    $"Source identity {ordered[index].Identity} was activated more than once.");
-            }
+            if (!identities.Add(entry.Identity))
+                throw new MechanicsException($"Source identity {entry.Identity} was activated more than once.");
         }
 
         return ordered.Select(entry => entry.Value).ToArray();

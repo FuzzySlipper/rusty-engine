@@ -1,19 +1,13 @@
 using Rusty.Engine.Entities;
 using Rusty.Engine.Mechanics;
 
-const long BaseStrength = 40;
-const long EquipmentBonus = 4;
-const long BlessingBonus = 6;
 const long ResourceStart = 30;
 const long ResourceSpend = 10;
-const double ContinuousBase = 0.5;
-const double ContinuousBonus = 0.25;
 
 ExerciseTypedValues();
-ExerciseExactStatEvaluation();
+StatExercise.Run();
 ExerciseExactStatTrackSourceChanges();
 ExerciseExactStatTrackCurrentMutations();
-ExerciseContinuousStatEvaluation();
 ExerciseExactTrackAtomicity();
 ExerciseContinuousTrackAtomicity();
 ExerciseEffectPolicies();
@@ -41,77 +35,6 @@ static void ExerciseTypedValues()
     ExpectMechanicsError(
         () => ContinuousValue.FromBits(0x7ff0_0000_0000_0000),
         "non-finite continuous value was admitted");
-}
-
-static void ExerciseExactStatEvaluation()
-{
-    StatId strength = StatId.Parse("strength");
-    StackingGroupId additions = StackingGroupId.Parse("strength-additions");
-    StackingGroupId scale = StackingGroupId.Parse("strength-scale");
-    ExactStatDefinition definition = new(strength, new ExactValue(0), new ExactValue(100));
-    ExactSource equipment = new(
-        new EquippedItemSourceIdentity(new EntityId(1), new EntityId(2), SourceDefinitionId.Parse("equipment")),
-        SourceDefinitionId.Parse("equipment"),
-        priority: 10,
-        [new ExactStatContributionDefinition(
-            strength,
-            additions,
-            MechanicsStackingPolicy.Sum,
-            new ExactStatContribution.Add(new ExactValue(EquipmentBonus)))]);
-    ExactSource blessing = new(
-        new IntrinsicSourceIdentity(new EntityId(1), SourceInstanceId.Parse("blessing")),
-        SourceDefinitionId.Parse("blessing"),
-        priority: 20,
-        [
-            new ExactStatContributionDefinition(
-                strength,
-                additions,
-                MechanicsStackingPolicy.Sum,
-                new ExactStatContribution.Add(new ExactValue(BlessingBonus))),
-            new ExactStatContributionDefinition(
-                strength,
-                scale,
-                MechanicsStackingPolicy.Highest,
-                new ExactStatContribution.Scale(new ExactRatio(3, 2))),
-        ]);
-
-    ExactStatEvaluation evaluation = ExactStatEvaluator.Evaluate(
-        definition,
-        new ExactValue(BaseStrength),
-        [blessing, equipment]);
-    Require(evaluation.Value.Raw == 75, "exact stat modifiers did not combine deterministically");
-    Require(evaluation.Decisions[0].SourceDefinition.Value == "equipment",
-        "source order did not use priority before identity");
-    Require(evaluation.Decisions.All(decision => decision.Outcome == MechanicsDecisionOutcome.Applied),
-        "applicable exact contributions were unexpectedly suppressed");
-
-    ExpectMechanicsError(
-        () => ExactStatEvaluator.Evaluate(definition, new ExactValue(BaseStrength), [equipment, equipment]),
-        "duplicate source identity was silently accepted");
-}
-
-static void ExerciseContinuousStatEvaluation()
-{
-    StatId accuracy = StatId.Parse("accuracy");
-    ContinuousStatDefinition definition = new(
-        accuracy,
-        new ContinuousValue(0.0),
-        new ContinuousValue(2.0));
-    ContinuousSource source = new(
-        new RequestSourceIdentity(OperationId.Parse("aim"), SourceInstanceId.Parse("focus")),
-        SourceDefinitionId.Parse("focus"),
-        priority: 1,
-        [new ContinuousStatContributionDefinition(
-            accuracy,
-            StackingGroupId.Parse("accuracy-additions"),
-            MechanicsStackingPolicy.Sum,
-            new ContinuousStatContribution.Add(new ContinuousValue(ContinuousBonus)))]);
-
-    ContinuousStatEvaluation evaluation = ContinuousStatEvaluator.Evaluate(
-        definition,
-        new ContinuousValue(ContinuousBase),
-        [source]);
-    Require(evaluation.Value.Value == 0.75, "continuous stat addition was not retained");
 }
 
 static void ExerciseExactStatTrackSourceChanges()

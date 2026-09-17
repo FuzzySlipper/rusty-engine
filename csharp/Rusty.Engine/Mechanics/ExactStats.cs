@@ -313,7 +313,7 @@ public static class ExactStatEvaluator
 
                     Apply(selected, decisions);
                     break;
-                case MechanicsStackingPolicy.UniqueBySource:
+                case MechanicsStackingPolicy.UniqueByDefinition:
                     var definitions = new HashSet<SourceDefinitionId>();
                     foreach (Candidate member in members)
                     {
