@@ -121,12 +121,14 @@ public sealed class EntityTriggerProjection
         }
 
         // ReconcileTriggers owns atomic trigger-state publication. The managed side is only the
-        // immutable call input, so all stale checks happen before that single service crossing.
+        // immutable call input, so all stale checks and the bounded fact buffer happen before
+        // that single service crossing. A failure while reading the committed result does not
+        // imply rollback of Spatial state.
+        var facts = new SpatialTriggerFactAtReceipt[maximumFactReadback];
         SpatialTriggerReceipt trigger = _spatial.ReconcileTriggers(
             new SpatialTriggerReconcileRequest(_session, tick, cause, projected));
-        int factCount = checked((int)trigger.FactCount);
-        int readCount = Math.Min(factCount, maximumFactReadback);
-        var facts = new SpatialTriggerFactAtReceipt[readCount];
+        ulong factCount = trigger.FactCount;
+        int readCount = (int)Math.Min(factCount, (ulong)maximumFactReadback);
         for (uint index = 0; index < (uint)readCount; index++)
         {
             facts[index] = _spatial.ReadTriggerFactAt(new SpatialTriggerFactAtRequest(_session, index));
@@ -136,8 +138,8 @@ public sealed class EntityTriggerProjection
             trigger,
             new EntityTriggerProjectionGuard(storeRevision, guards),
             projected,
-            facts,
-            factCount > readCount);
+            facts.AsMemory(0, readCount),
+            factCount > (ulong)readCount);
     }
 
     private static void ValidateComponentGuards(

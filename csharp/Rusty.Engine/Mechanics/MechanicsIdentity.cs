@@ -1,4 +1,3 @@
-using System.Text;
 using Rusty.Engine.Entities;
 
 namespace Rusty.Engine.Mechanics;
@@ -9,8 +8,6 @@ namespace Rusty.Engine.Mechanics;
 /// </summary>
 public abstract record MechanicsIdentity
 {
-    public const int MaximumBytes = 96;
-
     protected MechanicsIdentity(string value)
     {
         Value = MechanicsIdentityValidation.Validate(value, GetType().Name);
@@ -29,33 +26,6 @@ internal static class MechanicsIdentityValidation
         if (value.Length == 0)
         {
             throw new ArgumentException($"{kind} identities cannot be empty.", nameof(value));
-        }
-
-        if (Encoding.UTF8.GetByteCount(value) > MechanicsIdentity.MaximumBytes)
-        {
-            throw new ArgumentException(
-                $"{kind} identities cannot exceed {MechanicsIdentity.MaximumBytes} UTF-8 bytes.",
-                nameof(value));
-        }
-
-        if (value[0] is < 'a' or > 'z')
-        {
-            throw new ArgumentException(
-                $"{kind} identities must start with a lowercase ASCII letter.",
-                nameof(value));
-        }
-
-        foreach (char character in value)
-        {
-            bool supported = character is >= 'a' and <= 'z'
-                || character is >= '0' and <= '9'
-                || character is '.' or '-' or '_';
-            if (!supported)
-            {
-                throw new ArgumentException(
-                    $"{kind} identities contain unsupported characters.",
-                    nameof(value));
-            }
         }
 
         return value;

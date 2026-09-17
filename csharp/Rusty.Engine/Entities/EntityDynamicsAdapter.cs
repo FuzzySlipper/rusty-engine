@@ -46,6 +46,15 @@ public readonly record struct EntityDynamicsAdapterReceipt(
     EntityDynamicsAdapterGuard Guard);
 
 /// <summary>
+/// One fully captured managed input row for an irreversible Dynamics step.
+/// The public guard remains revision and binding evidence; this private
+/// projection retains the values the adapter must preserve in its publication.
+/// </summary>
+internal readonly record struct EntityDynamicsAdapterProjection(
+    EntityDynamicsAdapterComponentGuard Guard,
+    Vector3 Scale);
+
+/// <summary>
 /// Composes caller-owned EntityId-to-DynamicsBody bindings with canonical
 /// managed Transform and copied DynamicsMotion values. It retains neither a
 /// native entity mirror nor a parallel physics state.
@@ -67,10 +76,12 @@ public sealed class EntityDynamicsAdapter
     }
 
     /// <summary>
-    /// Preflights the exact participating component revisions, runs one
-    /// bounded typed Dynamics operation, then rechecks and publishes every
+    /// Preflights the exact participating values and component revisions, runs
+    /// one bounded typed Dynamics operation, then attempts to publish every
     /// returned Transform/DynamicsMotion pair in exactly one EntityBatch.
     /// Binding and action order are explicit and preserved by the native lease.
+    /// A post-step receipt or managed-publication failure does not undo or retry
+    /// the retained Dynamics step.
     /// </summary>
     public EntityDynamicsAdapterReceipt Step(
         float stepSeconds,
@@ -101,7 +112,10 @@ public sealed class EntityDynamicsAdapter
         }
 
         DynamicsEntityBinding[] projectedBindings = bindings.ToArray();
-        EntityDynamicsAdapterGuard guard = CaptureGuard(projectedBindings);
+        EntityDynamicsAdapterProjection[] projection = CaptureProjection(projectedBindings);
+        EntityDynamicsAdapterGuard guard = new(
+            _entities.Revision,
+            projection.Select(row => row.Guard).ToArray());
         if (expectedGuard is EntityDynamicsAdapterGuard expected)
         {
             ValidateGuard(expected, guard);
@@ -116,21 +130,24 @@ public sealed class EntityDynamicsAdapter
             projectedActions,
             selectedBodies));
 
-        ValidateGuard(guard, CaptureGuard(projectedBindings));
+        // StepAndRead has already advanced the retained Dynamics world.  Its
+        // output must therefore be handled as one committed native outcome:
+        // there is no managed rollback or retry path if a generated receipt is
+        // invalid.  All product facts needed to publish it were captured above.
         ValidateNativeReceipt(projectedBindings, native);
-        EntityEdit managed = _entities.PrepareBatch(BuildBatch(guard, native), guard.StoreRevision);
+        EntityEdit managed = _entities.PrepareBatch(BuildBatch(projection, native), guard.StoreRevision);
         managed.Publish();
         return new EntityDynamicsAdapterReceipt(native, managed.Receipt, guard);
     }
 
-    private EntityDynamicsAdapterGuard CaptureGuard(ReadOnlySpan<DynamicsEntityBinding> bindings)
+    private EntityDynamicsAdapterProjection[] CaptureProjection(ReadOnlySpan<DynamicsEntityBinding> bindings)
     {
         var active = new HashSet<EntityId>(_entities.Query(
             EngineComponentTypes.Transform,
             EngineComponentTypes.DynamicsMotion).Select(row => row.Entity));
         var entities = new HashSet<ulong>();
         var bodies = new HashSet<ulong>();
-        var guards = new EntityDynamicsAdapterComponentGuard[bindings.Length];
+        var projection = new EntityDynamicsAdapterProjection[bindings.Length];
         for (int index = 0; index < bindings.Length; index++)
         {
             DynamicsEntityBinding binding = bindings[index];
@@ -151,13 +168,15 @@ public sealed class EntityDynamicsAdapter
                 throw new InvalidOperationException(
                     $"Dynamics entity {binding.Entity.Value} must be active with Transform and DynamicsMotion components.");
             }
-            guards[index] = new EntityDynamicsAdapterComponentGuard(
+            Transform transform = _entities.Get(binding.Entity, EngineComponentTypes.Transform);
+            var guard = new EntityDynamicsAdapterComponentGuard(
                 binding.Entity,
                 _entities.GetComponentRevision(binding.Entity, EngineComponentTypes.Transform),
                 _entities.GetComponentRevision(binding.Entity, EngineComponentTypes.DynamicsMotion),
                 binding.Body.Handle);
+            projection[index] = new EntityDynamicsAdapterProjection(guard, transform.Scale);
         }
-        return new EntityDynamicsAdapterGuard(_entities.Revision, guards);
+        return projection;
     }
 
     private static DynamicsAction[] ProjectActions(
@@ -232,23 +251,25 @@ public sealed class EntityDynamicsAdapter
         }
     }
 
-    private EntityBatch BuildBatch(
-        EntityDynamicsAdapterGuard guard,
+    private static EntityBatch BuildBatch(
+        ReadOnlySpan<EntityDynamicsAdapterProjection> projection,
         DynamicsStepAndReadLeaseReceipt native)
     {
         var batch = new EntityBatch();
-        ReadOnlySpan<EntityDynamicsAdapterComponentGuard> components = guard.Components.Span;
         ReadOnlySpan<DynamicsStepAndReadBody> rows = native.Bodies.Span;
         for (int index = 0; index < rows.Length; index++)
         {
-            EntityDynamicsAdapterComponentGuard component = components[index];
+            EntityDynamicsAdapterProjection input = projection[index];
+            EntityDynamicsAdapterComponentGuard component = input.Guard;
             DynamicsReadout readout = rows[index].Readout;
             Transform transform = readout.Transform with
             {
                 // Rigid dynamics owns translation and rotation. Scale is a
                 // canonical product render/layout fact and remains outside
-                // the retained unit-scale body representation.
-                Scale = _entities.Get(component.Entity, EngineComponentTypes.Transform).Scale,
+                // the retained unit-scale body representation. It was captured
+                // before the native step so this publication performs no
+                // managed source reads after that irreversible crossing.
+                Scale = input.Scale,
             };
             DynamicsMotion motion = new(
                 readout.LinearVelocity,

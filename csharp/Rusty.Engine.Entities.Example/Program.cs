@@ -14,6 +14,8 @@ using StateMachineTransitionRequest = Rusty.Engine.StateMachine.StateMachineTran
 
 // This executable is a deliberately broad managed-helper proof harness. It is not a recommended
 // product architecture or a template for assembling unrelated gameplay domains in one program.
+EntityAdapterSafetyExercise.Run();
+
 const uint HealthLocalComponentId = 1;
 const uint ArmorLocalComponentId = 2;
 const int InitialHealth = 10;

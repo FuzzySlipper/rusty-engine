@@ -8,11 +8,14 @@ StatsComponentExercise.Run();
 MechanicsComponentsExercise.Run();
 ExerciseEffectPolicies();
 ExerciseManagedInventory();
+ManagedLimitsExercise.Run();
 
 static void ExerciseTypedIds()
 {
     StatId strength = StatId.Parse("strength");
-    Require(!StatId.TryParse("Strength", out _), "invalid typed identity was admitted");
+    Require(StatId.TryParse("Strength", out StatId? capitalized)
+        && capitalized!.Value == "Strength",
+        "caller-selected typed identity was not preserved");
     Require(strength.Value == "strength", "typed identity lost its value");
 }
 
@@ -252,33 +255,6 @@ static void ExerciseManagedInventory()
         && !world.TryGetItem(new EntityId(ShieldEntity), out _),
         "explicit unique destruction did not remove the item");
 
-    var boundedWorld = new InventoryStore();
-    EntityId boundedOwner = new(100);
-    boundedWorld.RegisterInventory(new InventoryState(boundedOwner));
-    for (int index = 0; index < ManagedInventoryLimits.MaximumStacksPerInventory; index++)
-    {
-        boundedWorld.Grant(
-            boundedOwner,
-            new ItemDefinition(
-                ItemDefinitionId.Parse($"stack-{index}"),
-                ItemKind.Fungible,
-                maximumQuantity: 1),
-            quantity: 1);
-    }
-
-    ulong beforeRejectedStack = boundedWorld.Revision;
-    ExpectMechanicsError(
-        () => boundedWorld.Grant(
-            boundedOwner,
-            new ItemDefinition(
-                ItemDefinitionId.Parse("stack-overflow"),
-                ItemKind.Fungible,
-                maximumQuantity: 1),
-            quantity: 1),
-        "managed inventory stack limit was not enforced");
-    Require(boundedWorld.Revision == beforeRejectedStack
-        && boundedWorld.View(boundedOwner).Stacks.Count == ManagedInventoryLimits.MaximumStacksPerInventory,
-        "rejected stack insertion changed managed inventory state");
 }
 
 static void ExpectMechanicsError(Action action, string message)

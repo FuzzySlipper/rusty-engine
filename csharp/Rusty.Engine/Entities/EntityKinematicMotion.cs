@@ -43,17 +43,21 @@ public sealed class EntityKinematicMotionPrepared
         EntityStore entities,
         ComponentType<SpatialCollider> colliders,
         EntityKinematicMotionGuard guard,
-        KinematicMotionLeaseReceipt motion)
+        KinematicMotionLeaseReceipt motion,
+        KinematicMotionEntityRow[] rows)
     {
         _entities = entities;
         _colliders = colliders;
         Guard = guard;
         Motion = motion;
+        Rows = rows;
     }
 
     public EntityKinematicMotionGuard Guard { get; }
 
     public KinematicMotionLeaseReceipt Motion { get; }
+
+    internal ReadOnlyMemory<KinematicMotionEntityRow> Rows { get; }
 
     /// <summary>
     /// Rechecks the copied projection, then publishes all changed Transform
@@ -67,7 +71,7 @@ public sealed class EntityKinematicMotionPrepared
         }
         _applied = true;
         EntityKinematicMotion.ValidateGuard(Guard, EntityKinematicMotion.CaptureGuard(_entities, _colliders, checked((int)Guard.Components.Length)));
-        EntityBatch batch = EntityKinematicMotion.BuildBatch(_entities, Guard, Motion);
+        EntityBatch batch = EntityKinematicMotion.BuildBatch(Guard, Motion, Rows.Span);
         EntityEdit staged = _entities.PrepareBatch(batch, Guard.StoreRevision);
         staged.Publish();
         return new EntityKinematicMotionReceipt(Motion, staged.Receipt, Guard);
@@ -137,8 +141,8 @@ public sealed class EntityKinematicMotion
             selection.HasValue,
             selectedIds));
         ValidateGuard(guard, CaptureGuard(_entities, _colliders, maximumEntities));
-        ValidateMotionReceipt(guard, motion, selectedIds, selection.HasValue);
-        return new EntityKinematicMotionPrepared(_entities, _colliders, guard, motion);
+        ValidateMotionReceipt(guard, rows, motion, selectedIds, selection.HasValue);
+        return new EntityKinematicMotionPrepared(_entities, _colliders, guard, motion, rows);
     }
 
     internal static EntityKinematicMotionGuard CaptureGuard(
@@ -190,7 +194,10 @@ public sealed class EntityKinematicMotion
         }
     }
 
-    internal static EntityBatch BuildBatch(EntityStore entities, EntityKinematicMotionGuard guard, KinematicMotionLeaseReceipt motion)
+    internal static EntityBatch BuildBatch(
+        EntityKinematicMotionGuard guard,
+        KinematicMotionLeaseReceipt motion,
+        ReadOnlySpan<KinematicMotionEntityRow> rows)
     {
         var batch = new EntityBatch();
         foreach (KinematicMotionCandidate candidate in motion.Candidates.Span)
@@ -208,9 +215,9 @@ public sealed class EntityKinematicMotion
             }
             if (velocityChanged)
             {
-                Kinematic current = entities.Get(component.Entity, EngineComponentTypes.Kinematic);
+                KinematicMotionEntityRow input = FindRow(rows, component.Entity);
                 batch.Set(component.Entity, EngineComponentTypes.Kinematic,
-                    new Kinematic(current.HalfExtents, candidate.AfterVelocity), component.KinematicRevision);
+                    new Kinematic(input.HalfExtents, candidate.AfterVelocity), component.KinematicRevision);
             }
         }
         return batch;
@@ -259,11 +266,16 @@ public sealed class EntityKinematicMotion
 
     private void ValidateMotionReceipt(
         EntityKinematicMotionGuard guard,
+        ReadOnlySpan<KinematicMotionEntityRow> rows,
         KinematicMotionLeaseReceipt motion,
         ReadOnlySpan<ulong> selectedIds,
         bool selectionPresent)
     {
         ReadOnlySpan<EntityKinematicMotionComponentGuard> components = guard.Components.Span;
+        if (rows.Length != components.Length)
+        {
+            throw new InvalidOperationException("Kinematic managed projection did not preserve its guarded row set.");
+        }
         if (motion.BodiesConsidered > (ulong)components.Length
             || motion.MovedBodies > motion.BodiesConsidered
             || motion.BlockedAxes > (ulong)motion.Facts.Length
@@ -294,8 +306,8 @@ public sealed class EntityKinematicMotion
             if ((candidates.Count != 0 && candidate.EntityId <= previousCandidate)
                 || !allowed.Contains(candidate.EntityId)
                 || !TryFindGuard(components, new EntityId(candidate.EntityId), out EntityKinematicMotionComponentGuard component)
-                || candidate.BeforeTransform != CurrentTransform(component)
-                || candidate.BeforeVelocity != CurrentVelocity(component)
+                || candidate.BeforeTransform != FindRow(rows, component.Entity).Transform
+                || candidate.BeforeVelocity != FindRow(rows, component.Entity).Velocity
                 || (candidate.BeforeTransform == candidate.AfterTransform && candidate.BeforeVelocity == candidate.AfterVelocity)
                 || !candidates.Add(candidate.EntityId))
             {
@@ -304,10 +316,20 @@ public sealed class EntityKinematicMotion
             previousCandidate = candidate.EntityId;
         }
 
-        Transform CurrentTransform(EntityKinematicMotionComponentGuard component)
-            => _entities.Get(component.Entity, EngineComponentTypes.Transform);
-        Vector3 CurrentVelocity(EntityKinematicMotionComponentGuard component)
-            => _entities.Get(component.Entity, EngineComponentTypes.Kinematic).Velocity;
+    }
+
+    private static KinematicMotionEntityRow FindRow(
+        ReadOnlySpan<KinematicMotionEntityRow> rows,
+        EntityId entity)
+    {
+        foreach (KinematicMotionEntityRow row in rows)
+        {
+            if (row.EntityId == entity.Value)
+            {
+                return row;
+            }
+        }
+        throw new InvalidOperationException($"Kinematic projection omitted entity {entity.Value}.");
     }
 
     private static EntityKinematicMotionComponentGuard FindGuard(

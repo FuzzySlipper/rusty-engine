@@ -7,32 +7,17 @@ public enum ItemKind
     Unique,
 }
 
-/// <summary>Limits shared by the small managed inventory/equipment mechanisms.</summary>
-public static class ManagedInventoryLimits
-{
-    public const int MaximumStacksPerInventory = 128;
-    public const int MaximumCapacityLimitsPerInventory = 32;
-    public const int MaximumContainedEntitiesPerInventory = 256;
-    public const int MaximumEquipmentAssignments = 32;
-    public const int MaximumEquipmentSourceActivations = 256;
-    public const int MaximumClassificationsPerItem = 16;
-    public const int MaximumCapacityCostsPerItem = 32;
-    public const ushort MaximumEquipmentSlotsPerItem = 8;
-    public const ulong MaximumStackQuantity = 1_000_000_000;
-    public const ulong MaximumCapacityUnits = 1_000_000_000_000_000_000;
-}
-
 /// <summary>One typed capacity cost applied once per stack quantity or unique item.</summary>
 public readonly record struct ItemCapacityCost
 {
     public ItemCapacityCost(CapacityMetricId metric, ulong units)
     {
         Metric = metric ?? throw new ArgumentNullException(nameof(metric));
-        if (units == 0 || units > ManagedInventoryLimits.MaximumCapacityUnits)
+        if (units == 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(units),
-                $"Capacity costs must be between one and {ManagedInventoryLimits.MaximumCapacityUnits} units.");
+                "Capacity costs must be positive.");
         }
 
         Units = units;
@@ -50,11 +35,11 @@ public sealed class ItemEquipmentPolicy
         ushort requiredSlots,
         EquipmentExclusivityId? exclusiveGroup = null)
     {
-        if (requiredSlots == 0 || requiredSlots > ManagedInventoryLimits.MaximumEquipmentSlotsPerItem)
+        if (requiredSlots == 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(requiredSlots),
-                $"An item must require between one and {ManagedInventoryLimits.MaximumEquipmentSlotsPerItem} slots.");
+                "An item must require at least one slot.");
         }
 
         RequiredSlots = requiredSlots;
@@ -83,11 +68,11 @@ public sealed class ItemDefinition
         IEnumerable<SourceDefinitionId>? sourceDefinitions = null)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
-        if (maximumQuantity == 0 || maximumQuantity > ManagedInventoryLimits.MaximumStackQuantity)
+        if (maximumQuantity == 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(maximumQuantity),
-                $"Item quantities must be between one and {ManagedInventoryLimits.MaximumStackQuantity}.");
+                "Item quantities must be positive.");
         }
 
         if (kind == ItemKind.Unique && maximumQuantity != 1)
@@ -95,13 +80,10 @@ public sealed class ItemDefinition
             throw new ArgumentException("Unique item definitions must have a quantity of one.", nameof(maximumQuantity));
         }
 
-        Classifications = CopySortedDistinct(
-            classifications,
-            ManagedInventoryLimits.MaximumClassificationsPerItem,
-            "item classifications");
+        Classifications = CopySortedDistinct(classifications, "item classifications");
         CapacityCosts = CopyCosts(capacityCosts);
         Equipment = equipment;
-        SourceDefinitions = CopySortedDistinct(sourceDefinitions, null, "item source definitions");
+        SourceDefinitions = CopySortedDistinct(sourceDefinitions, "item source definitions");
         Kind = kind;
         MaximumQuantity = maximumQuantity;
     }
@@ -148,13 +130,6 @@ public sealed class ItemDefinition
         ItemCapacityCost[] costs = values
             .OrderBy(value => value.Metric.Value, StringComparer.Ordinal)
             .ToArray();
-        if (costs.Length > ManagedInventoryLimits.MaximumCapacityCostsPerItem)
-        {
-            throw new ArgumentException(
-                $"An item cannot have more than {ManagedInventoryLimits.MaximumCapacityCostsPerItem} capacity costs.",
-                nameof(values));
-        }
-
         for (int index = 1; index < costs.Length; index++)
         {
             if (costs[index - 1].Metric == costs[index].Metric)
@@ -170,7 +145,6 @@ public sealed class ItemDefinition
 
     private static IReadOnlyList<T> CopySortedDistinct<T>(
         IEnumerable<T>? values,
-        int? maximum,
         string name)
         where T : MechanicsIdentity
     {
@@ -183,11 +157,6 @@ public sealed class ItemDefinition
             .Select(value => value ?? throw new ArgumentException($"{name} cannot contain null values.", nameof(values)))
             .OrderBy(value => value.Value, StringComparer.Ordinal)
             .ToArray();
-        if (maximum is int limit && copied.Length > limit)
-        {
-            throw new ArgumentException($"An item cannot have more than {limit} {name}.", nameof(values));
-        }
-
         for (int index = 1; index < copied.Length; index++)
         {
             if (copied[index - 1] == copied[index])

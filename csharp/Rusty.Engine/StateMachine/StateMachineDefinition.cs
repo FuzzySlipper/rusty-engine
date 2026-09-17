@@ -13,9 +13,6 @@ namespace Rusty.Engine.StateMachine;
 /// </summary>
 public sealed class StateMachineDefinition
 {
-    public const int MaximumStates = 256;
-    public const int MaximumTransitions = 1_024;
-
     private readonly HashSet<ulong> _stateValues;
     private readonly HashSet<StateMachineTransition> _transitionValues;
 
@@ -32,14 +29,6 @@ public sealed class StateMachineDefinition
         {
             throw new ArgumentException("A state-machine definition must declare at least one state.", nameof(states));
         }
-        if (stateValues.Length > MaximumStates)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(states),
-                stateValues.Length,
-                $"A state-machine definition may declare at most {MaximumStates} states.");
-        }
-
         _stateValues = new HashSet<ulong>(stateValues.Length);
         foreach (ulong state in stateValues)
         {
@@ -52,14 +41,6 @@ public sealed class StateMachineDefinition
         }
 
         StateMachineTransition[] transitionValues = transitions.ToArray();
-        if (transitionValues.Length > MaximumTransitions)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(transitions),
-                transitionValues.Length,
-                $"A state-machine definition may declare at most {MaximumTransitions} transitions.");
-        }
-
         _transitionValues = new HashSet<StateMachineTransition>(transitionValues.Length);
         foreach (StateMachineTransition transition in transitionValues)
         {

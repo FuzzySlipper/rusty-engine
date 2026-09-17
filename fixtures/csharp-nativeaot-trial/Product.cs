@@ -181,7 +181,7 @@ public sealed class Product : IEngineProduct
             "trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
         RenderResourceInfo repeatedAlias = _engine.Graphics.OpenResource(new RenderResourceRequest(
             "content/trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
-        Require(clampedTexture.Handle.Handle != repeatedTexture.Handle.Handle && repeatedTexture.Handle.Handle == repeatedAlias.Handle,
+        Require(clampedTexture.Handle.Handle != repeatedTexture.Handle.Handle && repeatedTexture.Handle.Handle == repeatedAlias.Handle.Handle,
             "texture sampler variants must retain distinct assets over shared content");
         _appearance = _engine.Graphics.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(

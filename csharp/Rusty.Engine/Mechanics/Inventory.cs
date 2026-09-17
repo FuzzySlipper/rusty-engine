@@ -8,7 +8,7 @@ public readonly record struct InventoryStack
     public InventoryStack(ItemDefinitionId definition, ulong quantity)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
-        if (quantity == 0 || quantity > ManagedInventoryLimits.MaximumStackQuantity)
+        if (quantity == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(quantity));
         }
@@ -27,13 +27,6 @@ public readonly record struct InventoryCapacityLimit
     public InventoryCapacityLimit(CapacityMetricId metric, ulong maximum)
     {
         Metric = metric ?? throw new ArgumentNullException(nameof(metric));
-        if (maximum > ManagedInventoryLimits.MaximumCapacityUnits)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maximum),
-                $"Capacity limits cannot exceed {ManagedInventoryLimits.MaximumCapacityUnits} units.");
-        }
-
         Maximum = maximum;
     }
 
@@ -239,12 +232,6 @@ public sealed class InventoryState
             }
         }
 
-        if (_capacityLimits.Count > ManagedInventoryLimits.MaximumCapacityLimitsPerInventory)
-        {
-            throw new ArgumentException(
-                $"An inventory cannot have more than {ManagedInventoryLimits.MaximumCapacityLimitsPerInventory} capacity limits.",
-                nameof(capacityLimits));
-        }
     }
 
     public EntityId Owner { get; }
@@ -276,13 +263,6 @@ public sealed class InventoryState
     /// <summary>Adds or replaces a local capacity limit and advances this standalone state revision.</summary>
     public void SetCapacityLimit(InventoryCapacityLimit limit)
     {
-        if (!_capacityLimits.ContainsKey(limit.Metric)
-            && _capacityLimits.Count >= ManagedInventoryLimits.MaximumCapacityLimitsPerInventory)
-        {
-            throw new MechanicsException(
-                $"An inventory cannot have more than {ManagedInventoryLimits.MaximumCapacityLimitsPerInventory} capacity limits.");
-        }
-
         _capacityLimits[limit.Metric] = limit;
         Revision = checked(Revision + 1);
     }
@@ -312,13 +292,6 @@ public sealed class InventoryState
         {
             _stacks.Remove(definition.Id);
             return;
-        }
-
-        if (!_stacks.ContainsKey(definition.Id)
-            && _stacks.Count >= ManagedInventoryLimits.MaximumStacksPerInventory)
-        {
-            throw new MechanicsException(
-                $"An inventory cannot contain more than {ManagedInventoryLimits.MaximumStacksPerInventory} fungible stacks.");
         }
 
         _stacks[definition.Id] = new InventoryStackEntry(definition, quantity);
@@ -808,12 +781,6 @@ public sealed partial class InventoryStore
         foreach ((EntityId owner, InventoryState inventory) in _inventories)
         {
             _ = ComputeCapacity(owner, inventory);
-            if (_containedChildren.TryGetValue(owner, out SortedSet<EntityId>? children)
-                && children.Count > ManagedInventoryLimits.MaximumContainedEntitiesPerInventory)
-            {
-                throw new MechanicsException(
-                    $"Inventory {owner.Value} contains more than {ManagedInventoryLimits.MaximumContainedEntitiesPerInventory} entities.");
-            }
         }
 
         foreach ((EntityId child, EntityId container) in _containment)
@@ -868,19 +835,6 @@ public sealed partial class InventoryStore
         if (quantity == 0)
         {
             throw new MechanicsException("Inventory quantities must be positive.");
-        }
-    }
-
-    private static void EnsureContainmentQuota(
-        SortedSet<EntityId>? children,
-        EntityId owner,
-        bool adding)
-    {
-        int count = children?.Count ?? 0;
-        if (adding && count >= ManagedInventoryLimits.MaximumContainedEntitiesPerInventory)
-        {
-            throw new MechanicsException(
-                $"Inventory {owner.Value} cannot contain more than {ManagedInventoryLimits.MaximumContainedEntitiesPerInventory} entities.");
         }
     }
 

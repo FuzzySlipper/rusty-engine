@@ -26,8 +26,6 @@ public enum EffectMutationKind
 /// </summary>
 public sealed class EffectDefinition
 {
-    public const ushort MaximumSupportedStacks = 32;
-
     public EffectDefinition(
         EffectDefinitionId id,
         StackingGroupId stackingGroup,
@@ -38,11 +36,11 @@ public sealed class EffectDefinition
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         StackingGroup = stackingGroup ?? throw new ArgumentNullException(nameof(stackingGroup));
-        if (maximumStacks == 0 || maximumStacks > MaximumSupportedStacks)
+        if (maximumStacks == 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(maximumStacks),
-                $"Effect stack limits must be between one and {MaximumSupportedStacks}.");
+                "Effect stack limits must be positive.");
         }
 
         if (stacking == EffectStackingPolicy.IndependentByProvenance && maximumInstances == 0)
@@ -155,8 +153,6 @@ public sealed class EffectMutationReceipt
 /// </summary>
 public sealed class EffectsComponent
 {
-    public const int MaximumActiveEffects = 64;
-
     private readonly List<ActiveEffect> _effects = [];
 
     public EffectsComponent(EntityId? owner = null)
@@ -335,12 +331,12 @@ public sealed class EffectsComponent
     private EffectSourceActivation[] ActivateSources(ActiveEffect effect)
     {
         List<EffectSourceActivation> activations = [];
-        for (ushort stack = 1; stack <= effect.Stacks; stack++)
+        for (int stack = 1; stack <= effect.Stacks; stack++)
         {
             foreach (SourceDefinitionId source in effect.Definition.SourceDefinitions)
             {
                 activations.Add(new EffectSourceActivation(
-                    new EffectSourceIdentity(Owner, effect.Instance, stack, source),
+                    new EffectSourceIdentity(Owner, effect.Instance, checked((ushort)stack), source),
                     source));
             }
         }
@@ -350,12 +346,6 @@ public sealed class EffectsComponent
 
     private void ValidateCollection(IReadOnlyList<ActiveEffect> effects)
     {
-        if (effects.Count > MaximumActiveEffects)
-        {
-            throw new MechanicsException(
-                $"An effect state cannot contain more than {MaximumActiveEffects} active effects.");
-        }
-
         if (effects.Select(effect => effect.Instance).Distinct().Count() != effects.Count)
         {
             throw new MechanicsException("Active effect instances must have unique identities.");

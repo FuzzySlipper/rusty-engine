@@ -29,13 +29,6 @@ public sealed class EquipmentSlotDefinition
             .Select(value => value ?? throw new ArgumentException("Slot classifications cannot be null.", nameof(values)))
             .OrderBy(value => value.Value, StringComparer.Ordinal)
             .ToArray();
-        if (copied.Length > ManagedInventoryLimits.MaximumClassificationsPerItem)
-        {
-            throw new ArgumentException(
-                $"A slot cannot admit more than {ManagedInventoryLimits.MaximumClassificationsPerItem} classifications.",
-                nameof(values));
-        }
-
         if (copied.Distinct().Count() != copied.Length)
         {
             throw new ArgumentException("Slot classifications must be unique.", nameof(values));
@@ -313,12 +306,6 @@ public sealed partial class InventoryStore
         EquipmentState equipment,
         out IReadOnlyList<EntityId> observedItems)
     {
-        if (equipment.Assignments.Count > ManagedInventoryLimits.MaximumEquipmentAssignments)
-        {
-            throw new MechanicsException(
-                $"Equipment cannot contain more than {ManagedInventoryLimits.MaximumEquipmentAssignments} assignments.");
-        }
-
         Dictionary<EntityId, List<EquipmentState.EquipmentSlotEntry>> byItem = [];
         foreach (EquipmentState.EquipmentSlotEntry assignment in equipment.Entries())
         {
@@ -376,12 +363,6 @@ public sealed partial class InventoryStore
             }
         }
 
-        if (activations.Count > ManagedInventoryLimits.MaximumEquipmentSourceActivations)
-        {
-            throw new MechanicsException(
-                $"Equipment source activations cannot exceed {ManagedInventoryLimits.MaximumEquipmentSourceActivations}.");
-        }
-
         observedItems = itemIds;
         return Array.AsReadOnly(activations.ToArray());
     }
@@ -392,11 +373,6 @@ public sealed partial class InventoryStore
         EquipmentSlotDefinition[] requested = slots
             .Select(slot => slot ?? throw new ArgumentException("Equipment slots cannot be null.", nameof(slots)))
             .ToArray();
-        if (requested.Length > ManagedInventoryLimits.MaximumEquipmentAssignments)
-        {
-            throw new MechanicsException(
-                $"An equipment request cannot contain more than {ManagedInventoryLimits.MaximumEquipmentAssignments} slots.");
-        }
         if (requested.Select(slot => slot.Id).Distinct().Count() != requested.Length)
         {
             throw new MechanicsException("An equipment request cannot repeat a slot.");

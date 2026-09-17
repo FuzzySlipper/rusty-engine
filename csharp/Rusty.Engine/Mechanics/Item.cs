@@ -164,11 +164,6 @@ public sealed partial class InventoryStore
         {
             throw new MechanicsException($"Unique item entity {item.Entity.Value} already has a container.");
         }
-        EnsureContainmentQuota(
-            _containedChildren.TryGetValue(owner, out SortedSet<EntityId>? children) ? children : null,
-            owner,
-            adding: true);
-
         ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> before = ComputeCapacity(owner, inventory);
         IReadOnlyList<CapacityUsage> after = ComputeCapacity(owner, inventory, includedItem: item.Entity, includedState: item);
@@ -215,11 +210,6 @@ public sealed partial class InventoryStore
             throw new MechanicsException(
                 $"Unique item {item.Value} must be unequipped before transfer.");
         }
-        EnsureContainmentQuota(
-            _containedChildren.TryGetValue(toOwner, out SortedSet<EntityId>? children) ? children : null,
-            toOwner,
-            adding: true);
-
         ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> fromBefore = ComputeCapacity(fromOwner, fromInventory);
         IReadOnlyList<CapacityUsage> toBefore = ComputeCapacity(toOwner, toInventory);
