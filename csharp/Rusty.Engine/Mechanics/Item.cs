@@ -320,32 +320,3 @@ public sealed partial class InventoryStore
     private bool IsEquippedAnywhere(EntityId item) =>
         _equipment.Values.Any(state => state.ContainsItem(item));
 }
-
-/// <summary>Convenience entry points for unique-item lifecycle operations.</summary>
-public static class ItemService
-{
-    public static ItemMaterializationReceipt MaterializeUnique(
-        InventoryStore store,
-        ItemState item,
-        EntityId owner)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        return store.MaterializeUnique(item, owner);
-    }
-
-    public static ItemTransferReceipt TransferUnique(
-        InventoryStore store,
-        EntityId item,
-        EntityId fromOwner,
-        EntityId toOwner)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        return store.TransferUnique(item, fromOwner, toOwner);
-    }
-
-    public static ItemDestroyReceipt DestroyUnique(InventoryStore store, EntityId item)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        return store.DestroyUnique(item);
-    }
-}

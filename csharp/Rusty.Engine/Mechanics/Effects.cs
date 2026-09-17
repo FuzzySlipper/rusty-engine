@@ -151,21 +151,29 @@ public sealed class EffectMutationReceipt
 /// <summary>
 /// Mutable product-owned collection of active effects. It performs stacking
 /// and provenance checks only; callers decide when an effect expires or what
-/// an effect means. Every mutation validates a complete candidate before
-/// publishing it.
+/// an effect means.
 /// </summary>
-public sealed class EffectState
+public sealed class EffectsComponent
 {
     public const int MaximumActiveEffects = 64;
 
     private readonly List<ActiveEffect> _effects = [];
 
-    public EffectState(EntityId? owner = null)
+    public EffectsComponent(EntityId? owner = null)
     {
         Owner = owner;
     }
 
     public EntityId? Owner { get; }
+
+    /// <summary>Creates an independent collection without replaying Apply/Refresh operations.
+    /// Immutable effect entries and definitions are shared; subsequent mutations do not cross copies.</summary>
+    public EffectsComponent Copy()
+    {
+        var copy = new EffectsComponent(Owner);
+        copy._effects.AddRange(_effects);
+        return copy;
+    }
 
     public IReadOnlyList<ActiveEffect> Effects =>
         Array.AsReadOnly(_effects.ToArray());

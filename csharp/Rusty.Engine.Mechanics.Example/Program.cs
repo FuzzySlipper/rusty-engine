@@ -5,6 +5,7 @@ ExerciseTypedIds();
 StatExercise.Run();
 TrackExercise.Run();
 StatsComponentExercise.Run();
+MechanicsComponentsExercise.Run();
 ExerciseEffectPolicies();
 ExerciseManagedInventory();
 
@@ -25,7 +26,7 @@ static void ExerciseEffectPolicies()
         maximumInstances: 2,
         maximumStacks: 3,
         [auraSource]);
-    EffectState independentState = new(new EntityId(1));
+    EffectsComponent independentState = new(new EntityId(1));
     independentState.Apply(
         independent,
         EffectInstanceId.Parse("ward-one"),
@@ -51,7 +52,7 @@ static void ExerciseEffectPolicies()
         EffectStackingPolicy.Refresh,
         maximumInstances: 0,
         maximumStacks: 3);
-    EffectState refreshState = new();
+    EffectsComponent refreshState = new();
     refreshState.Apply(
         refresh,
         EffectInstanceId.Parse("focus-instance"),
@@ -71,7 +72,7 @@ static void ExerciseEffectPolicies()
         EffectStackingPolicy.Replace,
         maximumInstances: 0,
         maximumStacks: 1);
-    EffectState replaceState = new();
+    EffectsComponent replaceState = new();
     replaceState.Apply(
         replace,
         EffectInstanceId.Parse("stance-old"),
@@ -152,9 +153,7 @@ static void ExerciseManagedInventory()
     Require(materialized.CapacityAfter.Single().Used == 13,
         "managed unique item capacity was not included");
 
-    EquipmentMutationReceipt equipped = EquipmentService.Equip(
-        world,
-        new EntityId(Owner),
+    EquipmentMutationReceipt equipped = world.Equip(new EntityId(Owner),
         new EntityId(RifleEntity),
         [leftHand, rightHand]);
     Require(equipped.SourceActivations.Count == 1
@@ -173,9 +172,7 @@ static void ExerciseManagedInventory()
 
     ulong beforeEquippedTransfer = world.Revision;
     ExpectMechanicsError(
-        () => ItemService.TransferUnique(
-            world,
-            new EntityId(RifleEntity),
+        () => world.TransferUnique(new EntityId(RifleEntity),
             new EntityId(Owner),
             new EntityId(SecondOwner)),
         "equipped unique item transfer was not blocked");
@@ -230,9 +227,7 @@ static void ExerciseManagedInventory()
         () => cancelledEdit.View(new EntityId(Owner)),
         "cancelled inventory edit retained its detached state");
 
-    EquipmentService.Equip(
-        world,
-        new EntityId(SecondOwner),
+    world.Equip(new EntityId(SecondOwner),
         new EntityId(RifleEntity),
         [leftHand, rightHand]);
 
@@ -242,9 +237,7 @@ static void ExerciseManagedInventory()
     Require(secondShield.CapacityAfter.Single().Used == 14,
         "second-owner capacity was not maintained");
     ExpectMechanicsError(
-        () => EquipmentService.Equip(
-            world,
-            new EntityId(SecondOwner),
+        () => world.Equip(new EntityId(SecondOwner),
             new EntityId(ShieldEntity),
             [shieldHand]),
         "exclusivity or containment validation was not enforced");
@@ -254,7 +247,7 @@ static void ExerciseManagedInventory()
         && equipment.Assignments.All(assignment => assignment.Item == new EntityId(RifleEntity)),
         "rejected equipment changed state");
 
-    ItemDestroyReceipt destroyed = ItemService.DestroyUnique(world, new EntityId(ShieldEntity));
+    ItemDestroyReceipt destroyed = world.DestroyUnique(new EntityId(ShieldEntity));
     Require(destroyed.FormerOwner == new EntityId(SecondOwner)
         && !world.TryGetItem(new EntityId(ShieldEntity), out _),
         "explicit unique destruction did not remove the item");

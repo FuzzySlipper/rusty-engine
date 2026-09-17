@@ -159,6 +159,22 @@ public sealed class EquipmentMutationReceipt
 
 public sealed partial class InventoryStore
 {
+    public EquipmentMutationReceipt Equip(
+        EntityId owner,
+        EntityId item,
+        IEnumerable<EquipmentSlotDefinition> slots) =>
+        Commit(candidate => candidate.Equip(owner, item, slots));
+
+    public EquipmentMutationReceipt Unequip(EntityId owner, EntityId item) =>
+        Commit(candidate => candidate.Unequip(owner, item));
+
+    public EquipmentMutationReceipt Swap(
+        EntityId owner,
+        EntityId outgoingItem,
+        EntityId incomingItem,
+        IEnumerable<EquipmentSlotDefinition> slots) =>
+        Commit(candidate => candidate.Swap(owner, outgoingItem, incomingItem, slots));
+
     internal EquipmentMutationReceipt EquipCore(
         EntityId owner,
         EntityId item,
@@ -433,47 +449,5 @@ public sealed partial class InventoryStore
                 oldValues.TryGetValue(slot, out EntityId oldItem) ? oldItem : null,
                 newValues.TryGetValue(slot, out EntityId newItem) ? newItem : null))
             .ToArray());
-    }
-}
-
-public static class EquipmentService
-{
-    public static EquipmentMutationReceipt Equip(
-        InventoryStore store,
-        EntityId owner,
-        EntityId item,
-        IEnumerable<EquipmentSlotDefinition> slots)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        InventoryEdit candidate = store.Prepare();
-        EquipmentMutationReceipt receipt = candidate.Equip(owner, item, slots);
-        candidate.Publish();
-        return receipt;
-    }
-
-    public static EquipmentMutationReceipt Unequip(
-        InventoryStore store,
-        EntityId owner,
-        EntityId item)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        InventoryEdit candidate = store.Prepare();
-        EquipmentMutationReceipt receipt = candidate.Unequip(owner, item);
-        candidate.Publish();
-        return receipt;
-    }
-
-    public static EquipmentMutationReceipt Swap(
-        InventoryStore store,
-        EntityId owner,
-        EntityId outgoingItem,
-        EntityId incomingItem,
-        IEnumerable<EquipmentSlotDefinition> slots)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        InventoryEdit candidate = store.Prepare();
-        EquipmentMutationReceipt receipt = candidate.Swap(owner, outgoingItem, incomingItem, slots);
-        candidate.Publish();
-        return receipt;
     }
 }

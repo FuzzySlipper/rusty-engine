@@ -1241,3 +1241,37 @@ mutable. Add methods reject duplicate IDs and retain the exact supplied objects.
 those collections directly. A track's maximum is registered only if the product
 explicitly adds it. Removing a stat entry does not disconnect tracks referencing
 that stat. IDs, labels, formulas, save schemas, and gameplay policy stay product-owned.
+
+### Effects and owner-scoped inventory components
+
+`EffectsComponent` is an ordinary class for Apply/Refresh/Replace/Remove/Expire
+operations, with stacking and provenance checks. It works standalone or attached
+through `entities.Add(entity, effects)`. Product code owns duration and timing.
+Use `effects.Copy()` only when a detached preview is useful: the copy has its own
+collection and shares immutable effect entries/definitions, without replaying
+mutations. D20 uses this for action planning; Rifles keeps its own effect clock.
+
+`InventoryStore` owns item quantities, containment and equipment records.
+Use its direct Grant/Consume/TransferFungible, MaterializeUnique/TransferUnique/
+DestroyUnique, and Equip/Unequip/Swap methods for ordinary operations. Redundant
+static InventoryService/ItemService/EquipmentService forwarding APIs are removed.
+`InventoryEdit` remains optional for grouped changes such as unequip → transfer →
+equip. Failed edits leave the store unchanged; publication rejects stale edits.
+
+After registering an owner's inventory/equipment, attach live facades if useful:
+
+```csharp
+var inventory = new InventoryComponent(store, owner);
+var equipment = new EquipmentComponent(store, owner);
+entities.Add(owner, inventory);
+entities.Add(owner, equipment);
+inventory.MaterializeUnique(item);
+equipment.Equip(item.Entity, slots);
+```
+
+These facades retain the store and owner ID, resolving current records on each
+read or operation. Retaining the component is safe across edit publication;
+individual returned views/lists describe the read that produced them. They do
+not hold another ledger, grant writable access to internal maps, or synchronize
+EntityStore parent relationships. Grouped operations still use the same store's
+`Prepare()` edit. Inventory-only owners need no EntityStore attachment.

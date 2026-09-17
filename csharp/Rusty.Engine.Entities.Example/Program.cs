@@ -232,7 +232,7 @@ static void ExerciseManagedMechanics()
     EquipmentSlotDefinition mainHand = new(
         EquipmentSlotId.Parse("main-hand"),
         [weapon]);
-    EquipmentMutationReceipt equipped = EquipmentService.Equip(inventory, hero, swordEntity, [mainHand]);
+    EquipmentMutationReceipt equipped = inventory.Equip(hero, swordEntity, [mainHand]);
     Require(equipped.SourceActivations.Count == 1
         && inventory.View(hero).UniqueItems.Single().Entity == swordEntity,
         "managed equipment did not publish the equipped item and its source activation");
@@ -240,7 +240,7 @@ static void ExerciseManagedMechanics()
     Throws(
         () => inventory.TransferUnique(swordEntity, hero, chest),
         "managed inventory allowed an equipped unique item to transfer");
-    EquipmentService.Unequip(inventory, hero, swordEntity);
+    inventory.Unequip(hero, swordEntity);
     ItemTransferReceipt transferred = inventory.TransferUnique(swordEntity, hero, chest);
     Require(transferred.ToOwner == chest
         && inventory.View(chest).UniqueItems.Single().Entity == swordEntity,
