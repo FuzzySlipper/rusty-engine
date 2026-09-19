@@ -16,7 +16,7 @@ use std::{
 
 use csharp_engine_abi::*;
 
-use crate::{composition::ABI_OK, composition::borrowed_utf8};
+use crate::{composition::borrowed_utf8, composition::ABI_OK};
 
 const HEADER_MAGIC: [u8; 4] = *b"RSP2";
 const HEADER_LEN: usize = 4 + 8 + 8;
