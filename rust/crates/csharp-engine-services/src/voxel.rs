@@ -1440,7 +1440,6 @@ mod tests {
                             bytes: key.as_ptr(),
                             len: key.len(),
                         },
-                        schema_version: codec.schema_version,
                         revision_guard: NativePersistenceRevisionGuard::Absent,
                         expected_revision: 0,
                         payload: NativeByteSlice {
@@ -1484,7 +1483,6 @@ mod tests {
         );
         let mut blob_info = NativePersistenceBlobInfo {
             present: false,
-            schema_version: 0,
             revision: 0,
             payload_len: 0,
         };
@@ -1494,14 +1492,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!(
-            (
-                blob_info.present,
-                blob_info.schema_version,
-                blob_info.revision
-            ),
-            (true, codec.schema_version, 1)
-        );
+        assert_eq!((blob_info.present, blob_info.revision), (true, 1));
         let mut restored_bytes = vec![0; blob_info.payload_len];
         assert_eq!(
             unsafe {

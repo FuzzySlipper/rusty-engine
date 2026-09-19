@@ -96,7 +96,6 @@ public sealed class Product : IEngineProduct
         _engine.Persistence.Save(new PersistenceSaveRequest(
             _persistenceStore,
             leaseKey,
-            1,
             PersistenceRevisionGuard.Any,
             0,
             leasePayload));

@@ -173,8 +173,8 @@ static void ExerciseEntityPersistence(
     using var store = new ProductStateStore<EntityCheckpoint>(
         new PersistenceEngineContext(persistence), "entities-example", new EntityCheckpointCodec());
     PersistenceSaveReceipt saved = store.Save("checkpoint", new EntityCheckpoint(world.Get(actor, health).Current));
-    Require(saved.Outcome == PersistenceSaveOutcome.Saved && saved.SchemaVersion == 0,
-        "the ordinary save did not report a versionless save");
+    Require(saved.Outcome == PersistenceSaveOutcome.Saved,
+        "the ordinary save did not report success");
     world.Set(actor, health, new Health(4));
     ProductStateLoad<EntityCheckpoint> loaded = store.Load("checkpoint");
     Require(loaded.Present && loaded.State.Health == InitialHealth && loaded.Revision == saved.Revision,
@@ -191,12 +191,11 @@ static void ExerciseEntityPersistence(
     Require(persistence.LastRevisionGuard == PersistenceRevisionGuard.Exact
         && persistence.LastExpectedRevision == loaded.Revision,
         "the revision guard was not forwarded to storage");
-    // Ordinary loads need no schema number or migration list: absent keys report absent,
-    // and malformed bytes fail in the codec rather than partially succeeding.
+    // Absent keys report absent, and malformed bytes fail in the codec rather than partially succeeding.
     ProductStateLoad<EntityCheckpoint> missing = store.Load("never-saved");
     Require(!missing.Present && missing.Revision == 0,
         "a missing save did not report absent");
-    persistence.Seed("entities-example", "corrupt", 0, [0xFF, 0xFF]);
+    persistence.Seed("entities-example", "corrupt", [0xFF, 0xFF]);
     Exception? malformed = null;
     try
     {
@@ -221,8 +220,8 @@ static void ExerciseJsonPersistence()
         ],
         Reputation = new Dictionary<string, int> { ["harbor"] = 3, ["beacon"] = 1 },
     };
-    // The default example shape carries no schema-version field, compatibility
-    // fingerprint, or migration branch; pin that against the serialized form.
+    // The payload stays focused on product state, without storage compatibility
+    // metadata or a migration branch.
     string json = JsonSerializer.Serialize(log, QuestLogJsonContext.Default.QuestLog);
     Require(!json.Contains("schema", StringComparison.OrdinalIgnoreCase)
         && !json.Contains("migrat", StringComparison.OrdinalIgnoreCase)
@@ -234,8 +233,8 @@ static void ExerciseJsonPersistence()
         new PersistenceEngineContext(persistence), "json-example",
         new JsonProductStateCodec<QuestLog>(QuestLogJsonContext.Default.QuestLog));
     PersistenceSaveReceipt saved = store.Save("quest", log);
-    Require(saved.Outcome == PersistenceSaveOutcome.Saved && saved.SchemaVersion == 0,
-        "the JSON save did not report a versionless save");
+    Require(saved.Outcome == PersistenceSaveOutcome.Saved,
+        "the JSON save did not report success");
     ProductStateLoad<QuestLog> loaded = store.Load("quest");
     QuestLog? quest = loaded.State;
     Require(loaded.Present && loaded.Revision == saved.Revision && quest is not null
@@ -248,7 +247,7 @@ static void ExerciseJsonPersistence()
 
     ProductStateLoad<QuestLog> missing = store.Load("never-saved");
     Require(!missing.Present && missing.Revision == 0, "a missing JSON save did not report absent");
-    persistence.Seed("json-example", "corrupt", 0, "{not json"u8.ToArray());
+    persistence.Seed("json-example", "corrupt", "{not json"u8.ToArray());
     JsonException? malformed = null;
     try
     {
@@ -259,7 +258,7 @@ static void ExerciseJsonPersistence()
         malformed = error;
     }
     Require(malformed is not null, "invalid JSON did not fail with an understandable error");
-    persistence.Seed("json-example", "nulldoc", 0, "null"u8.ToArray());
+    persistence.Seed("json-example", "nulldoc", "null"u8.ToArray());
     InvalidOperationException? nullDoc = null;
     try
     {
@@ -277,7 +276,7 @@ static void ExerciseJsonPersistence()
     using var trailingStore = new ProductStateStore<QuestLog>(
         new PersistenceEngineContext(persistence), "json-example",
         new JsonProductStateCodec<QuestLog>(new JsonSerializerOptions { AllowTrailingCommas = true }));
-    persistence.Seed("json-example", "trailing", 0, """{"Title":"Seeded","Objectives":[],"Reputation":{},}"""u8.ToArray());
+    persistence.Seed("json-example", "trailing", """{"Title":"Seeded","Objectives":[],"Reputation":{},}"""u8.ToArray());
     ProductStateLoad<QuestLog> trailing = trailingStore.Load("trailing");
     Require(trailing.Present && trailing.State is not null && trailing.State.Title == "Seeded",
         "the options-based codec did not honor its serialization options");
@@ -303,7 +302,7 @@ static void ExerciseJsonPersistence()
     using var defaultStore = new ProductStateStore<QuestLog>(
         new PersistenceEngineContext(persistence), "json-example",
         new JsonProductStateCodec<QuestLog>((JsonSerializerOptions?)null));
-    persistence.Seed("json-example", "defaulted", 0, """{"Title":"Defaulted","Objectives":[],"Reputation":{}}"""u8.ToArray());
+    persistence.Seed("json-example", "defaulted", """{"Title":"Defaulted","Objectives":[],"Reputation":{}}"""u8.ToArray());
     ProductStateLoad<QuestLog> defaulted = defaultStore.Load("defaulted");
     Require(defaulted.Present && defaulted.State is not null && defaulted.State.Title == "Defaulted",
         "null options did not resolve shared-default metadata");
@@ -952,7 +951,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
 
 sealed class InMemoryPersistenceService : IPersistenceService
 {
-    private sealed record Saved(uint SchemaVersion, ulong Revision, byte[] Payload);
+    private sealed record Saved(ulong Revision, byte[] Payload);
 
     private readonly Dictionary<ulong, string> _scopes = [];
     private readonly Dictionary<ulong, Saved> _blobs = [];
@@ -975,10 +974,10 @@ sealed class InMemoryPersistenceService : IPersistenceService
         var key = (scope, request.Key);
         _saved.TryGetValue(key, out Saved? previous);
         ulong revision = (previous?.Revision ?? 0) + 1;
-        _saved[key] = new Saved(request.SchemaVersion, revision, request.Payload.ToArray());
+        _saved[key] = new Saved(revision, request.Payload.ToArray());
         LastRevisionGuard = request.RevisionGuard;
         LastExpectedRevision = request.ExpectedRevision;
-        return new PersistenceSaveReceipt(revision, request.SchemaVersion);
+        return new PersistenceSaveReceipt(revision);
     }
 
     public PersistenceBlob Load(PersistenceLoadRequest request)
@@ -986,14 +985,14 @@ sealed class InMemoryPersistenceService : IPersistenceService
         string scope = _scopes[request.Store.Handle.Value];
         _saved.TryGetValue((scope, request.Key), out Saved? saved);
         ulong handle = _nextHandle++;
-        _blobs.Add(handle, saved ?? new Saved(0, 0, []));
+        _blobs.Add(handle, saved ?? new Saved(0, []));
         return new PersistenceBlob(new PersistenceBlobHandle(handle), () => _blobs.Remove(handle));
     }
 
     public PersistenceBlobInfo DescribeBlob(PersistenceBlob blob)
     {
         Saved saved = _blobs[blob.Handle.Value];
-        return new PersistenceBlobInfo(saved.Revision != 0, saved.SchemaVersion, saved.Revision, (nuint)saved.Payload.Length);
+        return new PersistenceBlobInfo(saved.Revision != 0, saved.Revision, (nuint)saved.Payload.Length);
     }
 
     public void CopyBlob(PersistenceCopyBlobRequest request)
@@ -1002,8 +1001,8 @@ sealed class InMemoryPersistenceService : IPersistenceService
     public ReadOnlyMemory<byte> ReadBlobBytes(PersistenceBlob blob)
         => _blobs[blob.Handle.Value].Payload;
 
-    public void Seed(string scope, string key, uint schemaVersion, byte[] payload)
-        => _saved[(scope, key)] = new Saved(schemaVersion, 1, payload);
+    public void Seed(string scope, string key, byte[] payload)
+        => _saved[(scope, key)] = new Saved(1, payload);
 }
 
 

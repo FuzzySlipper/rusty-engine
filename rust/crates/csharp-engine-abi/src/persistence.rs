@@ -35,7 +35,6 @@ pub struct NativePersistenceSaveRequest {
     pub store: NativePersistenceStoreHandle,
     /// A storage-safe relative identity, never a method name or dispatch key.
     pub key: NativeUtf8Slice,
-    pub schema_version: u32,
     pub revision_guard: NativePersistenceRevisionGuard,
     pub expected_revision: u64,
     /// Opaque product-defined state bytes copied before disk commit.
@@ -54,10 +53,9 @@ pub enum NativePersistenceSaveOutcome {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePersistenceSaveReceipt {
     /// Saved values describe the new blob. Conflict values describe the
-    /// existing blob; revision and schema zero mean the key is absent.
+    /// existing blob; revision zero means the key is absent.
     pub outcome: NativePersistenceSaveOutcome,
     pub revision: u64,
-    pub schema_version: u32,
 }
 
 #[repr(C)]
@@ -71,7 +69,6 @@ pub struct NativePersistenceLoadRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct NativePersistenceBlobInfo {
     pub present: bool,
-    pub schema_version: u32,
     pub revision: u64,
     pub payload_len: usize,
 }

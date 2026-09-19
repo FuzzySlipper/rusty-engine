@@ -38,7 +38,6 @@ public sealed class VoxelHistoryPersistenceStore : IDisposable
         return _persistence.Save(new PersistenceSaveRequest(
             _store,
             key,
-            _codec.SchemaVersion,
             guard,
             expectedRevision,
             export));
@@ -53,10 +52,7 @@ public sealed class VoxelHistoryPersistenceStore : IDisposable
         {
             return new VoxelHistoryPersistenceLoad(false, 0, default);
         }
-        if (info.SchemaVersion != _codec.SchemaVersion)
-        {
-            throw new InvalidOperationException($"Voxel history at '{key}' has schema {info.SchemaVersion}, but Engine requires {_codec.SchemaVersion}.");
-        }
+        // RestoreHistory owns decoding and checking the format embedded in the payload.
         if (info.PayloadLen > _codec.MaxEncodedBytes)
         {
             throw new InvalidOperationException($"Voxel history at '{key}' exceeds the Engine codec bound.");

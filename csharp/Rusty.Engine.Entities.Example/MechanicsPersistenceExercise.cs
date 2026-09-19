@@ -101,8 +101,8 @@ internal static class MechanicsPersistenceExercise
             new PersistenceEngineContext(persistence), "mechanics-example",
             new JsonProductStateCodec<MechanicsSave>(MechanicsPersistenceJsonContext.Default.MechanicsSave));
         PersistenceSaveReceipt saved = store.Save("session", save);
-        Require(saved.Outcome == PersistenceSaveOutcome.Saved && saved.SchemaVersion == 0,
-            "the mechanics save did not report a versionless save");
+        Require(saved.Outcome == PersistenceSaveOutcome.Saved,
+            "the mechanics save did not report success");
         ProductStateLoad<MechanicsSave> loaded = store.Load("session");
         if (!loaded.Present || loaded.State is null)
             throw new InvalidOperationException("the mechanics save did not load");

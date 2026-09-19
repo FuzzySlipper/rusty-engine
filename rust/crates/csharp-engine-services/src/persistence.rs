@@ -1,12 +1,9 @@
 //! Durable opaque product-byte storage behind the generated NativeAOT table.
 //!
-//! Callers supply state bytes; the per-blob version word is carried opaquely
-//! and assigned no migration meaning here. Ordinary product saves claim no
-//! schema (zero); Engine-internal consumers such as voxel history supply their
-//! own codec versions in the same word. This owner supplies relative-key
-//! admission, revisions, atomic replacement, failure preservation, and explicit
-//! retained blob lifetime. The file header magic identifies this storage
-//! format; it is not a product-save compatibility contract.
+//! Callers supply opaque bytes. This owner supplies relative-key admission,
+//! revisions, atomic replacement, failure preservation, and retained blob lifetime.
+//! The header magic identifies only the storage layout; payload formats belong
+//! to their codecs, not this service.
 
 use std::{
     collections::BTreeMap,
@@ -19,10 +16,10 @@ use std::{
 
 use csharp_engine_abi::*;
 
-use crate::{composition::borrowed_utf8, composition::ABI_OK};
+use crate::{composition::ABI_OK, composition::borrowed_utf8};
 
-const HEADER_MAGIC: [u8; 4] = *b"RSP1";
-const HEADER_LEN: usize = 4 + 4 + 8 + 8;
+const HEADER_MAGIC: [u8; 4] = *b"RSP2";
+const HEADER_LEN: usize = 4 + 8 + 8;
 const MAX_PRODUCT_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -33,7 +30,6 @@ struct DurableStore {
 #[derive(Debug, Clone)]
 struct PersistenceBlob {
     present: bool,
-    schema_version: u32,
     revision: u64,
     payload: Vec<u8>,
 }
@@ -195,7 +191,6 @@ unsafe extern "C" fn save(
             *receipt = NativePersistenceSaveReceipt {
                 outcome: NativePersistenceSaveOutcome::RevisionConflict,
                 revision: current.as_ref().map_or(0, |blob| blob.revision),
-                schema_version: current.as_ref().map_or(0, |blob| blob.schema_version),
             };
         }
         return ABI_OK;
@@ -209,7 +204,6 @@ unsafe extern "C" fn save(
     };
     let next = PersistenceBlob {
         present: true,
-        schema_version: request.schema_version,
         revision,
         payload,
     };
@@ -220,7 +214,6 @@ unsafe extern "C" fn save(
         *receipt = NativePersistenceSaveReceipt {
             outcome: NativePersistenceSaveOutcome::Saved,
             revision,
-            schema_version: request.schema_version,
         };
     }
     ABI_OK
@@ -251,7 +244,6 @@ unsafe extern "C" fn load(
         Ok(Some(blob)) => blob,
         Ok(None) => PersistenceBlob {
             present: false,
-            schema_version: 0,
             revision: 0,
             payload: Vec::new(),
         },
@@ -325,7 +317,6 @@ unsafe extern "C" fn describe_blob(
     unsafe {
         *receipt = NativePersistenceBlobInfo {
             present: blob.present,
-            schema_version: blob.schema_version,
             revision: blob.revision,
             payload_len: blob.payload.len(),
         };
@@ -417,9 +408,8 @@ fn read_blob(path: &Path) -> Result<Option<PersistenceBlob>, ()> {
     if header[..4] != HEADER_MAGIC {
         return Err(());
     }
-    let schema_version = u32::from_le_bytes(header[4..8].try_into().map_err(|_| ())?);
-    let revision = u64::from_le_bytes(header[8..16].try_into().map_err(|_| ())?);
-    let payload_len = u64::from_le_bytes(header[16..24].try_into().map_err(|_| ())?);
+    let revision = u64::from_le_bytes(header[4..12].try_into().map_err(|_| ())?);
+    let payload_len = u64::from_le_bytes(header[12..20].try_into().map_err(|_| ())?);
     let payload_len: usize = payload_len.try_into().map_err(|_| ())?;
     if payload_len > MAX_PRODUCT_PAYLOAD_BYTES {
         return Err(());
@@ -431,7 +421,6 @@ fn read_blob(path: &Path) -> Result<Option<PersistenceBlob>, ()> {
     }
     Ok(Some(PersistenceBlob {
         present: true,
-        schema_version,
         revision,
         payload,
     }))
@@ -457,8 +446,6 @@ fn write_atomically(path: &Path, blob: &PersistenceBlob) -> Result<(), ()> {
             .open(&temporary)
             .map_err(|_| ())?;
         file.write_all(&HEADER_MAGIC).map_err(|_| ())?;
-        file.write_all(&blob.schema_version.to_le_bytes())
-            .map_err(|_| ())?;
         file.write_all(&blob.revision.to_le_bytes())
             .map_err(|_| ())?;
         file.write_all(&(blob.payload.len() as u64).to_le_bytes())
@@ -501,7 +488,6 @@ mod tests {
                 bytes: key.as_ptr(),
                 len: key.len(),
             },
-            schema_version: 7,
             revision_guard: NativePersistenceRevisionGuard::Absent,
             expected_revision: 0,
             payload: NativeByteSlice {
@@ -546,16 +532,12 @@ mod tests {
         assert_eq!(unsafe { load(context, &load_request, &mut blob) }, ABI_OK);
         let mut info = NativePersistenceBlobInfo {
             present: false,
-            schema_version: 0,
             revision: 0,
             payload_len: 0,
         };
         assert_eq!(unsafe { describe_blob(context, blob, &mut info) }, ABI_OK);
         assert!(info.present);
-        assert_eq!(
-            (info.schema_version, info.revision, info.payload_len),
-            (7, 1, 5)
-        );
+        assert_eq!((info.revision, info.payload_len), (1, 5));
         let mut copied = vec![0; info.payload_len];
         let copy = NativePersistenceCopyBlobRequest {
             blob,
@@ -585,7 +567,29 @@ mod tests {
 
         assert_eq!(unsafe { destroy_blob(context, blob) }, ABI_OK);
         assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
-        assert!(root.path().join("campaign/campaign.state").is_file());
+        let path = root.path().join("campaign/campaign.state");
+        assert!(path.is_file());
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), HEADER_LEN + first_payload.len());
+        assert_eq!(&bytes[..4], b"RSP2");
+        // Reopen through a fresh bridge: the roundtrip must use disk, not live handles.
+        drop(bridge);
+        let mut reopened = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+        let context = (&mut reopened as *mut RuntimePersistenceBridge).cast();
+        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        let request = NativePersistenceLoadRequest {
+            store,
+            ..load_request
+        };
+        assert_eq!(unsafe { load(context, &request, &mut blob) }, ABI_OK);
+        assert_eq!(unsafe { describe_blob(context, blob, &mut info) }, ABI_OK);
+        assert_eq!((info.revision, info.payload_len), (1, first_payload.len()));
+        let copy = NativePersistenceCopyBlobRequest { blob, ..copy };
+        copied.fill(0);
+        assert_eq!(unsafe { copy_blob(context, &copy) }, ABI_OK);
+        assert_eq!(copied, first_payload);
+        assert_eq!(unsafe { destroy_blob(context, blob) }, ABI_OK);
+        assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
     }
 
     #[test]

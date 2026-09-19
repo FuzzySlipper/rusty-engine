@@ -30,8 +30,8 @@ internal static class ExpeditionProof
             new ProofEngineContext(persistence), "json-aot-proof",
             new JsonProductStateCodec<ExpeditionLog>(ExpeditionJsonContext.Default.ExpeditionLog));
         PersistenceSaveReceipt saved = store.Save("expedition", log);
-        Require(saved.Outcome == PersistenceSaveOutcome.Saved && saved.SchemaVersion == 0,
-            "the AOT save did not report a versionless save");
+        Require(saved.Outcome == PersistenceSaveOutcome.Saved,
+            "the AOT save did not report success");
         ProductStateLoad<ExpeditionLog> loaded = store.Load("expedition");
         ExpeditionLog? expedition = loaded.State;
         Require(loaded.Present && loaded.Revision == saved.Revision && expedition is not null
@@ -43,7 +43,7 @@ internal static class ExpeditionProof
             "the AOT roundtrip did not preserve nested data and collections");
 
         Require(!store.Load("never-saved").Present, "a missing AOT save did not report absent");
-        persistence.Seed("json-aot-proof", "corrupt", 0, "{not json"u8.ToArray());
+        persistence.Seed("json-aot-proof", "corrupt", "{not json"u8.ToArray());
         JsonException? malformed = null;
         try
         {
@@ -54,7 +54,7 @@ internal static class ExpeditionProof
             malformed = error;
         }
         Require(malformed is not null, "invalid JSON did not fail with an understandable error");
-        persistence.Seed("json-aot-proof", "nulldoc", 0, "null"u8.ToArray());
+        persistence.Seed("json-aot-proof", "nulldoc", "null"u8.ToArray());
         InvalidOperationException? nullDoc = null;
         try
         {
@@ -141,7 +141,7 @@ internal sealed class MemoryPersistenceService : IPersistenceService
         _saved.TryGetValue(key, out Stored? previous);
         ulong revision = (previous?.Revision ?? 0) + 1;
         _saved[key] = new Stored(revision, request.Payload.ToArray());
-        return new PersistenceSaveReceipt(revision, request.SchemaVersion);
+        return new PersistenceSaveReceipt(revision);
     }
 
     public PersistenceBlob Load(PersistenceLoadRequest request)
@@ -156,7 +156,7 @@ internal sealed class MemoryPersistenceService : IPersistenceService
     public PersistenceBlobInfo DescribeBlob(PersistenceBlob blob)
     {
         Stored saved = _blobs[blob.Handle.Value];
-        return new PersistenceBlobInfo(saved.Revision != 0, 0, saved.Revision, (nuint)saved.Payload.Length);
+        return new PersistenceBlobInfo(saved.Revision != 0, saved.Revision, (nuint)saved.Payload.Length);
     }
 
     public void CopyBlob(PersistenceCopyBlobRequest request)
@@ -165,6 +165,6 @@ internal sealed class MemoryPersistenceService : IPersistenceService
     public ReadOnlyMemory<byte> ReadBlobBytes(PersistenceBlob blob)
         => _blobs[blob.Handle.Value].Payload;
 
-    public void Seed(string scope, string key, uint schemaVersion, byte[] payload)
+    public void Seed(string scope, string key, byte[] payload)
         => _saved[(scope, key)] = new Stored(1, payload);
 }

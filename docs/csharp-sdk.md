@@ -1326,6 +1326,13 @@ malformed bytes fail in deserialization; a JSON null document fails rather than 
 to a missing value. Custom binary codecs stay available through the same small
 `IProductStateCodec<T>` contract.
 
+The direct Persistence requests, receipts and blobs also carry no product schema
+version. Storage owns only its file layout marker and revision; specialized codecs
+(such as voxel edit history) identify their own payload format during decoding.
+The current layout replaces the old schema-bearing envelope without migration;
+old development save files must be discarded or explicitly converted by their owner.
+
+
 `StatsComponentCapture.Capture` reads a component's selected stat/track values as plain
 data and `Rebuild` reconstructs an equivalent set with each track sharing its rebuilt
 maximum `Stat` — later stat changes reach the same track. Authored stat sources are not

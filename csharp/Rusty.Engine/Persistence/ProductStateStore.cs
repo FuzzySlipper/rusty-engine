@@ -25,14 +25,6 @@ public readonly record struct ProductStateLoad<TState>(bool Present, ulong Revis
 /// </summary>
 public sealed class ProductStateStore<TState> : IDisposable
 {
-    /// <summary>
-    /// The ordinary product path claims no schema. The storage envelope still carries a
-    /// version word owned by the Rust persistence service, which reports it opaquely and
-    /// assigns it no migration meaning; Engine-internal consumers such as voxel history
-    /// supply their own codec versions there. Zero means this save names no product schema.
-    /// </summary>
-    private const uint NoProductSchemaVersion = 0;
-
     private readonly IPersistenceService _persistence;
     private readonly PersistenceStore _store;
     private readonly IProductStateCodec<TState> _codec;
@@ -63,7 +55,6 @@ public sealed class ProductStateStore<TState> : IDisposable
         return _persistence.Save(new PersistenceSaveRequest(
             _store,
             key,
-            NoProductSchemaVersion,
             guard,
             expectedRevision,
             payload.WrittenMemory));
