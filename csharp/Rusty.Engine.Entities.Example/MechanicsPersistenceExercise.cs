@@ -19,6 +19,7 @@ internal static class MechanicsPersistenceExercise
 {
     public static void Run()
     {
+        ExerciseSharedRestore();
         // Live source session: one stat with a modifier, one track over it, one effect,
         // one stack grant, one unique item equipped in one slot.
         CapacityMetricId weight = CapacityMetricId.Parse("weight");
@@ -221,6 +222,73 @@ internal static class MechanicsPersistenceExercise
                 MidpointRounding.AwayFromZero, MidpointRounding.AwayFromZero)]);
         ThrowsInvalidOperation(() => StatsComponentCapture.Rebuild(unknownMaximum),
             "an unknown track maximum did not fail rebuild");
+    }
+
+    private static void ExerciseSharedRestore()
+    {
+        StatId primary = StatId.Parse("health-max");
+        StatId alias = StatId.Parse("vitality");
+        TrackId health = TrackId.Parse("health");
+        TrackId healthAlias = TrackId.Parse("life");
+        var source = new StatSource(
+            new RequestSourceIdentity(OperationId.Parse("equip"), SourceInstanceId.Parse("belt")),
+            SourceDefinitionId.Parse("belt"), 0,
+            [new StatContributionDefinition(primary, StackingGroupId.Parse("bonus"),
+                MechanicsStackingPolicy.Sum, new StatContribution.Add(50))]);
+
+        // Test both previously throwing current > bare maximum and the subtler case
+        // where applying sources after track creation would change an in-range current.
+        foreach (double current in new[] { 140d, 80d })
+        {
+            var stat = new Stat(100);
+            StatModifierHandle originalHandle = stat.AddModifier(10);
+            stat.SetSources(primary, [source]);
+            var track = new Track(stat, current: current,
+                maximumChangePolicy: TrackMaximumChangePolicy.PreserveMissingAmount);
+            var component = new StatsComponent();
+            // Insert aliases first: selection and preservation must not depend on insertion order.
+            component.AddStat(alias, stat);
+            component.AddStat(primary, stat);
+            component.AddTrack(healthAlias, track);
+            component.AddTrack(health, track);
+
+            StatsComponentSnapshot captured = StatsComponentCapture.Capture(component);
+            var codec = new JsonProductStateCodec<StatsComponentSnapshot>(
+                MechanicsPersistenceJsonContext.Default.StatsComponentSnapshot);
+            var bytes = new System.Buffers.ArrayBufferWriter<byte>();
+            codec.Encode(captured, bytes);
+            StatsComponentSnapshot loaded = codec.Decode(bytes.WrittenSpan);
+            StatModifierHandle? restoredHandle = null;
+            int callbacks = 0;
+            StatsComponent restored = StatsComponentCapture.Rebuild(loaded, (saved, rebuilt, handles) =>
+            {
+                callbacks++;
+                Require(saved.Id == primary.Value && handles.Count == 1,
+                    "restore callback must run once for the canonical stat with ordered handles");
+                rebuilt.SetSources(primary, [source]);
+                restoredHandle = handles[0];
+            });
+            Stat restoredStat = restored.GetStat(alias);
+            Track restoredTrack = restored.GetTrack(healthAlias);
+            Require(callbacks == 1 && ReferenceEquals(restoredStat, restored.GetStat(primary))
+                && ReferenceEquals(restoredTrack, restored.GetTrack(health))
+                && ReferenceEquals(restoredTrack.Maximum, restoredStat),
+                "JSON restore broke stat, track, or maximum aliases");
+            Require(restoredTrack.Current == current && restoredTrack.MaximumValue == 160,
+                "restoring sources must not change captured current");
+            restoredStat.BaseValue = 120;
+            Require(restoredTrack.Current == current + 20 && track.Current == current,
+                "restored aliases must share subsequent changes without changing the original");
+            Require(!restoredStat.RemoveModifier(originalHandle)
+                && restoredStat.RemoveModifier(restoredHandle!)
+                && !restoredStat.RemoveModifier(restoredHandle!),
+                "product must be able to remove the restored modifier with its fresh handle");
+            Require(restoredTrack.MaximumValue == 170 && restoredTrack.Current == current + 10,
+                "removing a restored modifier must update the same shared track exactly once");
+            restoredTrack.Spend(5);
+            Require(restored.GetTrack(health).Current == current + 5,
+                "track aliases must share current-value changes");
+        }
     }
 
     private static void Require(bool condition, string message)

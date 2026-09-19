@@ -1336,7 +1336,23 @@ old development save files must be discarded or explicitly converted by their ow
 `StatsComponentCapture.Capture` reads a component's selected stat/track values as plain
 data and `Rebuild` reconstructs an equivalent set with each track sharing its rebuilt
 maximum `Stat` — later stat changes reach the same track. Authored stat sources are not
-captured; re-supply them via `SetSources`. Effects rebuild by re-applying definitions
+captured; re-supply them via `SetSources` in the optional `restoreStat` callback,
+before any tracks are constructed. That callback runs once per distinct stat and
+receives fresh modifier removal handles in capture order; retain them with the
+product-owned temporary effects that will later remove those modifiers. Without
+the callback, captured local modifiers remain attached for the rebuilt stat's lifetime.
+Multiple names for the same Stat or Track are captured as aliases and rebuild to
+the same instance. The callback receives the ordinal-first stat name, not each alias.
+
+```csharp
+StatsComponent restored = StatsComponentCapture.Rebuild(saved, (capture, stat, handles) =>
+{
+    stat.SetSources(StatId.Parse(capture.Id), sourcesByStat[capture.Id]);
+    restoredModifierHandles[capture.Id] = handles; // product-owned removal associations
+});
+```
+
+Effects rebuild by re-applying definitions
 with fresh instance ids and product provenance through `EffectsComponent.Apply`;
 inventory rebuilds by re-registering, granting stacks, materializing uniques under
 product-mapped fresh entities, and equipping with re-supplied slot definitions.

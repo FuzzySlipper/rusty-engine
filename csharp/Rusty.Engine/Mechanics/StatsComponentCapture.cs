@@ -32,7 +32,14 @@ public sealed record TrackCapture(
 /// <summary>Selected values for one StatsComponent: plain data with no live references.</summary>
 public sealed record StatsComponentSnapshot(
     IReadOnlyList<StatCapture> Stats,
-    IReadOnlyList<TrackCapture> Tracks);
+    IReadOnlyList<TrackCapture> Tracks)
+{
+    public IReadOnlyList<MechanicsAlias> StatAliases { get; init; } = [];
+    public IReadOnlyList<MechanicsAlias> TrackAliases { get; init; } = [];
+}
+
+/// <summary>Another component key for the same captured object, not a copy of its values.</summary>
+public sealed record MechanicsAlias(string Id, string TargetId);
 
 /// <summary>
 /// Captures a StatsComponent's selected values and rebuilds an equivalent component set.
@@ -46,7 +53,7 @@ public sealed record StatsComponentSnapshot(
 /// </para>
 /// <para>
 /// Explicit product choices, not captured here: authored stat sources and provenance
-/// (re-supply via SetSources), effect definitions and instance identities (re-apply via
+/// (re-supply via SetSources in the restoreStat callback), effect definitions and instance identities (re-apply via
 /// EffectsComponent.Apply with fresh ids), item and slot definitions (re-supply to the
 /// inventory store), and durable-to-runtime identity mapping (product-owned). Existing
 /// constructors keep their validation, so hand-edited snapshots fail loudly at rebuild.
@@ -62,8 +69,18 @@ public static class StatsComponentCapture
     {
         ArgumentNullException.ThrowIfNull(component);
         var stats = new List<StatCapture>(component.Stats.Count);
+        var statIds = new Dictionary<Stat, string>(ReferenceEqualityComparer.Instance);
+        var statAliases = new List<MechanicsAlias>();
+        var trackIds = new Dictionary<Track, string>(ReferenceEqualityComparer.Instance);
+        var trackAliases = new List<MechanicsAlias>();
         foreach ((StatId id, Stat stat) in component.Stats.OrderBy(entry => entry.Key.Value, StringComparer.Ordinal))
         {
+            if (statIds.TryGetValue(stat, out string? existing))
+            {
+                statAliases.Add(new MechanicsAlias(id.Value, existing));
+                continue;
+            }
+            statIds.Add(stat, id.Value);
             stats.Add(new StatCapture(
                 id.Value,
                 stat.BaseValue,
@@ -78,15 +95,20 @@ public static class StatsComponentCapture
         var tracks = new List<TrackCapture>(component.Tracks.Count);
         foreach ((TrackId id, Track track) in component.Tracks.OrderBy(entry => entry.Key.Value, StringComparer.Ordinal))
         {
-            StatId? maximumId = component.Stats.FirstOrDefault(entry => ReferenceEquals(entry.Value, track.Maximum)).Key;
-            if (maximumId is null)
+            if (trackIds.TryGetValue(track, out string? existing))
+            {
+                trackAliases.Add(new MechanicsAlias(id.Value, existing));
+                continue;
+            }
+            trackIds.Add(track, id.Value);
+            if (!statIds.TryGetValue(track.Maximum, out string? maximumId))
             {
                 throw new InvalidOperationException(
                     $"Track '{id.Value}' has a maximum stat outside this component; capture requires shared component ownership.");
             }
             tracks.Add(new TrackCapture(
                 id.Value,
-                maximumId.Value,
+                maximumId,
                 track.Value,
                 track.Minimum,
                 track.MaximumChangePolicy,
@@ -95,7 +117,11 @@ public static class StatsComponentCapture
                 track.IntegerRounding));
         }
 
-        return new StatsComponentSnapshot(stats, tracks);
+        return new StatsComponentSnapshot(stats, tracks)
+        {
+            StatAliases = statAliases,
+            TrackAliases = trackAliases,
+        };
     }
 
     /// <summary>
@@ -103,7 +129,13 @@ public static class StatsComponentCapture
     /// tracks share the rebuilt maximum instances. Throws on unknown maximum ids, duplicate
     /// ids, or values the existing constructors reject.
     /// </summary>
-    public static StatsComponent Rebuild(StatsComponentSnapshot snapshot)
+    /// <param name="snapshot">Selected values and aliases to rebuild.</param>
+    /// <param name="restoreStat">Optional product composition, called once per distinct stat
+    /// after local modifiers are restored and before any tracks exist. Re-supply authored
+    /// sources here and retain modifier handles in capture order for later removal. The Id
+    /// is the canonical (ordinal-first) captured key; aliases do not invoke this callback again.</param>
+    public static StatsComponent Rebuild(StatsComponentSnapshot snapshot,
+        Action<StatCapture, Stat, IReadOnlyList<StatModifierHandle>>? restoreStat = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var rebuilt = new StatsComponent();
@@ -117,12 +149,21 @@ public static class StatsComponentCapture
                 quantum: captured.Quantum,
                 rounding: captured.Rounding,
                 integerRounding: captured.IntegerRounding);
+            var handles = new List<StatModifierHandle>(captured.Modifiers.Count);
             foreach (StatModifier modifier in captured.Modifiers)
             {
-                stat.AddModifier(modifier.Amount, modifier.Kind);
+                handles.Add(stat.AddModifier(modifier.Amount, modifier.Kind));
             }
+            restoreStat?.Invoke(captured, stat, handles);
             rebuilt.AddStat(StatId.Parse(captured.Id), stat);
             stats.Add(captured.Id, stat);
+        }
+
+        foreach (MechanicsAlias alias in snapshot.StatAliases)
+        {
+            Stat stat = stats[alias.TargetId];
+            stats.Add(alias.Id, stat);
+            rebuilt.AddStat(StatId.Parse(alias.Id), stat);
         }
 
         foreach (TrackCapture captured in snapshot.Tracks)
@@ -144,6 +185,10 @@ public static class StatsComponentCapture
                     integerRounding: captured.IntegerRounding));
         }
 
+        foreach (MechanicsAlias alias in snapshot.TrackAliases)
+        {
+            rebuilt.AddTrack(TrackId.Parse(alias.Id), rebuilt.GetTrack(TrackId.Parse(alias.TargetId)));
+        }
         return rebuilt;
     }
 }
