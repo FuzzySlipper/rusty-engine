@@ -11,7 +11,7 @@ using System.Text.Json.Serialization;
 /// <remarks>
 /// Explicit product choices demonstrated here, not Engine policy: authored definitions
 /// (items, slots, effects) are re-supplied; effect instances and provenance are fresh;
-/// runtime-to-fresh identity mapping is a product-owned table (a definition-keyed map and a
+/// runtime-to-fresh identity mapping is a product-owned table (a save-local instance-key map and a
 /// fresh-id counter stand in for it); stat sources are not captured. What the Engine owns:
 /// shared Stat identity for track maximums, modifier values, and validation on rebuild.
 /// </remarks>
@@ -21,7 +21,7 @@ internal static class MechanicsPersistenceExercise
     {
         ExerciseSharedRestore();
         // Live source session: one stat with a modifier, one track over it, one effect,
-        // one stack grant, one unique item equipped in one slot.
+        // one stack grant, two identical swords and one multi-slot item.
         CapacityMetricId weight = CapacityMetricId.Parse("weight");
         ItemClassificationId weapon = ItemClassificationId.Parse("weapon");
         var potion = new ItemDefinition(
@@ -33,6 +33,13 @@ internal static class MechanicsPersistenceExercise
             capacityCosts: [new ItemCapacityCost(weight, 3)],
             equipment: new ItemEquipmentPolicy(1));
         var mainHand = new EquipmentSlotDefinition(EquipmentSlotId.Parse("main-hand"), [weapon]);
+        var offHand = new EquipmentSlotDefinition(EquipmentSlotId.Parse("off-hand"), [weapon]);
+        var backLeft = new EquipmentSlotDefinition(EquipmentSlotId.Parse("back-left"), [weapon]);
+        var backRight = new EquipmentSlotDefinition(EquipmentSlotId.Parse("back-right"), [weapon]);
+        var greatsword = new ItemDefinition(
+            ItemDefinitionId.Parse("greatsword"), ItemKind.Unique, maximumQuantity: 1,
+            classifications: [weapon], capacityCosts: [new ItemCapacityCost(weight, 5)],
+            equipment: new ItemEquipmentPolicy(2));
         var burning = new EffectDefinition(
             EffectDefinitionId.Parse("burning"), StackingGroupId.Parse("fire"),
             EffectStackingPolicy.IndependentByProvenance, maximumInstances: 4, maximumStacks: 3);
@@ -62,6 +69,12 @@ internal static class MechanicsPersistenceExercise
         EntityId swordEntity = new(511);
         inventory.MaterializeUnique(new ItemState(swordEntity, sword), owner);
         inventory.Equip(owner, swordEntity, [mainHand]);
+        EntityId secondSwordEntity = new(512);
+        EntityId greatswordEntity = new(513);
+        inventory.MaterializeUnique(new ItemState(secondSwordEntity, sword), owner);
+        inventory.MaterializeUnique(new ItemState(greatswordEntity, greatsword), owner);
+        inventory.Equip(owner, secondSwordEntity, [offHand]);
+        inventory.Equip(owner, greatswordEntity, [backLeft, backRight]);
 
         // Capture selected values: stats via the Engine helper; effects and inventory via
         // their existing read paths (Effects list, inventory View, equipment assignments).
@@ -76,8 +89,11 @@ internal static class MechanicsPersistenceExercise
             throw new InvalidOperationException("inventory read did not resolve");
         EquipmentState equipment = foundEquipment;
         InventoryState state = foundInventory;
-        Dictionary<ulong, string> slotByItem = equipment.Assignments
-            .ToDictionary(assignment => assignment.Item.Value, assignment => assignment.Slot.Value);
+        var slotsByItem = equipment.Assignments.ToLookup(assignment => assignment.Item);
+        // These keys only identify instances within this save, not definitions or new runtime IDs.
+        var savedItemIds = view.UniqueItems.OrderBy(item => item.Entity.Value)
+            .Select((item, index) => (item.Entity, Id: index + 1))
+            .ToDictionary(item => item.Entity, item => item.Id);
         var save = new MechanicsSave(
             statsCapture,
             effectCaptures,
@@ -89,8 +105,9 @@ internal static class MechanicsPersistenceExercise
                 view.UniqueItems
                     .OrderBy(item => item.Definition.Value, StringComparer.Ordinal)
                     .Select(item => new UniqueItemCapture(
-                        item.Definition.Value,
-                        slotByItem.TryGetValue(item.Entity.Value, out string? slot) ? slot : null))
+                        savedItemIds[item.Entity], item.Definition.Value,
+                        slotsByItem[item.Entity].Select(assignment => assignment.Slot.Value)
+                            .OrderBy(slot => slot, StringComparer.Ordinal).ToList()))
                     .ToList(),
                 state.CapacityLimits
                     .OrderBy(limit => limit.Metric.Value, StringComparer.Ordinal)
@@ -148,42 +165,67 @@ internal static class MechanicsPersistenceExercise
         {
             [potion.Id.Value] = potion,
             [sword.Id.Value] = sword,
+            [greatsword.Id.Value] = greatsword,
         };
         foreach (InventoryStackCapture stack in saveState.Inventory.Stacks)
         {
             freshInventory.Grant(freshOwner, definitions[stack.Definition], stack.Quantity);
         }
-        // Product-owned fresh identity: definition-keyed stand-ins for durable mapping.
+        // Map saved instances to fresh runtime IDs; definitions are looked up separately.
         ulong nextItemValue = 601;
-        var freshItems = new Dictionary<string, EntityId>(StringComparer.Ordinal);
+        var freshItems = new Dictionary<int, EntityId>();
         foreach (UniqueItemCapture unique in saveState.Inventory.Uniques)
         {
             EntityId fresh = new(nextItemValue++);
-            freshItems.Add(unique.Definition, fresh);
+            freshItems.Add(unique.Id, fresh);
             freshInventory.MaterializeUnique(new ItemState(fresh, definitions[unique.Definition]), freshOwner);
         }
         Dictionary<string, EquipmentSlotDefinition> slots = new(StringComparer.Ordinal)
         {
             [mainHand.Id.Value] = mainHand,
+            [offHand.Id.Value] = offHand,
+            [backLeft.Id.Value] = backLeft,
+            [backRight.Id.Value] = backRight,
         };
         foreach (UniqueItemCapture unique in saveState.Inventory.Uniques)
         {
-            if (unique.Slot is not null)
+            if (unique.Slots.Count > 0)
             {
-                freshInventory.Equip(freshOwner, freshItems[unique.Definition], [slots[unique.Slot]]);
+                freshInventory.Equip(freshOwner, freshItems[unique.Id],
+                    unique.Slots.Select(slot => slots[slot]).ToArray());
             }
         }
         InventoryView freshView = freshInventory.View(freshOwner);
         Require(freshView.Stacks.Single().Definition == ItemDefinitionId.Parse("potion")
             && freshView.Stacks.Single().Quantity == 3, "granted stacks did not rebuild");
-        UniqueInventoryItem freshSword = freshView.UniqueItems.Single();
-        Require(freshSword.Definition == ItemDefinitionId.Parse("sword") && freshSword.Entity != swordEntity,
-            "the unique item did not rebuild with a fresh entity");
-        Require(freshInventory.TryGetEquipment(freshOwner, out EquipmentState? freshEquipment)
-            && freshEquipment is not null
-            && freshEquipment.Assignments.Single() is { Slot.Value: "main-hand" } assignment
-            && assignment.Item == freshSword.Entity,
-            "the equipment assignment did not rebuild on the fresh item");
+        EntityId freshSword = freshItems[savedItemIds[swordEntity]];
+        EntityId freshSecondSword = freshItems[savedItemIds[secondSwordEntity]];
+        EntityId freshGreatsword = freshItems[savedItemIds[greatswordEntity]];
+        Require(freshView.UniqueItems.Count == 3
+            && freshView.UniqueItems.Count(item => item.Definition == sword.Id) == 2
+            && freshSword != freshSecondSword
+            && freshView.UniqueItems.All(item => !savedItemIds.ContainsKey(item.Entity)),
+            "unique instances did not receive distinct fresh runtime identities");
+        // Use the live facade for reads across mutations; EquipmentState readouts are detached.
+        var freshEquipment = new EquipmentComponent(freshInventory, freshOwner);
+        var assignments = freshEquipment.Assignments.ToDictionary(item => item.Slot, item => item.Item);
+        Require(assignments.Count == 4 && assignments[mainHand.Id] == freshSword
+            && assignments[offHand.Id] == freshSecondSword
+            && assignments[backLeft.Id] == freshGreatsword
+            && assignments[backRight.Id] == freshGreatsword,
+            "restored assignments lost instance identity or multi-slot membership");
+        freshEquipment.Unequip(freshSword);
+        Require(freshEquipment.Assignments.Count == 3
+            && freshEquipment.Assignments.Single(item => item.Slot == offHand.Id).Item == freshSecondSword,
+            "unequipping one sword changed the other instance");
+        freshEquipment.Unequip(freshGreatsword);
+        Require(freshEquipment.Assignments.Count == 1,
+            "unequipping the multi-slot item did not free both slots");
+        freshEquipment.Equip(freshGreatsword, [mainHand, backLeft]);
+        Require(freshEquipment.Assignments.Count == 3
+            && freshEquipment.Assignments.Count(item => item.Item == freshGreatsword) == 2
+            && equipment.Assignments.Count == 4,
+            "restored equipment could not be used independently of the source inventory");
 
         // Reattach to a fresh entity and wrap: subsequent behavior proves live aliasing,
         // not byte equality.
@@ -308,7 +350,7 @@ internal sealed record ActiveEffectCapture(string Definition, ushort Stacks);
 
 internal sealed record InventoryStackCapture(string Definition, ulong Quantity);
 
-internal sealed record UniqueItemCapture(string Definition, string? Slot);
+internal sealed record UniqueItemCapture(int Id, string Definition, List<string> Slots);
 
 internal sealed record CapacityLimitCapture(string Metric, ulong Maximum);
 

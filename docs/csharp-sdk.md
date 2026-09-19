@@ -1356,8 +1356,12 @@ Effects rebuild by re-applying definitions
 with fresh instance ids and product provenance through `EffectsComponent.Apply`;
 inventory rebuilds by re-registering, granting stacks, materializing uniques under
 product-mapped fresh entities, and equipping with re-supplied slot definitions.
-Definitions, provenance, and durable identity mapping are product choices, documented at
-each helper.
+Keep an item's saved instance key separate from its definition ID: two swords can
+share a definition while remaining different items. The mechanics example assigns
+save-local keys, maps each to a fresh runtime entity, and stores every equipment slot
+per item (including multi-slot items). These keys are product-owned save data, not an
+Engine identity registry. Definitions, provenance, and durable identity mapping remain
+product choices.
 
 For debug inspection, opt in on the existing product execution boundary:
 
