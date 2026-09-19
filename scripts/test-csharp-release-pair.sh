@@ -8,14 +8,15 @@ set -euo pipefail
 # reference packs may still resolve from NuGet on machines that do not bundle
 # them with the installed SDK.
 
-if [[ $# -ne 1 ]]; then
-    echo "usage: scripts/test-csharp-release-pair.sh <pair.tar.gz>" >&2
+if [[ $# -lt 1 || $# -gt 2 || (${2:-} != "" && ${2:-} != --aot) ]]; then
+    echo "usage: scripts/test-csharp-release-pair.sh <pair.tar.gz> [--aot]" >&2
     exit 2
 fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 archive=$1
+run_aot=${2:-}
 "$script_dir/verify-csharp-release-pair.sh" --archive "$archive" >/dev/null
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/rusty-engine-pair-consumer.XXXXXX")
@@ -69,7 +70,7 @@ namespace PairConsumer;
 
 public sealed class Product : IEngineProduct
 {
-    public Product(ProductCreateContext context) { }
+    public Product(ProductCreateContext context) { JsonPersistenceChecks.Run(context.Engine); }
     public void Start() { }
     public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
@@ -80,6 +81,7 @@ public sealed class Product : IEngineProduct
     public void Dispose() { }
 }
 EOF
+cp "$repo_root/scripts/fixtures/JsonPersistenceChecks.cs" "$consumer/JsonPersistenceChecks.cs"
 printf '// pair-only product UI\n' > "$consumer/product-ui/main.js"
 printf 'pair-only content\n' > "$consumer/content/trial.txt"
 
@@ -117,8 +119,16 @@ grep -F 'usage: rusty dev --project' "$work/rusty-dev-help.log" >/dev/null || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not expose rusty dev" >&2
     exit 1
 }
+loaders=(coreclr)
+if [[ "$run_aot" == --aot ]]; then
+    (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild PairConsumer.csproj -t:VerifyRustyEngineAot -p:RustyEngineProductPort=0)
+    loaders+=(nativeaot)
+fi
+for loader in "${loaders[@]}"; do
+host_log="$work/runtime-host-$loader.log"
 env -u CARGO -u CARGO_HOME -u RUSTUP_HOME \
-    "$runtime/bin/rusty-product-host" --product "$staged" --loader coreclr > "$host_log" 2>&1 &
+    "$runtime/bin/rusty-product-host" --product "$staged" --loader "$loader" --persistence-root "$work/persistence-$loader" > "$host_log" 2>&1 &
 host_pid=$!
 origin=""
 for _ in $(seq 1 40); do
@@ -131,6 +141,15 @@ done
 [[ -n "$origin" ]] || { cat "$host_log" >&2; echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not launch the CoreCLR product" >&2; exit 1; }
 curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "fixture.release-pair" and .ui.entry == "product-ui/main.js"' >/dev/null \
     || { echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime did not serve the staged Product" >&2; exit 1; }
+
+[[ -s "$work/persistence-$loader/json-roundtrip/journey" ]] || {
+    echo "JSON fixture did not write real persistent state" >&2; exit 1;
+}
+kill "$host_pid"
+wait "$host_pid" || true
+host_pid=""
+echo "JSON persistence through packaged $loader host passed"
+done
 
 tampered="$work/tampered-pair"
 cp -a "$pair_root" "$tampered"
