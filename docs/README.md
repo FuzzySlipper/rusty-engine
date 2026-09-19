@@ -10,13 +10,17 @@ already exposed to C#.
   C# product, and TypeScript lanes.
 - [C# SDK guide](csharp-sdk.md) explains the current product bootstrap,
   lifecycle, services, generated output, leases, and optional managed helper
-  packages.
+  packages. Ordinary gameplay lives in its entity/mechanics sections:
+  `EntityStore` and Engine adapters, class components, `Stat`/`Track` and live
+  mechanics components, optional `InventoryEdit`, and explicit save/debug.
 - [C# SDK/runtime distribution](csharp-distribution.md) explains the exact,
   verified Linux-x64 release pair used by clean downstream CI.
 - [C# product style](csharp-product-style.md) gives a recommended, product-side
   organization that does not require a hidden Engine framework.
 - [C# capability map](csharp-capabilities.md) inventories the current generated
   service families, managed helpers, and retained native runtime mechanisms.
+  Managed-helper rows name the owning SDK guide sections; the generated
+  contracts and their Rust ABI sources remain authoritative over this summary.
 - [CoreCLR diagnostics](coreclr-diagnostics.md) covers worker discovery, standard
   managed profiling, callback breakpoints over SSH, and dumps.
 - [Runtime profiling](runtime-profiling.md) explains worker timing, runtime

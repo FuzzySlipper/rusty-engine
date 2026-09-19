@@ -136,9 +136,9 @@ native services or mandatory framework layers:
 | Namespace | Current role |
 | --- | --- |
 | [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | Optional update-pipeline and admitted-step scheduling helpers. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, scoped value edits, and selected Engine adapters. |
-| [`Rusty.Engine.Mechanics`](../csharp/Rusty.Engine/Mechanics) | Reusable managed values, stats, tracks, sources, effects, inventory, and equipment mechanisms. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product codecs, stores, and migrations. |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | `EntityStore` class/value component storage, `EntityTypeId` kind metadata, the optional `Actor` facade, scoped `EntityBatch`/`EntityEdit` value replacements, the seven responsibility adapters, and `EntityStoreDebugModule` live inspection. See the SDK guide's [entity stores](csharp-sdk.md#entity-stores-mechanics-stores-and-engine-adapters), [component attachment](csharp-sdk.md#ordinary-component-attachment), [metadata and Actor](csharp-sdk.md#entity-metadata-and-the-optional-actor-facade), and [explicit edits](csharp-sdk.md#explicit-edits-and-persistence) sections. |
+| [`Rusty.Engine.Mechanics`](../csharp/Rusty.Engine/Mechanics) | Double-backed `Stat`, referenced-maximum `Track`, `StatsComponent`/`EffectsComponent` mechanics owners, and `InventoryStore` with optional `InventoryEdit` plus live `InventoryComponent`/`EquipmentComponent` facades. See the SDK guide's [stats](csharp-sdk.md#ordinary-numeric-stats), [tracks](csharp-sdk.md#resource-tracks), [stats collections](csharp-sdk.md#entity-stats-collections), [effects/inventory](csharp-sdk.md#effects-and-owner-scoped-inventory-components), and [capture/restore/inspection](csharp-sdk.md#explicit-capture-restore-and-live-inspection) sections. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product codecs (`JsonProductStateCodec`, custom binary) and stores for the current shape (`ProductStateStore` save/load, `StatsComponentCapture` rebuild). See the SDK guide's [explicit capture, restore and live inspection](csharp-sdk.md#explicit-capture-restore-and-live-inspection). |
 | [`Rusty.Engine.StateMachine`](../csharp/Rusty.Engine/StateMachine) | Product-owned managed state-machine definitions and instances. |
 
 Using one of these namespaces is optional. A product may organize its own

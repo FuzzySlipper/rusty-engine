@@ -6,6 +6,7 @@ internal static class ClassComponentExercise
     public static void Run()
     {
         ExerciseAutomaticKeyPromotion();
+        ExerciseEntityTypeId();
         using var store = new EntityStore();
         EntityId actor = store.Create();
         EntityId other = store.Create();
@@ -126,6 +127,60 @@ internal static class ClassComponentExercise
             "automatic diagnostic keys blocked explicit descriptor registration");
     }
 
+    private static void ExerciseEntityTypeId()
+    {
+        using var store = new EntityStore();
+        Require(default(EntityTypeId) == EntityTypeId.Unspecified && !EntityTypeId.Unspecified.IsSpecified,
+            "the default TypeId was not the unspecified value");
+
+        // A descriptive code-created origin needs no authored definition, registry, or grammar.
+        var scoutKind = new EntityTypeId("code:spawn/goblin-scout");
+        EntityId first = store.Create(scoutKind);
+        EntityId second = store.Create(scoutKind);
+        Require(first != second, "distinct entities shared one runtime identity");
+        Require(store.GetTypeId(first) == scoutKind && store.GetTypeId(second) == scoutKind,
+            "distinct entities did not share one TypeId");
+        Require(store.GetTypeId(first).IsSpecified && store.GetTypeId(first).Value == "code:spawn/goblin-scout",
+            "code-created origin was not readable through ordinary entity access");
+
+        // Omitting the kind leaves ordinary creation behavior unchanged.
+        EntityId plain = store.Create();
+        Require(store.GetTypeId(plain) == EntityTypeId.Unspecified && !store.GetTypeId(plain).IsSpecified,
+            "omitted TypeId was not unspecified");
+        Require(new EntityTypeId(string.Empty) == EntityTypeId.Unspecified,
+            "empty TypeId was not treated as unspecified");
+        Require(new EntityTypeId(null!) == EntityTypeId.Unspecified && !new EntityTypeId(null!).IsSpecified,
+            "null TypeId was not treated as unspecified");
+        Require(store.GetTypeId(plain).Value == string.Empty && store.GetTypeId(plain).ToString() == string.Empty,
+            "unspecified TypeId did not expose an empty value");
+
+        // The lifecycle overload carries metadata too; creation-time kind never depends on liveness.
+        EntityId dormant = store.Create(scoutKind, EntityLifecycle.Disabled);
+        Require(store.GetTypeId(dormant) == scoutKind && store.GetLifecycle(dormant) == EntityLifecycle.Disabled,
+            "disabled creation did not retain its TypeId");
+
+        // Metadata travels with the canonical record, not component membership or lifecycle.
+        store.Add(first, new ActorState { Health = 3 });
+        store.SetLifecycle(second, EntityLifecycle.Disabled);
+        Require(store.Get<ActorState>(first).Health == 3
+            && store.Query<ActorState>().Count == 1
+            && store.Query<ActorState>(includeDisabled: true).Count == 1
+            && store.GetTypeId(first) == scoutKind
+            && store.GetTypeId(second) == scoutKind,
+            "TypeId did not stay coherent across component access and lifecycle");
+
+        var debug = new EntityStoreDebugModule();
+        debug.RegisterStore("kinds", store);
+        Require(debug.GetEntity("kinds", first.Value).Message.Contains("type=code:spawn/goblin-scout", StringComparison.Ordinal),
+            "entity inspection did not show the named kind");
+        Require(debug.GetEntity("kinds", plain.Value).Message.Contains("type=unspecified", StringComparison.Ordinal),
+            "entity inspection did not show the unspecified kind");
+
+        store.Destroy(first);
+        ThrowsInvalidOperation(() => store.GetTypeId(first), "destroyed entity metadata lookup succeeded");
+        ThrowsInvalidOperation(() => store.GetTypeId(new EntityId(999)), "unknown entity metadata lookup succeeded");
+    }
+
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
@@ -135,6 +190,13 @@ internal static class ClassComponentExercise
     {
         try { action(); }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException or ObjectDisposedException) { return; }
+        throw new InvalidOperationException(message);
+    }
+
+    private static void ThrowsInvalidOperation(Action action, string message)
+    {
+        try { action(); }
+        catch (Exception error) when (error.GetType() == typeof(InvalidOperationException)) { return; }
         throw new InvalidOperationException(message);
     }
 

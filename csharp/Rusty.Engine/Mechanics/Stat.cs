@@ -113,6 +113,13 @@ public sealed class Stat
         return true;
     }
 
+    /// <summary>
+    /// Attached modifiers as plain values, in application order. Handles are live removal tokens
+    /// and are deliberately not part of the readout: rebuilding re-adds equivalent modifiers.
+    /// </summary>
+    public IReadOnlyList<StatModifier> Modifiers =>
+        _modifiers.Select(modifier => new StatModifier(modifier.Amount, modifier.Kind)).ToArray();
+
     /// <summary>Optional authored provenance and stacking. Replaces sources, preserving local modifiers.</summary>
     public void SetSources(StatId stat, IEnumerable<StatSource> sources)
     {

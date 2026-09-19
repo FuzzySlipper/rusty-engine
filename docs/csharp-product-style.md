@@ -41,6 +41,10 @@ is the same object the product constructed. Use domain methods where they preser
 useful invariants. Add a shaped view or request when an ownership boundary benefits
 from it, and an explicit capture/rebuild representation when persistence is needed.
 Sharing references is deliberate C# aliasing, not an Engine permission boundary.
+For the current Engine mechanics vocabulary (`EntityStore`, `EntityTypeId`, `Actor`,
+`Stat`/`Track`, `StatsComponent`/`EffectsComponent`, inventory facades, explicit
+save/capture/debug), see the [C# SDK guide](csharp-sdk.md)'s entity/mechanics sections
+rather than a second copy here.
 
 ## Keep coordination thin
 

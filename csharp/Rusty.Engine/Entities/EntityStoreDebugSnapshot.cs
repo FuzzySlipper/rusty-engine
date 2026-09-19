@@ -16,6 +16,7 @@ internal sealed record EntityStoreDebugEntitySnapshot(
     EntityId Entity,
     EntityLifecycle Lifecycle,
     ulong Revision,
+    EntityTypeId TypeId,
     EntityId? Container,
     IReadOnlyList<EntityId> Children,
     IReadOnlyList<EntityStoreDebugComponentPresence> Components);

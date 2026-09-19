@@ -1,0 +1,3 @@
+# Local build outputs, like csharp/.gitignore.
+**/bin/
+**/obj/

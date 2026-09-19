@@ -655,13 +655,19 @@ pieces:
 | --- | --- |
 | [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
 | [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, scoped value edits, and managed adapters around Engine mechanisms, compiled into `Rusty.Engine`. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product-state codecs, stores, and migrations, compiled into `Rusty.Engine`. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product-state codecs and stores for the current shape, compiled into `Rusty.Engine`. No product schema versions or migrations: breaking the shape breaks old saves by product choice. |
 
 Use a helper when it fits the product's real domain. A product may compose its
 own ordinary C# architecture instead. None of these packages implies a hidden
 `ProductApplication`, `ProductBuilder`, `IProductModule`, analyzer suite,
 typed-content framework, or projection framework: those names are not current
 SDK APIs.
+
+Product- and Kit-owned typed services with meaningful rule-resolution extension points
+are ordinary C# composition, not Engine framework extension: the Engine ships no gameplay
+bus, plugin registry, or RPG rules, and Read → Decide → Apply → Publish remains a
+product-style option (see [C# product style](csharp-product-style.md)), never an Engine
+protocol.
 
 ### Entity stores, mechanics stores and Engine adapters
 
@@ -671,7 +677,7 @@ to their owning stores. The entity adapters read those facts and call named
 Engine mechanisms; they do not create another entity world or own native
 resources supplied by the caller.
 
-The campaign naming migration is source-breaking:
+The completed naming migration is source-breaking (the left column is historical):
 
 | Previous name | Current name / responsibility |
 | --- | --- |
@@ -693,8 +699,7 @@ Related adapter guards/results follow their owning adapter name and use
 `StoreRevision`. `InventoryView.StoreRevision` identifies the whole inventory
 store revision; its existing `InventoryRevision` identifies the individual owner
 inventory revision. Item receipts use `InventoryRevisionBefore` and
-`InventoryRevisionAfter`. Kinematic integration requests name their configuration
-`Settings`. Debug registration uses
+`InventoryRevisionAfter`. Debug registration uses
 `RegisterStore`, `ReplaceStore` and `UnregisterStore`; `entity.stores` lists
 registrations and debug output identifies them with `store=` / `stores=`.
 
@@ -705,10 +710,9 @@ store. The Rust spatial implementation's internal physics type is unchanged.
 `EntityStore` now accepts ordinary classes and value components in the same
 store. Unused whole-store snapshot/restore, callback mutation batches, component
 copy codecs and entity-persistence wrappers have been retired.
-During the campaign, use coordinated contributor proving copies. The final
-SDK/runtime release and downstream rollout happen together; do not combine a
-renamed SDK with a previously published runtime merely because layouts look
-similar.
+Use one exact SDK/runtime pair per [distribution](csharp-distribution.md);
+do not combine a renamed SDK with a previously published runtime merely
+because layouts look similar.
 
 ### Ordinary component attachment
 
@@ -766,6 +770,29 @@ a class with the same instance is a no-op. Destroy releases entity/component row
 and containment edges; it detaches children without destroying them. IDs stay
 nonzero and monotonic, with no reuse.
 
+### Entity metadata and the optional Actor facade
+
+`EntityStore.Create` accepts an `EntityTypeId`: kind/origin metadata describing what an
+entity is, independent of its unique runtime `EntityId` and any product-owned durable
+identity. The value is free-form and fixed at creation — `"code:spawn/goblin-scout"` needs
+no authored definition or registry — and defaults to `EntityTypeId.Unspecified`. Metadata
+travels with the canonical record and shows in `entity.list` / `entity.get` debug output.
+Read it with `GetTypeId`; it is not a component.
+
+`Actor` is an optional sealed facade over one existing entity for discoverable typed access:
+
+```csharp
+var actor = new Actor(entities, hero);
+StatsComponent stats = actor.Get<StatsComponent>();
+EntityTypeId kind = actor.TypeId;
+```
+
+Every member reads the store live, so named properties return the same attached instances —
+never copies or a mirrored state graph. Wrapping attaches nothing: unknown entities throw,
+missing components throw the store's ordinary `InvalidOperationException`, and releasing the
+facade never affects the entity (there is nothing to dispose). Downstream Kit and ruleset
+actors compose their own small wrappers holding an `Actor` rather than inheriting from it.
+
 ### Explicit edits and persistence
 
 Ordinary access never deep-copies components. Direct gameplay methods need no
@@ -781,10 +808,10 @@ internals or roll back nested references or external owners. A failed or dispose
 edit cannot publish; successful publication is idempotent. Receipts report
 structural revisions, not an ambiguous mutation count.
 
-D20 uses this path for value facts. Entity/native adapters use typed replacements
-to preflight their selected values before native commits. Their native lifetime
-and failure rules remain in force; class-aware adapter guards are a separate
-campaign task. No arbitrary mutation callback or whole-store restore is offered.
+D20 uses this path for value facts. Entity/native adapters capture their selected
+values before native commits and publish typed replacements afterward. Their native
+lifetime and failure rules remain in force. No arbitrary mutation callback or
+whole-store restore is offered.
 
 `InventoryEdit` retains detached planning required by inventory operations.
 Failed operations, stale publication, cancellation and disposal close the edit;
@@ -1281,7 +1308,7 @@ EntityStore parent relationships. Grouped operations still use the same store's
 Capture selected durable values into product-owned records on request. Save those
 records through `ProductStateStore<T>.Save`; they should not contain live component
 references, native leases, input state or presentation resources. `Load` reads and
-decodes/migrates product bytes and returns a value; it never changes the live graph.
+decodes the current shape and returns a value; it never changes the live graph.
 Build and validate replacement owners from that value, then install them at the
 product boundary. A failed decode or candidate build leaves the old owners in place.
 This does not promise rollback of independent native work already committed.
@@ -1290,6 +1317,24 @@ Rebuild shared references deliberately. For example, construct one maximum `Stat
 put it in `StatsComponent.Stats`, and pass that same object to the restored `Track`.
 D20 restores this graph through participant admission; its save contains numeric
 values and product identities rather than a serialized component graph.
+
+`JsonProductStateCodec<T>` is the ordinary JSON path over `ProductStateStore<T>`: supply
+the save type plus a `JsonTypeInfo<T>` (source-generated contexts work under NativeAOT
+without reflection) or `JsonSerializerOptions` for CoreCLR convenience, then Save/Load
+with no byte-buffer plumbing and no version scaffolding. Absent keys report absent;
+malformed bytes fail in deserialization; a JSON null document fails rather than decoding
+to a missing value. Custom binary codecs stay available through the same small
+`IProductStateCodec<T>` contract.
+
+`StatsComponentCapture.Capture` reads a component's selected stat/track values as plain
+data and `Rebuild` reconstructs an equivalent set with each track sharing its rebuilt
+maximum `Stat` — later stat changes reach the same track. Authored stat sources are not
+captured; re-supply them via `SetSources`. Effects rebuild by re-applying definitions
+with fresh instance ids and product provenance through `EffectsComponent.Apply`;
+inventory rebuilds by re-registering, granting stacks, materializing uniques under
+product-mapped fresh entities, and equipping with re-supplied slot definitions.
+Definitions, provenance, and durable identity mapping are product choices, documented at
+each helper.
 
 For debug inspection, opt in on the existing product execution boundary:
 

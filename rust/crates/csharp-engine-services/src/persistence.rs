@@ -1,8 +1,12 @@
 //! Durable opaque product-byte storage behind the generated NativeAOT table.
 //!
-//! Product code supplies state bytes, schema versions, and migration meaning.
-//! This owner supplies relative-key admission, revisions, atomic replacement,
-//! failure preservation, and explicit retained blob lifetime.
+//! Callers supply state bytes; the per-blob version word is carried opaquely
+//! and assigned no migration meaning here. Ordinary product saves claim no
+//! schema (zero); Engine-internal consumers such as voxel history supply their
+//! own codec versions in the same word. This owner supplies relative-key
+//! admission, revisions, atomic replacement, failure preservation, and explicit
+//! retained blob lifetime. The file header magic identifies this storage
+//! format; it is not a product-save compatibility contract.
 
 use std::{
     collections::BTreeMap,

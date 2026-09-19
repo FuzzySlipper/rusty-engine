@@ -69,7 +69,15 @@ public sealed class EntityStore : IDisposable
         Mutated();
     }
 
+    /// <summary>Creates one entity with unspecified kind metadata.</summary>
     public EntityId Create(EntityLifecycle lifecycle = EntityLifecycle.Active)
+        => Create(EntityTypeId.Unspecified, lifecycle);
+
+    /// <summary>
+    /// Creates one entity carrying kind/origin metadata. The TypeId is fixed at creation and
+    /// travels with the canonical entity record; it is not a component and has no registry.
+    /// </summary>
+    public EntityId Create(EntityTypeId typeId, EntityLifecycle lifecycle = EntityLifecycle.Active)
     {
         ThrowIfDisposed();
         EntityLifecycleValidation.EnsureDefined(lifecycle, nameof(lifecycle));
@@ -83,9 +91,16 @@ public sealed class EntityStore : IDisposable
         }
 
         EntityId entity = new(_state.NextEntityValue++);
-        _state.Entities.Add(entity.Value, new EntityRecord(lifecycle, 1));
+        _state.Entities.Add(entity.Value, new EntityRecord(lifecycle, 1, typeId));
         Mutated();
         return entity;
+    }
+
+    /// <summary>Reads the kind/origin metadata stored on the canonical entity record.</summary>
+    public EntityTypeId GetTypeId(EntityId entity)
+    {
+        ThrowIfDisposed();
+        return RequireEntity(entity).TypeId;
     }
 
     public EntityRevision GetEntityRevision(EntityId entity)
@@ -522,7 +537,7 @@ public sealed class EntityStore : IDisposable
             IReadOnlyList<EntityId> children = _state.ContainedChildren.TryGetValue(value, out SortedSet<ulong>? contained)
                 ? contained.Select(child => new EntityId(child)).ToArray()
                 : [];
-            entities.Add(new EntityStoreDebugEntitySnapshot(entity, record.Lifecycle, record.Revision, container, children, components.ToArray()));
+            entities.Add(new EntityStoreDebugEntitySnapshot(entity, record.Lifecycle, record.Revision, record.TypeId, container, children, components.ToArray()));
         }
 
         EntityStoreDebugComponentFamily[] componentFamilies = _state.Tables.Values
@@ -775,11 +790,12 @@ public sealed class EntityStore : IDisposable
         }
     }
 
-    internal sealed class EntityRecord(EntityLifecycle lifecycle, ulong revision)
+    internal sealed class EntityRecord(EntityLifecycle lifecycle, ulong revision, EntityTypeId typeId)
     {
         internal EntityLifecycle Lifecycle { get; set; } = lifecycle;
         internal ulong Revision { get; set; } = revision;
-        internal EntityRecord Clone() => new(Lifecycle, Revision);
+        internal EntityTypeId TypeId { get; } = typeId;
+        internal EntityRecord Clone() => new(Lifecycle, Revision, TypeId);
     }
 
     internal abstract class ComponentTable

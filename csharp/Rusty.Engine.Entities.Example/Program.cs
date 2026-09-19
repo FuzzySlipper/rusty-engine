@@ -1,5 +1,8 @@
 using System.Buffers;
 using System.Numerics;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Rusty.Engine;
 using Rusty.Engine.Entities;
 using Rusty.Engine.Mechanics;
@@ -64,6 +67,9 @@ Throws(() => world.Set(actor, health, new Health(9), healthRevision), "an old co
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
 ClassComponentExercise.Run();
+ActorExercise.Run();
+MechanicsPersistenceExercise.Run();
+ExerciseJsonPersistence();
 ExercisePreparedValueEdits();
 ExerciseEntityPersistence(world, actor, health);
 ExerciseManagedMechanics();
@@ -96,6 +102,18 @@ static void Throws(Action action, string message)
         return;
     }
     throw new InvalidOperationException(message);
+}
+
+static bool IsOrWrapsProbe(Exception? error)
+{
+    for (Exception? current = error; current is not null; current = current.InnerException)
+    {
+        if (current is ResolverProbeException)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void ExercisePreparedValueEdits()
@@ -154,16 +172,141 @@ static void ExerciseEntityPersistence(
     var persistence = new InMemoryPersistenceService();
     using var store = new ProductStateStore<EntityCheckpoint>(
         new PersistenceEngineContext(persistence), "entities-example", new EntityCheckpointCodec());
-    store.Save("checkpoint", new EntityCheckpoint(world.Get(actor, health).Current));
+    PersistenceSaveReceipt saved = store.Save("checkpoint", new EntityCheckpoint(world.Get(actor, health).Current));
+    Require(saved.Outcome == PersistenceSaveOutcome.Saved && saved.SchemaVersion == 0,
+        "the ordinary save did not report a versionless save");
     world.Set(actor, health, new Health(4));
     ProductStateLoad<EntityCheckpoint> loaded = store.Load("checkpoint");
-    Require(loaded.Present && loaded.State.Health == InitialHealth,
-        "product-owned persistence did not decode the selected value");
+    Require(loaded.Present && loaded.State.Health == InitialHealth && loaded.Revision == saved.Revision,
+        "product-owned persistence did not decode the selected value with its revision");
     // This product owns the adoption. For a multi-object save, build and validate
     // a replacement graph before swapping its owner; the byte store never rolls back gameplay.
     world.Set(actor, health, new Health(loaded.State.Health));
     Require(world.Get(actor, health).Current == InitialHealth,
         "explicit product adoption did not apply the loaded value");
+    // Guards stay optional with real storage meaning: the store forwards them untouched.
+    // Enforcement itself lives in the Rust service (covered by its own tests); the fake
+    // records rather than enforces, so this pins forwarding, not conflict behavior.
+    store.Save("checkpoint", new EntityCheckpoint(InitialHealth), PersistenceRevisionGuard.Exact, loaded.Revision);
+    Require(persistence.LastRevisionGuard == PersistenceRevisionGuard.Exact
+        && persistence.LastExpectedRevision == loaded.Revision,
+        "the revision guard was not forwarded to storage");
+    // Ordinary loads need no schema number or migration list: absent keys report absent,
+    // and malformed bytes fail in the codec rather than partially succeeding.
+    ProductStateLoad<EntityCheckpoint> missing = store.Load("never-saved");
+    Require(!missing.Present && missing.Revision == 0,
+        "a missing save did not report absent");
+    persistence.Seed("entities-example", "corrupt", 0, [0xFF, 0xFF]);
+    Exception? malformed = null;
+    try
+    {
+        store.Load("corrupt");
+    }
+    catch (InvalidOperationException error) when (error.Message.Contains("unexpected length", StringComparison.Ordinal))
+    {
+        malformed = error;
+    }
+    Require(malformed is not null, "malformed current bytes did not fail in the codec");
+}
+
+static void ExerciseJsonPersistence()
+{
+    var log = new QuestLog
+    {
+        Title = "Harbor Lights",
+        Objectives =
+        [
+            new QuestObjective { Name = "Light the beacon", Done = true },
+            new QuestObjective { Name = "Return to the harbor", Done = false },
+        ],
+        Reputation = new Dictionary<string, int> { ["harbor"] = 3, ["beacon"] = 1 },
+    };
+    // The default example shape carries no schema-version field, compatibility
+    // fingerprint, or migration branch; pin that against the serialized form.
+    string json = JsonSerializer.Serialize(log, QuestLogJsonContext.Default.QuestLog);
+    Require(!json.Contains("schema", StringComparison.OrdinalIgnoreCase)
+        && !json.Contains("migrat", StringComparison.OrdinalIgnoreCase)
+        && !json.Contains("fingerprint", StringComparison.OrdinalIgnoreCase),
+        "the example save shape smuggled in versioning vocabulary");
+
+    var persistence = new InMemoryPersistenceService();
+    using var store = new ProductStateStore<QuestLog>(
+        new PersistenceEngineContext(persistence), "json-example",
+        new JsonProductStateCodec<QuestLog>(QuestLogJsonContext.Default.QuestLog));
+    PersistenceSaveReceipt saved = store.Save("quest", log);
+    Require(saved.Outcome == PersistenceSaveOutcome.Saved && saved.SchemaVersion == 0,
+        "the JSON save did not report a versionless save");
+    ProductStateLoad<QuestLog> loaded = store.Load("quest");
+    QuestLog? quest = loaded.State;
+    Require(loaded.Present && loaded.Revision == saved.Revision && quest is not null
+        && quest.Title == "Harbor Lights"
+        && quest.Objectives.Count == 2
+        && quest.Objectives[0].Name == "Light the beacon" && quest.Objectives[0].Done
+        && !quest.Objectives[1].Done
+        && quest.Reputation["harbor"] == 3 && quest.Reputation["beacon"] == 1,
+        "the JSON roundtrip did not preserve nested data and collections");
+
+    ProductStateLoad<QuestLog> missing = store.Load("never-saved");
+    Require(!missing.Present && missing.Revision == 0, "a missing JSON save did not report absent");
+    persistence.Seed("json-example", "corrupt", 0, "{not json"u8.ToArray());
+    JsonException? malformed = null;
+    try
+    {
+        store.Load("corrupt");
+    }
+    catch (JsonException error)
+    {
+        malformed = error;
+    }
+    Require(malformed is not null, "invalid JSON did not fail with an understandable error");
+    persistence.Seed("json-example", "nulldoc", 0, "null"u8.ToArray());
+    InvalidOperationException? nullDoc = null;
+    try
+    {
+        store.Load("nulldoc");
+    }
+    catch (InvalidOperationException error) when (error.Message.Contains("decoded to null", StringComparison.Ordinal))
+    {
+        nullDoc = error;
+    }
+    Require(nullDoc is not null, "a JSON null document did not fail the load");
+
+    // The options overload is CoreCLR convenience over reflection-based metadata: prove it
+    // resolves the right type and honors its options through public behavior. Trailing commas
+    // decode only because AllowTrailingCommas flows through; default options would throw.
+    using var trailingStore = new ProductStateStore<QuestLog>(
+        new PersistenceEngineContext(persistence), "json-example",
+        new JsonProductStateCodec<QuestLog>(new JsonSerializerOptions { AllowTrailingCommas = true }));
+    persistence.Seed("json-example", "trailing", 0, """{"Title":"Seeded","Objectives":[],"Reputation":{},}"""u8.ToArray());
+    ProductStateLoad<QuestLog> trailing = trailingStore.Load("trailing");
+    Require(trailing.Present && trailing.State is not null && trailing.State.Title == "Seeded",
+        "the options-based codec did not honor its serialization options");
+
+    // The caller's configured chain is consulted before any reflection fallback: a resolver
+    // that explodes on consultation must surface its own failure, not a metadata error.
+    var probeOptions = new JsonSerializerOptions();
+    var probe = new ExplodingResolver();
+    probeOptions.TypeInfoResolverChain.Add(probe);
+    Exception? probeFailure = null;
+    try
+    {
+        _ = new JsonProductStateCodec<QuestLog>(probeOptions);
+    }
+    catch (Exception error)
+    {
+        probeFailure = error;
+    }
+    Require(probe.Consulted && IsOrWrapsProbe(probeFailure),
+        "the configured resolver was not consulted first");
+
+    // Null options mean the shared defaults; reflection still resolves the shape.
+    using var defaultStore = new ProductStateStore<QuestLog>(
+        new PersistenceEngineContext(persistence), "json-example",
+        new JsonProductStateCodec<QuestLog>((JsonSerializerOptions?)null));
+    persistence.Seed("json-example", "defaulted", 0, """{"Title":"Defaulted","Objectives":[],"Reputation":{}}"""u8.ToArray());
+    ProductStateLoad<QuestLog> defaulted = defaultStore.Load("defaulted");
+    Require(defaulted.Present && defaulted.State is not null && defaulted.State.Title == "Defaulted",
+        "null options did not resolve shared-default metadata");
 }
 
 static void ExerciseManagedMechanics()
@@ -816,6 +959,9 @@ sealed class InMemoryPersistenceService : IPersistenceService
     private readonly Dictionary<(string Scope, string Key), Saved> _saved = [];
     private ulong _nextHandle = 1;
 
+    public PersistenceRevisionGuard LastRevisionGuard { get; private set; } = PersistenceRevisionGuard.Any;
+    public ulong LastExpectedRevision { get; private set; }
+
     public PersistenceStore OpenStore(PersistenceOpenRequest request)
     {
         ulong handle = _nextHandle++;
@@ -830,6 +976,8 @@ sealed class InMemoryPersistenceService : IPersistenceService
         _saved.TryGetValue(key, out Saved? previous);
         ulong revision = (previous?.Revision ?? 0) + 1;
         _saved[key] = new Saved(request.SchemaVersion, revision, request.Payload.ToArray());
+        LastRevisionGuard = request.RevisionGuard;
+        LastExpectedRevision = request.ExpectedRevision;
         return new PersistenceSaveReceipt(revision, request.SchemaVersion);
     }
 
@@ -1079,11 +1227,42 @@ readonly record struct Armor(int Current);
 readonly record struct ReferenceComponent(int[] Values);
 readonly record struct EntityCheckpoint(int Health);
 
+sealed class QuestObjective
+{
+    public string Name { get; set; } = string.Empty;
+    public bool Done { get; set; }
+}
+
+sealed class QuestLog
+{
+    public string Title { get; set; } = string.Empty;
+    public List<QuestObjective> Objectives { get; set; } = [];
+    public Dictionary<string, int> Reputation { get; set; } = new();
+}
+
+[JsonSerializable(typeof(QuestLog))]
+internal partial class QuestLogJsonContext : JsonSerializerContext
+{
+}
+
+/// <summary>Test-only failure proving resolver consultation order.</summary>
+sealed class ResolverProbeException : Exception;
+
+/// <summary>Test-only resolver exploding when consulted, instead of covering any type.</summary>
+sealed class ExplodingResolver : IJsonTypeInfoResolver
+{
+    public bool Consulted { get; private set; }
+
+    public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options)
+    {
+        Consulted = true;
+        throw new ResolverProbeException();
+    }
+}
+
 sealed class EntityCheckpointCodec : IProductStateCodec<EntityCheckpoint>
 {
     private const int PayloadLength = 1;
-
-    public uint SchemaVersion => 1;
 
     public void Encode(in EntityCheckpoint state, IBufferWriter<byte> destination)
     {

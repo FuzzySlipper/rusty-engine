@@ -257,7 +257,10 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
         };
 
     private static string EntitySummary(EntityStoreDebugEntitySnapshot entity)
-        => $"entity={entity.Entity.Value}:lifecycle={entity.Lifecycle}:revision={entity.Revision}";
+        => $"entity={entity.Entity.Value}:lifecycle={entity.Lifecycle}:revision={entity.Revision}:type={FormatTypeId(entity.TypeId)}";
+
+    private static string FormatTypeId(EntityTypeId typeId)
+        => typeId.IsSpecified ? typeId.Value : "unspecified";
 
     private static DebugCommandResult Invalid(string message)
         => DebugCommandResult.Failure(DebugCommandStatus.InvalidArguments, BoundedMessage(message));
