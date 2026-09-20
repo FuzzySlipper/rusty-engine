@@ -1385,3 +1385,38 @@ unchanged. Mechanics projections limit entries and all projection output remains
 bounded to 4096 characters. Returned debug metadata is an observation, not a save
 or replay checkpoint. Registration is local and explicit; no mechanics discovery
 or structural-version value cache is involved.
+
+### Spatial debugging maps
+
+`Spatial.ReadMap` reads a bounded (up to 1,024 cells), world-aligned X/Z map
+from a live `SpatialSession`. Supply the minimum X/Z corner, cell size,
+columns/rows, a collision Y interval, a separate navigation support Y interval,
+and current product-owned dynamic colliders. Columns advance +X; rows advance
++Z. The copied receipt carries spatial publication identity and source,
+collision and navigation revisions. It does not change navigation or gameplay.
+
+Collision tests each full cell footprint against retained geometry and enabled,
+non-trigger supplied colliders. Navigation samples the cell center against the
+retained navigation projection, preserving support counts/heights and traversal
+allowance. No navigation sample means unknown, not walkable. A collision miss
+means no hit in the supplied/retained sources, not proof of loaded empty space
+or character clearance. These are different observations, not a merged occupancy
+truth. Multiple support heights remain explicit; this first view is not a full
+stacked-floor visualizer.
+
+`Rusty.Engine.Debugging.SpatialMapSnapshot.Capture` combines that read with
+product-supplied `SpatialMapObservation` (stamp, player position/facing) and
+`SpatialMapAnnotation` values (stable ID, label, relation, state, world position).
+Call it at the existing serialized live-debug boundary for coherent product
+facts. `ToAscii()` emits map layers and a legend; `ToJson()` emits the same
+snapshot with compact row-major cell arrays whose `cellFields` names define
+the columns. Both are NativeAOT-compatible. The helper retains copied facts,
+not the session or collider inputs. Annotation limits, out-of-view counts, and
+height intervals are explicit. The current view is omniscient.
+
+Expose a product command through the ordinary generated debug catalog and use
+`runtime-pack/bin/rusty-live-debug --origin http://127.0.0.1:PORT --command
+"spatial.map ascii 12 1"` when the product implements that command (as
+`rusty-doom` does). The CLI transports the command; the product supplies semantic
+annotations and the Engine owns the spatial read. Rendering and fast-controller
+experiments are independent of this capability.

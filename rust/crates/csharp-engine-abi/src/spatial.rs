@@ -1362,3 +1362,56 @@ pub struct NativeNavigationStepReceipt {
     pub projection_hash: u64,
     pub path_hash: u64,
 }
+
+/// Bounded world-aligned X/Z observation. Collision is sampled over each cell's
+/// full footprint and the explicit Y interval; navigation samples cell centers.
+/// Caller-owned colliders are borrowed for this observation only.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialMapRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub origin: NativeVec3,
+    pub cell_size: f64,
+    pub columns: u32,
+    pub rows: u32,
+    pub collision_min_y: f64,
+    pub collision_max_y: f64,
+    pub navigation_min_y: f64,
+    pub navigation_max_y: f64,
+    pub entities: *const NativeSpatialEntityCollider,
+    pub entities_len: usize,
+}
+
+/// No navigation sample means unknown, not traversable. Multiple support levels
+/// remain explicit. Collision occupancy is not a character-clearance guarantee.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialMapCell {
+    pub static_collision: bool,
+    pub dynamic_collision_count: u32,
+    pub first_dynamic_entity: u64,
+    pub navigation_samples: u32,
+    pub navigation_allowed_samples: u32,
+    pub minimum_support_y: f64,
+    pub maximum_support_y: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpatialMapLeaseHandle {
+    pub value: u64,
+}
+
+/// Row-major cells (+X across, +Z down), copied before exact lease release.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialMapLease {
+    pub handle: NativeSpatialMapLeaseHandle,
+    pub cells: *const NativeSpatialMapCell,
+    pub cells_len: usize,
+    pub projection_identity: u64,
+    pub source_revision: u64,
+    pub collision_revision: u64,
+    pub navigation_revision: u64,
+    pub navigation_present: bool,
+}

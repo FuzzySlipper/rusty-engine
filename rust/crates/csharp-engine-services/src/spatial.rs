@@ -1,3 +1,5 @@
+mod inspection;
+
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -149,6 +151,8 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) next_voxel_operation_diagnostic_lease: u64,
     next_trigger_diagnostic_lease: u64,
     next_trigger_overlap_page_lease: u64,
+    map_leases: BTreeMap<u64, Box<[NativeSpatialMapCell]>>,
+    next_map_lease: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
     pub(crate) next_world_origin_prepared: u64,
     pub(crate) kinematic_motion_leases:
@@ -427,6 +431,8 @@ impl RuntimeSpatialBridge {
             next_voxel_operation_diagnostic_lease: 1,
             next_trigger_diagnostic_lease: 1,
             next_trigger_overlap_page_lease: 1,
+            map_leases: BTreeMap::new(),
+            next_map_lease: 1,
             prepared_world_origins: BTreeMap::new(),
             next_world_origin_prepared: 1,
             kinematic_motion_leases: BTreeMap::new(),
@@ -4272,6 +4278,8 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         replace_volumetric_navigation_traversal: replace_spatial_volumetric_navigation_traversal,
         clear_volumetric_navigation_traversal: clear_spatial_volumetric_navigation_traversal,
         read_navigation_projection,
+        read_map: inspection::read_map,
+        destroy_map_lease: inspection::destroy_map_lease,
         request_navigation_path,
         request_weighted_navigation_path,
         request_weighted_volumetric_navigation_path,

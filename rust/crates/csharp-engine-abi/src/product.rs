@@ -150,6 +150,13 @@ pub type NativeClearVolumetricNavigationTraversal = unsafe extern "C" fn(
     NativeNavigationVolumetricTraversalClearRequest,
     *mut NativeNavigationVolumetricTraversalReplaceReceipt,
 ) -> i32;
+pub type NativeReadSpatialMap = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialMapRequest,
+    *mut NativeSpatialMapLease,
+) -> i32;
+pub type NativeDestroySpatialMapLease =
+    unsafe extern "C" fn(*mut c_void, NativeSpatialMapLeaseHandle) -> i32;
 pub type NativeReadNavigationProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationProjectionReadRequest,
@@ -899,6 +906,8 @@ pub struct NativeSpatialApi {
     pub replace_volumetric_navigation_traversal: NativeReplaceVolumetricNavigationTraversal,
     pub clear_volumetric_navigation_traversal: NativeClearVolumetricNavigationTraversal,
     pub read_navigation_projection: NativeReadNavigationProjection,
+    pub read_map: NativeReadSpatialMap,
+    pub destroy_map_lease: NativeDestroySpatialMapLease,
     pub request_navigation_path: NativeRequestNavigationPath,
     pub request_weighted_navigation_path: NativeRequestWeightedNavigationPath,
     pub request_weighted_volumetric_navigation_path: NativeRequestWeightedVolumetricNavigationPath,
