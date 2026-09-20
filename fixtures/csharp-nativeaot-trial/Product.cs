@@ -1152,6 +1152,20 @@ public sealed class Product : IEngineProduct
             true,
             false,
             true);
+        DynamicsBodyConfig genericConfig = new(
+            new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One),
+            new Vector3(0.5f),
+            configured with { AxisLocks = default, LinearVelocity = new Vector3(120, 0, 0), GravityScale = 0 });
+        DynamicsBody genericBody = _engine.Dynamics.CreateBody(new DynamicsCreateBodyRequest(world, genericConfig));
+        _engine.Dynamics.Step(new DynamicsStepRequest(world, oneSixtiethSecond, oneStep, ReadOnlyMemory<DynamicsAction>.Empty));
+        Require(_engine.Dynamics.Read(new DynamicsReadRequest(genericBody)).Transform.Translation.X > 1,
+            "generic body creation did not apply CCD and initial velocity");
+        DynamicsBody genericReplacement = _engine.Dynamics.ReplaceBody(new DynamicsReplaceBodyRequest(
+            genericBody, genericConfig with { Properties = genericConfig.Properties with { ContinuousCollision = false } }));
+        ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(world, oneSixtiethSecond, oneStep, ReadOnlyMemory<DynamicsAction>.Empty)));
+        genericBody.Dispose();
+        genericReplacement.Dispose();
+
         DynamicsBody configuredBody = _engine.Dynamics.CreateCuboidBody(new DynamicsCreateCuboidBodyRequest(
             world,
             new DynamicsCuboidBodyConfig(

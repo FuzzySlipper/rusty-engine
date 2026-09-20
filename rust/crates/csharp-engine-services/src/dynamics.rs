@@ -1206,14 +1206,7 @@ fn cuboid_body_config(
     let shape = RigidBodyShape::Cuboid {
         half_extents: native_vec3_value(value.half_extents),
     };
-    body_config(
-        transform,
-        shape,
-        value.mass,
-        value.mass_policy,
-        value.axis_locks,
-        value.gravity_scale,
-    )
+    body_config_with_properties(transform, shape, value.properties)
 }
 
 fn sphere_body_config(
@@ -1927,11 +1920,120 @@ mod tests {
                 y: 0.5,
                 z: 0.5,
             },
-            mass: 2.0,
-            mass_policy: NativeDynamicsMassPolicy::default(),
-            axis_locks: NativeAxisLocks::default(),
-            gravity_scale: 0.0,
+            properties: NativeDynamicsBodyProperties {
+                mass: 2.0,
+                mass_policy: NativeDynamicsMassPolicy::default(),
+                linear_velocity: NativeVec3::default(),
+                angular_velocity: NativeVec3::default(),
+                axis_locks: NativeAxisLocks::default(),
+                linear_damping: 0.0,
+                angular_damping: 0.0,
+                gravity_scale: 0.0,
+                friction: 0.5,
+                restitution: 0.0,
+                collision_groups: u32::MAX,
+                collision_mask: u32::MAX,
+                enabled: true,
+                sleeping: false,
+                continuous_collision: false,
+            },
         }
+    }
+
+    #[test]
+    fn generic_body_properties_share_shape_validation_and_select_ccd_on_create_and_replace() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let mut config = body_config(NativeVec3::default());
+        config.properties.linear_velocity.x = 120.0; // Two units per step, above discrete's one.
+        let mut body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        let step = NativeDynamicsStepRequest {
+            world,
+            step_seconds: ONE_SIXTIETH_SECOND,
+            steps: 1,
+            actions: std::ptr::null(),
+            actions_len: 0,
+        };
+        assert_eq!(
+            bridge.step(&step).unwrap_err().detail(),
+            "dynamics-motion-limit-exceeded"
+        );
+        assert_eq!(
+            bridge
+                .read(NativeDynamicsReadRequest { body })
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            0.0
+        );
+        config.properties.continuous_collision = true;
+        body = bridge
+            .replace_body(NativeDynamicsReplaceBodyRequest {
+                body,
+                replacement: config,
+            })
+            .unwrap();
+        bridge.step(&step).unwrap();
+        assert!(
+            bridge
+                .read(NativeDynamicsReadRequest { body })
+                .unwrap()
+                .transform
+                .translation
+                .x
+                > 1.0
+        );
+        bridge.destroy_body(body).unwrap();
+        body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        bridge.step(&step).unwrap();
+        config.properties.continuous_collision = false;
+        body = bridge
+            .replace_body(NativeDynamicsReplaceBodyRequest {
+                body,
+                replacement: config,
+            })
+            .unwrap();
+        assert_eq!(
+            bridge.step(&step).unwrap_err().detail(),
+            "dynamics-motion-limit-exceeded"
+        );
+
+        config.properties.friction = -1.0;
+        let generic_error = bridge
+            .replace_body(NativeDynamicsReplaceBodyRequest {
+                body,
+                replacement: config,
+            })
+            .unwrap_err();
+        let shape_error = bridge
+            .create_cuboid_body(&NativeDynamicsCreateCuboidBodyRequest {
+                world,
+                body: NativeDynamicsCuboidBodyConfig {
+                    transform: config.transform,
+                    half_extents: config.half_extents,
+                    properties: config.properties,
+                },
+            })
+            .unwrap_err();
+        assert_eq!(generic_error.code(), shape_error.code());
+        assert_eq!(generic_error.to_string(), shape_error.to_string());
+        assert!(bridge.read(NativeDynamicsReadRequest { body }).is_ok());
     }
 
     #[test]
@@ -2302,6 +2404,19 @@ mod tests {
             sleeping: false,
             continuous_collision: true,
         };
+        let generic = NativeDynamicsBodyConfig {
+            properties,
+            ..body_config(NativeVec3::default())
+        };
+        let shape_specific = NativeDynamicsCuboidBodyConfig {
+            transform: generic.transform,
+            half_extents: generic.half_extents,
+            properties,
+        };
+        assert_eq!(
+            cuboid_body_config(generic).unwrap().body,
+            cuboid_body_properties_config(shape_specific).unwrap().body,
+        );
         let cuboid = bridge
             .create_cuboid_body(&NativeDynamicsCreateCuboidBodyRequest {
                 world,

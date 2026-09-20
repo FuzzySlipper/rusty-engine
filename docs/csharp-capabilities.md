@@ -54,6 +54,22 @@ The generated contracts are authoritative when this table and source ever
 disagree. Add a missing coherent family at the ABI and generator edge; do not
 handwrite a parallel C# declaration or generic dispatch protocol.
 
+### Dynamic body configuration
+
+`DynamicsBodyConfig(Transform, HalfExtents, Properties)` accepts the same
+`DynamicsBodyProperties` as shape-specific creation. Both `CreateBody` and
+`ReplaceBody` apply initial velocities, mass policy, axis locks, damping, gravity,
+material, collision filters, enabled/sleeping state, and continuous collision
+selection. The six-argument constructor retains the standard defaults: zero
+velocities/damping/restitution, friction 0.5, all collision groups/masks, enabled,
+awake, and discrete collision.
+
+Products select `ContinuousCollision` in these properties. Engine owns the CCD
+solver and motion limits; enabling CCD selects the Engine CCD limit rather than
+the discrete-body limit. Products do not need to subdivide motion or replace
+the generic creation path to enable it.
+
+
 ### Sprite viewport placement
 
 `Graphics.SetSpriteViewport` optionally places an existing sprite in CSS

@@ -76,10 +76,7 @@ pub struct NativeDynamicsMassPolicy {
 pub struct NativeDynamicsBodyConfig {
     pub transform: NativeTransform,
     pub half_extents: NativeVec3,
-    pub mass: f32,
-    pub mass_policy: NativeDynamicsMassPolicy,
-    pub axis_locks: NativeAxisLocks,
-    pub gravity_scale: f32,
+    pub properties: NativeDynamicsBodyProperties,
 }
 
 /// Complete dynamic-body behavior supported by the current Engine owner.
