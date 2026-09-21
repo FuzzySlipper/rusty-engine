@@ -4911,6 +4911,17 @@ fn native_occlusion_hit(value: engine_spatial::SpatialOcclusionHit) -> NativeSpa
             distance: hit.distance,
             ..Default::default()
         },
+        engine_spatial::SpatialOcclusionHit::StaticMesh(hit) => NativeSpatialHit {
+            present: true,
+            kind: NativeSpatialHitKind::StaticMesh,
+            instance: hit.instance.0,
+            asset: hit.asset.0,
+            geometry_hash: hit.geometry_hash,
+            point: native_f64_vec3([hit.point.x, hit.point.y, hit.point.z]),
+            normal: native_f64_vec3([hit.normal.x, hit.normal.y, hit.normal.z]),
+            distance: hit.distance,
+            ..Default::default()
+        },
     }
 }
 

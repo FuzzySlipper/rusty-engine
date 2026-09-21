@@ -1,7 +1,9 @@
 use core_ids::EntityId;
 use engine_spatial::{
     SpatialPerceptionError, SpatialPerceptionObserver, SpatialPerceptionPairKind,
-    SpatialPerceptionQuery, SpatialPerceptionService, SpatialPerceptionTarget, VoxelCollisionScene,
+    SpatialPerceptionQuery, SpatialPerceptionService, SpatialPerceptionTarget, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
+    VoxelCollisionScene,
 };
 use entity_state::EntityState;
 
@@ -87,6 +89,45 @@ fn reports_facing_rejection_and_voxel_occlusion_as_typed_pair_facts() {
         SpatialPerceptionPairKind::FacingRejected
     );
     assert_eq!(readout.pairs[1].kind, SpatialPerceptionPairKind::Occluded);
+}
+
+#[test]
+fn retained_static_mesh_occludes_visibility_while_a_clear_target_remains_visible() {
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(17),
+        vec![[2.0, -1.0, -1.0], [2.0, 1.0, -1.0], [2.0, 0.0, 1.0]],
+        vec![[0, 1, 2]],
+    )
+    .unwrap();
+    let geometry_hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(23),
+                asset: StaticMeshAssetId(17),
+                expected_geometry_hash: geometry_hash,
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    let entities = EntityState::default();
+    let observers = [observer(1, [0.0, 0.0, 0.0], 1.0)];
+    let targets = [target(7, [4.0, 0.0, 0.0]), target(8, [4.0, 3.0, 0.0])];
+
+    let readout = SpatialPerceptionService
+        .evaluate(query(&scene, &entities, &observers, &targets))
+        .unwrap();
+
+    assert_eq!(readout.visibility_casts, 2);
+    assert_eq!(readout.occlusion_rejects, 1);
+    assert_eq!(readout.pairs[0].kind, SpatialPerceptionPairKind::Occluded);
+    assert_eq!(readout.pairs[1].kind, SpatialPerceptionPairKind::Visible);
+    assert_eq!(readout.aggregates.len(), 1);
+    assert_eq!(readout.aggregates[0].target, EntityId::new(8));
+    assert_eq!(readout.aggregates[0].visible_observer_count, 1);
 }
 
 #[test]

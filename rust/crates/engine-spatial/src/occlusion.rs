@@ -4,7 +4,7 @@ use core_ids::EntityId;
 use entity_state::{BoundsComponent, EntityState};
 
 use crate::active_collision::active_entity_colliders;
-use crate::{CollisionRayHit, VoxelCollisionScene};
+use crate::{CollisionRayHit, SpatialCollisionHit, StaticMeshHit, VoxelCollisionScene};
 
 /// Maximum number of entity records one combined occlusion query will inspect.
 pub const MAX_OCCLUSION_QUERY_ENTITIES: usize = 4_096;
@@ -26,8 +26,9 @@ pub struct SpatialOcclusionHitboxOverride {
     pub max: [f64; 3],
 }
 
-/// One bounded ray against canonical voxel geometry and current active entity
-/// colliders. Callers normally ignore the source and intended target identities.
+/// One bounded ray against canonical world geometry and current active entity
+/// colliders. World geometry includes the voxel and retained static-mesh
+/// projections. Callers normally ignore the source and intended target identities.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpatialOcclusionQuery<'a> {
     pub origin: [f64; 3],
@@ -45,6 +46,7 @@ pub enum SpatialOcclusionHit {
         distance: f64,
     },
     Voxel(CollisionRayHit),
+    StaticMesh(StaticMeshHit),
 }
 
 impl SpatialOcclusionHit {
@@ -52,6 +54,7 @@ impl SpatialOcclusionHit {
         match self {
             Self::Entity { distance, .. } => distance,
             Self::Voxel(hit) => hit.distance,
+            Self::StaticMesh(hit) => hit.distance,
         }
     }
 
@@ -59,6 +62,7 @@ impl SpatialOcclusionHit {
         match self {
             Self::Entity { point, .. } => point,
             Self::Voxel(hit) => hit.point,
+            Self::StaticMesh(hit) => [hit.point.x, hit.point.y, hit.point.z],
         }
     }
 }
@@ -82,7 +86,7 @@ impl std::fmt::Display for SpatialOcclusionError {
 
 impl std::error::Error for SpatialOcclusionError {}
 
-/// Read-only owner for combined voxel and retained-entity occlusion.
+/// Read-only owner for combined world and retained-entity occlusion.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SpatialOcclusionService;
 
@@ -155,8 +159,11 @@ impl SpatialOcclusionService {
             }
         }
         let mut nearest = scene
-            .raycast(query.origin, direction, query.max_distance)
-            .map(SpatialOcclusionHit::Voxel);
+            .raycast_world(query.origin, direction, query.max_distance)
+            .map(|hit| match hit {
+                SpatialCollisionHit::Voxel(hit) => SpatialOcclusionHit::Voxel(hit),
+                SpatialCollisionHit::StaticMesh(hit) => SpatialOcclusionHit::StaticMesh(hit),
+            });
         for collider in active_entity_colliders(entities) {
             if query.ignored_entities.contains(&collider.entity) {
                 continue;
@@ -265,5 +272,6 @@ fn tie_key(hit: SpatialOcclusionHit) -> (u8, u64) {
     match hit {
         SpatialOcclusionHit::Entity { entity, .. } => (0, entity.raw()),
         SpatialOcclusionHit::Voxel(_) => (1, 0),
+        SpatialOcclusionHit::StaticMesh(hit) => (2, hit.instance.0),
     }
 }

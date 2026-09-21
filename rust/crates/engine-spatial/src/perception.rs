@@ -109,7 +109,7 @@ pub struct SpatialPerceptionQuery<'a> {
     pub targets: &'a [SpatialPerceptionTarget],
 }
 
-/// Read-only spatial sensing over the canonical voxel scene and caller-owned active colliders.
+/// Read-only spatial sensing over canonical world geometry and caller-owned active colliders.
 ///
 /// This is intentionally a mechanism rather than an AI system: it returns facts, does not retain
 /// observer/target roles, and never publishes or mutates product state.

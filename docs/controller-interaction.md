@@ -119,8 +119,9 @@ an offset orthographic cursor ray. Cursor selection is not mouse-look input.
 
 `InteractionVisibilityQuery.Cast` uses full retained `Spatial.CastRay`, including
 static meshes, plus supplied entity colliders. Ignore the target's own collider
-when testing its center. The current Perception static-mesh gap is tracked as
-#8385; use this full collision helper for these interaction/aim candidates.
+when testing its center. Shared Perception visibility also uses retained world
+occlusion, including static meshes; observer and target entity colliders remain
+excluded from their own visibility test.
 
 ## Controller aiming and shot magnetism
 

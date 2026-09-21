@@ -328,6 +328,109 @@ mod tests {
     }
 
     #[test]
+    fn native_visibility_reports_a_retained_static_mesh_as_occluded() {
+        let mut spatial_bridge = RuntimeSpatialBridge::new();
+        let spatial_api = spatial::api(&mut spatial_bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        let mut scene = engine_spatial::VoxelCollisionScene::from_solid_voxels(1.0, 8, [])
+            .expect("empty scene");
+        let asset = engine_spatial::StaticMeshColliderAsset::new(
+            engine_spatial::StaticMeshAssetId(17),
+            vec![[2.0, -1.0, -1.0], [2.0, 1.0, -1.0], [2.0, 0.0, 1.0]],
+            vec![[0, 1, 2]],
+        )
+        .expect("valid retained mesh");
+        let geometry_hash = asset.geometry_hash;
+        scene
+            .replace_static_mesh_colliders(
+                0,
+                [asset],
+                [engine_spatial::StaticMeshColliderInstance {
+                    id: engine_spatial::StaticMeshInstanceId(23),
+                    asset: engine_spatial::StaticMeshAssetId(17),
+                    expected_geometry_hash: geometry_hash,
+                    transform: engine_spatial::StaticMeshTransform::IDENTITY,
+                }],
+            )
+            .expect("retained mesh projection");
+        spatial_bridge.publish_scene(session, Arc::new(scene));
+
+        let mut perception_bridge = RuntimePerceptionBridge::new(&spatial_bridge);
+        let perception_api = api(&mut perception_bridge);
+        let observers = [NativePerceptionObserver {
+            entity: 1,
+            origin: NativeVec3::default(),
+            forward: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            maximum_distance: 10.0,
+            minimum_facing_cosine: 0.5,
+            evidence: 1.0,
+        }];
+        let targets = [NativePerceptionTarget {
+            entity: 2,
+            center: NativeVec3 {
+                x: 4.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        }];
+        let mut result = NativePerceptionReadoutLease::default();
+        assert_eq!(
+            unsafe {
+                (perception_api.query_visibility)(
+                    perception_api.context,
+                    &NativePerceptionQueryRequest {
+                        session,
+                        observers: observers.as_ptr(),
+                        observers_len: observers.len(),
+                        targets: targets.as_ptr(),
+                        targets_len: targets.len(),
+                        occluders: std::ptr::null(),
+                        occluders_len: 0,
+                        expected_projection_identity: 0,
+                        pair_cursor: 0,
+                        page_size: 1,
+                    },
+                    &mut result,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(result.pairs_len, 1);
+        assert_eq!(result.aggregates_len, 0);
+        assert_eq!(result.occlusion_rejects, 1);
+        let pairs = unsafe { std::slice::from_raw_parts(result.pairs, result.pairs_len) };
+        assert_eq!(pairs[0].kind, NativePerceptionPairKind::Occluded);
+        assert_eq!(
+            unsafe {
+                (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
+            ABI_OK
+        );
+    }
+
+    #[test]
     fn continuation_rejects_a_rebuilt_projection_that_reuses_its_local_version() {
         let mut spatial_bridge = RuntimeSpatialBridge::new();
         let mut perception_bridge = RuntimePerceptionBridge::new(&spatial_bridge);
