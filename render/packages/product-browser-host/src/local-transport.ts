@@ -1576,56 +1576,30 @@ async function readResponseText(
   maximumBytes: number,
   route: string,
 ): Promise<string> {
-  const reader = response.body?.getReader();
-  if (reader === undefined) {
-    let text: string;
-    try {
-      text = await response.text();
-    } catch (cause) {
-      throw new ProductBrowserLocalTransportError(
-        'request_failed',
-        `Product Browser local runtime response could not be read for ${route}`,
-        { cause, route },
-      );
-    }
-    const bytes = new TextEncoder().encode(text).byteLength;
-    if (bytes > maximumBytes) {
-      throw new ProductBrowserLocalTransportError(
-        'response_decode_failed',
-        `Product Browser local runtime response for ${route} exceeds ${String(maximumBytes)} bytes`,
-        { route },
-      );
-    }
-    return text;
-  }
-  const decoder = new TextDecoder();
-  let byteLength = 0;
-  let text = '';
+  // Use the browser's complete-body consumer. In Chromium, manually draining
+  // a fetch reader can report ERR_ABORTED even after every byte and done=true
+  // reached JavaScript. Native consumption also settles the network request.
+  const oversized = (): ProductBrowserLocalTransportError => new ProductBrowserLocalTransportError(
+    'response_decode_failed',
+    `Product Browser local runtime response for ${route} exceeds ${String(maximumBytes)} bytes`,
+    { route },
+  );
+  // The trusted local host supplies a bounded Content-Length. Reject a
+  // caller-selected smaller budget before buffering, then check actual bytes.
+  const declaredBytes = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredBytes) && declaredBytes > maximumBytes) throw oversized();
+  let bytes: ArrayBuffer;
   try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      byteLength += chunk.value.byteLength;
-      if (byteLength > maximumBytes) {
-        await reader.cancel();
-        throw new ProductBrowserLocalTransportError(
-          'response_decode_failed',
-          `Product Browser local runtime response for ${route} exceeds ${String(maximumBytes)} bytes`,
-          { route },
-        );
-      }
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
+    bytes = await response.arrayBuffer();
   } catch (cause) {
-    if (cause instanceof ProductBrowserLocalTransportError) throw cause;
     throw new ProductBrowserLocalTransportError(
       'request_failed',
       `Product Browser local runtime response could not be read for ${route}`,
       { cause, route },
     );
   }
-  return text;
+  if (bytes.byteLength > maximumBytes) throw oversized();
+  return new TextDecoder().decode(bytes);
 }
 
 function encodeRequestBody(body: unknown, maximumBytes: number, route: string): string {

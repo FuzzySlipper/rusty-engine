@@ -27194,87 +27194,88 @@ function wT(e, t, n) {
 //#region packages/application-host/src/input-ingress.ts
 var TT = 1024, ET = 256, DT = 256, OT = 3, kT = 18446744073709551615n, AT = 9007199254740991;
 function jT(e, t) {
-	let n = IT(e), r = NT(n.maximumQueue), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), o = /* @__PURE__ */ new Map(), s = /* @__PURE__ */ new Map(), c = /* @__PURE__ */ new Set(), l = t.canvas(), u = !1, d = 0, f = () => t.document.pointerLockElement === t.canvas(), p = () => f() || t.document.activeElement === t.canvas(), m = () => {
+	let n = IT(e), r = NT(n.maximumQueue), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), o = /* @__PURE__ */ new Map(), s = /* @__PURE__ */ new Map(), c = /* @__PURE__ */ new Set(), l = t.canvas(), u = !1, d = 0, f = !1, p = () => t.document.pointerLockElement === t.canvas(), m = () => p() || t.document.activeElement === t.canvas(), h = () => {
 		d += 1, i.clear(), a.clear(), c.clear(), o.clear(), s.clear();
-	}, h = (e) => {
-		m(), (e === "pointer-lock-loss" || e === "interaction-mode-loss") && t.interactionMode() === "interface" && t.active() && t.document.hasFocus?.() !== !1 && te(), r.clear(e), n.onAvailable?.();
 	}, g = (e) => {
+		h(), (e === "pointer-lock-loss" || e === "interaction-mode-loss") && t.interactionMode() === "interface" && t.active() && t.document.hasFocus?.() !== !1 && M(), r.clear(e), n.onAvailable?.();
+	}, _ = (e) => {
 		let t = r.enqueueFact(e);
-		return t && m(), n.onAvailable?.(), t;
-	}, _ = (e, n) => t.allowsGameplayInput(e) ? n && !p() ? (h("focus-loss"), !1) : !0 : (h("interaction-mode-loss"), !1), v = (e) => {
-		if (!_(e, !1)) return;
+		return t && h(), n.onAvailable?.(), t;
+	}, v = (e, n) => t.allowsGameplayInput(e) ? n && !m() ? (g("focus-loss"), !1) : !0 : (g("interaction-mode-loss"), !1), y = (e) => {
+		if (!v(e, !1)) return;
 		let n = eE(e.button);
-		n !== null && (a.has(n) || (a.add(n), g(Object.freeze({
+		n !== null && (a.has(n) || (a.add(n), _(Object.freeze({
 			kind: "pointer-button",
 			button: n,
 			edge: "pressed"
 		}))), n === "primary" && t.focusGameplay());
-	}, y = (e) => {
-		if (!_(e, !0)) return;
+	}, b = (e) => {
+		if (!v(e, !0)) return;
 		let t = eE(e.button);
-		t === null || !a.delete(t) || g(Object.freeze({
+		t === null || !a.delete(t) || _(Object.freeze({
 			kind: "pointer-button",
 			button: t,
 			edge: "released"
 		}));
-	}, b = (e) => {
-		t.allowsGameplayInput(e), h("interaction-mode-loss");
 	}, x = (e) => {
-		if (!_(e, !1) || !f()) return;
+		t.allowsGameplayInput(e), g("interaction-mode-loss");
+	}, S = (e) => {
+		if (!v(e, !1) || !p()) return;
 		let t = sE(e.movementX, n.maximumPointerDelta), r = sE(e.movementY, n.maximumPointerDelta);
-		t === 0 && r === 0 || g(Object.freeze({
+		t === 0 && r === 0 || _(Object.freeze({
 			kind: "pointer-delta",
 			x: t,
 			y: r
 		}));
-	}, S = (e) => {
-		if (!_(e, !0)) return;
+	}, C = (e) => {
+		if (!v(e, !0)) return;
 		let t = sE(e.deltaX, n.maximumWheelDelta), r = sE(e.deltaY, n.maximumWheelDelta);
-		t === 0 && r === 0 || g(Object.freeze({
+		t === 0 && r === 0 || _(Object.freeze({
 			kind: "wheel",
 			x: t,
 			y: r
 		}));
-	}, C = (e) => {
-		if (!_(e, !0)) return;
+	}, w = (e) => {
+		if (!v(e, !0)) return;
 		let t = MT(e.code);
-		t === null || i.has(t) || (i.add(t), g(Object.freeze({
+		t === null || i.has(t) || (i.add(t), _(Object.freeze({
 			kind: "key",
 			code: t,
 			edge: "pressed"
 		})));
-	}, w = (e) => {
-		if (!_(e, !0)) return;
+	}, T = (e) => {
+		if (!v(e, !0)) return;
 		let t = MT(e.code);
-		t === null || !i.delete(t) || g(Object.freeze({
+		t === null || !i.delete(t) || _(Object.freeze({
 			kind: "key",
 			code: t,
 			edge: "released"
 		}));
-	}, T = (e) => {
-		t.allowsGameplayInput(e), f() || h("pointer-lock-loss");
 	}, E = (e) => {
-		t.allowsGameplayInput(e), h("focus-loss");
+		t.allowsGameplayInput(e), p() || g("pointer-lock-loss");
 	}, D = (e) => {
-		t.allowsGameplayInput(e);
+		t.allowsGameplayInput(e), g("focus-loss");
 	}, O = (e) => {
-		t.allowsGameplayInput(e), n.selectedController === e.gamepad.index && h("interaction-mode-loss");
-	}, k = () => {
-		t.eventTarget.addEventListener("pointerdown", v), t.document.addEventListener("pointerup", y), t.document.addEventListener("pointercancel", b), t.document.addEventListener("wheel", S, { passive: !0 });
+		t.allowsGameplayInput(e);
+	}, k = (e) => {
+		t.allowsGameplayInput(e), n.selectedController === e.gamepad.index && g("interaction-mode-loss");
 	}, A = () => {
-		t.eventTarget.removeEventListener("pointerdown", v), t.document.removeEventListener("pointerup", y), t.document.removeEventListener("pointercancel", b), t.document.removeEventListener("wheel", S);
+		t.eventTarget.addEventListener("pointerdown", y), t.document.addEventListener("pointerup", b), t.document.addEventListener("pointercancel", x), t.document.addEventListener("wheel", C, { passive: !0 });
 	}, ee = () => {
+		t.eventTarget.removeEventListener("pointerdown", y), t.document.removeEventListener("pointerup", b), t.document.removeEventListener("pointercancel", x), t.document.removeEventListener("wheel", C);
+	}, j = () => {
 		if (u || n.selectedController === null) return 0;
 		let e = t.interactionMode();
-		if (!t.active() || t.document.hasFocus?.() === !1 || e === "modal" || e === "gameplay" && !p()) return h("interaction-mode-loss"), 0;
+		if (!t.active() || t.document.hasFocus?.() === !1 || e === "modal" || e === "gameplay" && !m()) return f || (f = !0, g("interaction-mode-loss")), 0;
+		f = !1;
 		let r = t.gamepads()[n.selectedController];
-		if (r == null || !r.connected) return (c.size > 0 || o.size > 0 || s.size > 0) && h("interaction-mode-loss"), 0;
+		if (r == null || !r.connected) return (c.size > 0 || o.size > 0 || s.size > 0) && g("interaction-mode-loss"), 0;
 		let i = d, a = (n) => {
 			if (e === "interface") t.observeInterfaceInput?.(Object.freeze({
 				context: "interface",
 				fact: n
 			}));
-			else if (g(n)) return !0;
+			else if (_(n)) return !0;
 			return u || d !== i || t.interactionMode() !== e;
 		}, l = 0;
 		for (let e = 0; e < 4; e += 1) {
@@ -27309,39 +27310,39 @@ function jT(e, t) {
 			}
 		}
 		return l;
-	}, j = (e) => {
+	}, te = (e) => {
 		if (!(u || !r.rebaseRuntime(e))) {
 			if (t.interactionMode() !== "gameplay") {
-				m(), te();
+				h(), M();
 				return;
 			}
-			te();
-			for (let e of [...i].sort()) g(Object.freeze({
+			M();
+			for (let e of [...i].sort()) _(Object.freeze({
 				kind: "key",
 				code: e,
 				edge: "pressed"
 			}));
-			for (let e of [...a].sort()) g(Object.freeze({
+			for (let e of [...a].sort()) _(Object.freeze({
 				kind: "pointer-button",
 				button: e,
 				edge: "pressed"
 			}));
 			for (let e of [...o.keys()].sort()) {
 				let t = o.get(e);
-				t !== 0 && g(Object.freeze({
+				t !== 0 && _(Object.freeze({
 					kind: "controller-axis",
 					axis: e,
 					value: t
 				}));
 			}
-			for (let e of [...c].sort()) g(Object.freeze({
+			for (let e of [...c].sort()) _(Object.freeze({
 				kind: "controller-button",
 				button: e,
 				edge: "pressed"
 			}));
 			for (let e of [...s.keys()].sort()) {
 				let t = s.get(e);
-				t !== 0 && g(Object.freeze({
+				t !== 0 && _(Object.freeze({
 					kind: "controller-button-value",
 					button: e,
 					value: t
@@ -27350,7 +27351,7 @@ function jT(e, t) {
 			n.onAvailable?.();
 		}
 	};
-	function te() {
+	function M() {
 		if (n.selectedController === null) return;
 		let e = t.gamepads()[n.selectedController];
 		if (c.clear(), o.clear(), s.clear(), !(e == null || !e.connected)) {
@@ -27365,33 +27366,33 @@ function jT(e, t) {
 			}
 		}
 	}
-	return k(), t.document.addEventListener("pointermove", x), t.document.addEventListener("keydown", C), t.document.addEventListener("keyup", w), t.document.addEventListener("pointerlockchange", T), t.document.defaultView?.addEventListener("blur", E), t.document.defaultView?.addEventListener("gamepadconnected", D), t.document.defaultView?.addEventListener("gamepaddisconnected", O), n.initialBinding !== null && r.bindRuntime(n.initialBinding), Object.freeze({
+	return A(), t.document.addEventListener("pointermove", S), t.document.addEventListener("keydown", w), t.document.addEventListener("keyup", T), t.document.addEventListener("pointerlockchange", E), t.document.defaultView?.addEventListener("blur", D), t.document.defaultView?.addEventListener("gamepadconnected", O), t.document.defaultView?.addEventListener("gamepaddisconnected", k), n.initialBinding !== null && r.bindRuntime(n.initialBinding), Object.freeze({
 		interactionModeChanged: () => {
-			u || (h("interaction-mode-loss"), te());
+			u || (g("interaction-mode-loss"), M());
 		},
 		bindRuntime: (e) => {
-			u || r.bindRuntime(e) && m();
+			u || r.bindRuntime(e) && h();
 		},
 		synchronizeRuntime: (e) => {
-			u || r.bindRuntime(e) && m();
+			u || r.bindRuntime(e) && h();
 		},
-		rebaselineRuntime: j,
+		rebaselineRuntime: te,
 		setContext: (e) => {
-			u || r.setContext(e) && m();
+			u || r.setContext(e) && h();
 		},
 		clear: (e) => {
-			u || h(e);
+			u || g(e);
 		},
 		drain: () => r.drain(),
 		claim: (e, t) => {
-			u || (r.claim(e, t) && m(), n.onAvailable?.());
+			u || (r.claim(e, t) && h(), n.onAvailable?.());
 		},
-		sampleController: ee,
+		sampleController: j,
 		rebindCanvas: (e) => {
-			u || e === l || (l = e, h("pointer-lock-loss"));
+			u || e === l || (l = e, g("pointer-lock-loss"));
 		},
 		dispose: () => {
-			u || (h("dispose"), u = !0, A(), t.document.removeEventListener("pointermove", x), t.document.removeEventListener("keydown", C), t.document.removeEventListener("keyup", w), t.document.removeEventListener("pointerlockchange", T), t.document.defaultView?.removeEventListener("blur", E), t.document.defaultView?.removeEventListener("gamepadconnected", D), t.document.defaultView?.removeEventListener("gamepaddisconnected", O));
+			u || (g("dispose"), u = !0, ee(), t.document.removeEventListener("pointermove", S), t.document.removeEventListener("keydown", w), t.document.removeEventListener("keyup", T), t.document.removeEventListener("pointerlockchange", E), t.document.defaultView?.removeEventListener("blur", D), t.document.defaultView?.removeEventListener("gamepadconnected", O), t.document.defaultView?.removeEventListener("gamepaddisconnected", k));
 		}
 	});
 }

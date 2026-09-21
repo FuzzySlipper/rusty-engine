@@ -431,6 +431,38 @@ test('local transport exposes only the fixed control-replace recovery fence', as
   adapter.dispose();
 });
 
+test('local transport preserves the UTF-8 response byte limit and committed receipt', async () => {
+  const adapter = createProductBrowserLocalHttpAdapter({
+    maximumResponseBytes: 1024,
+    fetch: async () => response({ ...result('start'), diagnostic: '界'.repeat(400) }),
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(
+    adapter.lifecycle({ kind: 'start' }),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.code === 'response_decode_failed'
+      && error.message.includes('exceeds 1024 bytes')
+      && error.mutation.certainty === 'committed',
+  );
+  adapter.dispose();
+});
+
+test('local transport rejects a declared oversized local response before buffering', async () => {
+  let consumed = false;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    maximumResponseBytes: 1024,
+    fetch: async () => {
+      const receipt = response(result('start'), 200, { 'content-length': '2048' });
+      receipt.arrayBuffer = async () => { consumed = true; return new ArrayBuffer(2048); };
+      return receipt;
+    },
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(adapter.lifecycle({ kind: 'start' }), /exceeds 1024 bytes/u);
+  assert.equal(consumed, false);
+  adapter.dispose();
+});
+
 test('local transport preserves committed output headers for #7761 when the response body truncates', async () => {
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => new Response(new ReadableStream<Uint8Array>({

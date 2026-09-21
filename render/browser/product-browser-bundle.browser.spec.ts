@@ -66,6 +66,37 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
       requestAnimationFrame(() => resolve());
     }));
     expect(requests).not.toContain('POST /__rusty/product/runtime/advance-realtime');
+    // A settled JSON receipt must finish as a browser network request too.
+    // Manual fetch-reader draining previously emitted intermittent ERR_ABORTED
+    // after complete bodies, hiding useful playtest diagnostics in false errors.
+    const failedReceipts: string[] = [];
+    let completedReceipts = 0;
+    page.on('requestfailed', (request) => {
+      if (request.url().endsWith('/input')) failedReceipts.push(request.failure()?.errorText ?? 'unknown');
+    });
+    page.on('requestfinished', (request) => {
+      if (request.url().endsWith('/input') && request.postData() === '{"batch":[]}') completedReceipts += 1;
+    });
+    const acceptedReceipts = await page.evaluate(async () => {
+      const modulePath = '/engine/product-browser-host.js';
+      const { createProductBrowserLocalHttpAdapter } = await import(modulePath) as {
+        createProductBrowserLocalHttpAdapter: () => {
+          input: (batch: never[]) => Promise<{ accepted: boolean }>;
+          dispose: () => void;
+        };
+      };
+      const adapter = createProductBrowserLocalHttpAdapter();
+      let accepted = 0;
+      try {
+        for (let index = 0; index < 100; index += 1) {
+          if ((await adapter.input([])).accepted) accepted += 1;
+        }
+      } finally { adapter.dispose(); }
+      return accepted;
+    });
+    expect(acceptedReceipts).toBe(100);
+    await expect.poll(() => completedReceipts).toBe(100);
+    expect(failedReceipts).toEqual([]);
     await expect.poll(() => readStartupRendererProof(page)).not.toBeNull();
     const pixels = await readStartupRendererProof(page);
     expect(pixels).not.toBeNull();

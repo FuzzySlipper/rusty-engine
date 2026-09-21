@@ -50,6 +50,15 @@ correlation, incomplete capture, and terminal errors cannot clear that warning.
 Failed browser resources carry their observed URL and status rather than an
 assumed favicon diagnosis.
 
+When investigating `net::ERR_ABORTED`, distinguish body consumption from
+request cancellation. Task 8387 traced complete committed JSON bodies followed
+by Chromium abort events with manual fetch-reader draining; the local transport
+now uses native complete-body consumption and retains its UTF-8 size check.
+Controller sampling also clears input once per unfocused/blocked interval,
+avoiding a clear → input-pump → clear request loop. These are owning fixes,
+not exemptions: the capture still records all request failures, including real
+truncation or disposal failures.
+
 Run a named navigation-only exercise:
 
 ```sh

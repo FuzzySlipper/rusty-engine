@@ -465,6 +465,7 @@ void test('controller sampling clears on focus loss, skips gamepad reads while u
   const canvas = {} as HTMLCanvasElement;
   let focused = true;
   let gamepadReads = 0;
+  let wakeups = 0;
   const axes = [0.4, 0, 0, 0];
   const buttons = Array.from({ length: 16 }, (_, index) => ({
     value: index === 7 ? 0.6 : 0,
@@ -485,6 +486,7 @@ void test('controller sampling clears on focus loss, skips gamepad reads while u
   const ingress = createRustyApplicationInputIngress({
     binding: INITIAL,
     selectedController: { index: 0 },
+    onAvailable: () => { wakeups += 1; },
   }, {
     canvas: () => canvas,
     eventTarget: eventTarget as unknown as HTMLElement,
@@ -518,6 +520,15 @@ void test('controller sampling clears on focus loss, skips gamepad reads while u
   assert.equal(ingress.sampleController(), 0);
   assert.equal(gamepadReads, 1);
   assert.ok(ingress.drain().every((entry) => 'fact' in entry && entry.fact.kind === 'clear'));
+  const blockedWakeups = wakeups;
+  // The host's input pump samples again after it sends a clear. Repeated
+  // blocked samples must not schedule another request or read the device.
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(ingress.sampleController(), 0);
+    assert.deepEqual(ingress.drain(), []);
+  }
+  assert.equal(wakeups, blockedWakeups);
+  assert.equal(gamepadReads, 1);
 
   focused = true;
   assert.equal(ingress.sampleController(), 3);
@@ -526,6 +537,14 @@ void test('controller sampling clears on focus loss, skips gamepad reads while u
     { kind: 'controller-button-value', button: 'button-7', value: 0.9 },
     { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
   ]);
+  // A subsequent focus loss still clears held input, even without a DOM blur.
+  focused = false;
+  assert.equal(ingress.sampleController(), 0);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'interaction-mode-loss' },
+  ]);
+  assert.equal(ingress.sampleController(), 0);
+  assert.deepEqual(ingress.drain(), []);
   ingress.dispose();
 });
 

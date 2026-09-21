@@ -249,6 +249,7 @@ export function createRustyApplicationInputIngress(
   let attachedCanvas = environment.canvas();
   let disposed = false;
   let controllerEpoch = 0;
+  let controllerSamplingBlocked = false;
 
   const pointerLocked = (): boolean => environment.document.pointerLockElement === environment.canvas();
   const gameplayFocused = (): boolean => pointerLocked()
@@ -374,9 +375,15 @@ export function createRustyApplicationInputIngress(
     const mode = environment.interactionMode();
     if (!environment.active() || environment.document.hasFocus?.() === false
       || mode === 'modal' || (mode === 'gameplay' && !gameplayFocused())) {
-      clear('interaction-mode-loss');
+      // Clearing wakes the input pump, which samples again. Publish the loss
+      // once per blocked interval rather than creating a self-sustaining loop.
+      if (!controllerSamplingBlocked) {
+        controllerSamplingBlocked = true;
+        clear('interaction-mode-loss');
+      }
       return 0;
     }
+    controllerSamplingBlocked = false;
     const controller = environment.gamepads()[normalized.selectedController];
     if (controller === null || controller === undefined || !controller.connected) {
       if (heldControllerButtons.size > 0 || controllerAxes.size > 0 || controllerButtonValues.size > 0) clear('interaction-mode-loss');
