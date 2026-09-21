@@ -4,6 +4,11 @@ This guide describes the C# surface that exists today. It distinguishes that
 surface from recommended product organization so an agent does not mistake a
 proposal for an API.
 
+For world-object use (containers, doors, talk), controller aim assistance, and
+agent-friendly testing, start with [world interaction](controller-interaction.md).
+`WorldInteraction` shares ordinary actions with explicit target-ID assistance;
+`InteractionDebugModule` exposes discoverable `interaction.inspect` / `use` commands.
+
 ## Build a product through the packaged surface
 
 `Rusty.Engine` is one immutable NuGet package containing the public C# service
@@ -1144,7 +1149,7 @@ cell, temporary-memory, and mesh budgets, so not every retained volume can be
 meshed in one request. Partition large products deliberately. This foundation
 does not implement erosion, world streaming, or efficient sparse edits.
 
-For opt-in FPS controls and shared human/agent targeting, see [controller and interaction composition](controller-interaction.md).
+
 
 An interrupted development-host output subscription reattaches through a fresh
 retained baseline, even after receiving numbered output. SSE cursors are local

@@ -13,6 +13,9 @@ already exposed to C#.
   packages. Ordinary gameplay lives in its entity/mechanics sections:
   `EntityStore` and Engine adapters, class components, `Stat`/`Track` and live
   mechanics components, optional `InventoryEdit`, and explicit save/debug.
+- [World interaction and controller aim assistance](controller-interaction.md)
+  is the green path for containers/doors, sticky targeting, controller aiming,
+  and agent testing without repeated pixel hunting. Start with `interaction.inspect`.
 - [C# SDK/runtime distribution](csharp-distribution.md) explains the exact,
   verified Linux-x64 release pair used by clean downstream CI.
 - [C# product style](csharp-product-style.md) gives a recommended, product-side

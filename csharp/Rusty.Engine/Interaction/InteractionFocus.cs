@@ -63,6 +63,16 @@ public sealed class InteractionFocus
     public InteractionReadout Observe(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query)
         => Readout(Evaluate(candidates, query), Selected);
 
+    /// <summary>Lists all supplied candidates, including off-reticle/out-of-range rejection facts.
+    /// Unlike Observe, this is for discovery; it does not change selection or broaden use eligibility.</summary>
+    public InteractionReadout Inspect(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query)
+        => Readout(Evaluate(candidates, query, includeOutside: true), Selected);
+
+    /// <summary>Explicit target-ID assistance removes only the need to aim a ray at the object.
+    /// Fresh identity, availability, visibility, reach and query range still apply. It does not turn the camera.</summary>
+    public static InteractionReason RevalidateTarget(InteractionTarget target, ReadOnlySpan<InteractionCandidate> current, InteractionQuery query)
+        => Revalidate(target, current, query with { AcquireAngleRadians = MathF.PI, ReleaseAngleRadians = MathF.PI, ReleaseDistance = query.MaximumDistance });
+
     /// <summary>Rechecks freshly supplied facts at use time. The product then invokes its ordinary
     /// action path only on Ready. Never use a previously returned observation as authorization.</summary>
     public static InteractionReason Revalidate(InteractionTarget target, ReadOnlySpan<InteractionCandidate> current, InteractionQuery query)
@@ -99,7 +109,7 @@ public sealed class InteractionFocus
         return new(live, reason, rows.AsReadOnly());
     }
 
-    private static List<InteractionObservation> Evaluate(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query)
+    private static List<InteractionObservation> Evaluate(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query, bool includeOutside = false)
     {
         Validate(query);
         List<InteractionObservation> rows = new();
@@ -108,7 +118,7 @@ public sealed class InteractionFocus
         {
             if (!identities.Add(candidate.Target.Id)) throw new ArgumentException("Candidate IDs must be unique within a query.", nameof(candidates));
             InteractionObservation row = EvaluateOne(candidate, query);
-            if (row.WithinRelease) rows.Add(row);
+            if (includeOutside || row.WithinRelease) rows.Add(row);
         }
         rows.Sort((a, b) =>
         {

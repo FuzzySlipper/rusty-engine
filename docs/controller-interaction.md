@@ -1,117 +1,166 @@
-# Controller and interaction composition
+# World interaction and controller aim assistance
 
-`Rusty.Engine.Input` is an optional managed composition over ordinary admitted
-`ProductInputEvent` batches. It works without debug facilities or crew-services.
-Products retain their input configuration, gameplay state and actions.
+Use `Rusty.Engine.Interaction` for world containers, doors, talk/use targets and
+assisted controller aiming. These are shared Engine SDK components, available
+without an agent or debug connection. Product code supplies current targets and
+ordinary gameplay actions; Engine supplies selection, hysteresis, fresh use
+checks, visibility composition, aiming math and discoverable debug commands.
 
-## FPS baseline
+## Agent green path: stop hunting for a tiny click target
 
-Create a product-held `FpsInput` with a selected `FpsInputConfig`. `Standard`
-provides WASD/left-stick movement, mouse/right-stick look, Space/A jump,
-Control/B crouch, Shift/left-stick-click sprint, and E/X use. These are opt-in
-bindings; constructing the helper does not change host input mappings.
+When testing an object that opens a container/UI, first inspect the product's
+live-debug catalog. If it includes `interaction.inspect`:
 
-Call `Consume(update.Input, simulationSeconds)` once per admitted update, then
-`IntegrateLook(yourLookState, frame)`. Pass `frame.Movement`, jump/crouch facts
-and the returned yaw to the normal `Spatial.ProposeCharacterStep` path. Apply
-speed/sprint and interaction policy in the product. When the update admits
-multiple fixed steps, step the character once for each admitted step; apply
-one-shot presses once. This adds no clock or simulation loop.
+```sh
+rusty-live-debug --origin http://127.0.0.1:PORT --command "interaction.help"
+rusty-live-debug --origin http://127.0.0.1:PORT --command "interaction.inspect"
+# Copy the exact useCommand from the desired candidate, for example:
+rusty-live-debug --origin http://127.0.0.1:PORT --command "interaction.use 11 1"
+```
 
-Pointer sensitivity is radians per pointer unit. Stick sensitivity is radians
-per simulation second at full deflection. They are composed separately, so
-changing mouse sensitivity does not change controller turn speed. Positive raw
-browser Y means down; the standard configuration inverts it into Engine's
-positive-up pitch. Products can select inversion and independent rates.
+`inspect` is read-only. It lists labels, identity/revision, world points,
+distance/reach, visibility, availability, focus, route evidence, rejection
+reasons and an exact `useCommand`. It includes off-reticle candidates, so looking
+a few pixels away does not make an object undiscoverable. The product supplies
+a relevant local collection; `truncated` and `totalCandidates` report the
+module's output limit (64 by default, configurable up to 256).
 
-The pieces are independently useful:
+`use` is an **explicit assisted action**, not a query. It removes only the need
+to place a reticle/pointer precisely. The command reads fresh product facts,
+checks identity/revision, query distance, interaction reach, visibility and
+availability, then calls the same product handler as ordinary use. It does not
+walk, teleport, turn the camera, open locked objects or reach through walls.
+The receipt says `assistance: "target-id"`, `performed`, `reason`, and `message`.
+Transport success alone does not mean the object was used.
 
-- `PhysicalInputState`: held state, per-batch pressed/released edges, summed
-  pointer displacement, latest stick axes and analog button/trigger values.
-  Mapped/direct events are ignored to avoid applying physical input twice.
-  Consume every update, including empty batches. Clear neutralizes held state
-  and exposes releases while discarding pending presses and mouse movement.
-- `AnalogInput`: radial inner/outer deadzone and exponent, scalar trigger
-  remapping, and bounded keyboard/analog movement composition. Partial stick
-  magnitude remains partial; a diagonal does not increase maximum speed.
-- `FpsInput`: the baseline composition, with its `Physical` state available for
-  product-specific actions and cycling. A new configuration may reuse that
-  state; clear it when the product disables its gameplay input context.
+If `OutOfReach`, approach with ordinary controls; if `Occluded`, find a visible
+approach; if `StaleTarget`, inspect again. `Locked`/`Unavailable` are product
+facts. `route: Unknown` is not a pathfinding result. After use, inspect/capture
+the actual UI and perform the intended UI test. When testing picking accuracy
+itself, use physical pointer input; target-ID use demonstrates the shared action
+and downstream UI, not that a particular screen coordinate was clickable.
 
-Host physical sampling, controller disconnect, focus and context lifecycle
-remain upstream host responsibilities. Device injection, remote sessions,
-timing, cancellation, screenshots and recovery remain crew-services concerns.
+If the commands are absent, adopt the component below. Do not invent another
+agent-only world registry, browser gameplay hook or repeated screenshot-click
+loop. This feature is opt-in; it cannot discover product objects that were never
+supplied as candidates.
 
-## Shared interaction focus
+## Product green path: one component, one ordinary action
 
-`Rusty.Engine.Interaction.InteractionFocus` is product-held selection state,
-not a registry. Supply current `InteractionCandidate` values at each update:
-stable ID/incarnation revision, label, world target point, interaction reach,
-availability, visibility and ranking priority. Increment the revision when an
-ID represents a different target incarnation. Removing a target removes its
-focus. Products decide which objects qualify and what using them means.
+Implement `IWorldInteractionScene`, construct one `WorldInteraction`, and use
+it for both human focus/use and the optional debug module:
 
-`InteractionQuery` supplies a world-space ray, acquisition/release half-angles
-in radians, distances in world units and ranking weights. An optional `DistanceOrigin` keeps
-player reach separate from an offset orthographic cursor ray origin. The caller supplies
-a bounded candidate collection; the helper evaluates it synchronously and
-returns candidates within release bounds. Release bounds must enclose
-acquisition bounds. Higher product priority wins; ties use weighted angle and
-distance, then stable ID. An eligible selected target persists inside release
-bounds even if a neighbour becomes slightly closer to the reticle. Pass an
-explicit -1/+1 cycle direction to select another eligible acquisition target.
+```csharp
+sealed class Containers : IWorldInteractionScene
+{
+    public InteractionSceneSnapshot ReadInteraction()
+    {
+        // Build current candidate facts from your ordinary product state.
+        // Use InteractionVisibilityQuery.Cast over the existing Spatial session.
+        return new(CurrentQuery(), CurrentCandidates(), CurrentStamp(), "open container");
+    }
 
-`Observe` is read-only and uses the same calculations as human focus. It
-returns target identity, world point, distance, angular error, selection and
-rejection facts. Out-of-reach candidates can guide an approach without becoming
-usable. Unknown visibility is distinct from visible or occluded. A line of
-sight is never reported as proof of a walking route: route evidence defaults
-to `Unknown`. Locked/unavailable/invalid targets cannot be focused or used.
+    public InteractionActionResult UseInteraction(InteractionTarget target)
+    {
+        // The SAME ordinary action: applies current product rules, opens UI,
+        // publishes through Engine Ui. No special debug inventory mutation.
+        return OpenContainer(target);
+    }
+}
 
-Immediately before the ordinary use action, call `Revalidate` with the target
-identity and **fresh** candidate facts. Only `Ready` permits the product action.
-An old observation is not authorization: moved, blocked, removed, locked or
-reincarnated targets must be checked again. Selection alone performs no look,
-movement or gameplay effect. This slice does not enable look assistance.
+var interactions = new WorldInteraction(containers);
+var interactionDebug = new InteractionDebugModule(interactions);
+// In the product's IDebugCommandModuleSource.RegisterDebugCommands:
+registrar.Register(interactionDebug);
+// During ordinary admitted input/update:
+interactions.Update(cycleDirection); // -1, 0, +1
+if (usePressed) interactions.UseFocused();
+```
 
-`InteractionVisibilityQuery.Cast` composes existing `Spatial.CastRay` over the
-product's ordinary session and entity colliders. Ignore the selected target's
-own collider when testing its center. The helper does not retain another
-spatial world. Products may instead supply their own visibility facts, including
-existing `Perception.QueryVisibility` results. Missing observations stay unknown.
+The illustrative `Current*` and `OpenContainer` methods are product methods,
+not additional Engine APIs. Namespaces are `Rusty.Engine.Interaction` and
+`Rusty.Engine.Debugging`. See the runnable
+[container fixture](../fixtures/csharp-controller-interaction/README.md).
 
-## Reticle, free cursor and agent queries
+`ReadInteraction` returns a call-local `InteractionSceneSnapshot(Query,
+Candidates, Stamp, Action)`. Call these operations on the ordinary serialized
+product update/debug boundary. Keep the supplied memory valid for that call;
+there is no cached second world. The action handler retains action-specific
+rules and reports whether it performed the action. `targetedUseEnabled: false`
+disables target-ID actions while keeping observation and ordinary focus usable.
 
-A first-person reticle uses the product's eye origin and normal look direction.
-A free cursor supplies its own ray; it does not become a mouse-look delta.
-`CameraQueries.Project` and `Ray` provide stateless perspective/orthographic
-math over the existing camera descriptor and an explicitly supplied viewport
-aspect. Coordinates are viewport-local, normalized, bottom-left based. This is
-not live renderer/viewport readback; callers must know the selected view's aspect
-rather than guessing it or treating a screenshot as a presentation revision.
+## Sticky reticle and cursor acquisition
 
-Expose optional query methods through the existing generated
-`DebugCommand`/`IDebugCommandModuleSource` facilities. No additional adapter or
-query registry is required. Include selection mode and assistance flags in the
-product's response so semantic assistance is distinguishable from unaided
-visual discovery. Queries do not activate objects, navigate or mutate inventory.
-Screenshot freshness remains separate work (#7816).
+`InteractionFocus` is also independently usable. Supply current
+`InteractionCandidate` values: stable ID/incarnation revision, label, world
+point, reach distance, availability, visibility and optional ranking priority.
+Increment the revision when an ID represents a different incarnation. Removed,
+locked, unavailable and occluded targets cannot be used.
 
-The [ordinary C# proving scene](../fixtures/csharp-controller-interaction/README.md)
-uses these helpers for movement, competing chests, a wall and product-owned
-open/locked state. The optional query reports exactly the scene's ordinary focus
-facts. Its default gameplay needs neither an agent nor a debug connection.
+`InteractionQuery` contains ray origin/direction, acquisition/release half-angles
+in radians, distances in world units, and ranking weights. Release bounds enclose
+acquisition bounds. Higher priority wins, then weighted angular/distance score,
+then stable ID. A selected eligible target persists within release bounds even
+when another target becomes slightly closer. Explicit cycling chooses another
+eligible acquisition target. Selection does not perform an action.
 
-## Existing mechanisms reused
+`Observe` returns candidates within release bounds; `Inspect` includes all
+supplied candidates for discovery. Both are read-only. `Revalidate` rechecks
+ordinary focus with fresh facts. `RevalidateTarget` is explicit target-ID
+assistance: it ignores angular acquisition but retains maximum query distance,
+reach, identity, availability and visibility. `WorldInteraction` composes these
+checks with the ordinary handler so callers need not duplicate that sequence.
 
-The host already admits four standard axes, controller digital edges and analog
-button values through the generated safe input surface. Existing `Look`,
-`Spatial.ProposeCharacterStep`, `Spatial.CastRay`, camera descriptors, appearance
-snapshots and compiled debug commands provide the underlying mechanisms. The
-new managed helpers fill composition gaps; they add no native handles, ABI
-protocol, renderer or browser gameplay state. Menu navigation, remapping UI,
-haptics, multiple-player device assignment and optional look assistance are
-separate extensions, not hidden behavior of this baseline.
+A reticle uses eye origin and normal look direction. A free cursor uses
+`CameraQueries.Ray` with the product camera and explicit viewport aspect;
+coordinates are viewport-local, normalized and bottom-left based. Use
+`InteractionQuery.DistanceOrigin` to measure reach from the player rather than
+an offset orthographic cursor ray. Cursor selection is not mouse-look input.
 
-For repeatable product-owned inspection poses and renderer submission facts,
-see [viewpoints and presentation observations](presentation-capture.md).
+`InteractionVisibilityQuery.Cast` uses full retained `Spatial.CastRay`, including
+static meshes, plus supplied entity colliders. Ignore the target's own collider
+when testing its center. The current Perception static-mesh gap is tracked as
+#8385; use this full collision helper for these interaction/aim candidates.
+
+## Controller aiming and shot magnetism
+
+`AimAssist` reuses `InteractionFocus` for sticky target acquisition. Supply the
+same fresh visibility/availability facts, with product-selected weapon range
+as candidate reach. Product code chooses hostile targets, aim points, activation
+policy and tuning; human and agent controller input take the same path.
+
+Call `Update(candidates, query, lookDeltaRadians, simulationSeconds, config,
+active)` before applying controller look. Deltas are already time-integrated:
+X is yaw-right, Y is pitch-up. The query direction is the look before those
+deltas. The result reports focus, adjusted deltas, correction and slowdown.
+`AimAssistConfig` selects slowdown angle/minimum scale, maximum tracking radians
+per second, shot cone and maximum shot correction radians. Tracking uses admitted
+simulation time; deliberate input away from a target receives no slowdown or
+tracking. When inactive, focus clears. Apply the returned delta through normal
+`Look.IntegrateClamped`; do not add a second simulation or input loop.
+
+At fire time, `CorrectShot` revalidates the retained target with fresh facts and
+returns a direction corrected only inside the shot cone and angular limit.
+**Cast that direction through ordinary collision.** An assisted direction is
+not a guaranteed hit and cannot authorize damage through cover. For hitscan this
+is a redirected ray; it does not implement curved/homing projectile simulation.
+Disabling tracking or shot correction with zero tuning is supported independently.
+
+## FPS input baseline
+
+`Rusty.Engine.Input.FpsInput` composes persistent `PhysicalInputState`, radial
+deadzones, pointer/stick look and configurable bindings. `Standard` provides
+WASD/left-stick movement, mouse/right-stick look, Space/A jump, Control/B crouch,
+Shift/left-stick-click sprint and E/X use. Products select fire/cycling bindings.
+
+Call `Consume(update.Input, simulationSeconds)` every admitted update, including
+empty batches. Pointer sensitivity is radians per pointer unit; controller look
+is radians per simulation second at full deflection. `IntegrateLook` composes
+them separately. Positive raw browser Y is down; the standard config inverts
+look Y to positive-up pitch. Apply one-shot presses once, and character movement
+once per admitted fixed step. Clear input/focus when disabling gameplay.
+
+Host sampling, disconnect/focus/context cleanup stay in Engine. Remote device
+injection, sessions, holds, cancellation and screenshots stay in crew-services.
+The managed helpers retain no native pointers, renderer or spatial world, need
+no ABI extension, and are shipped in the ordinary matched SDK/runtime pair.

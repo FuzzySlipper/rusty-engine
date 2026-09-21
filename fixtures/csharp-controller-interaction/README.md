@@ -15,7 +15,10 @@ dotnet restore CsharpControllerInteraction.csproj --source /path/to/pair/sdk-fee
 
 Normal controls: WASD/left stick movement, mouse/right stick look, Space/A jump,
 Control/B crouch, E/X use, Q/RB cycle. K toggles the left chest's lock and changes
-its revision. Green is focused; blue is opened. Debug is optional for gameplay.
+its revision. E/X opens a reachable visible chest through the shared interaction
+handler and publishes its product-owned title and contents in the container panel.
+Escape closes that panel through the declared `container.close` keyboard mapping.
+Green is focused; blue is opened. Debug is optional for gameplay.
 
 The read-only `interaction.query` command returns reticle candidates including
 identity/revision, target point, distance, angle, visibility, unknown walking
@@ -23,6 +26,13 @@ route, availability reason, focus and successful-use count. Approach using
 ordinary movement, cycle and use using ordinary buttons. Using a target checks
 fresh facts again; the preceding frame's selection does not authorize a stale
 or now-locked target. Opening a chest changes its incarnation and availability.
+
+For a discoverable assisted path, run `interaction.help`, then
+`interaction.inspect`. The inspection response gives exact `interaction.use <id>
+<revision>` commands. Target-ID use avoids pixel hunting only: it freshly checks
+the candidate identity, reach, visibility and locked/open state, then invokes the
+same product handler as E/X. A successful response shows the same container panel;
+Escape closes only the panel and does not change the chest's open state.
 
 `interaction.cursor x y aspect` asks the same mechanism about a free cursor
 without changing look or focus. Supply viewport-local normalized coordinates

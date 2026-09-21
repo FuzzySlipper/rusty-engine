@@ -108,6 +108,18 @@ full guide.
   tuning. Avoid a giant global constants dump unless a value is genuinely
   cross-domain.
 
+## World interaction and agent testing
+
+For containers, doors and other world-use targets, start with
+[shared interaction and aim assistance](docs/controller-interaction.md).
+Use the SDK `WorldInteraction` / `InteractionFocus` and expose
+`InteractionDebugModule` in the existing generated debug catalog. Human use and
+assisted `interaction.use <id> <revision>` must call the same product action.
+Before repeatedly hunting for a tiny screen target, inspect `interaction.help`
+and `interaction.inspect`; move normally for reach/visibility, use the reported
+identity, then verify the resulting UI. Target-ID use is explicit assistance,
+not evidence that physical picking works. Keep product action rules downstream.
+
 ## Work and evidence
 
 - Add capabilities as coherent service families informed by real downstream

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text;
 using System.Text.Json;
 using Rusty.Engine;
 using Rusty.Engine.Debugging;
@@ -8,13 +9,18 @@ using Rusty.Engine.Input;
 namespace CsharpControllerInteraction;
 
 /// <summary>Ordinary package-consuming gameplay: Engine mechanisms, local bindings and chest rules.</summary>
-public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
+public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule, IWorldInteractionScene
 {
     private const float Reach = 2.7f, Acquire = .35f, Release = .5f, QueryDistance = 15, EyeHeight = .65f;
+    private const uint UiRootNode = 0;
+    private const string UiKeys = "opentitlecontents";
+    private static readonly string[] ContainerContents = ["Brass compass and survey note.", "Field ration and signal flare.", "Occluded test crate contents."];
     private readonly IEngineContext engine;
     private readonly SpatialSession spatial;
     private readonly Camera camera;
-    private readonly InteractionFocus focus = new();
+    private readonly WorldInteraction interaction;
+    private readonly InteractionDebugModule interactionDebug;
+    private readonly UiStream uiStream;
     private readonly List<(ulong Id, Appearance Appearance, Transform Transform)> visuals = new();
     private readonly List<CharacterObstacle> obstacles = new();
     private readonly List<SpatialEntityCollider> colliders = new();
@@ -26,9 +32,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private CharacterMotion motion;
     private readonly CharacterControllerConfig characterConfig;
     private ulong sequence;
+    private ulong sceneRevision;
+    private ulong uiSequence;
     private bool locked;
     private string viewpoint = "free";
     private int uses;
+    private int openPanelChest = -1;
     private InteractionReason lastUse = InteractionReason.NoCandidate;
     private readonly FpsInput input = new(FpsInputConfig.Standard);
     private readonly Appearance focusedAppearance;
@@ -40,9 +49,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         FpsInputFrame frame = input.Consume(update.Input, dt);
         if (frame.Movement != Vector2.Zero || frame.PointerDelta != Vector2.Zero || frame.ControllerLookRadians != Vector2.Zero)
             viewpoint = "free";
-        InteractionTarget? useTarget = focus.Selected;
         look = input.IntegrateLook(look,frame).After;
-        if (input.Physical.Pressed(KeyboardControl.KeyK)) { locked = !locked; revisions[0]++; }
+        if (input.Physical.Pressed(KeyboardControl.KeyK)) { locked = !locked; revisions[0]++; sceneRevision++; }
+        if (input.Physical.Pressed(KeyboardControl.Escape)) CloseContainerPanel();
         for (uint admitted=0; admitted<update.Facts.AdmittedStepCount; admitted++)
         {
             bool jump = frame.JumpPressed && admitted==0;
@@ -53,8 +62,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             motion = step.Motion;
         }
         int cycle = input.Physical.Pressed(KeyboardControl.KeyQ) || input.Physical.Pressed(ControllerButton.Button5) ? 1 : 0;
-        focus.Update(Candidates(),Reticle,cycle);
-        if (frame.UsePressed) Use(useTarget);
+        sceneRevision++;
+        interaction.Update(cycle);
+        if (frame.UsePressed) lastUse = interaction.UseFocused().Reason;
         Publish();
         return ProductUpdateResult.None;
     }
@@ -62,6 +72,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public Product(ProductCreateContext context)
     {
         engine = context.Engine;
+        uiStream = engine.Ui.OpenStream(new UiStreamRequest("controller-interaction", "controller-interaction.panel.v1"));
         spatial = engine.Spatial.CreateSession(new SpatialSessionConfig(.25,16,VoxelSurfaceMode.GreedyCubes));
         characterConfig = engine.Spatial.DefaultCharacterControllerConfig();
         motion = new(Vector3.Zero,Vector3.Zero,false,CharacterStance.Standing,0,0,0,false,0,Vector3.Zero,Vector3.Zero,Quaternion.Identity,Vector3.Zero,position.Y,position.Y,0,0);
@@ -72,6 +83,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         openedAppearance = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube,false,new Color(.1f,.3f,.9f,1)));
         camera = engine.CameraView.CreateCamera(CameraDescriptor());
         engine.CameraView.SetActiveCamera(camera);
+        interaction = new WorldInteraction(this);
+        interactionDebug = new InteractionDebugModule(interaction);
         Publish();
     }
 
@@ -98,18 +111,56 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }
         return result;
     }
-    private void Use(InteractionTarget? target)
+    public InteractionSceneSnapshot ReadInteraction() => new(Reticle,Candidates(),$"scene-{sceneRevision}","open container");
+    public InteractionActionResult UseInteraction(InteractionTarget target)
     {
-        lastUse = target is {} selected ? InteractionFocus.Revalidate(selected,Candidates(),Reticle) : InteractionReason.NoCandidate;
-        if(lastUse != InteractionReason.Ready || target is not {} valid) return;
-        opened[(int)valid.Id-11] = true;
-        revisions[(int)valid.Id-11]++;
+        int index = checked((int)target.Id - 11);
+        if ((uint)index >= opened.Length) return new(false,"That target is not a container.");
+        if (target.Revision != revisions[index]) return new(false,"The container changed; inspect it again.");
+        if (opened[index]) return new(false,"The container is already open.");
+        if (index == 0 && locked) return new(false,"The left chest is locked.");
+        opened[index] = true;
+        revisions[index]++;
+        openPanelChest = index;
         uses++;
+        sceneRevision++;
+        PublishContainerPanel();
+        return new(true,$"Opened {ContainerTitle(index)}.");
     }
     private void Publish()
     {
-        engine.Graphics.PublishSnapshot(visuals.Select(v=>new AppearanceFact(v.Id,false,0,v.Transform,v.Id is >=11 and <=13 ? (opened[(int)v.Id-11] ? openedAppearance : focus.Selected?.Id==v.Id ? focusedAppearance : v.Appearance) : v.Appearance,true,RenderLayer.Scene)).ToArray());
+        engine.Graphics.PublishSnapshot(visuals.Select(v=>new AppearanceFact(v.Id,false,0,v.Transform,v.Id is >=11 and <=13 ? (opened[(int)v.Id-11] ? openedAppearance : interaction.Focus.Selected?.Id==v.Id ? focusedAppearance : v.Appearance) : v.Appearance,true,RenderLayer.Scene)).ToArray());
         engine.CameraView.UpdateCamera(new(camera,CameraDescriptor()));
+        PublishContainerPanel();
+    }
+    private void PublishContainerPanel()
+    {
+        engine.Ui.PublishProjection(new UiProjection(uiStream,++uiSequence,UiValue()));
+    }
+
+    private void CloseContainerPanel()
+    {
+        if (openPanelChest < 0) return;
+        openPanelChest = -1;
+        sceneRevision++;
+    }
+    private static string ContainerTitle(int index) => index switch { 0 => "Left chest", 1 => "Right chest", 2 => "Behind-wall chest", _ => "Container" };
+    private UiValue UiValue()
+    {
+        bool open = openPanelChest >= 0;
+        string title = open ? ContainerTitle(openPanelChest) : "Container";
+        string contents = open ? ContainerContents[openPanelChest] : string.Empty;
+        uint titleOffset = (uint)Encoding.UTF8.GetByteCount(UiKeys);
+        uint contentsOffset = titleOffset + (uint)Encoding.UTF8.GetByteCount(title);
+        byte[] utf8 = Encoding.UTF8.GetBytes(UiKeys + title + contents);
+        StructuredValueNode[] nodes =
+        [
+            new(StructuredValueKind.Object,0,0,0,0,0,0,0,3),
+            new(StructuredValueKind.Bool,open ? 1u : 0u,0,0,4,0,0,0,0),
+            new(StructuredValueKind.String,0,0,4,5,titleOffset,(uint)Encoding.UTF8.GetByteCount(title),0,0),
+            new(StructuredValueKind.String,0,0,9,8,contentsOffset,(uint)Encoding.UTF8.GetByteCount(contents),0,0),
+        ];
+        return new UiValue(nodes,new uint[]{1,2,3},UiRootNode,utf8);
     }
     [DebugCommand("viewpoint.visit",Description="Visit a product-owned inspection pose: entrance, near, or side. This explicitly moves the player; it is not ordinary-input evidence.")]
     public string Visit(string name)
@@ -126,20 +177,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         motion = new(Vector3.Zero,Vector3.Zero,false,CharacterStance.Standing,0,0,0,false,0,Vector3.Zero,Vector3.Zero,Quaternion.Identity,Vector3.Zero,position.Y,position.Y,0,0);
         look = new((float)double.DegreesToRadians(pose.YawDegrees),(float)double.DegreesToRadians(pose.PitchDegrees));
         input.Physical.Clear();
-        focus.Clear();
+        interaction.Focus.Clear();
         viewpoint = name;
+        sceneRevision++;
         Publish();
         return Observe();
     }
 
-    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
+    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) { registrar.Register(this); registrar.Register(interactionDebug); }
     [DebugCommand("interaction.query",Description="Read-only reticle candidates; semantic targeting enabled, look assistance disabled.")]
-    public string Observe() => Format(focus.Observe(Candidates(),Reticle),"reticle");
+    public string Observe() => Format(interaction.Focus.Observe(Candidates(),Reticle),"reticle");
     [DebugCommand("interaction.cursor",Description="Read-only free-cursor query: viewport-local bottom-left normalized x/y and explicit viewport width/height aspect. Does not turn camera or change focus.")]
     public string Cursor(float x,float y,double aspect)
     {
         CameraRay ray=CameraQueries.Ray(CameraDescriptor(),aspect,new(x,y));
-        return Format(focus.Observe(Candidates(),Query(ray.Origin,ray.Direction)),"free-cursor");
+        return Format(interaction.Focus.Observe(Candidates(),Query(ray.Origin,ray.Direction)),"free-cursor");
     }
     private string Format(InteractionReadout result,string mode) => JsonSerializer.Serialize(new {
         mode, viewpoint, semanticTargeting=true,lookAssistance=false,position=new[]{position.X,position.Y,position.Z},yaw=look.YawRadians,pitch=look.PitchRadians,
@@ -148,9 +200,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             point=new[]{x.Candidate.Point.X,x.Candidate.Point.Y,x.Candidate.Point.Z},distance=x.Distance,angleRadians=x.AngleRadians,
             visibility=x.Candidate.Visibility.ToString(),route=x.Candidate.Route.ToString(),reason=x.Reason.ToString(),selected=x.Selected }) });
     public void Start() { }
-    public void Pause() { input.Physical.Clear(); focus.Clear(); }
+    public void Pause() { input.Physical.Clear(); interaction.Focus.Clear(); }
     public void Resume() { }
     public void Restart() { }
     public void Shutdown() { }
-    public void Dispose() { engine.Graphics.PublishSnapshot([]); camera.Dispose(); focusedAppearance.Dispose(); openedAppearance.Dispose(); foreach(var v in visuals)v.Appearance.Dispose(); spatial.Dispose(); }
+    public void Dispose() { engine.Graphics.PublishSnapshot([]); uiStream.Dispose(); camera.Dispose(); focusedAppearance.Dispose(); openedAppearance.Dispose(); foreach(var v in visuals)v.Appearance.Dispose(); spatial.Dispose(); }
 }

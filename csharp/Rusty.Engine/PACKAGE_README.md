@@ -13,3 +13,14 @@ must not add handwritten P/Invoke, ABI declarations, or a second host.
 The package carries its generated ABI identity in build metadata. Select a
 matching runtime pack rather than attempting compatibility negotiation or
 recreating a missing Engine capability in the product.
+
+For world containers, doors and talk targets, use `Rusty.Engine.Interaction`:
+`WorldInteraction` shares fresh target checks and ordinary product actions,
+`InteractionFocus` handles sticky acquisition, and `AimAssist` supplies bounded
+controller assistance. Register `Rusty.Engine.Debugging.InteractionDebugModule`
+with the product's generated debug catalog. Agents can discover
+`interaction.inspect` and copy `interaction.use <id> <revision>` instead of
+repeatedly guessing screen coordinates; target-ID use preserves visibility,
+reach and product rules. Verify the resulting UI separately.
+
+The source guide is `docs/controller-interaction.md` in the Engine repository.

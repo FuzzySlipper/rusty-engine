@@ -166,6 +166,18 @@ Damage, healing, combat meaning, AI policy, rules, state transitions, content
 meaning, and gameplay orchestration remain downstream application concepts
 even when they are implemented using reusable Engine mechanisms.
 
+## Shared world interaction and aim assistance
+
+The packaged managed `Rusty.Engine.Interaction` surface owns `InteractionFocus`
+(sticky acquisition/cycling/inspection), `WorldInteraction` (fresh checks and a
+shared product action), `InteractionVisibilityQuery` (full Spatial ray composition)
+and `AimAssist` (bounded stick tracking/slowdown and shot-direction correction).
+`InteractionDebugModule` exposes `interaction.help`, `interaction.inspect` and
+explicit assisted `interaction.use <id> <revision>` in the ordinary debug catalog.
+See [the implementation and agent green path](controller-interaction.md).
+These helpers use existing input/look/spatial services; they add no native state
+or alternate gameplay authority. Products supply targets, eligibility and actions.
+
 ## Retained native runtime and host mechanisms
 
 The following Rust owners remain upstream because they hold reusable native or
