@@ -72,7 +72,10 @@ window.__rustyApplicationRiggedFixtureUrl = characterUrl;
 
 function resourceContent(corrupt = false): RustyApplicationContent {
   const bytes = TEXTURE_BYTES.slice();
-  if (corrupt) bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 0xff;
+  // Resource transport trusts the supplied identity and bytes. Break the PNG
+  // signature so the texture decoder, which consumes this resource below,
+  // rejects it during initial admission or replacement.
+  if (corrupt) bytes[0] = bytes[0]! ^ 0xff;
   return {
     frame: resourceBackedFrame(),
     resources: [

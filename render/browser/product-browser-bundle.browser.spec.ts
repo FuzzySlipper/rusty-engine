@@ -204,7 +204,7 @@ test('demand Product UI intent wakes input and one Engine-owned demand admission
   }
 });
 
-test('generated bundle preserves renderer hash mismatch without Web Crypto subtle', async ({ page }) => {
+test('generated bundle trusts altered renderer bytes without Web Crypto subtle', async ({ page }) => {
   await removeWebCryptoSubtle(page);
   const engineHostModule = await readFile(
     fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
@@ -215,6 +215,10 @@ test('generated bundle preserves renderer hash mismatch without Web Crypto subtl
     uiModule: './ui/main.js',
     runtimeAdapterModule: './runtime-adapter.js',
     lifecycleMode: 'realtime',
+    uiProjection: {
+      expectedStream: 'product.local',
+      expectedContract: 'product.local.current',
+    },
   });
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -225,18 +229,20 @@ test('generated bundle preserves renderer hash mismatch without Web Crypto subtl
   );
   const address = server.address();
   if (address === null || typeof address === 'string') {
-    throw new Error('tampered no-Web-Crypto Product Bundle server did not expose a TCP address');
+    throw new Error('altered no-Web-Crypto Product Bundle server did not expose a TCP address');
   }
   try {
     await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
-    await expect.poll(() => pageErrors.some((error) => error.includes('hash mismatch'))).toBe(true);
+    await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+    await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
     await expect.poll(() => page.evaluate(() => globalThis.crypto.subtle)).toBeUndefined();
+    expect(pageErrors).toEqual([]);
   } finally {
     await closeBundleServer(server);
   }
 });
 
-test('generated bundle rejects a malformed packed mesh header before initial content admission', async ({ page }) => {
+test('generated bundle transports a malformed packed mesh header until a decoder consumes it', async ({ page }) => {
   const engineHostModule = await readFile(
     fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
     'utf8',
@@ -246,6 +252,10 @@ test('generated bundle rejects a malformed packed mesh header before initial con
     uiModule: './ui/main.js',
     runtimeAdapterModule: './runtime-adapter.js',
     lifecycleMode: 'realtime',
+    uiProjection: {
+      expectedStream: 'product.local',
+      expectedContract: 'product.local.current',
+    },
   });
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -260,7 +270,9 @@ test('generated bundle rejects a malformed packed mesh header before initial con
   }
   try {
     await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
-    await expect.poll(() => pageErrors.some((error) => error.includes('media mismatch'))).toBe(true);
+    await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+    await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
+    expect(pageErrors).toEqual([]);
   } finally {
     await closeBundleServer(server);
   }

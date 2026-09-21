@@ -230,11 +230,11 @@ test('application host owns composition, input arbitration, and disposal', async
   )).toBe(true);
   await assertPublishedSurfaceRemains(page, publishedBeforeReplacement);
   expect(await page.evaluate(() => window.__rustyApplicationCanvasMutationCount)).toBe(0);
-  const corruptContent = await page.evaluate(async () => {
+  const decoderRejectedContent = await page.evaluate(async () => {
     window.__rustyApplicationAdmissionGate?.release();
     return window.__rustyApplicationPendingReplacement;
   });
-  expect(corruptContent).toMatchObject({
+  expect(decoderRejectedContent).toMatchObject({
     applied: false,
     outcome: 'rejected_atomic',
     diagnostics: [{ code: 'retained_frame_replacement_failed' }],
@@ -273,7 +273,6 @@ test('application host owns composition, input arbitration, and disposal', async
       schemaVersion: 1,
       ops: [],
     });
-    content.resources?.[0]?.bytes.fill(0);
   });
   await expect.poll(() => page.evaluate(() =>
     window.__rustyApplicationAdmissionGate?.pending() ?? false,
@@ -793,16 +792,16 @@ test('late trusted UI failure cleans the renderer transactionally and leaves bou
   );
 });
 
-test('initial resource failure never publishes a surface or mounts downstream UI', async ({ page }) => {
+test('initial texture decoder failure never publishes a surface or mounts downstream UI', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const message = await page.evaluate(() =>
     window.__rustyApplicationInitialResourceFailureProbe?.(),
   );
-  expect(message).toContain('immutable body hash mismatch');
+  expect(message).toContain('texture');
   await expect(page.locator('canvas')).toHaveCount(0);
   await expect(page.locator('[data-rusty-application-host]')).toHaveCount(0);
   await expect(page.locator('[data-rusty-application-failure]')).toContainText(
-    'immutable body hash mismatch',
+    'texture',
   );
 });
 
