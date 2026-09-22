@@ -585,6 +585,21 @@ issue a separate stateful operation. `ProposeNavigationStep` remains the
 stateful path proposal and updates the retained path on success or clears it
 for its existing failure outcomes.
 
+`Spatial.ReplaceCollisionNavigation` derives and retains a planar projection
+from the session's current Engine collision scene. The request supplies a
+finite `WorldMin`/`WorldMax` volume plus cell, bounded grid, step, agent
+clearance, and maximum-slope policy; it never supplies geometry. The Engine
+samples voxel and retained static-mesh collision for support and headroom,
+preserves supported elevations, and rejects incomplete support or obstructed
+cell footprints. It considers at most eight support layers per X/Z cell, so a
+deeper layer is intentionally unknown rather than implied walkable. Use the live foot position for `EvaluateNavigationStep` so it
+can reconcile to the nearest retained support within one quarter of a navigation cell (capped at 0.1 world units) in
+that X/Z cell. This is a
+bounded route suggestion only: normal character collision and controls remain
+the authority for physical movement. Product door and hazard state belongs in
+the existing planar traversal overlay; read-only evaluation honors that overlay
+without replacing the retained path diagnostic.
+
 Spatial trigger definitions remain registered for the session while their
 active state can change. `SetTriggerActive` is revision-guarded: deactivation
 removes current overlaps and publishes bounded exit facts, while reactivation

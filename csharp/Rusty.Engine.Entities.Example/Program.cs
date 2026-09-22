@@ -754,11 +754,13 @@ sealed class SpatialServiceFake : ISpatialService
     public SpatialContentArtifactReadout ReadContentArtifact(SpatialContentArtifactReadRequest arg0) => throw new NotSupportedException();
     public NavigationReplaceReceipt ReplaceNavigation(NavigationReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationReplaceReceipt ReplaceVoxelNavigation(NavigationVoxelReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationReplaceReceipt ReplaceCollisionNavigation(CollisionNavigationReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ReplaceNavigationTraversal(NavigationTraversalReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ClearNavigationTraversal(NavigationTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationVolumetricTraversalReplaceReceipt ReplaceVolumetricNavigationTraversal(NavigationVolumetricTraversalReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationVolumetricTraversalReplaceReceipt ClearVolumetricNavigationTraversal(NavigationVolumetricTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationProjectionReadout ReadNavigationProjection(NavigationProjectionReadRequest arg0) => throw new NotSupportedException();
+    public SpatialMapLeaseReceipt ReadMap(SpatialMapRequest arg0) => throw new NotSupportedException();
     public NavigationPathReadout RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
     public NavigationWeightedPathReadout RequestWeightedNavigationPath(NavigationWeightedPathRequest arg0) => throw new NotSupportedException();
     public NavigationPathCellAtReceipt ReadNavigationPathCellAt(NavigationPathCellAtRequest arg0) => throw new NotSupportedException();

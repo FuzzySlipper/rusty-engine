@@ -11,7 +11,7 @@ use std::{
 
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
-use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
+use core_space::{ChunkDims, Face, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
     CharacterCapsule, CharacterCollisionQueryStats, CharacterCollisionSource, CharacterContactFact,
@@ -32,12 +32,12 @@ use runtime_diagnostics::RuntimeUpdateAttribution;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use svc_pathfinding::{
-    build_nav_projection, find_path_with_policy, find_volumetric_path,
-    find_weighted_path_with_policy, find_weighted_volumetric_path, propose_direct_nav_movement,
-    volumetric_navigation_source_hash, DirectNavMovementRequest, NavError, NavPathOutcome,
-    NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell, NavTraversalOverlay,
-    PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig, VolumetricNavError,
-    VolumetricNavOutcome, VolumetricNavQuery, VolumetricNavTraversalCell,
+    build_nav_projection, find_path_with_policy, find_path_with_traversal_policy,
+    find_volumetric_path, find_weighted_path_with_policy, find_weighted_volumetric_path,
+    propose_direct_nav_movement, volumetric_navigation_source_hash, DirectNavMovementRequest,
+    NavError, NavPathOutcome, NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell,
+    NavTraversalOverlay, PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig,
+    VolumetricNavError, VolumetricNavOutcome, VolumetricNavQuery, VolumetricNavTraversalCell,
     VolumetricNavTraversalOverlay, VolumetricNeighborSet, VolumetricTraversalRule,
     VolumetricVerticalPolicy, WeightedNavPathError, WeightedNavPathOutcome,
     WeightedVolumetricNavPathError,
@@ -67,6 +67,10 @@ const MAX_SPATIAL_CONTENT_VERTICES: usize = 1_000_000;
 const MAX_SPATIAL_CONTENT_TRIANGLES: usize = 1_000_000;
 const MAX_SPATIAL_CONTENT_NAVIGATION_CELLS: usize = 1_000_000;
 const MAX_SPATIAL_CONTENT_COORDINATE: i64 = 10_000_000;
+const MAX_COLLISION_NAVIGATION_CELLS: u32 = 65_536;
+const MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN: usize = 8;
+const COLLISION_NAVIGATION_EPSILON: f64 = 0.001;
+const COLLISION_NAVIGATION_CLEARANCE_EPSILON: f64 = 0.02;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -273,6 +277,7 @@ impl SpatialTriggerDiagnosticLease {
 enum NavigationSource {
     HostWalkableCells,
     VoxelDerived(VoxelCollisionScene),
+    CollisionDerived(VoxelCollisionScene),
 }
 
 struct NavigationState {
@@ -291,6 +296,7 @@ struct NavigationState {
 struct NavigationVerticalMapping {
     level_quantum: f64,
     support_heights: BTreeMap<VoxelCoord, f64>,
+    support_snap_tolerance: Option<f64>,
 }
 
 impl NavigationState {
@@ -300,13 +306,18 @@ impl NavigationState {
                 NativeNavigationProjectionKind::HostWalkableCells
             }
             NavigationSource::VoxelDerived(_) => NativeNavigationProjectionKind::VoxelDerived,
+            NavigationSource::CollisionDerived(_) => {
+                NativeNavigationProjectionKind::CollisionDerived
+            }
         }
     }
 
     fn voxel_world(&self) -> Option<&svc_spatial::VoxelWorld> {
         match &self.source {
             NavigationSource::HostWalkableCells => None,
-            NavigationSource::VoxelDerived(scene) => Some(scene.voxel_world()),
+            NavigationSource::VoxelDerived(scene) | NavigationSource::CollisionDerived(scene) => {
+                Some(scene.voxel_world())
+            }
         }
     }
 
@@ -323,8 +334,34 @@ impl NavigationState {
             return base;
         };
         let [x, _, z] = base.to_array();
-        let level = (f64::from(position.y) / vertical.level_quantum).round() as i64;
-        VoxelCoord::new(x, level, z)
+        vertical
+            .support_heights
+            .iter()
+            .filter(|(cell, _)| cell.x == x && cell.z == z)
+            .filter(|(_, support)| {
+                vertical
+                    .support_snap_tolerance
+                    .is_none_or(|tolerance| (f64::from(position.y) - **support).abs() <= tolerance)
+            })
+            .min_by(|(_, left), (_, right)| {
+                (f64::from(position.y) - **left)
+                    .abs()
+                    .total_cmp(&(f64::from(position.y) - **right).abs())
+            })
+            .map_or_else(
+                || {
+                    if vertical.support_snap_tolerance.is_some() {
+                        VoxelCoord::new(x, i64::MIN, z)
+                    } else {
+                        VoxelCoord::new(
+                            x,
+                            (f64::from(position.y) / vertical.level_quantum).round() as i64,
+                            z,
+                        )
+                    }
+                },
+                |(cell, _)| *cell,
+            )
     }
 
     fn cell_center(&self, cell: VoxelCoord) -> Vec3 {
@@ -868,6 +905,7 @@ impl RuntimeSpatialBridge {
                     )
                 })
                 .collect(),
+            support_snap_tolerance: None,
         };
 
         let asset_id = spatial_content_asset_id(content.sha256);
@@ -1103,6 +1141,152 @@ impl RuntimeSpatialBridge {
             traversal,
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             vertical_mapping: None,
+            revision: navigation_revision,
+            last_path: Vec::new(),
+        });
+        session.content_artifact = None;
+        Ok(receipt)
+    }
+
+    fn replace_collision_navigation(
+        &mut self,
+        request: &NativeCollisionNavigationReplaceRequest,
+    ) -> Result<NativeNavigationReplaceReceipt, CsharpEngineServicesError> {
+        let world_min = native_vec3_value(request.world_min);
+        let world_max = native_vec3_value(request.world_max);
+        if !finite_vec3(world_min)
+            || !finite_vec3(world_max)
+            || world_min.x >= world_max.x
+            || world_min.y >= world_max.y
+            || world_min.z >= world_max.z
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_NAVIGATION_REGION",
+                "collision navigation region must be finite and strictly ordered",
+            ));
+        }
+        let grid = navigation_grid(NativePlanarNavConfig {
+            grid_id: request.config.grid_id,
+            cell_size: request.config.cell_size,
+            chunk_size: request.config.chunk_size,
+            max_step_cells: request.config.max_step_cells,
+        })?;
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: u8::try_from(request.config.max_step_cells).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_COLLISION_NAVIGATION_CONFIG",
+                    "maximum navigation step exceeded u8",
+                )
+            })?,
+        };
+        let max_cells = request.config.maximum_cells;
+        if max_cells == 0
+            || max_cells > MAX_COLLISION_NAVIGATION_CELLS
+            || !request.config.agent_radius.is_finite()
+            || !request.config.agent_height.is_finite()
+            || !request.config.maximum_slope_degrees.is_finite()
+            || request.config.agent_radius <= 0.0
+            || request.config.agent_height <= 0.0
+            || request.config.agent_radius * 2.0 > request.config.cell_size
+            || !(0.0..=89.0).contains(&request.config.maximum_slope_degrees)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_NAVIGATION_CONFIG",
+                "collision navigation policy is invalid or exceeds the supported bounded grid",
+            ));
+        }
+        let min_cell = grid.world_to_voxel(core_space::WorldPos::new(
+            f64::from(world_min.x),
+            0.0,
+            f64::from(world_min.z),
+        ));
+        let max_cell = grid.world_to_voxel(core_space::WorldPos::new(
+            f64::from(world_max.x) - COLLISION_NAVIGATION_EPSILON,
+            0.0,
+            f64::from(world_max.z) - COLLISION_NAVIGATION_EPSILON,
+        ));
+        // Conversion saturates outside the integer lattice. Leave one cell of
+        // headroom for footprint corners and neighbour arithmetic.
+        if min_cell.x <= i64::MIN + 1
+            || min_cell.z <= i64::MIN + 1
+            || max_cell.x >= i64::MAX - 1
+            || max_cell.z >= i64::MAX - 1
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_NAVIGATION_BUDGET",
+                "collision navigation bounds exceed the representable grid",
+            ));
+        }
+        let columns = max_cell
+            .x
+            .checked_sub(min_cell.x)
+            .and_then(|value| value.checked_add(1))
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_COLLISION_NAVIGATION_BUDGET",
+                    "collision navigation region cannot be represented by the requested grid",
+                )
+            })?;
+        let rows = max_cell
+            .z
+            .checked_sub(min_cell.z)
+            .and_then(|value| value.checked_add(1))
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_COLLISION_NAVIGATION_BUDGET",
+                    "collision navigation region cannot be represented by the requested grid",
+                )
+            })?;
+        if columns == 0 || rows == 0 || columns.saturating_mul(rows) > u64::from(max_cells) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_NAVIGATION_BUDGET",
+                "collision navigation region exceeds its maximum cell budget",
+            ));
+        }
+        let scene = self.session_mut(request.session)?.scene.clone();
+        let (projection, support_heights) = collision_navigation_projection(
+            &scene,
+            grid,
+            [
+                f64::from(world_min.x),
+                f64::from(world_min.y),
+                f64::from(world_min.z),
+            ],
+            [
+                f64::from(world_max.x),
+                f64::from(world_max.y),
+                f64::from(world_max.z),
+            ],
+            request.config,
+            min_cell.x..=max_cell.x,
+            min_cell.z..=max_cell.z,
+        );
+        let traversal = NavTraversalOverlay::empty(&projection);
+        let session = self.session_mut(request.session)?;
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        let navigation_revision = session.navigation_revision;
+        let receipt = NativeNavigationReplaceReceipt {
+            walkable_cell_count: projection.walkable_len() as u64,
+            projection_hash: projection.projection_hash(),
+            navigation_revision,
+        };
+        session.navigation = Some(NavigationState {
+            source: NavigationSource::CollisionDerived((*scene).clone()),
+            projection,
+            policy,
+            agent_height_voxels: 0,
+            require_solid_floor: true,
+            traversal,
+            volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+            vertical_mapping: Some(NavigationVerticalMapping {
+                level_quantum: request.config.cell_size,
+                support_heights,
+                support_snap_tolerance: Some(
+                    (request.config.cell_size * 0.25).min(0.1) + COLLISION_NAVIGATION_EPSILON,
+                ),
+            }),
             revision: navigation_revision,
             last_path: Vec::new(),
         });
@@ -1603,8 +1787,12 @@ fn evaluate_navigation_step_facts(
     }
     let start = navigation.world_cell(from);
     let goal = navigation.world_cell(target);
-    let path = find_path_with_policy(
+    // Evaluation is the read-only route used by assisted movement. It must use
+    // the same retained traversal overlay as the weighted full-path query so
+    // product-owned door or hazard facts cannot be bypassed by a pure step.
+    let path = find_path_with_traversal_policy(
         &navigation.projection,
+        &navigation.traversal,
         NavPathQuery {
             start,
             goal,
@@ -1616,7 +1804,7 @@ fn evaluate_navigation_step_facts(
         Ok(path) => path,
         Err(error) => {
             return (
-                navigation_step_failure(navigation, navigation_outcome(error)),
+                navigation_step_failure(navigation, weighted_navigation_outcome(error)),
                 Vec::new(),
             )
         }
@@ -3484,6 +3672,25 @@ unsafe extern "C" fn replace_spatial_voxel_navigation(
     }
 }
 
+unsafe extern "C" fn replace_spatial_collision_navigation(
+    context: *mut c_void,
+    request: *const NativeCollisionNavigationReplaceRequest,
+    receipt: *mut NativeNavigationReplaceReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .replace_collision_navigation(unsafe { &*request })
+    {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn replace_spatial_navigation_traversal(
     context: *mut c_void,
     request: *const NativeNavigationTraversalReplaceRequest,
@@ -4273,6 +4480,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         read_content_artifact: read_spatial_content_artifact,
         replace_navigation: replace_spatial_navigation,
         replace_voxel_navigation: replace_spatial_voxel_navigation,
+        replace_collision_navigation: replace_spatial_collision_navigation,
         replace_navigation_traversal: replace_spatial_navigation_traversal,
         clear_navigation_traversal: clear_spatial_navigation_traversal,
         replace_volumetric_navigation_traversal: replace_spatial_volumetric_navigation_traversal,
@@ -4538,6 +4746,124 @@ fn navigation_grid(
             "navigation cell size was invalid",
         )
     })
+}
+
+/// Derive a conservative, finite planar projection from the session's coherent
+/// collision authority. A candidate owns no geometry: support, slope, and
+/// headroom are all tested by the same voxel/static-mesh projection used by
+/// ordinary spatial queries. The full cell footprint is deliberately checked
+/// above support, which prevents a path edge from crossing a thin wall that a
+/// centre-only sample would miss.
+fn collision_navigation_projection(
+    scene: &VoxelCollisionScene,
+    grid: VoxelGridSpec,
+    world_min: [f64; 3],
+    world_max: [f64; 3],
+    config: NativeCollisionNavigationConfig,
+    columns: std::ops::RangeInclusive<i64>,
+    rows: std::ops::RangeInclusive<i64>,
+) -> (NavProjection, BTreeMap<VoxelCoord, f64>) {
+    let minimum_upward_normal = config.maximum_slope_degrees.to_radians().cos();
+    let mut supports = BTreeMap::new();
+    for x in columns {
+        for z in rows.clone() {
+            let center = grid.voxel_center_world(VoxelCoord::new(x, 0, z));
+            let mut origin_y = world_max[1] + COLLISION_NAVIGATION_EPSILON;
+            for _ in 0..MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN {
+                let maximum_distance = origin_y - world_min[1] + COLLISION_NAVIGATION_EPSILON;
+                let Some(hit) = scene.raycast_world(
+                    [center.x, origin_y, center.z],
+                    [0.0, -1.0, 0.0],
+                    maximum_distance,
+                ) else {
+                    break;
+                };
+                let (support_y, normal_y) = collision_navigation_support(hit);
+                if support_y < world_min[1] - COLLISION_NAVIGATION_EPSILON {
+                    break;
+                }
+                origin_y = support_y - COLLISION_NAVIGATION_EPSILON;
+                if normal_y < minimum_upward_normal {
+                    continue;
+                }
+                let min = grid.voxel_min_world(VoxelCoord::new(x, 0, z));
+                let max = grid.voxel_min_world(VoxelCoord::new(x + 1, 0, z + 1));
+                // Begin headroom above the highest accepted support across
+                // the footprint. This retains slopes and stairs while still
+                // rejecting geometry intruding anywhere into standing space.
+                let mut highest_support = support_y;
+                let mut footprint_supported = true;
+                let maximum_support_delta =
+                    config.cell_size * f64::from(config.max_step_cells.max(1));
+                for (sample_x, sample_z) in [
+                    (
+                        min.x + COLLISION_NAVIGATION_EPSILON,
+                        min.z + COLLISION_NAVIGATION_EPSILON,
+                    ),
+                    (
+                        min.x + COLLISION_NAVIGATION_EPSILON,
+                        max.z - COLLISION_NAVIGATION_EPSILON,
+                    ),
+                    (
+                        max.x - COLLISION_NAVIGATION_EPSILON,
+                        min.z + COLLISION_NAVIGATION_EPSILON,
+                    ),
+                    (
+                        max.x - COLLISION_NAVIGATION_EPSILON,
+                        max.z - COLLISION_NAVIGATION_EPSILON,
+                    ),
+                ] {
+                    let Some(sample) = scene.raycast_world(
+                        [
+                            sample_x,
+                            support_y + maximum_support_delta + COLLISION_NAVIGATION_EPSILON,
+                            sample_z,
+                        ],
+                        [0.0, -1.0, 0.0],
+                        maximum_support_delta + config.cell_size + COLLISION_NAVIGATION_EPSILON,
+                    ) else {
+                        footprint_supported = false;
+                        break;
+                    };
+                    let (sample_y, sample_normal_y) = collision_navigation_support(sample);
+                    if sample_y < support_y - maximum_support_delta
+                        || sample_y > support_y + maximum_support_delta
+                        || sample_normal_y < minimum_upward_normal
+                    {
+                        footprint_supported = false;
+                        break;
+                    }
+                    highest_support = highest_support.max(sample_y);
+                }
+                if !footprint_supported {
+                    continue;
+                }
+                let clearance_min = [
+                    min.x,
+                    highest_support + COLLISION_NAVIGATION_CLEARANCE_EPSILON,
+                    min.z,
+                ];
+                let clearance_max = [max.x, highest_support + config.agent_height, max.z];
+                if scene.aabb_overlaps_solid(clearance_min, clearance_max) {
+                    continue;
+                }
+                let cell =
+                    grid.world_to_voxel(core_space::WorldPos::new(center.x, support_y, center.z));
+                supports.entry(cell).or_insert(support_y);
+            }
+        }
+    }
+    let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
+    (projection, supports)
+}
+
+fn collision_navigation_support(hit: engine_spatial::SpatialCollisionHit) -> (f64, f64) {
+    match hit {
+        engine_spatial::SpatialCollisionHit::Voxel(hit) => {
+            (hit.point[1], f64::from((hit.face == Face::PosY) as u8))
+        }
+        engine_spatial::SpatialCollisionHit::StaticMesh(hit) => (hit.point.y, hit.normal.y),
+    }
 }
 
 fn next_navigation_revision(current: u64) -> Result<u64, CsharpEngineServicesError> {
@@ -5425,6 +5751,387 @@ mod tests {
             max_step_units: 0.5,
             max_visited,
         }
+    }
+
+    fn collision_navigation_request(
+        session: NativeSpatialSessionHandle,
+    ) -> NativeCollisionNavigationReplaceRequest {
+        NativeCollisionNavigationReplaceRequest {
+            session,
+            world_min: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            world_max: NativeVec3 {
+                x: 3.0,
+                y: 3.0,
+                z: 1.0,
+            },
+            config: NativeCollisionNavigationConfig {
+                grid_id: 91,
+                cell_size: 1.0,
+                chunk_size: 8,
+                max_step_cells: 1,
+                agent_radius: 0.25,
+                agent_height: 1.0,
+                maximum_slope_degrees: 45.0,
+                maximum_cells: 32,
+            },
+        }
+    }
+
+    #[test]
+    fn collision_navigation_projects_retained_collision_and_evaluation_reuses_overlay() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        bridge.sessions.get_mut(&session.value).unwrap().scene = Arc::new(
+            VoxelCollisionScene::from_solid_voxels(1.0, 8, [[0, 0, 0], [1, 0, 0], [2, 0, 0]])
+                .unwrap(),
+        );
+        let mut receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &collision_navigation_request(session),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.walkable_cell_count, 3);
+        let projection = bridge
+            .sessions
+            .get(&session.value)
+            .unwrap()
+            .navigation
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            projection.kind(),
+            NativeNavigationProjectionKind::CollisionDerived
+        );
+
+        let mut step = navigation_step_request(session, 32);
+        step.from.y = 1.02;
+        step.target.y = 1.02;
+        let mut evaluated = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
+            ABI_OK
+        );
+        assert_eq!(evaluated.outcome, NativeNavigationPathOutcome::Reached);
+
+        let before = navigation_state_fingerprint(&bridge, session);
+        for (minimum, maximum) in [(-f32::MAX, f32::MAX), (f32::MAX / 2.0, f32::MAX)] {
+            let mut invalid = collision_navigation_request(session);
+            invalid.world_min.x = minimum;
+            invalid.world_max.x = maximum;
+            assert_ne!(
+                unsafe { (api.replace_collision_navigation)(api.context, &invalid, &mut receipt) },
+                ABI_OK
+            );
+            assert_eq!(navigation_state_fingerprint(&bridge, session), before);
+        }
+
+        let blocked = [NativeNavigationTraversalCell {
+            cell: NativePlanarNavCell { x: 1, y: 1, z: 0 },
+            allowed: false,
+            traversal_cost: 1,
+        }];
+        let mut overlay = NativeNavigationTraversalReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_navigation_traversal)(
+                    api.context,
+                    &NativeNavigationTraversalReplaceRequest {
+                        session,
+                        cells: blocked.as_ptr(),
+                        cells_len: blocked.len(),
+                    },
+                    &mut overlay,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
+            ABI_OK
+        );
+        assert_eq!(evaluated.outcome, NativeNavigationPathOutcome::NoPath);
+    }
+
+    #[test]
+    fn collision_navigation_uses_retained_static_mesh_support_and_wall_clearance() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let vertices = [
+            NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 3.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 3.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 0.0,
+            },
+        ];
+        let triangles = [
+            NativeTriangle { a: 0, b: 2, c: 1 },
+            NativeTriangle { a: 0, b: 3, c: 2 },
+            NativeTriangle { a: 4, b: 6, c: 5 },
+            NativeTriangle { a: 4, b: 7, c: 6 },
+        ];
+        let assets = [NativeStaticMeshAsset {
+            id: 19,
+            mesh_resource: NativeMeshResourceReference { value: 0 },
+            first_vertex: 0,
+            vertex_count: vertices.len() as u32,
+            first_triangle: 0,
+            triangle_count: 2,
+        }];
+        let instances = [NativeStaticMeshInstance {
+            id: 20,
+            asset: 19,
+            transform: NativeTransform {
+                translation: NativeVec3::default(),
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+        }];
+        let mut collision = NativeCollisionReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_collision)(
+                    api.context,
+                    &NativeCollisionReplaceRequest {
+                        session,
+                        assets: assets.as_ptr(),
+                        assets_len: assets.len(),
+                        vertices: vertices.as_ptr(),
+                        vertices_len: vertices.len(),
+                        triangles: triangles.as_ptr(),
+                        triangles_len: triangles.len(),
+                        instances: instances.as_ptr(),
+                        instances_len: instances.len(),
+                    },
+                    &mut collision,
+                )
+            },
+            ABI_OK
+        );
+        let mut receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &collision_navigation_request(session),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            receipt.walkable_cell_count, 3,
+            "static mesh floor provides support"
+        );
+        let low_ceiling_vertices = [
+            NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 3.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 3.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 0.5,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 3.0,
+                y: 0.5,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 3.0,
+                y: 0.5,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 0.5,
+                z: 1.0,
+            },
+        ];
+        let low_ceiling_triangles = [
+            NativeTriangle { a: 0, b: 2, c: 1 },
+            NativeTriangle { a: 0, b: 3, c: 2 },
+            NativeTriangle { a: 4, b: 5, c: 6 },
+            NativeTriangle { a: 4, b: 6, c: 7 },
+        ];
+        let low_ceiling_asset = [NativeStaticMeshAsset {
+            id: 21,
+            mesh_resource: NativeMeshResourceReference { value: 0 },
+            first_vertex: 0,
+            vertex_count: low_ceiling_vertices.len() as u32,
+            first_triangle: 0,
+            triangle_count: low_ceiling_triangles.len() as u32,
+        }];
+        let low_ceiling_instance = [NativeStaticMeshInstance {
+            id: 22,
+            asset: 21,
+            transform: instances[0].transform,
+        }];
+        assert_eq!(
+            unsafe {
+                (api.replace_collision)(
+                    api.context,
+                    &NativeCollisionReplaceRequest {
+                        session,
+                        assets: low_ceiling_asset.as_ptr(),
+                        assets_len: 1,
+                        vertices: low_ceiling_vertices.as_ptr(),
+                        vertices_len: low_ceiling_vertices.len(),
+                        triangles: low_ceiling_triangles.as_ptr(),
+                        triangles_len: low_ceiling_triangles.len(),
+                        instances: low_ceiling_instance.as_ptr(),
+                        instances_len: 1,
+                    },
+                    &mut collision,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &collision_navigation_request(session),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let mut low_step = navigation_step_request(session, 32);
+        low_step.from.y = 0.02;
+        low_step.target.y = 0.02;
+        let mut low_receipt = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe { (api.evaluate_navigation_step)(api.context, low_step, &mut low_receipt) },
+            ABI_OK
+        );
+        assert_eq!(
+            low_receipt.outcome,
+            NativeNavigationPathOutcome::StartNotWalkable,
+            "a roof support cannot relabel the lower floor as walkable"
+        );
+        let wall_assets = [NativeStaticMeshAsset {
+            triangle_count: triangles.len() as u32,
+            ..assets[0]
+        }];
+        assert_eq!(
+            unsafe {
+                (api.replace_collision)(
+                    api.context,
+                    &NativeCollisionReplaceRequest {
+                        session,
+                        assets: wall_assets.as_ptr(),
+                        assets_len: wall_assets.len(),
+                        vertices: vertices.as_ptr(),
+                        vertices_len: vertices.len(),
+                        triangles: triangles.as_ptr(),
+                        triangles_len: triangles.len(),
+                        instances: instances.as_ptr(),
+                        instances_len: instances.len(),
+                    },
+                    &mut collision,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &collision_navigation_request(session),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert!(
+            receipt.walkable_cell_count < 3,
+            "wall blocks full-cell footprints"
+        );
+        let mut step = navigation_step_request(session, 32);
+        step.from.y = 0.02;
+        step.target.y = 0.02;
+        let mut evaluated = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
+            ABI_OK
+        );
+        assert_eq!(
+            evaluated.outcome,
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
     }
 
     fn navigation_state_fingerprint(

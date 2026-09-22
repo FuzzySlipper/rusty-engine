@@ -776,6 +776,75 @@ pub fn find_path_with_policy(
     })
 }
 
+/// Query a deterministic shortest path while respecting a retained traversal
+/// overlay. This gives read-only assisted steps the ordinary planar query
+/// budget semantics while product-owned blocked cells remain authoritative.
+pub fn find_path_with_traversal_policy(
+    projection: &NavProjection,
+    overlay: &NavTraversalOverlay,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+) -> Result<NavPathReadout, WeightedNavPathError> {
+    if query.max_visited == 0 {
+        return Err(WeightedNavPathError::InvalidQueryBudget);
+    }
+    if !projection.is_walkable(query.start) {
+        return Err(WeightedNavPathError::StartNotWalkable { start: query.start });
+    }
+    if !projection.is_walkable(query.goal) {
+        return Err(WeightedNavPathError::GoalNotWalkable { goal: query.goal });
+    }
+    if !overlay.is_allowed(query.start) {
+        return Err(WeightedNavPathError::StartBlocked { start: query.start });
+    }
+    if !overlay.is_allowed(query.goal) {
+        return Err(WeightedNavPathError::GoalBlocked { goal: query.goal });
+    }
+    if query.start == query.goal {
+        let path = vec![query.start];
+        return Ok(NavPathReadout {
+            outcome: NavPathOutcome::Reached,
+            visited: 1,
+            path_hash: hash_path(&path),
+            path,
+        });
+    }
+    let mut queue = VecDeque::new();
+    let mut visited = BTreeSet::new();
+    let mut came_from = BTreeMap::new();
+    queue.push_back(query.start);
+    visited.insert(query.start);
+    while let Some(current) = queue.pop_front() {
+        if visited.len() > query.max_visited {
+            break;
+        }
+        for next in planar_nav_neighbors(current, policy) {
+            if !projection.is_walkable(next) || !overlay.is_allowed(next) || visited.contains(&next)
+            {
+                continue;
+            }
+            came_from.insert(next, current);
+            if next == query.goal {
+                let path = reconstruct_path(query.start, query.goal, &came_from);
+                return Ok(NavPathReadout {
+                    outcome: NavPathOutcome::Reached,
+                    visited: visited.len() + 1,
+                    path_hash: hash_path(&path),
+                    path,
+                });
+            }
+            visited.insert(next);
+            queue.push_back(next);
+        }
+    }
+    Ok(NavPathReadout {
+        outcome: NavPathOutcome::NoPath,
+        visited: visited.len(),
+        path: Vec::new(),
+        path_hash: hash_path(&[]),
+    })
+}
+
 /// Query a deterministic, bounded minimum-cost path through a planar
 /// projection using caller-supplied [`NavTraversalOverlay`] facts.
 ///

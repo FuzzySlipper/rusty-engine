@@ -482,6 +482,7 @@ include = [
     "NativeDestroySpatialSession",
     "NativeReplaceCollision",
     "NativeReplaceNavigation",
+    "NativeReplaceCollisionNavigation",
     "NativeReplaceNavigationTraversal",
     "NativeClearNavigationTraversal",
     "NativeReplaceVolumetricNavigationTraversal",

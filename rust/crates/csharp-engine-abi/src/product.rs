@@ -130,6 +130,11 @@ pub type NativeReplaceVoxelNavigation = unsafe extern "C" fn(
     *const NativeNavigationVoxelReplaceRequest,
     *mut NativeNavigationReplaceReceipt,
 ) -> i32;
+pub type NativeReplaceCollisionNavigation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCollisionNavigationReplaceRequest,
+    *mut NativeNavigationReplaceReceipt,
+) -> i32;
 pub type NativeReplaceNavigationTraversal = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationTraversalReplaceRequest,
@@ -901,6 +906,7 @@ pub struct NativeSpatialApi {
     pub read_content_artifact: NativeReadSpatialContentArtifact,
     pub replace_navigation: NativeReplaceNavigation,
     pub replace_voxel_navigation: NativeReplaceVoxelNavigation,
+    pub replace_collision_navigation: NativeReplaceCollisionNavigation,
     pub replace_navigation_traversal: NativeReplaceNavigationTraversal,
     pub clear_navigation_traversal: NativeClearNavigationTraversal,
     pub replace_volumetric_navigation_traversal: NativeReplaceVolumetricNavigationTraversal,

@@ -641,6 +641,7 @@ pub enum NativeNavigationProjectionKind {
     None = 0,
     HostWalkableCells = 1,
     VoxelDerived = 2,
+    CollisionDerived = 3,
 }
 
 /// Typed, non-exceptional navigation query outcomes. A query failure is an
@@ -676,6 +677,34 @@ pub struct NativeNavigationVoxelReplaceRequest {
     pub require_solid_floor: bool,
     pub solid_cells: *const NativePlanarNavCell,
     pub solid_cells_len: usize,
+}
+
+/// Bounded agent policy for deriving a planar navigation projection from the
+/// session's retained voxel and static-mesh collision authority.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionNavigationConfig {
+    pub grid_id: u64,
+    pub cell_size: f64,
+    pub chunk_size: u32,
+    pub max_step_cells: u32,
+    pub agent_radius: f64,
+    pub agent_height: f64,
+    pub maximum_slope_degrees: f64,
+    pub maximum_cells: u32,
+}
+
+/// Atomically replaces the session's retained planar projection by sampling
+/// the coherent Engine collision scene in the explicit finite world region.
+/// The product supplies policy and bounds only; collision geometry never
+/// crosses the ABI boundary.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionNavigationReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub world_min: NativeVec3,
+    pub world_max: NativeVec3,
+    pub config: NativeCollisionNavigationConfig,
 }
 
 #[repr(C)]
