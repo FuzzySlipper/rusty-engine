@@ -277,7 +277,7 @@ impl SpatialTriggerDiagnosticLease {
 enum NavigationSource {
     HostWalkableCells,
     VoxelDerived(VoxelCollisionScene),
-    CollisionDerived(VoxelCollisionScene),
+    CollisionDerived,
 }
 
 struct NavigationState {
@@ -306,18 +306,16 @@ impl NavigationState {
                 NativeNavigationProjectionKind::HostWalkableCells
             }
             NavigationSource::VoxelDerived(_) => NativeNavigationProjectionKind::VoxelDerived,
-            NavigationSource::CollisionDerived(_) => {
-                NativeNavigationProjectionKind::CollisionDerived
-            }
+            NavigationSource::CollisionDerived => NativeNavigationProjectionKind::CollisionDerived,
         }
     }
 
     fn voxel_world(&self) -> Option<&svc_spatial::VoxelWorld> {
         match &self.source {
-            NavigationSource::HostWalkableCells => None,
-            NavigationSource::VoxelDerived(scene) | NavigationSource::CollisionDerived(scene) => {
-                Some(scene.voxel_world())
-            }
+            // A collision-derived surface includes meshes; its voxel subset
+            // cannot describe free 3D space for volumetric navigation.
+            NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived => None,
+            NavigationSource::VoxelDerived(scene) => Some(scene.voxel_world()),
         }
     }
 
@@ -1273,7 +1271,7 @@ impl RuntimeSpatialBridge {
             navigation_revision,
         };
         session.navigation = Some(NavigationState {
-            source: NavigationSource::CollisionDerived((*scene).clone()),
+            source: NavigationSource::CollisionDerived,
             projection,
             policy,
             agent_height_voxels: 0,
@@ -5812,6 +5810,10 @@ mod tests {
         assert_eq!(
             projection.kind(),
             NativeNavigationProjectionKind::CollisionDerived
+        );
+        assert!(
+            projection.voxel_world().is_none(),
+            "a mesh-derived surface is not a volumetric free-space grid"
         );
 
         let mut step = navigation_step_request(session, 32);
