@@ -235,6 +235,8 @@ public sealed class Product : IEngineProduct
         {
             throw new InvalidOperationException("keyed random sequence changed during creation");
         }
+        Lcg15Receipt lcg15 = _engine.Random.DrawLcg15(new Lcg15Request(0, 97));
+        Require(lcg15 == new Lcg15Receipt(12_345, 0), "generated LCG15 compatibility call returned the wrong receipt");
         _rng = _engine.Random.CreateScoped(new ScopedRngCreateRequest(17, "nativeaot-trial"));
         _forkedRng = _engine.Random.ForkScoped(new ScopedRngForkRequest(_rng, "child"));
         _lastRandom = _engine.Random.NextU64(_forkedRng).Value;

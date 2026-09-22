@@ -34,6 +34,7 @@ pub(crate) fn api(bridge: &mut RuntimeRngBridge) -> NativeRngApi {
     NativeRngApi {
         context: (bridge as *mut RuntimeRngBridge).cast(),
         draw_keyed: draw_keyed_rng,
+        draw_lcg15: draw_lcg15,
         create_scoped: create_scoped_rng,
         fork_scoped: fork_scoped_rng,
         destroy_scoped: destroy_scoped_rng,
@@ -74,6 +75,29 @@ unsafe extern "C" fn draw_keyed_rng(
         }
         Err(_) => 0,
     }
+}
+
+unsafe extern "C" fn draw_lcg15(
+    _context: *mut c_void,
+    request: NativeLcg15Request,
+    receipt: *mut NativeLcg15Receipt,
+) -> i32 {
+    if receipt.is_null() || request.upper_exclusive == 0 {
+        return 0;
+    }
+
+    let state = request
+        .state
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(12_345);
+    let sample = (state >> 16) & 0x7fff;
+    unsafe {
+        *receipt = NativeLcg15Receipt {
+            state,
+            value: sample % request.upper_exclusive,
+        }
+    };
+    ABI_OK
 }
 
 unsafe extern "C" fn create_scoped_rng(
@@ -193,5 +217,123 @@ fn next_rng_value(
             ABI_OK
         }
         None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draw(api: &NativeRngApi, state: u32, upper_exclusive: u32) -> NativeLcg15Receipt {
+        let mut receipt = NativeLcg15Receipt::default();
+        assert_eq!(
+            unsafe {
+                (api.draw_lcg15)(
+                    api.context,
+                    NativeLcg15Request {
+                        state,
+                        upper_exclusive,
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        receipt
+    }
+
+    #[test]
+    fn lcg15_preserves_the_known_32_bit_compatibility_sequence() {
+        let mut bridge = RuntimeRngBridge::new();
+        let api = api(&mut bridge);
+        let expected = [
+            NativeLcg15Receipt {
+                state: 1_103_527_590,
+                value: 57,
+            },
+            NativeLcg15Receipt {
+                state: 2_524_885_223,
+                value: 35,
+            },
+            NativeLcg15Receipt {
+                state: 662_824_084,
+                value: 25,
+            },
+        ];
+
+        let mut state = 1;
+        for expected in expected {
+            let actual = draw(&api, state, 97);
+            assert_eq!(actual.state, expected.state);
+            assert_eq!(actual.value, expected.value);
+            state = actual.state;
+        }
+    }
+
+    #[test]
+    fn lcg15_wraps_32_bit_state_and_honors_bounds() {
+        let mut bridge = RuntimeRngBridge::new();
+        let api = api(&mut bridge);
+        assert_eq!(
+            draw(&api, u32::MAX, 1),
+            NativeLcg15Receipt {
+                state: 3_191_464_396,
+                value: 0,
+            }
+        );
+
+        let mut receipt = NativeLcg15Receipt::default();
+        assert_ne!(
+            unsafe {
+                (api.draw_lcg15)(
+                    api.context,
+                    NativeLcg15Request {
+                        state: 1,
+                        upper_exclusive: 0,
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn lcg15_interleavings_are_caller_state_only() {
+        let mut bridge = RuntimeRngBridge::new();
+        let api = api(&mut bridge);
+        let first_a = draw(&api, 0, 97);
+        let first_b = draw(&api, u32::MAX, 97);
+        let second_a = draw(&api, first_a.state, 97);
+        let second_b = draw(&api, first_b.state, 97);
+
+        assert_eq!(
+            first_a,
+            NativeLcg15Receipt {
+                state: 12_345,
+                value: 0
+            }
+        );
+        assert_eq!(
+            second_a,
+            NativeLcg15Receipt {
+                state: 3_554_416_254,
+                value: 31
+            }
+        );
+        assert_eq!(
+            first_b,
+            NativeLcg15Receipt {
+                state: 3_191_464_396,
+                value: 21
+            }
+        );
+        assert_eq!(
+            second_b,
+            NativeLcg15Receipt {
+                state: 288_979_989,
+                value: 44
+            }
+        );
     }
 }

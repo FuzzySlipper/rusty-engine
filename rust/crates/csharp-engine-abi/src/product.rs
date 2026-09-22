@@ -804,6 +804,8 @@ pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *const NativeKeyedRngRequest,
     *mut NativeKeyedRngReceipt,
 ) -> i32;
+pub type NativeDrawLcg15 =
+    unsafe extern "C" fn(*mut c_void, NativeLcg15Request, *mut NativeLcg15Receipt) -> i32;
 pub type NativeCreateScopedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeScopedRngCreateRequest,
@@ -1230,6 +1232,7 @@ pub struct NativeCameraViewApi {
 pub struct NativeRngApi {
     pub context: *mut c_void,
     pub draw_keyed: NativeDrawKeyedRng,
+    pub draw_lcg15: NativeDrawLcg15,
     pub create_scoped: NativeCreateScopedRng,
     pub fork_scoped: NativeForkScopedRng,
     pub destroy_scoped: NativeDestroyScopedRng,
