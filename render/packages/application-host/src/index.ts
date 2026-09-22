@@ -26,6 +26,7 @@ export type {
   RustyApplicationHost,
   RustyApplicationHostOptions,
   RustyApplicationHostReadout,
+  RustyApplicationGameplayCursorMode,
   RustyApplicationInteractionMode,
   RustyApplicationLightingOptions,
   RustyApplicationPresentationDiagnostic,

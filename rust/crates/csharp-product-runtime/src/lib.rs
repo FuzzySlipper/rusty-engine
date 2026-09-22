@@ -510,6 +510,7 @@ pub struct CsharpProductRuntimeConfig {
     lifecycle: RuntimeLifecycleConfig,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     physical_mappings: Vec<RuntimeInputMapping>,
+    input_cursor_mode: NativeInputCursorMode,
     /// Optional host-selected application root for opaque product state.
     /// Products choose only relative scopes beneath this root.
     persistence_root: Option<PathBuf>,
@@ -530,6 +531,7 @@ impl CsharpProductRuntimeConfig {
             lifecycle,
             direct_intents,
             physical_mappings: Vec::new(),
+            input_cursor_mode: NativeInputCursorMode::PointerLock,
             persistence_root: None,
             content_store_root: None,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
@@ -541,6 +543,13 @@ impl CsharpProductRuntimeConfig {
     /// own or mutate the runtime lane's mapping evaluation.
     pub fn with_physical_mappings(mut self, mappings: Vec<RuntimeInputMapping>) -> Self {
         self.physical_mappings = mappings;
+        self
+    }
+
+    /// Selects the Engine-owned browser cursor behavior for gameplay input.
+    /// Pointer lock remains the default for existing first-person products.
+    pub fn with_input_cursor_mode(mut self, cursor_mode: NativeInputCursorMode) -> Self {
+        self.input_cursor_mode = cursor_mode;
         self
     }
 
@@ -1111,6 +1120,7 @@ impl CsharpProductRuntime {
                 generation: initial_binding.generation().value(),
                 control_revision: initial_binding.control_revision().value(),
             },
+            cursor_mode: config.input_cursor_mode,
             context: input_context.as_ptr(),
             context_len: input_context.len(),
             direct_intents: native_input_descriptors.as_ptr(),

@@ -72,6 +72,7 @@ const diagnosticReports: ProductBrowserDiagnosticsReport[] = [];
 const acceptedDiagnosticReports: ProductBrowserDiagnosticsReport[] = [];
 let rejectedRecoveryDiagnosticsRemaining = new URLSearchParams(window.location.search).has('rejectRecoveryDiagnostic') ? 1 : 0;
 const delayRecoveryDiagnostic = new URLSearchParams(window.location.search).has('delayRecoveryDiagnostic');
+const unlockedCursor = new URLSearchParams(window.location.search).has('unlockedCursor');
 let activeDiagnostics = 0;
 window.__rustyProductBrowserMaximumActiveDiagnostics = 0;
 window.__rustyProductBrowserInputBatches = inputBatches;
@@ -386,6 +387,7 @@ void mountProductBrowserHost({
   lifecycleMode: 'realtime',
   mountUi,
   initialInteractionMode: 'gameplay',
+  gameplayCursorMode: unlockedCursor ? 'unlocked' : 'pointer-lock',
   inputContext: 'gameplay.default',
   runtimeInput: { maximumPointerDelta: 32, maximumWheelDelta: 64 },
   uiProjection: { expectedStream: 'product.ui', expectedContract: 'product.ui.v1' },

@@ -584,6 +584,105 @@ pub(crate) fn character_collision_world_hash(
     hash_environment(character_environment(scene, &obstacles))
 }
 
+/// Admit one directed, support-to-support surface edge using the same capsule
+/// casts and step solver as ordinary character movement.
+///
+/// This is intentionally a geometry query rather than a controller update: it
+/// owns no entity state, does not advance timers, and does not publish motion.
+/// Collision-derived navigation uses it when deciding whether two already
+/// supported columns may be connected. Callers remain responsible for proving
+/// both endpoint supports are standable before asking for the edge.
+pub fn character_edge_is_traversable(
+    scene: &VoxelCollisionScene,
+    config: &CharacterControllerConfig,
+    start_support: WorldPos,
+    end_support: WorldPos,
+) -> Result<bool, CharacterControllerError> {
+    let height = stance_height(config, CharacterStance::Standing);
+    let capsule = |center| capsule_at(center, height, config.shape.radius);
+    let center_offset =
+        f64::from((height * 0.5).max(config.shape.radius) + config.shape.contact_skin);
+    let start = WorldPos::new(
+        start_support.x,
+        start_support.y + center_offset,
+        start_support.z,
+    );
+    let end = WorldPos::new(end_support.x, end_support.y + center_offset, end_support.z);
+    let rise = (end_support.y - start_support.y).abs() as f32;
+    if rise > config.surface.maximum_step_height + config.recovery.normal_nudge {
+        return Ok(false);
+    }
+
+    let mut stats = CharacterCollisionQueryStats::default();
+    if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some()
+        || overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some()
+    {
+        return Ok(false);
+    }
+
+    let translation = WorldVec::new(end.x - start.x, end.y - start.y, end.z - start.z);
+    if translation.x.abs() <= f64::EPSILON && translation.z.abs() <= f64::EPSILON {
+        return Ok(false);
+    }
+    // An upward edge must always run the step maneuver. A diagonal sweep could
+    // otherwise cut through a riser in a way that the controller's
+    // rise-forward-drop solver would reject.
+    if end_support.y <= start_support.y
+        && cast_world(
+            &scene.projection,
+            &[],
+            capsule(start),
+            WorldVec::new(translation.x, 0.0, translation.z),
+            0.0,
+            &mut stats,
+        )?
+        .is_none()
+    {
+        let descent = WorldVec::new(0.0, translation.y, 0.0);
+        if descent.y >= 0.0 {
+            return Ok(true);
+        }
+        let horizontal_end = WorldPos::new(end.x, start.y, end.z);
+        return Ok(cast_world(
+            &scene.projection,
+            &[],
+            capsule(horizontal_end),
+            descent,
+            0.0,
+            &mut stats,
+        )?
+        .is_none_or(|hit| hit.time_of_impact >= 1.0 - f64::from(config.recovery.normal_nudge)));
+    }
+
+    // A direct capsule sweep correctly rejects a wall, but an ordinary
+    // character is allowed to convert that contact into the bounded
+    // rise-forward-drop maneuver below. Reuse that exact solver path so a
+    // navigation edge cannot claim a step that normal controls cannot take.
+    let horizontal = Vec3::new(translation.x as f32, 0.0, translation.z as f32);
+    let (landing, _) = try_step(
+        &scene.projection,
+        &[],
+        start,
+        &capsule,
+        horizontal,
+        config,
+        &mut stats,
+    )?;
+    let Some(landing) = landing else {
+        return Ok(false);
+    };
+    let tolerance = f64::from(
+        config
+            .shape
+            .contact_skin
+            .max(config.recovery.normal_nudge)
+            .max(0.001),
+    );
+    Ok((landing.center.x - end.x).abs() <= tolerance
+        && (landing.center.y - end.y).abs() <= tolerance
+        && (landing.center.z - end.z).abs() <= tolerance)
+}
+
 impl CharacterControllerService {
     pub fn readout(&self) -> Option<CharacterControllerReadout> {
         self.last_readout

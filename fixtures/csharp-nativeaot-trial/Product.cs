@@ -103,6 +103,18 @@ public sealed class Product : IEngineProduct
         {
             Require(_engine.Persistence.ReadBlobBytes(loaded).Span.SequenceEqual(leasePayload),
                 "native byte lease did not copy and release its payload");
+            PersistenceDeleteReceipt deleted = _engine.Persistence.Delete(new PersistenceDeleteRequest(
+                _persistenceStore, leaseKey, PersistenceRevisionGuard.Any, 0));
+            Require(deleted.Outcome == PersistenceDeleteOutcome.Deleted && deleted.Revision > 0,
+                "native persistence deletion did not report the removed revision");
+            Require(_engine.Persistence.ReadBlobBytes(loaded).Span.SequenceEqual(leasePayload),
+                "deletion invalidated an already loaded blob");
+            using PersistenceBlob absent = _engine.Persistence.Load(new PersistenceLoadRequest(_persistenceStore, leaseKey));
+            Require(!_engine.Persistence.DescribeBlob(absent).Present,
+                "deleted persistence key remained present");
+            Require(_engine.Persistence.Delete(new PersistenceDeleteRequest(
+                _persistenceStore, leaseKey, PersistenceRevisionGuard.Any, 0)).Outcome == PersistenceDeleteOutcome.Missing,
+                "repeated native deletion did not report missing");
         }
         using (ContentStore store = _engine.ContentStore.OpenStore(new ContentStoreOpenRequest(
             $"nativeaot-content-store-{Environment.ProcessId}")))

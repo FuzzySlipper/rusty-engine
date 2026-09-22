@@ -59,6 +59,7 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
     <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
   </PropertyGroup>
   <ItemGroup><PackageReference Include="Rusty.Engine" Version="$version" /></ItemGroup>
 </Project>
@@ -70,7 +71,12 @@ namespace PairConsumer;
 
 public sealed class Product : IEngineProduct
 {
-    public Product(ProductCreateContext context) { JsonPersistenceChecks.Run(context.Engine); }
+    public Product(ProductCreateContext context)
+    {
+        if (context.Input.CursorMode != InputCursorMode.Unlocked)
+            throw new System.InvalidOperationException("Packaged cursor mode did not reach C# composition.");
+        JsonPersistenceChecks.Run(context.Engine);
+    }
     public void Start() { }
     public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
@@ -139,11 +145,14 @@ for _ in $(seq 1 40); do
     sleep 0.25
 done
 [[ -n "$origin" ]] || { cat "$host_log" >&2; echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not launch the CoreCLR product" >&2; exit 1; }
-curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "fixture.release-pair" and .ui.entry == "product-ui/main.js"' >/dev/null \
+curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "fixture.release-pair" and .ui.entry == "product-ui/main.js" and .input.cursorMode == "unlocked"' >/dev/null \
     || { echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime did not serve the staged Product" >&2; exit 1; }
 
 [[ -s "$work/persistence-$loader/json-roundtrip/journey" ]] || {
     echo "JSON fixture did not write real persistent state" >&2; exit 1;
+}
+[[ ! -e "$work/persistence-$loader/json-roundtrip/discarded" ]] || {
+    echo "JSON fixture did not remove deleted persistent state" >&2; exit 1;
 }
 kill "$host_pid"
 wait "$host_pid" || true

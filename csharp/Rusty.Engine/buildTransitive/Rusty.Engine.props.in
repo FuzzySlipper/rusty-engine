@@ -29,6 +29,8 @@
     <RustyEngineProductLifecycleMode Condition="'$(RustyEngineProductLifecycleMode)' == ''">demand</RustyEngineProductLifecycleMode>
     <RustyEngineProductFixedStepHz Condition="'$(RustyEngineProductFixedStepHz)' == ''"></RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps Condition="'$(RustyEngineProductFixedStepMaxCatchUpSteps)' == ''"></RustyEngineProductFixedStepMaxCatchUpSteps>
+    <!-- Existing first-person products retain pointer lock unless they opt into a free gameplay cursor. -->
+    <RustyEngineProductInputCursorMode Condition="'$(RustyEngineProductInputCursorMode)' == ''">pointer-lock</RustyEngineProductInputCursorMode>
     <RustyEngineNativeAotRuntimeIdentifier Condition="'$(RustyEngineNativeAotRuntimeIdentifier)' == ''">linux-x64</RustyEngineNativeAotRuntimeIdentifier>
     <!-- This is intentionally absolute so a launcher can query it without
          guessing an intermediate-path convention or adjacent checkout. -->

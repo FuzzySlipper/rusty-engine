@@ -43,6 +43,14 @@ internal static class ExpeditionProof
             "the AOT roundtrip did not preserve nested data and collections");
 
         Require(!store.Load("never-saved").Present, "a missing AOT save did not report absent");
+        Require(store.Delete("expedition", PersistenceRevisionGuard.Exact, saved.Revision + 1).Outcome
+            == PersistenceDeleteOutcome.RevisionConflict && store.Load("expedition").Present,
+            "a stale delete did not preserve the saved value");
+        Require(store.Delete("expedition", PersistenceRevisionGuard.Exact, saved.Revision).Outcome
+            == PersistenceDeleteOutcome.Deleted && !store.Load("expedition").Present,
+            "product-state deletion did not remove the saved value");
+        Require(store.Delete("expedition").Outcome == PersistenceDeleteOutcome.Missing,
+            "a repeated product-state deletion did not report missing");
         persistence.Seed("json-aot-proof", "corrupt", "{not json"u8.ToArray());
         JsonException? malformed = null;
         try
@@ -142,6 +150,23 @@ internal sealed class MemoryPersistenceService : IPersistenceService
         ulong revision = (previous?.Revision ?? 0) + 1;
         _saved[key] = new Stored(revision, request.Payload.ToArray());
         return new PersistenceSaveReceipt(revision);
+    }
+
+    public PersistenceDeleteReceipt Delete(PersistenceDeleteRequest request)
+    {
+        var key = (_scopes[request.Store.Handle.Value], request.Key);
+        _saved.TryGetValue(key, out Stored? previous);
+        bool matches = request.RevisionGuard switch
+        {
+            PersistenceRevisionGuard.Any => true,
+            PersistenceRevisionGuard.Exact => previous is not null && previous.Revision == request.ExpectedRevision,
+            PersistenceRevisionGuard.Absent => previous is null,
+            _ => throw new ArgumentOutOfRangeException(nameof(request)),
+        };
+        if (!matches) return new(PersistenceDeleteOutcome.RevisionConflict, previous?.Revision ?? 0);
+        if (previous is null) return new(PersistenceDeleteOutcome.Missing, 0);
+        _saved.Remove(key);
+        return new(PersistenceDeleteOutcome.Deleted, previous.Revision);
     }
 
     public PersistenceBlob Load(PersistenceLoadRequest request)

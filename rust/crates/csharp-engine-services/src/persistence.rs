@@ -92,6 +92,7 @@ pub(crate) fn api(bridge: &mut RuntimePersistenceBridge) -> NativePersistenceApi
         open_store,
         destroy_store,
         save,
+        delete,
         load,
         destroy_blob,
         describe_blob,
@@ -215,6 +216,61 @@ unsafe extern "C" fn save(
             outcome: NativePersistenceSaveOutcome::Saved,
             revision,
         };
+    }
+    ABI_OK
+}
+
+unsafe extern "C" fn delete(
+    context: *mut c_void,
+    request: *const NativePersistenceDeleteRequest,
+    receipt: *mut NativePersistenceDeleteReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let key = match unsafe { borrowed_utf8(request.key.bytes, request.key.len, "persistence key") }
+    {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
+    let Some(store) = bridge.stores.get(&request.store.value) else {
+        return 0;
+    };
+    let Ok(path) = storage_path(&store.root, key) else {
+        return 0;
+    };
+    let current = match read_blob(&path) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let revision = current.as_ref().map_or(0, |blob| blob.revision);
+    let outcome = if !matches_guard(
+        request.revision_guard,
+        request.expected_revision,
+        current.as_ref(),
+    ) {
+        NativePersistenceDeleteOutcome::RevisionConflict
+    } else if current.is_none() {
+        NativePersistenceDeleteOutcome::Missing
+    } else {
+        // Flush the directory entry removal before reporting durable success.
+        // A failed flush is an operation failure, not a deletion receipt.
+        let Some(parent) = path.parent() else {
+            return 0;
+        };
+        let directory = match File::open(parent) {
+            Ok(value) => value,
+            Err(_) => return 0,
+        };
+        if fs::remove_file(&path).is_err() || directory.sync_all().is_err() {
+            return 0;
+        }
+        NativePersistenceDeleteOutcome::Deleted
+    };
+    unsafe {
+        *receipt = NativePersistenceDeleteReceipt { outcome, revision };
     }
     ABI_OK
 }
@@ -590,6 +646,204 @@ mod tests {
         assert_eq!(copied, first_payload);
         assert_eq!(unsafe { destroy_blob(context, blob) }, ABI_OK);
         assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
+    }
+
+    #[test]
+    fn deletion_is_guarded_durable_scoped_and_preserves_retained_blobs() {
+        let root = tempfile::tempdir().unwrap();
+        let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+        let context = (&mut bridge as *mut RuntimePersistenceBridge).cast();
+        fn utf8(value: &str) -> NativeUtf8Slice {
+            NativeUtf8Slice {
+                bytes: value.as_ptr(),
+                len: value.len(),
+            }
+        }
+        let open = NativePersistenceOpenRequest {
+            scope: utf8("campaign"),
+        };
+        let mut store = NativePersistenceStoreHandle::default();
+        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        let first = NativePersistenceSaveRequest {
+            store,
+            key: utf8("nested/slot"),
+            revision_guard: NativePersistenceRevisionGuard::Any,
+            expected_revision: 0,
+            payload: NativeByteSlice {
+                bytes: b"saved".as_ptr(),
+                len: 5,
+            },
+        };
+        let mut saved = NativePersistenceSaveReceipt::default();
+        assert_eq!(unsafe { save(context, &first, &mut saved) }, ABI_OK);
+        assert_eq!(
+            unsafe {
+                save(
+                    context,
+                    &NativePersistenceSaveRequest {
+                        key: utf8("other"),
+                        ..first
+                    },
+                    &mut saved,
+                )
+            },
+            ABI_OK
+        );
+        let mut other_store = NativePersistenceStoreHandle::default();
+        assert_eq!(
+            unsafe {
+                open_store(
+                    context,
+                    &NativePersistenceOpenRequest {
+                        scope: utf8("elsewhere"),
+                    },
+                    &mut other_store,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                save(
+                    context,
+                    &NativePersistenceSaveRequest {
+                        store: other_store,
+                        ..first
+                    },
+                    &mut saved,
+                )
+            },
+            ABI_OK
+        );
+        let load_request = NativePersistenceLoadRequest {
+            store,
+            key: first.key,
+        };
+        let mut retained = NativePersistenceBlobHandle::default();
+        assert_eq!(
+            unsafe { load(context, &load_request, &mut retained) },
+            ABI_OK
+        );
+        let request = NativePersistenceDeleteRequest {
+            store,
+            key: first.key,
+            revision_guard: NativePersistenceRevisionGuard::Exact,
+            expected_revision: 2,
+        };
+        let mut receipt = NativePersistenceDeleteReceipt::default();
+        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, ABI_OK);
+        assert_eq!(
+            receipt.outcome,
+            NativePersistenceDeleteOutcome::RevisionConflict
+        );
+        assert_eq!(receipt.revision, 1);
+        assert!(root.path().join("campaign/nested/slot").exists());
+        assert_eq!(
+            unsafe {
+                delete(
+                    context,
+                    &NativePersistenceDeleteRequest {
+                        revision_guard: NativePersistenceRevisionGuard::Absent,
+                        ..request
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            receipt.outcome,
+            NativePersistenceDeleteOutcome::RevisionConflict
+        );
+        let request = NativePersistenceDeleteRequest {
+            expected_revision: 1,
+            ..request
+        };
+        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, ABI_OK);
+        assert_eq!(receipt.outcome, NativePersistenceDeleteOutcome::Deleted);
+        assert_eq!(receipt.revision, 1);
+        assert!(!root.path().join("campaign/nested/slot").exists());
+        assert_eq!(bridge.blobs[&retained.value].payload, b"saved");
+        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, ABI_OK);
+        assert_eq!(
+            receipt.outcome,
+            NativePersistenceDeleteOutcome::RevisionConflict
+        );
+        assert_eq!(receipt.revision, 0);
+        for guard in [
+            NativePersistenceRevisionGuard::Any,
+            NativePersistenceRevisionGuard::Absent,
+        ] {
+            assert_eq!(
+                unsafe {
+                    delete(
+                        context,
+                        &NativePersistenceDeleteRequest {
+                            revision_guard: guard,
+                            ..request
+                        },
+                        &mut receipt,
+                    )
+                },
+                ABI_OK
+            );
+            assert_eq!(receipt.outcome, NativePersistenceDeleteOutcome::Missing);
+        }
+        assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
+        receipt = NativePersistenceDeleteReceipt::default();
+        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, 0);
+        assert_ne!(receipt.outcome, NativePersistenceDeleteOutcome::Deleted);
+        drop(bridge);
+
+        let mut reopened = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+        let context = (&mut reopened as *mut RuntimePersistenceBridge).cast();
+        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        let mut blob = NativePersistenceBlobHandle::default();
+        assert_eq!(
+            unsafe {
+                load(
+                    context,
+                    &NativePersistenceLoadRequest {
+                        store,
+                        ..load_request
+                    },
+                    &mut blob,
+                )
+            },
+            ABI_OK
+        );
+        assert!(!reopened.blobs[&blob.value].present);
+        assert!(read_blob(&root.path().join("campaign/other"))
+            .unwrap()
+            .is_some());
+        assert!(read_blob(&root.path().join("elsewhere/nested/slot"))
+            .unwrap()
+            .is_some());
+        // Invalid paths and unreadable/corrupt storage cannot produce a success receipt.
+        fs::write(root.path().join("campaign/broken"), b"invalid header").unwrap();
+        for key in ["../escape", "broken", "nested"] {
+            receipt = NativePersistenceDeleteReceipt::default();
+            assert_eq!(
+                unsafe {
+                    delete(
+                        context,
+                        &NativePersistenceDeleteRequest {
+                            store,
+                            key: utf8(key),
+                            revision_guard: NativePersistenceRevisionGuard::Any,
+                            ..request
+                        },
+                        &mut receipt,
+                    )
+                },
+                0
+            );
+            assert_ne!(receipt.outcome, NativePersistenceDeleteOutcome::Deleted);
+        }
+        assert_eq!(
+            fs::read(root.path().join("campaign/broken")).unwrap(),
+            b"invalid header"
+        );
     }
 
     #[test]

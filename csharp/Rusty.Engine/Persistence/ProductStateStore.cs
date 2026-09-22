@@ -81,5 +81,21 @@ public sealed class ProductStateStore<TState> : IDisposable
         return new ProductStateLoad<TState>(true, info.Revision, _codec.Decode(payload));
     }
 
+    /// <summary>
+    /// Durably removes a key. Deleted reports the removed revision; Missing reports zero.
+    /// Guards follow Save: Exact requires an existing matching revision, and Absent
+    /// requires no key. A mismatch returns RevisionConflict without removing bytes.
+    /// Previously loaded blobs remain readable. Recreating a deleted key starts at revision one.
+    /// Storage failures throw; after an I/O failure callers must reload to determine the state.
+    /// </summary>
+    public PersistenceDeleteReceipt Delete(
+        string key,
+        PersistenceRevisionGuard guard = PersistenceRevisionGuard.Any,
+        ulong expectedRevision = 0)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        return _persistence.Delete(new PersistenceDeleteRequest(_store, key, guard, expectedRevision));
+    }
+
     public void Dispose() => _store.Dispose();
 }

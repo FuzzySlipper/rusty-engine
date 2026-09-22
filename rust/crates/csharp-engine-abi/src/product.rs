@@ -1212,6 +1212,7 @@ pub struct NativePersistenceApi {
     pub open_store: NativeOpenPersistenceStore,
     pub destroy_store: NativeDestroyPersistenceStore,
     pub save: NativeSavePersistence,
+    pub delete: NativeDeletePersistence,
     pub load: NativeLoadPersistence,
     pub destroy_blob: NativeDestroyPersistenceBlob,
     pub describe_blob: NativeDescribePersistenceBlob,

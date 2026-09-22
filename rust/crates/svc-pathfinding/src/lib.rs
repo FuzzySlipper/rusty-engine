@@ -106,6 +106,42 @@ pub struct PlanarNavNeighborPolicy {
     pub max_step_cells: u8,
 }
 
+/// Canonical directed surface edges admitted by the collision owner.
+///
+/// A surface projection owns which columns can hold an agent. Some collision
+/// scenes also need an edge test: a thin wall can separate two otherwise
+/// walkable columns, while a character-sized step can connect columns at
+/// different support heights. Keeping this distinct from cell traversal facts
+/// lets the collision owner retain its geometry authority without teaching the
+/// general pathfinding service about collision shapes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NavEdgeAdmission {
+    allowed: BTreeSet<(VoxelCoord, VoxelCoord)>,
+    admission_hash: u64,
+}
+
+impl NavEdgeAdmission {
+    /// Retain deterministic directed edges from a collision-derived surface.
+    pub fn from_allowed_edges(edges: impl IntoIterator<Item = (VoxelCoord, VoxelCoord)>) -> Self {
+        let allowed = edges.into_iter().collect();
+        let admission_hash = hash_edge_admission(&allowed);
+        Self {
+            allowed,
+            admission_hash,
+        }
+    }
+
+    /// Whether the directed step is admitted by the owning collision policy.
+    pub fn allows(&self, from: VoxelCoord, to: VoxelCoord) -> bool {
+        self.allowed.contains(&(from, to))
+    }
+
+    /// Stable identity for the retained directed-edge policy.
+    pub const fn admission_hash(&self) -> u64 {
+        self.admission_hash
+    }
+}
+
 /// Deterministic path readout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavPathReadout {
@@ -720,6 +756,26 @@ pub fn find_path_with_policy(
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
 ) -> Result<NavPathReadout, NavError> {
+    find_path_with_optional_edge_admission(projection, query, policy, None)
+}
+
+/// Query a deterministic shortest path while requiring every transition to be
+/// admitted by a collision-derived edge set.
+pub fn find_path_with_edge_admission(
+    projection: &NavProjection,
+    edges: &NavEdgeAdmission,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+) -> Result<NavPathReadout, NavError> {
+    find_path_with_optional_edge_admission(projection, query, policy, Some(edges))
+}
+
+fn find_path_with_optional_edge_admission(
+    projection: &NavProjection,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+    edges: Option<&NavEdgeAdmission>,
+) -> Result<NavPathReadout, NavError> {
     if query.max_visited == 0 {
         return Err(NavError::InvalidQueryBudget);
     }
@@ -750,7 +806,10 @@ pub fn find_path_with_policy(
             break;
         }
         for next in planar_nav_neighbors(current, policy) {
-            if !projection.is_walkable(next) || visited.contains(&next) {
+            if !projection.is_walkable(next)
+                || !edges.is_none_or(|admission| admission.allows(current, next))
+                || visited.contains(&next)
+            {
                 continue;
             }
             came_from.insert(next, current);
@@ -784,6 +843,34 @@ pub fn find_path_with_traversal_policy(
     overlay: &NavTraversalOverlay,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
+) -> Result<NavPathReadout, WeightedNavPathError> {
+    find_path_with_traversal_and_optional_edge_admission(projection, overlay, query, policy, None)
+}
+
+/// Query a deterministic shortest path while respecting both caller-owned
+/// traversal cells and collision-derived directed edge admission.
+pub fn find_path_with_traversal_and_edge_admission(
+    projection: &NavProjection,
+    overlay: &NavTraversalOverlay,
+    edges: &NavEdgeAdmission,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+) -> Result<NavPathReadout, WeightedNavPathError> {
+    find_path_with_traversal_and_optional_edge_admission(
+        projection,
+        overlay,
+        query,
+        policy,
+        Some(edges),
+    )
+}
+
+fn find_path_with_traversal_and_optional_edge_admission(
+    projection: &NavProjection,
+    overlay: &NavTraversalOverlay,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+    edges: Option<&NavEdgeAdmission>,
 ) -> Result<NavPathReadout, WeightedNavPathError> {
     if query.max_visited == 0 {
         return Err(WeightedNavPathError::InvalidQueryBudget);
@@ -819,7 +906,10 @@ pub fn find_path_with_traversal_policy(
             break;
         }
         for next in planar_nav_neighbors(current, policy) {
-            if !projection.is_walkable(next) || !overlay.is_allowed(next) || visited.contains(&next)
+            if !projection.is_walkable(next)
+                || !overlay.is_allowed(next)
+                || !edges.is_none_or(|admission| admission.allows(current, next))
+                || visited.contains(&next)
             {
                 continue;
             }
@@ -856,6 +946,28 @@ pub fn find_weighted_path_with_policy(
     overlay: &NavTraversalOverlay,
     query: NavPathQuery,
     policy: PlanarNavNeighborPolicy,
+) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
+    find_weighted_path_with_optional_edge_admission(projection, overlay, query, policy, None)
+}
+
+/// Query a deterministic minimum-cost path while requiring collision-derived
+/// directed edge admission in addition to the caller's cell traversal facts.
+pub fn find_weighted_path_with_edge_admission(
+    projection: &NavProjection,
+    overlay: &NavTraversalOverlay,
+    edges: &NavEdgeAdmission,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
+    find_weighted_path_with_optional_edge_admission(projection, overlay, query, policy, Some(edges))
+}
+
+fn find_weighted_path_with_optional_edge_admission(
+    projection: &NavProjection,
+    overlay: &NavTraversalOverlay,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+    edges: Option<&NavEdgeAdmission>,
 ) -> Result<WeightedNavPathReadout, WeightedNavPathError> {
     if query.max_visited == 0 {
         return Err(WeightedNavPathError::InvalidQueryBudget);
@@ -920,7 +1032,10 @@ pub fn find_weighted_path_with_policy(
         }
 
         for next in planar_nav_neighbors(current, policy) {
-            if !projection.is_walkable(next) || !overlay.is_allowed(next) {
+            if !projection.is_walkable(next)
+                || !overlay.is_allowed(next)
+                || !edges.is_none_or(|admission| admission.allows(current, next))
+            {
                 continue;
             }
             let next_cost = cost
@@ -1434,6 +1549,16 @@ fn hash_walkable(walkable: &BTreeSet<VoxelCoord>) -> u64 {
     feed_u64(&mut h, walkable.len() as u64);
     for coord in walkable {
         feed_coord(&mut h, *coord);
+    }
+    h
+}
+
+fn hash_edge_admission(edges: &BTreeSet<(VoxelCoord, VoxelCoord)>) -> u64 {
+    let mut h = fnv_offset();
+    feed_u64(&mut h, edges.len() as u64);
+    for (from, to) in edges {
+        feed_coord(&mut h, *from);
+        feed_coord(&mut h, *to);
     }
     h
 }

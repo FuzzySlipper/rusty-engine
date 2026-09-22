@@ -19,9 +19,18 @@ internal static class JsonPersistenceChecks
         {
             if (first.Load("absent").Present) throw new InvalidOperationException("Missing save was present.");
             revision = first.Save("journey", expected).Revision;
+            ulong disposableRevision = first.Save("discarded", expected).Revision;
+            if (first.Delete("discarded", PersistenceRevisionGuard.Exact, disposableRevision + 1).Outcome
+                != PersistenceDeleteOutcome.RevisionConflict || !first.Load("discarded").Present)
+                throw new InvalidOperationException("Stale deletion changed saved state.");
+            PersistenceDeleteReceipt deleted = first.Delete("discarded", PersistenceRevisionGuard.Exact, disposableRevision);
+            if (deleted.Outcome != PersistenceDeleteOutcome.Deleted || deleted.Revision != disposableRevision)
+                throw new InvalidOperationException("Deletion did not report the removed revision.");
         }
         using (var reopened = new ProductStateStore<SavedJourney>(engine, scope, codec))
         {
+            if (reopened.Load("discarded").Present || reopened.Delete("discarded").Outcome != PersistenceDeleteOutcome.Missing)
+                throw new InvalidOperationException("Deletion did not survive reopening.");
             var loaded = reopened.Load("journey");
             var value = loaded.State;
             if (!loaded.Present || loaded.Revision != revision || value is null

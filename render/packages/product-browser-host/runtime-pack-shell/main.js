@@ -33,6 +33,10 @@ if (defaultLights === null
   || (defaultLights.viewmodel !== 'neutral' && defaultLights.viewmodel !== 'disabled')) {
   throw new Error('Product bootstrap has an invalid default lighting declaration');
 }
+const cursorMode = bootstrap?.input?.cursorMode;
+if (cursorMode !== 'pointer-lock' && cursorMode !== 'unlocked') {
+  throw new Error('Product bootstrap has an invalid input cursor mode');
+}
 const productUi = await import(`./${bootstrap.ui.entry}`);
 if (typeof productUi.mountProductUi !== 'function') {
   throw new Error('Product UI entry must export mountProductUi(root)');
@@ -46,6 +50,7 @@ void mountProductBrowserHost({
   lifecycleMode: bootstrap.lifecycle.mode,
   realtimeAdvanceOwner: 'rust-host',
   initialInteractionMode: 'gameplay',
+  gameplayCursorMode: cursorMode,
   runtimeInput: {
     maximumPointerDelta: 32,
     maximumWheelDelta: 64,

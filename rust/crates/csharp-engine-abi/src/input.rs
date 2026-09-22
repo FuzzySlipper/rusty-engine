@@ -264,12 +264,21 @@ pub struct NativeInputMapping {
     pub context_len: usize,
 }
 
+/// Engine-selected browser cursor behavior for gameplay input.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeInputCursorMode {
+    PointerLock = 0,
+    Unlocked = 1,
+}
+
 /// Static input facts selected by the Engine-owned standard runtime. Products
 /// may inspect these descriptors but cannot alter the admitted runtime lane.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeInputConfiguration {
     pub binding: NativeInputBinding,
+    pub cursor_mode: NativeInputCursorMode,
     pub context: *const u8,
     pub context_len: usize,
     pub direct_intents: *const NativeInputDescriptor,

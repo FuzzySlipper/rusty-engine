@@ -6,6 +6,8 @@ import { type RustyApplicationInputPort, type RustyApplicationInterfaceInputObse
 import { type RustyApplicationUiProjectionOptions, type RustyApplicationUiProjectionPort, type RustyApplicationUiProjectionReadout, type RustyApplicationUiProjectionView } from './ui-projection.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
+/** Engine-selected cursor behavior while gameplay owns input. */
+export type RustyApplicationGameplayCursorMode = 'pointer-lock' | 'unlocked';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 /** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
@@ -367,6 +369,8 @@ export interface RustyApplicationHostOptions {
     readonly loadingLabel?: string;
     readonly failureLabel?: string;
     readonly initialInteractionMode?: RustyApplicationInteractionMode;
+    /** Pointer lock is the existing first-person default; unlocked gameplay keeps the browser cursor. */
+    readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
     /** Optional browser input ingress. Omission leaves renderer controls and DOM capture disabled. */
     readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
     /** Optional strict Product UI projection channel. */

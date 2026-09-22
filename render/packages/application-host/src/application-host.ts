@@ -57,6 +57,9 @@ export type RustyApplicationInteractionMode =
   | 'interface'
   | 'modal';
 
+/** Engine-selected cursor behavior while gameplay owns input. */
+export type RustyApplicationGameplayCursorMode = 'pointer-lock' | 'unlocked';
+
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 /** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
@@ -498,6 +501,8 @@ export interface RustyApplicationHostOptions {
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
   readonly initialInteractionMode?: RustyApplicationInteractionMode;
+  /** Pointer lock is the existing first-person default; unlocked gameplay keeps the browser cursor. */
+  readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
   /** Optional browser input ingress. Omission leaves renderer controls and DOM capture disabled. */
   readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
   /** Optional strict Product UI projection channel. */
@@ -617,6 +622,7 @@ export async function mountRustyApplicationWithEnvironment(
   let closing = false;
   let disposal: Promise<void> | null = null;
   let interactionMode = options.initialInteractionMode ?? 'interface';
+  const gameplayCursorMode = options.gameplayCursorMode ?? 'pointer-lock';
   let activeCanvas = layout.canvas;
   let activeContent: PreparedRustyApplicationContent | null = null;
   let resourceCatalog = new RustyApplicationResourceCatalog();
@@ -669,7 +675,7 @@ export async function mountRustyApplicationWithEnvironment(
     if (interactionMode !== 'gameplay') return;
     const activeSurface = requireActive();
     activeSurface.canvas.focus({ preventScroll: true });
-    requestPointerLock(activeSurface.canvas);
+    if (gameplayCursorMode === 'pointer-lock') requestPointerLock(activeSurface.canvas);
   };
   const mountSurface = async (
     canvas: HTMLCanvasElement,
@@ -1292,6 +1298,7 @@ export async function mountRustyApplicationWithEnvironment(
         focusGameplay,
         gamepads: () => document.defaultView?.navigator.getGamepads?.() ?? [],
         interactionMode: () => interactionMode,
+        usesPointerLock: () => gameplayCursorMode === 'pointer-lock',
         observeInterfaceInput: (observation) => {
           for (const observer of [...interfaceInputObservers]) {
             if (closing || disposed || interactionMode !== 'interface') break;

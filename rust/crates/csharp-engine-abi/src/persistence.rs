@@ -67,6 +67,38 @@ pub struct NativePersistenceLoadRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativePersistenceDeleteRequest {
+    pub store: NativePersistenceStoreHandle,
+    pub key: NativeUtf8Slice,
+    pub revision_guard: NativePersistenceRevisionGuard,
+    pub expected_revision: u64,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativePersistenceDeleteOutcome {
+    #[default]
+    Missing = 0,
+    Deleted = 1,
+    RevisionConflict = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativePersistenceDeleteReceipt {
+    pub outcome: NativePersistenceDeleteOutcome,
+    /// Deleted: removed revision. Conflict: current revision. Missing: zero.
+    pub revision: u64,
+}
+
+pub type NativeDeletePersistence = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePersistenceDeleteRequest,
+    *mut NativePersistenceDeleteReceipt,
+) -> i32;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativePersistenceBlobInfo {
     pub present: bool,
     pub revision: u64,

@@ -1,10 +1,12 @@
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
+use core_space::WorldPos;
 use engine_spatial::{
-    CharacterBlockKind, CharacterContactKind, CharacterControllerCommand,
-    CharacterControllerConfig, CharacterControllerError, CharacterControllerService,
-    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
-    StaticMeshTransform, VoxelCollisionScene, VoxelEdit, VoxelEditService, VoxelEditTransaction,
+    character_edge_is_traversable, CharacterBlockKind, CharacterContactKind,
+    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
+    CharacterControllerService, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, VoxelCollisionScene,
+    VoxelEdit, VoxelEditService, VoxelEditTransaction,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform, Quat,
@@ -104,6 +106,92 @@ fn ramp_scene(rise: f64) -> VoxelCollisionScene {
         )
         .unwrap();
     scene
+}
+
+fn quarter_step_scene(with_low_ceiling: bool) -> VoxelCollisionScene {
+    let mut scene = floor_scene();
+    let mut positions = vec![
+        [-2.0, 1.25, -0.25],
+        [2.0, 1.25, -0.25],
+        [2.0, 1.25, -3.0],
+        [-2.0, 1.25, -3.0],
+        [-2.0, 1.0, -0.25],
+        [2.0, 1.0, -0.25],
+    ];
+    let mut triangles = vec![[0, 1, 2], [0, 2, 3], [4, 5, 1], [4, 1, 0]];
+    if with_low_ceiling {
+        let first = positions.len() as u32;
+        positions.extend([
+            [-2.0, 2.75, -0.35],
+            [2.0, 2.75, -0.35],
+            [2.0, 2.75, -2.9],
+            [-2.0, 2.75, -2.9],
+        ]);
+        triangles.extend([[first, first + 2, first + 1], [first, first + 3, first + 2]]);
+    }
+    let asset = StaticMeshColliderAsset::new(StaticMeshAssetId(41), positions, triangles).unwrap();
+    let hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(41),
+                asset: StaticMeshAssetId(41),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    scene
+}
+
+#[test]
+fn character_capsule_edge_and_ordinary_controls_cross_a_quarter_meter_step() {
+    let scene = quarter_step_scene(false);
+    let config = CharacterControllerConfig::default();
+    let lower = WorldPos::new(0.0, 1.0, 0.5);
+    let upper = WorldPos::new(0.0, 1.25, -0.5);
+    assert!(character_edge_is_traversable(&scene, &config, lower, upper).unwrap());
+    assert!(character_edge_is_traversable(&scene, &config, upper, lower).unwrap());
+
+    let (entity, mut state) = character_at(Vec3::new(0.0, 1.9, 1.0));
+    let mut service = CharacterControllerService::default();
+    service
+        .step(&mut state, &scene, entity, &config, command(1, Vec2::ZERO))
+        .unwrap();
+    let mut crossed_upper_tread = None;
+    for sequence in 2..=180 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+        let position = receipt.transform_after.translation;
+        if receipt.step.is_some_and(|step| step.accepted) {
+            assert!(
+                position.y > 2.1,
+                "accepted step lands on the upper tread: {position:?}"
+            );
+        }
+        if position.y > 2.1 && position.z < -0.3 {
+            crossed_upper_tread = Some(position);
+            break;
+        }
+    }
+    let position = crossed_upper_tread.expect("ordinary forward controls cross the upper tread");
+    assert!(
+        position.z < -0.25 && position.y > 2.1,
+        "character crossed the upper tread: {position:?}"
+    );
+
+    let low_ceiling = quarter_step_scene(true);
+    assert!(!character_edge_is_traversable(&low_ceiling, &config, lower, upper).unwrap());
+    assert!(!character_edge_is_traversable(&low_ceiling, &config, upper, lower).unwrap());
 }
 
 #[test]

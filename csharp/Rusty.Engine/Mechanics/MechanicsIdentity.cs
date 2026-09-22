@@ -230,6 +230,32 @@ public sealed record ItemDefinitionId : MechanicsIdentity
     }
 }
 
+/// <summary>
+/// Product-selected identity for one quantity-bearing fungible stack within an
+/// inventory owner. It is distinct from the immutable item definition so a
+/// product can keep metadata-bearing stacks apart.
+/// </summary>
+public sealed record InventoryStackId : MechanicsIdentity
+{
+    private InventoryStackId(string value) : base(value) { }
+
+    public static InventoryStackId Parse(string value) => new(value);
+
+    public static bool TryParse(string? value, out InventoryStackId? result)
+    {
+        try
+        {
+            result = value is null ? null : Parse(value);
+            return result is not null;
+        }
+        catch (ArgumentException)
+        {
+            result = null;
+            return false;
+        }
+    }
+}
+
 /// <summary>Identity for one caller-authored capacity dimension.</summary>
 public sealed record CapacityMetricId : MechanicsIdentity
 {

@@ -748,7 +748,8 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         new InputBinding(input.binding.instance_id, input.binding.generation, input.binding.control_revision),
                         new InputContext(CopyBytes(input.context, input.context_len)),
                         descriptors,
-                        mappings);
+                        mappings,
+                        NativeConversions.FromNative(input.cursor_mode));
                 }
 
                 private static ReadOnlyMemory<KeyboardControl> CopyKeyboardControls(NativeKeyboardControl* source, nuint count)

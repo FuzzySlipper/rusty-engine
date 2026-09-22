@@ -10,6 +10,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use csharp_engine_abi::NativeInputCursorMode;
 use product_dev_host::{ProductDevBundleEntry, ProductDevRendererResource};
 use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
 use runtime_lifecycle::{
@@ -40,6 +41,7 @@ pub(super) struct ProductBundle {
     pub(super) lifecycle_mode: &'static str,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
     pub(super) physical_mappings: Vec<RuntimeInputMapping>,
+    pub(super) input_cursor_mode: ProductInputCursorMode,
     pub(super) bind_host: Ipv4Addr,
     pub(super) port: u16,
     pub(super) live_debug: bool,
@@ -113,7 +115,7 @@ impl ProductBundle {
         let renderer_lighting = ProductRendererLighting::from_manifest(manifest.renderer)?;
 
         let (lifecycle, lifecycle_mode) = lifecycle(&manifest.lifecycle)?;
-        let (direct_intents, physical_mappings) = input(&manifest.input)?;
+        let (direct_intents, physical_mappings, input_cursor_mode) = input(&manifest.input)?;
         let bind_host = manifest
             .server
             .bind_host
@@ -135,6 +137,7 @@ impl ProductBundle {
             lifecycle_mode,
             direct_intents,
             physical_mappings,
+            input_cursor_mode,
             bind_host,
             port: manifest.server.port,
             live_debug: manifest.server.live_debug,
@@ -184,6 +187,9 @@ impl ProductBundle {
             },
             lifecycle: ProductBootstrapLifecycle {
                 mode: self.lifecycle_mode,
+            },
+            input: ProductBootstrapInput {
+                cursor_mode: self.input_cursor_mode.as_str(),
             },
             ui_projection: self.ui_projection.as_ref(),
             renderer: ProductBootstrapRenderer {
@@ -248,7 +254,14 @@ fn lifecycle(value: &ManifestLifecycle) -> Result<(RuntimeLifecycleConfig, &'sta
 
 fn input(
     value: &ManifestInput,
-) -> Result<(Vec<DirectInputIntentDescriptor>, Vec<RuntimeInputMapping>), String> {
+) -> Result<
+    (
+        Vec<DirectInputIntentDescriptor>,
+        Vec<RuntimeInputMapping>,
+        ProductInputCursorMode,
+    ),
+    String,
+> {
     let direct_intents = value
         .intents
         .iter()
@@ -270,7 +283,11 @@ fn input(
         .collect::<Result<Vec<_>, _>>()?;
     CompiledInputMappings::standard(direct_intents.clone(), physical_mappings.clone())
         .map_err(|error| field_error("input", error.to_string()))?;
-    Ok((direct_intents, physical_mappings))
+    Ok((
+        direct_intents,
+        physical_mappings,
+        ProductInputCursorMode::parse(value.cursor_mode.as_deref())?,
+    ))
 }
 
 fn canonical_directory(path: &Path, field: &str) -> Result<PathBuf, String> {
@@ -556,11 +573,45 @@ struct ManifestFixedStep {
     max_catch_up_steps: u32,
 }
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ManifestInput {
+    #[serde(default)]
+    cursor_mode: Option<String>,
     #[serde(default)]
     intents: Vec<ManifestIntent>,
     #[serde(default)]
     mappings: Vec<ManifestMapping>,
+}
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) enum ProductInputCursorMode {
+    #[default]
+    PointerLock,
+    Unlocked,
+}
+impl ProductInputCursorMode {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("pointer-lock") => Ok(Self::PointerLock),
+            Some("unlocked") => Ok(Self::Unlocked),
+            Some(_) => Err(field_error(
+                "input.cursorMode",
+                "must be pointer-lock or unlocked",
+            )),
+        }
+    }
+
+    pub(super) fn native(self) -> NativeInputCursorMode {
+        match self {
+            Self::PointerLock => NativeInputCursorMode::PointerLock,
+            Self::Unlocked => NativeInputCursorMode::Unlocked,
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PointerLock => "pointer-lock",
+            Self::Unlocked => "unlocked",
+        }
+    }
 }
 #[derive(Debug, Deserialize)]
 struct ManifestIntent {
@@ -604,6 +655,7 @@ struct ProductBootstrap<'a> {
     product: ProductBootstrapIdentity<'a>,
     ui: ProductBootstrapUi<'a>,
     lifecycle: ProductBootstrapLifecycle,
+    input: ProductBootstrapInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     ui_projection: Option<&'a ProductUiProjection>,
     renderer: ProductBootstrapRenderer,
@@ -620,6 +672,11 @@ struct ProductBootstrapUi<'a> {
 #[derive(Serialize)]
 struct ProductBootstrapLifecycle {
     mode: &'static str,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductBootstrapInput {
+    cursor_mode: &'static str,
 }
 #[derive(Serialize)]
 struct ProductBootstrapRenderer {
@@ -750,6 +807,7 @@ mod tests {
             bootstrap["renderer"]["lighting"]["defaultLights"],
             serde_json::json!({ "world": "neutral", "viewmodel": "neutral" })
         );
+        assert_eq!(bootstrap["input"]["cursorMode"], "pointer-lock");
         assert!(!entries
             .iter()
             .any(|entry| entry.path().contains("trial.txt")));
@@ -762,6 +820,43 @@ mod tests {
         write_manifest(&root, "../product.so");
         let error = ProductBundle::read(&root).expect_err("escaping module is rejected");
         assert!(error.contains("product.json:nativeAot.module"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stages_the_product_selected_unlocked_gameplay_cursor() {
+        let root = fixture_root("unlocked-cursor");
+        write_manifest(&root, "native/product.so");
+        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("\"input\":{", "\"input\":{\"cursorMode\":\"unlocked\",");
+        fs::write(&manifest_path, manifest).unwrap();
+
+        let bootstrap = ProductBundle::read(&root)
+            .expect("unlocked cursor mode admits")
+            .browser_entries(&[])
+            .expect("browser bootstrap stages")
+            .into_iter()
+            .find(|entry| entry.path() == PRODUCT_BOOTSTRAP_PATH)
+            .expect("browser bootstrap exists");
+        let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.bytes()).unwrap();
+        assert_eq!(bootstrap["input"]["cursorMode"], "unlocked");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_input_cursor_modes_before_staging() {
+        let root = fixture_root("invalid-cursor-mode");
+        write_manifest(&root, "native/product.so");
+        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("\"input\":{", "\"input\":{\"cursorMode\":\"freeform\",");
+        fs::write(&manifest_path, manifest).unwrap();
+
+        let error = ProductBundle::read(&root).expect_err("invalid cursor mode rejects");
+        assert!(error.contains("product.json:input.cursorMode"));
         fs::remove_dir_all(root).unwrap();
     }
 

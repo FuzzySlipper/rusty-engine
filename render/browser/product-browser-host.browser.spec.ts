@@ -165,6 +165,45 @@ test('generated product browser host keeps UI controls out of gameplay pointer i
   })).toBe(1);
 });
 
+test('unlocked gameplay keeps the cursor while canvas focus restores Engine keyboard input', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html?unlockedCursor');
+  const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
+  await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
+
+  await page.evaluate(() => {
+    const surface = document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]');
+    if (surface === null) throw new Error('renderer canvas is unavailable');
+    let requests = 0;
+    surface.requestPointerLock = () => {
+      requests += 1;
+      return Promise.resolve();
+    };
+    Object.defineProperty(surface, '__rustyPointerLockRequests', { get: () => requests });
+  });
+
+  await page.locator('#product-intent').click();
+  await page.keyboard.press('KeyW');
+  const beforeFocusReturn = await page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).flat()
+    .filter((value) => 'fact' in value && value.fact.kind === 'key' && value.fact.code === 'key-w').length);
+
+  await canvas.click({ position: { x: 400, y: 300 } });
+  await expect.poll(() => page.evaluate(() => document.activeElement === document.querySelector(
+    'canvas[data-rusty-application-renderer="engine-owned"]',
+  ))).toBe(true);
+  expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
+  expect(await canvas.evaluate((surface) => (surface as HTMLCanvasElement & {
+    readonly __rustyPointerLockRequests?: number;
+  }).__rustyPointerLockRequests)).toBe(0);
+
+  await page.mouse.move(200, 150);
+  await page.keyboard.press('KeyW');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).flat()
+    .filter((value) => 'fact' in value && value.fact.kind === 'key' && value.fact.code === 'key-w').length))
+    .toBeGreaterThan(beforeFocusReturn);
+  expect(await page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).flat()
+    .some((value) => 'fact' in value && value.fact.kind === 'pointer-delta'))).toBe(false);
+});
+
 test('generated product browser host disposes transport and application owners', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html');
   await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');

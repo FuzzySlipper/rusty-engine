@@ -982,6 +982,23 @@ sealed class InMemoryPersistenceService : IPersistenceService
         return new PersistenceSaveReceipt(revision);
     }
 
+    public PersistenceDeleteReceipt Delete(PersistenceDeleteRequest request)
+    {
+        var key = (_scopes[request.Store.Handle.Value], request.Key);
+        _saved.TryGetValue(key, out Saved? previous);
+        bool matches = request.RevisionGuard switch
+        {
+            PersistenceRevisionGuard.Any => true,
+            PersistenceRevisionGuard.Exact => previous is not null && previous.Revision == request.ExpectedRevision,
+            PersistenceRevisionGuard.Absent => previous is null,
+            _ => throw new ArgumentOutOfRangeException(nameof(request)),
+        };
+        if (!matches) return new(PersistenceDeleteOutcome.RevisionConflict, previous?.Revision ?? 0);
+        if (previous is null) return new(PersistenceDeleteOutcome.Missing, 0);
+        _saved.Remove(key);
+        return new(PersistenceDeleteOutcome.Deleted, previous.Revision);
+    }
+
     public PersistenceBlob Load(PersistenceLoadRequest request)
     {
         string scope = _scopes[request.Store.Handle.Value];

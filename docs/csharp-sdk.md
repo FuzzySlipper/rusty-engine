@@ -49,6 +49,21 @@ keeps `IEngineContext` or the named services it needs. Exactly one concrete
 and NativeAOT bind implementations without assembly scanning or product-side
 registration infrastructure.
 
+### Gameplay cursor mode
+
+Keyboard-driven products without mouselook can opt into a free cursor:
+
+```xml
+<RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
+```
+
+The default is `pointer-lock`, preserving FPS behavior. In `unlocked` mode,
+clicking the canvas focuses gameplay keyboard input without requesting pointer
+lock; pointer movement does not supply camera-look deltas. Marked DOM controls
+remain usable, and Engine input still owns focus loss, clearing, and rebinding.
+The setting is available as `context.Input.CursorMode` and is carried through
+the packaged Product and browser bootstrap. Invalid values reject staging.
+
 ### Default browser lighting
 
 The packaged browser shell keeps its neutral world and viewmodel light rigs by
@@ -590,8 +605,14 @@ from the session's current Engine collision scene. The request supplies a
 finite `WorldMin`/`WorldMax` volume plus cell, bounded grid, step, agent
 clearance, and maximum-slope policy; it never supplies geometry. The Engine
 samples voxel and retained static-mesh collision for support and headroom,
-preserves supported elevations, and rejects incomplete support or obstructed
-cell footprints. It considers at most eight support layers per X/Z cell, so a
+preserves supported elevations, and checks a standing capsule at each cell
+center. Directed connections between supported cells use the character
+collision capsule casts and step solver: a traversable floor lip can connect
+without admitting a thin separating wall or insufficient headroom. Agent radius
+and height define capsule clearance; the step limit is cell size times
+`MaxStepCells`. Path, weighted-path and navigation-step queries retain these
+edge checks alongside product traversal overlays. It considers at most eight
+support layers per X/Z cell, so a
 deeper layer is intentionally unknown rather than implied walkable. Use the live foot position for `EvaluateNavigationStep` so it
 can reconcile to the nearest retained support within one quarter of a navigation cell (capped at 0.1 world units) in
 that X/Z cell. This is a
@@ -1323,6 +1344,24 @@ not hold another ledger, grant writable access to internal maps, or synchronize
 EntityStore parent relationships. Grouped operations still use the same store's
 `Prepare()` edit. Inventory-only owners need no EntityStore attachment.
 
+For metadata-bearing quantities, give each distinct stack a product-selected
+`InventoryStackId` and use `Grant(owner, definition, stackId, quantity)`.
+`InventoryView.Stacks` exposes the IDs; their scope is the owner inventory.
+Selected-stack Consume, SplitFungible, TransferFungible and MergeFungible all
+use the same store ledger and capacity checks. The product chooses compatible
+merge targets and copies or retires its metadata using the returned IDs.
+Splitting requires a new destination ID and leaves a positive source quantity;
+merging retires the source ID. A full transfer can preserve its ID in an owner
+where that ID is unused. Partial transfers require an explicit destination ID,
+either new or selected for a compatible merge. `MaximumQuantity` limits each
+stack; inventory capacity accounts for every stack and unique item together.
+Definition-only mutations reject ambiguous multi-stack selection.
+`InventoryState.CaptureStacks()` and `InventoryState.Restore(...)` retain stack
+IDs, definitions and quantities; restore and registration validate capacity.
+Persist product metadata keyed by those owner/stack IDs, or map them to save-local
+identities and re-grant on rebuild. No second quantity ledger or metadata-encoded
+definition ID is needed.
+
 ### Explicit capture, restore and live inspection
 
 Capture selected durable values into product-owned records on request. Save those
@@ -1351,6 +1390,17 @@ version. Storage owns only its file layout marker and revision; specialized code
 (such as voxel edit history) identify their own payload format during decoding.
 The current layout replaces the old schema-bearing envelope without migration;
 old development save files must be discarded or explicitly converted by their owner.
+
+`ProductStateStore<T>.Delete(key, guard, expectedRevision)` and the direct
+`Persistence.Delete(PersistenceDeleteRequest)` durably remove one scoped key.
+`Deleted` reports the removed revision; `Missing` reports zero. Guards match Save:
+`Any` accepts either state, `Exact` requires an existing matching revision, and
+`Absent` requires no key. A mismatch returns `RevisionConflict` with the current
+revision (zero when absent) without removing bytes. Loaded blobs remain readable.
+Recreating a deleted key starts at revision one; revisions are not tombstone IDs.
+Storage failures throw rather than returning a deletion receipt. After an I/O
+failure, reload to determine whether removal occurred. Product slot catalogs and
+metadata remain product-owned.
 
 
 `StatsComponentCapture.Capture` reads a component's selected stat/track values as plain

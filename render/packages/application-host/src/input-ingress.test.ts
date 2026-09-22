@@ -28,6 +28,33 @@ void test('input ingress normalizes exactly the Engine keyboard catalog', () => 
   assert.equal(normalizeRustyApplicationKeyboardControl('KeyAA'), null);
 });
 
+void test('unlocked gameplay ignores pointer deltas even if another caller holds pointer lock', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = {} as HTMLCanvasElement;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    pointerLockElement: canvas,
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+    usesPointerLock: () => false,
+  });
+
+  documentTarget.emit('pointermove', { movementX: 48, movementY: -12 } as PointerEvent);
+  assert.deepEqual(ingress.drain(), []);
+  ingress.dispose();
+});
+
 void test('input ingress preserves physical and direct UI observation order with lossless sequences', () => {
   const queue = createRustyApplicationInputQueue(8);
   assert.equal(queue.bindRuntime(INITIAL), true);

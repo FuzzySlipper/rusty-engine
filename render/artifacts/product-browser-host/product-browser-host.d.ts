@@ -1,4 +1,4 @@
-import { mountRustyApplication, type RustyApplicationFrame, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
+import { mountRustyApplication, type RustyApplicationFrame, type RustyApplicationGameplayCursorMode, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
 import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { type ProductBrowserDynamicRendererResourceFetcher } from './dynamic-renderer-resources.js';
 /** Fixed current artifact identity; compatibility follows actual code changes. */
@@ -475,6 +475,8 @@ export interface ProductBrowserHostOptions {
     readonly renderer?: Omit<RustyApplicationRendererOptions, 'onCadence'>;
     readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
     readonly initialInteractionMode?: 'gameplay' | 'interface' | 'modal';
+    /** Engine-selected gameplay cursor behavior; defaults to pointer lock for FPS products. */
+    readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
     readonly inputContext?: string;
     readonly loadingLabel?: string;
     readonly failureLabel?: string;
@@ -654,6 +656,8 @@ export interface ProductBrowserBundleTemplateOptions {
     readonly lifecycleMode: ProductBrowserRuntimeMode;
     /** Defaults to `rust-host` for realtime bundles and `browser` otherwise. */
     readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
+    /** Engine-selected gameplay cursor behavior; defaults to pointer lock. */
+    readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
     readonly uiProjection?: {
         readonly expectedStream: string;
         readonly expectedContract: string;

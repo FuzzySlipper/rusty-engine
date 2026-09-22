@@ -153,6 +153,8 @@ interface RustyApplicationInputIngressEnvironment {
     readonly document: Document;
     readonly allowsGameplayInput: (event: Event) => boolean;
     readonly interactionMode: () => 'gameplay' | 'interface' | 'modal';
+    /** Cursor behavior is selected by the Engine-owned product host configuration. */
+    readonly usesPointerLock?: () => boolean;
     readonly active: () => boolean;
     readonly focusGameplay: () => void;
     readonly gamepads: () => readonly (Gamepad | null)[];

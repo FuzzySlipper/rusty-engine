@@ -1,6 +1,7 @@
 import {
   mountRustyApplication,
   type RustyApplicationFrame,
+  type RustyApplicationGameplayCursorMode,
   type RustyApplicationAnimationCueDefinition,
   type RustyApplicationContent,
   type RustyApplicationHost,
@@ -633,6 +634,8 @@ export interface ProductBrowserHostOptions {
   readonly renderer?: Omit<RustyApplicationRendererOptions, 'onCadence'>;
   readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
   readonly initialInteractionMode?: 'gameplay' | 'interface' | 'modal';
+  /** Engine-selected gameplay cursor behavior; defaults to pointer lock for FPS products. */
+  readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
   readonly inputContext?: string;
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
@@ -2694,6 +2697,9 @@ export async function mountProductBrowserHostWithApplication(
       ...(options.initialInteractionMode === undefined
         ? {}
         : { initialInteractionMode: options.initialInteractionMode }),
+      ...(options.gameplayCursorMode === undefined
+        ? {}
+        : { gameplayCursorMode: options.gameplayCursorMode }),
       ...(options.loadingLabel === undefined ? {} : { loadingLabel: options.loadingLabel }),
       ...(options.failureLabel === undefined ? {} : { failureLabel: options.failureLabel }),
       ...(runtimeInput === undefined ? {} : { runtimeInput }),
@@ -3224,6 +3230,8 @@ export interface ProductBrowserBundleTemplateOptions {
   readonly lifecycleMode: ProductBrowserRuntimeMode;
   /** Defaults to `rust-host` for realtime bundles and `browser` otherwise. */
   readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
+  /** Engine-selected gameplay cursor behavior; defaults to pointer lock. */
+  readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
   readonly uiProjection?: {
     readonly expectedStream: string;
     readonly expectedContract: string;
@@ -3254,6 +3262,11 @@ export function productBrowserBundleAssets(
   if (options.realtimeAdvanceOwner === 'rust-host' && options.lifecycleMode !== 'realtime') {
     throw new RangeError('rust-host realtimeAdvanceOwner requires realtime lifecycle mode');
   }
+  if (options.gameplayCursorMode !== undefined
+    && options.gameplayCursorMode !== 'pointer-lock'
+    && options.gameplayCursorMode !== 'unlocked') {
+    throw new RangeError('gameplayCursorMode must be pointer-lock or unlocked');
+  }
   if (options.uiProjection !== undefined && options.uiProjection !== null) {
     validateBundleIdentity(options.uiProjection.expectedStream, 'expectedStream');
     validateBundleIdentity(options.uiProjection.expectedContract, 'expectedContract');
@@ -3280,6 +3293,7 @@ export function productBrowserBundleAssets(
         '  lifecycleMode: bridge.lifecycleMode,',
         '  realtimeAdvanceOwner: bridge.realtimeAdvanceOwner,',
         "  initialInteractionMode: 'gameplay',",
+        `  gameplayCursorMode: ${JSON.stringify(options.gameplayCursorMode ?? 'pointer-lock')},`,
         '  mountUi: mountProductUi,',
         '  uiProjection: bridge.uiProjection,',
         '  runtimeInput: bridge.runtimeInput,',
@@ -3304,6 +3318,7 @@ export function productBrowserBundleAssets(
         `    lifecycleMode: ${JSON.stringify(options.lifecycleMode)},`,
         `    realtimeAdvanceOwner: ${JSON.stringify(options.realtimeAdvanceOwner
           ?? (options.lifecycleMode === 'realtime' ? 'rust-host' : 'browser'))},`,
+        `    gameplayCursorMode: ${JSON.stringify(options.gameplayCursorMode ?? 'pointer-lock')},`,
         ...(options.uiProjection === undefined || options.uiProjection === null
           ? ['    uiProjection: undefined,']
           : [`    uiProjection: ${JSON.stringify(options.uiProjection)},`]),

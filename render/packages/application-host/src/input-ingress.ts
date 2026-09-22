@@ -193,6 +193,8 @@ interface RustyApplicationInputIngressEnvironment {
   readonly document: Document;
   readonly allowsGameplayInput: (event: Event) => boolean;
   readonly interactionMode: () => 'gameplay' | 'interface' | 'modal';
+  /** Cursor behavior is selected by the Engine-owned product host configuration. */
+  readonly usesPointerLock?: () => boolean;
   readonly active: () => boolean;
   readonly focusGameplay: () => void;
   readonly gamepads: () => readonly (Gamepad | null)[];
@@ -312,7 +314,7 @@ export function createRustyApplicationInputIngress(
   };
   const onPointerMove = (event: PointerEvent): void => {
     if (!admit(event, false)) return;
-    if (!pointerLocked()) return;
+    if (environment.usesPointerLock?.() === false || !pointerLocked()) return;
     const x = boundedNumber(event.movementX, normalized.maximumPointerDelta);
     const y = boundedNumber(event.movementY, normalized.maximumPointerDelta);
     if (x === 0 && y === 0) return;
@@ -342,7 +344,7 @@ export function createRustyApplicationInputIngress(
   const onPointerLockChange = (event: Event): void => {
     // Pointer lock changes are DOM events too, even though losing it must clear regardless.
     environment.allowsGameplayInput(event);
-    if (!pointerLocked()) clear('pointer-lock-loss');
+    if (environment.usesPointerLock?.() !== false && !pointerLocked()) clear('pointer-lock-loss');
   };
   const onWindowBlur = (event: Event): void => {
     environment.allowsGameplayInput(event);

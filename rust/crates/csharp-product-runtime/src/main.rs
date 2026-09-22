@@ -2996,6 +2996,9 @@ impl Arguments {
             direct_intents,
         )
         .with_physical_mappings(physical_mappings);
+        if let Some(product) = &self.product {
+            config = config.with_input_cursor_mode(product.input_cursor_mode.native());
+        }
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
         }
