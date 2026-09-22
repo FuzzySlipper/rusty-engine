@@ -64,6 +64,7 @@ pub(crate) struct RuntimeVideoBridge {
     callback_error: Option<CsharpEngineServicesError>,
     facts: VecDeque<VideoRealizationFact>,
     evicted: u64,
+    renderer_evicted: u64,
     accepted_through: Option<u64>,
     content: Option<*const RuntimeContentBridge>,
 }
@@ -81,6 +82,7 @@ impl RuntimeVideoBridge {
             callback_error: None,
             facts: VecDeque::new(),
             evicted: 0,
+            renderer_evicted: 0,
             accepted_through: None,
             content: None,
         }
@@ -128,11 +130,11 @@ impl RuntimeVideoBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         if replace {
             self.facts.clear();
-            self.evicted = evicted_fact_count;
+            self.evicted = 0;
+            self.renderer_evicted = 0;
             self.accepted_through = None;
-        } else if evicted_fact_count > self.evicted {
-            self.evicted = evicted_fact_count;
         }
+        self.renderer_evicted = self.renderer_evicted.max(evicted_fact_count);
         for fact in facts {
             if self.accepted_through.is_some_and(|id| fact.id() <= id) {
                 continue;
@@ -268,7 +270,7 @@ impl RuntimeVideoBridge {
         let _ = self.staged()?;
         Ok(NativeVideoRealizationReadout {
             retained_fact_count: self.facts.len() as u32,
-            evicted_fact_count: self.evicted,
+            evicted_fact_count: self.evicted.saturating_add(self.renderer_evicted),
         })
     }
     fn read_fact(
@@ -442,6 +444,21 @@ mod tests {
         let call = bridge.take_staged_call().expect("staged video call");
         bridge.commit(call);
         assert_eq!(bridge.render_resources().count(), 1);
+    }
+
+    #[test]
+    fn renderer_and_runtime_evictions_accumulate_independently() {
+        let mut bridge = RuntimeVideoBridge::new(BTreeMap::new());
+        bridge.ingest_realized_feedback(true, 2, (1..=129).map(|fact_id|
+            VideoRealizationFact::Completed { fact_id, handle: fact_id }
+        )).unwrap();
+        bridge.ingest_realized_feedback(false, 4, []).unwrap();
+        bridge.begin_call();
+        assert_eq!(bridge.read_realization().unwrap().evicted_fact_count, 5);
+        bridge.discard_call();
+        bridge.ingest_realized_feedback(false, 4, []).unwrap();
+        bridge.begin_call();
+        assert_eq!(bridge.read_realization().unwrap().evicted_fact_count, 5);
     }
 
     #[test]
