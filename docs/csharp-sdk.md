@@ -49,6 +49,32 @@ keeps `IEngineContext` or the named services it needs. Exactly one concrete
 and NativeAOT bind implementations without assembly scanning or product-side
 registration infrastructure.
 
+### Runtime input remapping
+
+Use `context.Engine.Input.ReplacePhysicalMappings(mappings)` to replace the
+whole physical mapping set during product creation, Start, Pause, Resume,
+Restart, or an admitted Update callback. The mappings use the existing
+`ProductInputMapping` values and must target the product's declared semantic intents; remapping does not add intents
+or change their value kinds or payload contracts. An empty set disables
+physical mappings while leaving direct intents available.
+
+`Staged` means the candidate takes effect when the callback successfully
+settles. The last valid replacement in that callback wins. `InvalidMappings`
+leaves the current mapping set and any earlier valid candidate unchanged;
+callback failure discards the staged replacement. `Unavailable` reports a call
+outside those supported callbacks (such as Attach, Shutdown, debug or timeline
+completion). Duplicate mapping IDs, unknown intents, incompatible value kinds,
+and unsupported controls are invalid. Distinct mapping IDs may deliberately share a physical trigger.
+
+At runtime, a successful replacement uses the lifecycle transition or advances
+the input control revision and clears held and pending input through the
+existing input lane. During creation it instead selects the initial map before
+the lane admits input. Old bindings stop firing, and queued events from the previous binding cannot trigger stale actions.
+Products receive the normal clear fact and must release their derived held
+state. Focus and text-entry suppression continue through the same lane.
+`ProductCreateContext.Input` remains the initial composition snapshot; products
+own their chosen settings, UI and persistence.
+
 ### Gameplay cursor mode
 
 Keyboard-driven products without mouselook can opt into a free cursor:
@@ -1355,7 +1381,11 @@ merging retires the source ID. A full transfer can preserve its ID in an owner
 where that ID is unused. Partial transfers require an explicit destination ID,
 either new or selected for a compatible merge. `MaximumQuantity` limits each
 stack; inventory capacity accounts for every stack and unique item together.
-Definition-only mutations reject ambiguous multi-stack selection.
+Every inventory mutation selects an explicit stack ID. Definition-only Grant,
+Consume and TransferFungible overloads and the implicit-ID InventoryStack
+constructor have been removed. Existing callers must choose stack IDs; the
+Engine never derives one from definition text. Definition-level quantity reads
+still aggregate all stacks of that definition.
 `InventoryState.CaptureStacks()` and `InventoryState.Restore(...)` retain stack
 IDs, definitions and quantities; restore and registration validate capacity.
 Persist product metadata keyed by those owner/stack IDs, or map them to save-local

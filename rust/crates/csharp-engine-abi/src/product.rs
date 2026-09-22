@@ -1236,10 +1236,28 @@ pub struct NativeContentStoreApi {
     pub publish: NativePublishContentStore,
 }
 
+pub type NativeReplaceInputMappings = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeInputMapping,
+    usize,
+    *mut NativeInputMappingReplacementOutcome,
+) -> i32;
+
+/// Runtime replacement of physical mappings. The product supplies a complete
+/// candidate set; the Engine retains declared semantic intents and settles a
+/// valid candidate only after the current callback succeeds.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeInputApi {
+    pub context: *mut c_void,
+    pub replace_physical_mappings: NativeReplaceInputMappings,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeEngineApi {
+    pub input: NativeInputApi,
     pub implicit_surfaces: NativeImplicitSurfacesApi,
     pub diagnostics: NativeDiagnosticsApi,
     pub dynamics: NativeDynamicsApi,

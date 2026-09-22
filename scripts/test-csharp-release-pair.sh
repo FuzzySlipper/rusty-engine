@@ -53,6 +53,7 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
     <RustyEngineProductEntryType>PairConsumer.Product</RustyEngineProductEntryType>
     <RustyEngineProductId>fixture.release-pair</RustyEngineProductId>
     <RustyEngineProductTitle>Release pair fixture</RustyEngineProductTitle>
@@ -61,7 +62,11 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
   </PropertyGroup>
-  <ItemGroup><PackageReference Include="Rusty.Engine" Version="$version" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$version" />
+    <RustyEngineProductInputIntent Include="pair.use" Value="digital" />
+    <RustyEngineProductInputMapping Include="pair.use.key" Intent="pair.use" Trigger="key:key-e:pressed" />
+  </ItemGroup>
 </Project>
 EOF
 cat > "$consumer/Product.cs" <<'EOF'
@@ -75,7 +80,17 @@ public sealed class Product : IEngineProduct
     {
         if (context.Input.CursorMode != InputCursorMode.Unlocked)
             throw new System.InvalidOperationException("Packaged cursor mode did not reach C# composition.");
+        IInputService input = context.Engine.Input;
+        ProductInputMapping initialMapping = context.Input.PhysicalMappings.Span[0];
         JsonPersistenceChecks.Run(context.Engine);
+        AddressableInventoryStacksExercise.Run();
+        ProductInputMapping replacement = initialMapping with { Keyboard = KeyboardControl.KeyF };
+        if (input.ReplacePhysicalMappings([replacement]) != InputMappingReplacementOutcome.Staged)
+            throw new InvalidOperationException("Packaged input replacement did not stage.");
+        if (input.ReplacePhysicalMappings([replacement, replacement]) != InputMappingReplacementOutcome.InvalidMappings)
+            throw new InvalidOperationException("Duplicate mapping IDs did not return a recoverable outcome.");
+        if (initialMapping.Keyboard != KeyboardControl.KeyE)
+            throw new InvalidOperationException("Runtime replacement mutated the initial composition snapshot.");
     }
     public void Start() { }
     public void Attach() { }
@@ -88,6 +103,7 @@ public sealed class Product : IEngineProduct
 }
 EOF
 cp "$repo_root/scripts/fixtures/JsonPersistenceChecks.cs" "$consumer/JsonPersistenceChecks.cs"
+cp "$repo_root/csharp/Rusty.Engine.Mechanics.Example/AddressableInventoryStacksExercise.cs" "$consumer/AddressableInventoryStacksExercise.cs"
 printf '// pair-only product UI\n' > "$consumer/product-ui/main.js"
 printf 'pair-only content\n' > "$consumer/content/trial.txt"
 
@@ -157,7 +173,7 @@ curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "f
 kill "$host_pid"
 wait "$host_pid" || true
 host_pid=""
-echo "JSON persistence through packaged $loader host passed"
+echo "Packaged $loader inventory, input remapping, and JSON persistence checks passed"
 done
 
 tampered="$work/tampered-pair"

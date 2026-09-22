@@ -17,11 +17,6 @@ public readonly record struct InventoryStack
         Quantity = quantity;
     }
 
-    public InventoryStack(ItemDefinitionId definition, ulong quantity)
-        : this(InventoryStackId.Parse((definition ?? throw new ArgumentNullException(nameof(definition))).Value), definition, quantity)
-    {
-    }
-
     /// <summary>Product-selected stack identity, unique within its owner inventory.</summary>
     public InventoryStackId Id { get; }
 
@@ -426,20 +421,6 @@ public sealed class InventoryState
     internal bool TryGetEntry(InventoryStackId id, out InventoryStackEntry? entry) =>
         _stacks.TryGetValue(id, out entry);
 
-    internal InventoryStackEntry? FindOnlyEntry(ItemDefinitionId definition)
-    {
-        InventoryStackEntry[] entries = _stacks.Values
-            .Where(entry => entry.Definition.Id == definition)
-            .ToArray();
-        return entries.Length switch
-        {
-            0 => null,
-            1 => entries[0],
-            _ => throw new MechanicsException(
-                $"Inventory {Owner.Value} has multiple stacks of item {definition}; select an InventoryStackId."),
-        };
-    }
-
     internal IEnumerable<InventoryStackEntry> Entries() => _stacks.Values;
 
     internal void SetEntry(InventoryStackId id, ItemDefinition definition, ulong quantity)
@@ -640,9 +621,6 @@ public sealed partial class InventoryStore
         return new InventoryEdit(this, Clone(), _revision);
     }
 
-    public InventoryMutationReceipt Grant(EntityId owner, ItemDefinition definition, ulong quantity) =>
-        Commit(candidate => candidate.Grant(owner, definition, quantity));
-
     /// <summary>Adds quantity to one product-selected stack, creating it when its ID is unused by this owner.</summary>
     public InventoryMutationReceipt Grant(
         EntityId owner,
@@ -651,19 +629,9 @@ public sealed partial class InventoryStore
         ulong quantity) =>
         Commit(candidate => candidate.Grant(owner, definition, stack, quantity));
 
-    public InventoryMutationReceipt Consume(EntityId owner, ItemDefinition definition, ulong quantity) =>
-        Commit(candidate => candidate.Consume(owner, definition, quantity));
-
     /// <summary>Consumes quantity from one selected stack and retires it when its quantity reaches zero.</summary>
     public InventoryMutationReceipt Consume(EntityId owner, InventoryStackId stack, ulong quantity) =>
         Commit(candidate => candidate.Consume(owner, stack, quantity));
-
-    public InventoryTransferReceipt TransferFungible(
-        EntityId fromOwner,
-        EntityId toOwner,
-        ItemDefinition definition,
-        ulong quantity) =>
-        Commit(candidate => candidate.TransferFungible(fromOwner, toOwner, definition, quantity));
 
     /// <summary>Moves an entire selected stack to another owner while retaining its stack identity.</summary>
     public InventoryTransferReceipt TransferFungible(
@@ -708,25 +676,6 @@ public sealed partial class InventoryStore
     public InventoryView Read(EntityId owner) => View(owner);
 
     internal InventoryMutationReceipt GrantCore(
-        EntityId owner,
-        ItemDefinition definition,
-        ulong quantity)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        EnsureFungible(definition);
-        EnsurePositiveQuantity(quantity);
-        InventoryState inventory = RequireInventory(owner);
-        InventoryState.InventoryStackEntry? existing = inventory.FindOnlyEntry(definition.Id);
-        return GrantSelectedCore(owner, definition, existing?.Id ?? LegacyStackId(definition.Id), quantity);
-    }
-
-    internal InventoryMutationReceipt GrantCore(
-        EntityId owner,
-        ItemDefinition definition,
-        InventoryStackId stack,
-        ulong quantity) => GrantSelectedCore(owner, definition, stack, quantity);
-
-    private InventoryMutationReceipt GrantSelectedCore(
         EntityId owner,
         ItemDefinition definition,
         InventoryStackId stack,
@@ -783,29 +732,6 @@ public sealed partial class InventoryStore
 
     internal InventoryMutationReceipt ConsumeCore(
         EntityId owner,
-        ItemDefinition definition,
-        ulong quantity)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        EnsureFungible(definition);
-        EnsurePositiveQuantity(quantity);
-        InventoryState inventory = RequireInventory(owner);
-        InventoryState.InventoryStackEntry? existing = inventory.FindOnlyEntry(definition.Id);
-        if (existing is null)
-        {
-            throw new MechanicsException($"Inventory {owner.Value} has no item {definition.Id}.");
-        }
-        EnsureDefinitionMatches(definition, existing.Definition);
-        return ConsumeSelectedCore(owner, existing.Id, quantity);
-    }
-
-    internal InventoryMutationReceipt ConsumeCore(
-        EntityId owner,
-        InventoryStackId stack,
-        ulong quantity) => ConsumeSelectedCore(owner, stack, quantity);
-
-    private InventoryMutationReceipt ConsumeSelectedCore(
-        EntityId owner,
         InventoryStackId stack,
         ulong quantity)
     {
@@ -846,41 +772,6 @@ public sealed partial class InventoryStore
             candidate.Revision,
             capacityBefore,
             capacityAfter);
-    }
-
-    internal InventoryTransferReceipt TransferFungibleCore(
-        EntityId fromOwner,
-        EntityId toOwner,
-        ItemDefinition definition,
-        ulong quantity)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        EnsureFungible(definition);
-        EnsurePositiveQuantity(quantity);
-        if (fromOwner == toOwner)
-        {
-            throw new MechanicsException("A fungible transfer requires distinct owners.");
-        }
-
-        InventoryState from = RequireInventory(fromOwner);
-        InventoryState.InventoryStackEntry? source = from.FindOnlyEntry(definition.Id);
-        if (source is null)
-        {
-            throw new MechanicsException($"Inventory {fromOwner.Value} has no item {definition.Id}.");
-        }
-        EnsureDefinitionMatches(definition, source.Definition);
-        InventoryState to = RequireInventory(toOwner);
-        InventoryState.InventoryStackEntry? destination = to.FindOnlyEntry(definition.Id);
-        if (destination is not null)
-        {
-            EnsureDefinitionMatches(definition, destination.Definition);
-        }
-        return TransferFungibleCore(
-            fromOwner,
-            toOwner,
-            source.Id,
-            destination?.Id ?? LegacyStackId(definition.Id),
-            quantity);
     }
 
     internal InventoryTransferReceipt TransferFungibleCore(
@@ -1364,10 +1255,6 @@ public sealed partial class InventoryStore
             EnsureDefinitionMatches(definition, entry.Definition);
         }
     }
-
-    private static InventoryStackId LegacyStackId(ItemDefinitionId definition) =>
-        InventoryStackId.Parse(definition.Value);
-
 }
 
 /// <summary>
@@ -1421,9 +1308,6 @@ public sealed partial class InventoryEdit : IDisposable
     /// <summary>Discards this detached edit without changing its owner.</summary>
     public void Dispose() => Discard();
 
-    public InventoryMutationReceipt Grant(EntityId owner, ItemDefinition definition, ulong quantity) =>
-        Execute(working => working.GrantCore(owner, definition, quantity));
-
     public InventoryMutationReceipt Grant(
         EntityId owner,
         ItemDefinition definition,
@@ -1431,18 +1315,8 @@ public sealed partial class InventoryEdit : IDisposable
         ulong quantity) =>
         Execute(working => working.GrantCore(owner, definition, stack, quantity));
 
-    public InventoryMutationReceipt Consume(EntityId owner, ItemDefinition definition, ulong quantity) =>
-        Execute(working => working.ConsumeCore(owner, definition, quantity));
-
     public InventoryMutationReceipt Consume(EntityId owner, InventoryStackId stack, ulong quantity) =>
         Execute(working => working.ConsumeCore(owner, stack, quantity));
-
-    public InventoryTransferReceipt TransferFungible(
-        EntityId fromOwner,
-        EntityId toOwner,
-        ItemDefinition definition,
-        ulong quantity)
-        => Execute(working => working.TransferFungibleCore(fromOwner, toOwner, definition, quantity));
 
     public InventoryTransferReceipt TransferFungible(
         EntityId fromOwner,

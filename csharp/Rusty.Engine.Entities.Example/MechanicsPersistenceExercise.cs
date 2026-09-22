@@ -65,7 +65,8 @@ internal static class MechanicsPersistenceExercise
         var inventory = new InventoryStore();
         inventory.RegisterInventory(new InventoryState(owner, [new InventoryCapacityLimit(weight, 20)]));
         inventory.RegisterEquipment(new EquipmentState(owner));
-        inventory.Grant(owner, potion, 3);
+        InventoryStackId potionStack = InventoryStackId.Parse("carried-potions");
+        inventory.Grant(owner, potion, potionStack, 3);
         EntityId swordEntity = new(511);
         inventory.MaterializeUnique(new ItemState(swordEntity, sword), owner);
         inventory.Equip(owner, swordEntity, [mainHand]);
@@ -100,7 +101,7 @@ internal static class MechanicsPersistenceExercise
             new InventoryCapture(
                 view.Stacks
                     .OrderBy(stack => stack.Definition.Value, StringComparer.Ordinal)
-                    .Select(stack => new InventoryStackCapture(stack.Definition.Value, stack.Quantity))
+                    .Select(stack => new InventoryStackCapture(stack.Id.Value, stack.Definition.Value, stack.Quantity))
                     .ToList(),
                 view.UniqueItems
                     .OrderBy(item => item.Definition.Value, StringComparer.Ordinal)
@@ -169,7 +170,7 @@ internal static class MechanicsPersistenceExercise
         };
         foreach (InventoryStackCapture stack in saveState.Inventory.Stacks)
         {
-            freshInventory.Grant(freshOwner, definitions[stack.Definition], stack.Quantity);
+            freshInventory.Grant(freshOwner, definitions[stack.Definition], InventoryStackId.Parse(stack.Id), stack.Quantity);
         }
         // Map saved instances to fresh runtime IDs; definitions are looked up separately.
         ulong nextItemValue = 601;
@@ -196,7 +197,8 @@ internal static class MechanicsPersistenceExercise
             }
         }
         InventoryView freshView = freshInventory.View(freshOwner);
-        Require(freshView.Stacks.Single().Definition == ItemDefinitionId.Parse("potion")
+        Require(freshView.Stacks.Single().Id == potionStack
+            && freshView.Stacks.Single().Definition == ItemDefinitionId.Parse("potion")
             && freshView.Stacks.Single().Quantity == 3, "granted stacks did not rebuild");
         EntityId freshSword = freshItems[savedItemIds[swordEntity]];
         EntityId freshSecondSword = freshItems[savedItemIds[secondSwordEntity]];
@@ -348,7 +350,7 @@ internal static class MechanicsPersistenceExercise
 
 internal sealed record ActiveEffectCapture(string Definition, ushort Stacks);
 
-internal sealed record InventoryStackCapture(string Definition, ulong Quantity);
+internal sealed record InventoryStackCapture(string Id, string Definition, ulong Quantity);
 
 internal sealed record UniqueItemCapture(int Id, string Definition, List<string> Slots);
 

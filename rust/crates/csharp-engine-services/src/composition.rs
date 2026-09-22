@@ -48,6 +48,7 @@ use crate::appearance::{
     reason = "the generated ABI table needs independent mutable borrows of each named Engine bridge"
 )]
 fn engine_api(
+    input_bridge: &mut crate::input::RuntimeInputBridge,
     diagnostics_bridge: &mut crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance_bridge: &mut RuntimeAppearanceBridge,
     content_bridge: &mut RuntimeContentBridge,
@@ -68,6 +69,7 @@ fn engine_api(
     appearance_bridge.bind_authored_content(authored_content_bridge);
     spatial_bridge.bind_appearance(appearance_bridge);
     NativeEngineApi {
+        input: crate::input::api(input_bridge),
         implicit_surfaces: crate::implicit_surfaces::api(implicit_bridge, appearance_bridge),
         diagnostics: crate::diagnostics::api(diagnostics_bridge),
         dynamics: crate::dynamics::api(dynamics_bridge),
@@ -259,6 +261,7 @@ pub struct EngineServiceSet {
     retired_resources: BTreeMap<String, crate::appearance::CsharpRenderResource>,
     call_elapsed_seconds: f64,
     presentation_world: render_presentation::PresentationWorld,
+    input: crate::input::RuntimeInputBridge,
     diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
@@ -278,6 +281,7 @@ pub struct EngineServiceSet {
 }
 
 pub struct CsharpEngineCall {
+    input_mapping_replacement: Option<runtime_input::CompiledInputMappings>,
     implicit: crate::implicit_surfaces::RuntimeImplicitCall,
     presentation_world: render_presentation::PresentationWorld,
     output: CsharpEngineCallOutput,
@@ -327,6 +331,24 @@ impl EngineServiceSet {
         content_store_root: Option<PathBuf>,
         diagnostics_sink: RuntimeDiagnosticsSink,
     ) -> Result<Self, CsharpEngineServicesError> {
+        Self::with_direct_intents(
+            catalog,
+            content_resources,
+            persistence_root,
+            content_store_root,
+            diagnostics_sink,
+            Vec::new(),
+        )
+    }
+
+    pub fn with_direct_intents(
+        catalog: CsharpAppearanceCatalog,
+        content_resources: BTreeMap<String, Arc<[u8]>>,
+        persistence_root: Option<PathBuf>,
+        content_store_root: Option<PathBuf>,
+        diagnostics_sink: RuntimeDiagnosticsSink,
+        direct_intents: Vec<runtime_input::DirectInputIntentDescriptor>,
+    ) -> Result<Self, CsharpEngineServicesError> {
         let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
         let perception = crate::perception::RuntimePerceptionBridge::new(&spatial);
         let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
@@ -354,6 +376,7 @@ impl EngineServiceSet {
             retired_resources: BTreeMap::new(),
             call_elapsed_seconds: 0.0,
             presentation_world: render_presentation::PresentationWorld::default(),
+            input: crate::input::RuntimeInputBridge::new(direct_intents),
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
             appearance,
             content,
@@ -375,6 +398,7 @@ impl EngineServiceSet {
 
     pub fn api(&mut self) -> NativeEngineApi {
         engine_api(
+            &mut self.input,
             &mut self.diagnostics,
             &mut self.appearance,
             &mut self.content,
@@ -413,7 +437,21 @@ impl EngineServiceSet {
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
         self.call_elapsed_seconds = 0.0;
         self.appearance.begin_call();
-        self.begin_other_services(ui_binding);
+        self.begin_other_services(ui_binding, false);
+    }
+
+    /// Product construction is the only non-update callback that can select a
+    /// complete initial physical map before the runtime input lane exists.
+    pub fn begin_create_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
+        self.call_elapsed_seconds = 0.0;
+        self.appearance.begin_call();
+        self.begin_other_services(ui_binding, true);
+    }
+
+    pub fn begin_lifecycle_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
+        self.call_elapsed_seconds = 0.0;
+        self.appearance.begin_call();
+        self.begin_other_services(ui_binding, true);
     }
 
     /// Begins a detached browser-attachment projection. Renderer-facing
@@ -424,6 +462,7 @@ impl EngineServiceSet {
         ui_binding: RuntimeUiRuntimeBinding,
     ) -> Result<(), CsharpEngineServicesError> {
         self.call_elapsed_seconds = 0.0;
+        self.input.begin_call(false);
         self.appearance.begin_attach_call();
         self.audio.begin_call();
         self.camera_view.begin_attach_call()?;
@@ -445,7 +484,7 @@ impl EngineServiceSet {
         self.call_elapsed_seconds =
             facts.fixed_delta_seconds * f64::from(facts.admitted_step_count);
         self.appearance.begin_update_call(facts);
-        self.begin_other_services(ui_binding);
+        self.begin_other_services(ui_binding, true);
         self.audio.begin_update_call(self.call_elapsed_seconds);
     }
 
@@ -484,7 +523,12 @@ impl EngineServiceSet {
         }
     }
 
-    fn begin_other_services(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
+    fn begin_other_services(
+        &mut self,
+        ui_binding: RuntimeUiRuntimeBinding,
+        accepts_input_replacement: bool,
+    ) {
+        self.input.begin_call(accepts_input_replacement);
         self.audio.begin_call();
         self.camera_view.begin_call();
         self.dynamics.begin_call();
@@ -545,6 +589,7 @@ impl EngineServiceSet {
     }
 
     pub fn discard_call(&mut self) {
+        self.input.discard_call();
         self.appearance.discard_call();
         self.audio.discard_call();
         self.camera_view.discard_call();
@@ -556,6 +601,7 @@ impl EngineServiceSet {
     }
 
     pub fn take_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
+        let input_mapping_replacement = self.input.take_call();
         let appearance = self.appearance.take_staged_call()?;
         let audio = self.audio.take_staged_call()?;
         let camera_view = self.camera_view.take_staged_call()?;
@@ -570,6 +616,7 @@ impl EngineServiceSet {
         let voxel_scene_presentation = self.voxel_scene_presentation.take_staged_call()?;
         let implicit = self.implicit.take_call()?;
         let mut call = CsharpEngineCall {
+            input_mapping_replacement,
             implicit,
             presentation_world: self.presentation_world.clone(),
             output: CsharpEngineCallOutput::default(),
@@ -788,6 +835,10 @@ impl EngineServiceSet {
 }
 
 impl CsharpEngineCall {
+    pub fn input_mapping_replacement(&self) -> Option<&runtime_input::CompiledInputMappings> {
+        self.input_mapping_replacement.as_ref()
+    }
+
     /// Retags only staged UI envelopes after their owning lifecycle action has
     /// actually succeeded. Other Engine service state stays staged unchanged.
     pub fn rebind_ui_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {

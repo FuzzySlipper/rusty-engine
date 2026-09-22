@@ -102,6 +102,7 @@ internal partial class ExpeditionJsonContext : JsonSerializerContext
 
 internal sealed class ProofEngineContext(IPersistenceService persistence) : IEngineContext
 {
+    public IInputService Input => throw new NotSupportedException();
     public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();

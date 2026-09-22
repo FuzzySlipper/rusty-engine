@@ -370,7 +370,8 @@ static void ExerciseManagedMechanics()
         chest,
         [new InventoryCapacityLimit(weight, 20)]));
 
-    InventoryMutationReceipt potions = inventory.Grant(hero, potion, 3);
+    InventoryStackId heroPotions = InventoryStackId.Parse("hero-potions");
+    InventoryMutationReceipt potions = inventory.Grant(hero, potion, heroPotions, 3);
     Require(potions.AfterQuantity == 3, "managed inventory did not grant the requested stack");
     inventory.MaterializeUnique(new ItemState(swordEntity, sword), hero);
     EquipmentSlotDefinition mainHand = new(
@@ -391,7 +392,8 @@ static void ExerciseManagedMechanics()
         "managed inventory did not transfer the unequipped unique item");
 
     InventoryEdit candidate = inventory.Prepare(inventory.Revision);
-    InventoryMutationReceipt chestPotions = candidate.Grant(chest, potion, 2);
+    InventoryStackId chestPotionStack = InventoryStackId.Parse("chest-potions");
+    InventoryMutationReceipt chestPotions = candidate.Grant(chest, potion, chestPotionStack, 2);
     candidate.Publish();
     Require(chestPotions.AfterQuantity == 2 && inventory.View(chest).Stacks.Single().Quantity == 2,
         "managed inventory candidate did not publish one atomic product mutation");
@@ -927,6 +929,7 @@ sealed class GraphicsServiceFake : IGraphicsService
 
 sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngineContext
 {
+    public IInputService Input => throw new NotSupportedException();
     public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();

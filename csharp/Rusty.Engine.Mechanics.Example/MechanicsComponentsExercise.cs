@@ -20,9 +20,11 @@ internal static class MechanicsComponentsExercise
         entities.Add(owner, inventory);
         entities.Add(owner, equipment);
         var ammunition = new ItemDefinition(ItemDefinitionId.Parse("ammunition"), ItemKind.Fungible, 100);
-        inventory.Grant(ammunition, 5);
-        inventory.Consume(ammunition, 1);
-        inventory.TransferFungible(destination, ammunition, 2);
+        var carriedStack = InventoryStackId.Parse("carried-ammunition");
+        var transferredStack = InventoryStackId.Parse("transferred-ammunition");
+        inventory.Grant(ammunition, carriedStack, 5);
+        inventory.Consume(carriedStack, 1);
+        inventory.TransferFungible(destination, carriedStack, transferredStack, 2);
         Check(inventory.Stacks.Single().Quantity == 2 && other.Stacks.Single().Quantity == 2, "facade quantity operations conserve items");
         var weapon = new ItemDefinition(ItemDefinitionId.Parse("blade"), ItemKind.Unique, 1, equipment: new ItemEquipmentPolicy(1));
         var item = entities.Create();

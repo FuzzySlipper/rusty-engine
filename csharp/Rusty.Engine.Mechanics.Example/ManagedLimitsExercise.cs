@@ -93,6 +93,7 @@ internal static class ManagedLimitsExercise
             inventory.Grant(
                 owner,
                 new ItemDefinition(ItemDefinitionId.Parse($"stack-{index}"), ItemKind.Fungible, 1),
+                InventoryStackId.Parse($"instance-{index}"),
                 1);
         }
 
@@ -113,8 +114,9 @@ internal static class ManagedLimitsExercise
             ulong.MaxValue,
             capacityCosts: [new ItemCapacityCost(metric, ulong.MaxValue)]);
 
+        InventoryStackId stack = InventoryStackId.Parse("overflowing-stack");
         ExpectMechanicsError(
-            () => inventory.Grant(owner, definition, 2),
+            () => inventory.Grant(owner, definition, stack, 2),
             "overflowing capacity arithmetic was admitted");
         Check(inventory.View(owner).Stacks.Count == 0, "overflowing grant changed inventory state");
     }

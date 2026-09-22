@@ -742,6 +742,7 @@ dependencies = [
  "render-presentation",
  "render-projection",
  "runtime-diagnostics",
+ "runtime-input",
  "runtime-lifecycle",
  "runtime-ui",
  "serde",

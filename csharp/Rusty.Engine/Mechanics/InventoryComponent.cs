@@ -24,11 +24,8 @@ public sealed class InventoryComponent
     public InventoryView View() => Store.View(Owner);
     public bool TryGetQuantity(ItemDefinitionId id, out ulong quantity) => State.TryGetQuantity(id, out quantity);
     public bool Contains(EntityId item) => Store.TryGetContainer(item, out var owner) && owner == Owner;
-    public InventoryMutationReceipt Grant(ItemDefinition definition, ulong quantity) => Store.Grant(Owner, definition, quantity);
     public InventoryMutationReceipt Grant(ItemDefinition definition, InventoryStackId stack, ulong quantity) => Store.Grant(Owner, definition, stack, quantity);
-    public InventoryMutationReceipt Consume(ItemDefinition definition, ulong quantity) => Store.Consume(Owner, definition, quantity);
     public InventoryMutationReceipt Consume(InventoryStackId stack, ulong quantity) => Store.Consume(Owner, stack, quantity);
-    public InventoryTransferReceipt TransferFungible(EntityId destination, ItemDefinition definition, ulong quantity) => Store.TransferFungible(Owner, destination, definition, quantity);
     public InventoryTransferReceipt TransferFungible(EntityId destination, InventoryStackId stack, ulong quantity) => Store.TransferFungible(Owner, destination, stack, quantity);
     public InventoryTransferReceipt TransferFungible(EntityId destination, InventoryStackId sourceStack, InventoryStackId destinationStack, ulong quantity) => Store.TransferFungible(Owner, destination, sourceStack, destinationStack, quantity);
     public InventorySplitReceipt SplitFungible(InventoryStackId sourceStack, InventoryStackId splitStack, ulong quantity) => Store.SplitFungible(Owner, sourceStack, splitStack, quantity);

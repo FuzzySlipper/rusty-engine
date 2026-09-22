@@ -690,6 +690,7 @@ pub enum RuntimeInputError {
     DuplicateIntent,
     InvalidMapping,
     DuplicateMapping,
+    MappingReplacementIntentMismatch,
     DirectIntentPayloadUnsupported,
     UnknownIntent,
     IntentValueKindMismatch,

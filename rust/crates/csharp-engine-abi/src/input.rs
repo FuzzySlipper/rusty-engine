@@ -272,6 +272,18 @@ pub enum NativeInputCursorMode {
     Unlocked = 1,
 }
 
+/// Result of asking the Engine-owned runtime lane to stage a complete
+/// replacement of its physical mappings. Semantic validation failures are an
+/// expected product-settings outcome, while malformed ABI borrowing remains a
+/// service-call failure.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeInputMappingReplacementOutcome {
+    Staged = 1,
+    InvalidMappings = 2,
+    Unavailable = 3,
+}
+
 /// Static input facts selected by the Engine-owned standard runtime. Products
 /// may inspect these descriptors but cannot alter the admitted runtime lane.
 #[repr(C)]

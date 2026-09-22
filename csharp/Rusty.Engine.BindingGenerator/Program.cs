@@ -148,6 +148,7 @@ internal sealed class BindingModel
         if (inputs == 0 && hasReceipt) return;
         if (inputs == 2 && IsExactBorrowedPointer(parameters[0]) && Bare(parameters[1]) == "size_t")
         {
+            if (Bare(parameters[0]) == "NativeInputMapping") return;
             ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element");
             return;
         }
@@ -829,6 +830,7 @@ internal static class Emit
     private static string EmitSpanMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature)
     {
         string item = BindingModel.Bare(Inputs(callback)[0]);
+        if (item == "NativeInputMapping") return EmitProductInputMappingSpanMethod(model, service, operation, callback, returnType, signature);
         StringBuilder output = new();
         output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
         output.AppendLine($"        {RawType(item)}[] rawValues = values.ToArray().Select(NativeConversions.ToNative).ToArray();");
@@ -837,6 +839,61 @@ internal static class Emit
         if (hasErrorReadout) output.AppendLine("            NativeOperationErrorReceipt rawError = default;");
         output.AppendLine($"            int status = _native.{RawIdentifier(operation)}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length{(hasErrorReadout ? ", &rawError" : string.Empty)});");
         EmitRequire(output, model, service, service, operation, hasErrorReadout, "            ");
+        output.AppendLine("        }").AppendLine("    }").AppendLine();
+        return output.ToString();
+    }
+
+    private static string EmitProductInputMappingSpanMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature)
+    {
+        StringBuilder output = new();
+        output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
+        output.AppendLine("        ProductInputMapping[] values = mappings.ToArray();");
+        output.AppendLine("        MemoryHandle[] idPins = new MemoryHandle[values.Length];");
+        output.AppendLine("        MemoryHandle[] intentPins = new MemoryHandle[values.Length];");
+        output.AppendLine("        MemoryHandle[] contextPins = new MemoryHandle[values.Length];");
+        output.AppendLine("        NativeKeyboardControl[][] chordValues = values.Select(value => value.Chord.ToArray().Select(NativeConversions.ToNative).ToArray()).ToArray();");
+        output.AppendLine("        MemoryHandle[] chordPins = new MemoryHandle[values.Length];");
+        output.AppendLine("        try").AppendLine("        {");
+        output.AppendLine("            for (int index = 0; index < values.Length; index++)").AppendLine("            {");
+        output.AppendLine("                idPins[index] = values[index].Id.Pin();");
+        output.AppendLine("                intentPins[index] = values[index].Intent.Pin();");
+        output.AppendLine("                contextPins[index] = values[index].Context.Value.Pin();");
+        output.AppendLine("                chordPins[index] = chordValues[index].AsMemory().Pin();");
+        output.AppendLine("            }");
+        output.AppendLine("            NativeInputMapping[] rawValues = new NativeInputMapping[values.Length];");
+        output.AppendLine("            for (int index = 0; index < values.Length; index++)").AppendLine("            {");
+        output.AppendLine("                rawValues[index] = new NativeInputMapping").AppendLine("                {");
+        output.AppendLine("                    id = values[index].Id.Length == 0 ? null : (byte*)idPins[index].Pointer,");
+        output.AppendLine("                    id_len = (nuint)values[index].Id.Length,");
+        output.AppendLine("                    intent = values[index].Intent.Length == 0 ? null : (byte*)intentPins[index].Pointer,");
+        output.AppendLine("                    intent_len = (nuint)values[index].Intent.Length,");
+        output.AppendLine("                    trigger_kind = NativeConversions.ToNative(values[index].TriggerKind),");
+        output.AppendLine("                    edge = NativeConversions.ToNative(values[index].Edge),");
+        output.AppendLine("                    axis = NativeConversions.ToNative(values[index].Axis),");
+        output.AppendLine("                    keyboard = NativeConversions.ToNative(values[index].Keyboard),");
+        output.AppendLine("                    pointer_button = NativeConversions.ToNative(values[index].PointerButton),");
+        output.AppendLine("                    controller_button = NativeConversions.ToNative(values[index].ControllerButton),");
+        output.AppendLine("                    controller_axis = NativeConversions.ToNative(values[index].ControllerAxis),");
+        output.AppendLine("                    chord = chordValues[index].Length == 0 ? null : (NativeKeyboardControl*)chordPins[index].Pointer,");
+        output.AppendLine("                    chord_len = (nuint)chordValues[index].Length,");
+        output.AppendLine("                    context = values[index].Context.Value.Length == 0 ? null : (byte*)contextPins[index].Pointer,");
+        output.AppendLine("                    context_len = (nuint)values[index].Context.Value.Length,");
+        output.AppendLine("                };");
+        output.AppendLine("            }");
+        output.AppendLine("            fixed (NativeInputMapping* pointer = rawValues)").AppendLine("            {");
+        bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
+        if (hasErrorReadout) output.AppendLine("                NativeOperationErrorReceipt rawError = default;");
+        string result = ResultParameter(callback) ?? throw new InvalidOperationException("input replacement must return its typed outcome");
+        output.AppendLine($"                {RawType(result)} rawResult = default;");
+        output.AppendLine($"                int status = _native.{RawIdentifier(operation)}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length, &rawResult{(hasErrorReadout ? ", &rawError" : string.Empty)});");
+        EmitRequire(output, model, service, service, operation, hasErrorReadout, "                ");
+        output.AppendLine("                return NativeConversions.FromNative(rawResult);");
+        output.AppendLine("            }");
+        output.AppendLine("        }").AppendLine("        finally").AppendLine("        {");
+        output.AppendLine("            foreach (MemoryHandle pin in idPins) pin.Dispose();");
+        output.AppendLine("            foreach (MemoryHandle pin in intentPins) pin.Dispose();");
+        output.AppendLine("            foreach (MemoryHandle pin in contextPins) pin.Dispose();");
+        output.AppendLine("            foreach (MemoryHandle pin in chordPins) pin.Dispose();");
         output.AppendLine("        }").AppendLine("    }").AppendLine();
         return output.ToString();
     }
@@ -1256,7 +1313,11 @@ internal static class Emit
     {
         string[] args = ServiceParameters(callback);
         if (args.Length > 0 && !args[^1].StartsWith("const ", StringComparison.Ordinal) && args[^1].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[^1]) != "void") args = args[..^1];
-        if (args.Length == 2 && args[0].StartsWith("const ", StringComparison.Ordinal) && args[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[1]) == "size_t") return $"ReadOnlySpan<{SafeType(model, BindingModel.Bare(args[0]))}> values";
+        if (args.Length == 2 && args[0].StartsWith("const ", StringComparison.Ordinal) && args[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[1]) == "size_t")
+        {
+            string item = BindingModel.Bare(args[0]);
+            return item == "NativeInputMapping" ? "ReadOnlySpan<ProductInputMapping> mappings" : $"ReadOnlySpan<{SafeType(model, item)}> values";
+        }
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));
     }
     private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int16_t" => "short", "int" or "int32_t" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", "NativeAnimationFeedbackText" => "string", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };

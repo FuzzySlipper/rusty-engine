@@ -114,6 +114,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
             {
                 internal EngineContext(NativeEngineApi native, LeaseReleaseCoordinator leaseReleases)
                 {
+                    Input = new InputServiceImplementation(native.input);
                     Diagnostics = new DiagnosticsServiceImplementation(native.diagnostics);
                     Audio = new AudioServiceImplementation(native.audio, leaseReleases);
                     Dynamics = new DynamicsServiceImplementation(native.dynamics, leaseReleases);
@@ -138,6 +139,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Ui = new UiServiceImplementation(native.ui, leaseReleases);
                 }
 
+                public IInputService Input { get; }
                 public IDiagnosticsService Diagnostics { get; }
                 public IAudioService Audio { get; }
                 public IDynamicsService Dynamics { get; }

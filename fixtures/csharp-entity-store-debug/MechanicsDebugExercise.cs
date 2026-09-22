@@ -44,9 +44,10 @@ internal static class MechanicsDebugExercise
         effects.Expire(effect);
         Require(Read(nameof(EffectsComponent)).Contains("effects=0"), "live effect expiry");
         var item = new ItemDefinition(ItemDefinitionId.Parse("potion"), ItemKind.Fungible, 10);
-        inventory.Grant(item, 3);
+        var potionStack = InventoryStackId.Parse("carried-potions");
+        inventory.Grant(item, potionStack, 3);
         Require(Read(nameof(InventoryComponent)).Contains("quantity=3"), "live inventory grant");
-        using (var edit = inventoryStore.Prepare()) { edit.Consume(entity, item, 2); edit.Publish(); }
+        using (var edit = inventoryStore.Prepare()) { edit.Consume(entity, potionStack, 2); edit.Publish(); }
         Require(Read(nameof(InventoryComponent)).Contains("quantity=1"), "live facade after edit publication");
         var weaponEntity = new EntityId(100);
         var weapon = new ItemDefinition(ItemDefinitionId.Parse("blade"), ItemKind.Unique, 1, equipment: new ItemEquipmentPolicy(1));

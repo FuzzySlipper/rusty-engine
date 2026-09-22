@@ -129,6 +129,28 @@ impl RuntimeInputLane {
         self.last_sequence
     }
 
+    /// Replaces the already-compiled physical mapping candidate for this lane.
+    ///
+    /// A replacement retains the lane's declared direct intents: callers must
+    /// compile the candidate against the same intent IDs, value kinds, and
+    /// payload contracts. This only replaces mapping evaluation and resets its
+    /// per-mapping transition bookkeeping. The host remains responsible for
+    /// advancing the control revision and calling [`Self::rebind`] to clear
+    /// any retained input before admitting events at the replacement binding.
+    pub fn replace_physical_mappings(
+        &mut self,
+        candidate: CompiledInputMappings,
+    ) -> Result<(), RuntimeInputError> {
+        if !same_declared_intents(&self.mappings, &candidate) {
+            return Err(RuntimeInputError::MappingReplacementIntentMismatch);
+        }
+
+        let mapping_count = candidate.mappings().len();
+        self.mappings = candidate;
+        self.mapping_active = vec![false; mapping_count];
+        Ok(())
+    }
+
     /// Ingests an ordered batch as one lane transaction. A same-binding,
     /// same-context event whose sequence is already behind the lane cursor is
     /// a safe stale/duplicate observation and is dropped without changing
@@ -323,7 +345,18 @@ impl RuntimeInputLane {
     }
 
     fn is_safe_stale_duplicate(&self, event: &RuntimeInputEvent) -> bool {
-        event.runtime() == self.binding
+        let event_binding = event.runtime();
+        // A prior control revision from this exact running incarnation can
+        // arrive after the host has already published a newer rebind. It is a
+        // safe stale observation, not a foreign-control failure: admitting it
+        // must never clear the new lane before fresh edges arrive.
+        if event_binding.instance_id() == self.binding.instance_id()
+            && event_binding.generation() == self.binding.generation()
+            && event_binding.control_revision() < self.binding.control_revision()
+        {
+            return true;
+        }
+        event_binding == self.binding
             && event.context() == &self.context
             && expected_sequence(self.last_sequence)
                 .is_ok_and(|expected| event.sequence() < expected)
@@ -624,6 +657,18 @@ fn valid_rebind(
     new.generation() == old.generation()
         && new.control_revision() > old.control_revision()
         && reason == InputClearReason::ControlRevisionChange
+}
+
+fn same_declared_intents(
+    current: &CompiledInputMappings,
+    candidate: &CompiledInputMappings,
+) -> bool {
+    current
+        .intents()
+        .map(|intent| (intent.id(), intent.value_kind(), intent.payload_contract()))
+        .eq(candidate
+            .intents()
+            .map(|intent| (intent.id(), intent.value_kind(), intent.payload_contract())))
 }
 
 fn expected_sequence(last: Option<u64>) -> Result<u64, RuntimeInputError> {

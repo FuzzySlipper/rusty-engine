@@ -10,6 +10,7 @@ mod content_store;
 mod diagnostics;
 mod dynamics;
 mod implicit_surfaces;
+mod input;
 mod kinematic;
 mod magica_vox;
 mod motion;

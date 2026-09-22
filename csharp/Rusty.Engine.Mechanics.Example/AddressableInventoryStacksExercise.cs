@@ -5,6 +5,7 @@ internal static class AddressableInventoryStacksExercise
 {
     public static void Run()
     {
+        ExerciseIndependentStackAndDefinitionIdentities();
         EntityId owner = new(41);
         EntityId destination = new(42);
         CapacityMetricId mass = CapacityMetricId.Parse("addressable-stack-mass");
@@ -100,6 +101,30 @@ internal static class AddressableInventoryStacksExercise
         RequireStacks(restored.View(owner), (first, 3), (second, 1));
 
         Console.WriteLine("passed: addressable inventory stacks preserve identity, quantity, capacity, and restore relationships");
+    }
+
+    private static void ExerciseIndependentStackAndDefinitionIdentities()
+    {
+        EntityId owner = new(51);
+        EntityId destination = new(52);
+        var firstDefinition = new ItemDefinition(ItemDefinitionId.Parse("first-definition"), ItemKind.Fungible, 10);
+        var secondDefinition = new ItemDefinition(ItemDefinitionId.Parse("second-definition"), ItemKind.Fungible, 10);
+        // Product stack names may equal any definition name without reserving that name.
+        InventoryStackId secondStack = InventoryStackId.Parse(firstDefinition.Id.Value);
+        InventoryStackId firstStack = InventoryStackId.Parse("first-selected-stack");
+        InventoryStackId destinationStack = InventoryStackId.Parse("received-first-stack");
+        var store = new InventoryStore();
+        store.RegisterInventory(new InventoryState(owner));
+        store.RegisterInventory(new InventoryState(destination));
+        store.Grant(owner, secondDefinition, secondStack, 2);
+        store.Grant(destination, secondDefinition, secondStack, 4);
+        store.Grant(owner, firstDefinition, firstStack, 3);
+        store.TransferFungible(owner, destination, firstStack, destinationStack, 1);
+        store.Consume(owner, firstStack, 1);
+        RequireStacks(store.View(owner), (secondStack, 2), (firstStack, 1));
+        RequireStacks(store.View(destination), (secondStack, 4), (destinationStack, 1));
+        Require(store.View(owner).Stacks.Single(stack => stack.Id == secondStack).Definition == secondDefinition.Id,
+            "a stack name matching another definition changed the selected definition");
     }
 
     private static InventoryState RequireInventory(InventoryStore store, EntityId owner)

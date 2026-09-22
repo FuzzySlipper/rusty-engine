@@ -7,7 +7,8 @@ use runtime_input::{
     RuntimeIntentValue, RuntimeProductPayload,
 };
 use runtime_lifecycle::{
-    RuntimeFault, RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig,
+    RuntimeControlOperation, RuntimeFault, RuntimeInstanceId, RuntimeLifecycle,
+    RuntimeLifecycleConfig,
 };
 
 fn context() -> InputContext {
@@ -623,6 +624,240 @@ fn monotonic_rebind_clears_state_and_disposal_is_terminal() {
         )),
         Err(RuntimeInputError::Disposed)
     ));
+}
+
+#[test]
+fn compiled_mapping_replacement_fences_held_movement_and_rebinds_new_actions() {
+    let descriptors = vec![
+        DirectInputIntentDescriptor::new("move.forward", IntentValueKind::Digital).unwrap(),
+        DirectInputIntentDescriptor::new("move.left", IntentValueKind::Digital).unwrap(),
+        DirectInputIntentDescriptor::new("attack", IntentValueKind::Digital).unwrap(),
+        DirectInputIntentDescriptor::new("interact", IntentValueKind::Digital).unwrap(),
+    ];
+    let old_mappings = CompiledInputMappings::standard(
+        descriptors.clone(),
+        vec![
+            RuntimeInputMapping::new(
+                "old-forward",
+                "move.forward",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyW,
+                    edge: InputEdge::Held,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+            RuntimeInputMapping::new(
+                "old-left",
+                "move.left",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyA,
+                    edge: InputEdge::Held,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+            RuntimeInputMapping::new(
+                "old-attack",
+                "attack",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyF,
+                    edge: InputEdge::Pressed,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+            RuntimeInputMapping::new(
+                "old-interact",
+                "interact",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyE,
+                    edge: InputEdge::Pressed,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let replacement = CompiledInputMappings::standard(
+        descriptors,
+        vec![
+            RuntimeInputMapping::new(
+                "new-forward",
+                "move.forward",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyS,
+                    edge: InputEdge::Held,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+            RuntimeInputMapping::new(
+                "new-left",
+                "move.left",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyD,
+                    edge: InputEdge::Held,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+            RuntimeInputMapping::new(
+                "new-attack",
+                "attack",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyQ,
+                    edge: InputEdge::Pressed,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+            RuntimeInputMapping::new(
+                "new-interact",
+                "interact",
+                RuntimeInputTrigger::Key {
+                    code: KeyboardControl::KeyR,
+                    edge: InputEdge::Pressed,
+                    chord: Vec::new(),
+                    context: Some(context()),
+                },
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(old_mappings, binding, context());
+
+    for (sequence, code) in [
+        KeyboardControl::KeyW,
+        KeyboardControl::KeyA,
+        KeyboardControl::KeyF,
+        KeyboardControl::KeyE,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        lane.ingest(physical(
+            binding,
+            sequence as u64,
+            RuntimeInputFact::Key {
+                code,
+                edge: PhysicalEdge::Pressed,
+            },
+        ))
+        .unwrap();
+    }
+    let (_, old_envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(
+        old_envelopes
+            .iter()
+            .map(|entry| entry.intent())
+            .collect::<Vec<_>>(),
+        ["attack", "interact", "move.forward", "move.left"]
+    );
+
+    lane.replace_physical_mappings(replacement).unwrap();
+    assert_eq!(lane.binding(), binding);
+
+    lifecycle
+        .change_control(RuntimeControlOperation::Replace)
+        .unwrap();
+    let replacement_binding = RuntimeInputBinding::new(
+        lifecycle.instance_id(),
+        lifecycle.generation(),
+        lifecycle.control_revision(),
+    );
+    lane.rebind(
+        replacement_binding,
+        context(),
+        InputClearReason::ControlRevisionChange,
+    )
+    .unwrap();
+    let (frame, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(frame.keyboard().is_empty());
+    assert!(envelopes.is_empty());
+
+    for (sequence, code) in [
+        KeyboardControl::KeyS,
+        KeyboardControl::KeyD,
+        KeyboardControl::KeyQ,
+        KeyboardControl::KeyR,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        lane.ingest(physical(
+            replacement_binding,
+            sequence as u64 + 1,
+            RuntimeInputFact::Key {
+                code,
+                edge: PhysicalEdge::Pressed,
+            },
+        ))
+        .unwrap();
+    }
+    let (_, new_envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(
+        new_envelopes
+            .iter()
+            .map(|entry| entry.intent())
+            .collect::<Vec<_>>(),
+        ["attack", "interact", "move.forward", "move.left"]
+    );
+    assert!(new_envelopes.iter().all(|entry| {
+        matches!(
+            entry.provenance(),
+            IntentProvenance::Physical { mapping_id }
+                if mapping_id.starts_with("new-")
+        )
+    }));
+}
+
+#[test]
+fn compiled_mapping_replacement_rejects_changed_declared_intents() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    let candidate = CompiledInputMappings::standard(
+        vec![
+            DirectInputIntentDescriptor::new("different.intent", IntentValueKind::Digital).unwrap(),
+        ],
+        vec![
+            RuntimeInputMapping::new("different-key", "different.intent", key(InputEdge::Held))
+                .unwrap(),
+        ],
+    )
+    .unwrap();
+
+    assert!(matches!(
+        lane.replace_physical_mappings(candidate),
+        Err(RuntimeInputError::MappingReplacementIntentMismatch)
+    ));
+    lane.ingest(physical(
+        binding,
+        0,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    ))
+    .unwrap();
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(envelopes.iter().any(|entry| {
+        entry.intent() == "move.forward"
+            && entry.provenance()
+                == &IntentProvenance::Physical {
+                    mapping_id: "w-held".into(),
+                }
+    }));
 }
 
 #[test]

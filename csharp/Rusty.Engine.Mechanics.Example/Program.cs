@@ -146,7 +146,8 @@ static void ExerciseManagedInventory()
     world.RegisterEquipment(new EquipmentState(new EntityId(Owner)));
     world.RegisterEquipment(new EquipmentState(new EntityId(SecondOwner)));
 
-    InventoryMutationReceipt granted = world.Grant(new EntityId(Owner), ammunition, 5);
+    InventoryStackId ammunitionStack = InventoryStackId.Parse("carried-ammunition");
+    InventoryMutationReceipt granted = world.Grant(new EntityId(Owner), ammunition, ammunitionStack, 5);
     Require(granted.AfterQuantity == 5, "managed fungible grant was not applied");
     Require(world.View(new EntityId(Owner)).Stacks.Single().Quantity == 5,
         "managed stacks were not exposed canonically");
@@ -201,9 +202,9 @@ static void ExerciseManagedInventory()
         "published inventory edit retained its detached state");
 
     InventoryEdit rejectedEdit = world.Prepare();
-    rejectedEdit.Grant(new EntityId(Owner), ammunition, 1);
+    rejectedEdit.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1);
     ExpectMechanicsError(
-        () => rejectedEdit.Consume(new EntityId(Owner), ammunition, 10),
+        () => rejectedEdit.Consume(new EntityId(Owner), ammunitionStack, 10),
         "rejected edit operation was accepted");
     ExpectInvalidOperation(
         rejectedEdit.Publish,
@@ -212,8 +213,8 @@ static void ExerciseManagedInventory()
         "failed inventory edit changed the live owner");
 
     InventoryEdit staleEdit = world.Prepare();
-    staleEdit.Grant(new EntityId(Owner), ammunition, 1);
-    world.Grant(new EntityId(Owner), ammunition, 1);
+    staleEdit.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1);
+    world.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1);
     ExpectMechanicsError(staleEdit.Publish, "stale inventory edit was published");
     ExpectInvalidOperation(staleEdit.Publish, "stale inventory edit was retried");
     Require(world.View(new EntityId(Owner)).Stacks.Single().Quantity == 6,
@@ -222,7 +223,7 @@ static void ExerciseManagedInventory()
     InventoryEdit discardedEdit = world.Prepare();
     discardedEdit.Dispose();
     ExpectInvalidOperation(
-        () => discardedEdit.Grant(new EntityId(Owner), ammunition, 1),
+        () => discardedEdit.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1),
         "disposed inventory edit remained usable");
 
     InventoryEdit cancelledEdit = world.Prepare();

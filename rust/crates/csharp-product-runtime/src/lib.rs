@@ -1083,7 +1083,7 @@ impl CsharpProductRuntime {
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let content_store_root = prepare_content_store_root(config.content_store_root.as_deref())?;
-        let input_mappings = CompiledInputMappings::standard(
+        let mut input_mappings = CompiledInputMappings::standard(
             config.direct_intents.clone(),
             config.physical_mappings.clone(),
         )
@@ -1146,12 +1146,13 @@ impl CsharpProductRuntime {
         // The generated ABI stores raw context pointers. Boxing the whole
         // service set keeps every callback context at one stable address for
         // the complete lifetime of the product.
-        let mut services = Box::new(EngineServiceSet::new(
+        let mut services = Box::new(EngineServiceSet::with_direct_intents(
             appearance_catalog,
             content_resources,
             persistence_root,
             content_store_root,
             config.diagnostics.handle(),
+            config.direct_intents.clone(),
         )?);
         services.bind_content_bundles(bundles);
         let native_content: Vec<NativeContentFile> = content
@@ -1170,7 +1171,7 @@ impl CsharpProductRuntime {
             engine: services.api(),
         };
         let mut handle = ptr::null_mut();
-        services.begin_call(ui_binding(&lifecycle));
+        services.begin_create_call(ui_binding(&lifecycle));
         match call_create(&api, &args, &mut handle) {
             Ok(()) => {}
             Err(error) => {
@@ -1219,6 +1220,7 @@ impl CsharpProductRuntime {
             unsafe { (api.destroy)(handle) };
             return Err(error);
         }
+        let initial_input_mapping_replacement = staged.input_mapping_replacement().cloned();
         let initial_output = Some(services.outputs(&staged));
         services.commit_call(staged);
         complete_product_call(&api, handle, true, false);
@@ -1234,6 +1236,9 @@ impl CsharpProductRuntime {
                 return Err(error);
             }
         };
+        if let Some(replacement) = initial_input_mapping_replacement {
+            input_mappings = replacement;
+        }
         let input_lane =
             RuntimeInputLane::new(input_mappings, initial_binding, standard_input_context());
         Ok(Self {
@@ -2043,10 +2048,16 @@ impl CsharpProductRuntime {
         // Clear only after staged Engine output has been converted. A failed
         // conversion must preserve the input for the caller's failure path.
         self.pending_inputs.clear();
+        let input_mapping_replacement = staged.input_mapping_replacement().cloned();
         self.services.commit_call(staged);
         complete_product_call(&self.api, self.handle, true, false);
 
         if result == NativeProductUpdateResult::ReportFault {
+            if let Some(replacement) = input_mapping_replacement {
+                self.input_lane
+                    .replace_physical_mappings(replacement)
+                    .map_err(input_error)?;
+            }
             // Product results are intentionally applied only after the completed
             // Engine service call is committed. This is a typed lifecycle
             // signal, not a reentrant service call or a general event bus.
@@ -2060,6 +2071,9 @@ impl CsharpProductRuntime {
                 self.next_input_sequence().get(),
             ));
             outputs.push(self.complete_baseline_output(binding)?);
+        } else if let Some(replacement) = input_mapping_replacement {
+            self.settle_input_mapping_replacement(replacement)?;
+            outputs = self.rebind_outputs(outputs)?;
         }
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         if let Some(attribution) = &mut self.pending_update_attribution {
@@ -2254,7 +2268,18 @@ impl CsharpProductRuntime {
     where
         F: FnOnce(&mut RuntimeLifecycle) -> Result<T, runtime_lifecycle::RuntimeLifecycleError>,
     {
-        self.services.begin_call(ui_binding(&self.lifecycle));
+        if matches!(
+            operation,
+            ProductDevOperationKind::Start
+                | ProductDevOperationKind::Pause
+                | ProductDevOperationKind::Resume
+                | ProductDevOperationKind::Restart
+        ) {
+            self.services
+                .begin_lifecycle_call(ui_binding(&self.lifecycle));
+        } else {
+            self.services.begin_call(ui_binding(&self.lifecycle));
+        }
         match call_action(&self.api, action, self.handle, operation) {
             Ok(()) => {}
             Err(error) => {
@@ -2296,8 +2321,14 @@ impl CsharpProductRuntime {
             service_outputs(self.services.outputs(&staged))
                 .expect("rebinding typed UI identity cannot invalidate prevalidated output"),
         );
+        let input_mapping_replacement = staged.input_mapping_replacement().cloned();
         self.services.commit_call(staged);
         complete_product_call(&self.api, self.handle, true, false);
+        if let Some(replacement) = input_mapping_replacement {
+            self.input_lane
+                .replace_physical_mappings(replacement)
+                .map_err(input_error)?;
+        }
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         Ok(outputs)
     }
@@ -2557,17 +2588,24 @@ impl CsharpProductRuntime {
         &self,
         outputs: Vec<RuntimePublication>,
     ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+        self.rebind_outputs(outputs)
+            .map_err(|error| self.runtime_error(error))
+    }
+
+    /// Reconstructs a complete browser baseline after an input binding fence.
+    /// Retained UI and presentation state are rebound to the current runtime,
+    /// while callback-local transient presentation stays in its original
+    /// causal position before the baseline marker.
+    fn rebind_outputs(
+        &self,
+        outputs: Vec<RuntimePublication>,
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         let binding = self.binding();
         // Every binding baseline reconstructs committed state. Callback deltas
         // already precede its frontier and cannot be replayed against it.
-        let mut snapshot = self
-            .snapshot_outputs()
-            .map_err(|error| self.runtime_error(error))?;
+        let mut snapshot = self.snapshot_outputs()?;
         for output in outputs {
-            if let Some(events) = output
-                .transient_presentation()
-                .map_err(|error| self.runtime_error(publication_error(error)))?
-            {
+            if let Some(events) = output.transient_presentation().map_err(publication_error)? {
                 snapshot.push(events);
             }
         }
@@ -2577,10 +2615,7 @@ impl CsharpProductRuntime {
             self.next_input_sequence().get(),
         ));
         tagged.append(&mut snapshot);
-        tagged.push(
-            self.complete_baseline_output(binding)
-                .map_err(|error| self.runtime_error(error))?,
-        );
+        tagged.push(self.complete_baseline_output(binding)?);
         Ok(tagged)
     }
 
@@ -2612,6 +2647,23 @@ impl CsharpProductRuntime {
         self.pending_inputs.clear();
         self.pending_inputs.push(clear_input_owned(binding, reason));
         Ok(())
+    }
+
+    /// Settles a C#-staged mapping set only after the product callback and all
+    /// other staged Engine output have committed. The existing control fence
+    /// makes any browser batch carrying the old binding stale and gives the
+    /// product one explicit clear before fresh physical edges are admitted.
+    fn settle_input_mapping_replacement(
+        &mut self,
+        replacement: CompiledInputMappings,
+    ) -> Result<(), CsharpProductRuntimeError> {
+        self.input_lane
+            .replace_physical_mappings(replacement)
+            .map_err(input_error)?;
+        self.lifecycle
+            .change_control(RuntimeControlOperation::Replace)
+            .map_err(lifecycle_error)?;
+        self.rebind_input(InputClearReason::ControlRevisionChange)
     }
 
     fn start_for_exercise(&mut self) -> Result<(), CsharpProductRuntimeError> {
@@ -4077,6 +4129,9 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::DuplicateIntent => "CSHARP_INPUT_DUPLICATE_INTENT",
         RuntimeInputError::InvalidMapping => "CSHARP_INPUT_INVALID_MAPPING",
         RuntimeInputError::DuplicateMapping => "CSHARP_INPUT_DUPLICATE_MAPPING",
+        RuntimeInputError::MappingReplacementIntentMismatch => {
+            "CSHARP_INPUT_MAPPING_REPLACEMENT_INTENT_MISMATCH"
+        }
         RuntimeInputError::DirectIntentPayloadUnsupported => {
             "CSHARP_INPUT_DIRECT_INTENT_PAYLOAD_UNSUPPORTED"
         }
@@ -5497,6 +5552,11 @@ mod tests {
     static DIRECT_INPUT_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DIRECT_INPUT_CALLBACK_EVENTS: Mutex<Vec<Vec<DirectInputCallbackEvent>>> =
         Mutex::new(Vec::new());
+    static REMAPPING_CALLBACK_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static REMAPPING_CALLBACK_REPLACE: AtomicUsize = AtomicUsize::new(0);
+    static REMAPPING_CALLBACK_STAGE: AtomicBool = AtomicBool::new(false);
+    static REMAPPING_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(0);
+    static REMAPPING_CALLBACK_OUTCOME: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn renderer_debug_summary_is_compact_and_owns_only_exact_engine_commands() {
@@ -5787,6 +5847,60 @@ mod tests {
         ABI_OK
     }
 
+    unsafe extern "C" fn remapping_callback_fixture_create(
+        args: *const NativeProductCreateArgs,
+        handle: *mut *mut c_void,
+    ) -> i32 {
+        let status = unsafe { drop_fixture_create(args, handle) };
+        if status == ABI_OK {
+            let input = unsafe { (*args).engine.input };
+            REMAPPING_CALLBACK_CONTEXT.store(input.context as usize, Ordering::SeqCst);
+            REMAPPING_CALLBACK_REPLACE
+                .store(input.replace_physical_mappings as usize, Ordering::SeqCst);
+        }
+        status
+    }
+
+    unsafe extern "C" fn remapping_callback_fixture_update(
+        handle: *mut c_void,
+        args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        if REMAPPING_CALLBACK_STAGE.swap(false, Ordering::SeqCst) {
+            let mapping = NativeInputMapping {
+                id: b"attack-f".as_ptr(),
+                id_len: b"attack-f".len(),
+                intent: b"fixture.attack".as_ptr(),
+                intent_len: b"fixture.attack".len(),
+                trigger_kind: NativeInputTriggerKind::Key,
+                edge: NativeInputEdge::Pressed,
+                axis: NativeInputAxis::None,
+                keyboard: NativeKeyboardControl::KeyF,
+                pointer_button: NativePointerButton::None,
+                controller_button: NativeControllerButton::None,
+                controller_axis: NativeControllerAxis::None,
+                chord: ptr::null(),
+                chord_len: 0,
+                context: ptr::null(),
+                context_len: 0,
+            };
+            let replace: NativeReplaceInputMappings =
+                unsafe { std::mem::transmute(REMAPPING_CALLBACK_REPLACE.load(Ordering::SeqCst)) };
+            let mut outcome = NativeInputMappingReplacementOutcome::Unavailable;
+            let status = unsafe {
+                replace(
+                    REMAPPING_CALLBACK_CONTEXT.load(Ordering::SeqCst) as *mut c_void,
+                    &mapping,
+                    1,
+                    &mut outcome,
+                )
+            };
+            REMAPPING_CALLBACK_STATUS.store(status, Ordering::SeqCst);
+            REMAPPING_CALLBACK_OUTCOME.store(outcome as usize, Ordering::SeqCst);
+        }
+        unsafe { direct_input_fixture_update(handle, args, result) }
+    }
+
     fn record_drop_event(event: &'static str) {
         DROP_EVENTS.lock().expect("drop fixture events").push(event);
     }
@@ -6062,6 +6176,13 @@ mod tests {
         api
     }
 
+    fn remapping_callback_fixture_api() -> LoadedProductApi {
+        let mut api = direct_input_fixture_api();
+        api.create = remapping_callback_fixture_create;
+        api.update = remapping_callback_fixture_update;
+        api
+    }
+
     fn voxel_failure_fixture_api() -> LoadedProductApi {
         let mut api = drop_fixture_api();
         api.create = voxel_failure_fixture_create;
@@ -6138,6 +6259,71 @@ mod tests {
             || Ok(direct_input_fixture_api()),
         )
         .expect("direct-input fixture runtime");
+        (runtime, root)
+    }
+
+    fn remapping_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("remapping fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("remapping fixture content");
+        let descriptor =
+            DirectInputIntentDescriptor::new("fixture.attack", IntentValueKind::Digital)
+                .expect("remapping descriptor");
+        let old_mapping = RuntimeInputMapping::new(
+            "attack-w",
+            "fixture.attack",
+            RuntimeInputTrigger::Key {
+                code: runtime_input_model::KeyboardControl::KeyW,
+                edge: InputEdge::Pressed,
+                chord: Vec::new(),
+                context: None,
+            },
+        )
+        .expect("old remapping fixture mapping");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                vec![descriptor],
+            )
+            .with_physical_mappings(vec![old_mapping]),
+            || Ok(direct_input_fixture_api()),
+        )
+        .expect("remapping fixture runtime");
+        (runtime, root)
+    }
+
+    fn callback_remapping_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("callback remapping fixture content root");
+        let content =
+            CsharpProductContent::admit(&root).expect("callback remapping fixture content");
+        let descriptor =
+            DirectInputIntentDescriptor::new("fixture.attack", IntentValueKind::Digital)
+                .expect("callback remapping descriptor");
+        let old_mapping = RuntimeInputMapping::new(
+            "attack-w",
+            "fixture.attack",
+            RuntimeInputTrigger::Key {
+                code: runtime_input_model::KeyboardControl::KeyW,
+                edge: InputEdge::Pressed,
+                chord: Vec::new(),
+                context: None,
+            },
+        )
+        .expect("callback old mapping");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                vec![descriptor],
+            )
+            .with_physical_mappings(vec![old_mapping]),
+            || Ok(remapping_callback_fixture_api()),
+        )
+        .expect("callback remapping runtime");
         (runtime, root)
     }
 
@@ -7102,6 +7288,186 @@ mod tests {
 
         drop(runtime);
         fs::remove_dir_all(root).expect("remove duplicate-input fixture content");
+    }
+
+    #[test]
+    fn settled_mapping_replacement_fences_old_browser_input_and_delivers_fresh_edges() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .expect("direct-input fixture gate");
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .expect("shared callback fixture gate");
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("callback events")
+            .clear();
+        let (mut runtime, root) = remapping_fixture_runtime("mapping-replacement-fence");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start fixture");
+        runtime.admit_demand_step().expect("drain start clear");
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("callback events")
+            .clear();
+
+        let old_binding = input_binding(&runtime.lifecycle);
+        let old_press = RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+            old_binding,
+            1,
+            standard_input_context(),
+            RuntimeInputFact::Key {
+                code: runtime_input_model::KeyboardControl::KeyW,
+                edge: runtime_input::PhysicalEdge::Pressed,
+            },
+        ));
+        runtime
+            .input(ProductDevInputBatch::new(vec![old_press]))
+            .expect("queue old physical edge");
+        let replacement = CompiledInputMappings::standard(
+            runtime.direct_intents.clone(),
+            [RuntimeInputMapping::new(
+                "attack-f",
+                "fixture.attack",
+                RuntimeInputTrigger::Key {
+                    code: runtime_input_model::KeyboardControl::KeyF,
+                    edge: InputEdge::Pressed,
+                    chord: Vec::new(),
+                    context: None,
+                },
+            )
+            .expect("new mapping")],
+        )
+        .expect("compile replacement");
+        runtime
+            .settle_input_mapping_replacement(replacement)
+            .expect("settle replacement");
+        let fresh_binding = input_binding(&runtime.lifecycle);
+        assert_ne!(fresh_binding, old_binding);
+        assert_eq!(
+            runtime.pending_inputs.len(),
+            1,
+            "old queued facts are replaced by one clear"
+        );
+        let stale = runtime
+            .input(ProductDevInputBatch::new(vec![
+                RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                    old_binding,
+                    2,
+                    standard_input_context(),
+                    RuntimeInputFact::Key {
+                        code: runtime_input_model::KeyboardControl::KeyW,
+                        edge: runtime_input::PhysicalEdge::Pressed,
+                    },
+                )),
+            ]))
+            .expect("old binding is a safe stale drop");
+        assert!(
+            !stale.result().is_accepted(),
+            "old-binding inflight input cannot be remapped"
+        );
+        runtime
+            .input(ProductDevInputBatch::new(vec![
+                RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                    fresh_binding,
+                    1,
+                    standard_input_context(),
+                    RuntimeInputFact::Key {
+                        code: runtime_input_model::KeyboardControl::KeyF,
+                        edge: runtime_input::PhysicalEdge::Pressed,
+                    },
+                )),
+            ]))
+            .expect("fresh physical edge is admitted");
+        runtime.admit_demand_step().expect("deliver fresh edge");
+        let events = DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("callback events")
+            .clone();
+        assert_eq!(events.len(), 1);
+        assert!(events[0]
+            .iter()
+            .any(|event| event.kind == NativeInputEventKind::MappedDigital
+                && event.intent == b"fixture.attack"));
+        assert!(!events[0].iter().any(|event| event.intent == b"attack-w"));
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove remapping fixture content");
+    }
+
+    #[test]
+    fn update_callback_staged_mapping_rebinds_the_browser_and_delivers_fresh_edges() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .expect("direct-input fixture gate");
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .expect("shared callback fixture gate");
+        REMAPPING_CALLBACK_STAGE.store(false, Ordering::SeqCst);
+        REMAPPING_CALLBACK_STATUS.store(0, Ordering::SeqCst);
+        REMAPPING_CALLBACK_OUTCOME.store(0, Ordering::SeqCst);
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("callback events")
+            .clear();
+        let (mut runtime, root) =
+            callback_remapping_fixture_runtime("callback-mapping-replacement");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start fixture");
+        runtime.admit_demand_step().expect("drain start clear");
+        let old_binding = input_binding(&runtime.lifecycle);
+        REMAPPING_CALLBACK_STAGE.store(true, Ordering::SeqCst);
+        let (_, outputs) = runtime
+            .admit_demand_step()
+            .expect("settle callback mapping")
+            .into_parts();
+        assert_eq!(REMAPPING_CALLBACK_STATUS.load(Ordering::SeqCst), ABI_OK);
+        assert_eq!(
+            REMAPPING_CALLBACK_OUTCOME.load(Ordering::SeqCst) as u32,
+            NativeInputMappingReplacementOutcome::Staged as u32
+        );
+        let fresh_binding = input_binding(&runtime.lifecycle);
+        assert_ne!(fresh_binding, old_binding);
+        assert!(outputs.iter().any(|output| matches!(output, RuntimePublication::Binding { runtime, .. } if *runtime == fresh_binding)));
+        assert!(outputs.iter().any(|output| matches!(output, RuntimePublication::CompleteBaseline { runtime, .. } if *runtime == fresh_binding)));
+        assert_eq!(
+            runtime.pending_inputs.len(),
+            1,
+            "callback replacement leaves one clear fact"
+        );
+
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("callback events")
+            .clear();
+        runtime
+            .input(ProductDevInputBatch::new(vec![
+                RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                    fresh_binding,
+                    1,
+                    standard_input_context(),
+                    RuntimeInputFact::Key {
+                        code: runtime_input_model::KeyboardControl::KeyF,
+                        edge: runtime_input::PhysicalEdge::Pressed,
+                    },
+                )),
+            ]))
+            .expect("fresh binding input");
+        runtime
+            .admit_demand_step()
+            .expect("deliver fresh mapped edge");
+        let events = DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("callback events")
+            .clone();
+        assert_eq!(events.len(), 1);
+        assert!(events[0]
+            .iter()
+            .any(|event| event.kind == NativeInputEventKind::MappedDigital
+                && event.intent == b"fixture.attack"));
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove callback remapping fixture content");
     }
 
     #[test]
