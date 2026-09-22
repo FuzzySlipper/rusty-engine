@@ -1823,7 +1823,10 @@ impl CsharpProductRuntime {
                 )
             })?;
         let stale = direct_intent(stale_binding, next_sequence, &descriptor)?;
-        if self.input(ProductDevInputBatch::new(vec![stale])).is_ok() {
+        if self
+            .input(ProductDevInputBatch::new(vec![stale]))
+            .is_ok_and(|receipt| receipt.result().is_accepted())
+        {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_STALE_DIRECT_INTENT",
                 "stale direct intent was admitted after a control rebind",
