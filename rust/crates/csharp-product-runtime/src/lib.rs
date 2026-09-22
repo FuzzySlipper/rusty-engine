@@ -1313,7 +1313,7 @@ impl CsharpProductRuntime {
                 started_binding,
                 2,
             )]))
-            .is_ok()
+            .is_ok_and(|receipt| receipt.result().is_accepted())
         {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_STALE_INPUT",
