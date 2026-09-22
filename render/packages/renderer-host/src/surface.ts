@@ -58,6 +58,7 @@ import {
 } from './presentation-host-set.js';
 import type { RendererGhostPlatePresentation, RendererGhostPlateReadout } from './ghost-plate-host.js';
 import type { RendererAudioRealizedFactsReadout } from './audio-host.js';
+import type { RendererVideoRealizedFactsReadout } from './video-host.js';
 import { resolveRendererAudioListenerPose } from './renderer-listener-pose.js';
 import {
   assertRendererSurfaceSourceTime,
@@ -604,6 +605,7 @@ export interface RendererSurface {
   ) => Promise<RendererPresentationFrameReceipt>;
   /** Read renderer-realized audio facts without exposing a projector readout. */
   readonly audioRealizedFacts: () => RendererAudioRealizedFactsReadout | null;
+  readonly videoRealizedFacts: () => RendererVideoRealizedFactsReadout | null;
   /** Read renderer-observed animation facts without exposing backend handles. */
   readonly animationRealizedFacts: () => import('./animation-host.js').RendererAnimationRealizedFactsReadout | null;
   readonly ghostPlateReadout: () => RendererGhostPlateReadout | null;
@@ -633,6 +635,8 @@ export interface RendererSurface {
   readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
   /** Invalidate audio playback ownership when the runtime binding is replaced. */
   readonly resetAudioRealizationOwner: () => boolean;
+  readonly acknowledgeVideoRealizedFacts: (throughFactId: number) => boolean;
+  readonly resetVideoRealizationOwner: () => boolean;
   /** Invalidate animation feedback ownership for a replaced runtime binding. */
   readonly resetAnimationRealizationOwner: () => boolean;
   readonly resetCameraMotion: () => void;
@@ -1255,6 +1259,7 @@ function mountPreparedRendererSurface(
       return receipt;
     },
     audioRealizedFacts: () => presentationHosts?.readAudioRealizedFacts() ?? null,
+    videoRealizedFacts: () => presentationHosts?.readVideoRealizedFacts() ?? null,
     animationRealizedFacts: () => presentationHosts?.readAnimationRealizedFacts() ?? null,
     ghostPlateReadout: () => presentationHosts?.readGhostPlate() ?? null,
     automaticSubmissionPacing: () => Object.freeze({
@@ -1347,6 +1352,8 @@ function mountPreparedRendererSurface(
     acknowledgeAnimationRealizedFacts: (throughFactId) =>
       presentationHosts?.acknowledgeAnimationRealizedFacts(throughFactId) ?? false,
     resetAudioRealizationOwner: () => presentationHosts?.resetAudioRealizationOwner() ?? false,
+    acknowledgeVideoRealizedFacts: (throughFactId) => presentationHosts?.acknowledgeVideoRealizedFacts(throughFactId) ?? false,
+    resetVideoRealizationOwner: () => presentationHosts?.resetVideoRealizationOwner() ?? false,
     resetAnimationRealizationOwner: () => presentationHosts?.resetAnimationRealizationOwner() ?? false,
     resetCameraMotion: () => { backendSurface.resetCameraMotion(); requestAutomaticSubmission(); },
     retainResources: (identities) => {

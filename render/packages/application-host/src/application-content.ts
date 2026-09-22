@@ -2,6 +2,7 @@ import {
   type RendererMeshResourceDescriptor,
   type RendererMeshResourceManifest,
   type RendererAudioResourceResolver,
+  type RendererVideoResourceResolver,
   type RendererAnimatedMeshResourceDescriptor,
   type RendererAnimationClipPackResourceDescriptor,
   type RendererAnimatedMeshResourceManifest,
@@ -16,7 +17,7 @@ import {
 import type { RustyApplicationFrame } from './application-host.js';
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 
-export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture' | 'font';
+export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'video' | 'mesh' | 'clipPack' | 'texture' | 'font';
 
 export interface RustyApplicationResource {
   readonly identity: string;
@@ -93,6 +94,7 @@ export function prepareRustyApplicationContent(
       : family === 'clip-pack-resource' ? 'clipPack'
       : family === 'animated-mesh-resource' ? 'animatedMesh'
       : family === 'audio-resource' ? 'audio'
+      : family === 'video-resource' ? 'video'
       : family === 'texture-resource' ? 'texture' : 'mesh';
     return Object.freeze({
       identity: resource.identity,
@@ -187,6 +189,15 @@ export class RustyApplicationResourceCatalog {
       return resource?.kind === 'audio'
         ? Promise.resolve({ bytes: resource.bytes, contentHash: resource.contentHash })
         : Promise.reject(new Error(`audio resource ${clip.asset} (${clip.contentHash}) is unavailable`));
+    };
+  }
+
+  videoResolver(): RendererVideoResourceResolver {
+    return (clip) => {
+      const resource = this.#byHash.get(clip.contentHash);
+      return resource?.kind === 'video' && resource.mediaType === 'video/webm'
+        ? Promise.resolve({ bytes: resource.bytes, contentHash: resource.contentHash, mediaType: 'video/webm' })
+        : Promise.reject(new Error(`video resource ${clip.asset} (${clip.contentHash}) is unavailable`));
     };
   }
 }

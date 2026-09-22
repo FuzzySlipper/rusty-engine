@@ -459,6 +459,7 @@ enum DiagnosticsOperationWire {
     AdmitExternalStep,
     CompleteTimeline,
     ReportAudioFeedback,
+    ReportVideoFeedback,
     ReportAnimationFeedback,
     ReportGhostPlateFeedback,
     ReportRendererDiagnostics,

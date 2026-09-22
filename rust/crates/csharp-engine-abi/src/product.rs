@@ -379,6 +379,26 @@ pub type NativeOpenAudioClip = unsafe extern "C" fn(
     *const NativeAudioClipRequest,
     *mut NativeAudioClipHandle,
 ) -> i32;
+pub type NativePlayVideo = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePlayVideoRequest,
+    *mut NativeVideoPlaybackHandle,
+) -> i32;
+pub type NativePlayVideoFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePlayVideoFromContentRequest,
+    *mut NativeVideoPlaybackHandle,
+) -> i32;
+pub type NativeStopVideo = unsafe extern "C" fn(*mut c_void, NativeVideoPlaybackHandle) -> i32;
+pub type NativeSkipVideo = unsafe extern "C" fn(*mut c_void, NativeVideoPlaybackHandle) -> i32;
+pub type NativeReadVideo = unsafe extern "C" fn(*mut c_void, *mut NativeVideoReadout) -> i32;
+pub type NativeReadVideoRealization =
+    unsafe extern "C" fn(*mut c_void, *mut NativeVideoRealizationReadout) -> i32;
+pub type NativeReadVideoRealizationFactAt = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVideoRealizationFactAtRequest,
+    *mut NativeVideoRealizationFactAtReceipt,
+) -> i32;
 pub type NativeOpenAudioClipFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioClipFromContentRequest,
@@ -1174,6 +1194,19 @@ pub struct NativeAudioApi {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeVideoApi {
+    pub context: *mut c_void,
+    pub play: NativePlayVideo,
+    pub play_from_content: NativePlayVideoFromContent,
+    pub stop: NativeStopVideo,
+    pub skip: NativeSkipVideo,
+    pub read: NativeReadVideo,
+    pub read_realization: NativeReadVideoRealization,
+    pub read_realization_fact_at: NativeReadVideoRealizationFactAt,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeCameraViewApi {
     pub context: *mut c_void,
     pub create_camera: NativeCreateCamera,
@@ -1275,6 +1308,7 @@ pub struct NativeEngineApi {
     pub presentation: NativePresentationApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,
+    pub video: NativeVideoApi,
     pub camera_view: NativeCameraViewApi,
     pub rng: NativeRngApi,
     pub persistence: NativePersistenceApi,

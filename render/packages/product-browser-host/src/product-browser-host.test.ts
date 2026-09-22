@@ -7,6 +7,7 @@ import {
   bindProductBrowserInitialRendererFrame,
   bufferProductBrowserPreMountOutput,
   createProductBrowserAudioFeedbackReporter,
+  createProductBrowserVideoFeedbackReporter,
   createProductBrowserGhostPlateFeedbackReporter,
   createProductBrowserRendererDiagnosticsCadenceSampler,
   createProductBrowserRendererDiagnosticsReporter,
@@ -1517,8 +1518,8 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     const applied: unknown[] = [];
     const rendererOperations: string[] = [];
     const retainedResources: string[][] = [];
-    const resourceBytes = new Uint8Array([137, 80, 78, 71]);
-    const resourceIdentity = `texture-resource/${createHash('sha256').update(resourceBytes).digest('hex')}`;
+    const resourceBytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x88, 0x77, 0x65, 0x62, 0x6d]);
+    const resourceIdentity = `video-resource/${createHash('sha256').update(resourceBytes).digest('hex')}`;
     const confirmations: Array<{epoch: number; applied: number; replacements: number}> = [];
     const diagnosticConfirmations: number[] = [];
     let acknowledgeInitialReport: (() => void) | undefined;
@@ -1548,6 +1549,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
       },
       dispose: () => undefined,
     };
+    const admittedResourceMediaTypes: string[] = [];
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => true,
@@ -1558,7 +1560,8 @@ test('a normal fresh attachment installs its complete frontier baseline before t
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => true,
         acknowledgeAnimationRealizedFacts: () => true,
-        admitResources: async (resources: readonly { readonly identity: string }[]) => {
+        admitResources: async (resources: readonly { readonly identity: string; readonly mediaType: string }[]) => {
+          admittedResourceMediaTypes.push(...resources.map((resource) => resource.mediaType));
           rendererOperations.push(`admit:${resources.map((resource) => resource.identity).join(',')}`);
         },
         retainResources: (resources: ReadonlySet<string>) => {
@@ -1629,6 +1632,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     assert.deepEqual(rendererOperations.slice(0, 3), [
       'fetch', `admit:${resourceIdentity}`, 'replace',
     ], 'fresh attachment fetches and admits its inventory before replacing the baseline frame');
+    assert.deepEqual(admittedResourceMediaTypes.slice(0, 1), ['video/webm'], 'the ordinary Product Browser dynamic-resource path admits the WebM video owner');
     assert.deepEqual(retainedResources, [[resourceIdentity]], 'baseline replacement retains its authoritative resource closure');
     assert.deepEqual(confirmations, [{ epoch: 1, applied: 1, replacements: 1 }]);
     // The first ready report began before the baseline was realized. Its late
@@ -1765,6 +1769,34 @@ test('terminal feedback rejection preserves the candidate and fails the caller',
   });
   await assert.rejects(reporter.flush(), /counter exhausted/u);
   assert.deepEqual(acknowledgements, []);
+});
+
+test('video feedback carries renderer eviction counts and clears them for a replacement owner', async () => {
+  const reports: Array<Record<string, unknown>> = [];
+  let evictedFactCount = 3;
+  const renderer = {
+    videoRealizedFacts: () => ({ retainedFactCount: 0, evictedFactCount, facts: [] }),
+    acknowledgeVideoRealizedFacts: () => true,
+    resetVideoRealizationOwner: () => { evictedFactCount = 0; return true; },
+  } as unknown as Parameters<typeof createProductBrowserVideoFeedbackReporter>[0]['renderer'];
+  const reporter = createProductBrowserVideoFeedbackReporter({
+    renderer,
+    report: async (feedback) => {
+      reports.push(feedback as unknown as Record<string, unknown>);
+      return { accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime };
+    },
+  });
+  const first = { instanceId: 'video', generation: '1', controlRevision: '1' } as const;
+  reporter.bindRuntime(first);
+  await reporter.flush();
+  assert.equal(reports[0]?.['evictedFactCount'], '0', 'a replacement reset clears the browser-owned eviction counter before the claim');
+
+  evictedFactCount = 3;
+  await reporter.flush();
+  assert.equal(reports[1]?.['evictedFactCount'], '3');
+  reporter.bindRuntime({ ...first, generation: '2' });
+  await reporter.flush();
+  assert.equal(reports[2]?.['evictedFactCount'], '0');
 });
 
 test('ghost plate feedback replaces an active snapshot with an empty snapshot after disposal', async () => {

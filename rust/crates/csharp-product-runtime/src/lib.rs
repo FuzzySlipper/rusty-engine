@@ -20,7 +20,7 @@ use std::{
 use csharp_engine_services::{
     AnimationRealizationFact, AudioRealizationFact, CsharpAppearanceCallOutput,
     CsharpAppearanceCatalog, CsharpEngineCallOutput, CsharpEngineServicesError,
-    CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
+    CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet, VideoRealizationFact,
 };
 use libloading::Library;
 use netcorehost::{
@@ -42,6 +42,7 @@ use product_dev_host::{
     ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeReadout,
     ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevRuntimeState,
     ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
+    ProductDevVideoFeedback, ProductDevVideoFeedbackFact,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -3371,6 +3372,33 @@ impl ProductDevRuntime for CsharpProductRuntime {
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
 
+    fn report_video_feedback(
+        &mut self,
+        feedback: ProductDevVideoFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.require_current_control_binding(Some(feedback.runtime))?;
+        feedback.validate().map_err(host_runtime_error)?;
+        let accepted_through_fact_id = feedback.facts.last().map(|fact| fact.fact_id());
+        let facts = feedback
+            .facts
+            .into_iter()
+            .map(video_realization_fact)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.services
+            .ingest_video_realization_feedback(
+                feedback.replace_owner,
+                feedback.evicted_fact_count.get(),
+                facts,
+            )
+            .map_err(|error| self.runtime_error(error.into()))?;
+        ProductDevRuntimeReceipt::new(
+            ProductDevAudioFeedbackResult::accepted(self.binding(), accepted_through_fact_id),
+            Vec::new(),
+        )
+        .map_err(host_runtime_error)
+    }
+
     fn report_animation_feedback(
         &mut self,
         feedback: ProductDevAnimationFeedback,
@@ -3645,6 +3673,43 @@ fn audio_realization_fact(
             sequence,
             signal_handle: signal_handle.map(CanonicalU64::get),
             voice_handle: voice_handle.map(CanonicalU64::get),
+        },
+    })
+}
+
+fn video_realization_fact(
+    fact: ProductDevVideoFeedbackFact,
+) -> Result<VideoRealizationFact, ProductDevRuntimeError> {
+    Ok(match fact {
+        ProductDevVideoFeedbackFact::Completed { fact_id, handle } => {
+            VideoRealizationFact::Completed {
+                fact_id: fact_id.get(),
+                handle: handle.get(),
+            }
+        }
+        ProductDevVideoFeedbackFact::Skipped { fact_id, handle } => VideoRealizationFact::Skipped {
+            fact_id: fact_id.get(),
+            handle: handle.get(),
+        },
+        ProductDevVideoFeedbackFact::Failed {
+            fact_id,
+            handle,
+            code,
+        } => VideoRealizationFact::Failed {
+            fact_id: fact_id.get(),
+            handle: handle.get(),
+            failure: match code.as_str() {
+                "decodeFailed" => NativeVideoFailureCode::DecodeFailed,
+                "playbackBlocked" => NativeVideoFailureCode::PlaybackBlocked,
+                "hostFailure" => NativeVideoFailureCode::HostFailure,
+                _ => {
+                    return Err(ProductDevRuntimeError::new(
+                        "CSHARP_VIDEO_FEEDBACK",
+                        "video feedback failure code is invalid",
+                    )
+                    .expect("fixed"))
+                }
+            },
         },
     })
 }
@@ -5327,6 +5392,7 @@ fn admit_renderer_resource(
         CsharpRenderResourceKind::Mesh => HostKind::Mesh,
         CsharpRenderResourceKind::Font => HostKind::Font,
         CsharpRenderResourceKind::Audio => HostKind::Audio,
+        CsharpRenderResourceKind::Video => HostKind::Video,
         CsharpRenderResourceKind::AnimatedMesh => HostKind::AnimatedMesh,
         CsharpRenderResourceKind::AnimationClipPack => HostKind::AnimationClipPack,
     };

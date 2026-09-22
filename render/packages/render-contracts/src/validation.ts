@@ -89,7 +89,7 @@ export function decodePresentationFrameDiff(input: unknown): PresentationFrameDi
     const domain = enumeration(
       value['domain'],
       `${path}.domain`,
-      ['audio', 'billboard', 'particle', 'telemetryOverlay', 'animation', 'ghostPlate'] as const,
+      ['audio', 'video', 'billboard', 'particle', 'telemetryOverlay', 'animation', 'ghostPlate'] as const,
     );
     presentationOperation(domain, value['op'], `${path}.op`);
   });
@@ -1124,11 +1124,30 @@ function presentationOperation(domain: string, input: unknown, path: string): vo
   const value = looseRecord(input, path);
   const op = text(value['op'], `${path}.op`);
   if (domain === 'audio') return audioOperation(op, input, path);
+  if (domain === 'video') return videoOperation(op, input, path);
   if (domain === 'billboard') return billboardOperation(op, input, path);
   if (domain === 'particle') return particleOperation(op, input, path);
   if (domain === 'telemetryOverlay') return telemetryOperation(op, input, path);
   if (domain === 'ghostPlate') return ghostPlateOperation(op, input, path);
   animationOperation(op, input, path);
+}
+
+function videoOperation(op: string, input: unknown, path: string): void {
+  if (op === 'play') {
+    const value = record(input, path, ['op', 'handle', 'clip']);
+    handle(value['handle'], `${path}.handle`);
+    const clip = record(value['clip'], `${path}.clip`, ['asset', 'contentHash', 'mediaType']);
+    nonEmptyText(clip['asset'], `${path}.clip.asset`);
+    nonEmptyText(clip['contentHash'], `${path}.clip.contentHash`);
+    if (clip['mediaType'] !== 'video/webm') fail(`${path}.clip.mediaType`, 'must equal video/webm');
+    return;
+  }
+  if (op === 'stop' || op === 'skip') {
+    const value = record(input, path, ['op', 'handle']);
+    handle(value['handle'], `${path}.handle`);
+    return;
+  }
+  fail(`${path}.op`, 'is unsupported for video');
 }
 
 function ghostPlateOperation(op: string, input: unknown, path: string): void {

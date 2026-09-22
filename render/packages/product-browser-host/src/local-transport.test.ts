@@ -162,6 +162,14 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
             }],
           });
           return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '7' });
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}video-feedback`:
+          assert.deepEqual(body, {
+            runtime: RUNTIME,
+            replaceOwner: true,
+            evictedFactCount: '2',
+            facts: [{ kind: 'completed', factId: '9', handle: '3' }],
+          });
+          return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '9' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
           assert.deepEqual(body, {
             runtime: RUNTIME,
@@ -234,6 +242,12 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
       kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
     }],
   }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '7' });
+  assert.deepEqual(await adapter.reportVideoFeedback?.({
+    runtime: RUNTIME,
+    replaceOwner: true,
+    evictedFactCount: '2',
+    facts: [{ kind: 'completed', factId: '9', handle: '3' }],
+  }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '9' });
   assert.deepEqual(await adapter.reportAnimationFeedback({
     runtime: RUNTIME,
     replaceOwner: true,
@@ -272,6 +286,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     'POST /__rusty/product/runtime/admit-external-step',
     'POST /__rusty/product/runtime/timeline-completion',
     'POST /__rusty/product/runtime/audio-feedback',
+    'POST /__rusty/product/runtime/video-feedback',
     'POST /__rusty/product/runtime/animation-feedback',
   ]);
   assert.equal(batches.length, 1);

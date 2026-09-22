@@ -133,6 +133,7 @@ pub enum ProductDevOperationKind {
     AdmitExternalStep,
     CompleteTimeline,
     ReportAudioFeedback,
+    ReportVideoFeedback,
     ReportAnimationFeedback,
     ReportGhostPlateFeedback,
     ReportRendererDiagnostics,
@@ -428,6 +429,62 @@ impl ProductDevAudioFeedbackResult {
             accepted_through_fact_id: None,
             diagnostic: Some(diagnostic),
         })
+    }
+}
+
+/// Fixed browser-to-runtime video realization facts. Each fact names the
+/// Engine-issued playback handle, so a late HTMLVideoElement callback cannot
+/// advance a replacement presentation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ProductDevVideoFeedbackFact {
+    Completed {
+        fact_id: CanonicalU64,
+        handle: CanonicalU64,
+    },
+    Skipped {
+        fact_id: CanonicalU64,
+        handle: CanonicalU64,
+    },
+    Failed {
+        fact_id: CanonicalU64,
+        handle: CanonicalU64,
+        code: String,
+    },
+}
+impl ProductDevVideoFeedbackFact {
+    pub const fn fact_id(&self) -> CanonicalU64 {
+        match self {
+            Self::Completed { fact_id, .. }
+            | Self::Skipped { fact_id, .. }
+            | Self::Failed { fact_id, .. } => *fact_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevVideoFeedback {
+    pub runtime: ProductDevRuntimeBinding,
+    pub replace_owner: bool,
+    pub evicted_fact_count: CanonicalU64,
+    pub facts: Vec<ProductDevVideoFeedbackFact>,
+}
+impl ProductDevVideoFeedback {
+    pub const MAX_FACTS: usize = 128;
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        if self.facts.len() > Self::MAX_FACTS
+            || self
+                .facts
+                .windows(2)
+                .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
+        {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_VIDEO_FEEDBACK",
+                "video feedback must contain at most 128 strictly ordered facts",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -3367,6 +3424,18 @@ pub trait ProductDevRuntime: Send + 'static {
             "audio feedback is not supported by this runtime",
         )
         .expect("fixed audio-feedback diagnostic"))
+    }
+
+    fn report_video_feedback(
+        &mut self,
+        _feedback: ProductDevVideoFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
+    {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_VIDEO_FEEDBACK_UNSUPPORTED",
+            "video feedback is not supported by this runtime",
+        )
+        .expect("fixed video feedback diagnostic"))
     }
 
     fn report_animation_feedback(

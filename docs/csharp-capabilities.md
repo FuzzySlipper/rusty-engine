@@ -44,6 +44,7 @@ the ignored `obj/Generated` output is produced by
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |
+| `Video` | Own one content-backed full-viewport WebM presentation and terminal browser realization facts. |
 | `CameraView` | Retain cameras, offscreen targets, and ordered primary/offscreen view compositions; select one active camera as a convenience. |
 | `Random` | Provide Engine-owned deterministic random streams and keyed draws. |
 | `Persistence` | Read and write bounded Engine persistence blobs and stores. |

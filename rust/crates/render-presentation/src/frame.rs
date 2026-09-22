@@ -14,7 +14,7 @@ use crate::{
     BillboardMeter, BillboardPatch, BillboardProjectionOp, BillboardStyle, BillboardTextureRef,
     GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlatePlacement,
     GhostPlateProjectionOp, ParticleAnchor, ParticleCollisionVolume, ParticleEmitterDescriptor,
-    ParticleEmitterPatch, ParticleProjectionOp, TelemetryOverlayProjectionOp,
+    ParticleEmitterPatch, ParticleProjectionOp, TelemetryOverlayProjectionOp, VideoProjectionOp,
 };
 
 pub const PRESENTATION_FRAME_SCHEMA_VERSION: u32 = 1;
@@ -58,6 +58,10 @@ pub enum PresentationOp {
         meta: PresentationOpMeta,
         op: GhostPlateProjectionOp,
     },
+    Video {
+        meta: PresentationOpMeta,
+        op: VideoProjectionOp,
+    },
 }
 
 impl PresentationOp {
@@ -68,7 +72,8 @@ impl PresentationOp {
             | Self::Particle { meta, .. }
             | Self::TelemetryOverlay { meta, .. }
             | Self::Animation { meta, .. }
-            | Self::GhostPlate { meta, .. } => *meta,
+            | Self::GhostPlate { meta, .. }
+            | Self::Video { meta, .. } => *meta,
         }
     }
 }
@@ -248,6 +253,24 @@ fn validate_json_safe_integers(
             }
             AudioProjectionOp::BusControl { control, .. } => {
                 validate_audio_bus_control(control, sequence)
+            }
+        },
+        PresentationOp::Video { op, .. } => match op {
+            VideoProjectionOp::Play { handle, clip } => {
+                json_safe(handle.raw(), sequence, "video.handle")?;
+                if clip.asset.is_empty()
+                    || clip.content_hash.is_empty()
+                    || clip.media_type != "video/webm"
+                {
+                    return Err(PresentationFrameError::InvalidDescriptor {
+                        sequence,
+                        field: "video.clip",
+                    });
+                }
+                Ok(())
+            }
+            VideoProjectionOp::Stop { handle } | VideoProjectionOp::Skip { handle } => {
+                json_safe(handle.raw(), sequence, "video.handle")
             }
         },
         PresentationOp::Billboard { op, .. } => match op {

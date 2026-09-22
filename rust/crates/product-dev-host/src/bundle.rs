@@ -37,6 +37,7 @@ pub enum ProductDevRendererResourceKind {
     Mesh,
     Font,
     Audio,
+    Video,
     AnimatedMesh,
     AnimationClipPack,
 }
@@ -325,6 +326,7 @@ impl ProductDevRendererResource {
             ProductDevRendererResourceKind::Mesh => "application/octet-stream",
             ProductDevRendererResourceKind::Font => "font/woff2",
             ProductDevRendererResourceKind::Audio => "audio/wav",
+            ProductDevRendererResourceKind::Video => "video/webm",
             ProductDevRendererResourceKind::AnimatedMesh => "model/gltf-binary",
             ProductDevRendererResourceKind::AnimationClipPack => "model/gltf-binary",
         }
@@ -647,6 +649,7 @@ fn is_allowed_content_type(value: &str) -> bool {
             | "image/jpeg"
             | "font/woff2"
             | "audio/wav"
+            | "video/webm"
             | "model/gltf-binary"
             | "application/octet-stream"
             | "application/wasm"

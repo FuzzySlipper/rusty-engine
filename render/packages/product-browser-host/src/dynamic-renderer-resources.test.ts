@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { ProductBrowserDynamicRendererResources } from './dynamic-renderer-resources.js';
 
-function identity(kind: 'audio-resource' | 'font', body: Uint8Array): string {
+function identity(kind: 'audio-resource' | 'video-resource' | 'font', body: Uint8Array): string {
   const hash = createHash('sha256').update(body).digest('hex');
   return `${kind}/${hash}`;
 }
@@ -50,6 +50,24 @@ test('dynamic resources trust delivered bodies and prune only inactive cached en
   const [loaded] = await cache.ensure([other], '9');
   assert.deepEqual(loaded?.bytes, new Uint8Array([119, 79, 70, 50, 9]));
   assert.equal(loaded?.identity, other);
+});
+
+test('dynamic resources admit a content-addressed WebM video on the ordinary resource route', async () => {
+  const body = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x88, 0x77, 0x65, 0x62, 0x6d]);
+  const video = identity('video-resource', body);
+  let requested: URL | undefined;
+  const cache = new ProductBrowserDynamicRendererResources(async (input) => {
+    requested = new URL(String(input), 'https://product.test');
+    return new Response(body);
+  });
+
+  const [resource] = await cache.ensure([video], '42');
+  assert.equal(requested?.pathname, '/__rusty/product/runtime/resource');
+  assert.equal(requested?.searchParams.get('identity'), video);
+  assert.equal(requested?.searchParams.get('generation'), '42');
+  assert.equal(resource?.identity, video);
+  assert.equal(resource?.mediaType, 'video/webm');
+  assert.deepEqual(resource?.bytes, body);
 });
 
 test('a late response cannot populate a replacement runtime cache', async () => {

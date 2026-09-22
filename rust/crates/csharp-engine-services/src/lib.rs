@@ -20,6 +20,7 @@ mod presentation;
 mod rng;
 mod spatial;
 mod ui;
+mod video;
 mod voxel;
 mod voxel_content;
 mod voxel_scene_presentation;
@@ -34,5 +35,6 @@ pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
     CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,
 };
+pub use video::VideoRealizationFact;
 
 pub use content::ProductContentBundles;

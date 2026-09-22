@@ -3,6 +3,7 @@ import {
   RendererAnimationHost,
   RendererAnimationCueDefinitionError,
   RendererAudioHost,
+  RendererVideoHost,
   RendererBillboardHost,
   RendererParticleHost,
   RendererGhostPlateHost,
@@ -266,6 +267,17 @@ export interface RustyApplicationAudioRealizedFactsReadout {
   readonly facts: readonly RustyApplicationAudioRealizedFact[];
 }
 
+export type RustyApplicationVideoRealizedFact =
+  | { readonly kind: 'completed'; readonly factId: number; readonly handle: number }
+  | { readonly kind: 'skipped'; readonly factId: number; readonly handle: number }
+  | { readonly kind: 'failed'; readonly factId: number; readonly handle: number; readonly code: 'decodeFailed' | 'playbackBlocked' | 'hostFailure' };
+
+export interface RustyApplicationVideoRealizedFactsReadout {
+  readonly retainedFactCount: number;
+  readonly evictedFactCount: number;
+  readonly facts: readonly RustyApplicationVideoRealizedFact[];
+}
+
 export type RustyApplicationAnimationDiagnosticCode =
   | 'invalidDescriptor'
   | 'duplicateHandle'
@@ -366,14 +378,17 @@ export interface RustyApplicationRendererPort {
   ) => RustyApplicationFrameReceipt;
   /** Read Engine-realized audio facts without exposing the browser audio owner. */
   readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
+  readonly videoRealizedFacts: () => RustyApplicationVideoRealizedFactsReadout | null;
   readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
   readonly ghostPlateReadout: () => RustyApplicationGhostPlateReadout | null;
   readonly diagnosticsReadout: () => RendererSurfaceDiagnosticsReadout;
   /** Acknowledge only the submitted Engine-realized audio fact range. */
   readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
+  readonly acknowledgeVideoRealizedFacts: (throughFactId: number) => boolean;
   readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
   /** Invalidate the realized-audio owner when a product runtime binding changes. */
   readonly resetAudioRealizationOwner: () => boolean;
+  readonly resetVideoRealizationOwner: () => boolean;
   readonly resetAnimationRealizationOwner: () => boolean;
   readonly resetCameraMotion: () => void;
   readonly configureViews: (
@@ -627,6 +642,7 @@ export async function mountRustyApplicationWithEnvironment(
   let activeContent: PreparedRustyApplicationContent | null = null;
   let resourceCatalog = new RustyApplicationResourceCatalog();
   let activeAudio: RendererAudioHost | null = null;
+  let activeVideo: RendererVideoHost | null = null;
   let activeAnimation: RendererAnimationHost | null = null;
   let activeBillboard: RendererBillboardHost | null = null;
   let activeParticle: RendererParticleHost | null = null;
@@ -682,7 +698,8 @@ export async function mountRustyApplicationWithEnvironment(
     content: PreparedRustyApplicationContent,
     catalog: RustyApplicationResourceCatalog,
   ): Promise<{
-    readonly audio: RendererAudioHost;
+  readonly audio: RendererAudioHost;
+    readonly video: RendererVideoHost;
     readonly animation: RendererAnimationHost;
     readonly billboard: RendererBillboardHost;
     readonly particle: RendererParticleHost;
@@ -719,8 +736,10 @@ export async function mountRustyApplicationWithEnvironment(
         : { onAnimationFrame: options.renderer.onCadence }),
     });
     const resolveAudio = catalog.audioResolver();
+    const resolveVideo = catalog.videoResolver();
     const presentationUrls = new Set<string>();
     let audio: RendererAudioHost | null = null;
+    let video: RendererVideoHost | null = null;
     let animation: RendererAnimationHost | null = null;
     let billboard: RendererBillboardHost | null = null;
     let particle: RendererParticleHost | null = null;
@@ -731,6 +750,7 @@ export async function mountRustyApplicationWithEnvironment(
       // no admitted clips. Keep the Engine audio mechanism available and let
       // its typed resolver reject only an actually missing clip request.
       audio = new RendererAudioHost({ resolveResource: resolveAudio });
+      video = new RendererVideoHost({ container: layout.host, resolveResource: resolveVideo });
       // The generic application host owns the renderer animation mechanism as
       // well as audio. Product Browser therefore observes only fixed typed
       // renderer facts, never a downstream animation substitute.
@@ -791,6 +811,7 @@ export async function mountRustyApplicationWithEnvironment(
       mounted.setPresentationHosts(new RendererPresentationHostSet({
         animation,
         audio,
+        video,
         billboard,
         particle,
         ghostPlate,
@@ -798,6 +819,7 @@ export async function mountRustyApplicationWithEnvironment(
       presentationHostsInstalled = true;
       return {
         audio,
+        video,
         animation,
         billboard,
         billboardUrls: presentationUrls,
@@ -881,6 +903,7 @@ export async function mountRustyApplicationWithEnvironment(
       let inputRebindAttempted = false;
       let candidateSurface: RendererSurface | null = null;
       let candidateAudio: RendererAudioHost | null = null;
+      let candidateVideo: RendererVideoHost | null = null;
       let candidateAnimation: RendererAnimationHost | null = null;
       let candidateBillboard: RendererBillboardHost | null = null;
       let candidateParticle: RendererParticleHost | null = null;
@@ -897,6 +920,7 @@ export async function mountRustyApplicationWithEnvironment(
         const mounted = await mountSurface(candidateCanvas, candidateContent, candidateCatalog);
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
+        candidateVideo = mounted.video;
         candidateAnimation = mounted.animation;
         mounted.animation.replaceCueDefinitions(oldAnimation?.cueDefinitions() ?? []);
         candidateBillboard = mounted.billboard;
@@ -923,6 +947,7 @@ export async function mountRustyApplicationWithEnvironment(
         oldCanvas.replaceWith(candidateCanvas);
         surface = candidateSurface;
         activeAudio = candidateAudio;
+        activeVideo = candidateVideo;
         activeAnimation = mounted.animation;
         activeBillboard = candidateBillboard;
         activeParticle = candidateParticle;
@@ -1220,16 +1245,20 @@ export async function mountRustyApplicationWithEnvironment(
       });
     },
     audioRealizedFacts: () => requireActive().audioRealizedFacts(),
+    videoRealizedFacts: () => requireActive().videoRealizedFacts(),
     animationRealizedFacts: () => requireActive().animationRealizedFacts(),
     ghostPlateReadout: () => requireActive().ghostPlateReadout() as RustyApplicationGhostPlateReadout | null,
     diagnosticsReadout: () => requireActive().diagnosticsReadout(),
     acknowledgeAudioRealizedFacts: (throughFactId: number) =>
       requireActive().acknowledgeAudioRealizedFacts(throughFactId),
+    acknowledgeVideoRealizedFacts: (throughFactId: number) =>
+      requireActive().acknowledgeVideoRealizedFacts(throughFactId),
     acknowledgeAnimationRealizedFacts: (throughFactId: number) =>
       requireActive().acknowledgeAnimationRealizedFacts(throughFactId),
     resetAnimationRealizationOwner: () => requireActive().resetAnimationRealizationOwner(),
     resetCameraMotion: () => requireActive().resetCameraMotion(),
     resetAudioRealizationOwner: () => requireActive().resetAudioRealizationOwner(),
+    resetVideoRealizationOwner: () => requireActive().resetVideoRealizationOwner(),
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
     configureViews: (composition: RustyApplicationViewComposition) => {
       if (rendererTerminal) {
@@ -1282,6 +1311,7 @@ export async function mountRustyApplicationWithEnvironment(
     const surfaceMount = await mountSurface(layout.canvas, initialContent, resourceCatalog);
     surface = surfaceMount.surface;
     activeAudio = surfaceMount.audio;
+    activeVideo = surfaceMount.video;
     activeAnimation = surfaceMount.animation;
     activeBillboard = surfaceMount.billboard;
     activeParticle = surfaceMount.particle;
@@ -1419,6 +1449,7 @@ export async function mountRustyApplicationWithEnvironment(
         input = null;
         surface = null;
         activeAudio = null;
+        activeVideo = null;
         activeAnimation = null;
         activeBillboard = null;
         activeParticle = null;

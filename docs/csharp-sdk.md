@@ -212,6 +212,7 @@ Use the same asset admissions during Create or a later product update:
 | Animated meshes and animation packs | `Animation.OpenAnimatedMeshFromContent`, `OpenAnimationClipPackFromContent` | GLB, including same-bundle relative dependencies |
 | Fonts | `Graphics.OpenResourceFromContent` | WOFF2 |
 | Audio clips | `Audio.OpenClipFromContent` | WAV |
+| Full-viewport video | `Video.Play`, `Video.Stop`, `Video.Skip` | WebM (`video/webm`; VP9+Opus or video-only VP9) |
 | Voxel assets, objects and annotations | `VoxelContent.LoadAssetFromContent`, `LoadObjectFromContent`, `LoadAnnotationFromContent` | Existing typed JSON formats |
 | Imported voxel models | `VoxelContent.LoadMagicaVoxelFromContent` | MagicaVoxel `.vox` |
 | Authored catalogs/prefabs/scenes and spatial artifacts | Existing typed ContentReference consumers | Their existing Engine document formats |
@@ -219,7 +220,7 @@ Use the same asset admissions during Create or a later product update:
 
 The bundle is a source container; an admission still applies the relevant
 Engine format rules. It does not make arbitrary image, model or audio formats
-supported. The Engine supplies admitted resource bytes to its renderer/audio
+supported. The Engine supplies admitted resource bytes to its renderer/audio/video
 host, including assets first loaded after startup and fresh client attachments.
 Products do not extract bundle files or build renderer URLs.
 

@@ -141,6 +141,7 @@ pub enum CsharpRenderResourceKind {
     Mesh,
     Font,
     Audio,
+    Video,
     AnimatedMesh,
     AnimationClipPack,
 }
@@ -289,6 +290,40 @@ impl CsharpRenderResource {
         );
         Ok(Self {
             kind: CsharpRenderResourceKind::Audio,
+            identity,
+            content_hash,
+            path,
+            bytes: Arc::from(bytes),
+            texture: None,
+            animated_mesh: None,
+        })
+    }
+
+    pub(crate) fn admit_video(
+        path: String,
+        bytes: Vec<u8>,
+    ) -> Result<Self, CsharpEngineServicesError> {
+        use sha2::{Digest, Sha256};
+        let path = renderer_path(path, ".webm")?;
+        if bytes.get(..4) != Some(&[0x1a, 0x45, 0xdf, 0xa3])
+            || !bytes[..bytes.len().min(1024)]
+                .windows(4)
+                .any(|window| window == b"webm")
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VIDEO_RESOURCE_WEBM",
+                "video resource must be an admitted WebM EBML body",
+            ));
+        }
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "video-resource/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: CsharpRenderResourceKind::Video,
             identity,
             content_hash,
             path,
@@ -3436,6 +3471,12 @@ impl RuntimeAppearanceBridge {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
                         "audio resources are exposed by the Audio service, not Appearance",
+                    ));
+                }
+                CsharpRenderResourceKind::Video => {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_RENDER_RESOURCE_KIND",
+                        "video resources are exposed by the Video service, not Appearance",
                     ));
                 }
                 CsharpRenderResourceKind::AnimatedMesh => {

@@ -1584,6 +1584,7 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/admit-external-step" => invoke_external(state, &request.body),
         "/__rusty/product/runtime/timeline-completion" => invoke_timeline(state, &request.body),
         "/__rusty/product/runtime/audio-feedback" => invoke_audio_feedback(state, &request.body),
+        "/__rusty/product/runtime/video-feedback" => invoke_video_feedback(state, &request.body),
         "/__rusty/product/runtime/animation-feedback" => {
             invoke_animation_feedback(state, &request.body)
         }
@@ -2024,6 +2025,23 @@ fn invoke_audio_feedback<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]
         state,
         ProductDevOperationKind::ReportAudioFeedback,
         |runtime| runtime.report_audio_feedback(request),
+        |error| crate::ProductDevAudioFeedbackResult::rejected_runtime(binding, error),
+    )
+}
+
+fn invoke_video_feedback<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request: crate::ProductDevVideoFeedback = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(error) = request.validate() {
+        return HttpResponse::error(400, error.code(), error.detail());
+    }
+    let binding = request.runtime;
+    call_runtime(
+        state,
+        ProductDevOperationKind::ReportVideoFeedback,
+        |runtime| runtime.report_video_feedback(request),
         |error| crate::ProductDevAudioFeedbackResult::rejected_runtime(binding, error),
     )
 }

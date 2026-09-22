@@ -16,6 +16,7 @@ mod ghost_plate;
 mod particle;
 mod projector;
 mod telemetry;
+mod video;
 mod world;
 
 pub use animation::*;
@@ -27,4 +28,5 @@ pub use ghost_plate::*;
 pub use particle::*;
 pub use projector::*;
 pub use telemetry::*;
+pub use video::*;
 pub use world::*;

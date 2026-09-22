@@ -166,6 +166,8 @@ export type {
 } from './presentation-host-set.js';
 
 export { RendererAudioHost } from './audio-host.js';
+export { RendererVideoHost } from './video-host.js';
+export type { RendererVideoHostOptions, RendererVideoRealizedFact, RendererVideoRealizedFactsReadout, RendererVideoResource, RendererVideoResourceResolver } from './video-host.js';
 export type {
   RendererAudioContext,
   RendererAudioEntityPositionResolver,

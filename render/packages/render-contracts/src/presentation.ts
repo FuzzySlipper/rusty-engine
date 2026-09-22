@@ -8,6 +8,8 @@ import {
 } from './render.js';
 
 export type AudioHandle = number & { readonly __brand: 'AudioHandle' };
+/** One Engine-owned video presentation incarnation. */
+export type VideoPlaybackHandle = number & { readonly __brand: 'VideoPlaybackHandle' };
 /** Engine-issued correlation for an individual one-shot audio realization. */
 export type AudioSignalHandle = number & { readonly __brand: 'AudioSignalHandle' };
 export type BillboardHandle = number & { readonly __brand: 'BillboardHandle' };
@@ -18,6 +20,8 @@ export type GhostPlateHandle = number & { readonly __brand: 'GhostPlateHandle' }
 
 export const audioHandle = (raw: number): AudioHandle =>
   assertJsonSafeUnsignedInteger(raw, 'audio handle') as AudioHandle;
+export const videoPlaybackHandle = (raw: number): VideoPlaybackHandle =>
+  assertJsonSafeUnsignedInteger(raw, 'video playback handle') as VideoPlaybackHandle;
 export const audioSignalHandle = (raw: number): AudioSignalHandle =>
   assertJsonSafeUnsignedInteger(raw, 'audio signal handle') as AudioSignalHandle;
 export const billboardHandle = (raw: number): BillboardHandle =>
@@ -97,6 +101,23 @@ export type AudioProjectionOp =
   | { readonly op: 'destroy'; readonly handle: AudioHandle }
   | { readonly op: 'voiceControl'; readonly handle: AudioHandle; readonly control: AudioVoiceControl }
   | { readonly op: 'busControl'; readonly bus: AudioBus; readonly control: AudioBusControl };
+
+/**
+ * A normalized WebM resource selected by Engine content admission. The host
+ * resolves the opaque resource identity through its normal same-origin route;
+ * products never receive a browser URL or media element.
+ */
+export interface VideoClipRef {
+  readonly asset: string;
+  readonly contentHash: string;
+  readonly mediaType: 'video/webm';
+}
+
+/** One full-viewport presentation owner. Starting a later handle replaces it. */
+export type VideoProjectionOp =
+  | { readonly op: 'play'; readonly handle: VideoPlaybackHandle; readonly clip: VideoClipRef }
+  | { readonly op: 'stop'; readonly handle: VideoPlaybackHandle }
+  | { readonly op: 'skip'; readonly handle: VideoPlaybackHandle };
 
 export type BillboardAnchor =
   | { readonly kind: 'world'; readonly position: Vec3 }
@@ -476,6 +497,7 @@ export type GhostPlateProjectionOp =
 
 export type PresentationOp =
   | { readonly domain: 'audio'; readonly meta: PresentationOpMeta; readonly op: AudioProjectionOp }
+  | { readonly domain: 'video'; readonly meta: PresentationOpMeta; readonly op: VideoProjectionOp }
   | { readonly domain: 'billboard'; readonly meta: PresentationOpMeta; readonly op: BillboardProjectionOp }
   | { readonly domain: 'particle'; readonly meta: PresentationOpMeta; readonly op: ParticleProjectionOp }
   | { readonly domain: 'telemetryOverlay'; readonly meta: PresentationOpMeta; readonly op: TelemetryOverlayProjectionOp }

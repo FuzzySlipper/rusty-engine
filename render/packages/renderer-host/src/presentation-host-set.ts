@@ -11,6 +11,7 @@ import type {
 import type { RendererAnimationRealizedFactsReadout } from './animation-host.js';
 import type { AudioProjectionDiagnostic } from './host-types.js';
 import type { RendererGhostPlateReadout } from './ghost-plate-host.js';
+import type { RendererVideoRealizedFactsReadout } from './video-host.js';
 
 export type RendererPresentationDomain = PresentationOp['domain'];
 
@@ -57,9 +58,17 @@ interface RendererAnimationPresentationHost extends RendererAdvancingPresentatio
   readonly reset?: () => void;
 }
 
+interface RendererVideoPresentationHost extends RendererPresentationDomainHost {
+  readonly realizedFacts?: () => RendererVideoRealizedFactsReadout;
+  readonly acknowledgeRealizedFacts?: (throughFactId: number) => void;
+  readonly reset?: () => void;
+  readonly dispose?: () => void;
+}
+
 export interface RendererPresentationHosts {
   readonly animation?: RendererAnimationPresentationHost;
   readonly audio?: RendererAudioListenerPresentationHost;
+  readonly video?: RendererVideoPresentationHost;
   readonly billboard?: RendererAdvancingPresentationDomainHost;
   readonly particle?: RendererAdvancingPresentationDomainHost;
   readonly telemetryOverlay?: RendererPresentationDomainHost;
@@ -263,6 +272,25 @@ export class RendererPresentationHostSet {
     return host?.realizedFacts?.() ?? null;
   }
 
+  /** Browser-realized video terminal facts, distinct from product policy. */
+  readVideoRealizedFacts(): RendererVideoRealizedFactsReadout | null {
+    return this.#hosts.video?.realizedFacts?.() ?? null;
+  }
+
+  acknowledgeVideoRealizedFacts(throughFactId: number): boolean {
+    const host = this.#hosts.video;
+    if (host?.acknowledgeRealizedFacts === undefined) return false;
+    host.acknowledgeRealizedFacts(throughFactId);
+    return true;
+  }
+
+  resetVideoRealizationOwner(): boolean {
+    const host = this.#hosts.video;
+    if (host?.reset === undefined) return false;
+    host.reset();
+    return true;
+  }
+
   /** Acknowledge audio facts through the submitted ID while preserving later arrivals. */
   acknowledgeAudioRealizedFacts(throughFactId: number): boolean {
     const host = this.#hosts.audio;
@@ -324,6 +352,11 @@ export class RendererPresentationHostSet {
 
   dispose(): void {
     try {
+      this.#hosts.video?.dispose?.();
+    } catch (cause) {
+      this.#degrade('video', 'dispose', cause);
+    }
+    try {
       this.#hosts.ghostPlate?.dispose?.();
     } catch (cause) {
       this.#degrade('ghostPlate', 'dispose', cause);
@@ -373,6 +406,7 @@ function hasListenerSynchronization(
 const PRESENTATION_DOMAIN_ORDER: readonly RendererPresentationDomain[] = [
   'animation',
   'audio',
+  'video',
   'billboard',
   'particle',
   'telemetryOverlay',

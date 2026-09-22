@@ -20,6 +20,7 @@ use crate::{
     rng::RuntimeRngBridge,
     spatial::RuntimeSpatialBridge,
     ui::{RuntimeUiBridge, RuntimeUiCall},
+    video::{RuntimeVideoBridge, RuntimeVideoCall},
     voxel_content::RuntimeVoxelContentBridge,
     voxel_scene_presentation::RuntimeVoxelScenePresentationBridge,
 };
@@ -55,6 +56,7 @@ fn engine_api(
     authored_content_bridge: &mut RuntimeAuthoredContentBridge,
     content_store_bridge: &mut crate::content_store::RuntimeContentStoreBridge,
     audio_bridge: &mut RuntimeAudioBridge,
+    video_bridge: &mut RuntimeVideoBridge,
     camera_view_bridge: &mut RuntimeCameraViewBridge,
     dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
@@ -164,6 +166,7 @@ fn engine_api(
         },
         animation: crate::appearance::animation_api(appearance_bridge),
         audio: crate::audio::api(audio_bridge),
+        video: crate::video::api(video_bridge),
         camera_view: NativeCameraViewApi {
             context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
             create_camera: crate::camera_view::create_camera,
@@ -268,6 +271,7 @@ pub struct EngineServiceSet {
     authored_content: RuntimeAuthoredContentBridge,
     content_store: Box<crate::content_store::RuntimeContentStoreBridge>,
     audio: RuntimeAudioBridge,
+    video: RuntimeVideoBridge,
     camera_view: Box<RuntimeCameraViewBridge>,
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
@@ -287,6 +291,7 @@ pub struct CsharpEngineCall {
     output: CsharpEngineCallOutput,
     appearance: Option<RuntimeAppearanceCall>,
     audio: RuntimeAudioCall,
+    video: RuntimeVideoCall,
     camera_view: crate::camera_view::RuntimeCameraViewCall,
     sky_frame: Option<render_model::RenderFrameDiff>,
     ui: RuntimeUiCall,
@@ -367,9 +372,11 @@ impl EngineServiceSet {
         appearance.bind_camera_view(&camera_view);
         appearance.bind_diagnostics_sink(diagnostics_sink.clone());
         appearance.bind_content(&content);
-        let mut audio = RuntimeAudioBridge::new(content_resources);
+        let mut audio = RuntimeAudioBridge::new(content_resources.clone());
         audio.bind_diagnostics_sink(diagnostics_sink.clone());
         audio.bind_content(&content);
+        let mut video = RuntimeVideoBridge::new(content_resources.clone());
+        video.bind_content(&content);
         let mut voxel_content = RuntimeVoxelContentBridge::new();
         voxel_content.bind_content(&content);
         Ok(Self {
@@ -383,6 +390,7 @@ impl EngineServiceSet {
             authored_content,
             content_store,
             audio,
+            video,
             camera_view,
             dynamics,
             spatial,
@@ -405,6 +413,7 @@ impl EngineServiceSet {
             &mut self.authored_content,
             &mut self.content_store,
             &mut self.audio,
+            &mut self.video,
             &mut self.camera_view,
             &mut self.dynamics,
             &mut self.spatial,
@@ -465,6 +474,7 @@ impl EngineServiceSet {
         self.input.begin_call(false);
         self.appearance.begin_attach_call();
         self.audio.begin_call();
+        self.video.begin_call();
         self.camera_view.begin_attach_call()?;
         self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
@@ -486,6 +496,7 @@ impl EngineServiceSet {
         self.appearance.begin_update_call(facts);
         self.begin_other_services(ui_binding, true);
         self.audio.begin_update_call(self.call_elapsed_seconds);
+        self.video.begin_call();
     }
 
     /// Returns every committed renderer stream continuation point. Detached
@@ -530,6 +541,7 @@ impl EngineServiceSet {
     ) {
         self.input.begin_call(accepts_input_replacement);
         self.audio.begin_call();
+        self.video.begin_call();
         self.camera_view.begin_call();
         self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
@@ -547,6 +559,16 @@ impl EngineServiceSet {
         facts: impl IntoIterator<Item = AudioRealizationFact>,
     ) -> Result<(), CsharpEngineServicesError> {
         self.audio
+            .ingest_realized_feedback(replace_owner, evicted_fact_count, facts)
+    }
+
+    pub fn ingest_video_realization_feedback(
+        &mut self,
+        replace_owner: bool,
+        evicted_fact_count: u64,
+        facts: impl IntoIterator<Item = crate::video::VideoRealizationFact>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.video
             .ingest_realized_feedback(replace_owner, evicted_fact_count, facts)
     }
 
@@ -579,6 +601,10 @@ impl EngineServiceSet {
         self.audio.reset_realized_feedback();
     }
 
+    pub fn reset_video_realization_owner(&mut self) {
+        self.video.reset_realized_feedback();
+    }
+
     pub fn reset_animation_realization_owner(&mut self) {
         self.appearance
             .ingest_animation_realization_feedback(true, 0, []);
@@ -592,6 +618,7 @@ impl EngineServiceSet {
         self.input.discard_call();
         self.appearance.discard_call();
         self.audio.discard_call();
+        self.video.discard_call();
         self.camera_view.discard_call();
         self.dynamics.discard_call();
         self.ui.discard_call();
@@ -604,6 +631,7 @@ impl EngineServiceSet {
         let input_mapping_replacement = self.input.take_call();
         let appearance = self.appearance.take_staged_call()?;
         let audio = self.audio.take_staged_call()?;
+        let video = self.video.take_staged_call()?;
         let camera_view = self.camera_view.take_staged_call()?;
         self.dynamics.take_staged_call()?;
         // Sky resources are owned and admitted by Appearance. Resolve the
@@ -622,6 +650,7 @@ impl EngineServiceSet {
             output: CsharpEngineCallOutput::default(),
             appearance,
             audio,
+            video,
             camera_view,
             sky_frame,
             ui,
@@ -668,6 +697,10 @@ impl EngineServiceSet {
         if !audio.ops.is_empty() {
             effects.push(audio);
         }
+        let video = RuntimeVideoBridge::snapshot_call_frame(&call.video);
+        if !video.ops.is_empty() {
+            effects.push(video);
+        }
         call.presentation_world.retain_effects(effects);
         call.output = output;
         Ok(call)
@@ -695,6 +728,7 @@ impl EngineServiceSet {
         self.appearance.commit(call.appearance);
         self.implicit.commit_call(call.implicit);
         self.audio.commit(call.audio);
+        self.video.commit(call.video);
         self.camera_view.commit(call.camera_view);
         self.dynamics.commit_call();
         self.ui.commit(call.ui);
@@ -714,6 +748,7 @@ impl EngineServiceSet {
             .render_resources
             .iter()
             .chain(self.audio.render_resources())
+            .chain(self.video.render_resources())
             .map(|resource| resource.identity().to_owned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -729,6 +764,7 @@ impl EngineServiceSet {
             .render_resources
             .iter()
             .chain(self.audio.render_resources())
+            .chain(self.video.render_resources())
             .find(|resource| resource.identity() == identity)
             .cloned()
     }
@@ -740,6 +776,7 @@ impl EngineServiceSet {
             .iter()
             .cloned()
             .chain(self.audio.render_resources().cloned())
+            .chain(self.video.render_resources().cloned())
             .collect()
     }
 
@@ -802,7 +839,13 @@ impl EngineServiceSet {
             frames,
             view_composition: call.camera_view.composition.clone(),
             ui: call.ui.projections.clone(),
-            presentation: call.audio.frame.clone().into_iter().collect(),
+            presentation: call
+                .audio
+                .frame
+                .clone()
+                .into_iter()
+                .chain(call.video.frame.clone())
+                .collect(),
         }
     }
 

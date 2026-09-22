@@ -64,8 +64,8 @@ pub use model::{
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevRuntimeState, ProductDevTelemetrySnapshot,
     ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
-    ProductDevUpdateAttributionSnapshot, ProductDevWorkerUpdateSnapshot, PRODUCT_DEV_HOST_ARTIFACT,
-    PRODUCT_DEV_RUNTIME_BASE_PATH,
+    ProductDevUpdateAttributionSnapshot, ProductDevVideoFeedback, ProductDevVideoFeedbackFact,
+    ProductDevWorkerUpdateSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use runtime_publication::{
     RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,

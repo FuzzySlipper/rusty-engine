@@ -25,6 +25,8 @@ import type {
   ProductBrowserAudioFeedback,
   ProductBrowserAudioFeedbackFact,
   ProductBrowserAudioFeedbackResult,
+  ProductBrowserVideoFeedback,
+  ProductBrowserVideoFeedbackFact,
   ProductBrowserAnimationFeedback,
   ProductBrowserAnimationFeedbackFact,
   ProductBrowserAnimationFeedbackResult,
@@ -81,6 +83,7 @@ const ROUTES = Object.freeze({
   admitExternalStep: 'admit-external-step',
   completeTimeline: 'timeline-completion',
   audioFeedback: 'audio-feedback',
+  videoFeedback: 'video-feedback',
   animationFeedback: 'animation-feedback',
   ghostPlateFeedback: 'ghost-plate-feedback',
   rendererDiagnostics: 'renderer-diagnostics',
@@ -101,6 +104,7 @@ const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
 const UINT64_MAX_DECIMAL = '18446744073709551615';
 const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
 const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
+const MAXIMUM_VIDEO_FEEDBACK_FACTS = 128;
 const MAXIMUM_ANIMATION_FEEDBACK_FACTS = 128;
 const MAXIMUM_ANIMATION_CUE_DEFINITIONS = 128;
 const MAXIMUM_ANIMATION_CUE_TEXT_BYTES = 96;
@@ -805,6 +809,13 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
+  const reportVideoFeedback = (feedback: ProductBrowserVideoFeedback): Promise<ProductBrowserAudioFeedbackResult> => {
+    const snapshot = snapshotVideoFeedback(feedback);
+    return post(ROUTES.videoFeedback, snapshot, (value) => decodeAudioFeedbackResult(
+      value, snapshot.runtime, snapshot.facts as unknown as readonly ProductBrowserAudioFeedbackFact[],
+    ));
+  };
+
   const reportAnimationFeedback = (
     feedback: ProductBrowserAnimationFeedback,
   ): Promise<ProductBrowserAnimationFeedbackResult> => {
@@ -1400,6 +1411,7 @@ export function createProductBrowserLocalHttpAdapter(
     replaceControl,
     input,
     reportAudioFeedback,
+    reportVideoFeedback,
     reportAnimationFeedback,
     reportGhostPlateFeedback,
     reportRendererDiagnostics,
@@ -1756,6 +1768,47 @@ function snapshotAudioFeedbackFact(value: unknown): ProductBrowserAudioFeedbackF
     });
   }
   throw new TypeError('audio feedback fact kind is not admitted');
+}
+
+function snapshotVideoFeedback(value: ProductBrowserVideoFeedback): ProductBrowserVideoFeedback {
+  const record = requireRecord(value, 'video feedback');
+  requireKnownFields(record, ['runtime', 'replaceOwner', 'evictedFactCount', 'facts'], 'video feedback');
+  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('video feedback replaceOwner must be boolean');
+  const facts = requirePlainArray(record.facts, 'video feedback facts');
+  if (facts.length > MAXIMUM_VIDEO_FEEDBACK_FACTS) {
+    throw new ProductBrowserLocalTransportError('invalid_options', `video feedback facts must contain 0..${String(MAXIMUM_VIDEO_FEEDBACK_FACTS)} entries`);
+  }
+  return Object.freeze({
+    runtime: decodeRuntimeIdentity(record.runtime),
+    replaceOwner: record.replaceOwner,
+    evictedFactCount: requireU64Text(record.evictedFactCount, 'video feedback evictedFactCount'),
+    facts: Object.freeze(facts.map(snapshotVideoFeedbackFact)),
+  });
+}
+
+function snapshotVideoFeedbackFact(value: unknown): ProductBrowserVideoFeedbackFact {
+  const record = requireRecord(value, 'video feedback fact');
+  const common = {
+    factId: requireU64Text(record['factId'], 'video feedback factId'),
+    handle: requireU64Text(record['handle'], 'video feedback handle'),
+  };
+  if (record.kind === 'completed' || record.kind === 'skipped') {
+    requireKnownFields(record, ['kind', 'factId', 'handle'], 'video terminal feedback');
+    return Object.freeze({ kind: record.kind, ...common });
+  }
+  if (record.kind === 'failed') {
+    requireKnownFields(record, ['kind', 'factId', 'handle', 'code'], 'video failure feedback');
+    return Object.freeze({
+      kind: 'failed',
+      ...common,
+      code: requireCatalogValue<'decodeFailed' | 'playbackBlocked' | 'hostFailure'>(
+        record.code,
+        'video feedback failure code',
+        new Set(['decodeFailed', 'playbackBlocked', 'hostFailure']),
+      ),
+    });
+  }
+  throw new TypeError('video feedback fact kind is not admitted');
 }
 
 function snapshotAnimationFeedback(value: ProductBrowserAnimationFeedback): ProductBrowserAnimationFeedback {

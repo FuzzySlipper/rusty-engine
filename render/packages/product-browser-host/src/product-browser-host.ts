@@ -155,6 +155,17 @@ export interface ProductBrowserAudioFeedbackResult {
   readonly diagnostic?: string;
 }
 
+export type ProductBrowserVideoFeedbackFact =
+  | { readonly kind: 'completed'; readonly factId: string; readonly handle: string }
+  | { readonly kind: 'skipped'; readonly factId: string; readonly handle: string }
+  | { readonly kind: 'failed'; readonly factId: string; readonly handle: string; readonly code: 'decodeFailed' | 'playbackBlocked' | 'hostFailure' };
+export interface ProductBrowserVideoFeedback {
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly replaceOwner: boolean;
+  readonly evictedFactCount: string;
+  readonly facts: readonly ProductBrowserVideoFeedbackFact[];
+}
+
 /** Closed renderer-observation feedback; this is not an animation command route. */
 export type ProductBrowserAnimationFeedbackFact =
   | { readonly kind: 'playbackObservation'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly status: string; readonly selectedClip: string | null; readonly sampledAtSeconds: number | null }
@@ -464,6 +475,9 @@ export interface ProductBrowserRuntimeAdapter {
   readonly reportAudioFeedback: (
     feedback: ProductBrowserAudioFeedback,
   ) => Promise<ProductBrowserAudioFeedbackResult>;
+  readonly reportVideoFeedback?: (
+    feedback: ProductBrowserVideoFeedback,
+  ) => Promise<ProductBrowserAudioFeedbackResult>;
   readonly reportAnimationFeedback: (
     feedback: ProductBrowserAnimationFeedback,
   ) => Promise<ProductBrowserAnimationFeedbackResult>;
@@ -512,6 +526,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly replaceControl?: NonNullable<ProductBrowserRuntimeAdapter['replaceControl']>;
   readonly input: ProductBrowserRuntimeAdapter['input'];
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
+  readonly reportVideoFeedback?: NonNullable<ProductBrowserRuntimeAdapter['reportVideoFeedback']>;
   readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
   readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
   readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
@@ -544,6 +559,7 @@ export function createProductBrowserRuntimeTransport(
   }
   requireFunction(adapter.input, 'input');
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
+  if (adapter.reportVideoFeedback !== undefined) requireFunction(adapter.reportVideoFeedback, 'reportVideoFeedback');
   requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
   requireFunction(adapter.reportGhostPlateFeedback, 'reportGhostPlateFeedback');
   if (adapter.reportRendererDiagnostics !== undefined) {
@@ -582,6 +598,7 @@ export function createProductBrowserRuntimeTransport(
     ...(adapter.replaceControl === undefined ? {} : { replaceControl: adapter.replaceControl }),
     input: adapter.input,
     reportAudioFeedback: adapter.reportAudioFeedback,
+    ...(adapter.reportVideoFeedback === undefined ? {} : { reportVideoFeedback: adapter.reportVideoFeedback }),
     reportAnimationFeedback: adapter.reportAnimationFeedback,
     reportGhostPlateFeedback: adapter.reportGhostPlateFeedback,
     ...(adapter.reportRendererDiagnostics === undefined
@@ -840,6 +857,41 @@ interface ProductBrowserOperationQueue {
 interface ProductBrowserAudioFeedbackReporter {
   readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
   readonly flush: () => Promise<void>;
+}
+
+export interface ProductBrowserVideoFeedbackReporter { readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void; readonly flush: () => Promise<void>; }
+
+export function createProductBrowserVideoFeedbackReporter(options: {
+  readonly renderer: Pick<RustyApplicationHost['renderer'], 'videoRealizedFacts' | 'acknowledgeVideoRealizedFacts' | 'resetVideoRealizationOwner'>;
+  readonly report: NonNullable<ProductBrowserRuntimeTransport['reportVideoFeedback']>;
+}): ProductBrowserVideoFeedbackReporter {
+  let binding: RustyApplicationRuntimeIdentity | null = null;
+  let replaceOwner = false;
+  let lastReportedEvictionCount = 0;
+  const bindRuntime = (next: RustyApplicationRuntimeIdentity): void => {
+    if (binding === null || !sameRuntimeBinding(binding, next)) { options.renderer.resetVideoRealizationOwner(); replaceOwner = true; }
+    binding = next;
+  };
+  const flush = async (): Promise<void> => {
+    if (binding === null) return;
+    const readout = options.renderer.videoRealizedFacts();
+    const realizedFacts = readout?.facts ?? [];
+    const facts = realizedFacts.map((fact) => Object.freeze({ ...fact, factId: canonicalSafeU64(fact.factId, 'video feedback factId'), handle: canonicalSafeU64(fact.handle, 'video feedback handle') }));
+    const evictedFactCount = readout?.evictedFactCount ?? 0;
+    if (!replaceOwner && facts.length === 0 && evictedFactCount === lastReportedEvictionCount) return;
+    const result = await options.report(Object.freeze({
+      runtime: binding,
+      replaceOwner,
+      evictedFactCount: canonicalSafeU64(evictedFactCount, 'video feedback evictedFactCount'),
+      facts,
+    }));
+    if (!result.accepted || !sameRuntimeBinding(result.runtime, binding)) throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'video feedback was rejected by the runtime');
+    const through = facts.at(-1)?.factId;
+    if (through !== undefined) options.renderer.acknowledgeVideoRealizedFacts(Number(through));
+    lastReportedEvictionCount = evictedFactCount;
+    replaceOwner = false;
+  };
+  return Object.freeze({ bindRuntime, flush });
 }
 
 interface ProductBrowserAnimationFeedbackReporter {
@@ -1366,6 +1418,7 @@ export async function mountProductBrowserHostWithApplication(
   let lastProgressDomWriteAtMs = Number.NEGATIVE_INFINITY;
   const progressDomWriteIntervalMs = 250;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
+  let videoFeedbackReporter: ProductBrowserVideoFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
   let rendererDiagnosticsReporter: ProductBrowserRendererDiagnosticsReporter | null = null;
@@ -1692,6 +1745,7 @@ export async function mountProductBrowserHostWithApplication(
     const host = requireApplication();
     host.renderer.resetCameraMotion();
     audioFeedbackReporter?.bindRuntime(runtime);
+    videoFeedbackReporter?.bindRuntime(runtime);
     animationFeedbackReporter?.bindRuntime(runtime);
     ghostPlateFeedbackReporter?.bindRuntime(runtime);
     rendererDiagnosticsReporter?.bindRuntime(runtime);
@@ -1790,6 +1844,7 @@ export async function mountProductBrowserHostWithApplication(
   const flushRendererFeedback = async (): Promise<void> => {
     requireReady();
     await audioFeedbackReporter?.flush();
+    await videoFeedbackReporter?.flush();
     await animationFeedbackReporter?.flush();
     await ghostPlateFeedbackReporter?.flush();
   };
@@ -1890,6 +1945,7 @@ export async function mountProductBrowserHostWithApplication(
             host.renderer.resetCameraMotion();
           }
           audioFeedbackReporter?.bindRuntime(output.runtime);
+          videoFeedbackReporter?.bindRuntime(output.runtime);
           animationFeedbackReporter?.bindRuntime(output.runtime);
           ghostPlateFeedbackReporter?.bindRuntime(output.runtime);
           rendererDiagnosticsReporter?.bindRuntime(output.runtime);
@@ -2285,6 +2341,7 @@ export async function mountProductBrowserHostWithApplication(
           renderer: host.renderer,
           report: transport.reportAudioFeedback,
         });
+        videoFeedbackReporter = transport.reportVideoFeedback === undefined ? null : createProductBrowserVideoFeedbackReporter({ renderer: host.renderer, report: transport.reportVideoFeedback });
         animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
           renderer: host.renderer,
           report: transport.reportAnimationFeedback,
@@ -2730,6 +2787,7 @@ export async function mountProductBrowserHostWithApplication(
         ? {}
         : { initialRuntime: options.runtimeInput.binding }),
     });
+    videoFeedbackReporter = transport.reportVideoFeedback === undefined ? null : createProductBrowserVideoFeedbackReporter({ renderer: application.renderer, report: transport.reportVideoFeedback });
     animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
       renderer: application.renderer,
       report: transport.reportAnimationFeedback,
@@ -2765,6 +2823,7 @@ export async function mountProductBrowserHostWithApplication(
       enqueueOperation: queue.enqueue,
       flush: async () => {
         await audioFeedbackReporter?.flush();
+        await videoFeedbackReporter?.flush();
         await animationFeedbackReporter?.flush();
         await ghostPlateFeedbackReporter?.flush();
         await rendererDiagnosticsReporter?.flush();

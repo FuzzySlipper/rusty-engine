@@ -1,7 +1,7 @@
 import type { RustyApplicationResource } from '@rusty-engine/application-host';
 
 const RESOURCE_ROUTE = '/__rusty/product/runtime/resource';
-const RESOURCE_IDENTITY = /^(animated-mesh|audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u;
+const RESOURCE_IDENTITY = /^(animated-mesh|audio|mesh|clip-pack|texture|video)-resource\/([0-9a-f]{64})$/u;
 const FONT_IDENTITY = /^font\/([0-9a-f]{64})$/u;
 
 export interface ProductBrowserDynamicRendererResourceFetcher {
@@ -118,6 +118,7 @@ function resourceDescriptor(identity: string): { readonly hash: string; readonly
   if (regular !== null) {
     const mediaType = regular[1] === 'texture' ? 'image/png'
       : regular[1] === 'audio' ? 'audio/wav'
+        : regular[1] === 'video' ? 'video/webm'
         : regular[1] === 'mesh' ? 'application/octet-stream'
           : 'model/gltf-binary';
     return { hash: regular[2]!, mediaType };

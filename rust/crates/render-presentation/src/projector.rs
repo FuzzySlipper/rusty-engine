@@ -8,7 +8,7 @@ use crate::{
     ParticleProjectionDiagnostic, ParticleProjectionReadout, ParticleProjector,
     PresentationAssetLookup, PresentationFrameDiff, PresentationFrameError, PresentationOp,
     RenderTargetLookup, TelemetryOverlayDiagnostic, TelemetryOverlayProjector,
-    TelemetryOverlayReadout,
+    TelemetryOverlayReadout, VideoProjector,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,6 +43,7 @@ pub struct PresentationProjectorSet {
     telemetry: TelemetryOverlayProjector,
     animation: AnimationProjector,
     ghost_plates: GhostPlateProjector,
+    video: VideoProjector,
 }
 
 impl PresentationProjectorSet {
@@ -83,6 +84,16 @@ impl PresentationProjectorSet {
                     .ghost_plates
                     .project(targets, meta, op)
                     .map_err(PresentationProjectionError::GhostPlate)?,
+                PresentationOp::Video { meta, op } => {
+                    staged.video.project(meta, op).map_err(|_| {
+                        PresentationProjectionError::Frame(
+                            PresentationFrameError::InvalidDescriptor {
+                                sequence: meta.sequence,
+                                field: "video",
+                            },
+                        )
+                    })?
+                }
             };
             projected.push(output);
         }
