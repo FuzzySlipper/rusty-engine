@@ -57,7 +57,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             bool jump = frame.JumpPressed && admitted==0;
             // Engine owns contact/support solving; the product supplies movement policy and current obstacles.
             var command = new CharacterControllerCommand(frame.Movement,look.YawRadians,jump,frame.JumpHeld,frame.CrouchHeld,Vector3.Zero,Vector3.Zero,(float)update.Facts.FixedDeltaSeconds,++sequence);
-            var step = engine.Spatial.ProposeCharacterStep(new(spatial,position,motion,Support(),obstacles.ToArray(),characterConfig,command));
+            var step = engine.Spatial.ProposeCharacterStep(new(spatial,position,motion,Support(),obstacles.ToArray(),ReadOnlyMemory<CharacterMeshInstance>.Empty,characterConfig,command));
             position = step.Transform.Translation;
             motion = step.Motion;
         }

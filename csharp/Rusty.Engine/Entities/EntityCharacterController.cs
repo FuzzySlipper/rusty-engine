@@ -26,6 +26,8 @@ public readonly record struct EntityCharacterControllerReceipt(
 /// Character controller. The current native service creates its character with a call-local
 /// <c>EntityId(1)</c>; optional active obstacles are likewise borrowed for one proposal. That
 /// temporary identity is validated on readback and never becomes a managed binding or mirror.
+/// Retained collision-resident mesh instances are selected by the product's durable instance
+/// and entity identities; their current pose is resolved by Spatial for the proposal.
 /// </summary>
 public sealed class EntityCharacterController
 {
@@ -53,7 +55,8 @@ public sealed class EntityCharacterController
         CharacterControllerConfig config,
         CharacterControllerCommand command,
         EntityCharacterControllerGuard? expectedGuard = null,
-        ReadOnlyMemory<CharacterObstacle> obstacles = default)
+        ReadOnlyMemory<CharacterObstacle> obstacles = default,
+        ReadOnlyMemory<CharacterMeshInstance> meshInstances = default)
     {
         ArgumentNullException.ThrowIfNull(session);
 
@@ -72,6 +75,7 @@ public sealed class EntityCharacterController
             motion,
             support,
             obstacles,
+            meshInstances,
             config,
             command));
 

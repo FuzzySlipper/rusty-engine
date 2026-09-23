@@ -578,6 +578,27 @@ impl CollisionProjection {
         self.static_meshes.instance_count()
     }
 
+    /// Return one retained static-mesh instance's authored identity and current
+    /// pose. The returned transform is a value snapshot for a call-local
+    /// consumer; collision queries continue using the retained shape.
+    pub fn static_mesh_instance(
+        &self,
+        id: StaticMeshInstanceId,
+    ) -> Option<(StaticMeshAssetId, u64, StaticMeshTransform)> {
+        self.static_meshes.instance_descriptor(id)
+    }
+
+    /// Stable identity for retained static-mesh collision topology. Pose is
+    /// excluded only for explicitly admitted moving instances; all other
+    /// retained instances keep their complete pose in the identity.
+    pub fn static_mesh_collision_topology_hash_excluding_pose(
+        &self,
+        moving_instances: &std::collections::BTreeSet<StaticMeshInstanceId>,
+    ) -> u64 {
+        self.static_meshes
+            .topology_hash_excluding_pose(moving_instances)
+    }
+
     /// Cast a local +Y capsule through the immutable voxel/static-mesh snapshot.
     /// Exact-distance ties retain deterministic source order: voxel chunks first,
     /// then static-mesh instance identity.

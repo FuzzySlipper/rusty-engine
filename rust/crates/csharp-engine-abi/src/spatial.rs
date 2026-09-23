@@ -1169,6 +1169,20 @@ pub struct NativeCharacterObstacle {
     pub angular_velocity: NativeVec3,
 }
 
+/// One retained collision-resident mesh instance admitted for a single
+/// character proposal. The instance identity selects the already-copied
+/// Engine Spatial mesh and its current transform; the product supplies only
+/// the stable entity identity and current motion facts needed for support and
+/// carry. No native handle or product-owned bounds are borrowed here.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterMeshInstance {
+    pub instance: u64,
+    pub entity: u64,
+    pub linear_velocity: NativeVec3,
+    pub angular_velocity: NativeVec3,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterStepRequest {
@@ -1178,6 +1192,8 @@ pub struct NativeCharacterStepRequest {
     pub support: NativeCharacterSupport,
     pub obstacles: *const NativeCharacterObstacle,
     pub obstacles_len: usize,
+    pub mesh_instances: *const NativeCharacterMeshInstance,
+    pub mesh_instances_len: usize,
     pub config: NativeCharacterControllerConfig,
     pub command: NativeCharacterControllerCommand,
 }

@@ -1,12 +1,12 @@
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
-use core_space::WorldPos;
+use core_space::{WorldPos, WorldVec};
 use engine_spatial::{
     character_edge_is_traversable, CharacterBlockKind, CharacterContactKind,
     CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
-    CharacterControllerService, StaticMeshAssetId, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, VoxelCollisionScene,
-    VoxelEdit, VoxelEditService, VoxelEditTransaction,
+    CharacterControllerService, CharacterMeshInstance, CharacterStepColliders, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
+    VoxelCollisionScene, VoxelEdit, VoxelEditService, VoxelEditTransaction,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform, Quat,
@@ -140,6 +140,79 @@ fn quarter_step_scene(with_low_ceiling: bool) -> VoxelCollisionScene {
                 asset: StaticMeshAssetId(41),
                 expected_geometry_hash: hash,
                 transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    scene
+}
+
+fn moving_mesh_scene(translation_x: f64) -> VoxelCollisionScene {
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(101),
+        vec![
+            [-1.5, 0.0, -1.5],
+            [1.5, 0.0, -1.5],
+            [-1.5, 0.0, 1.5],
+            [1.5, 0.0, 1.5],
+        ],
+        vec![[0, 2, 1], [1, 2, 3]],
+    )
+    .unwrap();
+    let hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(101),
+                asset: StaticMeshAssetId(101),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform {
+                    translation: [translation_x, 1.0, 0.0],
+                    ..StaticMeshTransform::IDENTITY
+                },
+            }],
+        )
+        .unwrap();
+    scene
+}
+
+fn hollow_frame_scene() -> VoxelCollisionScene {
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    let mut add_bar = |min_x: f64, max_x: f64, min_z: f64, max_z: f64| {
+        let start = positions.len() as u32;
+        positions.extend([
+            [min_x, 0.0, min_z],
+            [max_x, 0.0, min_z],
+            [min_x, 0.0, max_z],
+            [max_x, 0.0, max_z],
+        ]);
+        triangles.extend([
+            [start, start + 2, start + 1],
+            [start + 1, start + 2, start + 3],
+        ]);
+    };
+    add_bar(-1.5, 1.5, -1.5, -0.7);
+    add_bar(-1.5, 1.5, 0.7, 1.5);
+    add_bar(-1.5, -0.7, -0.7, 0.7);
+    add_bar(0.7, 1.5, -0.7, 0.7);
+    let asset = StaticMeshColliderAsset::new(StaticMeshAssetId(102), positions, triangles).unwrap();
+    let hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(102),
+                asset: StaticMeshAssetId(102),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform {
+                    translation: [0.0, 1.0, 0.0],
+                    ..StaticMeshTransform::IDENTITY
+                },
             }],
         )
         .unwrap();
@@ -545,6 +618,211 @@ fn moving_platform_support_is_retained_and_carries_next_step() {
     assert!(!platform.departed);
     assert!((platform.carried_displacement.x - 0.2).abs() < 1.0e-5);
     assert!(second.displacement.x > 0.19);
+}
+
+#[test]
+fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
+    let mut scene = moving_mesh_scene(0.0);
+    let character_id = EntityId::new(1);
+    let mesh_entity = EntityId::new(2);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(character_id, "character")
+            .with_transform(Vec3::new(0.5, 1.9, 0.0))
+            .with_character_motion(CharacterMotionComponent::at_rest(1.9)),
+        EntityDefinition::new(mesh_entity, "mesh-platform")
+            .with_transform(Vec3::new(0.0, 1.0, 0.0)),
+    ])
+    .unwrap();
+    let config = CharacterControllerConfig::default();
+    let mesh = CharacterMeshInstance {
+        instance: StaticMeshInstanceId(101),
+        entity: mesh_entity,
+        linear_velocity: WorldVec::ZERO,
+        angular_velocity: WorldVec::new(0.0, 1.0, 0.0),
+    };
+    // This intentionally overlaps the character. The admitted mesh identity
+    // removes the duplicate box authority before the shared solver runs.
+    let duplicate = engine_spatial::CharacterObstacle {
+        id: mesh_entity.raw(),
+        center: WorldPos::new(0.0, 1.0, 0.0),
+        half_extents: WorldVec::new(2.0, 2.0, 2.0),
+        linear_velocity: WorldVec::ZERO,
+        angular_velocity: WorldVec::ZERO,
+    };
+    let mut service = CharacterControllerService::default();
+    let first = service
+        .step_with_obstacles_and_mesh_instances(
+            &mut state,
+            &scene,
+            character_id,
+            &config,
+            command(1, Vec2::ZERO),
+            CharacterStepColliders::new(&[duplicate], &[mesh]),
+        )
+        .unwrap();
+    assert!(first.motion_after.grounded);
+    assert_eq!(first.motion_after.support_entity, Some(mesh_entity));
+    assert!(matches!(
+        first.ground.unwrap().source,
+        engine_spatial::CharacterCollisionSource::StaticMesh { instance, .. }
+            if instance == StaticMeshInstanceId(101)
+    ));
+    assert!(first.motion_after.support_point_velocity.z.abs() > 0.1);
+    let world_hash = first.motion_after.collision_world_hash;
+
+    let state_revision = state.revision();
+    state
+        .apply_transform(
+            state_revision,
+            entity_state::TransformCommand::Translate {
+                entity: mesh_entity,
+                delta: Vec3::new(0.2, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    let mesh_revision = scene.static_mesh_collision_revision();
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(101),
+        vec![
+            [-1.5, 0.0, -1.5],
+            [1.5, 0.0, -1.5],
+            [-1.5, 0.0, 1.5],
+            [1.5, 0.0, 1.5],
+        ],
+        vec![[0, 2, 1], [1, 2, 3]],
+    )
+    .unwrap();
+    let asset_hash = asset.geometry_hash;
+    scene
+        .apply_static_mesh_residency(
+            mesh_revision,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(101),
+                asset: StaticMeshAssetId(101),
+                expected_geometry_hash: asset_hash,
+                transform: StaticMeshTransform {
+                    translation: [0.2, 1.0, 0.0],
+                    ..StaticMeshTransform::IDENTITY
+                },
+            }],
+            [],
+            [],
+        )
+        .unwrap();
+    let second = service
+        .step_with_obstacles_and_mesh_instances(
+            &mut state,
+            &scene,
+            character_id,
+            &config,
+            command(2, Vec2::ZERO),
+            CharacterStepColliders::new(
+                &[duplicate],
+                &[CharacterMeshInstance {
+                    linear_velocity: WorldVec::new(12.0, 0.0, 0.0),
+                    ..mesh
+                }],
+            ),
+        )
+        .unwrap();
+    assert_eq!(second.motion_after.support_entity, Some(mesh_entity));
+    assert_eq!(second.motion_after.collision_world_hash, world_hash);
+    assert!((second.platform.unwrap().carried_displacement.x - 0.2).abs() < 1.0e-4);
+    assert!(second.displacement.x > 0.19);
+
+    // A geometry replacement is a topology change even when the same retained
+    // instance remains admitted. It must clear the old support continuation;
+    // the current mesh can then be reacquired without carrying the old pose
+    // delta as if it were a platform movement.
+    let state_revision = state.revision();
+    state
+        .apply_transform(
+            state_revision,
+            entity_state::TransformCommand::Translate {
+                entity: mesh_entity,
+                delta: Vec3::new(0.2, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    let mesh_revision = scene.static_mesh_collision_revision();
+    let changed_asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(101),
+        vec![
+            [-1.4, 0.0, -1.5],
+            [1.5, 0.0, -1.5],
+            [-1.5, 0.0, 1.5],
+            [1.5, 0.0, 1.5],
+        ],
+        vec![[0, 2, 1], [1, 2, 3]],
+    )
+    .unwrap();
+    let changed_hash = changed_asset.geometry_hash;
+    scene
+        .apply_static_mesh_residency(
+            mesh_revision,
+            [changed_asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(101),
+                asset: StaticMeshAssetId(101),
+                expected_geometry_hash: changed_hash,
+                transform: StaticMeshTransform {
+                    translation: [0.4, 1.0, 0.0],
+                    ..StaticMeshTransform::IDENTITY
+                },
+            }],
+            [],
+            [],
+        )
+        .unwrap();
+    let third = service
+        .step_with_obstacles_and_mesh_instances(
+            &mut state,
+            &scene,
+            character_id,
+            &config,
+            command(3, Vec2::ZERO),
+            CharacterStepColliders::new(
+                &[duplicate],
+                &[CharacterMeshInstance {
+                    linear_velocity: WorldVec::ZERO,
+                    angular_velocity: WorldVec::ZERO,
+                    ..mesh
+                }],
+            ),
+        )
+        .unwrap();
+    assert_ne!(third.motion_after.collision_world_hash, world_hash);
+    assert!(third.platform.is_some_and(|platform| {
+        platform.entity == mesh_entity && platform.carried_displacement.x.abs() < 0.05
+    }));
+}
+
+#[test]
+fn static_mesh_aabb_hole_remains_passable_and_unadmitted_mesh_is_collision_only() {
+    let scene = hollow_frame_scene();
+    let character_id = EntityId::new(1);
+    let mesh_entity = EntityId::new(2);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(character_id, "character")
+            .with_transform(Vec3::new(0.0, 1.9, 0.0))
+            .with_character_motion(CharacterMotionComponent::at_rest(1.9)),
+        EntityDefinition::new(mesh_entity, "static-mesh").with_transform(Vec3::new(0.0, 1.0, 0.0)),
+    ])
+    .unwrap();
+    let receipt = CharacterControllerService::default()
+        .step_with_obstacles_and_mesh_instances(
+            &mut state,
+            &scene,
+            character_id,
+            &CharacterControllerConfig::default(),
+            command(1, Vec2::ZERO),
+            CharacterStepColliders::empty(),
+        )
+        .unwrap();
+    assert!(!receipt.motion_after.grounded);
+    assert!(receipt.ground.is_none());
+    assert!(receipt.motion_after.support_entity.is_none());
 }
 
 #[test]

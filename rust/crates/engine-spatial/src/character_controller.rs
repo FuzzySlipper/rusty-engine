@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use core_space::{WorldPos, WorldVec};
@@ -11,7 +13,7 @@ use svc_collision::{
     cast_character_capsule_against_obstacles_with_stats,
     character_capsule_overlap_obstacles_with_stats, CharacterCapsule, CharacterCapsuleCastHit,
     CharacterCapsuleOverlap, CharacterCollisionQueryError, CharacterCollisionQueryStats,
-    CharacterCollisionSource, CharacterObstacle,
+    CharacterCollisionSource, CharacterObstacle, StaticMeshInstanceId,
 };
 
 use crate::VoxelCollisionScene;
@@ -414,6 +416,49 @@ pub struct CharacterPlatformFact {
     pub departed: bool,
 }
 
+/// One retained collision-resident mesh admitted as a moving character
+/// support for a single controller call. The mesh shape and pose remain owned
+/// by the Spatial collision projection; this value supplies only the product
+/// entity identity and current motion needed for typed support/carry facts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterMeshInstance {
+    pub instance: StaticMeshInstanceId,
+    pub entity: EntityId,
+    pub linear_velocity: WorldVec,
+    pub angular_velocity: WorldVec,
+}
+
+/// Call-local collision authorities supplied to a character step.
+///
+/// The slices are borrowed for the duration of prepare/commit. Keeping the
+/// box overrides and admitted retained meshes together makes it explicit that
+/// they are one collision input, while the controller can still remove a
+/// duplicate box authority for an admitted mesh entity.
+#[derive(Debug, Clone, Copy)]
+pub struct CharacterStepColliders<'a> {
+    pub obstacles: &'a [CharacterObstacle],
+    pub mesh_instances: &'a [CharacterMeshInstance],
+}
+
+impl<'a> CharacterStepColliders<'a> {
+    pub const fn new(
+        obstacles: &'a [CharacterObstacle],
+        mesh_instances: &'a [CharacterMeshInstance],
+    ) -> Self {
+        Self {
+            obstacles,
+            mesh_instances,
+        }
+    }
+
+    pub const fn empty() -> Self {
+        Self {
+            obstacles: &[],
+            mesh_instances: &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DynamicImpulseProposal {
     pub entity: EntityId,
@@ -481,6 +526,10 @@ pub enum CharacterControllerError {
     MissingMotion { entity: EntityId },
     ParentedEntity { entity: EntityId },
     NonUnitScale { entity: EntityId },
+    InvalidMeshInstance { instance: StaticMeshInstanceId },
+    DuplicateMeshInstance { instance: StaticMeshInstanceId },
+    DuplicateMeshEntity { entity: EntityId },
+    InvalidMeshMotion { instance: StaticMeshInstanceId },
     Collision(CharacterCollisionQueryError),
     Publication(CharacterMotionPublicationError),
     StaleEnvironment,
@@ -505,6 +554,10 @@ impl CharacterControllerError {
             Self::MissingMotion { .. } => "missing-character-motion-component",
             Self::ParentedEntity { .. } => "parented-character-controller-entity",
             Self::NonUnitScale { .. } => "scaled-character-controller-entity",
+            Self::InvalidMeshInstance { .. } => "invalid-character-controller-mesh-instance",
+            Self::DuplicateMeshInstance { .. } => "duplicate-character-controller-mesh-instance",
+            Self::DuplicateMeshEntity { .. } => "duplicate-character-controller-mesh-entity",
+            Self::InvalidMeshMotion { .. } => "invalid-character-controller-mesh-motion",
             Self::Collision(_) => "character-controller-collision-query-failed",
             Self::Publication(error) => error.code(),
             Self::StaleEnvironment => "stale-character-controller-environment",
@@ -541,7 +594,10 @@ struct CharacterEnvironmentIdentity {
     authority_hash: u64,
     projection_version: u64,
     static_mesh_revision: u64,
+    static_mesh_topology_hash: u64,
     obstacle_hash: u64,
+    mesh_instance_hash: u64,
+    mesh_motion_hash: u64,
 }
 
 #[derive(Clone)]
@@ -581,7 +637,7 @@ pub(crate) fn character_collision_world_hash(
     entity: EntityId,
 ) -> u64 {
     let obstacles = character_obstacles(entities, entity);
-    hash_environment(character_environment(scene, &obstacles))
+    hash_environment(character_environment(scene, &obstacles, &[]))
 }
 
 /// Admit one directed, support-to-support surface edge using the same capsule
@@ -713,15 +769,33 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         obstacle_overrides: &[CharacterObstacle],
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        let prepared = self.prepare_with_obstacles(
+        self.step_with_obstacles_and_mesh_instances(
             entities,
             scene,
             entity,
             config,
             command,
-            obstacle_overrides,
+            CharacterStepColliders::new(obstacle_overrides, &[]),
+        )
+    }
+
+    /// Solve one character step against call-local box obstacles and admitted
+    /// collision-resident mesh instances. A mesh instance supplies the exact
+    /// retained collision shape; callers must not also submit a duplicate box
+    /// obstacle for the same entity.
+    pub fn step_with_obstacles_and_mesh_instances(
+        &mut self,
+        entities: &mut EntityState,
+        scene: &VoxelCollisionScene,
+        entity: EntityId,
+        config: &CharacterControllerConfig,
+        command: CharacterControllerCommand,
+        colliders: CharacterStepColliders<'_>,
+    ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
+        let prepared = self.prepare_with_obstacles_and_mesh_instances(
+            entities, scene, entity, config, command, colliders,
         )?;
-        self.commit_with_obstacles(entities, scene, prepared, obstacle_overrides)
+        self.commit_with_obstacles_and_mesh_instances(entities, scene, prepared, colliders)
     }
 
     pub fn prepare(
@@ -744,6 +818,27 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         obstacle_overrides: &[CharacterObstacle],
     ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
+        self.prepare_with_obstacles_and_mesh_instances(
+            entities,
+            scene,
+            entity,
+            config,
+            command,
+            CharacterStepColliders::new(obstacle_overrides, &[]),
+        )
+    }
+
+    fn prepare_with_obstacles_and_mesh_instances(
+        &self,
+        entities: &EntityState,
+        scene: &VoxelCollisionScene,
+        entity: EntityId,
+        config: &CharacterControllerConfig,
+        command: CharacterControllerCommand,
+        colliders: CharacterStepColliders<'_>,
+    ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
+        let obstacle_overrides = colliders.obstacles;
+        let mesh_instances = colliders.mesh_instances;
         command.validate_against(config)?;
         let core = entities
             .core(entity)
@@ -775,8 +870,14 @@ impl CharacterControllerService {
         let motion_revision = entities
             .component_revision::<CharacterMotionComponent>(entity)
             .expect("built-in character-motion registration");
-        let obstacles = character_obstacles_with_overrides(entities, entity, obstacle_overrides);
-        let environment = character_environment(scene, &obstacles);
+        validate_mesh_instances(entities, scene, entity, mesh_instances)?;
+        let obstacles = character_obstacles_with_mesh_instances(
+            entities,
+            entity,
+            obstacle_overrides,
+            mesh_instances,
+        );
+        let environment = character_environment(scene, &obstacles, mesh_instances);
         let world_hash = hash_environment(environment);
         let dt = command.step_seconds;
         let mut motion = motion_before;
@@ -1054,10 +1155,10 @@ impl CharacterControllerService {
         update_platform_support(
             entities,
             &obstacles,
+            mesh_instances,
             &mut motion,
             &ground,
             &mut platform,
-            dt,
             config,
         )?;
         let dynamic_impulses = dynamic_impulse_proposals(
@@ -1114,19 +1215,31 @@ impl CharacterControllerService {
         scene: &VoxelCollisionScene,
         prepared: PreparedCharacterControllerStep,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        self.commit_with_obstacles(entities, scene, prepared, &[])
+        self.commit_with_obstacles_and_mesh_instances(
+            entities,
+            scene,
+            prepared,
+            CharacterStepColliders::empty(),
+        )
     }
 
-    fn commit_with_obstacles(
+    fn commit_with_obstacles_and_mesh_instances(
         &mut self,
         entities: &mut EntityState,
         scene: &VoxelCollisionScene,
         prepared: PreparedCharacterControllerStep,
-        obstacle_overrides: &[CharacterObstacle],
+        colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        let obstacles =
-            character_obstacles_with_overrides(entities, prepared.entity, obstacle_overrides);
-        if character_environment(scene, &obstacles) != prepared.environment {
+        let obstacle_overrides = colliders.obstacles;
+        let mesh_instances = colliders.mesh_instances;
+        validate_mesh_instances(entities, scene, prepared.entity, mesh_instances)?;
+        let obstacles = character_obstacles_with_mesh_instances(
+            entities,
+            prepared.entity,
+            obstacle_overrides,
+            mesh_instances,
+        );
+        if character_environment(scene, &obstacles, mesh_instances) != prepared.environment {
             return Err(CharacterControllerError::StaleEnvironment);
         }
         let publication = replace_character_motion_state(
@@ -1749,13 +1862,23 @@ fn validate_command(
 fn character_environment(
     scene: &VoxelCollisionScene,
     obstacles: &[CharacterObstacle],
+    mesh_instances: &[CharacterMeshInstance],
 ) -> CharacterEnvironmentIdentity {
+    let moving_instances = mesh_instances
+        .iter()
+        .map(|mesh| mesh.instance)
+        .collect::<BTreeSet<_>>();
+    let (mesh_instance_hash, mesh_motion_hash) = hash_mesh_instances(mesh_instances);
     CharacterEnvironmentIdentity {
         source_revision: scene.source_revision().raw(),
         authority_hash: scene.authority_hash(),
         projection_version: scene.projection_version(),
         static_mesh_revision: scene.static_mesh_collision_revision(),
+        static_mesh_topology_hash: scene
+            .static_mesh_collision_topology_hash_excluding_pose(&moving_instances),
         obstacle_hash: hash_obstacles(obstacles),
+        mesh_instance_hash,
+        mesh_motion_hash,
     }
 }
 
@@ -1765,7 +1888,8 @@ fn hash_environment(value: CharacterEnvironmentIdentity) -> u64 {
         value.source_revision,
         value.authority_hash,
         value.projection_version,
-        value.static_mesh_revision,
+        value.static_mesh_topology_hash,
+        value.mesh_instance_hash,
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -1773,6 +1897,43 @@ fn hash_environment(value: CharacterEnvironmentIdentity) -> u64 {
         }
     }
     hash
+}
+
+fn hash_mesh_instances(values: &[CharacterMeshInstance]) -> (u64, u64) {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable_by_key(|mesh| (mesh.instance.0, mesh.entity.raw()));
+    let mut identity = 0xcbf29ce484222325u64;
+    let mut motion = 0xcbf29ce484222325u64;
+    for byte in (sorted.len() as u64).to_le_bytes() {
+        identity ^= u64::from(byte);
+        identity = identity.wrapping_mul(0x100000001b3);
+        motion ^= u64::from(byte);
+        motion = motion.wrapping_mul(0x100000001b3);
+    }
+    for mesh in sorted {
+        for byte in mesh.instance.0.to_le_bytes() {
+            identity ^= u64::from(byte);
+            identity = identity.wrapping_mul(0x100000001b3);
+        }
+        for byte in mesh.entity.raw().to_le_bytes() {
+            identity ^= u64::from(byte);
+            identity = identity.wrapping_mul(0x100000001b3);
+        }
+        for value in [
+            mesh.linear_velocity.x.to_bits(),
+            mesh.linear_velocity.y.to_bits(),
+            mesh.linear_velocity.z.to_bits(),
+            mesh.angular_velocity.x.to_bits(),
+            mesh.angular_velocity.y.to_bits(),
+            mesh.angular_velocity.z.to_bits(),
+        ] {
+            for byte in value.to_le_bytes() {
+                motion ^= u64::from(byte);
+                motion = motion.wrapping_mul(0x100000001b3);
+            }
+        }
+    }
+    (identity, motion)
 }
 
 fn character_obstacles(entities: &EntityState, controlled: EntityId) -> Vec<CharacterObstacle> {
@@ -1824,6 +1985,81 @@ fn character_obstacles_with_overrides(
         }
     }
     obstacles
+}
+
+fn character_obstacles_with_mesh_instances(
+    entities: &EntityState,
+    controlled: EntityId,
+    overrides: &[CharacterObstacle],
+    mesh_instances: &[CharacterMeshInstance],
+) -> Vec<CharacterObstacle> {
+    let mut obstacles = character_obstacles_with_overrides(entities, controlled, overrides);
+    if !mesh_instances.is_empty() {
+        obstacles.retain(|obstacle| {
+            !mesh_instances
+                .iter()
+                .any(|mesh| mesh.entity.raw() == obstacle.id)
+        });
+    }
+    obstacles
+}
+
+fn validate_mesh_instances(
+    entities: &EntityState,
+    scene: &VoxelCollisionScene,
+    controlled: EntityId,
+    mesh_instances: &[CharacterMeshInstance],
+) -> Result<(), CharacterControllerError> {
+    let mut instances = BTreeSet::new();
+    let mut entities_seen = BTreeSet::new();
+    for mesh in mesh_instances {
+        if mesh.entity == controlled {
+            return Err(CharacterControllerError::DuplicateMeshEntity {
+                entity: mesh.entity,
+            });
+        }
+        if !instances.insert(mesh.instance) {
+            return Err(CharacterControllerError::DuplicateMeshInstance {
+                instance: mesh.instance,
+            });
+        }
+        if !entities_seen.insert(mesh.entity) {
+            return Err(CharacterControllerError::DuplicateMeshEntity {
+                entity: mesh.entity,
+            });
+        }
+        if scene.static_mesh_instance(mesh.instance).is_none() {
+            return Err(CharacterControllerError::InvalidMeshInstance {
+                instance: mesh.instance,
+            });
+        }
+        if ![
+            mesh.linear_velocity.x,
+            mesh.linear_velocity.y,
+            mesh.linear_velocity.z,
+            mesh.angular_velocity.x,
+            mesh.angular_velocity.y,
+            mesh.angular_velocity.z,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+        {
+            return Err(CharacterControllerError::InvalidMeshMotion {
+                instance: mesh.instance,
+            });
+        }
+        let transform = entities.world_transform(mesh.entity).ok_or(
+            CharacterControllerError::UnknownEntity {
+                entity: mesh.entity,
+            },
+        )?;
+        if transform.scale != Vec3::ONE {
+            return Err(CharacterControllerError::NonUnitScale {
+                entity: mesh.entity,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn hash_obstacles(obstacles: &[CharacterObstacle]) -> u64 {
@@ -1954,14 +2190,18 @@ fn apply_platform_carry(
 fn update_platform_support(
     entities: &EntityState,
     obstacles: &[CharacterObstacle],
+    mesh_instances: &[CharacterMeshInstance],
     motion: &mut CharacterMotionComponent,
     ground: &Option<CharacterGroundFact>,
     platform: &mut Option<CharacterPlatformFact>,
-    _dt: f32,
     config: &CharacterControllerConfig,
 ) -> Result<(), CharacterControllerError> {
     let next = ground.as_ref().and_then(|ground| match ground.source {
         CharacterCollisionSource::ActiveEntity(raw) => Some((EntityId::new(raw), ground.point)),
+        CharacterCollisionSource::StaticMesh { instance, .. } => mesh_instances
+            .iter()
+            .find(|mesh| mesh.instance == instance)
+            .map(|mesh| (mesh.entity, ground.point)),
         _ => None,
     });
     if let Some((entity, point)) = next {
@@ -1977,6 +2217,17 @@ fn update_platform_support(
             .iter()
             .find(|obstacle| obstacle.id == entity.raw())
             .and_then(|obstacle| vec3_from_world(obstacle.linear_velocity).ok())
+            .or_else(|| {
+                mesh_instances
+                    .iter()
+                    .find(|mesh| mesh.entity == entity)
+                    .and_then(|mesh| {
+                        let anchor = point - transform.translation;
+                        let linear = vec3_from_world(mesh.linear_velocity).ok()?;
+                        let angular = vec3_from_world(mesh.angular_velocity).ok()?;
+                        Some(linear + angular.cross(anchor))
+                    })
+            })
             .or_else(|| entities.rigid_body(entity).map(|body| body.linear_velocity))
             .unwrap_or(Vec3::ZERO);
         motion.support_point_velocity = linear;

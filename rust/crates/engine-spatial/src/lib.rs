@@ -32,12 +32,13 @@ pub use character_controller::{
     CharacterContactFact, CharacterContactKind, CharacterControllerCommand,
     CharacterControllerConfig, CharacterControllerError, CharacterControllerReadout,
     CharacterControllerReceipt, CharacterControllerService, CharacterExternalMotionConfig,
-    CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterPlatformConfig,
-    CharacterPlatformFact, CharacterRecoveryConfig, CharacterShapeConfig, CharacterSolverConfig,
-    CharacterStanceFact, CharacterStepFact, CharacterSurfaceConfig, CharacterVerticalConfig,
-    DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
-    FirstPersonLookDiagnostic, FirstPersonLookError, FirstPersonLookReceipt,
-    FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
+    CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterMeshInstance,
+    CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig, CharacterShapeConfig,
+    CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders, CharacterStepFact,
+    CharacterSurfaceConfig, CharacterVerticalConfig, DynamicImpulseProposal,
+    FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookDiagnostic, FirstPersonLookError,
+    FirstPersonLookReceipt, FirstPersonLookService, FirstPersonLookState,
+    PreparedCharacterControllerStep,
 };
 pub use core_space::{GlobalPosition, WorldOrigin};
 pub use entity_motion::{
@@ -916,6 +917,27 @@ impl VoxelCollisionScene {
 
     pub fn static_mesh_collision_revision(&self) -> u64 {
         self.projection.static_mesh_revision()
+    }
+
+    /// Read one retained collision-resident mesh instance's authored identity
+    /// and current pose for a bounded call-local Engine service. The returned
+    /// value does not expose the retained shape or create a second authority.
+    pub fn static_mesh_instance(
+        &self,
+        id: StaticMeshInstanceId,
+    ) -> Option<(StaticMeshAssetId, u64, StaticMeshTransform)> {
+        self.projection.static_mesh_instance(id)
+    }
+
+    /// Stable identity for the retained static-mesh collision topology. Pose
+    /// is excluded only for explicitly admitted moving instances; all other
+    /// retained instances keep their complete pose in the identity.
+    pub fn static_mesh_collision_topology_hash_excluding_pose(
+        &self,
+        moving_instances: &std::collections::BTreeSet<StaticMeshInstanceId>,
+    ) -> u64 {
+        self.projection
+            .static_mesh_collision_topology_hash_excluding_pose(moving_instances)
     }
 
     /// Number of caller-owned static collision assets currently admitted into

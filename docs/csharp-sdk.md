@@ -686,6 +686,21 @@ entities or collider records. Collision uses the existing translation-offset
 AABB posture with unit scale; obstacle rotation participates in platform carry
 but does not rotate the collider volume.
 
+For a moving retained static-mesh instance, use the call-local
+`CharacterStepRequest.MeshInstances` collection. Each
+`CharacterMeshInstance` names the admitted `StaticMeshInstance` by its stable
+instance ID, supplies the product entity ID that should receive support facts,
+and carries the current linear and angular velocity. The Engine uses the
+retained triangle mesh for collision and support, then applies translation and
+rotation carry from the admitted instance transform. Do not also submit the
+same model as a `CharacterObstacle`: the mesh instance is one collision and
+support authority. Update its retained pose through `ApplyCollisionResidency`
+before the step and resubmit its mesh admission each step. The separate
+`CharacterSupport` value may be absent for admitted mesh support; the Engine
+reads its pose from residency. An unadmitted mesh remains collision-only.
+Product persistence keeps the instance/entity IDs
+and pose as ordinary values; no native handle is part of the saved state.
+
 To save an admitted character continuation, call
 `CaptureCharacterContinuation` with the latest `CharacterStepReceipt.Generation`
 and persist the copied `CharacterContinuationCheckpoint` beside the

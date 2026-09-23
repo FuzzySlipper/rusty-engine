@@ -185,6 +185,54 @@ impl StaticMeshCollisionProjection {
         })
     }
 
+    /// Return the retained authored identity and pose for one collision
+    /// instance. The pose is a copied fact for a caller-owned bridge; the
+    /// projection remains the collision authority and retains its own shape.
+    pub(crate) fn instance_descriptor(
+        &self,
+        id: StaticMeshInstanceId,
+    ) -> Option<(StaticMeshAssetId, u64, StaticMeshTransform)> {
+        self.instances
+            .get(&id)
+            .map(|instance| (instance.asset, instance.geometry_hash, instance.transform))
+    }
+
+    /// Stable collision identity for retained mesh topology while allowing
+    /// explicitly admitted moving instances to change pose. Unadmitted
+    /// instances retain their complete pose in this identity so unrelated
+    /// static collision changes still invalidate controller continuity.
+    pub(crate) fn topology_hash_excluding_pose(
+        &self,
+        moving_instances: &std::collections::BTreeSet<StaticMeshInstanceId>,
+    ) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        write_hash(&mut hash, &(self.assets.len() as u64).to_le_bytes());
+        for (id, asset) in &self.assets {
+            write_hash(&mut hash, &id.0.to_le_bytes());
+            write_hash(&mut hash, &asset.geometry_hash.to_le_bytes());
+        }
+        write_hash(&mut hash, &(self.instances.len() as u64).to_le_bytes());
+        for (id, instance) in &self.instances {
+            write_hash(&mut hash, &id.0.to_le_bytes());
+            write_hash(&mut hash, &instance.asset.0.to_le_bytes());
+            write_hash(&mut hash, &instance.geometry_hash.to_le_bytes());
+            let pose = moving_instances.contains(id);
+            let values = instance
+                .transform
+                .translation
+                .iter()
+                .chain(instance.transform.rotation.iter())
+                .chain(instance.transform.scale.iter());
+            for (index, value) in values.enumerate() {
+                if pose && index < 7 {
+                    continue;
+                }
+                write_hash(&mut hash, &value.to_bits().to_le_bytes());
+            }
+        }
+        hash
+    }
+
     pub(crate) fn dynamics_shapes(&self) -> impl Iterator<Item = SharedShape> + '_ {
         self.instances
             .values()
@@ -805,6 +853,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hit.instance, StaticMeshInstanceId(12));
+    }
+
+    #[test]
+    fn topology_identity_excludes_only_admitted_mesh_pose() {
+        let asset = ramp();
+        let hash = asset.geometry_hash;
+        let mut projection = StaticMeshCollisionProjection::default();
+        projection
+            .replace_all(
+                0,
+                [asset],
+                [
+                    StaticMeshColliderInstance {
+                        id: StaticMeshInstanceId(11),
+                        asset: StaticMeshAssetId(7),
+                        expected_geometry_hash: hash,
+                        transform: StaticMeshTransform::IDENTITY,
+                    },
+                    StaticMeshColliderInstance {
+                        id: StaticMeshInstanceId(12),
+                        asset: StaticMeshAssetId(7),
+                        expected_geometry_hash: hash,
+                        transform: StaticMeshTransform {
+                            translation: [5.0, 0.0, 0.0],
+                            ..StaticMeshTransform::IDENTITY
+                        },
+                    },
+                ],
+            )
+            .unwrap();
+        let moving = std::collections::BTreeSet::from([StaticMeshInstanceId(11)]);
+        let before = projection.topology_hash_excluding_pose(&moving);
+        let full_before = projection.identity_hash();
+        projection
+            .apply_residency(
+                1,
+                [],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(11),
+                    asset: StaticMeshAssetId(7),
+                    expected_geometry_hash: hash,
+                    transform: StaticMeshTransform {
+                        translation: [2.0, 0.0, 0.0],
+                        ..StaticMeshTransform::IDENTITY
+                    },
+                }],
+                [],
+                [],
+            )
+            .unwrap();
+        assert_eq!(projection.topology_hash_excluding_pose(&moving), before);
+        assert_ne!(projection.identity_hash(), full_before);
+
+        projection
+            .apply_residency(
+                2,
+                [],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(12),
+                    asset: StaticMeshAssetId(7),
+                    expected_geometry_hash: hash,
+                    transform: StaticMeshTransform {
+                        translation: [6.0, 0.0, 0.0],
+                        ..StaticMeshTransform::IDENTITY
+                    },
+                }],
+                [],
+                [],
+            )
+            .unwrap();
+        assert_ne!(projection.topology_hash_excluding_pose(&moving), before);
     }
 
     #[test]

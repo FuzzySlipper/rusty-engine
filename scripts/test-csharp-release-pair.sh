@@ -98,6 +98,7 @@ public sealed class Product : IEngineProduct
         ProductInputMapping initialMapping = context.Input.PhysicalMappings.Span[0];
         JsonPersistenceChecks.Run(context.Engine);
         SpatialResidencyChecks.Run(context.Engine);
+        CharacterMeshChecks.Run(context.Engine);
         AddressableInventoryStacksExercise.Run();
         ProductInputMapping replacement = initialMapping with { Keyboard = KeyboardControl.KeyF };
         if (input.ReplacePhysicalMappings([replacement]) != InputMappingReplacementOutcome.Staged)
@@ -119,6 +120,7 @@ public sealed class Product : IEngineProduct
 EOF
 cp "$repo_root/scripts/fixtures/JsonPersistenceChecks.cs" "$consumer/JsonPersistenceChecks.cs"
 cp "$repo_root/scripts/fixtures/SpatialResidencyChecks.cs" "$consumer/SpatialResidencyChecks.cs"
+cp "$repo_root/scripts/fixtures/CharacterMeshChecks.cs" "$consumer/CharacterMeshChecks.cs"
 cp "$repo_root/scripts/fixtures/RenderOutputChecks.cs" "$consumer/RenderOutputChecks.cs"
 cp "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer/content/animated.glb"
 cp "$repo_root/fixtures/voxel-conversion/kenney-wall-a.glb" "$consumer/content/static.glb"

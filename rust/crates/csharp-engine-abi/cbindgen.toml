@@ -233,6 +233,7 @@ include = [
     "NativeCharacterMotion",
     "NativeCharacterSupport",
     "NativeCharacterObstacle",
+    "NativeCharacterMeshInstance",
     "NativeCharacterShapeConfig",
     "NativeCharacterGroundConfig",
     "NativeCharacterAirConfig",

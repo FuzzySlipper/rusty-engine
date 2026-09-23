@@ -17,12 +17,14 @@ use engine_spatial::{
     character_edge_is_traversable, CharacterCapsule, CharacterCollisionQueryStats,
     CharacterCollisionSource, CharacterContactFact, CharacterContactKind,
     CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
-    CharacterControllerReceipt, CharacterControllerService, CharacterGroundFact, CharacterObstacle,
-    MaterialVoxel, SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
-    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
-    StaticMeshTransform, SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource,
-    TriggerOverlapFact, TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError,
-    TriggerVolumeSystem, VoxelCollisionScene, VoxelPickHint, VoxelPickService,
+    CharacterControllerReceipt, CharacterControllerService, CharacterGroundFact,
+    CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
+    CharacterStepColliders, MaterialVoxel, SpatialOcclusionHitboxOverride, SpatialOcclusionQuery,
+    SpatialOcclusionService, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshOptions,
+    SurfaceMode, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
+    TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem, VoxelCollisionScene,
+    VoxelPickHint, VoxelPickService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
@@ -182,6 +184,7 @@ pub(crate) struct SpatialSession {
     last_character_receipt: Option<CharacterControllerReceipt>,
     last_character_config: Option<NativeCharacterControllerConfig>,
     last_character_content_authority_hash: Option<u64>,
+    last_character_mesh_entities: BTreeMap<u64, u64>,
     triggers: TriggerVolumeSystem,
     last_trigger_facts: Vec<TriggerOverlapFact>,
 }
@@ -611,6 +614,7 @@ impl RuntimeSpatialBridge {
                 last_character_receipt: None,
                 last_character_config: None,
                 last_character_content_authority_hash: None,
+                last_character_mesh_entities: BTreeMap::new(),
                 triggers: TriggerVolumeSystem::default(),
                 last_trigger_facts: Vec::new(),
             },
@@ -1983,17 +1987,36 @@ impl RuntimeSpatialBridge {
                 "character obstacles",
             )
         }?;
+        let mesh_values = unsafe {
+            borrowed_slice(
+                request.mesh_instances,
+                request.mesh_instances_len,
+                "character mesh instances",
+            )
+        }?;
         let session = self.session_mut(request.session)?;
         let position = native_vec3_value(request.position);
         let motion = character_motion(request.motion)?;
         let player = EntityDefinition::new(EntityId::new(1), "spatial-proposal")
             .with_full_transform(EntityTransform::at(position))
             .with_character_motion(motion);
-        let support = character_support_definition(request.motion, request.support)?;
+        let (mesh_definitions, mesh_instances) =
+            character_mesh_instance_definitions(&session.scene, mesh_values, obstacle_values)?;
+        let mesh_entities = mesh_values
+            .iter()
+            .map(|value| (value.instance, value.entity))
+            .collect::<BTreeMap<_, _>>();
+        let mesh_support_entity = request.motion.support_entity_present
+            && mesh_definitions
+                .iter()
+                .any(|definition| definition.id.raw() == request.motion.support_entity);
+        let support =
+            character_support_definition(request.motion, request.support, &mesh_definitions)?;
         let mut definitions = vec![player];
         let (obstacle_definitions, obstacle_overrides) =
             character_obstacle_definitions(obstacle_values)?;
         definitions.extend(obstacle_definitions);
+        definitions.extend(mesh_definitions);
         if let Some(definition) = support.as_ref() {
             if !definitions
                 .iter()
@@ -2006,17 +2029,19 @@ impl RuntimeSpatialBridge {
             CsharpEngineServicesError::new("CSHARP_CHARACTER_STATE", error.to_string())
         })?;
         if let Some(support) = support {
-            apply_support_lifecycle(&mut entities, support.id, request.support.lifecycle)?;
+            if !mesh_support_entity || request.support.present {
+                apply_support_lifecycle(&mut entities, support.id, request.support.lifecycle)?;
+            }
         }
         let receipt = session
             .controller
-            .step_with_obstacles(
+            .step_with_obstacles_and_mesh_instances(
                 &mut entities,
                 &session.scene,
                 EntityId::new(1),
                 &character_config(request.config)?,
                 character_command(request.command),
-                &obstacle_overrides,
+                CharacterStepColliders::new(&obstacle_overrides, &mesh_instances),
             )
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_CHARACTER_STEP", error.code())
@@ -2024,8 +2049,10 @@ impl RuntimeSpatialBridge {
         session.last_character_receipt = Some(receipt.clone());
         session.last_character_config = Some(request.config);
         session.last_character_content_authority_hash = Some(session.scene.authority_hash());
+        session.last_character_mesh_entities = mesh_entities;
         let query_stats = receipt.collision_query_stats;
-        let native_receipt = native_character_receipt(&receipt);
+        let native_receipt =
+            native_character_receipt(&receipt, &session.last_character_mesh_entities);
         self.last_character_query_stats = query_stats;
         Ok(native_receipt)
     }
@@ -2200,7 +2227,7 @@ impl RuntimeSpatialBridge {
             .and_then(|receipt| receipt.contacts.get(request.index as usize))
             .map(|contact| NativeCharacterContactAtReceipt {
                 present: true,
-                contact: native_character_contact(*contact),
+                contact: native_character_contact(*contact, &session.last_character_mesh_entities),
             })
             .unwrap_or_default())
     }
@@ -2992,6 +3019,55 @@ fn static_mesh_transform(value: NativeTransform) -> StaticMeshTransform {
     }
 }
 
+fn retained_mesh_entity_transform(
+    value: StaticMeshTransform,
+    instance: u64,
+) -> Result<EntityTransform, CsharpEngineServicesError> {
+    let cast = |value: f64, field: &'static str| {
+        let result = value as f32;
+        if value.is_finite() && result.is_finite() {
+            Ok(result)
+        } else {
+            Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                format!("retained mesh instance {instance} had a non-finite {field}"),
+            ))
+        }
+    };
+    let translation = Vec3::new(
+        cast(value.translation[0], "translation.x")?,
+        cast(value.translation[1], "translation.y")?,
+        cast(value.translation[2], "translation.z")?,
+    );
+    let rotation = Quat::new(
+        cast(value.rotation[0], "rotation.x")?,
+        cast(value.rotation[1], "rotation.y")?,
+        cast(value.rotation[2], "rotation.z")?,
+        cast(value.rotation[3], "rotation.w")?,
+    );
+    let length_squared = rotation.norm_squared();
+    if !length_squared.is_finite() || length_squared <= f32::EPSILON {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_CHARACTER_MESH_INSTANCE",
+            format!("retained mesh instance {instance} had an invalid rotation"),
+        ));
+    }
+    let inverse_length = length_squared.sqrt().recip();
+    Ok(EntityTransform {
+        translation,
+        rotation: Quat::new(
+            rotation.x * inverse_length,
+            rotation.y * inverse_length,
+            rotation.z * inverse_length,
+            rotation.w * inverse_length,
+        ),
+        // The synthetic support entity is a rigid pose used only for carry
+        // anchors. Retained mesh scale remains owned by the collision
+        // projection and participates in its topology identity.
+        scale: Vec3::ONE,
+    })
+}
+
 fn character_motion(
     value: NativeCharacterMotion,
 ) -> Result<CharacterMotionComponent, CsharpEngineServicesError> {
@@ -3028,8 +3104,25 @@ fn character_motion(
 fn character_support_definition(
     motion: NativeCharacterMotion,
     support: NativeCharacterSupport,
+    mesh_definitions: &[EntityDefinition],
 ) -> Result<Option<EntityDefinition>, CsharpEngineServicesError> {
     if !motion.support_entity_present {
+        return Ok(None);
+    }
+    if let Some(definition) = mesh_definitions
+        .iter()
+        .find(|candidate| candidate.id.raw() == motion.support_entity)
+    {
+        // A retained mesh admission is the support pose authority. The
+        // product intentionally may pass an empty CharacterSupport value on
+        // continuation; using its transform here would reintroduce the
+        // stale duplicate pose that mesh admission removes.
+        return Ok(Some(definition.clone()));
+    }
+    if !support.present {
+        // The product has not admitted the previous mesh support for this
+        // call. Let the controller observe support loss and depart cleanly;
+        // do not synthesize a stale support entity from absent facts.
         return Ok(None);
     }
     if !support.present || support.entity != motion.support_entity {
@@ -3052,6 +3145,86 @@ fn character_support_definition(
                 .with_full_transform(native_entity_transform(support.transform)),
         )),
     }
+}
+
+fn character_mesh_instance_definitions(
+    scene: &VoxelCollisionScene,
+    values: &[NativeCharacterMeshInstance],
+    obstacles: &[NativeCharacterObstacle],
+) -> Result<(Vec<EntityDefinition>, Vec<SpatialCharacterMeshInstance>), CsharpEngineServicesError> {
+    let obstacle_entities = obstacles
+        .iter()
+        .map(|value| value.entity)
+        .collect::<BTreeSet<_>>();
+    let mut instances = BTreeSet::new();
+    let mut entities = BTreeSet::new();
+    let mut definitions = Vec::with_capacity(values.len());
+    let mut admitted = Vec::with_capacity(values.len());
+    for value in values {
+        if value.instance == 0 || value.entity == 0 || value.entity == 1 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                "C# mesh admission used an invalid instance or entity identity",
+            ));
+        }
+        if !instances.insert(value.instance) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                "C# mesh admission repeated a retained instance identity",
+            ));
+        }
+        if !entities.insert(value.entity) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                "C# mesh admission repeated an entity identity",
+            ));
+        }
+        if obstacle_entities.contains(&value.entity) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                "C# mesh admission duplicated a call-local obstacle entity",
+            ));
+        }
+        let linear_velocity = native_vec3_value(value.linear_velocity);
+        let angular_velocity = native_vec3_value(value.angular_velocity);
+        if !finite_vec3(linear_velocity) || !finite_vec3(angular_velocity) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                "C# mesh admission used non-finite motion",
+            ));
+        }
+        let Some((_, _, retained_transform)) =
+            scene.static_mesh_instance(StaticMeshInstanceId(value.instance))
+        else {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_MESH_INSTANCE",
+                "C# mesh admission named a static instance absent from retained Spatial collision",
+            ));
+        };
+        let transform = retained_mesh_entity_transform(retained_transform, value.instance)?;
+        definitions.push(
+            EntityDefinition::new(
+                EntityId::new(value.entity),
+                format!("spatial-character-mesh-instance-{}", value.instance),
+            )
+            .with_full_transform(transform),
+        );
+        admitted.push(SpatialCharacterMeshInstance {
+            instance: StaticMeshInstanceId(value.instance),
+            entity: EntityId::new(value.entity),
+            linear_velocity: core_space::WorldVec::new(
+                f64::from(linear_velocity.x),
+                f64::from(linear_velocity.y),
+                f64::from(linear_velocity.z),
+            ),
+            angular_velocity: core_space::WorldVec::new(
+                f64::from(angular_velocity.x),
+                f64::from(angular_velocity.y),
+                f64::from(angular_velocity.z),
+            ),
+        });
+    }
+    Ok((definitions, admitted))
 }
 
 fn character_obstacle_definitions(
@@ -3402,6 +3575,7 @@ fn native_character_motion(value: CharacterMotionComponent) -> NativeCharacterMo
 
 fn native_character_source(
     source: CharacterCollisionSource,
+    mesh_entities: &BTreeMap<u64, u64>,
 ) -> (
     NativeCharacterCollisionSourceKind,
     u64,
@@ -3427,15 +3601,29 @@ fn native_character_source(
             instance,
             asset,
             geometry_hash,
-        } => (
-            NativeCharacterCollisionSourceKind::StaticMesh,
-            0,
-            instance.0,
-            asset.0,
-            geometry_hash,
-            0,
-            0,
-            0,
+        } => mesh_entities.get(&instance.0).map_or(
+            (
+                NativeCharacterCollisionSourceKind::StaticMesh,
+                0,
+                instance.0,
+                asset.0,
+                geometry_hash,
+                0,
+                0,
+                0,
+            ),
+            |entity| {
+                (
+                    NativeCharacterCollisionSourceKind::ActiveEntity,
+                    *entity,
+                    instance.0,
+                    asset.0,
+                    geometry_hash,
+                    0,
+                    0,
+                    0,
+                )
+            },
         ),
         CharacterCollisionSource::ActiveEntity(entity) => (
             NativeCharacterCollisionSourceKind::ActiveEntity,
@@ -3488,7 +3676,10 @@ fn native_character_block_flags(mask: u32) -> NativeCharacterBlockFlags {
     }
 }
 
-fn native_character_contact(value: CharacterContactFact) -> NativeCharacterContact {
+fn native_character_contact(
+    value: CharacterContactFact,
+    mesh_entities: &BTreeMap<u64, u64>,
+) -> NativeCharacterContact {
     let (
         source_kind,
         source_entity,
@@ -3498,7 +3689,7 @@ fn native_character_contact(value: CharacterContactFact) -> NativeCharacterConta
         source_voxel_x,
         source_voxel_y,
         source_voxel_z,
-    ) = native_character_source(value.source);
+    ) = native_character_source(value.source, mesh_entities);
     NativeCharacterContact {
         present: true,
         kind: match value.kind {
@@ -3522,7 +3713,10 @@ fn native_character_contact(value: CharacterContactFact) -> NativeCharacterConta
     }
 }
 
-fn native_character_ground(value: CharacterGroundFact) -> NativeCharacterGround {
+fn native_character_ground(
+    value: CharacterGroundFact,
+    mesh_entities: &BTreeMap<u64, u64>,
+) -> NativeCharacterGround {
     let (
         source_kind,
         source_entity,
@@ -3532,7 +3726,7 @@ fn native_character_ground(value: CharacterGroundFact) -> NativeCharacterGround 
         source_voxel_x,
         source_voxel_y,
         source_voxel_z,
-    ) = native_character_source(value.source);
+    ) = native_character_source(value.source, mesh_entities);
     NativeCharacterGround {
         present: true,
         point: native_vec3(value.point),
@@ -3551,16 +3745,17 @@ fn native_character_ground(value: CharacterGroundFact) -> NativeCharacterGround 
 
 fn native_character_receipt(
     receipt: &engine_spatial::CharacterControllerReceipt,
+    mesh_entities: &BTreeMap<u64, u64>,
 ) -> NativeCharacterStepReceipt {
     let contact = receipt
         .contacts
         .first()
         .copied()
-        .map(native_character_contact)
+        .map(|contact| native_character_contact(contact, mesh_entities))
         .unwrap_or_default();
     let ground = receipt
         .ground
-        .map(native_character_ground)
+        .map(|ground| native_character_ground(ground, mesh_entities))
         .unwrap_or_default();
     let floor_probe = receipt
         .floor_probe
@@ -3568,11 +3763,11 @@ fn native_character_receipt(
             present: true,
             rejected_hit: probe
                 .rejected_hit
-                .map(native_character_contact)
+                .map(|contact| native_character_contact(contact, mesh_entities))
                 .unwrap_or_default(),
             accepted_support: probe
                 .accepted_support
-                .map(native_character_ground)
+                .map(|ground| native_character_ground(ground, mesh_entities))
                 .unwrap_or_default(),
         })
         .unwrap_or_default();
@@ -7158,6 +7353,8 @@ mod tests {
                 support: NativeCharacterSupport::default(),
                 obstacles: std::ptr::null(),
                 obstacles_len: 0,
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
                 config: bridge.default_character_controller_config(),
                 command: NativeCharacterControllerCommand {
                     planar_intent: NativeVec2::default(),
@@ -7204,6 +7401,8 @@ mod tests {
                 support: NativeCharacterSupport::default(),
                 obstacles,
                 obstacles_len,
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
                     planar_intent: NativeVec2::default(),
@@ -7265,6 +7464,206 @@ mod tests {
         assert_eq!(
             obstacle_error.detail(),
             "C# obstacle transforms require unit scale"
+        );
+    }
+
+    #[test]
+    fn character_mesh_admission_rejects_invalid_identity_without_advancing_generation() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .expect("character session creates");
+        let asset = StaticMeshColliderAsset::new(
+            StaticMeshAssetId(7),
+            vec![
+                [-1.0, 0.0, -1.0],
+                [1.0, 0.0, -1.0],
+                [1.0, 0.0, 1.0],
+                [-1.0, 0.0, 1.0],
+            ],
+            vec![[0, 1, 2], [0, 2, 3]],
+        )
+        .expect("mesh geometry is valid");
+        let instances = [
+            StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(9),
+                asset: StaticMeshAssetId(7),
+                expected_geometry_hash: asset.geometry_hash,
+                transform: StaticMeshTransform::IDENTITY,
+            },
+            StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(10),
+                asset: StaticMeshAssetId(7),
+                expected_geometry_hash: asset.geometry_hash,
+                transform: StaticMeshTransform::IDENTITY,
+            },
+        ];
+        let next_scene = {
+            let current = bridge.sessions.get(&session.value).unwrap().scene.as_ref();
+            let mut candidate = current.clone();
+            candidate
+                .replace_static_mesh_colliders(
+                    candidate.static_mesh_collision_revision(),
+                    [asset],
+                    instances,
+                )
+                .expect("mesh residency admits");
+            Arc::new(candidate)
+        };
+        bridge.sessions.get_mut(&session.value).unwrap().scene = Arc::clone(&next_scene);
+        bridge.publish_scene(session, next_scene);
+
+        let config = bridge.default_character_controller_config();
+        let base = |meshes: &[NativeCharacterMeshInstance],
+                    obstacles: &[NativeCharacterObstacle],
+                    motion: NativeCharacterMotion,
+                    position: NativeVec3,
+                    sequence: u64| NativeCharacterStepRequest {
+            session,
+            position,
+            motion,
+            support: NativeCharacterSupport::default(),
+            obstacles: obstacles.as_ptr(),
+            obstacles_len: obstacles.len(),
+            mesh_instances: meshes.as_ptr(),
+            mesh_instances_len: meshes.len(),
+            config,
+            command: NativeCharacterControllerCommand {
+                planar_intent: NativeVec2::default(),
+                heading_yaw_radians: 0.0,
+                jump_pressed: false,
+                jump_held: false,
+                crouch_requested: false,
+                external_velocity: NativeVec3::default(),
+                external_impulse: NativeVec3::default(),
+                step_seconds: 1.0 / 60.0,
+                sequence,
+            },
+        };
+        let first = bridge
+            .propose_character(base(
+                &[],
+                &[],
+                NativeCharacterMotion {
+                    stance: NativeCharacterStance::Standing,
+                    fall_origin_y: 2.0,
+                    peak_y: 2.0,
+                    ..Default::default()
+                },
+                NativeVec3 {
+                    x: 0.0,
+                    y: 2.0,
+                    z: 0.0,
+                },
+                1,
+            ))
+            .expect("baseline proposal succeeds");
+        assert_eq!(
+            bridge
+                .sessions
+                .get(&session.value)
+                .unwrap()
+                .controller
+                .readout()
+                .unwrap()
+                .generation,
+            1
+        );
+
+        let mut invalid = |meshes: &[NativeCharacterMeshInstance],
+                           obstacles: &[NativeCharacterObstacle]| {
+            bridge.propose_character(base(
+                meshes,
+                obstacles,
+                first.motion,
+                first.transform.translation,
+                2,
+            ))
+        };
+        let unknown = [NativeCharacterMeshInstance {
+            instance: 999,
+            entity: 2,
+            linear_velocity: NativeVec3::default(),
+            angular_velocity: NativeVec3::default(),
+        }];
+        let error = invalid(&unknown, &[]).expect_err("unknown mesh instance is rejected");
+        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
+
+        let duplicate_instance = [
+            NativeCharacterMeshInstance {
+                instance: 9,
+                entity: 2,
+                linear_velocity: NativeVec3::default(),
+                angular_velocity: NativeVec3::default(),
+            },
+            NativeCharacterMeshInstance {
+                instance: 9,
+                entity: 3,
+                linear_velocity: NativeVec3::default(),
+                angular_velocity: NativeVec3::default(),
+            },
+        ];
+        let error = invalid(&duplicate_instance, &[])
+            .expect_err("duplicate mesh instance identity is rejected");
+        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
+
+        let duplicate_entity = [
+            NativeCharacterMeshInstance {
+                instance: 9,
+                entity: 2,
+                linear_velocity: NativeVec3::default(),
+                angular_velocity: NativeVec3::default(),
+            },
+            NativeCharacterMeshInstance {
+                instance: 10,
+                entity: 2,
+                linear_velocity: NativeVec3::default(),
+                angular_velocity: NativeVec3::default(),
+            },
+        ];
+        let error = invalid(&duplicate_entity, &[])
+            .expect_err("duplicate mesh entity identity is rejected");
+        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
+
+        let conflicting_obstacle = [NativeCharacterObstacle {
+            entity: 2,
+            bounds_min: NativeVec3 {
+                x: -1.0,
+                y: -0.25,
+                z: -1.0,
+            },
+            bounds_max: NativeVec3 {
+                x: 1.0,
+                y: 0.25,
+                z: 1.0,
+            },
+            collision_enabled: true,
+            ..Default::default()
+        }];
+        let admitted_mesh = [NativeCharacterMeshInstance {
+            instance: 9,
+            entity: 2,
+            linear_velocity: NativeVec3::default(),
+            angular_velocity: NativeVec3::default(),
+        }];
+        let error = invalid(&admitted_mesh, &conflicting_obstacle)
+            .expect_err("mesh and box obstacle cannot share an entity identity");
+        assert_eq!(error.code(), "CSHARP_CHARACTER_MESH_INSTANCE");
+        assert_eq!(
+            bridge
+                .sessions
+                .get(&session.value)
+                .unwrap()
+                .controller
+                .readout()
+                .unwrap()
+                .generation,
+            1,
+            "invalid mesh admission must not advance controller generation"
         );
     }
 
@@ -7331,6 +7730,8 @@ mod tests {
                 support: NativeCharacterSupport::default(),
                 obstacles: first_obstacles.as_ptr(),
                 obstacles_len: first_obstacles.len(),
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
                     planar_intent: NativeVec2::default(),
@@ -7365,6 +7766,8 @@ mod tests {
                 },
                 obstacles: second_obstacles.as_ptr(),
                 obstacles_len: second_obstacles.len(),
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
                     planar_intent: NativeVec2::default(),
@@ -7411,6 +7814,8 @@ mod tests {
             support: NativeCharacterSupport::default(),
             obstacles: std::ptr::null(),
             obstacles_len: 0,
+            mesh_instances: std::ptr::null(),
+            mesh_instances_len: 0,
             config,
             command: NativeCharacterControllerCommand {
                 planar_intent: NativeVec2::default(),
@@ -7654,6 +8059,8 @@ mod tests {
                 support: NativeCharacterSupport::default(),
                 obstacles: obstacles.as_ptr(),
                 obstacles_len: obstacles.len(),
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
                     planar_intent: NativeVec2::default(),
@@ -7694,6 +8101,8 @@ mod tests {
             support,
             obstacles: obstacles.as_ptr(),
             obstacles_len: obstacles.len(),
+            mesh_instances: std::ptr::null(),
+            mesh_instances_len: 0,
             config,
             command: NativeCharacterControllerCommand {
                 planar_intent: NativeVec2::default(),

@@ -922,12 +922,12 @@ public sealed class Product : IEngineProduct
 
         CharacterStepReceipt first = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             _spatial, new Vector3(0, 3, 0), motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, config, firstCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, firstCommand));
         CharacterControllerCommand secondCommand = new(
             new Vector2(0, 1), 0, true, true, false, new Vector3(0.1f, 0, 0), new Vector3(0, 0.5f, 0), 1.0f / 60.0f, 2);
         CharacterStepReceipt second = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             _spatial, first.Transform.Translation, first.Motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, config, secondCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, secondCommand));
         Require(second.Generation > first.Generation && second.RevisionAfter > second.RevisionBefore,
             "character proposal did not return Engine publication revisions");
         Require(second.Motion.LastCommandSequence == 2 && second.Motion.CollisionWorldHash != 0,
@@ -936,10 +936,10 @@ public sealed class Product : IEngineProduct
             new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
         CharacterStepReceipt checkpointFirst = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             checkpointSource, new Vector3(0, 3, 0), motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, config, firstCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, firstCommand));
         CharacterStepReceipt checkpointSecond = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             checkpointSource, checkpointFirst.Transform.Translation, checkpointFirst.Motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, config, secondCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, secondCommand));
         CharacterContinuationCheckpoint checkpoint = _engine.Spatial.CaptureCharacterContinuation(
             new CharacterContinuationCaptureRequest(checkpointSource, checkpointSecond.Generation));
         ExpectEngineFailure(() => _engine.Spatial.CaptureCharacterContinuation(
@@ -954,7 +954,7 @@ public sealed class Product : IEngineProduct
             new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
         CharacterStepReceipt usedTargetStep = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             usedRestoreTarget, new Vector3(0, 3, 0), motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, config, firstCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, firstCommand));
         ExpectEngineFailure(() => _engine.Spatial.RestoreCharacterContinuation(
             new CharacterContinuationRestoreRequest(usedRestoreTarget, checkpoint)));
         Require(_engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(usedRestoreTarget)).Generation
@@ -988,10 +988,10 @@ public sealed class Product : IEngineProduct
         CharacterControllerCommand thirdCommand = secondCommand with { Sequence = 3 };
         CharacterStepReceipt uninterrupted = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             checkpointSource, checkpointSecond.Transform.Translation, checkpointSecond.Motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, config, thirdCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, thirdCommand));
         CharacterStepReceipt resumed = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             restoredSpatial, checkpointSecond.Transform.Translation, restored.Motion, noSupport,
-            ReadOnlyMemory<CharacterObstacle>.Empty, checkpoint.Config, thirdCommand));
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, checkpoint.Config, thirdCommand));
         Require(resumed.Motion.Grounded == uninterrupted.Motion.Grounded
             && resumed.Motion.LastCommandSequence == uninterrupted.Motion.LastCommandSequence
             && MathF.Abs(resumed.Transform.Translation.Y - uninterrupted.Transform.Translation.Y) < 0.0001f,
@@ -1014,6 +1014,7 @@ public sealed class Product : IEngineProduct
             groundedInitialMotion,
             noSupport,
             new[] { platform },
+            ReadOnlyMemory<CharacterMeshInstance>.Empty,
             config,
             firstCommand));
         Require(groundedFirst.Motion.Grounded
@@ -1030,10 +1031,10 @@ public sealed class Product : IEngineProduct
         CharacterControllerCommand groundedNextCommand = firstCommand with { Sequence = 2 };
         CharacterStepReceipt groundedUninterrupted = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             groundedSource, groundedFirst.Transform.Translation, groundedFirst.Motion, platformSupport,
-            new[] { platform }, config, groundedNextCommand));
+            new[] { platform }, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, groundedNextCommand));
         CharacterStepReceipt groundedResumed = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             groundedTarget, groundedFirst.Transform.Translation, groundedRestored.Motion, platformSupport,
-            new[] { platform }, groundedCheckpoint.Config, groundedNextCommand));
+            new[] { platform }, ReadOnlyMemory<CharacterMeshInstance>.Empty, groundedCheckpoint.Config, groundedNextCommand));
         Require(groundedResumed.Motion.Grounded
             && groundedResumed.Motion.SupportEntity == groundedUninterrupted.Motion.SupportEntity
             && groundedResumed.Motion.LastCommandSequence == groundedUninterrupted.Motion.LastCommandSequence
