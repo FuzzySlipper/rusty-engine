@@ -464,6 +464,27 @@ pub struct NativeCollisionReplaceRequest {
     pub instances_len: usize,
 }
 
+/// Atomically removes and upserts selected static collision identities. Geometry
+/// is copied into the Spatial owner. Unmentioned assets/instances remain resident.
+/// Instance transforms are in the session's current local origin frame.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionResidencyRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub assets: *const NativeStaticMeshAsset,
+    pub assets_len: usize,
+    pub vertices: *const NativeVec3,
+    pub vertices_len: usize,
+    pub triangles: *const NativeTriangle,
+    pub triangles_len: usize,
+    pub instances: *const NativeStaticMeshInstance,
+    pub instances_len: usize,
+    pub removed_assets: *const u64,
+    pub removed_assets_len: usize,
+    pub removed_instances: *const u64,
+    pub removed_instances_len: usize,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCollisionReplaceReceipt {

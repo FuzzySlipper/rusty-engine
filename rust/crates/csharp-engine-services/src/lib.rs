@@ -17,6 +17,7 @@ mod motion;
 mod perception;
 mod persistence;
 mod presentation;
+mod render_output;
 mod rng;
 mod spatial;
 mod ui;

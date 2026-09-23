@@ -3422,6 +3422,17 @@ impl ProductDevRuntime for CsharpProductRuntime {
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
 
+    fn report_render_output_feedback(
+        &mut self,
+        feedback: product_dev_host::ProductDevRenderOutputFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<bool>, ProductDevRuntimeError> {
+        self.require_current_control_binding(Some(feedback.runtime))?;
+        self.services
+            .ingest_render_output(feedback.chunk)
+            .map_err(|error| self.runtime_error(error.into()))?;
+        ProductDevRuntimeReceipt::new(true, Vec::new()).map_err(host_runtime_error)
+    }
+
     fn report_ghost_plate_feedback(
         &mut self,
         feedback: ProductDevGhostPlateFeedback,
@@ -5452,6 +5463,9 @@ fn service_outputs(
     }
     for frame in &output.presentation {
         outputs.push(RuntimePublication::presentation(frame).map_err(publication_error)?);
+    }
+    if let Some(jobs) = output.render_output {
+        outputs.push(RuntimePublication::RenderOutput(jobs));
     }
     Ok(outputs)
 }
@@ -7683,6 +7697,7 @@ mod tests {
     #[test]
     fn animation_cue_definition_output_maps_to_the_typed_product_dev_snapshot() {
         let output = csharp_engine_services::CsharpEngineCallOutput {
+            render_output: None,
             appearance: vec![CsharpAppearanceCallOutput::AnimationCueDefinitions(vec![
                 csharp_engine_services::AnimationCueDefinition {
                     cue_id: "footfall".to_owned(),
@@ -7727,6 +7742,7 @@ mod tests {
     #[test]
     fn service_outputs_preserve_appearance_frame_and_presentation_order() {
         let output = CsharpEngineCallOutput {
+            render_output: None,
             appearance: vec![
                 CsharpAppearanceCallOutput::Presentation(
                     render_presentation::PresentationFrameDiff::new(),

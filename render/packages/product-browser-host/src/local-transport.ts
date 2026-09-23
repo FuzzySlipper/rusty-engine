@@ -1,3 +1,4 @@
+import type { RenderOutputJob } from "@rusty-engine/render-contracts";
 import { browserAttachmentEvidence } from './attachment-evidence.js';
 import { snapshotRustyApplicationJson, snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
 import type {
@@ -86,6 +87,7 @@ const ROUTES = Object.freeze({
   videoFeedback: 'video-feedback',
   animationFeedback: 'animation-feedback',
   ghostPlateFeedback: 'ghost-plate-feedback',
+  renderOutputFeedback: 'render-output-feedback',
   rendererDiagnostics: 'renderer-diagnostics',
   browserDiagnostics: 'browser-diagnostics',
   outputs: 'outputs',
@@ -827,6 +829,9 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
+  const reportRenderOutputFeedback: NonNullable<ProductBrowserRuntimeAdapter['reportRenderOutputFeedback']> = (feedback) =>
+    post(ROUTES.renderOutputFeedback, feedback, () => undefined);
+
   const reportGhostPlateFeedback = (
     feedback: ProductBrowserGhostPlateFeedback,
   ): Promise<ProductBrowserGhostPlateFeedbackResult> => {
@@ -1414,6 +1419,7 @@ export function createProductBrowserLocalHttpAdapter(
     reportVideoFeedback,
     reportAnimationFeedback,
     reportGhostPlateFeedback,
+    reportRenderOutputFeedback,
     reportRendererDiagnostics,
     reportBrowserDiagnostics,
     advanceRealtime,
@@ -2607,6 +2613,8 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     case 'frame':
       requireKnownFields(record, ['kind', 'frame', 'rendererResources'], 'frame output');
       return { kind: 'frame', frame: decodeFrame(record.frame, 'frame'), ...optionalRendererResources(record) };
+    case 'render-output':
+      return { kind: 'render-output', jobs: requirePlainArray(record['jobs'], 'render output jobs') as unknown as readonly RenderOutputJob[], ...optionalRendererResources(record) };
     case 'view-composition':
       requireKnownFields(record, ['kind', 'composition', 'rendererResources'], 'view composition output');
       return { kind: 'view-composition', composition: decodeViewComposition(record.composition), ...optionalRendererResources(record) };

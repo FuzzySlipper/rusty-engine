@@ -1083,6 +1083,20 @@ pub(crate) unsafe extern "C" fn set_background_color(
     }
 }
 
+impl RuntimeCameraViewCall {
+    pub(crate) fn output_camera(
+        &self,
+        id: u64,
+    ) -> Result<RendererCompositionCamera, CsharpEngineServicesError> {
+        let camera = self.state.cameras.get(&id).cloned().ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_RENDER_OUTPUT_CAMERA", "unknown capture camera")
+        })?;
+        let mut camera = composition_camera(format!("capture-{id}"), camera)?;
+        camera.motion = None;
+        Ok(camera)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -62,6 +62,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
         &persistence_root,
         &content_store_root,
         options.debugger,
+        options.headless,
     )?);
     let mut crash_budget = CrashBudget::new(MAX_UNEXPECTED_EXITS_PER_ARTIFACT);
 
@@ -108,6 +109,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
                             &persistence_root,
                             &content_store_root,
                             options.debugger,
+                            options.headless,
                         )?;
                         diagnostic(
                             "restarted-after-unexpected-exit",
@@ -258,6 +260,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 &persistence_root,
                 &content_store_root,
                 options.debugger,
+                options.headless,
             )?);
             true
         };
@@ -268,6 +271,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 &persistence_root,
                 &content_store_root,
                 options.debugger,
+                options.headless,
             )?);
         }
         if replacement_failed {
@@ -372,6 +376,7 @@ struct DevOptions {
     port: Option<u16>,
     live_debug: bool,
     debugger: bool,
+    headless: bool,
 }
 
 impl Arguments {
@@ -388,6 +393,7 @@ impl Arguments {
         let mut port = None;
         let mut live_debug = false;
         let mut debugger = false;
+        let mut headless = false;
         while let Some(value) = values.next() {
             match value.as_str() {
                 "--project" => {
@@ -418,6 +424,7 @@ impl Arguments {
                 }
                 "--live-debug" => live_debug = true,
                 "--debugger" => debugger = true,
+                "--headless" => headless = true,
                 "--help" => return Err(usage()),
                 _ => {
                     return Err(format!(
@@ -445,6 +452,7 @@ impl Arguments {
                 port,
                 live_debug,
                 debugger,
+                headless,
             }),
         })
     }
@@ -457,7 +465,7 @@ fn required_value(values: &mut impl Iterator<Item = String>, flag: &str) -> Resu
 }
 
 fn usage() -> String {
-    "usage: rusty dev --project <ordinary-product.csproj> [--runtime <runtime-pack>] [--engine-source <rusty-engine-source>] [--bind-host <IPv4>] [--port <u16>] [--live-debug] [--debugger]\n\nCoreCLR is the only normal loader. --debugger disables supervised worker startup/callback deadlines for managed breakpoints; source changes still replace workers. The SDK stages Product truth; this command never invokes Cargo or auto-discovers an adjacent Engine checkout. Use an explicit override only for Engine contributor runtime packs.".to_owned()
+    "usage: rusty dev --project <ordinary-product.csproj> [--runtime <runtime-pack>] [--engine-source <rusty-engine-source>] [--bind-host <IPv4>] [--port <u16>] [--live-debug] [--debugger] [--headless]\n\nCoreCLR is the only normal loader. --debugger disables supervised worker startup/callback deadlines for managed breakpoints; source changes still replace workers. --headless starts the installed Chromium browser against the host; set RUSTY_CHROMIUM_PATH to select its executable. The SDK stages Product truth; this command never invokes Cargo or auto-discovers an adjacent Engine checkout. Use an explicit override only for Engine contributor runtime packs.".to_owned()
 }
 
 #[derive(Debug)]
@@ -740,6 +748,7 @@ impl SupervisedHost {
         persistence_root: &Path,
         content_store_root: &Path,
         debugger: bool,
+        headless: bool,
     ) -> Result<Self, String> {
         let runtime_instance_id = next_supervised_runtime_instance_id()?;
         let arguments = supervised_host_arguments(
@@ -748,6 +757,7 @@ impl SupervisedHost {
             content_store_root,
             runtime_instance_id,
             debugger,
+            headless,
         )?;
         let mut child = Command::new(host)
             .args(&arguments)
@@ -840,6 +850,7 @@ fn supervised_host_arguments(
     content_store_root: &Path,
     runtime_instance_id: u64,
     debugger: bool,
+    headless: bool,
 ) -> Result<Vec<String>, String> {
     if runtime_instance_id == 0 {
         return Err(
@@ -870,6 +881,9 @@ fn supervised_host_arguments(
     ];
     if debugger {
         arguments.push("--debugger".to_owned());
+    }
+    if headless {
+        arguments.push("--headless".to_owned());
     }
     Ok(arguments)
 }
@@ -1060,9 +1074,30 @@ mod tests {
             Path::new("/content-store"),
             7,
             options.debugger,
+            options.headless,
         )
         .expect("host arguments");
         assert!(host.iter().any(|argument| argument == "--debugger"));
+    }
+
+    #[test]
+    fn headless_option_reaches_the_supervised_host() {
+        let arguments = Arguments::parse(
+            ["dev", "--project", "Product.csproj", "--headless"].map(str::to_owned),
+        )
+        .expect("headless options");
+        let CommandName::Dev(options) = arguments.command;
+        assert!(options.headless);
+        let host = supervised_host_arguments(
+            Path::new("/product"),
+            Path::new("/persistence"),
+            Path::new("/content-store"),
+            7,
+            options.debugger,
+            options.headless,
+        )
+        .expect("host arguments");
+        assert!(host.iter().any(|argument| argument == "--headless"));
     }
 
     #[test]
@@ -1087,6 +1122,7 @@ mod tests {
         assert_eq!(options.port, Some(9348));
         assert!(options.live_debug);
         assert!(!options.debugger);
+        assert!(!options.headless);
     }
 
     #[test]
@@ -1114,6 +1150,7 @@ mod tests {
             port: None,
             live_debug: false,
             debugger: false,
+            headless: false,
         };
 
         let properties = stage_properties(&options).expect("source properties");
@@ -1184,6 +1221,7 @@ mod tests {
             Path::new("/workspace/Product/.runtime/content-store"),
             41,
             false,
+            false,
         )
         .expect("supervised host arguments");
 
@@ -1232,6 +1270,7 @@ mod tests {
             Path::new("/workspace/Product/.runtime/persistence"),
             Path::new("/workspace/Product/.runtime/content-store"),
             0,
+            false,
             false,
         )
         .expect_err("zero runtime incarnation is not a valid shell seed");

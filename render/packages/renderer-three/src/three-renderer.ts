@@ -295,9 +295,22 @@ interface PreparedFrameResources {
  */
 export interface ThreeRendererIsolatedCaptureScene {
   readonly scene: THREE.Scene;
+  readonly viewmodelScene?: THREE.Scene;
   objectFor(handle: RenderHandle): THREE.Object3D | undefined;
   sceneFor(handle: RenderHandle): THREE.Scene | undefined;
+  animationClipSourcesInSubtree?(handle: RenderHandle): readonly ThreeRendererAnimationClipSource[];
+  sampleAnimatedMesh?(handle: RenderHandle, clipId: string, normalizedTime: number): void;
+  setViewportSize?(width: number, height: number): void;
+  prepareSpritesForCamera?(camera: THREE.Camera, scene: THREE.Scene): void;
+  prepareStaticInstanceBatches?(camera: THREE.Camera): void;
   dispose(): void;
+}
+
+/** Animation clips retained by animated mesh instances inside one selected subtree. */
+export interface ThreeRendererAnimationClipSource {
+  readonly handle: RenderHandle;
+  readonly object: THREE.Object3D;
+  readonly clips: readonly THREE.AnimationClip[];
 }
 
 /** Immutable mounted-host defaults used only by a disposable ghost capture. */
@@ -507,6 +520,7 @@ export class ThreeRenderer {
     }
     return Object.freeze({
       scene: isolated.scene,
+      viewmodelScene: isolated.viewmodelScene,
       objectFor: (handle: RenderHandle) => isolated.objectFor(handle),
       sceneFor: (handle: RenderHandle) => {
         const object = isolated.objectFor(handle);
@@ -515,6 +529,16 @@ export class ThreeRenderer {
           ? isolated.viewmodelScene
           : isolated.scene;
       },
+      animationClipSourcesInSubtree: (handle: RenderHandle) =>
+        isolated.animationClipSourcesInSubtree(handle),
+      sampleAnimatedMesh: (handle: RenderHandle, clipId: string, normalizedTime: number) => {
+        isolated.sampleAnimatedMesh(handle, clipId, normalizedTime);
+      },
+      setViewportSize: (width: number, height: number) => isolated.setViewportSize(width, height),
+      prepareSpritesForCamera: (camera: THREE.Camera, scene: THREE.Scene) =>
+        isolated.prepareSpritesForCamera(camera, scene),
+      prepareStaticInstanceBatches: (camera: THREE.Camera) =>
+        isolated.prepareStaticInstanceBatches(camera),
       dispose: () => isolated.dispose(),
     });
   }
@@ -1341,6 +1365,20 @@ export class ThreeRenderer {
   /** The Three.js object for a handle, for inspection/tests. */
   objectFor(handle: RenderHandle): THREE.Object3D | undefined {
     return this.#handles.get(handle)?.object;
+  }
+
+  /** Animation clips retained below one handle, for isolated output operations. */
+  animationClipSourcesInSubtree(handle: RenderHandle): readonly ThreeRendererAnimationClipSource[] {
+    const root = this.objectFor(handle);
+    if (root === undefined) return Object.freeze([]);
+    const sources = [...this.#handles.entries()]
+      .sort(([left], [right]) => left - right)
+      .flatMap(([candidate, entry]) => {
+        if (entry.object !== root && !isDescendantOf(entry.object, root)) return [];
+        const clips = this.#animatedMeshes.clips(candidate);
+        return clips === undefined ? [] : [Object.freeze({ handle: candidate, object: entry.object, clips })];
+      });
+    return Object.freeze(sources);
   }
 
   /**

@@ -1,3 +1,6 @@
+import type { RenderOutputJob } from '@rusty-engine/render-contracts';
+import { RendererOutputExecutor } from './render-output.js';
+import { createCamera as createOutputCamera, updateCameraAspect as updateOutputCameraAspect } from './view-composition.js';
 // Browser/canvas surface built on the retained ThreeRenderer.
 
 import * as THREE from 'three';
@@ -298,6 +301,7 @@ export interface RendererBrowserSurface {
   readonly automaticSubmissionPacing:
     () => RendererBrowserSurfaceAutomaticSubmissionPacingSample;
   readonly renderOnce: (timeMs?: number) => RendererBrowserSurfaceSubmissionStatistics;
+  readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
   readonly setCameraPose: (
     pose: RendererBrowserSurfaceCameraPose,
     basis?: RendererBrowserSurfaceCameraBasis,
@@ -641,6 +645,7 @@ export function mountRendererBrowserSurface(
       release(() => ghostPlatePresentation.dispose());
     }
     ghostPlatePresentations.clear();
+    outputExecutor.dispose();
     release(() => gpuSubmissionFence.dispose());
     release(() => gpuSubmissionDuty.dispose());
     release(() => viewComposition.dispose());
@@ -653,6 +658,7 @@ export function mountRendererBrowserSurface(
   };
 
   setCameraPose(currentCameraPose, currentCameraBasis ?? undefined);
+  const outputExecutor = new RendererOutputExecutor(webgl, renderer);
   renderOnce(0);
   if (options.autoStart !== false) {
     start();
@@ -729,6 +735,19 @@ export function mountRendererBrowserSurface(
     projectWorldPoint,
     pick: (request) => pickProjectedObject(renderer, camera, raycaster, center, request),
     snapshot: () => renderer.snapshot(),
+    executeRenderOutput: (job: RenderOutputJob) => {
+      if (job.operation.kind === 'glb') return outputExecutor.exportGlb(job.frame, job.source, job.operation.includeAnimations);
+      const options = job.operation;
+      const captureCamera = createOutputCamera(options.camera);
+      updateOutputCameraAspect(captureCamera, options.width / options.height);
+      return outputExecutor.capture(job.frame, captureCamera, {
+        width: options.width, height: options.height, background: options.background,
+        useCameraBackground: options.useCameraBackground,
+        exposure: options.exposure, toneMapping: options.acesFilmic ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping,
+        samples: options.samples,
+        ...(options.pose === null ? {} : { pose: options.pose }),
+      });
+    },
     renderOnce,
     setCameraPose,
     start,

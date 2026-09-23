@@ -29,8 +29,8 @@ use product_dev_host::{
     ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererResource, ProductDevRuntime,
     ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
-    ProductDevTimelineCompletionResult, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
-    ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic,
+    ProductDevTimelineCompletionResult, ProductDevVideoFeedback, ProductDevWorkerBundle,
+    ProductDevWorkerBundleEntry, ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic,
     ProductDevWorkerDiagnosticRelayReceiver, ProductDevWorkerDiagnosticRelaySender,
     ProductDevWorkerEvent, ProductDevWorkerFault, ProductDevWorkerFeedbackOperation,
     ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerPublication,
@@ -44,6 +44,7 @@ use runtime_input::{
 };
 use runtime_lifecycle::RuntimeInstanceId;
 
+mod headless_browser;
 mod product_bundle;
 use product_bundle::ProductBundle;
 
@@ -73,7 +74,10 @@ fn main() -> Result<(), String> {
     if args.worker {
         return run_worker(args);
     }
-    if args.supervised {
+    validate_headless_host(&args)?;
+    if args.supervised || args.headless {
+        let mut args = args;
+        prepare_shell_runtime_instance_id(&mut args);
         if args.debugger {
             eprintln!(
                 "RUSTY_HOST debugger: worker startup and callback deadlines are disabled; source restaging still replaces the worker"
@@ -181,13 +185,14 @@ fn main() -> Result<(), String> {
         drop(output_stream);
         host.shutdown().map_err(|error| error.to_string())?;
     } else {
+        let termination = install_termination_signal_hook();
         println!(
             "C# {} product host listening at {}",
             args.loader.label(),
             host.origin()
         );
         println!("Press Ctrl+C to stop.");
-        wait_for_process_termination(args.supervised, &host);
+        wait_for_process_termination(args.supervised, &host, termination);
     }
     Ok(())
 }
@@ -240,9 +245,10 @@ impl WorkerInputMailbox {
     }
 }
 
-/// Foreground `rusty dev` shell.  It owns the one browser listener and its
-/// retained projection; the C# runtime itself lives only in the worker below.
+/// Foreground `rusty dev` or headless product shell. It owns the browser
+/// listener and retained projection; the product runtime lives in its worker.
 fn run_supervised_shell(args: Arguments) -> Result<(), String> {
+    let termination = install_termination_signal_hook();
     let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
     let (runtime, bundle, initial_outputs, worker_outputs, worker_diagnostics, worker_failures) =
         WorkerRuntime::start(&args)?;
@@ -266,14 +272,72 @@ fn run_supervised_shell(args: Arguments) -> Result<(), String> {
     runtime
         .activate_current()
         .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))?;
+    let headless_browser = if args.headless {
+        Some(headless_browser::HeadlessBrowser::launch(&browser_url(
+            host.address(),
+        ))?)
+    } else {
+        None
+    };
     println!(
         "C# {} product host listening at {}",
         args.loader.label(),
         host.origin()
     );
     println!("Press Ctrl+C to stop.");
-    supervise_worker_replacements(&args, &runtime, &host, &diagnostics, worker_failures)?;
+    let supervision = if args.supervised {
+        supervise_worker_replacements(
+            &args,
+            &runtime,
+            &host,
+            &diagnostics,
+            worker_failures,
+            termination,
+        )
+    } else {
+        // `--headless` uses this shell only to keep CoreCLR away from the
+        // signal-owning process. Preserve ordinary host semantics: stdin EOF
+        // does not stop the host unless `--supervised` was explicitly set.
+        wait_for_process_termination(false, &host, termination);
+        Ok(())
+    };
+    let browser_shutdown = headless_browser
+        .map(headless_browser::HeadlessBrowser::shutdown)
+        .unwrap_or(Ok(()));
+    let host_shutdown = host.shutdown().map_err(|error| error.to_string());
+    let worker_shutdown = runtime.stop_generation(runtime.active_generation());
+    browser_shutdown?;
+    host_shutdown?;
+    worker_shutdown?;
+    supervision?;
     Ok(())
+}
+
+fn prepare_shell_runtime_instance_id(args: &mut Arguments) {
+    if args.headless && args.runtime_instance_id.is_none() {
+        // Headless products run in a worker so this foreground process
+        // remains the signal owner and can reap Chromium on shutdown.
+        args.runtime_instance_id = Some(next_direct_runtime_instance_id());
+    }
+}
+
+fn validate_headless_host(args: &Arguments) -> Result<(), String> {
+    if !args.headless {
+        return Ok(());
+    }
+    if args.product_path.is_none() {
+        return Err("--headless requires a packaged --product bundle".to_owned());
+    }
+    Ok(())
+}
+
+fn browser_url(address: SocketAddr) -> String {
+    let ip = if address.ip().is_unspecified() {
+        Ipv4Addr::LOCALHOST.into()
+    } else {
+        address.ip()
+    };
+    format!("http://{ip}:{}", address.port())
 }
 
 /// The foreground shell accepts exactly one supervisor command family over
@@ -297,8 +361,8 @@ fn supervise_worker_replacements(
     host: &RunningProductDevHost,
     diagnostics: &ProductDevLog,
     failures: mpsc::Receiver<u64>,
+    termination: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let termination = install_termination_signal_hook();
     let mut current_product_directory = shell_args.product_path.clone().ok_or(
         "DEV_HOST_SUPERVISOR_REPLACE: supervised shell requires a staged Product directory",
     )?;
@@ -517,6 +581,7 @@ fn replacement_arguments(
         performance_probe: None,
         supervised: false,
         debugger: shell_args.debugger,
+        headless: shell_args.headless,
         runtime_instance_id: Some(RuntimeInstanceId::new(runtime_instance_id)),
         worker: false,
         worker_channel: None,
@@ -1647,12 +1712,27 @@ impl ProductDevRuntime for WorkerRuntime {
         self.feedback(ProductDevWorkerFeedbackOperation::Audio, feedback)
     }
 
+    fn report_video_feedback(
+        &mut self,
+        feedback: ProductDevVideoFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.feedback(ProductDevWorkerFeedbackOperation::Video, feedback)
+    }
+
     fn report_animation_feedback(
         &mut self,
         feedback: ProductDevAnimationFeedback,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
     {
         self.feedback(ProductDevWorkerFeedbackOperation::Animation, feedback)
+    }
+
+    fn report_render_output_feedback(
+        &mut self,
+        feedback: product_dev_host::ProductDevRenderOutputFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<bool>, ProductDevRuntimeError> {
+        self.feedback(ProductDevWorkerFeedbackOperation::RenderOutput, feedback)
     }
 
     fn report_ghost_plate_feedback(
@@ -2483,11 +2563,25 @@ fn worker_request(
                     |feedback| owner.report_audio_feedback(feedback),
                     settle_request,
                 )?,
+                ProductDevWorkerFeedbackOperation::Video => worker_feedback(
+                    request_id,
+                    payload,
+                    ProductDevVideoFeedback::validate,
+                    |feedback| owner.report_video_feedback(feedback),
+                    settle_request,
+                )?,
                 ProductDevWorkerFeedbackOperation::Animation => worker_feedback(
                     request_id,
                     payload,
                     ProductDevAnimationFeedback::validate,
                     |feedback| owner.report_animation_feedback(feedback),
+                    settle_request,
+                )?,
+                ProductDevWorkerFeedbackOperation::RenderOutput => worker_feedback(
+                    request_id,
+                    payload,
+                    product_dev_host::ProductDevRenderOutputFeedback::validate,
+                    |feedback| owner.report_render_output_feedback(feedback),
                     settle_request,
                 )?,
                 ProductDevWorkerFeedbackOperation::GhostPlate => worker_feedback(
@@ -2691,8 +2785,11 @@ fn print_runtime_identity(machine_readable: bool) {
 /// closing it is its cross-platform clean-replacement signal. Returning here
 /// lets `RunningProductDevHost` and then `CsharpProductRuntime` execute their
 /// normal shutdown/drop ordering before the process exits.
-fn wait_for_process_termination(supervised: bool, host: &RunningProductDevHost) {
-    let termination = install_termination_signal_hook();
+fn wait_for_process_termination(
+    supervised: bool,
+    host: &RunningProductDevHost,
+    termination: Arc<AtomicBool>,
+) {
     if supervised {
         // Keep stdin as the supervisor's clean-stop mechanism, but read it on
         // a helper so a terminal runtime recovery can wake this foreground
@@ -2883,6 +2980,7 @@ struct Arguments {
     performance_probe: Option<u32>,
     supervised: bool,
     debugger: bool,
+    headless: bool,
     runtime_instance_id: Option<RuntimeInstanceId>,
     worker: bool,
     worker_channel: Option<SocketAddr>,
@@ -3103,6 +3201,7 @@ impl Arguments {
         let mut performance_probe = None;
         let mut supervised = false;
         let mut debugger = false;
+        let mut headless = false;
         let mut runtime_instance_id = None;
         let mut worker = false;
         let mut worker_channel = None;
@@ -3191,6 +3290,7 @@ impl Arguments {
                 }
                 "--supervised" => supervised = true,
                 "--debugger" => debugger = true,
+                "--headless" => headless = true,
                 "--worker" => worker = true,
                 "--worker-channel" => {
                     worker_channel = Some(
@@ -3214,7 +3314,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-sdk.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables worker startup/callback deadlines for supervised CoreCLR debugging; normal sessions retain their deadlines. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-sdk.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables worker startup/callback deadlines for supervised CoreCLR debugging; normal sessions retain their deadlines. `--headless` starts Chromium after the listener is ready and closes it with the host; set `RUSTY_CHROMIUM_PATH` to select its executable. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -3274,6 +3374,7 @@ impl Arguments {
             performance_probe,
             supervised,
             debugger,
+            headless,
             runtime_instance_id,
             worker,
             worker_channel,
@@ -3286,6 +3387,14 @@ impl Arguments {
         }
         if arguments.worker != arguments.worker_channel.is_some() {
             return Err("--worker and --worker-channel must be supplied together".to_owned());
+        }
+        if arguments.headless && arguments.worker {
+            return Err("--headless is only valid for a foreground product host".to_owned());
+        }
+        if arguments.headless && (arguments.exercise || arguments.performance_probe.is_some()) {
+            return Err(
+                "--headless cannot be combined with --exercise or --performance-probe".to_owned(),
+            );
         }
         if arguments.exercise && arguments.performance_probe.is_some() {
             return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
@@ -4875,6 +4984,63 @@ mod tests {
         let args = parse_test_args(&["--supervised"])
             .expect("supervised shutdown hook parses for a foreground host");
         assert!(args.supervised);
+    }
+
+    #[test]
+    fn parser_admits_headless_only_for_foreground_host_launches() {
+        let args = parse_test_args(&["--headless"]).expect("headless host launch parses");
+        assert!(args.headless);
+        assert!(parse_test_error(&["--headless", "--exercise"])
+            .contains("cannot be combined with --exercise"));
+        assert!(
+            parse_test_error(&["--headless", "--worker", "--worker-channel", "127.0.0.1:1",])
+                .contains("only valid for a foreground product host")
+        );
+    }
+
+    #[test]
+    fn headless_requires_a_packaged_product() {
+        let mut args = parse_test_args(&["--headless"]).expect("headless host arguments");
+        assert!(validate_headless_host(&args)
+            .expect_err("legacy direct launches cannot use the worker shell")
+            .contains("requires a packaged --product"));
+
+        args.product_path = Some(PathBuf::from("/product"));
+        validate_headless_host(&args).expect("packaged headless host is supported");
+    }
+
+    #[test]
+    fn headless_shell_allocates_a_missing_runtime_incarnation() {
+        let mut args = parse_test_args(&[]).expect("host arguments");
+        args.headless = true;
+        prepare_shell_runtime_instance_id(&mut args);
+        assert!(
+            args.runtime_instance_id
+                .expect("headless shell incarnation")
+                .value()
+                > 0
+        );
+
+        let mut explicit =
+            parse_test_args(&["--runtime-instance-id", "41"]).expect("explicit incarnation parses");
+        explicit.headless = true;
+        prepare_shell_runtime_instance_id(&mut explicit);
+        assert_eq!(
+            explicit.runtime_instance_id,
+            Some(RuntimeInstanceId::new(41))
+        );
+    }
+
+    #[test]
+    fn headless_browser_uses_loopback_for_a_wildcard_listener() {
+        assert_eq!(
+            browser_url("0.0.0.0:9348".parse().unwrap()),
+            "http://127.0.0.1:9348"
+        );
+        assert_eq!(
+            browser_url("127.0.0.2:9348".parse().unwrap()),
+            "http://127.0.0.2:9348"
+        );
     }
 
     #[test]

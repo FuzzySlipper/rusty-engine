@@ -902,7 +902,7 @@ internal static class Emit
     // today. Other generated owners retain the established immediate local
     // disposal path so a later product-call rollback never revives a native
     // handle that was already destroyed.
-    private static bool UsesCommitAwareRelease(Service service) => service.Name is "Audio" or "Graphics" or "CameraView" or "Ui" or "Dynamics" or "Presentation" or "ImplicitSurfaces";
+    private static bool UsesCommitAwareRelease(Service service) => service.Name is "RenderOutput" or "Audio" or "Graphics" or "CameraView" or "Ui" or "Dynamics" or "Presentation" or "ImplicitSurfaces";
 
     private static bool RequiresCommitAwareRelease(BindingModel model, Service service) =>
         UsesCommitAwareRelease(service)

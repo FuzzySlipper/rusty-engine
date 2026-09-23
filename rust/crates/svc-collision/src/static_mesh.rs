@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use core_space::{WorldPos, WorldVec};
 use parry3d_f64::math::{Pose, Vector};
@@ -157,7 +157,7 @@ struct PreparedInstance {
 /// callers retain authored identity, transforms, persistence, and mutation policy.
 #[derive(Clone, Default)]
 pub struct StaticMeshCollisionProjection {
-    assets: BTreeMap<StaticMeshAssetId, StaticMeshColliderAsset>,
+    assets: BTreeMap<StaticMeshAssetId, Arc<StaticMeshColliderAsset>>,
     instances: BTreeMap<StaticMeshInstanceId, PreparedInstance>,
     revision: u64,
 }
@@ -199,7 +199,11 @@ impl StaticMeshCollisionProjection {
         if ![delta.x, delta.y, delta.z].into_iter().all(f64::is_finite) {
             return Err(StaticMeshCollisionError::InvalidTransform);
         }
-        let assets = self.assets.values().cloned().collect::<Vec<_>>();
+        let assets = self
+            .assets
+            .values()
+            .map(|asset| (**asset).clone())
+            .collect::<Vec<_>>();
         let instances = self
             .instances
             .iter()
@@ -267,10 +271,6 @@ impl StaticMeshCollisionProjection {
                 actual: self.revision,
             });
         }
-        let revision_after = self
-            .revision
-            .checked_add(1)
-            .ok_or(StaticMeshCollisionError::RevisionExhausted)?;
         let mut next_assets = BTreeMap::new();
         let mut vertex_count = 0usize;
         let mut triangle_count = 0usize;
@@ -300,7 +300,7 @@ impl StaticMeshCollisionProjection {
                 });
             }
             let id = asset.id;
-            if next_assets.insert(id, asset).is_some() {
+            if next_assets.insert(id, Arc::new(asset)).is_some() {
                 return Err(StaticMeshCollisionError::DuplicateAsset { id });
             }
             if next_assets.len() > MAX_STATIC_MESH_ASSETS {
@@ -310,6 +310,101 @@ impl StaticMeshCollisionProjection {
             }
         }
 
+        self.commit_projection(expected_revision, next_assets, instances)
+    }
+
+    pub fn asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
+        self.assets.get(&id).map(|asset| asset.geometry_hash)
+    }
+
+    /// Applies a bounded residency delta without rebuilding unchanged triangle meshes.
+    /// Removals precede upserts. Removing an absent identity is idempotent.
+    /// Assets still referenced by retained instances cannot be removed.
+    pub fn apply_residency(
+        &mut self,
+        expected_revision: u64,
+        assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
+        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
+        removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
+        removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        let mut admitted = Self::default();
+        admitted.replace_all(0, assets, [])?;
+        let mut next_assets = self.assets.clone();
+        for id in removed_assets {
+            next_assets.remove(&id);
+        }
+        next_assets.extend(admitted.assets);
+        let mut next_instances = self
+            .instances
+            .iter()
+            .map(|(id, instance)| {
+                (
+                    *id,
+                    StaticMeshColliderInstance {
+                        id: *id,
+                        asset: instance.asset,
+                        expected_geometry_hash: next_assets
+                            .get(&instance.asset)
+                            .map_or(instance.geometry_hash, |asset| asset.geometry_hash),
+                        transform: instance.transform,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for id in removed_instances {
+            next_instances.remove(&id);
+        }
+        let mut upserts = BTreeMap::new();
+        for instance in instances {
+            let id = instance.id;
+            if upserts.insert(id, instance).is_some() {
+                return Err(StaticMeshCollisionError::DuplicateInstance { id });
+            }
+        }
+        next_instances.extend(upserts);
+        self.commit_projection(expected_revision, next_assets, next_instances.into_values())
+    }
+
+    fn commit_projection(
+        &mut self,
+        expected_revision: u64,
+        next_assets: BTreeMap<StaticMeshAssetId, Arc<StaticMeshColliderAsset>>,
+        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        if expected_revision != self.revision {
+            return Err(StaticMeshCollisionError::RevisionMismatch {
+                expected: expected_revision,
+                actual: self.revision,
+            });
+        }
+        let revision_after = self
+            .revision
+            .checked_add(1)
+            .ok_or(StaticMeshCollisionError::RevisionExhausted)?;
+        if next_assets.len() > MAX_STATIC_MESH_ASSETS {
+            return Err(StaticMeshCollisionError::TooManyAssets {
+                limit: MAX_STATIC_MESH_ASSETS,
+            });
+        }
+        let vertex_count = next_assets
+            .values()
+            .map(|asset| asset.positions.len())
+            .sum::<usize>();
+        let triangle_count = next_assets
+            .values()
+            .map(|asset| asset.triangles.len())
+            .sum::<usize>();
+        if vertex_count > MAX_STATIC_MESH_VERTICES {
+            return Err(StaticMeshCollisionError::TooManyVertices {
+                limit: MAX_STATIC_MESH_VERTICES,
+            });
+        }
+        if triangle_count > MAX_STATIC_MESH_TRIANGLES {
+            return Err(StaticMeshCollisionError::TooManyTriangles {
+                limit: MAX_STATIC_MESH_TRIANGLES,
+            });
+        }
         let mut next_instances = BTreeMap::new();
         let mut projected_vertex_count = 0usize;
         let mut projected_triangle_count = 0usize;
@@ -352,6 +447,14 @@ impl StaticMeshCollisionProjection {
                 return Err(StaticMeshCollisionError::TooManyTriangles {
                     limit: MAX_STATIC_MESH_TRIANGLES,
                 });
+            }
+            if let Some(previous) = self.instances.get(&instance.id).filter(|previous| {
+                previous.asset == instance.asset
+                    && previous.geometry_hash == asset.geometry_hash
+                    && previous.transform == instance.transform
+            }) {
+                next_instances.insert(instance.id, previous.clone());
+                continue;
             }
             let vertices = asset
                 .positions
@@ -636,6 +739,72 @@ mod tests {
             vec![[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn residency_reuses_untouched_geometry_and_rejects_orphaning_atomically() {
+        let first = ramp();
+        let hash = first.geometry_hash;
+        let mut projection = StaticMeshCollisionProjection::default();
+        let first_instance = StaticMeshColliderInstance {
+            id: StaticMeshInstanceId(11),
+            asset: first.id,
+            expected_geometry_hash: hash,
+            transform: StaticMeshTransform::IDENTITY,
+        };
+        projection
+            .apply_residency(0, [first], [first_instance], [], [])
+            .unwrap();
+        let retained_asset = Arc::clone(&projection.assets[&StaticMeshAssetId(7)]);
+        let retained_shape = projection.instances[&StaticMeshInstanceId(11)]
+            .shape
+            .clone();
+        let mut second = ramp();
+        second.id = StaticMeshAssetId(8);
+        let mut second_instance = first_instance;
+        second_instance.id = StaticMeshInstanceId(12);
+        second_instance.asset = second.id;
+        second_instance.transform.translation[0] = 10.0;
+        projection
+            .apply_residency(1, [second], [second_instance], [], [])
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &retained_asset,
+            &projection.assets[&StaticMeshAssetId(7)]
+        ));
+        assert!(std::ptr::eq(
+            retained_shape.as_ref(),
+            projection.instances[&StaticMeshInstanceId(11)]
+                .shape
+                .as_ref()
+        ));
+        let identity = projection.identity_hash();
+        assert!(matches!(
+            projection.apply_residency(2, [], [], [StaticMeshAssetId(7)], []),
+            Err(StaticMeshCollisionError::MissingAsset { .. })
+        ));
+        assert_eq!(projection.revision(), 2);
+        assert_eq!(projection.identity_hash(), identity);
+        projection
+            .apply_residency(
+                2,
+                [],
+                [],
+                [StaticMeshAssetId(7)],
+                [StaticMeshInstanceId(11)],
+            )
+            .unwrap();
+        assert_eq!(projection.asset_count(), 1);
+        let shifted = projection
+            .translated(WorldVec::new(-10.0, 0.0, 0.0))
+            .unwrap();
+        let hit = shifted
+            .raycast(
+                Ray::new(WorldPos::new(1.0, 3.0, 0.0), WorldVec::new(0.0, -1.0, 0.0)),
+                10.0,
+            )
+            .unwrap();
+        assert_eq!(hit.instance, StaticMeshInstanceId(12));
     }
 
     #[test]

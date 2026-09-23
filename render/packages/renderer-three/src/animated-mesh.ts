@@ -744,6 +744,14 @@ export class AnimatedMeshRegistry {
     };
   }
 
+  /** Clip tracks retained for one instance, including its admitted clip packs. */
+  clips(handle: RenderHandle): readonly THREE.AnimationClip[] | undefined {
+    const instance = this.#instances.get(handle);
+    return instance === undefined
+      ? undefined
+      : Object.freeze([...instance.actions.values()].map((action) => action.getClip()));
+  }
+
   sample(handle: RenderHandle, clipId: string, normalizedTime: number): AnimatedMeshSampleReadout {
     const instance = this.#requireInstance(handle, 'sampleAnimatedMesh');
     const asset = this.#assets.get(instance.asset);

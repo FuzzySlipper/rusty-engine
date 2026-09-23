@@ -1,7 +1,7 @@
-import { type RendererMeshResourceDescriptor, type RendererMeshResourceManifest, type RendererAudioResourceResolver, type RendererAnimatedMeshResourceManifest, type RendererAnimatedMeshResourceResolver, type RendererTextureResourceDescriptor, type RendererTextureResourceManifest, RendererMutableAnimatedMeshResourceSource, RendererMutableMeshResourceSource, RendererMutableTextureResourceSource } from '@rusty-engine/renderer-host';
+import { type RendererMeshResourceDescriptor, type RendererMeshResourceManifest, type RendererAudioResourceResolver, type RendererVideoResourceResolver, type RendererAnimatedMeshResourceManifest, type RendererAnimatedMeshResourceResolver, type RendererTextureResourceDescriptor, type RendererTextureResourceManifest, RendererMutableAnimatedMeshResourceSource, RendererMutableMeshResourceSource, RendererMutableTextureResourceSource } from '@rusty-engine/renderer-host';
 import type { RustyApplicationFrame } from './application-host.js';
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
-export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture' | 'font';
+export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'video' | 'mesh' | 'clipPack' | 'texture' | 'font';
 export interface RustyApplicationResource {
     readonly identity: string;
     readonly contentHash: string;
@@ -63,6 +63,7 @@ export declare class RustyApplicationResourceCatalog {
     };
     clear(): void;
     audioResolver(): RendererAudioResourceResolver;
+    videoResolver(): RendererVideoResourceResolver;
 }
 export declare function rustyApplicationAudioResourceResolver(content: PreparedRustyApplicationContent): RendererAudioResourceResolver;
 export declare function rustyApplicationSurfaceResourceOptions(content: PreparedRustyApplicationContent): RustyApplicationSurfaceResourceOptions;

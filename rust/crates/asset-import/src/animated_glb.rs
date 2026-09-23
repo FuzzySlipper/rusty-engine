@@ -886,7 +886,10 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
 fn is_admitted_extension(extension: &str) -> bool {
     matches!(
         extension,
-        "EXT_texture_webp" | "KHR_materials_unlit" | "KHR_texture_transform"
+        "EXT_texture_webp"
+            | "KHR_materials_unlit"
+            | "KHR_materials_emissive_strength"
+            | "KHR_texture_transform"
     )
 }
 

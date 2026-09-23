@@ -57,6 +57,7 @@ fn engine_api(
     content_store_bridge: &mut crate::content_store::RuntimeContentStoreBridge,
     audio_bridge: &mut RuntimeAudioBridge,
     video_bridge: &mut RuntimeVideoBridge,
+    render_output_bridge: &mut crate::render_output::RuntimeRenderOutputBridge,
     camera_view_bridge: &mut RuntimeCameraViewBridge,
     dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
@@ -167,6 +168,7 @@ fn engine_api(
         animation: crate::appearance::animation_api(appearance_bridge),
         audio: crate::audio::api(audio_bridge),
         video: crate::video::api(video_bridge),
+        render_output: crate::render_output::api(render_output_bridge),
         camera_view: NativeCameraViewApi {
             context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
             create_camera: crate::camera_view::create_camera,
@@ -273,6 +275,7 @@ pub struct EngineServiceSet {
     content_store: Box<crate::content_store::RuntimeContentStoreBridge>,
     audio: RuntimeAudioBridge,
     video: RuntimeVideoBridge,
+    render_output: crate::render_output::RuntimeRenderOutputBridge,
     camera_view: Box<RuntimeCameraViewBridge>,
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
@@ -293,6 +296,7 @@ pub struct CsharpEngineCall {
     appearance: Option<RuntimeAppearanceCall>,
     audio: RuntimeAudioCall,
     video: RuntimeVideoCall,
+    render_output: crate::render_output::RuntimeRenderOutputCall,
     camera_view: crate::camera_view::RuntimeCameraViewCall,
     sky_frame: Option<render_model::RenderFrameDiff>,
     ui: RuntimeUiCall,
@@ -303,6 +307,7 @@ pub struct CsharpEngineCall {
 /// Staged Engine observations from one successful product call.
 #[derive(Clone, Default)]
 pub struct CsharpEngineCallOutput {
+    pub render_output: Option<Vec<render_host_contracts::RenderOutputJob>>,
     pub appearance: Vec<CsharpAppearanceCallOutput>,
     pub frames: Vec<render_model::RenderFrameDiff>,
     pub view_composition: Option<render_host_contracts::RendererViewComposition>,
@@ -392,6 +397,7 @@ impl EngineServiceSet {
             content_store,
             audio,
             video,
+            render_output: crate::render_output::RuntimeRenderOutputBridge::new(),
             camera_view,
             dynamics,
             spatial,
@@ -415,6 +421,7 @@ impl EngineServiceSet {
             &mut self.content_store,
             &mut self.audio,
             &mut self.video,
+            &mut self.render_output,
             &mut self.camera_view,
             &mut self.dynamics,
             &mut self.spatial,
@@ -476,6 +483,7 @@ impl EngineServiceSet {
         self.appearance.begin_attach_call();
         self.audio.begin_call();
         self.video.begin_call();
+        self.render_output.begin_call();
         self.camera_view.begin_attach_call()?;
         self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
@@ -498,6 +506,7 @@ impl EngineServiceSet {
         self.begin_other_services(ui_binding, true);
         self.audio.begin_update_call(self.call_elapsed_seconds);
         self.video.begin_call();
+        self.render_output.begin_call();
     }
 
     /// Returns every committed renderer stream continuation point. Detached
@@ -543,6 +552,7 @@ impl EngineServiceSet {
         self.input.begin_call(accepts_input_replacement);
         self.audio.begin_call();
         self.video.begin_call();
+        self.render_output.begin_call();
         self.camera_view.begin_call();
         self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
@@ -620,6 +630,7 @@ impl EngineServiceSet {
         self.appearance.discard_call();
         self.audio.discard_call();
         self.video.discard_call();
+        self.render_output.discard_call();
         self.camera_view.discard_call();
         self.dynamics.discard_call();
         self.ui.discard_call();
@@ -633,6 +644,7 @@ impl EngineServiceSet {
         let appearance = self.appearance.take_staged_call()?;
         let audio = self.audio.take_staged_call()?;
         let video = self.video.take_staged_call()?;
+        let render_output = self.render_output.take_call()?;
         let camera_view = self.camera_view.take_staged_call()?;
         self.dynamics.take_staged_call()?;
         // Sky resources are owned and admitted by Appearance. Resolve the
@@ -652,6 +664,7 @@ impl EngineServiceSet {
             appearance,
             audio,
             video,
+            render_output,
             camera_view,
             sky_frame,
             ui,
@@ -703,8 +716,38 @@ impl EngineServiceSet {
             effects.push(video);
         }
         call.presentation_world.retain_effects(effects);
+        let resources = call
+            .appearance
+            .as_ref()
+            .map(|appearance| appearance.state.render_resources.iter().cloned().collect())
+            .unwrap_or_else(|| {
+                self.appearance
+                    .state
+                    .render_resources
+                    .iter()
+                    .cloned()
+                    .collect()
+            });
+        crate::render_output::RuntimeRenderOutputBridge::settle(
+            &mut call.render_output,
+            &call.presentation_world,
+            &call.camera_view,
+            resources,
+            call.appearance
+                .as_ref()
+                .map(|a| &a.state)
+                .unwrap_or(&self.appearance.state),
+        )?;
+        output.render_output = self.render_output.changed_jobs(&call.render_output);
         call.output = output;
         Ok(call)
+    }
+
+    pub fn ingest_render_output(
+        &mut self,
+        chunk: render_host_contracts::RenderOutputChunk,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.render_output.ingest(chunk)
     }
 
     pub fn take_retired_resources(&mut self) -> Vec<crate::appearance::CsharpRenderResource> {
@@ -730,6 +773,7 @@ impl EngineServiceSet {
         self.implicit.commit_call(call.implicit);
         self.audio.commit(call.audio);
         self.video.commit(call.video);
+        self.render_output.commit(call.render_output);
         self.camera_view.commit(call.camera_view);
         self.dynamics.commit_call();
         self.ui.commit(call.ui);
@@ -750,6 +794,7 @@ impl EngineServiceSet {
             .iter()
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
+            .chain(self.render_output.resources())
             .map(|resource| resource.identity().to_owned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -766,6 +811,7 @@ impl EngineServiceSet {
             .iter()
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
+            .chain(self.render_output.resources())
             .find(|resource| resource.identity() == identity)
             .cloned()
     }
@@ -778,6 +824,7 @@ impl EngineServiceSet {
             .cloned()
             .chain(self.audio.render_resources().cloned())
             .chain(self.video.render_resources().cloned())
+            .chain(self.render_output.resources().cloned())
             .collect()
     }
 
@@ -794,6 +841,7 @@ impl EngineServiceSet {
         let snapshot = self.presentation_world.snapshot();
         let presentation = self.presentation_world.effects_snapshot();
         Ok(CsharpEngineCallOutput {
+            render_output: Some(self.render_output.snapshot()),
             appearance: vec![
                 CsharpAppearanceCallOutput::Frame(snapshot.frame),
                 CsharpAppearanceCallOutput::AnimationCueDefinitions(
@@ -836,6 +884,7 @@ impl EngineServiceSet {
         frames.extend(call.voxel_content.frames.clone());
         frames.extend(call.voxel_scene_presentation.frames.clone());
         CsharpEngineCallOutput {
+            render_output: None,
             appearance,
             frames,
             view_composition: call.camera_view.composition.clone(),
@@ -869,6 +918,7 @@ impl EngineServiceSet {
         // without adopting any failed product-call staging or replaying input.
         self.presentation_world = world;
         Ok(CsharpEngineCallOutput {
+            render_output: Some(self.render_output.snapshot()),
             appearance: Vec::new(),
             frames,
             view_composition: None,

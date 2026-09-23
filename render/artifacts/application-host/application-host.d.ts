@@ -1,3 +1,4 @@
+import type { RenderOutputJob } from "@rusty-engine/render-contracts";
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { type RendererSurface, type RendererSurfaceDiagnosticsReadout, type RendererSurfaceOptions, type RendererSurfaceResourceOptions } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent, type RustyApplicationResource } from './application-content.js';
@@ -196,6 +197,25 @@ export interface RustyApplicationAudioRealizedFactsReadout {
     readonly evictedFactCount: number;
     readonly facts: readonly RustyApplicationAudioRealizedFact[];
 }
+export type RustyApplicationVideoRealizedFact = {
+    readonly kind: 'completed';
+    readonly factId: number;
+    readonly handle: number;
+} | {
+    readonly kind: 'skipped';
+    readonly factId: number;
+    readonly handle: number;
+} | {
+    readonly kind: 'failed';
+    readonly factId: number;
+    readonly handle: number;
+    readonly code: 'decodeFailed' | 'playbackBlocked' | 'hostFailure';
+};
+export interface RustyApplicationVideoRealizedFactsReadout {
+    readonly retainedFactCount: number;
+    readonly evictedFactCount: number;
+    readonly facts: readonly RustyApplicationVideoRealizedFact[];
+}
 export type RustyApplicationAnimationDiagnosticCode = 'invalidDescriptor' | 'duplicateHandle' | 'unknownHandle' | 'unknownTarget' | 'assetMissing' | 'contentHashMismatch' | 'clipMissing' | 'incompatibleRig' | 'invalidBlendWeight' | 'invalidTransition' | 'staleRevision' | 'unavailableHost' | 'compatibilityFallback' | 'hostFailure';
 export interface RustyApplicationAnimationDiagnostic {
     readonly code: RustyApplicationAnimationDiagnosticCode;
@@ -264,20 +284,24 @@ export interface RustyApplicationRendererPort {
     readonly replaceAnimationCueDefinitions: (definitions: readonly RustyApplicationAnimationCueDefinition[]) => RustyApplicationFrameReceipt;
     /** Read Engine-realized audio facts without exposing the browser audio owner. */
     readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
+    readonly videoRealizedFacts: () => RustyApplicationVideoRealizedFactsReadout | null;
     readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
     readonly ghostPlateReadout: () => RustyApplicationGhostPlateReadout | null;
     readonly diagnosticsReadout: () => RendererSurfaceDiagnosticsReadout;
     /** Acknowledge only the submitted Engine-realized audio fact range. */
     readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
+    readonly acknowledgeVideoRealizedFacts: (throughFactId: number) => boolean;
     readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
     /** Invalidate the realized-audio owner when a product runtime binding changes. */
     readonly resetAudioRealizationOwner: () => boolean;
+    readonly resetVideoRealizationOwner: () => boolean;
     readonly resetAnimationRealizationOwner: () => boolean;
     readonly resetCameraMotion: () => void;
     readonly configureViews: (composition: RustyApplicationViewComposition) => RustyApplicationViewCompositionReceipt;
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;
     readonly renderOnce: (timeMs?: number) => void;
+    readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
     /** Admit immutable bytes into the live Engine renderer without replacing its surface. */
     readonly admitResources: (resources: readonly RustyApplicationResource[], frame?: RustyApplicationFrame) => Promise<void>;
     readonly retainResources: (identities: ReadonlySet<string>) => void;

@@ -701,6 +701,60 @@ session identity and generation are copied diagnostic provenance, not a native
 handle that remains resolvable after save/load; target compatibility comes from
 the typed configuration, motion, session, and canonical-content checks.
 
+## Offline images and GLB export
+
+`engine.RenderOutput` owns asynchronous output from the current retained
+appearance snapshot. `CaptureImage` and `ExportSceneGlb` select a product
+`AppearanceFact.ObjectId`, including its descendants and ancestor transforms.
+They freeze the scene at successful callback completion; later product changes
+cannot alter that job. A missing source/camera or unsupported export feature
+produces a failed job with a UTF-8 diagnostic, rather than partial success.
+
+```csharp
+RenderOutput image = engine.RenderOutput.CaptureImage(new(
+    sourceObjectId, camera, 512, 512, new Color(0, 0, 0, 0), false,
+    1, CaptureToneMapping.AcesFilmic, 4, animatedObjectId, "run", .5));
+RenderOutput glb = engine.RenderOutput.ExportSceneGlb(new(sourceObjectId, true));
+// During later product callbacks:
+if (engine.RenderOutput.Read(image).State == RenderOutputState.Completed)
+{
+    ReadOnlyMemory<byte> png = engine.RenderOutput.ReadBytes(image);
+    // Product chooses a file, store, or other destination for these copied bytes.
+    image.Dispose();
+}
+```
+
+Image dimensions are independent of the window. The result is a top-to-bottom
+8-bit sRGB RGBA PNG with straight alpha. Clear colors use linear RGB;
+`UseCameraBackground` instead selects the current `CameraView` sky/color.
+Existing retained lights, material assignments, camera framing and projection
+remain Engine inputs. Exposure, no tone mapping/ACES, and multisample count are
+explicit capture choices. Unsupported target dimensions or sample counts fail
+with a diagnostic. A zero `PoseObjectId` keeps the frozen pose; a nonzero object
+selects an exact normalized clip time in `[0,1]`, including the final pose,
+without advancing the live animation or wall clock.
+
+Completion means resources loaded, pose evaluated, render/readback finished,
+and PNG/GLB bytes copied to the Engine owner. Poll `Read`; use `ReadDiagnostic`
+for a failed job. `Cancel` or `Dispose` prevents later completion from reviving
+a job. Dispose results after use; the renderer reuses its batch render target.
+Requests settle after a callback, so never block that callback waiting for one.
+
+GLB exports current retained geometry, hierarchy, transforms, standard material
+and texture assignments, normals and UVs, rather than returning the original
+imported file. `IncludeAnimations` preserves supported skin/clip data. Unsupported
+shader-based materials or animation features fail explicitly. Generated meshes
+remain exportable after the implicit field has been disposed, as long as the
+mesh appearance is retained when the request settles. Reopen output through the
+`Animation.OpenAnimatedMesh` / `CreateAnimatedMeshAppearance` content path
+(which also admits static GLBs with no embedded clips).
+
+For unattended batches, launch the packaged `rusty dev --headless` or
+`rusty-product-host --headless`. Chromium must be installed; `RUSTY_CHROMIUM_PATH`
+selects its executable. This uses the Engine browser backend in a managed
+headless process, including software WebGL support; it is not a GPU-free
+renderer or a product-owned DOM screenshot path.
+
 ## Values, leases, and native lifetime
 
 The public C# layer turns direct service calls into typed requests, receipts,
@@ -1107,6 +1161,18 @@ asset uses a reference. Spatial copies the geometry during admission; its
 collider remains valid after the source graphics resource is released. Visual
 and collision replacement are explicit independent product actions. A zero
 reference retains the existing borrowed-array collision path.
+
+For streaming authored collision cells, use `Spatial.ApplyCollisionResidency`
+with stable asset and instance IDs. Its arrays are upserts; `RemovedAssets` and
+`RemovedInstances` remove selected IDs before upserts are applied. Missing
+removals are harmless. A whole delta commits atomically, and removing an asset
+still referenced by a retained instance fails without changing the scene.
+Unchanged geometry and prepared colliders are shared; admission does not copy
+or rebuild every resident cell. Use current local-frame instance transforms;
+`WorldOrigin` rebases these same retained colliders. The product owns cell
+selection, unload/reload policy and its authored identity map. This path uses
+ordinary static-mesh collision/query ownership, without a dense voxel volume
+or replacement of the complete collision artifact.
 
 `ReadGeneration(field)` reports the most recent successful generation's vertex,
 triangle and material-group counts, actual sample spacing, octree depth,

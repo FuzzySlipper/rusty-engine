@@ -728,6 +728,48 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeCollisionReplaceRequest,
     ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
+        self.mutate_collision(request, None)
+    }
+
+    fn apply_collision_residency(
+        &mut self,
+        request: &NativeCollisionResidencyRequest,
+    ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
+        let removed_assets = unsafe {
+            borrowed_slice(
+                request.removed_assets,
+                request.removed_assets_len,
+                "removed collision assets",
+            )
+        }?;
+        let removed_instances = unsafe {
+            borrowed_slice(
+                request.removed_instances,
+                request.removed_instances_len,
+                "removed collision instances",
+            )
+        }?;
+        self.mutate_collision(
+            &NativeCollisionReplaceRequest {
+                session: request.session,
+                assets: request.assets,
+                assets_len: request.assets_len,
+                vertices: request.vertices,
+                vertices_len: request.vertices_len,
+                triangles: request.triangles,
+                triangles_len: request.triangles_len,
+                instances: request.instances,
+                instances_len: request.instances_len,
+            },
+            Some((removed_assets, removed_instances)),
+        )
+    }
+
+    fn mutate_collision(
+        &mut self,
+        request: &NativeCollisionReplaceRequest,
+        removed: Option<(&[u64], &[u64])>,
+    ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
         let assets =
             unsafe { borrowed_slice(request.assets, request.assets_len, "collision assets") }?;
         let vertices = unsafe {
@@ -786,16 +828,25 @@ impl RuntimeSpatialBridge {
             .iter()
             .map(|asset| (asset.id, asset.geometry_hash))
             .collect::<BTreeMap<_, _>>();
+        let scene_before = Arc::clone(&self.session_mut(request.session)?.scene);
         let instances = instances
             .iter()
             .map(|instance| {
                 let asset = StaticMeshAssetId(instance.asset);
-                let expected_geometry_hash = *geometry.get(&asset).ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_COLLISION_INSTANCE",
-                        "instance referenced an unavailable asset",
-                    )
-                })?;
+                let expected_geometry_hash = geometry
+                    .get(&asset)
+                    .copied()
+                    .or_else(|| {
+                        removed
+                            .filter(|(assets, _)| !assets.contains(&instance.asset))
+                            .and_then(|_| scene_before.static_mesh_asset_geometry_hash(asset))
+                    })
+                    .ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_COLLISION_INSTANCE",
+                            "instance referenced an unavailable asset",
+                        )
+                    })?;
                 Ok(StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(instance.id),
                     asset,
@@ -807,15 +858,24 @@ impl RuntimeSpatialBridge {
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
             let mut candidate = (*session.scene).clone();
-            let receipt = candidate
-                .replace_static_mesh_colliders(
+            let receipt = if let Some((removed_assets, removed_instances)) = removed {
+                candidate.apply_static_mesh_residency(
+                    candidate.static_mesh_collision_revision(),
+                    admitted,
+                    instances,
+                    removed_assets.iter().copied().map(StaticMeshAssetId),
+                    removed_instances.iter().copied().map(StaticMeshInstanceId),
+                )
+            } else {
+                candidate.replace_static_mesh_colliders(
                     candidate.static_mesh_collision_revision(),
                     admitted,
                     instances,
                 )
-                .map_err(|error| {
-                    CsharpEngineServicesError::new("CSHARP_COLLISION_REPLACE", format!("{error:?}"))
-                })?;
+            }
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_COLLISION_REPLACE", format!("{error:?}"))
+            })?;
             let candidate = Arc::new(candidate);
             session.scene = Arc::clone(&candidate);
             session.content_artifact = None;
@@ -3656,6 +3716,24 @@ unsafe extern "C" fn replace_spatial_collision(
     }
 }
 
+unsafe extern "C" fn apply_collision_residency(
+    context: *mut c_void,
+    request: *const NativeCollisionResidencyRequest,
+    receipt: *mut NativeCollisionReplaceReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.apply_collision_residency(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn replace_spatial_content_artifact(
     context: *mut c_void,
     request: *const NativeSpatialContentArtifactReplaceRequest,
@@ -4533,6 +4611,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         create_session: create_spatial_session,
         destroy_session: destroy_spatial_session,
         replace_collision: replace_spatial_collision,
+        apply_collision_residency,
         replace_content_artifact: replace_spatial_content_artifact,
         read_content_artifact: read_spatial_content_artifact,
         replace_navigation: replace_spatial_navigation,

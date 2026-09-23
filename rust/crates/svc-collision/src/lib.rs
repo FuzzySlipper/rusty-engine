@@ -820,6 +820,27 @@ impl CollisionProjection {
             .replace_all(expected_revision, assets, instances)
     }
 
+    pub fn static_mesh_asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
+        self.static_meshes.asset_geometry_hash(id)
+    }
+
+    pub fn apply_static_mesh_residency(
+        &mut self,
+        expected_revision: u64,
+        assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
+        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
+        removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
+        removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        self.static_meshes.apply_residency(
+            expected_revision,
+            assets,
+            instances,
+            removed_assets,
+            removed_instances,
+        )
+    }
+
     /// Preserve the caller-owned derived static-mesh projection while voxel
     /// authority is rebuilt transactionally.
     pub fn copy_static_meshes_from(&mut self, source: &Self) {

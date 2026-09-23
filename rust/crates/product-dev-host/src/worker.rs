@@ -70,8 +70,10 @@ pub enum ProductDevWorkerUpdateOperation {
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevWorkerFeedbackOperation {
     Audio,
+    Video,
     Animation,
     GhostPlate,
+    RenderOutput,
     RendererDiagnostics,
 }
 

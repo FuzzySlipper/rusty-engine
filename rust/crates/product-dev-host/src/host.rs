@@ -1591,6 +1591,9 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/ghost-plate-feedback" => {
             invoke_ghost_plate_feedback(state, &request.body)
         }
+        "/__rusty/product/runtime/render-output-feedback" => {
+            invoke_render_output_feedback(state, &request.body)
+        }
         "/__rusty/product/runtime/renderer-diagnostics" => {
             invoke_renderer_diagnostics(state, &request.body)
         }
@@ -2083,6 +2086,34 @@ fn invoke_ghost_plate_feedback<R: ProductDevRuntime>(
         ProductDevOperationKind::ReportGhostPlateFeedback,
         |runtime| runtime.report_ghost_plate_feedback(request),
         |error| crate::ProductDevGhostPlateFeedbackResult::rejected_runtime(binding, error),
+    )
+}
+
+fn invoke_render_output_feedback<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    body: &[u8],
+) -> HttpResponse {
+    let request: crate::ProductDevRenderOutputFeedback = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(error) = request.validate() {
+        return HttpResponse::error(400, error.code(), error.detail());
+    }
+    call_runtime(
+        state,
+        ProductDevOperationKind::ReportRenderOutputFeedback,
+        |runtime| runtime.report_render_output_feedback(request),
+        |error| {
+            Err(crate::ProductDevHostError::new(
+                "DEV_HOST_RENDER_OUTPUT_FEEDBACK_RUNTIME",
+                if error.diagnostic().is_empty() {
+                    "render output feedback failed"
+                } else {
+                    error.diagnostic()
+                },
+            ))
+        },
     )
 }
 

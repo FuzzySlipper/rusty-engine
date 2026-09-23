@@ -500,7 +500,7 @@ function freezeValue<T>(value: T): T {
   return Object.freeze(value);
 }
 
-function createCamera(descriptor: RendererCompositionCamera): THREE.Camera {
+export function createCamera(descriptor: RendererCompositionCamera): THREE.Camera {
   const camera = descriptor.projection.kind === 'perspective'
     ? new THREE.PerspectiveCamera(
         descriptor.projection.fovYDegrees,
@@ -523,7 +523,7 @@ function createCamera(descriptor: RendererCompositionCamera): THREE.Camera {
   return camera;
 }
 
-function updateCameraAspect(camera: THREE.Camera, aspect: number): void {
+export function updateCameraAspect(camera: THREE.Camera, aspect: number): void {
   if (camera instanceof THREE.PerspectiveCamera) {
     camera.aspect = aspect;
     camera.updateProjectionMatrix();

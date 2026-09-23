@@ -34,7 +34,7 @@ pub(crate) fn api(bridge: &mut RuntimeRngBridge) -> NativeRngApi {
     NativeRngApi {
         context: (bridge as *mut RuntimeRngBridge).cast(),
         draw_keyed: draw_keyed_rng,
-        draw_lcg15: draw_lcg15,
+        draw_lcg15,
         create_scoped: create_scoped_rng,
         fork_scoped: fork_scoped_rng,
         destroy_scoped: destroy_scoped_rng,

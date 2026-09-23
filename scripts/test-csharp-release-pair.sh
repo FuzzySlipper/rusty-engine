@@ -21,7 +21,9 @@ run_aot=${2:-}
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/rusty-engine-pair-consumer.XXXXXX")
 host_pid=""
+control_open=0
 cleanup() {
+    if [[ "$control_open" == 1 ]]; then exec 9>&-; control_open=0; fi
     if [[ -n "$host_pid" ]] && kill -0 "$host_pid" 2>/dev/null; then
         kill "$host_pid" 2>/dev/null || true
         wait "$host_pid" 2>/dev/null || true
@@ -61,6 +63,7 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
+    <RustyEngineProductLiveDebug>true</RustyEngineProductLiveDebug>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$version" />
@@ -76,13 +79,16 @@ namespace PairConsumer;
 
 public sealed class Product : IEngineProduct
 {
+    private readonly RenderOutputChecks _outputs;
     public Product(ProductCreateContext context)
     {
+        _outputs = new(context.Engine);
         if (context.Input.CursorMode != InputCursorMode.Unlocked)
             throw new System.InvalidOperationException("Packaged cursor mode did not reach C# composition.");
         IInputService input = context.Engine.Input;
         ProductInputMapping initialMapping = context.Input.PhysicalMappings.Span[0];
         JsonPersistenceChecks.Run(context.Engine);
+        SpatialResidencyChecks.Run(context.Engine);
         AddressableInventoryStacksExercise.Run();
         ProductInputMapping replacement = initialMapping with { Keyboard = KeyboardControl.KeyF };
         if (input.ReplacePhysicalMappings([replacement]) != InputMappingReplacementOutcome.Staged)
@@ -94,7 +100,7 @@ public sealed class Product : IEngineProduct
     }
     public void Start() { }
     public void Attach() { }
-    public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
+    public ProductUpdateResult Update(ProductUpdate update) { _outputs.Tick(); return ProductUpdateResult.None; }
     public void Pause() { }
     public void Resume() { }
     public void Restart() { }
@@ -103,8 +109,15 @@ public sealed class Product : IEngineProduct
 }
 EOF
 cp "$repo_root/scripts/fixtures/JsonPersistenceChecks.cs" "$consumer/JsonPersistenceChecks.cs"
+cp "$repo_root/scripts/fixtures/SpatialResidencyChecks.cs" "$consumer/SpatialResidencyChecks.cs"
+cp "$repo_root/scripts/fixtures/RenderOutputChecks.cs" "$consumer/RenderOutputChecks.cs"
+cp "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer/content/animated.glb"
+cp "$repo_root/fixtures/voxel-conversion/kenney-wall-a.glb" "$consumer/content/static.glb"
+mkdir -p "$consumer/content/Textures"
+cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer/content/Textures/wall_lines.png"
+cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer/content/Textures/concrete.png"
 cp "$repo_root/csharp/Rusty.Engine.Mechanics.Example/AddressableInventoryStacksExercise.cs" "$consumer/AddressableInventoryStacksExercise.cs"
-printf '// pair-only product UI\n' > "$consumer/product-ui/main.js"
+printf 'export function mountProductUi(root) { root.dataset.fixture = "ready"; }\n' > "$consumer/product-ui/main.js"
 printf 'pair-only content\n' > "$consumer/content/trial.txt"
 
 consumer_home="$work/dotnet-home"
@@ -143,14 +156,23 @@ grep -F 'usage: rusty dev --project' "$work/rusty-dev-help.log" >/dev/null || {
 }
 loaders=(coreclr)
 if [[ "$run_aot" == --aot ]]; then
-    (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet msbuild PairConsumer.csproj -t:VerifyRustyEngineAot -p:RustyEngineProductPort=0)
     loaders+=(nativeaot)
 fi
 for loader in "${loaders[@]}"; do
-host_log="$work/runtime-host-$loader.log"
-env -u CARGO -u CARGO_HOME -u RUSTUP_HOME \
-    "$runtime/bin/rusty-product-host" --product "$staged" --loader "$loader" --persistence-root "$work/persistence-$loader" > "$host_log" 2>&1 &
+if [[ "$loader" == nativeaot ]]; then
+    (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild PairConsumer.csproj -t:VerifyRustyEngineAot -p:RustyEngineProductPort=0)
+fi
+for reopen in 0 1; do
+output_dir="$work/output-$loader-$reopen"
+mkdir -p "$output_dir"
+host_log="$work/runtime-host-$loader-$reopen.log"
+control_fifo="$work/control-$loader-$reopen"
+mkfifo "$control_fifo"
+exec 9<>"$control_fifo"
+control_open=1
+env -u CARGO -u CARGO_HOME -u RUSTUP_HOME RUSTY_OUTPUT_TEST_DIR="$output_dir" RUSTY_OUTPUT_REOPEN="$reopen" \
+    "$runtime/bin/rusty-product-host" --headless --supervised --runtime-instance-id "$$" --product "$staged" --loader "$loader" --persistence-root "$work/persistence-$loader" < "$control_fifo" 9>&- > "$host_log" 2>&1 &
 host_pid=$!
 origin=""
 for _ in $(seq 1 40); do
@@ -170,10 +192,35 @@ curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "f
 [[ ! -e "$work/persistence-$loader/json-roundtrip/discarded" ]] || {
     echo "JSON fixture did not remove deleted persistent state" >&2; exit 1;
 }
-kill "$host_pid"
-wait "$host_pid" || true
+for _ in $(seq 1 240); do
+    [[ -f "$output_dir/complete" ]] && break
+    kill -0 "$host_pid" 2>/dev/null || break
+    sleep 0.25
+done
+if [[ ! -f "$output_dir/complete" ]]; then
+    cat "$host_log" >&2
+    curl --silent --max-time 5 -H 'Content-Type: application/json' --data '{}' \
+        "$origin/__rusty/product/runtime/diagnostics/read" >&2 || true
+    echo "Packaged renderer outputs did not complete" >&2
+    exit 1
+fi
+python3 "$repo_root/scripts/fixtures/verify-render-outputs.py" "$output_dir"
+exec 9>&-
+control_open=0
+wait "$host_pid"
 host_pid=""
-echo "Packaged $loader inventory, input remapping, and JSON persistence checks passed"
+echo "Packaged $loader output checks passed (reopen=$reopen)"
+if [[ "$reopen" == 0 ]]; then
+    cp "$output_dir/"*.glb "$consumer/content/"
+    (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild PairConsumer.csproj -t:StageRustyEngineCoreClrProduct -p:RustyEngineProductPort=0)
+    if [[ "$loader" == nativeaot ]]; then
+        (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+            dotnet msbuild PairConsumer.csproj -t:VerifyRustyEngineAot -p:RustyEngineProductPort=0)
+    fi
+fi
+done
+echo "Packaged $loader inventory, input, persistence, residency, capture, and export checks passed"
 done
 
 tampered="$work/tampered-pair"

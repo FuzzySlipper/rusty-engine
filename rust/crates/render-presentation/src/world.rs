@@ -262,6 +262,14 @@ impl PresentationWorld {
         &self,
         source: RenderHandle,
     ) -> Result<RenderFrameDiff, PresentationWorldError> {
+        self.capture_output_scene(source, false)
+    }
+
+    pub fn capture_output_scene(
+        &self,
+        source: RenderHandle,
+        retain_background: bool,
+    ) -> Result<RenderFrameDiff, PresentationWorldError> {
         if !self.nodes.contains_key(&source) {
             return Err(PresentationWorldError::UnknownNode(source));
         }
@@ -278,6 +286,7 @@ impl PresentationWorld {
                 break;
             }
         }
+        let mut renderable = selected.clone();
         // Ancestors preserve the capture's original world-space transform.
         let mut parent = self.nodes[&source].parent;
         while let Some(handle) = parent {
@@ -286,6 +295,7 @@ impl PresentationWorld {
         }
         for (handle, node) in &self.nodes {
             if matches!(node.kind, NodeKind::Light(_)) {
+                renderable.insert(*handle);
                 selected.insert(*handle);
                 let mut parent = node.parent;
                 while let Some(handle) = parent {
@@ -296,7 +306,41 @@ impl PresentationWorld {
         }
         let mut captured = self.clone();
         captured.nodes.retain(|handle, _| selected.contains(handle));
-        captured.sky = None;
+        for (handle, node) in &mut captured.nodes {
+            if renderable.contains(handle) {
+                continue;
+            }
+            let node = Arc::make_mut(node);
+            macro_rules! group {
+                ($value:expr, $layer:expr) => {
+                    RenderNode {
+                        geometry: Geometry::Group,
+                        material: Material::DEFAULT,
+                        transform: $value.transform,
+                        visible: $value.visible,
+                        layer: $layer,
+                        metadata: $value.metadata.clone(),
+                    }
+                };
+            }
+            let group = match &node.kind {
+                NodeKind::Primitive(value) => group!(value, value.layer),
+                NodeKind::StaticMesh(value) => group!(value, RenderLayer::Scene),
+                NodeKind::AnimatedMesh(value) => group!(value, RenderLayer::Scene),
+                NodeKind::VoxelObject(value) => group!(value, RenderLayer::Scene),
+                NodeKind::Sprite(value) => group!(value, value.layer),
+                NodeKind::Light(_) => continue,
+            };
+            node.kind = NodeKind::Primitive(group);
+            node.mesh_payload = None;
+            node.material_override = None;
+            node.material_parameters.clear();
+        }
+
+        if !retain_background {
+            captured.sky = None;
+            captured.background_color = None;
+        }
         // Capture dependencies are a subset of the live world. In particular,
         // one small plate must not copy or realize every unrelated mesh.
         let mut meshes = BTreeSet::new();
@@ -387,12 +431,15 @@ impl PresentationWorld {
         for atlas in captured.atlases.values() {
             textures.insert(atlas.texture.clone());
         }
+        if let Some(sky) = &captured.sky {
+            textures.insert(sky.texture.clone());
+        }
         captured.textures.retain(|id, _| textures.contains(id));
         let mut frame = captured.snapshot().frame;
         for controller in self
             .controllers
             .values()
-            .filter(|controller| selected.contains(&controller.target))
+            .filter(|controller| renderable.contains(&controller.target))
         {
             frame
                 .ops
@@ -910,6 +957,33 @@ mod tests {
             }],
             collision: MeshCollisionPolicy::VisualOnly,
         }
+    }
+
+    #[test]
+    fn selected_child_capture_retains_ancestor_transform_without_ancestor_geometry() {
+        let mut world = PresentationWorld::default();
+        let mut parent = RenderNode::new(Geometry::Cube);
+        parent.transform.translation = [3.0, 0.0, 0.0];
+        world
+            .apply(&frame(vec![
+                RenderDiff::Create {
+                    handle: RenderHandle::new(1),
+                    parent: None,
+                    node: parent.clone(),
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(2),
+                    parent: Some(RenderHandle::new(1)),
+                    node: RenderNode::new(Geometry::Sphere),
+                },
+            ]))
+            .unwrap();
+        let captured = world
+            .capture_output_scene(RenderHandle::new(2), false)
+            .unwrap();
+        assert!(captured.ops.iter().any(|op| matches!(op, RenderDiff::Create {handle,node,..} if handle.raw()==1 && node.geometry==Geometry::Group && node.transform==parent.transform)));
+        assert!(captured.ops.iter().any(|op| matches!(op, RenderDiff::Create {handle,node,..} if handle.raw()==2 && node.geometry==Geometry::Sphere)));
+        assert!(world.snapshot().frame.ops.iter().any(|op| matches!(op, RenderDiff::Create {handle,node,..} if handle.raw()==1 && node.geometry==Geometry::Cube)));
     }
 
     #[test]

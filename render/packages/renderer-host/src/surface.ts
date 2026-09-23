@@ -1,3 +1,4 @@
+import type { RenderOutputJob } from "@rusty-engine/render-contracts";
 // Explicit browser/canvas composition over the renderer-neutral projection and Three backend.
 
 import type {
@@ -644,6 +645,7 @@ export interface RendererSurface {
   readonly retainResources: (identities: ReadonlySet<string>) => void;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
+  readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
   readonly resetCamera: () => void;
   /** Synchronize a caller-owned camera, such as an authoritative game player view. */
   readonly setCameraPose: (
@@ -1360,6 +1362,7 @@ function mountPreparedRendererSurface(
       if (disposed) return;
       backendSurface.renderer.retainResources(identities);
     },
+    executeRenderOutput: (job: RenderOutputJob) => backendSurface.executeRenderOutput(job),
     renderOnce,
     resetCamera: () => {
       controls.resetCamera();

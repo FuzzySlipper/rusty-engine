@@ -1,3 +1,4 @@
+import type { RenderOutputJob, RenderOutputChunk } from "@rusty-engine/render-contracts";
 import { mountRustyApplication, type RustyApplicationFrame, type RustyApplicationGameplayCursorMode, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
 import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { type ProductBrowserDynamicRendererResourceFetcher } from './dynamic-renderer-resources.js';
@@ -114,6 +115,26 @@ export interface ProductBrowserAudioFeedbackResult {
     readonly acceptedThroughFactId?: string;
     readonly recovery?: ProductBrowserRuntimeRecovery;
     readonly diagnostic?: string;
+}
+export type ProductBrowserVideoFeedbackFact = {
+    readonly kind: 'completed';
+    readonly factId: string;
+    readonly handle: string;
+} | {
+    readonly kind: 'skipped';
+    readonly factId: string;
+    readonly handle: string;
+} | {
+    readonly kind: 'failed';
+    readonly factId: string;
+    readonly handle: string;
+    readonly code: 'decodeFailed' | 'playbackBlocked' | 'hostFailure';
+};
+export interface ProductBrowserVideoFeedback {
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly replaceOwner: boolean;
+    readonly evictedFactCount: string;
+    readonly facts: readonly ProductBrowserVideoFeedbackFact[];
 }
 /** Closed renderer-observation feedback; this is not an animation command route. */
 export type ProductBrowserAnimationFeedbackFact = {
@@ -283,7 +304,11 @@ export interface ProductBrowserRuntimeBindingOutput {
     /** Immutable renderer identities required by this output group, without bytes. */
     readonly rendererResources?: readonly string[];
 }
-export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
+export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput | {
+    readonly kind: 'render-output';
+    readonly jobs: readonly RenderOutputJob[];
+    readonly rendererResources?: readonly string[];
+}
 /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
  | {
     readonly kind: 'runtime-progress';
@@ -411,7 +436,12 @@ export interface ProductBrowserRuntimeAdapter {
     readonly replaceControl?: (runtime: RustyApplicationRuntimeIdentity) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly input: (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => Promise<ProductBrowserRuntimeInputResult>;
     readonly reportAudioFeedback: (feedback: ProductBrowserAudioFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
+    readonly reportVideoFeedback?: (feedback: ProductBrowserVideoFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
     readonly reportAnimationFeedback: (feedback: ProductBrowserAnimationFeedback) => Promise<ProductBrowserAnimationFeedbackResult>;
+    readonly reportRenderOutputFeedback?: (feedback: {
+        readonly runtime: RustyApplicationRuntimeIdentity;
+        readonly chunk: RenderOutputChunk;
+    }) => Promise<void>;
     readonly reportGhostPlateFeedback: (feedback: ProductBrowserGhostPlateFeedback) => Promise<ProductBrowserGhostPlateFeedbackResult>;
     readonly reportRendererDiagnostics?: (feedback: ProductBrowserRendererDiagnosticsFeedback) => Promise<ProductBrowserRendererDiagnosticsFeedbackResult>;
     readonly reportBrowserDiagnostics?: (report: ProductBrowserDiagnosticsReport) => Promise<ProductBrowserDiagnosticsResult>;
@@ -438,7 +468,9 @@ export interface ProductBrowserRuntimeTransport {
     readonly replaceControl?: NonNullable<ProductBrowserRuntimeAdapter['replaceControl']>;
     readonly input: ProductBrowserRuntimeAdapter['input'];
     readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
+    readonly reportVideoFeedback?: NonNullable<ProductBrowserRuntimeAdapter['reportVideoFeedback']>;
     readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
+    readonly reportRenderOutputFeedback?: NonNullable<ProductBrowserRuntimeAdapter['reportRenderOutputFeedback']>;
     readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
     readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
     readonly reportBrowserDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportBrowserDiagnostics']>;
@@ -537,6 +569,14 @@ interface ProductBrowserAudioFeedbackReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;
 }
+export interface ProductBrowserVideoFeedbackReporter {
+    readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+    readonly flush: () => Promise<void>;
+}
+export declare function createProductBrowserVideoFeedbackReporter(options: {
+    readonly renderer: Pick<RustyApplicationHost['renderer'], 'videoRealizedFacts' | 'acknowledgeVideoRealizedFacts' | 'resetVideoRealizationOwner'>;
+    readonly report: NonNullable<ProductBrowserRuntimeTransport['reportVideoFeedback']>;
+}): ProductBrowserVideoFeedbackReporter;
 interface ProductBrowserAnimationFeedbackReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;

@@ -457,3 +457,6 @@ fn validate_json_safe(value: u64) -> Result<(), RendererHostContractError> {
         Err(RendererHostContractError::OutsideJsonSafeRange)
     }
 }
+
+mod render_output;
+pub use render_output::*;

@@ -1,3 +1,4 @@
+import type { RenderOutputJob } from "@rusty-engine/render-contracts";
 import type { PresentationFrameDiff, RenderFrameDiff, RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import {
   RendererAnimationHost,
@@ -397,6 +398,7 @@ export interface RustyApplicationRendererPort {
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
   readonly renderOnce: (timeMs?: number) => void;
+  readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
   /** Admit immutable bytes into the live Engine renderer without replacing its surface. */
   readonly admitResources: (
     resources: readonly RustyApplicationResource[],
@@ -1218,6 +1220,7 @@ export async function mountRustyApplicationWithEnvironment(
         );
       }
     },
+    executeRenderOutput: (job: RenderOutputJob) => requireActive().executeRenderOutput(job),
     renderOnce: (timeMs?: number) => {
       if (timeMs === undefined) requireActive().renderOnce();
       else requireActive().renderOnce(timeMs);

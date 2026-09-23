@@ -492,6 +492,20 @@ impl CsharpRenderResource {
     }
 }
 
+impl RuntimeAppearanceState {
+    pub(crate) fn output_object_handle(
+        &self,
+        id: u64,
+    ) -> Result<RenderHandle, CsharpEngineServicesError> {
+        self.projector.object_handle(id).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_RENDER_OUTPUT_SOURCE",
+                "output source object is absent from the retained appearance snapshot",
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 fn atlas_sprite_request(
     atlas: NativeSpriteAtlasHandle,

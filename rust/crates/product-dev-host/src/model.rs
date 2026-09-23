@@ -136,6 +136,7 @@ pub enum ProductDevOperationKind {
     ReportVideoFeedback,
     ReportAnimationFeedback,
     ReportGhostPlateFeedback,
+    ReportRenderOutputFeedback,
     ReportRendererDiagnostics,
     ExecuteDebug,
 }
@@ -860,6 +861,46 @@ impl ProductDevGhostPlateFeedbackResult {
             runtime,
             diagnostic: Some(diagnostic),
         })
+    }
+}
+
+/// One bounded renderer-output transfer chunk reported for an active runtime
+/// generation. The renderer owns byte production; the runtime consumes the
+/// copied chunk under its existing generation binding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevRenderOutputFeedback {
+    pub runtime: ProductDevRuntimeBinding,
+    pub chunk: render_host_contracts::RenderOutputChunk,
+}
+
+impl ProductDevRenderOutputFeedback {
+    pub const MAX_CHUNK_BYTES: usize = 32 * 1024;
+    pub const MAX_ERROR_BYTES: usize = 1_024;
+
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        let offset_out_of_range =
+            u64::try_from(self.chunk.offset).map_or(true, |offset| offset > JSON_SAFE_U64_MAX);
+        let invalid_error = self
+            .chunk
+            .error
+            .as_ref()
+            .is_some_and(|error| error.is_empty() || error.len() > Self::MAX_ERROR_BYTES);
+        let invalid_terminal_error =
+            self.chunk.error.is_some() && (!self.chunk.bytes.is_empty() || !self.chunk.complete);
+        if self.chunk.id == 0
+            || self.chunk.id > JSON_SAFE_U64_MAX
+            || offset_out_of_range
+            || self.chunk.bytes.len() > Self::MAX_CHUNK_BYTES
+            || invalid_error
+            || invalid_terminal_error
+        {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDER_OUTPUT_FEEDBACK_BOUNDS",
+                "render output feedback requires a JSON-safe job identity, bounded chunk, and terminal error without bytes",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -2368,6 +2409,9 @@ enum ProductDevRuntimeOutputWire {
     AnimationCueDefinitions {
         definitions: Vec<ProductDevAnimationCueDefinition>,
     },
+    RenderOutput {
+        jobs: Vec<render_host_contracts::RenderOutputJob>,
+    },
     UiProjection {
         envelope: runtime_ui::RuntimeUiProjectionEnvelope,
     },
@@ -2602,6 +2646,11 @@ impl ProductDevRuntimeOutput {
                     .collect::<Result<Vec<_>, _>>()?;
                 Self::animation_cue_definitions(definitions)
             }
+            RuntimePublication::RenderOutput(jobs) => Ok(Self {
+                renderer_resources: None,
+                resources: Default::default(),
+                wire: ProductDevRuntimeOutputWire::RenderOutput { jobs },
+            }),
             RuntimePublication::UiProjection(envelope) => Ok(Self {
                 renderer_resources: None,
                 resources: Default::default(),
@@ -2666,6 +2715,9 @@ impl ProductDevRuntimeOutput {
                     .collect::<Result<Vec<_>, _>>()?;
                 RuntimePublication::animation_cue_definitions(definitions)
                     .map_err(publication_error)
+            }
+            ProductDevRuntimeOutputWire::RenderOutput { jobs } => {
+                RuntimePublication::render_output(jobs).map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::UiProjection { envelope } => {
                 RuntimePublication::ui_projection(&envelope).map_err(publication_error)
@@ -3462,6 +3514,20 @@ pub trait ProductDevRuntime: Send + 'static {
             "ghost plate feedback is not supported by this runtime",
         )
         .expect("fixed ghost-plate feedback diagnostic"))
+    }
+
+    /// Ingests one bounded completed image or authored-scene output chunk.
+    /// The browser host reports copied bytes and keeps the job's renderer
+    /// resources alive until this terminal feedback is accepted.
+    fn report_render_output_feedback(
+        &mut self,
+        _feedback: ProductDevRenderOutputFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<bool>, ProductDevRuntimeError> {
+        Err(ProductDevRuntimeError::new_not_applied(
+            "DEV_HOST_RENDER_OUTPUT_FEEDBACK_UNSUPPORTED",
+            "render output feedback is not supported by this runtime",
+        )
+        .expect("fixed render-output feedback diagnostic"))
     }
 
     fn report_renderer_diagnostics(

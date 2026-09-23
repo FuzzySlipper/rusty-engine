@@ -118,6 +118,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Diagnostics = new DiagnosticsServiceImplementation(native.diagnostics);
                     Audio = new AudioServiceImplementation(native.audio, leaseReleases);
                     Video = new VideoServiceImplementation(native.video);
+                    RenderOutput = new RenderOutputServiceImplementation(native.render_output, leaseReleases);
                     Dynamics = new DynamicsServiceImplementation(native.dynamics, leaseReleases);
                     Motion = new MotionServiceImplementation(native.motion);
                     Kinematic = new KinematicServiceImplementation(native.kinematic);
@@ -144,6 +145,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IDiagnosticsService Diagnostics { get; }
                 public IAudioService Audio { get; }
                 public IVideoService Video { get; }
+                public IRenderOutputService RenderOutput { get; }
                 public IDynamicsService Dynamics { get; }
                 public IMotionService Motion { get; }
                 public IKinematicService Kinematic { get; }

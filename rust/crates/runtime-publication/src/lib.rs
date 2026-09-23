@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use render_host_contracts::RendererViewComposition;
+use render_host_contracts::{RenderOutputJob, RendererViewComposition};
 use render_model::{RenderFrameDiff, JSON_SAFE_U64_MAX};
 use render_presentation::PresentationFrameDiff;
 use runtime_input::RuntimeInputBinding;
@@ -202,6 +202,9 @@ pub enum RuntimePublication {
     Frame(RuntimeRenderFrame),
     ViewComposition(RendererViewComposition),
     Presentation(RuntimePresentationFrame),
+    /// Complete replacement snapshot of pending renderer output jobs. An
+    /// empty snapshot cancels every previously published pending job.
+    RenderOutput(Vec<RenderOutputJob>),
     AnimationCueDefinitions(Vec<RuntimeAnimationCueDefinition>),
     UiProjection(RuntimeUiProjectionEnvelope),
 }
@@ -236,6 +239,12 @@ impl RuntimePublication {
             .validate()
             .map_err(|_| RuntimePublicationError::InvalidPresentation)?;
         Ok(Self::Presentation(RuntimePresentationFrame(frame.clone())))
+    }
+
+    pub fn render_output(jobs: Vec<RenderOutputJob>) -> Result<Self, RuntimePublicationError> {
+        let publication = Self::RenderOutput(jobs);
+        publication.validate()?;
+        Ok(publication)
     }
 
     pub fn animation_cue_definitions(
@@ -289,6 +298,21 @@ impl RuntimePublication {
             } => validate_frontiers(publication_frontiers),
             // These snapshots cannot be mutated after their constructor admitted them.
             Self::Frame(_) | Self::Presentation(_) => Ok(()),
+            Self::RenderOutput(jobs) => {
+                let mut ids = BTreeSet::new();
+                for job in jobs {
+                    if job.id == 0 || job.id > JSON_SAFE_U64_MAX {
+                        return Err(RuntimePublicationError::InvalidRenderOutputJobId);
+                    }
+                    if !ids.insert(job.id) {
+                        return Err(RuntimePublicationError::DuplicateRenderOutputJobId);
+                    }
+                    job.frame
+                        .validate()
+                        .map_err(|_| RuntimePublicationError::InvalidFrame)?;
+                }
+                Ok(())
+            }
             Self::ViewComposition(composition) => composition
                 .validate()
                 .map_err(|_| RuntimePublicationError::InvalidViewComposition),
@@ -384,6 +408,8 @@ pub enum RuntimePublicationError {
     TooManyAnimationCueDefinitions,
     DuplicateAnimationCueDefinition,
     InvalidFrame,
+    InvalidRenderOutputJobId,
+    DuplicateRenderOutputJobId,
     InvalidViewComposition,
     InvalidPresentation,
     InvalidUiProjection,
@@ -409,6 +435,12 @@ impl std::fmt::Display for RuntimePublicationError {
                 "runtime animation cue definitions contain a duplicate identity"
             }
             Self::InvalidFrame => "runtime publication frame is invalid",
+            Self::InvalidRenderOutputJobId => {
+                "runtime render output job id is outside the supported range"
+            }
+            Self::DuplicateRenderOutputJobId => {
+                "runtime render output snapshot contains a duplicate job id"
+            }
             Self::InvalidViewComposition => "runtime publication view composition is invalid",
             Self::InvalidPresentation => "runtime publication presentation is invalid",
             Self::InvalidUiProjection => "runtime publication UI projection is invalid",
