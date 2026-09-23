@@ -633,7 +633,7 @@ test('one runtime output batch is decoded and delivered through one batch callba
   adapter.dispose();
 });
 
-test('runtime output UI snapshots retain large deep data as detached immutable values', () => {
+test('runtime output UI snapshots retain empty strings and large deep data as detached immutable values', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response({}),
@@ -672,6 +672,8 @@ test('runtime output UI snapshots retain large deep data as detached immutable v
           contract: 'product.ui.v1',
           value: {
             nested: { state: 'before' },
+            empty: '',
+            emptyArray: ['', { text: '' }],
             magnitude: 1e20,
             deep,
             entries: Array.from({ length: 1_025 }, (_, index) => index),
@@ -692,6 +694,9 @@ test('runtime output UI snapshots retain large deep data as detached immutable v
   assert.equal(output.kind, 'ui-projection');
   const value = output.envelope.value;
   assert.equal(value['magnitude'], 1e20);
+  assert.equal(value['empty'], '');
+  assert.equal((value['emptyArray'] as readonly unknown[])[0], '');
+  assert.equal(((value['emptyArray'] as readonly unknown[])[1] as { text: string }).text, '');
   assert.equal((value['nested'] as { readonly state: string }).state, 'before');
   assert.equal((value['entries'] as readonly unknown[]).length, 1_025);
   assert.equal((value['text'] as string).length, 64 * 1024 + 1);

@@ -35,6 +35,7 @@ internal sealed class RenderOutputChecks
             new(new(0, 1.5f, 4), 0, 0), CameraBasisMode.Derived, default,
             new(CameraProjectionKind.Orthographic, 55, 4, .01, 100), new(0, 0, 1, 1)));
         engine.CameraView.SetActiveCamera(_camera);
+        engine.CameraView.SetBackgroundColor(new(new(.25f, .5f, .75f, 1)));
         Appearance source = OpenGlb(_reopen ? "content/export-static.glb" : "content/static.glb");
         _owners.Add(source);
         Appearance generated;
@@ -77,6 +78,7 @@ internal sealed class RenderOutputChecks
         }
         QueueCapture("static", StaticObject);
         QueueCapture("generated", GeneratedObject);
+        _jobs.Add(("camera-background.png", engine.RenderOutput.CaptureImage(Request(GeneratedObject) with { UseCameraBackground = true })));
         _jobs.Add(("antialias.png", engine.RenderOutput.CaptureImage(Request(GeneratedObject) with { Samples = 4 })));
         _jobs.Add(("dim.png", engine.RenderOutput.CaptureImage(Request(GeneratedObject) with { Exposure = .5f })));
         _jobs.Add(("aces.png", engine.RenderOutput.CaptureImage(Request(GeneratedObject) with { ToneMapping = CaptureToneMapping.AcesFilmic })));
@@ -140,7 +142,8 @@ internal sealed class RenderOutputChecks
                 throw new InvalidOperationException("Exact pose capture changed across repeated jobs.");
             if (middle.SequenceEqual(File.ReadAllBytes(Path.Combine(_directory, "pose-start.png"))))
                 throw new InvalidOperationException("Different sampled poses produced identical output.");
-            QueueCapture("batch-reuse", GeneratedObject);
+            _engine.CameraView.ClearSkyBackground(new());
+            _jobs.Add(("batch-reuse.png", _engine.RenderOutput.CaptureImage(Request(GeneratedObject) with { UseCameraBackground = true })));
             return;
         }
         _engine.Graphics.PublishSnapshot([]);

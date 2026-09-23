@@ -24,7 +24,7 @@ for path in root.glob('*.png'):
     rows = [pixels[i * (width * 4 + 1):(i + 1) * (width * 4 + 1)] for i in range(height)]
     assert all(row[0] == 0 for row in rows), 'fixture PNG encoder changed filter'
     alpha = [a for row in rows for a in row[4::4]]
-    if path.name != 'background.png':
+    if path.name not in ('background.png', 'camera-background.png'):
         assert any(a == 0 for a in alpha) and any(a > 0 for a in alpha), f'{path}: expected transparent background and rendered geometry'
     decoded[path.name] = rows
     assert any(any(row[i:i+3]) for row in rows for i in range(1, len(row), 4)), f'{path}: geometry was black'
@@ -35,6 +35,8 @@ assert decoded['dim.png'] != decoded['generated.png'], 'exposure was ignored'
 assert decoded['aces.png'] != decoded['generated.png'], 'ACES was ignored'
 corner = decoded['background.png'][0][1:5]
 assert all(abs(a - b) <= 2 for a, b in zip(corner, [137, 188, 225, 128])), f'background color/alpha conversion failed: {list(corner)}'
+camera_corner = decoded['camera-background.png'][0][1:5]
+assert all(abs(a - b) <= 2 for a, b in zip(camera_corner, [137, 188, 225, 255])), f'retained camera background failed: {list(camera_corner)}'
 for path in root.glob('*.glb'):
     data = path.read_bytes()
     magic, version, length = struct.unpack_from('<4sII', data)

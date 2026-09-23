@@ -64,6 +64,8 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
     <RustyEngineProductLiveDebug>true</RustyEngineProductLiveDebug>
+    <RustyEngineProductUiProjectionStream>pair.ui</RustyEngineProductUiProjectionStream>
+    <RustyEngineProductUiProjectionContract>pair.ui.v1</RustyEngineProductUiProjectionContract>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$version" />
@@ -80,8 +82,15 @@ namespace PairConsumer;
 public sealed class Product : IEngineProduct
 {
     private readonly RenderOutputChecks _outputs;
+    private readonly UiStream _ui;
     public Product(ProductCreateContext context)
     {
+        _ui = context.Engine.Ui.OpenStream(new("pair.ui", "pair.ui.v1"));
+        context.Engine.Ui.PublishProjection(new(_ui, 1, new UiValue(
+            new StructuredValueNode[] {
+                new(StructuredValueKind.Object, 0, 0, 0, 0, 0, 0, 0, 1),
+                new(StructuredValueKind.String, 0, 0, 0, 5, 5, 0, 0, 0),
+            }, new uint[] { 1 }, 0, "empty"u8.ToArray())));
         _outputs = new(context.Engine);
         if (context.Input.CursorMode != InputCursorMode.Unlocked)
             throw new System.InvalidOperationException("Packaged cursor mode did not reach C# composition.");
@@ -105,7 +114,7 @@ public sealed class Product : IEngineProduct
     public void Resume() { }
     public void Restart() { }
     public void Shutdown() { }
-    public void Dispose() { }
+    public void Dispose() { _ui.Dispose(); }
 }
 EOF
 cp "$repo_root/scripts/fixtures/JsonPersistenceChecks.cs" "$consumer/JsonPersistenceChecks.cs"
@@ -117,7 +126,17 @@ mkdir -p "$consumer/content/Textures"
 cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer/content/Textures/wall_lines.png"
 cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer/content/Textures/concrete.png"
 cp "$repo_root/csharp/Rusty.Engine.Mechanics.Example/AddressableInventoryStacksExercise.cs" "$consumer/AddressableInventoryStacksExercise.cs"
-printf 'export function mountProductUi(root) { root.dataset.fixture = "ready"; }\n' > "$consumer/product-ui/main.js"
+cat > "$consumer/product-ui/main.js" <<'EOF'
+export function mountProductUi(root, context) {
+    root.dataset.fixture = 'ready';
+    const unsubscribe = context.projection.subscribe((projection) => {
+        if (projection?.contract !== 'pair.ui.v1') return;
+        if (projection.value.empty !== '') throw new Error('Empty UI string changed in transport');
+        root.dataset.emptyString = 'preserved';
+    });
+    return { dispose: unsubscribe };
+}
+EOF
 printf 'pair-only content\n' > "$consumer/content/trial.txt"
 
 consumer_home="$work/dotnet-home"

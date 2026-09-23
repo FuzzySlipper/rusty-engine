@@ -822,6 +822,12 @@ export class RenderProjection {
   }
 
   #setBackgroundColor(color: Vec4): RenderProjectionInstruction {
+    if (!Array.isArray(color) || color.length !== 4
+      || !Array.from(color).every((channel) => typeof channel === 'number'
+        && Number.isFinite(channel) && channel >= 0 && channel <= 1)
+      || color[3] !== 1) {
+      throw new RenderProjectionError('setBackgroundColor: expected four finite normalized channels with opaque alpha');
+    }
     this.#skyBackground = null;
     this.#backgroundColor = clone(color);
     return { op: 'setBackgroundColor', color: clone(color) };

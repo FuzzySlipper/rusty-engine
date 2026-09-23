@@ -2166,6 +2166,7 @@ var Nt, U = class extends Error {
 		};
 	}
 	#w(e) {
+		if (!Array.isArray(e) || e.length !== 4 || !Array.from(e).every((e) => typeof e == "number" && Number.isFinite(e) && e >= 0 && e <= 1) || e[3] !== 1) throw new U("setBackgroundColor: expected four finite normalized channels with opaque alpha");
 		return this.#i = null, this.#a = W(e), {
 			op: "setBackgroundColor",
 			color: W(e)

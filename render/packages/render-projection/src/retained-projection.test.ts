@@ -909,6 +909,32 @@ void test('sky background replacement and clear are fail-atomic retained present
   assert.equal(projection.snapshot().backgroundColor, null);
 });
 
+void test('direct background colors validate before changing retained state', () => {
+  const projection = new RenderProjection();
+  const fixtureFrame = decodeRenderFrameDiff(JSON.parse(readFileSync(
+    resolve(repoRoot, 'fixtures/render/retained-frame-v1.json'), 'utf8',
+  )) as unknown);
+  projection.applyFrame({ schemaVersion: 1, ops: fixtureFrame.ops.filter(
+    (operation) => operation.op === 'defineTexture' || operation.op === 'setSkyBackground',
+  ) });
+  const malformed = [[0, 0, 0, .5], [NaN, 0, 0, 1], [0, 0, 0, 1, 1],
+    [0, 0, 1], [-1, 0, 0, 1], [0, Infinity, 0, 1], [0, 2, 0, 1],
+    new Array(4), null];
+  for (const color of malformed) {
+    const before = projection.snapshot();
+    assert.throws(() => projection.applyDiff({ op: 'setBackgroundColor', color } as unknown as RenderDiff),
+      /four finite normalized channels with opaque alpha/u);
+    assert.deepEqual(projection.snapshot(), before);
+  }
+  assert.deepEqual(projection.applyDiff({ op: 'setBackgroundColor', color: [.2, .4, .6, 1] }),
+    [{ op: 'setBackgroundColor', color: [.2, .4, .6, 1] }]);
+  assert.equal(projection.snapshot().skyBackground, null);
+  assert.deepEqual(projection.snapshot().backgroundColor, [.2, .4, .6, 1]);
+  const before = projection.snapshot();
+  assert.throws(() => projection.applyDiff({ op: 'setBackgroundColor', color: [0, 0, 0, .5] }));
+  assert.deepEqual(projection.snapshot(), before);
+});
+
 void test('keeps stable parent/child ids and removes descendants before parents', () => {
   const projection = new RenderProjection();
   projection.applyFrame({
