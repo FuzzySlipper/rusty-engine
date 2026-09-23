@@ -217,3 +217,11 @@ pub struct NativeClearActiveCameraRequest {
 pub struct NativeClearSkyBackgroundRequest {
     pub reserved: u32,
 }
+
+/// Selects one opaque renderer-owned viewport clear color. Selecting a sky later
+/// replaces this color, and clearing the sky returns to the Engine default.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSetBackgroundColorRequest {
+    pub color: NativeColor,
+}

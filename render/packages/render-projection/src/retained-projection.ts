@@ -34,6 +34,7 @@ import type {
   StaticMeshInstanceDescriptor,
   TextureDescriptor,
   Transform,
+  Vec4,
   VoxelObjectInstanceDescriptor,
   VoxelObjectRenderAsset,
 } from '@rusty-engine/render-contracts';
@@ -122,6 +123,7 @@ export type RenderProjectionInstruction =
   | { readonly op: 'defineTexture'; readonly texture: TextureDescriptor }
   | { readonly op: 'releaseTexture'; readonly id: string }
   | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
+  | { readonly op: 'setBackgroundColor'; readonly color: Vec4 }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'releaseSpriteAtlas'; readonly id: string }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
@@ -143,6 +145,7 @@ export interface RenderProjectionLight {
 
 export interface RenderProjectionSnapshot {
   readonly skyBackground: SkyBackgroundDescriptor | null;
+  readonly backgroundColor: Vec4 | null;
   readonly nodes: readonly RenderProjectionNode[];
   readonly lights: readonly RenderProjectionLight[];
   readonly materials: readonly RenderMaterialDescriptor[];
@@ -260,6 +263,7 @@ export class RenderProjection {
   #materials = new Map<string, RenderMaterialDescriptor>();
   #textures = new Map<string, TextureDescriptor>();
   #skyBackground: SkyBackgroundDescriptor | null = null;
+  #backgroundColor: Vec4 | null = null;
   #spriteAtlases = new Map<string, SpriteAtlasDescriptor>();
   #staticMeshes = new Map<string, StaticMeshRecord>();
   #animatedMeshes = new Map<string, AnimatedMeshRecord>();
@@ -402,6 +406,8 @@ export class RenderProjection {
         return [this.#releaseTexture(diff.id)];
       case 'setSkyBackground':
         return [this.#setSkyBackground(diff.background)];
+      case 'setBackgroundColor':
+        return [this.#setBackgroundColor(diff.color)];
       case 'defineSpriteAtlas':
         return [this.#defineSpriteAtlas(diff.atlas)];
       case 'releaseSpriteAtlas':
@@ -518,6 +524,7 @@ export class RenderProjection {
   snapshot(): RenderProjectionSnapshot {
     return {
       skyBackground: clone(this.#skyBackground) ?? null,
+      backgroundColor: clone(this.#backgroundColor) ?? null,
       nodes: sortedHandles(this.#nodes).map((handle) => snapshotNode(this.#require(handle, 'snapshot'))),
       lights: sortedHandles(this.#lights).map((handle) => snapshotLight(this.#requireLight(handle, 'snapshot'))),
       materials: sortedValues(this.#materials),
@@ -810,7 +817,14 @@ export class RenderProjection {
       }
     }
     this.#skyBackground = clone(background) ?? null;
+    this.#backgroundColor = null;
     return { op: 'setSkyBackground', background: clone(background) ?? null };
+  }
+
+  #setBackgroundColor(color: Vec4): RenderProjectionInstruction {
+    this.#skyBackground = null;
+    this.#backgroundColor = clone(color);
+    return { op: 'setBackgroundColor', color: clone(color) };
   }
 
   #defineSpriteAtlas(atlas: SpriteAtlasDescriptor): RenderProjectionInstruction {
@@ -1379,6 +1393,7 @@ export class RenderProjection {
     projection.#materials = new Map(this.#materials);
     projection.#textures = new Map(this.#textures);
     projection.#skyBackground = clone(this.#skyBackground) ?? null;
+    projection.#backgroundColor = clone(this.#backgroundColor) ?? null;
     projection.#spriteAtlases = new Map(this.#spriteAtlases);
     projection.#staticMeshes = new Map(this.#staticMeshes);
     projection.#animatedMeshes = new Map(this.#animatedMeshes);
@@ -1404,6 +1419,7 @@ export class RenderProjection {
     this.#materials = projection.#materials;
     this.#textures = projection.#textures;
     this.#skyBackground = projection.#skyBackground;
+    this.#backgroundColor = projection.#backgroundColor;
     this.#spriteAtlases = projection.#spriteAtlases;
     this.#staticMeshes = projection.#staticMeshes;
     this.#animatedMeshes = projection.#animatedMeshes;

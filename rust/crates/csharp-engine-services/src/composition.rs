@@ -183,6 +183,7 @@ fn engine_api(
             clear_active_camera: crate::camera_view::clear_active_camera,
             set_sky_background: crate::camera_view::set_sky_background,
             clear_sky_background: crate::camera_view::clear_sky_background,
+            set_background_color: crate::camera_view::set_background_color,
         },
         rng: crate::rng::api(rng_bridge),
         persistence: crate::persistence::api(persistence_bridge),
@@ -638,7 +639,7 @@ impl EngineServiceSet {
         // cross-family handle while both staged states are available, before
         // either state can be committed or turned into host output.
         let sky_frame =
-            crate::camera_view::sky_frame(camera_view.sky_texture, appearance.as_ref())?;
+            crate::camera_view::background_frame(camera_view.background, appearance.as_ref())?;
         let ui = self.ui.take_staged_call()?;
         let voxel_content = self.voxel_content.take_staged_call()?;
         let voxel_scene_presentation = self.voxel_scene_presentation.take_staged_call()?;
@@ -1069,6 +1070,33 @@ mod tests {
         };
         assert_eq!(error.code(), "CSHARP_RENDER_RESOURCE_HANDLE");
         services.discard_call();
+
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_background_color)(
+                    api.camera_view.context,
+                    &NativeSetBackgroundColorRequest {
+                        color: NativeColor {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        },
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let colored = services.take_call().expect("background color");
+        let colored_output = services.outputs(&colored);
+        assert!(matches!(
+            colored_output.frames[0].ops.as_slice(),
+            [render_model::RenderDiff::SetBackgroundColor { color }]
+                if *color == [0.0, 0.0, 0.0, 1.0]
+        ));
+        services.commit_call(colored);
 
         services.begin_call(binding());
         let api = services.api();

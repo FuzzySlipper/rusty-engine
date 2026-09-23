@@ -330,6 +330,24 @@ fn static_mesh_release_survives_the_versioned_json_border() {
 }
 
 #[test]
+fn opaque_background_color_survives_the_json_border_and_rejects_alpha() {
+    let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }])
+    .unwrap();
+    assert_eq!(
+        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
+        frame
+    );
+    assert!(
+        RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 0.5],
+        }])
+        .is_err()
+    );
+}
+
+#[test]
 fn committed_cross_language_fixture_is_a_valid_canonical_frame() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()

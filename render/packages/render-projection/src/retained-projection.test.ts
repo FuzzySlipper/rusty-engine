@@ -901,8 +901,12 @@ void test('sky background replacement and clear are fail-atomic retained present
   );
   projection.applyFrame({ schemaVersion: 1, ops: skyOps });
   assert.deepEqual(projection.snapshot().skyBackground, { texture: 'texture/checker' });
+  projection.applyDiff({ op: 'setBackgroundColor', color: [0, 0, 0, 1] });
+  assert.equal(projection.snapshot().skyBackground, null);
+  assert.deepEqual(projection.snapshot().backgroundColor, [0, 0, 0, 1]);
   projection.applyDiff({ op: 'setSkyBackground', background: null });
   assert.equal(projection.snapshot().skyBackground, null);
+  assert.equal(projection.snapshot().backgroundColor, null);
 });
 
 void test('keeps stable parent/child ids and removes descendants before parents', () => {

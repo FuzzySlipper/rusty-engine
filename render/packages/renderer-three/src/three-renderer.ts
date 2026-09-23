@@ -402,6 +402,7 @@ export class ThreeRenderer {
   #retainedResourceIdentities: ReadonlySet<string> | null = null;
   #skyBackgroundTextureId: string | null = null;
   #skyBackgroundTexture: THREE.Texture | null = null;
+  #backgroundColor: readonly [number, number, number, number] | null = null;
   /**
    * Renderer-owned submission batches. Logical retained meshes remain the
    * handle/metadata/hierarchy authority; compatible world-static meshes are
@@ -666,7 +667,7 @@ export class ThreeRenderer {
       }
       this.#replaceLiveSpriteMaterials(changedTextureIds, changedSpriteAtlasIds);
       if (
-        frame.ops.some((operation) => operation.op === 'setSkyBackground')
+        frame.ops.some((operation) => operation.op === 'setSkyBackground' || operation.op === 'setBackgroundColor')
         || (this.#skyBackgroundTextureId !== null
           && changedTextureIds.has(this.#skyBackgroundTextureId))
       ) {
@@ -776,6 +777,8 @@ export class ThreeRenderer {
         }
       } else if (operation.op === 'setSkyBackground') {
         background = operation.background?.texture ?? null;
+      } else if (operation.op === 'setBackgroundColor') {
+        background = null;
       }
     }
     if (background === null) return;
@@ -877,6 +880,11 @@ export class ThreeRenderer {
         break;
       case 'setSkyBackground':
         this.#skyBackgroundTextureId = diff.background?.texture ?? null;
+        this.#backgroundColor = null;
+        break;
+      case 'setBackgroundColor':
+        this.#skyBackgroundTextureId = null;
+        this.#backgroundColor = diff.color;
         break;
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
@@ -1314,6 +1322,7 @@ export class ThreeRenderer {
     this.#skyBackgroundTexture?.dispose();
     this.#skyBackgroundTexture = null;
     this.#skyBackgroundTextureId = null;
+    this.#backgroundColor = null;
     for (const retained of this.#textureResources.values()) {
       retained.texture.dispose();
     }
@@ -2549,7 +2558,9 @@ export class ThreeRenderer {
       this.#trackTextureResource(next);
     }
     this.#skyBackgroundTexture = next;
-    this.scene.background = next;
+    this.scene.background = next ?? (this.#backgroundColor === null
+      ? null
+      : new THREE.Color(this.#backgroundColor[0], this.#backgroundColor[1], this.#backgroundColor[2]));
     previous?.dispose();
   }
 

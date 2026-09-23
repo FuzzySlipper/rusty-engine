@@ -305,6 +305,10 @@ pub enum RenderDiff {
     SetSkyBackground {
         background: Option<SkyBackgroundDescriptor>,
     },
+    /// Selects one opaque retained viewport clear color and clears any selected sky.
+    SetBackgroundColor {
+        color: [f32; 4],
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -417,6 +421,8 @@ impl RenderDiff {
                 .validate()
                 .map_err(RenderOperationError::SkyBackground),
             Self::SetSkyBackground { background: None } => Ok(()),
+            Self::SetBackgroundColor { color } if valid_color(*color) && color[3] == 1.0 => Ok(()),
+            Self::SetBackgroundColor { .. } => Err(RenderOperationError::BackgroundColor),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -502,6 +508,7 @@ impl RenderDiff {
             Self::DefineMaterial { .. }
             | Self::DefineTexture { .. }
             | Self::SetSkyBackground { .. }
+            | Self::SetBackgroundColor { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -534,6 +541,7 @@ pub enum RenderOperationError {
     MaterialParameters(crate::MaterialParametersError),
     Texture(crate::TextureError),
     SkyBackground(crate::RenderAssetError),
+    BackgroundColor,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),

@@ -175,6 +175,21 @@ void test('sky backgrounds decode as a narrow nullable texture reference', () =>
   );
 });
 
+void test('background colors are normalized and opaque', () => {
+  const frame = decodeRenderFrameDiff({
+    schemaVersion: 1,
+    ops: [{ op: 'setBackgroundColor', color: [0, 0, 0, 1] }],
+  });
+  assert.equal(frame.ops[0]?.op, 'setBackgroundColor');
+  assert.throws(
+    () => decodeRenderFrameDiff({
+      schemaVersion: 1,
+      ops: [{ op: 'setBackgroundColor', color: [0, 0, 0, 0.5] }],
+    }),
+    /must equal 1/u,
+  );
+});
+
 void test('particle decoding admits cubes, local collision, and the legacy sprite shape', () => {
   const cube = mutableFixture('presentation-frame-v1.json');
   const cubeOps = cube['ops'] as Array<Record<string, unknown>>;

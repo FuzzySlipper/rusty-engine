@@ -15,6 +15,13 @@ use crate::{
     CsharpEngineServicesError,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CameraBackground {
+    Default,
+    Sky(u64),
+    Color([f32; 4]),
+}
+
 #[derive(Clone)]
 struct CameraState {
     cameras: BTreeMap<u64, CameraEntry>,
@@ -24,7 +31,7 @@ struct CameraState {
     /// `SetActiveCamera` keeps this convenience selection live. Explicit
     /// compositions clear it and own their copied viewports independently.
     active_camera: Option<u64>,
-    sky_texture: Option<u64>,
+    background: CameraBackground,
     next_camera: u64,
     next_target: u64,
 }
@@ -47,7 +54,7 @@ struct CameraTargetState {
 pub(crate) struct RuntimeCameraViewCall {
     state: CameraState,
     pub(crate) composition: Option<RendererViewComposition>,
-    pub(crate) sky_texture: Option<Option<u64>>,
+    pub(crate) background: Option<CameraBackground>,
 }
 
 /// Engine-owned typed camera/view projection. Product facts are copied at the
@@ -68,7 +75,7 @@ impl RuntimeCameraViewBridge {
                 views: Vec::new(),
                 presentations: Vec::new(),
                 active_camera: None,
-                sky_texture: None,
+                background: CameraBackground::Default,
                 next_camera: 1,
                 next_target: 1,
             },
@@ -81,7 +88,7 @@ impl RuntimeCameraViewBridge {
         self.staged = Some(RuntimeCameraViewCall {
             state: self.state.clone(),
             composition: None,
-            sky_texture: None,
+            background: None,
         });
         self.callback_error = None;
     }
@@ -92,7 +99,7 @@ impl RuntimeCameraViewBridge {
             .staged
             .as_mut()
             .expect("attach begins a camera/view stage");
-        staged.sky_texture = Some(staged.state.sky_texture);
+        staged.background = Some(staged.state.background);
         stage_composition(staged)
     }
 
@@ -127,8 +134,8 @@ impl RuntimeCameraViewBridge {
             .as_ref()
             .map(|staged| &staged.state)
             .unwrap_or(&self.state)
-            .sky_texture
-            == Some(resource)
+            .background
+            == CameraBackground::Sky(resource)
     }
 
     /// Rebuilds the current retained camera composition without entering a
@@ -140,7 +147,7 @@ impl RuntimeCameraViewBridge {
         let mut snapshot = RuntimeCameraViewCall {
             state: self.state.clone(),
             composition: None,
-            sky_texture: None,
+            background: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -401,7 +408,7 @@ impl RuntimeCameraViewBridge {
         let mut candidate = RuntimeCameraViewCall {
             state: staged.state.clone(),
             composition: None,
-            sky_texture: None,
+            background: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -469,15 +476,41 @@ impl RuntimeCameraViewBridge {
             ));
         }
         let staged = self.staged_mut()?;
-        staged.state.sky_texture = Some(texture.value);
-        staged.sky_texture = Some(Some(texture.value));
+        staged.state.background = CameraBackground::Sky(texture.value);
+        staged.background = Some(staged.state.background);
         Ok(())
     }
 
     fn clear_sky(&mut self) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        staged.state.sky_texture = None;
-        staged.sky_texture = Some(None);
+        staged.state.background = CameraBackground::Default;
+        staged.background = Some(staged.state.background);
+        Ok(())
+    }
+
+    fn set_background_color(
+        &mut self,
+        request: NativeSetBackgroundColorRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let color = [
+            request.color.r,
+            request.color.g,
+            request.color.b,
+            request.color.a,
+        ];
+        if !color
+            .iter()
+            .all(|component| component.is_finite() && (0.0..=1.0).contains(component))
+            || request.color.a != 1.0
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_BACKGROUND_COLOR",
+                "background color must be finite, normalized, and opaque",
+            ));
+        }
+        let staged = self.staged_mut()?;
+        staged.state.background = CameraBackground::Color(color);
+        staged.background = Some(staged.state.background);
         Ok(())
     }
 }
@@ -740,30 +773,35 @@ fn validate_target_descriptor(
     })
 }
 
-pub(crate) fn sky_frame(
-    change: Option<Option<u64>>,
+pub(crate) fn background_frame(
+    change: Option<CameraBackground>,
     appearance: Option<&RuntimeAppearanceCall>,
 ) -> Result<Option<RenderFrameDiff>, CsharpEngineServicesError> {
     let Some(change) = change else {
         return Ok(None);
     };
-    let mut operations = Vec::with_capacity(if change.is_some() { 2 } else { 1 });
-    let background = if let Some(handle) = change {
-        let texture = appearance
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_SKY_TEXTURE",
-                    "sky background needs an appearance call that selected its texture",
-                )
-            })?
-            .texture_descriptor(handle)?;
-        let identity = texture.id.clone();
-        operations.push(RenderDiff::DefineTexture { texture });
-        Some(SkyBackgroundDescriptor { texture: identity })
-    } else {
-        None
-    };
-    operations.push(RenderDiff::SetSkyBackground { background });
+    let mut operations = Vec::with_capacity(2);
+    match change {
+        CameraBackground::Sky(handle) => {
+            let texture = appearance
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_SKY_TEXTURE",
+                        "sky background needs an appearance call that selected its texture",
+                    )
+                })?
+                .texture_descriptor(handle)?;
+            let identity = texture.id.clone();
+            operations.push(RenderDiff::DefineTexture { texture });
+            operations.push(RenderDiff::SetSkyBackground {
+                background: Some(SkyBackgroundDescriptor { texture: identity }),
+            });
+        }
+        CameraBackground::Color(color) => operations.push(RenderDiff::SetBackgroundColor { color }),
+        CameraBackground::Default => {
+            operations.push(RenderDiff::SetSkyBackground { background: None })
+        }
+    }
     RenderFrameDiff::try_from_ops(operations)
         .map(Some)
         .map_err(|error| {
@@ -1020,6 +1058,23 @@ pub(crate) unsafe extern "C" fn clear_sky_background(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.clear_sky() {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_background_color(
+    context: *mut c_void,
+    request: *const NativeSetBackgroundColorRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_background_color(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.callback_error = Some(error);

@@ -54,6 +54,7 @@ pub struct PresentationWorld {
     animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
     voxel_objects: BTreeMap<String, Arc<VoxelObjectRenderAsset>>,
     sky: Option<SkyBackgroundDescriptor>,
+    background_color: Option<[f32; 4]>,
     effects: Vec<PresentationFrameDiff>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
@@ -115,7 +116,8 @@ impl PresentationWorld {
             // publishing a stale texture-version update to the realization.
             if matches!(op, RenderDiff::DefineTexture { texture }
                 if candidate.textures.get(&texture.id).is_some_and(|current| current.as_ref() == texture))
-                || matches!(op, RenderDiff::SetSkyBackground { background } if &candidate.sky == background)
+                || matches!(op, RenderDiff::SetSkyBackground { background } if &candidate.sky == background && candidate.background_color.is_none())
+                || matches!(op, RenderDiff::SetBackgroundColor { color } if candidate.background_color == Some(*color) && candidate.sky.is_none())
             {
                 continue;
             }
@@ -439,9 +441,13 @@ impl PresentationWorld {
                 .map(|value| value.as_ref().clone())
                 .map(|asset| RenderDiff::DefineVoxelObject { asset }),
         );
-        ops.push(RenderDiff::SetSkyBackground {
-            background: self.sky.clone(),
-        });
+        if let Some(color) = self.background_color {
+            ops.push(RenderDiff::SetBackgroundColor { color });
+        } else {
+            ops.push(RenderDiff::SetSkyBackground {
+                background: self.sky.clone(),
+            });
+        }
         // Creation requires an existing parent and parents cannot be changed,
         // so this traversal is acyclic by construction.
         let mut emitted = BTreeSet::new();
@@ -838,7 +844,14 @@ impl PresentationWorld {
                 }
                 self.voxel_objects.remove(asset);
             }
-            RenderDiff::SetSkyBackground { background } => self.sky = background.clone(),
+            RenderDiff::SetSkyBackground { background } => {
+                self.sky = background.clone();
+                self.background_color = None;
+            }
+            RenderDiff::SetBackgroundColor { color } => {
+                self.sky = None;
+                self.background_color = Some(*color);
+            }
         }
         Ok(())
     }
@@ -1098,5 +1111,28 @@ mod tests {
             Err(PresentationWorldError::UnknownNode(_))
         ));
         assert_eq!(world.snapshot(), before);
+    }
+
+    #[test]
+    fn background_color_and_sky_clear_replace_one_retained_background() {
+        let mut world = PresentationWorld::default();
+        world
+            .apply(&frame(vec![RenderDiff::SetBackgroundColor {
+                color: [0.0, 0.0, 0.0, 1.0],
+            }]))
+            .unwrap();
+        assert!(matches!(
+            world.snapshot().frame.ops.as_slice(),
+            [RenderDiff::SetBackgroundColor { color }] if *color == [0.0, 0.0, 0.0, 1.0]
+        ));
+        world
+            .apply(&frame(vec![RenderDiff::SetSkyBackground {
+                background: None,
+            }]))
+            .unwrap();
+        assert!(matches!(
+            world.snapshot().frame.ops.as_slice(),
+            [RenderDiff::SetSkyBackground { background: None }]
+        ));
     }
 }

@@ -169,6 +169,13 @@ function renderDiff(input: unknown, path: string): void {
       nullable(value['background'], `${path}.background`, skyBackground);
       return;
     }
+    case 'setBackgroundColor': {
+      const value = record(input, path, ['op', 'color']);
+      color4(value['color'], `${path}.color`);
+      const color = value['color'] as readonly number[];
+      if (color[3] !== 1) fail(`${path}.color[3]`, 'must equal 1 for an opaque background');
+      return;
+    }
     case 'defineSpriteAtlas': {
       const value = record(input, path, ['op', 'atlas']);
       spriteAtlas(value['atlas'], `${path}.atlas`);

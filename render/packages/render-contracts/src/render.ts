@@ -574,6 +574,7 @@ export type RenderDiff =
   | { readonly op: 'defineTexture'; readonly texture: TextureDescriptor }
   | { readonly op: 'releaseTexture'; readonly id: string }
   | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
+  | { readonly op: 'setBackgroundColor'; readonly color: Vec4 }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'releaseSpriteAtlas'; readonly id: string }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }

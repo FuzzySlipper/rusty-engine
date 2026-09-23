@@ -3035,6 +3035,10 @@ void test('sky background flips asymmetric equirectangular content without chang
   const finalBackground = renderer.scene.background as THREE.Texture;
   let finalDisposals = 0;
   finalBackground.addEventListener('dispose', () => { finalDisposals += 1; });
+  renderer.applyDiff({ op: 'setBackgroundColor', color: [0, 0, 0, 1] });
+  assert.ok(renderer.scene.background instanceof THREE.Color);
+  assert.equal((renderer.scene.background as THREE.Color).getHex(), 0x000000);
+  assert.equal(finalDisposals, 1);
   renderer.applyDiff({ op: 'setSkyBackground', background: null });
   assert.equal(renderer.scene.background, null);
   assert.deepEqual(renderer.skyBackgroundReadout(), {
