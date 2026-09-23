@@ -30,8 +30,11 @@ Read [the architecture overview](docs/architecture.md) and
 - Engine project: `rusty-engine`. Resolve current Den guidance before
   substantial work; the current task overrides stale documentation and
   superseded downstream-language or authoring assumptions.
-- If Den is unreachable, stop and report the failed tool. Do not invent local
-  task records.
+- Den owns live task status and dependencies. If it is unreachable, report the
+  failed operation; do not invent task records or infer dependency completion.
+  Continue work whose scope and authority are already established. Pause only
+  decisions or actions that depend on unavailable Den information. This is the
+  owner-approved project exception to a blanket Den-unavailable stop rule.
 - If a needed mechanism is not expressible through the generated API, identify
   the exact upstream capability, file or link the owning request when
   authorized, and stop downstream substitution. If the owning Engine change is
@@ -151,6 +154,10 @@ not evidence that physical picking works. Keep product action rules downstream.
   or unknown-provenance diagnostics, and missing, lagged, dropped, or failed
   capture, block a clean claim. An explicitly compatible baseline is required
   for a delta; no baseline is report-only and comparison remains unavailable.
+- Missing or failed capture prevents claiming a clean warning delta; it does not
+  block unrelated task completion or require new capture infrastructure. Report
+  the evidence limit. Actual errors and warnings that break task acceptance
+  still need resolution.
 - Any allowlist is narrowly scoped, owned, reasoned, linked, and expiring; it
   is never a blanket permission to ignore errors. Clippy's warnings-as-errors
   policy is separate and must not be weakened incidentally. Do not blanket
