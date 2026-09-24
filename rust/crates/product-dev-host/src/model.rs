@@ -2623,9 +2623,7 @@ impl ProductDevRuntimeOutput {
             RuntimePublication::Frame(frame) => Ok(Self {
                 renderer_resources: None,
                 resources: Default::default(),
-                wire: ProductDevRuntimeOutputWire::Frame {
-                    frame: frame.into_frame(),
-                },
+                wire: ProductDevRuntimeOutputWire::Frame { frame },
             }),
             RuntimePublication::ViewComposition(composition) => Ok(Self {
                 renderer_resources: None,
@@ -2635,9 +2633,7 @@ impl ProductDevRuntimeOutput {
             RuntimePublication::Presentation(frame) => Ok(Self {
                 renderer_resources: None,
                 resources: Default::default(),
-                wire: ProductDevRuntimeOutputWire::Presentation {
-                    frame: frame.into_frame(),
-                },
+                wire: ProductDevRuntimeOutputWire::Presentation { frame },
             }),
             RuntimePublication::AnimationCueDefinitions(definitions) => {
                 let definitions = definitions
@@ -2699,14 +2695,12 @@ impl ProductDevRuntimeOutput {
                 publication.validate().map_err(publication_error)?;
                 Ok(publication)
             }
-            ProductDevRuntimeOutputWire::Frame { frame } => {
-                RuntimePublication::frame(&frame).map_err(publication_error)
-            }
+            ProductDevRuntimeOutputWire::Frame { frame } => Ok(RuntimePublication::Frame(frame)),
             ProductDevRuntimeOutputWire::ViewComposition { composition } => {
-                RuntimePublication::view_composition(&composition).map_err(publication_error)
+                Ok(RuntimePublication::ViewComposition(composition))
             }
             ProductDevRuntimeOutputWire::Presentation { frame } => {
-                RuntimePublication::presentation(&frame).map_err(publication_error)
+                Ok(RuntimePublication::Presentation(frame))
             }
             ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions } => {
                 let definitions = definitions
@@ -2717,10 +2711,10 @@ impl ProductDevRuntimeOutput {
                     .map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::RenderOutput { jobs } => {
-                RuntimePublication::render_output(jobs).map_err(publication_error)
+                Ok(RuntimePublication::RenderOutput(jobs))
             }
             ProductDevRuntimeOutputWire::UiProjection { envelope } => {
-                RuntimePublication::ui_projection(&envelope).map_err(publication_error)
+                Ok(RuntimePublication::UiProjection(envelope))
             }
             ProductDevRuntimeOutputWire::RendererResources
             | ProductDevRuntimeOutputWire::RuntimeReadout { .. }
@@ -3597,8 +3591,8 @@ mod tests {
         let receipt = ProductDevRuntimeReceipt::new(
             (),
             vec![
-                RuntimePublication::frame(&frame).unwrap(),
-                RuntimePublication::frame(&frame).unwrap(),
+                RuntimePublication::Frame(frame.clone()),
+                RuntimePublication::Frame(frame.clone()),
             ],
         )
         .unwrap()
@@ -3884,7 +3878,7 @@ mod tests {
             handle: render_model::RenderHandle::new(17),
         }])
         .unwrap();
-        let frame_publication = RuntimePublication::frame(&frame).unwrap();
+        let frame_publication = RuntimePublication::Frame(frame.clone());
         let frame_wire =
             ProductDevRuntimeOutput::from_publication(frame_publication.clone()).unwrap();
         let encoded = serde_json::to_vec(&frame_wire).unwrap();
@@ -3930,7 +3924,7 @@ mod tests {
         let canonical: Value = serde_json::from_slice(&envelope.encode_json().unwrap()).unwrap();
         assert_eq!(canonical["runtime"]["instanceId"], "7");
         assert_eq!(canonical["sequence"], "1");
-        let ui_publication = RuntimePublication::ui_projection(&envelope).unwrap();
+        let ui_publication = RuntimePublication::UiProjection(envelope.clone());
         let ui_wire = ProductDevRuntimeOutput::from_publication(ui_publication.clone()).unwrap();
         let encoded = serde_json::to_vec(&ui_wire).unwrap();
         assert_eq!(

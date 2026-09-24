@@ -305,7 +305,7 @@ pub struct CsharpEngineCall {
 }
 
 /// Staged Engine observations from one successful product call.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct CsharpEngineCallOutput {
     pub render_output: Option<Vec<render_host_contracts::RenderOutputJob>>,
     pub appearance: Vec<CsharpAppearanceCallOutput>,
@@ -317,7 +317,6 @@ pub struct CsharpEngineCallOutput {
 
 /// Ordered renderer realization work emitted by the existing Appearance API
 /// during one product callback.
-#[derive(Clone)]
 pub enum CsharpAppearanceCallOutput {
     Frame(render_model::RenderFrameDiff),
     Presentation(render_presentation::PresentationFrameDiff),
@@ -673,7 +672,7 @@ impl EngineServiceSet {
         };
         call.presentation_world
             .advance_elapsed(self.call_elapsed_seconds);
-        let mut output = self.raw_outputs(&call);
+        let mut output = Self::take_raw_outputs(&mut call);
         for item in &mut output.appearance {
             match item {
                 CsharpAppearanceCallOutput::Frame(frame) => {
@@ -828,10 +827,6 @@ impl EngineServiceSet {
             .collect()
     }
 
-    pub fn outputs(&self, call: &CsharpEngineCall) -> CsharpEngineCallOutput {
-        call.output.clone()
-    }
-
     /// Complete committed state for a fresh renderer. No product callback,
     /// projector reset, resource admission, or active publication occurs.
     pub fn snapshot_outputs(
@@ -855,14 +850,13 @@ impl EngineServiceSet {
         })
     }
 
-    fn raw_outputs(&self, call: &CsharpEngineCall) -> CsharpEngineCallOutput {
+    fn take_raw_outputs(call: &mut CsharpEngineCall) -> CsharpEngineCallOutput {
         let appearance = call
             .appearance
-            .as_ref()
+            .as_mut()
             .map(|call| {
-                call.outputs
-                    .iter()
-                    .cloned()
+                std::mem::take(&mut call.outputs)
+                    .into_iter()
                     .map(|output| match output {
                         crate::appearance::RuntimeAppearanceCallOutput::Frame(frame) => {
                             CsharpAppearanceCallOutput::Frame(frame)
@@ -878,23 +872,23 @@ impl EngineServiceSet {
             })
             .unwrap_or_default();
         let mut frames = Vec::new();
-        if let Some(frame) = call.sky_frame.clone() {
+        if let Some(frame) = call.sky_frame.take() {
             frames.push(frame);
         }
-        frames.extend(call.voxel_content.frames.clone());
-        frames.extend(call.voxel_scene_presentation.frames.clone());
+        frames.append(&mut call.voxel_content.frames);
+        frames.append(&mut call.voxel_scene_presentation.frames);
         CsharpEngineCallOutput {
             render_output: None,
             appearance,
             frames,
-            view_composition: call.camera_view.composition.clone(),
-            ui: call.ui.projections.clone(),
+            view_composition: call.camera_view.composition.take(),
+            ui: std::mem::take(&mut call.ui.projections),
             presentation: call
                 .audio
                 .frame
-                .clone()
+                .take()
                 .into_iter()
-                .chain(call.video.frame.clone())
+                .chain(call.video.frame.take())
                 .collect(),
         }
     }
@@ -929,6 +923,11 @@ impl EngineServiceSet {
 }
 
 impl CsharpEngineCall {
+    /// Move publications out while keeping the staged state available for commit.
+    pub fn take_output(&mut self) -> CsharpEngineCallOutput {
+        std::mem::take(&mut self.output)
+    }
+
     pub fn input_mapping_replacement(&self) -> Option<&runtime_input::CompiledInputMappings> {
         self.input_mapping_replacement.as_ref()
     }
@@ -937,7 +936,9 @@ impl CsharpEngineCall {
     /// actually succeeded. Other Engine service state stays staged unchanged.
     pub fn rebind_ui_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
         self.ui.rebind_runtime(binding);
-        self.output.ui = self.ui.projections.clone();
+        for projection in &mut self.output.ui {
+            projection.rebind_runtime(binding);
+        }
     }
 }
 
@@ -1055,8 +1056,8 @@ mod tests {
             },
             ABI_OK
         );
-        let staged = services.take_call().expect("sky call");
-        let output = services.outputs(&staged);
+        let mut staged = services.take_call().expect("sky call");
+        let output = staged.take_output();
         assert!(matches!(
             output.frames[0].ops.as_slice(),
             [
@@ -1093,9 +1094,9 @@ mod tests {
             },
             ABI_OK
         );
-        let call = services.take_call().unwrap();
-        assert!(services
-            .outputs(&call)
+        let mut call = services.take_call().unwrap();
+        assert!(call
+            .take_output()
             .frames
             .iter()
             .all(|frame| frame.ops.is_empty()));
@@ -1139,8 +1140,8 @@ mod tests {
             },
             ABI_OK
         );
-        let colored = services.take_call().expect("background color");
-        let colored_output = services.outputs(&colored);
+        let mut colored = services.take_call().expect("background color");
+        let colored_output = colored.take_output();
         assert!(matches!(
             colored_output.frames[0].ops.as_slice(),
             [render_model::RenderDiff::SetBackgroundColor { color }]
@@ -1159,8 +1160,8 @@ mod tests {
             },
             ABI_OK
         );
-        let cleared = services.take_call().expect("clear sky");
-        let cleared_output = services.outputs(&cleared);
+        let mut cleared = services.take_call().expect("clear sky");
+        let cleared_output = cleared.take_output();
         assert!(matches!(
             cleared_output.frames[0].ops.as_slice(),
             [render_model::RenderDiff::SetSkyBackground { background: None }]

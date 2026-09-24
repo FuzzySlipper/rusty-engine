@@ -1002,7 +1002,7 @@ pub struct CsharpProductRuntime {
     /// publish it.
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
-    initial_output: Option<CsharpEngineCallOutput>,
+    initial_output: Option<Vec<RuntimePublication>>,
     renderer_metrics_visible: bool,
     renderer_diagnostics_received_at: Option<Instant>,
     renderer_diagnostics_runtime: Option<ProductDevRuntimeBinding>,
@@ -1187,7 +1187,7 @@ impl CsharpProductRuntime {
                 return Err(error);
             }
         }
-        let staged = match services
+        let mut staged = match services
             .take_call()
             .map_err(CsharpProductRuntimeError::from)
         {
@@ -1209,20 +1209,18 @@ impl CsharpProductRuntime {
                 "rusty_product_create succeeded but returned a null product handle",
             ));
         }
-        // Keep a typed snapshot for the first accepted Start, but prove the
-        // create output is serializable before committing its Engine state.
-        // Start has the authoritative post-transition binding needed to tag
-        // any create-time UI projection without holding this staged call open.
-        if let Err(error) = service_outputs(services.outputs(&staged)) {
-            services.discard_call();
-            complete_product_call(&api, handle, false, false);
-            // SAFETY: create returned this owned handle, but its Engine output
-            // could not be admitted for commit.
-            unsafe { (api.destroy)(handle) };
-            return Err(error);
-        }
+        // Convert once and retain the owned create output for the first Start.
+        let initial_output = match service_outputs(staged.take_output()) {
+            Ok(outputs) => Some(outputs),
+            Err(error) => {
+                services.discard_call();
+                complete_product_call(&api, handle, false, false);
+                // SAFETY: create returned this owned handle.
+                unsafe { (api.destroy)(handle) };
+                return Err(error);
+            }
+        };
         let initial_input_mapping_replacement = staged.input_mapping_replacement().cloned();
-        let initial_output = Some(services.outputs(&staged));
         services.commit_call(staged);
         complete_product_call(&api, handle, true, false);
         observe_product_runtime(&api, handle, lifecycle.readout());
@@ -2037,13 +2035,13 @@ impl CsharpProductRuntime {
                 return Err(self.taint_after_callback(error));
             }
         };
-        let staged = match self.services.take_call() {
+        let mut staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
                 return Err(self.taint_after_callback(error.into()));
             }
         };
-        let mut outputs = match service_outputs(self.services.outputs(&staged)) {
+        let mut outputs = match service_outputs(staged.take_output()) {
             Ok(outputs) => outputs,
             Err(error) => {
                 return Err(self.taint_after_callback(error));
@@ -2297,34 +2295,23 @@ impl CsharpProductRuntime {
                 return Err(self.taint_after_callback(error.into()));
             }
         };
-        // Convert the complete staged output before the Rust lifecycle is
-        // changed. The later UI retag is infallible: it changes only the
-        // already-typed runtime binding of an already validated envelope.
-        if let Err(error) = service_outputs(self.services.outputs(&staged)) {
-            return Err(self.taint_after_callback(error));
-        }
+        let mut call_outputs = match service_outputs(staged.take_output()) {
+            Ok(outputs) => outputs,
+            Err(error) => return Err(self.taint_after_callback(error)),
+        };
         if let Err(error) = transition(&mut self.lifecycle) {
             return Err(self.taint_after_callback(lifecycle_error(error)));
         }
         let binding = ui_binding(&self.lifecycle);
         staged.rebind_ui_runtime(binding);
+        rebind_ui_output(&mut call_outputs, binding);
         let mut outputs = if matches!(operation, ProductDevOperationKind::Start) {
-            self.initial_output
-                .take()
-                .map(|mut output| {
-                    rebind_ui_output(&mut output, binding);
-                    service_outputs(output).expect(
-                        "rebinding typed create UI identity cannot invalidate prevalidated output",
-                    )
-                })
-                .unwrap_or_default()
+            self.initial_output.take().unwrap_or_default()
         } else {
             Vec::new()
         };
-        outputs.extend(
-            service_outputs(self.services.outputs(&staged))
-                .expect("rebinding typed UI identity cannot invalidate prevalidated output"),
-        );
+        rebind_ui_output(&mut outputs, binding);
+        outputs.extend(call_outputs);
         let input_mapping_replacement = staged.input_mapping_replacement().cloned();
         self.services.commit_call(staged);
         complete_product_call(&self.api, self.handle, true, false);
@@ -2609,7 +2596,7 @@ impl CsharpProductRuntime {
         // already precede its frontier and cannot be replayed against it.
         let mut snapshot = self.snapshot_outputs()?;
         for output in outputs {
-            if let Some(events) = output.transient_presentation().map_err(publication_error)? {
+            if let Some(events) = output.transient_presentation() {
                 snapshot.push(events);
             }
         }
@@ -3091,14 +3078,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 return Err(self.runtime_error(error));
             }
         };
-        let staged = match self.services.take_call() {
+        let mut staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
                 let error = self.taint_after_callback(error.into());
                 return Err(self.runtime_error(error));
             }
         };
-        let outputs = match service_outputs(self.services.outputs(&staged)) {
+        let outputs = match service_outputs(staged.take_output()) {
             Ok(outputs) => outputs,
             Err(error) => {
                 let error = self.taint_after_callback(error);
@@ -3306,14 +3293,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 ),
             );
         }
-        let staged = match self.services.take_call() {
+        let mut staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
                 self.discard_staged_call();
                 return self.resync_timeline(ticket, error.into());
             }
         };
-        let outputs = match service_outputs(self.services.outputs(&staged)) {
+        let outputs = match service_outputs(staged.take_output()) {
             Ok(outputs) => outputs,
             Err(error) => {
                 self.discard_staged_call();
@@ -5417,11 +5404,12 @@ fn admit_renderer_resource(
     .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))
 }
 
-fn rebind_ui_output(output: &mut CsharpEngineCallOutput, binding: RuntimeUiRuntimeBinding) {
-    output.ui = std::mem::take(&mut output.ui)
-        .into_iter()
-        .map(|projection| projection.with_runtime(binding))
-        .collect();
+fn rebind_ui_output(outputs: &mut [RuntimePublication], binding: RuntimeUiRuntimeBinding) {
+    for output in outputs {
+        if let RuntimePublication::UiProjection(projection) = output {
+            projection.rebind_runtime(binding);
+        }
+    }
 }
 
 fn publication_error(error: RuntimePublicationError) -> CsharpProductRuntimeError {
@@ -5429,20 +5417,20 @@ fn publication_error(error: RuntimePublicationError) -> CsharpProductRuntimeErro
 }
 
 fn service_outputs(
-    output: csharp_engine_services::CsharpEngineCallOutput,
+    output: CsharpEngineCallOutput,
 ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
     let mut outputs = Vec::new();
-    for appearance in &output.appearance {
+    for appearance in output.appearance {
         match appearance {
             CsharpAppearanceCallOutput::Frame(frame) => {
-                outputs.push(RuntimePublication::frame(frame).map_err(publication_error)?);
+                outputs.push(RuntimePublication::Frame(frame));
             }
             CsharpAppearanceCallOutput::Presentation(frame) => {
-                outputs.push(RuntimePublication::presentation(frame).map_err(publication_error)?);
+                outputs.push(RuntimePublication::Presentation(frame));
             }
             CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions) => {
                 let definitions = definitions
-                    .iter()
+                    .into_iter()
                     .map(product_dev_animation_cue_definition)
                     .collect::<Result<Vec<_>, _>>()?;
                 outputs.push(
@@ -5452,17 +5440,17 @@ fn service_outputs(
             }
         }
     }
-    for frame in &output.frames {
-        outputs.push(RuntimePublication::frame(frame).map_err(publication_error)?);
+    for frame in output.frames {
+        outputs.push(RuntimePublication::Frame(frame));
     }
-    if let Some(composition) = output.view_composition.as_ref() {
-        outputs.push(RuntimePublication::view_composition(composition).map_err(publication_error)?);
+    if let Some(composition) = output.view_composition {
+        outputs.push(RuntimePublication::ViewComposition(composition));
     }
-    for projection in &output.ui {
-        outputs.push(RuntimePublication::ui_projection(projection).map_err(publication_error)?);
+    for projection in output.ui {
+        outputs.push(RuntimePublication::UiProjection(projection));
     }
-    for frame in &output.presentation {
-        outputs.push(RuntimePublication::presentation(frame).map_err(publication_error)?);
+    for frame in output.presentation {
+        outputs.push(RuntimePublication::Presentation(frame));
     }
     if let Some(jobs) = output.render_output {
         outputs.push(RuntimePublication::RenderOutput(jobs));
@@ -5471,7 +5459,7 @@ fn service_outputs(
 }
 
 fn product_dev_animation_cue_definition(
-    definition: &csharp_engine_services::AnimationCueDefinition,
+    definition: csharp_engine_services::AnimationCueDefinition,
 ) -> Result<RuntimeAnimationCueDefinition, CsharpProductRuntimeError> {
     let signal_domain = match definition.signal_domain {
         csharp_engine_abi::NativeAnimationCueSignalDomain::Audio => {
@@ -5482,12 +5470,12 @@ fn product_dev_animation_cue_definition(
         }
     };
     RuntimeAnimationCueDefinition::new(
-        definition.cue_id.clone(),
-        definition.asset.clone(),
-        definition.clip.clone(),
+        definition.cue_id,
+        definition.asset,
+        definition.clip,
         definition.marker_millis,
         signal_domain,
-        definition.signal_id.clone(),
+        definition.signal_id,
     )
     .map_err(publication_error)
 }
@@ -5532,7 +5520,7 @@ fn complete_voxel_baseline(
         let RuntimePublication::Frame(frame) = output else {
             continue;
         };
-        let frame = serde_json::to_value(frame.as_frame()).map_err(|error| {
+        let frame = serde_json::to_value(frame).map_err(|error| {
             CsharpProductRuntimeError::new("CSHARP_EXERCISE_ATTACH", error.to_string())
         })?;
         let operations = frame
@@ -6527,11 +6515,11 @@ mod tests {
             },
             ABI_OK
         );
-        let staged = runtime
+        let mut staged = runtime
             .services
             .take_call()
             .expect("initial voxel projection");
-        assert!(service_outputs(runtime.services.outputs(&staged))
+        assert!(service_outputs(staged.take_output())
             .expect("initial output")
             .iter()
             .any(|output| publication_value(output)["kind"] == "frame"));
@@ -6625,10 +6613,9 @@ mod tests {
             .ops
             .iter()
             .map(|op| {
-                RuntimePublication::frame(
-                    &render_model::RenderFrameDiff::try_from_ops(vec![op.clone()]).unwrap(),
+                RuntimePublication::Frame(
+                    render_model::RenderFrameDiff::try_from_ops(vec![op.clone()]).unwrap(),
                 )
-                .unwrap()
             })
             .collect();
         let error = complete_voxel_baseline(&split).unwrap_err().to_string();
@@ -6680,8 +6667,8 @@ mod tests {
             },
             ABI_OK
         );
-        let call = runtime.services.take_call().unwrap();
-        let output = runtime.services.outputs(&call);
+        let mut call = runtime.services.take_call().unwrap();
+        let output = call.take_output();
         let delta = output
             .frames
             .iter()
@@ -6709,7 +6696,7 @@ mod tests {
         assert!(absent.contains("no frame publications observed"));
         assert!(absent.contains("missing [defineMaterial, create, replaceMeshPayload]"));
         assert!(absent.contains("Products without voxel content should launch without --exercise"));
-        let empty = RuntimePublication::frame(&render_model::RenderFrameDiff::new()).unwrap();
+        let empty = RuntimePublication::Frame(render_model::RenderFrameDiff::new());
         let error = complete_voxel_baseline(&[empty]).unwrap_err().to_string();
         assert!(error.contains(
             "frame 1: observed [], missing [defineMaterial, create, replaceMeshPayload]"
@@ -6755,12 +6742,17 @@ mod tests {
         runtime
             .lifecycle(ProductDevLifecycleOperation::Start)
             .expect("fixture start");
-        let error = runtime
+        let (result, outputs) = runtime
             .admit_demand_step()
-            .expect_err("escaped callback requires replacement");
+            .expect("the fault receipt delivers the current render-output snapshot")
+            .into_parts();
+        assert!(!result.is_accepted());
+        assert!(
+            matches!(outputs.as_slice(), [RuntimePublication::RenderOutput(jobs)] if jobs.is_empty())
+        );
         assert_eq!(
-            error.recovery().next_action(),
-            product_dev_host::ProductDevNextAction::ReplaceIncarnation
+            serde_json::to_value(&result).unwrap()["recovery"]["nextAction"],
+            "replace-incarnation"
         );
         assert_eq!(
             UPDATE_CALLBACK_DIAGNOSTIC_STATUS.load(Ordering::SeqCst),
@@ -7290,8 +7282,8 @@ mod tests {
             },
             1
         );
-        let call = runtime.services.take_call().unwrap();
-        let deltas = service_outputs(runtime.services.outputs(&call)).unwrap();
+        let mut call = runtime.services.take_call().unwrap();
+        let deltas = service_outputs(call.take_output()).unwrap();
         runtime.services.commit_call(call);
         let baseline = runtime.tag_complete_baseline(deltas).unwrap();
         let encoded = baseline.iter().map(publication_value).collect::<Vec<_>>();
@@ -7691,6 +7683,33 @@ mod tests {
             sentinel.create.expect("sentinel callback") as usize,
             before,
             "a mismatched product never receives host-owned product-table storage"
+        );
+    }
+
+    #[test]
+    fn service_frame_storage_moves_through_publication_and_host_roundtrip() {
+        let frame =
+            render_model::RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Create {
+                handle: render_model::RenderHandle::new(1),
+                parent: None,
+                node: render_model::RenderNode::new(render_model::Geometry::Cube),
+            }])
+            .unwrap();
+        let operations = frame.ops.as_ptr();
+        let output = CsharpEngineCallOutput {
+            frames: vec![frame],
+            ..Default::default()
+        };
+        let publication = service_outputs(output).unwrap().pop().unwrap();
+        let wire =
+            product_dev_host::ProductDevRuntimeOutput::from_publication(publication).unwrap();
+        let RuntimePublication::Frame(frame) = wire.into_publication().unwrap() else {
+            panic!("frame publication");
+        };
+        assert_eq!(
+            frame.ops.as_ptr(),
+            operations,
+            "owned operations must not be deep-copied in transit"
         );
     }
 

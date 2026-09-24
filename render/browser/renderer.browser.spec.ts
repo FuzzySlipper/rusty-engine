@@ -262,20 +262,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.authoredLightingReadout.retainedLights).toHaveLength(4);
   expect(proof.authoredLightingReadout.shadows).toEqual({
     enabled: true,
-    maximumActiveLights: 3,
     activeLights: 3,
     requestedUnsupportedLights: 1,
-  });
-  expect(proof.authoredLightingRejected).toEqual({
-    applied: false,
-    diagnostic: 'renderer_lighting_policy_rejected',
-    retainedLightCount: 4,
-  });
-  expect(proof.rejectedMountCleanup).toEqual({
-    pointerLockRequests: 0,
-    rejected: true,
-    tabIndex: -1,
-    touchAction: 'pan-x',
   });
   expect(proof.viewComposition.resizeApplied).toBe(true);
   expect(proof.viewComposition.staleApplied).toBe(false);

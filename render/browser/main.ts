@@ -151,17 +151,7 @@ interface BrowserProof {
   readonly defaultLightingReadout: ReturnType<RendererSurface['lightingReadout']>;
   readonly visibilityReadout: ReturnType<RendererSurface['visibilityReadout']>;
   readonly authoredLightingReadout: ReturnType<RendererSurface['lightingReadout']>;
-  readonly authoredLightingRejected: {
-    readonly applied: boolean;
-    readonly diagnostic: string | null;
-    readonly retainedLightCount: number;
-  };
-  readonly rejectedMountCleanup: {
-    readonly pointerLockRequests: number;
-    readonly rejected: boolean;
-    readonly tabIndex: number;
-    readonly touchAction: string;
-  };
+
   readonly particleReadout: RendererParticleSinkReadout;
   readonly particlePerformance: readonly ParticlePerformanceSample[];
   readonly pickHandle: number | null;
@@ -318,7 +308,7 @@ async function main(): Promise<void> {
     lighting: {
       schemaVersion: 1,
       defaultLights: { world: 'disabled', viewmodel: 'neutral' },
-      shadows: { enabled: true, maximumActiveLights: 3 },
+      shadows: { enabled: true },
     },
     frame: {
       schemaVersion: 1,
@@ -344,59 +334,6 @@ async function main(): Promise<void> {
     },
   });
   lightingSurface.renderOnce(1);
-  const rejectedLighting = lightingSurface.applyFrame({ schemaVersion: 1, ops: [{
-    op: 'createLight', handle: renderHandle(805), parent: null, light: {
-      kind: 'point', color: [1, 1, 1], intensity: 1, enabled: true,
-      position: [0, 1, 0], range: 5, decay: 2, shadowIntent: 'requested',
-    },
-  }] });
-
-  const rejectedMountCanvas = document.createElement('canvas');
-  rejectedMountCanvas.tabIndex = -1;
-  rejectedMountCanvas.style.touchAction = 'pan-x';
-  let pointerLockRequests = 0;
-  Object.defineProperty(rejectedMountCanvas, 'requestPointerLock', {
-    configurable: true,
-    value: () => { pointerLockRequests += 1; },
-  });
-  let rejectedMount = false;
-  try {
-    mountRendererSurface(rejectedMountCanvas, {
-      autoStart: false,
-      controls: { enabled: true },
-      lighting: {
-        schemaVersion: 1,
-        shadows: { enabled: true, maximumActiveLights: 1 },
-      },
-      frame: {
-        schemaVersion: 1,
-        ops: [-1, 1].map((x, index) => ({
-          op: 'createLight' as const,
-          handle: renderHandle(901 + index),
-          parent: null,
-          light: {
-            kind: 'point' as const,
-            color: [1, 0.8, 0.5] as const,
-            intensity: 2,
-            enabled: true,
-            position: [x, 2, -4] as const,
-            range: 8,
-            decay: 2,
-            shadowIntent: 'requested' as const,
-          },
-        })),
-      },
-    });
-  } catch {
-    rejectedMount = true;
-  }
-  rejectedMountCanvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0 }));
-  const rejectedMountCleanup = {
-    pointerLockRequests,
-    rejected: rejectedMount,
-    tabIndex: rejectedMountCanvas.tabIndex,
-    touchAction: rejectedMountCanvas.style.touchAction,
-  };
   const voxelFrameSwap = surface.applyFrame({
     schemaVersion: 1,
     ops: [{ op: 'setVoxelObjectFrame', handle: renderHandle(108), frame: 1 }],
@@ -1097,12 +1034,6 @@ async function main(): Promise<void> {
     defaultLightingReadout: surface.lightingReadout(),
     visibilityReadout,
     authoredLightingReadout: lightingSurface.lightingReadout(),
-    authoredLightingRejected: {
-      applied: rejectedLighting.applied,
-      diagnostic: rejectedLighting.diagnostics[0]?.code ?? null,
-      retainedLightCount: lightingSurface.lightingReadout().retainedLights.length,
-    },
-    rejectedMountCleanup,
     particleReadout: particleSink.readout(),
     particlePerformance,
     pickHandle: pick.hint?.handle ?? null,

@@ -833,7 +833,9 @@ internal static class Emit
         if (item == "NativeInputMapping") return EmitProductInputMappingSpanMethod(model, service, operation, callback, returnType, signature);
         StringBuilder output = new();
         output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
-        output.AppendLine($"        {RawType(item)}[] rawValues = values.ToArray().Select(NativeConversions.ToNative).ToArray();");
+        output.AppendLine($"        {RawType(item)}[] rawValues = new {RawType(item)}[values.Length];");
+        output.AppendLine("        for (int index = 0; index < values.Length; index++)");
+        output.AppendLine("            rawValues[index] = NativeConversions.ToNative(values[index]);");
         output.AppendLine($"        fixed ({RawType(item)}* pointer = rawValues)").AppendLine("        {");
         bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
         if (hasErrorReadout) output.AppendLine("            NativeOperationErrorReceipt rawError = default;");
@@ -847,17 +849,21 @@ internal static class Emit
     {
         StringBuilder output = new();
         output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
-        output.AppendLine("        ProductInputMapping[] values = mappings.ToArray();");
+        output.AppendLine("        ReadOnlySpan<ProductInputMapping> values = mappings;");
         output.AppendLine("        MemoryHandle[] idPins = new MemoryHandle[values.Length];");
         output.AppendLine("        MemoryHandle[] intentPins = new MemoryHandle[values.Length];");
         output.AppendLine("        MemoryHandle[] contextPins = new MemoryHandle[values.Length];");
-        output.AppendLine("        NativeKeyboardControl[][] chordValues = values.Select(value => value.Chord.ToArray().Select(NativeConversions.ToNative).ToArray()).ToArray();");
+        output.AppendLine("        NativeKeyboardControl[][] chordValues = new NativeKeyboardControl[values.Length][];");
         output.AppendLine("        MemoryHandle[] chordPins = new MemoryHandle[values.Length];");
         output.AppendLine("        try").AppendLine("        {");
         output.AppendLine("            for (int index = 0; index < values.Length; index++)").AppendLine("            {");
         output.AppendLine("                idPins[index] = values[index].Id.Pin();");
         output.AppendLine("                intentPins[index] = values[index].Intent.Pin();");
         output.AppendLine("                contextPins[index] = values[index].Context.Value.Pin();");
+        output.AppendLine("                var chord = values[index].Chord.Span;");
+        output.AppendLine("                chordValues[index] = new NativeKeyboardControl[chord.Length];");
+        output.AppendLine("                for (int key = 0; key < chord.Length; key++)");
+        output.AppendLine("                    chordValues[index][key] = NativeConversions.ToNative(chord[key]);");
         output.AppendLine("                chordPins[index] = chordValues[index].AsMemory().Pin();");
         output.AppendLine("            }");
         output.AppendLine("            NativeInputMapping[] rawValues = new NativeInputMapping[values.Length];");
@@ -956,7 +962,13 @@ internal static class Emit
                 {
                     EmitBorrowedSpanElementMarshalling(output, model, requestArgument, field);
                 }
-                else output.AppendLine($"        {rawElement}[] {field.Name}Raw = {requestArgument}.{property}.ToArray().Select(NativeConversions.ToNative).ToArray();");
+                else
+                {
+                    output.AppendLine($"        var {field.Name}Span = {requestArgument}.{property}.Span;");
+                    output.AppendLine($"        {rawElement}[] {field.Name}Raw = new {rawElement}[{field.Name}Span.Length];");
+                    output.AppendLine($"        for (int index = 0; index < {field.Name}Span.Length; index++)");
+                    output.AppendLine($"            {field.Name}Raw[index] = NativeConversions.ToNative({field.Name}Span[index]);");
+                }
                 output.AppendLine($"        fixed ({rawElement}* {field.Name}Pointer = {field.Name}Raw)").AppendLine("        {");
                 closers.Add("        }");
             }

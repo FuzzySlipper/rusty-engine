@@ -315,10 +315,9 @@ pub(crate) struct RuntimeUiCall {
 
 impl RuntimeUiCall {
     pub(crate) fn rebind_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
-        self.projections = std::mem::take(&mut self.projections)
-            .into_iter()
-            .map(|projection| projection.with_runtime(binding))
-            .collect();
+        for projection in &mut self.projections {
+            projection.rebind_runtime(binding);
+        }
     }
 }
 

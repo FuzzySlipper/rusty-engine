@@ -499,7 +499,6 @@ export interface RustyApplicationLightingOptions {
   };
   readonly shadows?: {
     readonly enabled?: boolean;
-    readonly maximumActiveLights?: number;
   };
 }
 

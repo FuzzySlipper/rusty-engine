@@ -4,19 +4,6 @@ import * as THREE from 'three';
 import { MAX_RENDER_LIGHT_INTENSITY } from '@rusty-engine/render-contracts';
 import type { LightDescriptor, RenderHandle } from '@rusty-engine/render-contracts';
 
-export const RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS = 8;
-
-export type RendererLightingPolicyErrorCode =
-  | 'invalid_shadow_limit'
-  | 'shadow_budget_exceeded';
-
-export class RendererLightingPolicyError extends Error {
-  constructor(readonly code: RendererLightingPolicyErrorCode, message: string) {
-    super(message);
-    this.name = 'RendererLightingPolicyError';
-  }
-}
-
 export type RendererLightShadowStatus = 'disabled' | 'active' | 'requested_unsupported';
 
 export interface RendererLightReadout {

@@ -107,8 +107,12 @@ impl RuntimeUiProjectionEnvelope {
     /// This is for Engine-owned staging when a callback runs before a
     /// lifecycle action commits. `RuntimeUiRuntimeBinding` is already typed,
     /// while the stream, contract, and value were validated by [`Self::new`].
-    pub fn with_runtime(mut self, runtime: RuntimeUiRuntimeBinding) -> Self {
+    pub fn rebind_runtime(&mut self, runtime: RuntimeUiRuntimeBinding) {
         self.runtime = runtime;
+    }
+
+    pub fn with_runtime(mut self, runtime: RuntimeUiRuntimeBinding) -> Self {
+        self.rebind_runtime(runtime);
         self
     }
 

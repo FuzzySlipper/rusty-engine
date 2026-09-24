@@ -35,7 +35,7 @@ try {
       initialContent: content,
       lighting: {
         defaultLights: { world: 'disabled', viewmodel: 'disabled' },
-        shadows: { enabled: true, maximumActiveLights: 1 },
+        shadows: { enabled: true },
       },
       pixelRatio: 1,
       onCadence: (timeMs) => {

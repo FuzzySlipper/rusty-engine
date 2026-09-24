@@ -6,11 +6,9 @@ import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
   RenderProjectionError,
-  type RenderProjectionInstruction,
 } from '@rusty-engine/render-projection';
 import type {
   AnimatedMeshAsset,
-  AnimatedMeshInstanceDescriptor,
   Geometry,
   LightDescriptor,
   Material,
@@ -53,8 +51,6 @@ import {
   disposeLight,
   lightShadowStatus,
   projectionParentHandle,
-  RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS,
-  RendererLightingPolicyError,
   validateLightDescriptor,
   type RendererLightReadout,
 } from './lighting.js';
@@ -74,9 +70,7 @@ import {
   updateSpriteMaterialTint,
 } from './sprite-material.js';
 import {
-  resolveVoxelSurfaceMaterial,
   specializeVoxelSurfaceMaterial,
-  VoxelSurfaceMaterialError,
   type VoxelSurfaceMaterialReadout,
 } from './voxel-surface-material.js';
 
@@ -104,7 +98,7 @@ export class RendererDisposedError extends RenderApplyError {
 export class RendererTerminalError extends RenderApplyError {
   constructor(
     message: string,
-    readonly phase: 'frame_mutation' | 'static_instance_batch' | 'shadow_realization',
+    readonly phase: 'frame_mutation' | 'static_instance_batch',
   ) {
     super(message);
     this.name = 'RendererTerminalError';
@@ -281,11 +275,6 @@ interface RetainedTextureResource {
   readonly readout: RendererTextureResourceReadout;
 }
 
-interface PreparedFrameResources {
-  readonly geometries: Map<number, readonly THREE.BufferGeometry[]>;
-  readonly textures: Map<number, RetainedTextureResource | null>;
-}
-
 /**
  * A disposable, private realization of an Engine-captured graphics frame.
  *
@@ -398,7 +387,6 @@ export class ThreeRenderer {
   readonly #isolatedCaptureLighting: ThreeRendererIsolatedCaptureLighting | undefined;
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
-  readonly #maximumActiveShadowLights: number;
   readonly #maximumTextureDimension: number | undefined;
   /**
    * The renderer realizes this neutral retained model. Mounted surfaces inject
@@ -438,7 +426,6 @@ export class ThreeRenderer {
     /** Browser-host neutral lighting recreated for each isolated ghost capture. */
     isolatedCaptureLighting?: ThreeRendererIsolatedCaptureLighting;
     shadowsEnabled?: boolean;
-    maximumActiveShadowLights?: number;
     /** Active backend MAX_TEXTURE_SIZE; omitted for CPU-only realization. */
     maximumTextureDimension?: number;
     /** Complete-replacement stream continuation points installed before the recovered frame. */
@@ -461,16 +448,6 @@ export class ThreeRenderer {
       () => this.#pruneRetiredResources(),
     );
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
-    this.#maximumActiveShadowLights = options.maximumActiveShadowLights
-      ?? RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS;
-    if (!Number.isSafeInteger(this.#maximumActiveShadowLights)
-      || this.#maximumActiveShadowLights < 0
-      || this.#maximumActiveShadowLights > RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS) {
-      throw new RendererLightingPolicyError(
-        'invalid_shadow_limit',
-        `maximumActiveShadowLights must be an integer in 0..=${String(RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS)}`,
-      );
-    }
     this.#projection = options.projection ?? new RenderProjection();
     if (options.projection === undefined) {
       this.#projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
@@ -503,7 +480,6 @@ export class ThreeRenderer {
       ...(this.#animatedMeshSource === undefined ? {} : { animatedMeshSource: this.#animatedMeshSource }),
       ...(this.#maximumTextureDimension === undefined ? {} : { maximumTextureDimension: this.#maximumTextureDimension }),
       shadowsEnabled: this.#shadowsEnabled,
-      maximumActiveShadowLights: this.#maximumActiveShadowLights,
     });
     try {
       if (this.#isolatedCaptureLighting !== undefined) {
@@ -567,9 +543,9 @@ export class ThreeRenderer {
   /**
    * Apply a whole frame of diffs in order.
    *
-   * The complete retained transition and every fallible mesh/animated resource
-   * are preflighted before the first Three object is mutated. A rejected later
-   * operation therefore leaves handles, resources, and scene objects unchanged.
+   * The projection admits the retained transition. Backend resources are realized
+   * once, in order; a realization failure retires this surface for reconstruction
+   * from the authoritative baseline rather than speculatively realizing twice.
    */
   applyFrame(frame: RenderFrameDiff): void {
     if (this.#disposed) {
@@ -579,9 +555,8 @@ export class ThreeRenderer {
       throw this.#terminalError;
     }
     try {
-      this.#projection.applyFrame(frame, (instructions) => {
-        this.#validateShadowBudget(instructions);
-        this.#applyValidatedFrame(frame, instructions);
+      this.#projection.applyFrame(frame, () => {
+        this.#applyValidatedFrame(frame);
       });
     } catch (cause) {
       if (cause instanceof RenderProjectionError) {
@@ -618,43 +593,19 @@ export class ThreeRenderer {
       throw new RenderApplyError('baseline realization requires a fresh ThreeRenderer');
     }
     const baseline = new RenderProjection();
-    let instructions: readonly RenderProjectionInstruction[];
     try {
-      instructions = baseline.establishBaseline(frame, frontiers);
-      this.#validateShadowBudget(instructions, baseline);
+      baseline.establishBaseline(frame, frontiers);
     } catch (cause) {
       if (cause instanceof RenderProjectionError) {
         throw new RenderApplyError(cause.message);
       }
       throw cause;
     }
-    this.#applyValidatedFrame(frame, instructions);
+    this.#applyValidatedFrame(frame);
     this.#projection.establishBaseline(frame, frontiers);
   }
 
-  #applyValidatedFrame(
-    frame: RenderFrameDiff,
-    instructions: readonly RenderProjectionInstruction[],
-  ): void {
-    const prepared = this.#prepareFrame(frame);
-    try {
-      this.#preflightSpriteMaterials(frame, prepared);
-      this.#preflightSkyBackground(frame, prepared);
-    } catch (cause) {
-      disposePreparedFrame(prepared);
-      // Sprite/sky admission is deliberately before the first retained Three
-      // mutation. Its named validation failures preserve the prior frame.
-      if (
-        (cause instanceof RenderApplyError || cause instanceof RendererLightingPolicyError)
-        && !(cause instanceof RendererDisposedError)
-        && !(cause instanceof RendererTerminalError)
-      ) {
-        throw cause;
-      }
-      // A non-contract exception from preparation has no trusted atomicity
-      // proof, even though it arrived before the ordinary operation loop.
-      throw this.#enterTerminal('frame_mutation', cause);
-    }
+  #applyValidatedFrame(frame: RenderFrameDiff): void {
     const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
     const recursivelyDestroyed = new Set<RenderHandle>();
     const changedMaterialIds = new Set<string>();
@@ -671,22 +622,20 @@ export class ThreeRenderer {
         } else {
           this.#applyDiff(
             op,
-            prepared.geometries.get(index),
-            prepared.textures.get(index),
             changedMaterialIds,
             changedTextureIds,
             changedSpriteAtlasIds,
           );
-          prepared.geometries.delete(index);
-          prepared.textures.delete(index);
         }
       }
-      for (const material of this.#materials.values()) {
-        if (material.texture !== null && changedTextureIds.has(material.texture)) {
-          changedMaterialIds.add(material.id);
+      if (changedTextureIds.size > 0) {
+        for (const material of this.#materials.values()) {
+          if (material.texture !== null && changedTextureIds.has(material.texture)) {
+            changedMaterialIds.add(material.id);
+          }
         }
       }
-      for (const materialId of [...changedMaterialIds].sort()) {
+      for (const materialId of changedMaterialIds) {
         this.#replaceLiveMaterial(materialId);
       }
       this.#replaceLiveSpriteMaterials(changedTextureIds, changedSpriteAtlasIds);
@@ -698,28 +647,14 @@ export class ThreeRenderer {
         this.#syncSkyBackground();
       }
     } catch (cause) {
-      disposePreparedFrame(prepared);
       // From here on the frame may already have changed live Three owners.
       throw this.#enterTerminal('frame_mutation', cause);
     }
-    disposePreparedFrame(prepared);
     if (staticInstanceBatchesChanged) {
       try {
         this.#syncStaticInstanceBatches();
       } catch (cause) {
         throw this.#enterTerminal('static_instance_batch', cause);
-      }
-    }
-    if (this.#shadowsEnabled) {
-      try {
-        this.#sceneGroup.traverse((object) => {
-          if (object instanceof THREE.Mesh && object.userData['rustySpriteShadowManaged'] !== true) {
-            object.castShadow = true;
-            object.receiveShadow = true;
-          }
-        });
-      } catch (cause) {
-        throw this.#enterTerminal('shadow_realization', cause);
       }
     }
     // Product Browser admits bytes and realizes this frame before it publishes
@@ -742,114 +677,6 @@ export class ThreeRenderer {
     return terminal;
   }
 
-  #preflightSpriteMaterials(frame: RenderFrameDiff, prepared: PreparedFrameResources): void {
-    const textureDescriptors = new Map(this.#textures);
-    const retainedTextures = new Set(this.#textureResources.keys());
-    const sprites = new Map<RenderHandle, SpriteInstanceDescriptor>(
-      [...this.#handles.entries()]
-        .filter((entry): entry is [RenderHandle, NodeEntry & { sprite: SpriteInstanceDescriptor }] =>
-          entry[1].kind === 'sprite' && entry[1].sprite !== undefined)
-        .map(([handle, entry]) => [handle, entry.sprite]),
-    );
-    for (let index = 0; index < frame.ops.length; index += 1) {
-      const op = frame.ops[index]!;
-      if (op.op === 'defineTexture') {
-        textureDescriptors.set(op.texture.id, op.texture);
-        const candidate = prepared.textures.get(index);
-        if (candidate === null || op.texture.payload === undefined) {
-          retainedTextures.delete(op.texture.id);
-        } else if (candidate !== undefined) {
-          retainedTextures.add(op.texture.id);
-        }
-      } else if (op.op === 'createSprite') {
-        sprites.set(op.handle, op.sprite);
-      } else if (op.op === 'destroy') {
-        sprites.delete(op.handle);
-      }
-    }
-    for (const sprite of sprites.values()) {
-      const material = resolveSpriteMaterialDescriptor(sprite);
-      for (const [role, id] of [
-        ['normal', material.normalTexture],
-        ['depth', material.depthTexture],
-      ] as const) {
-        if (id === null) continue;
-        const descriptor = textureDescriptors.get(id);
-        if (descriptor === undefined || !retainedTextures.has(id)) {
-          throw new RenderApplyError(`sprite ${role} texture ${id} is not retained`);
-        }
-        if (descriptor.payload?.colorSpace !== 'linear') {
-          throw new RenderApplyError(`sprite ${role} texture ${id} must use linear color space`);
-        }
-      }
-    }
-  }
-
-  #preflightSkyBackground(frame: RenderFrameDiff, prepared: PreparedFrameResources): void {
-    const descriptors = new Map(this.#textures);
-    const retained = new Set(this.#textureResources.keys());
-    let background = this.#skyBackgroundTextureId;
-    for (let index = 0; index < frame.ops.length; index += 1) {
-      const operation = frame.ops[index]!;
-      if (operation.op === 'defineTexture') {
-        descriptors.set(operation.texture.id, operation.texture);
-        const candidate = prepared.textures.get(index);
-        if (candidate === null || operation.texture.payload === undefined) {
-          retained.delete(operation.texture.id);
-        } else if (candidate !== undefined) {
-          retained.add(operation.texture.id);
-        }
-      } else if (operation.op === 'setSkyBackground') {
-        background = operation.background?.texture ?? null;
-      } else if (operation.op === 'setBackgroundColor') {
-        background = null;
-      }
-    }
-    if (background === null) return;
-    const descriptor = descriptors.get(background);
-    if (descriptor === undefined || !retained.has(background) || descriptor.payload === undefined) {
-      throw new RenderApplyError(`setSkyBackground: texture ${background} is not retained`);
-    }
-    if (descriptor.width !== descriptor.height * 2) {
-      throw new RenderApplyError(`setSkyBackground: texture ${background} must have a 2:1 aspect ratio`);
-    }
-    if (descriptor.payload.colorSpace !== 'srgb') {
-      throw new RenderApplyError(`setSkyBackground: texture ${background} must use sRGB color space`);
-    }
-    if (descriptor.wrap !== 'clamp') {
-      throw new RenderApplyError(`setSkyBackground: texture ${background} must use clamp wrapping`);
-    }
-  }
-
-  #validateShadowBudget(
-    instructions: ReturnType<RenderProjection['validateFrame']>,
-    projection = this.#projection,
-  ): void {
-    if (!this.#shadowsEnabled) return;
-    const active = new Set(
-      projection.snapshot().lights
-        .filter(({ light }) => activeShadowRequest(light))
-        .map(({ handle }) => handle),
-    );
-    for (const instruction of instructions) {
-      if (instruction.op === 'removeLight') {
-        active.delete(instruction.handle);
-      } else if (instruction.op === 'upsertLight') {
-        if (activeShadowRequest(instruction.light.light)) {
-          active.add(instruction.light.handle);
-        } else {
-          active.delete(instruction.light.handle);
-        }
-      }
-      if (active.size > this.#maximumActiveShadowLights) {
-        throw new RendererLightingPolicyError(
-          'shadow_budget_exceeded',
-          `active shadow light quota ${String(this.#maximumActiveShadowLights)} exceeded`,
-        );
-      }
-    }
-  }
-
   /** Strictly decode a versioned contract payload and apply it. */
   applyEncodedFrame(payload: unknown): void {
     this.applyFrame(decodeRenderFrameDiff(payload));
@@ -862,11 +689,9 @@ export class ThreeRenderer {
 
   #applyDiff(
     diff: RenderDiff,
-    preparedGeometry?: readonly THREE.BufferGeometry[],
-    preparedTexture?: RetainedTextureResource | null,
-    changedMaterialIds?: Set<string>,
-    changedTextureIds?: Set<string>,
-    changedSpriteAtlasIds?: Set<string>,
+    changedMaterialIds: Set<string>,
+    changedTextureIds: Set<string>,
+    changedSpriteAtlasIds: Set<string>,
   ): void {
     switch (diff.op) {
       case 'create':
@@ -879,7 +704,7 @@ export class ThreeRenderer {
         this.#destroy(diff);
         break;
       case 'replaceMeshPayload':
-        this.#replaceMeshPayload(diff, preparedGeometry?.[0]);
+        this.#replaceMeshPayload(diff);
         break;
       case 'createLight':
         this.#createLight(diff);
@@ -897,7 +722,7 @@ export class ThreeRenderer {
         this.#setMaterialInstanceParameters(diff);
         break;
       case 'defineTexture':
-        this.#defineTexture(diff.texture, preparedTexture, changedTextureIds);
+        this.#defineTexture(diff.texture, changedTextureIds);
         break;
       case 'releaseTexture':
         this.#releaseTexture(diff.id);
@@ -912,13 +737,13 @@ export class ThreeRenderer {
         break;
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
-        changedSpriteAtlasIds?.add(diff.atlas.id);
+        changedSpriteAtlasIds.add(diff.atlas.id);
         break;
       case 'releaseSpriteAtlas':
         this.#releaseSpriteAtlas(diff.id);
         break;
       case 'defineStaticMesh':
-        this.#defineStaticMesh(diff.asset, preparedGeometry?.[0]);
+        this.#defineStaticMesh(diff.asset);
         break;
       case 'releaseStaticMesh':
         this.#releaseDefinedStaticMesh(diff.asset);
@@ -936,7 +761,7 @@ export class ThreeRenderer {
         this.#setAnimatedMeshPlayback(diff);
         break;
       case 'defineVoxelObject':
-        this.#defineVoxelObject(diff.asset, preparedGeometry);
+        this.#defineVoxelObject(diff.asset);
         break;
       case 'releaseVoxelObject':
         this.#releaseVoxelObject(diff.asset);
@@ -956,163 +781,6 @@ export class ThreeRenderer {
       case 'updateSprite':
         this.#updateSprite(diff);
         break;
-    }
-  }
-
-  #prepareFrame(frame: RenderFrameDiff): PreparedFrameResources {
-    const prepared: PreparedFrameResources = {
-      geometries: new Map(),
-      textures: new Map(),
-    };
-    const selectedAnimatedClips = new Map<RenderHandle, string | null>();
-    const frameAnimatedDefinitions = new Map<string, AnimatedMeshAsset>();
-    const frameAnimatedInstances = new Map<RenderHandle, AnimatedMeshInstanceDescriptor>();
-    const textureDescriptors = new Map(
-      [...this.#textures].map(([id, value]) => [id, structuredClone(value)]),
-    );
-    const materialDescriptors = new Map(
-      [...this.#materials].map(([id, value]) => [id, structuredClone(value)]),
-    );
-    const texturePayloads = new Set(this.#textureResources.keys());
-    try {
-      for (let index = 0; index < frame.ops.length; index += 1) {
-        const operation = frame.ops[index]!;
-        if (operation.op === 'defineStaticMesh') {
-          prepared.geometries.set(index, [buildMeshGeometry(
-            operation.asset.payload,
-            operation.asset.materialSlots,
-            this.#meshBufferSource,
-            this.#meshResourceSource,
-            'defineStaticMesh',
-          )]);
-        } else if (operation.op === 'replaceMeshPayload') {
-          prepared.geometries.set(index, [buildMeshGeometry(
-            operation.payload,
-            undefined,
-            this.#meshBufferSource,
-            this.#meshResourceSource,
-            'replaceMeshPayload',
-          )]);
-        } else if (operation.op === 'defineVoxelObject') {
-          prepared.geometries.set(index, buildVoxelObjectGeometries(
-            operation.asset,
-            this.#meshBufferSource,
-            this.#meshResourceSource,
-          ));
-        } else if (operation.op === 'defineTexture') {
-          const payload = operation.texture.payload;
-          if (payload === undefined) {
-            texturePayloads.delete(operation.texture.id);
-            prepared.textures.set(index, null);
-          } else {
-            const retained = prepareTextureResource(
-              operation.texture,
-              this.#textureResourceSource,
-              'defineTexture',
-              this.#maximumTextureDimension,
-            );
-            texturePayloads.add(operation.texture.id);
-            prepared.textures.set(index, retained);
-          }
-          textureDescriptors.set(operation.texture.id, structuredClone(operation.texture));
-        } else if (operation.op === 'defineMaterial') {
-          materialDescriptors.set(operation.material.id, structuredClone(operation.material));
-        } else if (operation.op === 'defineAnimatedMesh') {
-          // Validate the source/clip contract without allocating the
-          // asset-scoped render template before the retained mutation.
-          this.#animatedMeshes.validateDefinition(operation.asset);
-          frameAnimatedDefinitions.set(operation.asset.asset, operation.asset);
-        } else if (operation.op === 'releaseAnimatedMesh') {
-          // Captures are backend-only leases. Logical instance refcounts are
-          // validated by the staged projection, which includes earlier destroys;
-          // a definition introduced earlier in this frame is not in this registry yet.
-          this.#animatedMeshes.validateReleaseCaptures(operation.asset);
-        } else if (operation.op === 'createAnimatedMeshInstance') {
-          const playback = operation.instance.playback;
-          if (playback?.kind === 'pause' || playback?.kind === 'resume') {
-            throw new RenderApplyError(
-              `createAnimatedMeshInstance.${playback.kind}: no current clip on ${operation.instance.asset}`,
-            );
-          }
-          selectedAnimatedClips.set(
-            operation.handle,
-            playback?.kind === 'play' || playback?.kind === 'sample' ? playback.clip : null,
-          );
-          const definedInFrame = frameAnimatedDefinitions.get(operation.instance.asset);
-          if (definedInFrame !== undefined) {
-            this.#animatedMeshes.validateInitialSampleForDefinition(
-              definedInFrame,
-              operation.instance,
-            );
-          } else {
-            this.#animatedMeshes.validateInitialSample(operation.instance);
-          }
-          frameAnimatedInstances.set(operation.handle, operation.instance);
-        } else if (operation.op === 'setAnimatedMeshPlayback') {
-          const currentClip = selectedAnimatedClips.has(operation.handle)
-            ? selectedAnimatedClips.get(operation.handle) ?? null
-            : this.#animatedMeshes.playback(operation.handle)?.currentClip ?? null;
-          if (
-            (operation.playback.kind === 'pause' || operation.playback.kind === 'resume')
-            && currentClip === null
-          ) {
-            throw new RenderApplyError(
-              `setAnimatedMeshPlayback.${operation.playback.kind}: no current clip`,
-            );
-          }
-          if (operation.playback.kind === 'play' || operation.playback.kind === 'sample') {
-            selectedAnimatedClips.set(operation.handle, operation.playback.clip);
-          } else if (operation.playback.kind === 'stop') {
-            selectedAnimatedClips.set(operation.handle, null);
-          }
-          if (operation.playback.kind === 'sample') {
-            const createdInFrame = frameAnimatedInstances.get(operation.handle);
-            if (createdInFrame !== undefined) {
-              const sampleInstance = { ...createdInFrame, playback: operation.playback };
-              const definedInFrame = frameAnimatedDefinitions.get(sampleInstance.asset);
-              if (definedInFrame !== undefined) {
-                this.#animatedMeshes.validateInitialSampleForDefinition(definedInFrame, sampleInstance);
-              } else {
-                this.#animatedMeshes.validateInitialSample(sampleInstance);
-              }
-            } else {
-              this.#animatedMeshes.validateSample(
-                operation.handle,
-                operation.playback.clip,
-                operation.playback.normalizedTime,
-              );
-            }
-          }
-        }
-      }
-      for (const material of materialDescriptors.values()) {
-        if (material.schemaVersion >= 3 && material.texture !== null
-          && !texturePayloads.has(material.texture)) {
-          throw new RenderApplyError(
-            `defineMaterial: texture ${material.texture} has no admitted retained payload`,
-          );
-        }
-        if (material.voxelSurface !== undefined) {
-          const texture = textureDescriptors.get(material.voxelSurface.mapping.texture);
-          if (texture === undefined) {
-            throw new RenderApplyError(
-              `defineMaterial: missing voxel surface texture ${material.voxelSurface.mapping.texture}`,
-            );
-          }
-          try {
-            resolveVoxelSurfaceMaterial(material, texture);
-          } catch (cause) {
-            if (cause instanceof VoxelSurfaceMaterialError) {
-              throw new RenderApplyError(`defineMaterial: ${cause.message}`);
-            }
-            throw cause;
-          }
-        }
-      }
-      return prepared;
-    } catch (cause) {
-      disposePreparedFrame(prepared);
-      throw animatedMeshError(cause);
     }
   }
 
@@ -1355,6 +1023,11 @@ export class ThreeRenderer {
     this.#atlases.clear();
     this.scene.clear();
     this.viewmodelScene.clear();
+    // A failed realization may have allocated resources before registering a
+    // definition or handle. Existing dispose listeners remove already-freed ones.
+    for (const geometry of this.#geometryResources) geometry.dispose();
+    for (const material of this.#materialResources) material.dispose();
+    for (const texture of this.#textureResourceObjects) texture.dispose();
     this.#geometryResources.clear();
     this.#materialResources.clear();
     this.#textureResourceReferences.clear();
@@ -1759,12 +1432,23 @@ export class ThreeRenderer {
         ? this.#layerGroup(diff.node.layer)
         : this.#require(diff.parent, 'create.parent').object;
     parent.add(object);
+    this.#initializeShadows(object);
     this.#handles.set(diff.handle, {
       object,
       kind: 'primitive',
       shape: diff.node.geometry.kind,
       ownsGeometry: diff.node.geometry.kind !== 'group',
       viewMaterial: diff.node.material,
+    });
+  }
+
+  #initializeShadows(root: THREE.Object3D): void {
+    if (!this.#shadowsEnabled || !isDescendantOf(root, this.#sceneGroup)) return;
+    root.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
     });
   }
 
@@ -1855,7 +1539,7 @@ export class ThreeRenderer {
    * Idempotent per asset id: a redefine while instances exist is rejected (it
    * would orphan shared geometry); a redefine of an unused asset replaces it.
    */
-  #defineStaticMesh(asset: StaticMeshAsset, preparedGeometry?: THREE.BufferGeometry): void {
+  #defineStaticMesh(asset: StaticMeshAsset): void {
     const existing = this.#staticMeshes.get(asset.asset);
     if (existing) {
       if (existing.refCount > 0) {
@@ -1870,7 +1554,7 @@ export class ThreeRenderer {
     // static mesh asset borrows the provider buffer, copies its bytes out, and
     // releases the borrow. A missing provider / unknown / stale / too-small buffer
     // fails closed below — never silently producing empty geometry.
-    const geometry = preparedGeometry ?? buildMeshGeometry(
+    const geometry = buildMeshGeometry(
       asset.payload,
       asset.materialSlots,
       this.#meshBufferSource,
@@ -1932,6 +1616,7 @@ export class ThreeRenderer {
     const parent =
       diff.parent === null ? this.#sceneGroup : this.#require(diff.parent, 'createStaticMeshInstance.parent').object;
     parent.add(mesh);
+    this.#initializeShadows(mesh);
     def.refCount += 1;
     this.#handles.set(diff.handle, {
       object: mesh,
@@ -2011,6 +1696,7 @@ export class ThreeRenderer {
     const parent =
       diff.parent === null ? this.#sceneGroup : this.#require(diff.parent, 'createAnimatedMeshInstance.parent').object;
     parent.add(record.object);
+    this.#initializeShadows(record.object);
     this.#handles.set(diff.handle, {
       object: record.object,
       kind: 'animatedMesh',
@@ -2037,24 +1723,14 @@ export class ThreeRenderer {
 
   // ── Voxel-object resources + caller-driven frame swaps ────────────────────
 
-  #defineVoxelObject(
-    asset: VoxelObjectRenderAsset,
-    preparedGeometries?: readonly THREE.BufferGeometry[],
-  ): void {
-    const geometries = preparedGeometries === undefined
-      ? buildVoxelObjectGeometries(asset, this.#meshBufferSource, this.#meshResourceSource)
-      : [...preparedGeometries];
-    if (geometries.length !== asset.meshes.length) {
-      throw new RenderApplyError(
-        `defineVoxelObject: prepared ${geometries.length} meshes for ${asset.meshes.length} descriptors`,
-      );
-    }
+  #defineVoxelObject(asset: VoxelObjectRenderAsset): void {
+    const geometries = buildVoxelObjectGeometries(asset, this.#meshBufferSource, this.#meshResourceSource);
+    geometries.forEach((geometry) => this.#trackGeometryResource(geometry));
     const slotIndex = new Map<number, number>();
     const materials = asset.materialSlots.map((slot, index) => {
       slotIndex.set(slot.slot, index);
       return this.#materialFor(slot);
     });
-    geometries.forEach((geometry) => this.#trackGeometryResource(geometry));
     const existing = this.#voxelObjects.get(asset.asset);
     const next: VoxelObjectDef = {
       geometries,
@@ -2155,6 +1831,7 @@ export class ThreeRenderer {
       ? this.#sceneGroup
       : this.#require(diff.parent, 'createVoxelObjectInstance.parent').object;
     parent.add(mesh);
+    this.#initializeShadows(mesh);
     definition.refCount += 1;
     this.#handles.set(diff.handle, {
       object: mesh,
@@ -2467,13 +2144,9 @@ export class ThreeRenderer {
    * output deterministically without a destroy+create. This renderer owns only
    * presentation state; downstream authority decides which definitions it emits.
    */
-  #defineMaterial(material: RenderMaterialDescriptor, changed?: Set<string>): void {
+  #defineMaterial(material: RenderMaterialDescriptor, changed: Set<string>): void {
     this.#materials.set(material.id, material);
-    if (changed === undefined) {
-      this.#replaceLiveMaterial(material.id);
-    } else {
-      changed.add(material.id);
-    }
+    changed.add(material.id);
   }
 
   #releaseMaterial(id: string): void {
@@ -2486,30 +2159,23 @@ export class ThreeRenderer {
     this.#materials.delete(id);
   }
 
-  /** Publish a preflighted texture and rebuild every material that references it. */
-  #defineTexture(
-    descriptor: TextureDescriptor,
-    prepared: RetainedTextureResource | null | undefined,
-    changed?: Set<string>,
-  ): void {
-    if (descriptor.payload !== undefined && prepared === undefined) {
-      throw new RenderApplyError(`defineTexture: missing prepared payload for ${descriptor.id}`);
-    }
+  /** Realize changed bytes once. Admitted descriptors are immutable Engine inputs. */
+  #defineTexture(descriptor: TextureDescriptor, changed: Set<string>): void {
+    const next = descriptor.payload === undefined ? undefined : prepareTextureResource(
+      descriptor,
+      this.#textureResourceSource,
+      'defineTexture',
+      this.#maximumTextureDimension,
+    );
     const previous = this.#textureResources.get(descriptor.id);
-    this.#textures.set(descriptor.id, structuredClone(descriptor));
-    if (prepared === null || descriptor.payload === undefined) {
+    this.#textures.set(descriptor.id, descriptor);
+    if (next === undefined) {
       this.#textureResources.delete(descriptor.id);
-    } else if (prepared !== undefined) {
-      this.#textureResources.set(descriptor.id, prepared);
-      this.#trackTextureResource(prepared.texture);
-    }
-    if (changed === undefined) {
-      for (const material of this.#materials.values()) {
-        if (material.texture === descriptor.id) this.#replaceLiveMaterial(material.id);
-      }
     } else {
-      changed.add(descriptor.id);
+      this.#textureResources.set(descriptor.id, next);
+      this.#trackTextureResource(next.texture);
     }
+    changed.add(descriptor.id);
     previous?.texture.dispose();
   }
 
@@ -3006,6 +2672,7 @@ export class ThreeRenderer {
     // lifecycle and future batching. Pivot shifts the plane so the anchor sits at
     // the node origin.
     const geometry = this.#spriteGeometry(s, s.frame);
+    this.#trackGeometryResource(geometry);
     const material = this.#spriteMaterialFor(s);
     const mesh = new THREE.Mesh(geometry, material);
     this.#trackObjectResources(mesh);
@@ -3016,7 +2683,6 @@ export class ThreeRenderer {
     mesh.userData['frame'] = s.frame;
     mesh.userData['billboard'] = s.billboard;
     mesh.userData['uv'] = this.#applySpriteUv(geometry, s.asset, s.frame);
-    mesh.userData['rustySpriteShadowManaged'] = true;
     const resolvedMaterial = resolveSpriteMaterialDescriptor(s);
     mesh.castShadow = this.#shadowsEnabled
       && (resolvedMaterial.shadow === 'cast' || resolvedMaterial.shadow === 'castAndReceive');
@@ -3176,15 +2842,13 @@ export class ThreeRenderer {
    */
   #replaceMeshPayload(
     diff: Extract<RenderDiff, { op: 'replaceMeshPayload' }>,
-    preparedGeometry?: THREE.BufferGeometry,
   ): void {
     const entry = this.#require(diff.handle, 'replaceMeshPayload');
     const object = entry.object;
     if (!(object instanceof THREE.Mesh)) {
       throw new RenderApplyError(`replaceMeshPayload: handle ${diff.handle} is not a mesh`);
     }
-    const geometry = preparedGeometry
-      ?? buildMeshGeometry(
+    const geometry = buildMeshGeometry(
         diff.payload,
         undefined,
         this.#meshBufferSource,
@@ -4334,23 +3998,4 @@ function animatedMeshError(cause: unknown): RenderApplyError {
     return new RenderApplyError(cause.message);
   }
   throw cause;
-}
-
-function disposePreparedGeometry(
-  prepared: ReadonlyMap<number, readonly THREE.BufferGeometry[]>,
-): void {
-  for (const geometries of prepared.values()) {
-    geometries.forEach((geometry) => geometry.dispose());
-  }
-}
-
-function disposePreparedFrame(prepared: PreparedFrameResources): void {
-  disposePreparedGeometry(prepared.geometries);
-  for (const retained of prepared.textures.values()) {
-    retained?.texture.dispose();
-  }
-}
-
-function activeShadowRequest(light: LightDescriptor): boolean {
-  return light.enabled && light.kind !== 'ambient' && light.shadowIntent === 'requested';
 }

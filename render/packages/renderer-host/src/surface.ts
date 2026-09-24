@@ -21,7 +21,6 @@ import {
   mountRendererBrowserSurface,
   RendererDisposedError,
   RendererThreeParticleSink,
-  RendererLightingPolicyError,
   RenderApplyError,
   RendererTerminalError,
   type AnimatedMeshAssetSource,
@@ -83,7 +82,6 @@ import {
 
 export const RUSTY_RENDERER_HOST_COMPATIBILITY_VERSION = 'renderer-host.v1';
 export const RUSTY_RENDERER_SURFACE_LIGHTING_SCHEMA_VERSION = 1;
-export const RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS = 8;
 
 export type RendererSurfaceDefaultLightingMode = 'neutral' | 'disabled';
 
@@ -95,7 +93,6 @@ export interface RendererSurfaceLightingOptions {
   };
   readonly shadows?: {
     readonly enabled?: boolean;
-    readonly maximumActiveLights?: number;
   };
 }
 
@@ -108,7 +105,6 @@ export interface RendererSurfaceLightingReadout {
   readonly neutralLightCounts: { readonly world: number; readonly viewmodel: number };
   readonly shadows: {
     readonly enabled: boolean;
-    readonly maximumActiveLights: number;
     readonly activeLights: number;
     readonly requestedUnsupportedLights: number;
   };
@@ -1179,7 +1175,7 @@ function mountPreparedRendererSurface(
         terminalizeBackend(cause);
         return terminalFrameReceipt('renderer_surface_unavailable', errorMessage(cause));
       }
-      if (cause instanceof RendererLightingPolicyError || cause instanceof RenderApplyError) {
+      if (cause instanceof RenderApplyError) {
         return atomicFrameRejection(cause);
       }
       // An unclassified backend exception may have escaped after it changed a
@@ -1425,9 +1421,7 @@ function atomicFrameRejection(cause: unknown): RendererAnimatedMeshFrameReceipt 
     applied: false,
     outcome: 'rejected_atomic',
     diagnostics: [{
-      code: cause instanceof RendererLightingPolicyError
-        ? 'renderer_lighting_policy_rejected'
-        : 'renderer_frame_rejected',
+      code: 'renderer_frame_rejected',
       message: errorMessage(cause),
       asset: null,
       handle: null,
@@ -1491,7 +1485,7 @@ function surfaceAnimationProjection(
         if (cause instanceof RendererTerminalError || cause instanceof RendererDisposedError) {
           return terminalFrameReceipt('renderer_terminal', errorMessage(cause));
         }
-        if (cause instanceof RenderApplyError || cause instanceof RendererLightingPolicyError) {
+        if (cause instanceof RenderApplyError) {
           return atomicFrameRejection(cause);
         }
         return {
@@ -1852,7 +1846,7 @@ function normalizeSurfaceLighting(
     readonly world: RendererSurfaceDefaultLightingMode;
     readonly viewmodel: RendererSurfaceDefaultLightingMode;
   };
-  readonly shadows: { readonly enabled: boolean; readonly maximumActiveLights: number };
+  readonly shadows: { readonly enabled: boolean };
 } {
   if (options !== undefined && options.schemaVersion !== RUSTY_RENDERER_SURFACE_LIGHTING_SCHEMA_VERSION) {
     throw new RendererSurfaceLightingError('lighting.schemaVersion must equal 1');
@@ -1867,19 +1861,10 @@ function normalizeSurfaceLighting(
   if (typeof enabled !== 'boolean') {
     throw new RendererSurfaceLightingError('lighting.shadows.enabled must be boolean');
   }
-  const maximumActiveLights = options?.shadows?.maximumActiveLights
-    ?? RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS;
-  if (!Number.isSafeInteger(maximumActiveLights)
-    || maximumActiveLights < 0
-    || maximumActiveLights > RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS) {
-    throw new RendererSurfaceLightingError(
-      `lighting.shadows.maximumActiveLights must be in 0..=${String(RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS)}`,
-    );
-  }
   return {
     schemaVersion: 1,
     defaultLights: { world, viewmodel },
-    shadows: { enabled, maximumActiveLights },
+    shadows: { enabled },
   };
 }
 

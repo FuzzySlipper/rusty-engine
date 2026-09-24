@@ -112,8 +112,7 @@ impl ReconnectRuntime {
         let outputs = if baseline {
             FixtureRuntime::baseline_publications()
         } else {
-            vec![RuntimePublication::frame(&RenderFrameDiff::new())
-                .expect("empty frame is a valid logical publication")]
+            vec![RuntimePublication::Frame(RenderFrameDiff::new())]
         };
         ProductDevRuntimeReceipt::new(
             ProductDevOperationResult::accepted(
@@ -440,8 +439,7 @@ impl ProductDevRuntime for OutputFailureRuntime {
             // This receipt is valid, but it cannot be attached to a retained
             // stream until a binding baseline exists. It models publication
             // failure after the authoritative input call has consumed once.
-            vec![RuntimePublication::frame(&RenderFrameDiff::new())
-                .expect("empty frame is a valid logical publication")]
+            vec![RuntimePublication::Frame(RenderFrameDiff::new())]
         } else {
             Vec::new()
         };

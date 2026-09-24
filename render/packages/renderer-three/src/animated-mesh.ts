@@ -432,34 +432,17 @@ export class AnimatedMeshRegistry {
     });
   }
 
-  /** Reject a backend-only capture lease without requiring a definition staged earlier in this frame. */
-  validateReleaseCaptures(asset: string): void {
-    const record = this.#assets.get(asset);
-    if (record !== undefined && record.captureCount !== 0) {
-      throw new AnimatedMeshApplyError(
-        `releaseAnimatedMesh: ${asset} is in use by ${record.refCount} instance(s) and ${record.captureCount} capture(s)`,
-      );
-    }
-  }
-
-  /** Validate one logical asset release without mutating its template. */
-  validateReleaseDefinition(asset: string): void {
+  /** Release a definition after its final instance and capture lease. */
+  releaseDefinition(asset: string): void {
     const record = this.#assets.get(asset);
     if (record === undefined) {
       throw new AnimatedMeshApplyError(`releaseAnimatedMesh: undefined animated mesh ${asset}`);
     }
-    this.validateReleaseCaptures(asset);
-    if (record.refCount !== 0) {
+    if (record.refCount !== 0 || record.captureCount !== 0) {
       throw new AnimatedMeshApplyError(
         `releaseAnimatedMesh: ${asset} is in use by ${record.refCount} instance(s) and ${record.captureCount} capture(s)`,
       );
     }
-  }
-
-  /** Release one logical asset definition after its final instance and capture lease. */
-  releaseDefinition(asset: string): void {
-    this.validateReleaseDefinition(asset);
-    const record = this.#assets.get(asset)!;
     disposeAnimatedMeshAssetScene(record.scene);
     this.#assets.delete(asset);
   }
@@ -482,60 +465,6 @@ export class AnimatedMeshRegistry {
       disposeAnimatedMeshAssetScene(record.scene);
       this.#assets.delete(asset);
     }
-  }
-
-  validateDefinition(asset: AnimatedMeshAsset): void {
-    this.#validatedResource(asset);
-  }
-
-  /** Run every fallible creation path on a detached instance during frame preflight. */
-  validateInitialSample(instance: AnimatedMeshInstanceDescriptor): void {
-    const probeHandle = -1 as RenderHandle;
-    const probe = {
-      ...instance,
-      // A preflight must not consume a source-entity generation.
-      metadata: { ...instance.metadata, sourceEntity: null },
-    };
-    let created = false;
-    try {
-      this.create(
-        probeHandle,
-        probe,
-        probe.materialOverrides.length === 0
-          ? undefined
-          : () => new THREE.MeshBasicMaterial(),
-      );
-      created = true;
-    } finally {
-      if (created) this.release(probeHandle);
-    }
-  }
-
-  /** Preflight creation for an asset defined earlier in this frame. */
-  validateInitialSampleForDefinition(
-    asset: AnimatedMeshAsset,
-    instance: AnimatedMeshInstanceDescriptor,
-  ): void {
-    const staged = new AnimatedMeshRegistry(this.#assetSource);
-    try {
-      staged.define(asset);
-      staged.validateInitialSample(instance);
-    } finally {
-      staged.dispose();
-    }
-  }
-
-  /** Preflight a held sample update against one already-retained instance. */
-  validateSample(handle: RenderHandle, clip: string, normalizedTime: number): void {
-    const instance = this.#requireInstance(handle, 'setAnimatedMeshPlayback');
-    this.validateInitialSample({
-      asset: instance.asset,
-      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-      materialOverrides: [...instance.materialOverrides.values()].map((override) => override.binding),
-      playback: { kind: 'sample', clip, normalizedTime },
-      visible: true,
-      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: null },
-    });
   }
 
   /** Renderer-internal proof surface for the admitted template/instance map. */

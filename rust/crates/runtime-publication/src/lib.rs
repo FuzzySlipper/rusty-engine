@@ -137,57 +137,12 @@ impl RuntimeAnimationCueDefinition {
     }
 }
 
-/// An admitted publication snapshot. Its contents are read-only until consumed;
-/// obtaining a mutable frame again requires a fresh admission before publishing.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RuntimeRenderFrame(RenderFrameDiff);
-
-impl RuntimeRenderFrame {
-    pub fn as_frame(&self) -> &RenderFrameDiff {
-        &self.0
-    }
-
-    pub fn into_frame(self) -> RenderFrameDiff {
-        self.0
-    }
-}
-
-impl std::ops::Deref for RuntimeRenderFrame {
-    type Target = RenderFrameDiff;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-/// An admitted publication snapshot. Its contents are read-only until consumed;
-/// obtaining a mutable frame again requires a fresh admission before publishing.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RuntimePresentationFrame(PresentationFrameDiff);
-
-impl RuntimePresentationFrame {
-    pub fn as_frame(&self) -> &PresentationFrameDiff {
-        &self.0
-    }
-
-    pub fn into_frame(self) -> PresentationFrameDiff {
-        self.0
-    }
-}
-
-impl std::ops::Deref for RuntimePresentationFrame {
-    type Target = PresentationFrameDiff;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 /// One logical output from a runtime operation.
 ///
 /// Progress pulses, readouts, and input-result receipts remain operation/host
 /// observations. They are intentionally not part of this Engine publication
 /// model; the serving adapter may add those wire facts around a receipt.
+/// Frames are owned Engine facts, moved here without validation or copying.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimePublication {
     Binding {
@@ -199,9 +154,9 @@ pub enum RuntimePublication {
         runtime: RuntimeInputBinding,
         publication_frontiers: Vec<RuntimePublicationFrontier>,
     },
-    Frame(RuntimeRenderFrame),
+    Frame(RenderFrameDiff),
     ViewComposition(RendererViewComposition),
-    Presentation(RuntimePresentationFrame),
+    Presentation(PresentationFrameDiff),
     /// Complete replacement snapshot of pending renderer output jobs. An
     /// empty snapshot cancels every previously published pending job.
     RenderOutput(Vec<RenderOutputJob>),
@@ -216,35 +171,6 @@ impl RuntimePublication {
             next_input_sequence,
             publication_frontiers: None,
         }
-    }
-
-    pub fn frame(frame: &RenderFrameDiff) -> Result<Self, RuntimePublicationError> {
-        frame
-            .validate()
-            .map_err(|_| RuntimePublicationError::InvalidFrame)?;
-        Ok(Self::Frame(RuntimeRenderFrame(frame.clone())))
-    }
-
-    pub fn view_composition(
-        composition: &RendererViewComposition,
-    ) -> Result<Self, RuntimePublicationError> {
-        composition
-            .validate()
-            .map_err(|_| RuntimePublicationError::InvalidViewComposition)?;
-        Ok(Self::ViewComposition(composition.clone()))
-    }
-
-    pub fn presentation(frame: &PresentationFrameDiff) -> Result<Self, RuntimePublicationError> {
-        frame
-            .validate()
-            .map_err(|_| RuntimePublicationError::InvalidPresentation)?;
-        Ok(Self::Presentation(RuntimePresentationFrame(frame.clone())))
-    }
-
-    pub fn render_output(jobs: Vec<RenderOutputJob>) -> Result<Self, RuntimePublicationError> {
-        let publication = Self::RenderOutput(jobs);
-        publication.validate()?;
-        Ok(publication)
     }
 
     pub fn animation_cue_definitions(
@@ -263,13 +189,6 @@ impl RuntimePublication {
         Ok(Self::AnimationCueDefinitions(definitions))
     }
 
-    pub fn ui_projection(
-        envelope: &RuntimeUiProjectionEnvelope,
-    ) -> Result<Self, RuntimePublicationError> {
-        // The envelope is immutable and validates at construction/deserialization.
-        Ok(Self::UiProjection(envelope.clone()))
-    }
-
     pub fn complete_baseline_with_frontiers(
         runtime: RuntimeInputBinding,
         publication_frontiers: Vec<RuntimePublicationFrontier>,
@@ -284,8 +203,7 @@ impl RuntimePublication {
         Self::complete_baseline_with_frontiers(runtime, Vec::new())
     }
 
-    /// Validates the typed facts before a serving host retains or converts
-    /// them. This intentionally does not inspect wire aggregate sizes.
+    /// Checks publication metadata, never revalidating owned Engine frames.
     pub fn validate(&self) -> Result<(), RuntimePublicationError> {
         match self {
             Self::Binding {
@@ -296,26 +214,6 @@ impl RuntimePublication {
                 publication_frontiers,
                 ..
             } => validate_frontiers(publication_frontiers),
-            // These snapshots cannot be mutated after their constructor admitted them.
-            Self::Frame(_) | Self::Presentation(_) => Ok(()),
-            Self::RenderOutput(jobs) => {
-                let mut ids = BTreeSet::new();
-                for job in jobs {
-                    if job.id == 0 || job.id > JSON_SAFE_U64_MAX {
-                        return Err(RuntimePublicationError::InvalidRenderOutputJobId);
-                    }
-                    if !ids.insert(job.id) {
-                        return Err(RuntimePublicationError::DuplicateRenderOutputJobId);
-                    }
-                    job.frame
-                        .validate()
-                        .map_err(|_| RuntimePublicationError::InvalidFrame)?;
-                }
-                Ok(())
-            }
-            Self::ViewComposition(composition) => composition
-                .validate()
-                .map_err(|_| RuntimePublicationError::InvalidViewComposition),
             Self::AnimationCueDefinitions(definitions) => {
                 if definitions.len() > RuntimeAnimationCueDefinition::MAX_DEFINITIONS {
                     return Err(RuntimePublicationError::TooManyAnimationCueDefinitions);
@@ -329,22 +227,28 @@ impl RuntimePublication {
                 }
                 Ok(())
             }
-            Self::UiProjection(_) => Ok(()),
+            // Frame/content invariants belong to their Engine owner. Publications
+            // move those trusted values; host conversion must not readmit them.
+            Self::Frame(_)
+            | Self::Presentation(_)
+            | Self::ViewComposition(_)
+            | Self::RenderOutput(_)
+            | Self::UiProjection(_) => Ok(()),
         }
     }
 
     /// Returns only newly emitted presentation events for baseline assembly.
     /// Retained presentation state is intentionally omitted from the returned
     /// publication so rebuilding a baseline cannot replay old effects.
-    pub fn transient_presentation(&self) -> Result<Option<Self>, RuntimePublicationError> {
+    pub fn transient_presentation(&self) -> Option<Self> {
         let Self::Presentation(frame) = self else {
-            return Ok(None);
+            return None;
         };
         let transient = frame.transient_events();
         if transient.is_empty() {
-            Ok(None)
+            None
         } else {
-            Self::presentation(&transient).map(Some)
+            Some(Self::Presentation(transient))
         }
     }
 
@@ -407,12 +311,6 @@ pub enum RuntimePublicationError {
     InvalidAnimationCueField { field: &'static str },
     TooManyAnimationCueDefinitions,
     DuplicateAnimationCueDefinition,
-    InvalidFrame,
-    InvalidRenderOutputJobId,
-    DuplicateRenderOutputJobId,
-    InvalidViewComposition,
-    InvalidPresentation,
-    InvalidUiProjection,
 }
 
 impl std::fmt::Display for RuntimePublicationError {
@@ -434,16 +332,6 @@ impl std::fmt::Display for RuntimePublicationError {
             Self::DuplicateAnimationCueDefinition => {
                 "runtime animation cue definitions contain a duplicate identity"
             }
-            Self::InvalidFrame => "runtime publication frame is invalid",
-            Self::InvalidRenderOutputJobId => {
-                "runtime render output job id is outside the supported range"
-            }
-            Self::DuplicateRenderOutputJobId => {
-                "runtime render output snapshot contains a duplicate job id"
-            }
-            Self::InvalidViewComposition => "runtime publication view composition is invalid",
-            Self::InvalidPresentation => "runtime publication presentation is invalid",
-            Self::InvalidUiProjection => "runtime publication UI projection is invalid",
         })
     }
 }
@@ -477,41 +365,11 @@ mod tests {
             node: render_model::RenderNode::new(Geometry::Cube),
         }])
         .expect("fixture frame");
-        let publication = RuntimePublication::frame(&frame).expect("typed frame");
+        let publication = RuntimePublication::Frame(frame);
         assert!(matches!(publication, RuntimePublication::Frame(_)));
         assert_eq!(
             RuntimePublication::binding(binding(), 11).binding_marker(),
             Some(binding())
-        );
-    }
-
-    #[test]
-    fn publication_snapshot_is_detached_and_mutable_frames_are_readmitted() {
-        let mut source = RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
-            handle: RenderHandle::new(1),
-            parent: None,
-            node: render_model::RenderNode::new(Geometry::Cube),
-        }])
-        .unwrap();
-        let publication = RuntimePublication::frame(&source).unwrap();
-        source.schema_version = u32::MAX;
-        assert_eq!(
-            RuntimePublication::frame(&source),
-            Err(RuntimePublicationError::InvalidFrame)
-        );
-        assert!(publication.validate().is_ok());
-        let RuntimePublication::Frame(snapshot) = publication else {
-            panic!("frame");
-        };
-        assert!(snapshot.as_frame().validate().is_ok());
-        let mut editable = snapshot.into_frame();
-        let RenderDiff::Create { node, .. } = &mut editable.ops[0] else {
-            unreachable!()
-        };
-        node.transform.translation[0] = f32::NAN;
-        assert_eq!(
-            RuntimePublication::frame(&editable),
-            Err(RuntimePublicationError::InvalidFrame)
         );
     }
 
@@ -543,10 +401,9 @@ mod tests {
                 },
             }],
         };
-        let publication = RuntimePublication::presentation(&frame).expect("typed presentation");
+        let publication = RuntimePublication::Presentation(frame);
         let transient = publication
             .transient_presentation()
-            .expect("transient extraction")
             .expect("one emitted event");
         assert!(matches!(transient, RuntimePublication::Presentation(_)));
         assert!(transient.validate().is_ok());
@@ -600,7 +457,7 @@ mod tests {
             serde_json::json!({"visible": true}),
         )
         .expect("fixture envelope");
-        let publication = RuntimePublication::ui_projection(&envelope).expect("typed UI");
+        let publication = RuntimePublication::UiProjection(envelope);
         assert!(publication.validate().is_ok());
     }
 }

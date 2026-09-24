@@ -201,8 +201,7 @@ mod tests {
                         Self::readout(),
                     )
                     .unwrap(),
-                    vec![RuntimePublication::frame(&RenderFrameDiff::new())
-                        .expect("empty frame is a valid logical publication")],
+                    vec![RuntimePublication::Frame(RenderFrameDiff::new())],
                 )
                 .unwrap());
             }

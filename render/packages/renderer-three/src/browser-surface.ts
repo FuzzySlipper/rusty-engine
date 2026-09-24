@@ -27,10 +27,6 @@ import {
   type TextureResourceSource,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
-import {
-  RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS,
-  RendererLightingPolicyError,
-} from './lighting.js';
 import type {
   AnimatedMeshAssetSource,
   AnimatedMeshPlaybackReadout,
@@ -140,7 +136,6 @@ export interface RendererBrowserSurfaceLightingOptions {
   };
   readonly shadows: {
     readonly enabled: boolean;
-    readonly maximumActiveLights: number;
   };
 }
 
@@ -153,7 +148,6 @@ export interface RendererBrowserSurfaceLightingReadout {
   readonly neutralLightCounts: { readonly world: number; readonly viewmodel: number };
   readonly shadows: {
     readonly enabled: boolean;
-    readonly maximumActiveLights: number;
     readonly activeLights: number;
     readonly requestedUnsupportedLights: number;
   };
@@ -367,7 +361,6 @@ export function mountRendererBrowserSurface(
       }),
       maximumTextureDimension: webgl.capabilities.maxTextureSize,
       shadowsEnabled: lighting.shadows.enabled,
-      maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },
   );
   // Mount has several independent WebGL owners. Keep their release actions in
@@ -716,7 +709,6 @@ export function mountRendererBrowserSurface(
         }),
         shadows: Object.freeze({
           enabled: lighting.shadows.enabled,
-          maximumActiveLights: lighting.shadows.maximumActiveLights,
           activeLights: retainedLights.filter((light) => light.shadowStatus === 'active').length,
           requestedUnsupportedLights: retainedLights.filter(
             (light) => light.shadowStatus === 'requested_unsupported',
@@ -774,27 +766,8 @@ function normalizeLightingOptions(
     defaultLights: { world: 'neutral', viewmodel: 'neutral' },
     shadows: {
       enabled: false,
-      maximumActiveLights: RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS,
     },
   } as const;
-  if (normalized.schemaVersion !== 1) {
-    throw new RendererLightingPolicyError('invalid_shadow_limit', 'lighting.schemaVersion must equal 1');
-  }
-  for (const [name, mode] of Object.entries(normalized.defaultLights)) {
-    if (mode !== 'neutral' && mode !== 'disabled') {
-      throw new RendererLightingPolicyError(
-        'invalid_shadow_limit',
-        `lighting.defaultLights.${name} must be neutral or disabled`,
-      );
-    }
-  }
-  const limit = normalized.shadows.maximumActiveLights;
-  if (!Number.isSafeInteger(limit) || limit < 0 || limit > RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS) {
-    throw new RendererLightingPolicyError(
-      'invalid_shadow_limit',
-      `lighting.shadows.maximumActiveLights must be in 0..=${String(RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS)}`,
-    );
-  }
   return normalized;
 }
 

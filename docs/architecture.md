@@ -120,10 +120,20 @@ their ordered queue boundary before later ticks can advance the cursor. The
 presentation revision and transport cursor remain separate facts. Replacement preparation
 quiesces the old publisher before projection write ownership is acquired; a
 prepared replacement value carries that ordering into the host install call.
-The runtime keeps typed publications through operation settlement. The serving
-adapter converts them to ProductDev wire DTOs and adds progress/input receipt
-observations. Mailbox draining and publication callbacks belong to that host
+The runtime moves owned typed publications through operation settlement into
+ProductDev wire DTOs. Publication and host adapters do not clone and readmit
+already admitted graphics, presentation, UI, or view payloads. The serving
+adapter adds progress/input receipt observations. Mailbox draining and publication callbacks belong to that host
 scheduler; neutral session scopes retain the single runtime lock.
+
+The renderer realizes admitted changes once, without constructing disposable
+resources or sampling phantom animated instances as a frame preflight. Backend
+realization failure makes that surface terminal; recovery rebuilds from committed
+intent instead of promising rollback of GPU mutations. Retained texture
+descriptors are immutable shared values. Shadows initialize on new world objects,
+without a scene-wide frame sweep or an Engine shadow-light quota; products choose
+their lighting workload. Generated C# bridges convert borrowed spans directly to
+native arrays while retaining the required pin and release lifetimes.
 
 Output batches use ordered fragments without a default aggregate byte/count cap.
 The host serializes actual delivery bytes, not a discarded size preflight. The

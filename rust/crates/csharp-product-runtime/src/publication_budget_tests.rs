@@ -57,7 +57,7 @@ fn inline_mesh_frame(vertex_count: usize) -> RuntimePublication {
         payload,
     }])
     .expect("valid typed inline mesh frame");
-    RuntimePublication::frame(&frame).expect("valid runtime publication")
+    RuntimePublication::Frame(frame.clone())
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn retained_baseline_and_following_delta_keep_their_publication_order() {
         RuntimePublication::binding(binding, 1),
         inline_mesh_frame(LARGE_BASELINE_VERTEX_COUNT),
         RuntimePublication::complete_baseline(binding),
-        RuntimePublication::frame(&RenderFrameDiff::new()).unwrap(),
+        RuntimePublication::Frame(RenderFrameDiff::new()),
     ];
     let receipt = ProductDevRuntimeReceipt::new((), outputs.clone()).unwrap();
     let (_, wire) = receipt.into_wire_parts().unwrap();

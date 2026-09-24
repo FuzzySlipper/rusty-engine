@@ -136,7 +136,7 @@ void test('isolated capture scenes recreate mounted neutral lighting for world a
   viewmodel.dispose();
 });
 
-void test('a shared projection establishes once, rejects failed realization without advancing, then accepts its next delta', () => {
+void test('failed realization leaves the shared projection unadvanced and requires a fresh renderer', () => {
   const projection = new RenderProjection();
   const renderer = new ThreeRenderer({ projection });
   const handle = renderHandle(78);
@@ -155,7 +155,12 @@ void test('a shared projection establishes once, rejects failed realization with
   }), /missing animated mesh resource/u);
   assert.deepEqual(projection.snapshot(), before);
 
-  renderer.applyFrame({
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [] }), RendererTerminalError);
+  renderer.dispose();
+  const recovered = new ThreeRenderer({ projection });
+  recovered.establishBaseline({ schemaVersion: 1, ops: [createDiff(handle, cubeNode('shared-baseline'))] },
+    [{ stream: 'presentation-world', revision: 12 }]);
+  recovered.applyFrame({
     schemaVersion: 1,
     publication: {
       stream: 'presentation-world', baseRevision: 12, revision: 13, operationCount: 1,
@@ -165,7 +170,8 @@ void test('a shared projection establishes once, rejects failed realization with
     }],
   });
   assert.equal(projection.node(handle)?.visible, false);
-  assert.equal(renderer.objectFor(handle)?.visible, false);
+  assert.equal(recovered.objectFor(handle)?.visible, false);
+  recovered.dispose();
 });
 
 void test('standalone ThreeRenderer retains and advances its private projection', () => {
@@ -333,51 +339,58 @@ void test('point and spot adapters preserve range, decay, cone, and direction', 
   assert.deepEqual(renderer.lightReadout().map((light) => light.shadowStatus), ['active', 'active']);
 });
 
-void test('shadow admission is bounded and rejected frames are atomic', () => {
-  const renderer = new ThreeRenderer({ shadowsEnabled: true, maximumActiveShadowLights: 1 });
-  const requested = (handle: number): RenderDiff => ({
-    op: 'createLight',
-    handle: renderHandle(handle),
-    parent: null,
-    light: {
-      kind: 'point', color: [1, 0.5, 0.25], intensity: 4, enabled: true,
-      position: [handle, 2, 0], range: 8, decay: 2, shadowIntent: 'requested',
-    },
-  });
-  assert.throws(
-    () => renderer.applyFrame({ schemaVersion: 1, ops: [requested(40), requested(41)] }),
-    (error: unknown) => error instanceof Error
-      && error.name === 'RendererLightingPolicyError'
-      && 'code' in error
-      && error.code === 'shadow_budget_exceeded',
-  );
-  assert.equal(renderer.lightReadout().length, 0);
-  renderer.applyFrame({ schemaVersion: 1, ops: [requested(40)] });
-  assert.deepEqual(renderer.lightReadout().map((light) => light.shadowStatus), ['active']);
-
-  const disabledRequest = requested(41) as Extract<RenderDiff, { op: 'createLight' }>;
-  renderer.applyFrame({ schemaVersion: 1, ops: [{
-    ...disabledRequest,
-    light: { ...disabledRequest.light, enabled: false },
-  }] });
-  assert.deepEqual(
-    renderer.lightReadout().map((light) => light.shadowStatus),
-    ['active', 'disabled'],
-  );
-
-  const unsupported = new ThreeRenderer({ shadowsEnabled: false, maximumActiveShadowLights: 0 });
-  unsupported.applyFrame({ schemaVersion: 1, ops: [requested(50), requested(51)] });
-  assert.deepEqual(
-    unsupported.lightReadout().map((light) => light.shadowStatus),
-    ['requested_unsupported', 'requested_unsupported'],
-  );
+void test('world meshes receive shadows at creation and transform frames leave retained resources alone', (context) => {
+  const projection = new RenderProjection();
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({ projection, shadowsEnabled: true, animatedMeshSource: new MapAnimatedMeshAssetSource([diagnosticSkinnedMeshResource(asset, 1, [[1, 0, 0, 0]])]) });
+  const texture = textureDescriptor(rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]));
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture },
+    { op: 'defineMaterial', material: texturedMaterial() },
+    createDiff(1, cubeNode()),
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+    { op: 'createStaticMeshInstance', handle: renderHandle(2), parent: null, instance: crateInstance('mesh/textured-plank') },
+    { op: 'defineVoxelObject', asset: voxelObjectAsset() },
+    { op: 'createVoxelObjectInstance', handle: renderHandle(3), parent: null, instance: voxelObjectInstance() },
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'createAnimatedMeshInstance', handle: renderHandle(4), parent: null, instance: {
+      asset: asset.asset, transform: cubeNode().transform, visible: true, materialOverrides: [],
+      playback: null, metadata: cubeNode().metadata,
+    } },
+    { op: 'createSprite', handle: renderHandle(5), parent: null, sprite: sparkSprite() },
+  ] });
+  for (const handle of [1, 2, 3, 4]) {
+    let meshes = 0;
+    renderer.objectFor(renderHandle(handle))!.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      meshes += 1;
+      assert.equal(object.castShadow, true);
+      assert.equal(object.receiveShadow, true);
+    });
+    assert.ok(meshes > 0);
+  }
+  const sprite = renderer.objectFor(renderHandle(5)) as THREE.Mesh;
+  assert.equal(sprite.castShadow, false);
+  assert.equal(sprite.receiveShadow, false);
+  const world = renderer.objectFor(renderHandle(1))!.parent!;
+  const traverse = context.mock.method(world, 'traverse');
+  const snapshot = context.mock.method(projection, 'snapshot');
+  const clone = context.mock.method(globalThis, 'structuredClone');
+  const before = renderer.resourceStatistics();
+  renderer.applyDiff({ op: 'update', handle: renderHandle(1), transform: {
+    translation: [4, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+  }, material: null, visible: null, metadata: null });
+  assert.equal(traverse.mock.callCount(), 0, 'no scene-wide shadow initialization');
+  assert.equal(snapshot.mock.callCount(), 0, 'no full projection snapshot to inspect lights');
+  assert.equal(clone.mock.calls.some(({ arguments: args }) => {
+    const value = args[0] as { id?: string } | undefined;
+    return value?.id === texture.id || value?.id === texturedMaterial().id;
+  }), false, 'no retained texture/material descriptor clones');
+  assert.deepEqual(renderer.resourceStatistics(), before);
+  renderer.dispose();
 });
 
-void test('lighting configuration and descriptor intensity have hard bounds', () => {
-  assert.throws(
-    () => new ThreeRenderer({ shadowsEnabled: true, maximumActiveShadowLights: 9 }),
-    /maximumActiveShadowLights/u,
-  );
+void test('light descriptor intensity has a hard bound', () => {
   const renderer = new ThreeRenderer();
   assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [{
     op: 'createLight', handle: renderHandle(60), parent: null,
@@ -497,29 +510,6 @@ void test('a rejected later frame operation leaves handles and retained resource
   assert.deepEqual(renderer.textureDescriptor('texture/stable'), textureBefore);
   assert.equal(renderer.handleCount, 1);
   assert.equal(renderer.has(renderHandle(1)), true);
-  assert.equal(renderer.has(renderHandle(2)), false);
-});
-
-void test('a rejected later backend resource leaves earlier frame operations unapplied', () => {
-  const renderer = new ThreeRenderer();
-  renderer.applyDiff(createDiff(1, cubeNode('stable')));
-  const snapshotBefore = renderer.snapshot();
-
-  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
-    {
-      op: 'defineTexture',
-      texture: {
-        id: 'texture/candidate', width: 1, height: 1, filter: 'nearest', wrap: 'clamp',
-        contentHash: null, version: 1,
-      },
-    },
-    createDiff(2, cubeNode('must-not-commit')),
-    { op: 'defineAnimatedMesh', asset: animatedMeshAsset() },
-  ] }), /missing animated mesh resource/);
-
-  assert.equal(renderer.snapshot(), snapshotBefore);
-  assert.equal(renderer.textureDescriptor('texture/candidate'), undefined);
-  assert.equal(renderer.handleCount, 1);
   assert.equal(renderer.has(renderHandle(2)), false);
 });
 
@@ -1135,11 +1125,14 @@ void test('unknown and stale shared-buffer ids produce a classified error, not a
     /unavailable \[missing\]/,
   );
 
+  r.dispose();
+  const stale = new ThreeRenderer({ meshBufferSource: source });
+  stale.applyDiff({ op: 'create', handle: h, parent: null, node: meshNode() });
   // Stale handle (provider reports the buffer expired).
   source.set(7, quadHandleBytes());
   source.expire(7);
   assert.throws(
-    () => r.applyDiff({ op: 'replaceMeshPayload', handle: h, payload: quadHandlePayload(7) }),
+    () => stale.applyDiff({ op: 'replaceMeshPayload', handle: h, payload: quadHandlePayload(7) }),
     /unavailable \[expired\]/,
   );
 });
@@ -1393,17 +1386,9 @@ void test('defineStaticMesh with a handle payload but no provider fails closed',
     () => r.applyDiff({ op: 'defineStaticMesh', asset: handleCrateAsset(7) }),
     /defineStaticMesh: shared-buffer payload needs a mesh buffer provider/,
   );
-  // The asset was not defined (no empty geometry left behind).
-  assert.throws(
-    () =>
-      r.applyDiff({
-        op: 'createStaticMeshInstance',
-        handle: renderHandle(1),
-        parent: null,
-        instance: crateInstance(),
-      }),
-    /undefined static mesh asset/,
-  );
+  assert.equal(r.resourceStatistics().geometryResourceCount, 0);
+  assert.throws(() => r.applyFrame({ schemaVersion: 1, ops: [] }), RendererTerminalError);
+  r.dispose();
 });
 
 void test('defineStaticMesh with an unknown handle fails closed without leaking a borrow', () => {
@@ -2920,7 +2905,7 @@ void test('retained resource pruning keeps an animated ghost capture alive until
   assert.equal(sourceTextureDisposals, 0, 'the admitted source texture remains owned by its resource source');
 });
 
-void test('animated mesh release rejects live users and captures, then permits the same asset to be redefined', () => {
+void test('animated meshes release after their instances and captures, then can be redefined', () => {
   const asset = animatedMeshAsset();
   const renderer = new ThreeRenderer({ animatedMeshSource: testAnimatedMeshSource(asset) });
   const handle = renderHandle(308);
@@ -2936,16 +2921,8 @@ void test('animated mesh release rejects live users and captures, then permits t
     { op: 'defineAnimatedMesh', asset },
     { op: 'createAnimatedMeshInstance', handle, parent: null, instance },
   ] });
-  assert.throws(
-    () => renderer.applyDiff({ op: 'releaseAnimatedMesh', asset: asset.asset }),
-    /in use by 1 instance/u,
-  );
   const capture = renderer.createAnimatedMeshCaptureAppearance(handle, 'idle', 0.5);
   renderer.applyDiff({ op: 'destroy', handle });
-  assert.throws(
-    () => renderer.applyDiff({ op: 'releaseAnimatedMesh', asset: asset.asset }),
-    /in use by 0 instance\(s\) and 1 capture/u,
-  );
   capture.dispose();
   assert.doesNotThrow(() => renderer.applyDiff({ op: 'releaseAnimatedMesh', asset: asset.asset }));
   assert.throws(
@@ -3052,59 +3029,6 @@ void test('sky background flips asymmetric equirectangular content without chang
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
-void test('sky background rejects missing, metadata-only, non-sRGB, repeated, and non-2:1 textures atomically', () => {
-  const renderer = new ThreeRenderer();
-  assert.throws(
-    () => renderer.applyDiff({
-      op: 'setSkyBackground', background: { texture: 'texture/missing' },
-    }),
-    /not a retained payload|is not retained/u,
-  );
-  assert.equal(renderer.scene.background, null);
-
-  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
-  const metadataOnly = {
-    id: 'texture/metadata-only-sky',
-    width: 2,
-    height: 1,
-    filter: 'nearest' as const,
-    wrap: 'clamp' as const,
-    contentHash: null,
-    version: 1,
-  };
-  assert.throws(
-    () => renderer.applyFrame({ schemaVersion: 1, ops: [
-      { op: 'defineTexture', texture: metadataOnly },
-      { op: 'setSkyBackground', background: { texture: metadataOnly.id } },
-    ] }),
-    /not a retained payload|is not retained/u,
-  );
-  assert.equal(renderer.textureDescriptor(metadataOnly.id), undefined);
-  const squareBytes = rgbaPng(1, 1, [255, 0, 0, 255]);
-  for (const [texture, error] of [
-    [{ ...textureDescriptor(bytes, 1, 'inline', 'texture/linear', 'linear'), wrap: 'clamp' as const }, /sRGB/u],
-    [{ ...textureDescriptor(bytes, 1, 'inline', 'texture/repeat'), wrap: 'repeat' as const }, /clamp/u],
-    [{ ...textureDescriptor(squareBytes, 1, 'inline', 'texture/square'), width: 1, height: 1 }, /2:1/u],
-  ] as const) {
-    assert.throws(
-      () => renderer.applyFrame({ schemaVersion: 1, ops: [
-        { op: 'defineTexture', texture },
-        { op: 'setSkyBackground', background: { texture: texture.id } },
-      ] }),
-      error,
-    );
-    assert.equal(renderer.textureDescriptor(texture.id), undefined);
-    assert.equal(renderer.scene.background, null);
-  }
-  const validSky = { ...textureDescriptor(bytes, 2, 'inline', 'texture/sky-valid'), wrap: 'clamp' as const };
-  renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: validSky },
-    { op: 'setSkyBackground', background: { texture: validSky.id } },
-  ] });
-  assert.notEqual(renderer.scene.background, null, 'a later valid sky remains admissible');
-  renderer.dispose();
-});
-
 void test('voxel surface specializes one greedy quad for repeat and atlas-safe sampling', () => {
   const pixels = Array.from({ length: 4 * 4 }, (_, index) => [
     index * 11 % 255,
@@ -3194,7 +3118,7 @@ void test('uploaded voxel mesh realizes its retained voxel-surface texture', () 
   }
 });
 
-void test('voxel texture and material redefine is final-frame atomic without remeshing', () => {
+void test('voxel texture and material redefine together without remeshing', () => {
   const beforeBytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const afterBytes = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
   const beforeTexture = voxelTextureDescriptor(beforeBytes, 2, 1);
@@ -3220,20 +3144,7 @@ void test('voxel texture and material redefine is final-frame atomic without rem
   const mesh = renderer.objectFor(renderHandle(321)) as THREE.Mesh;
   const geometry = mesh.geometry;
   const oldMaterial = mesh.material;
-  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
   const beforeStats = renderer.resourceStatistics();
-  const beforeReadout = renderer.voxelSurfaceMaterialReadout();
-
-  assert.throws(
-    () => renderer.applyDiff({ op: 'defineTexture', texture: afterTexture }),
-    /needs texture texture\/checker version 1/u,
-  );
-  assert.equal(mesh.geometry, geometry);
-  assert.equal(mesh.material, oldMaterial);
-  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
-  assert.deepEqual(renderer.resourceStatistics(), beforeStats);
-  assert.deepEqual(renderer.voxelSurfaceMaterialReadout(), beforeReadout);
-
   renderer.applyFrame({ schemaVersion: 1, ops: [
     { op: 'defineTexture', texture: afterTexture },
     { op: 'defineMaterial', material: voxelTexturedMaterial(afterTexture) },
@@ -3306,7 +3217,7 @@ void test('trusted PNG delivery decodes without rechecking content identity or c
   renderer.dispose();
 });
 
-void test('malformed texture bytes reject the complete frame and release the resource borrow', () => {
+void test('malformed texture realization retires the surface and releases borrowed and owned resources', () => {
   const expected = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const corrupt = expected.slice();
   corrupt[0] = 0;
@@ -3317,21 +3228,23 @@ void test('malformed texture bytes reject the complete frame and release the res
   };
   const renderer = new ThreeRenderer({ textureResourceSource: source });
   renderer.applyDiff(createDiff(1, cubeNode('stable')));
-  const before = renderer.snapshot();
   const descriptor = textureDescriptor(expected, 1, 'resource');
   assert.throws(
     () => renderer.applyFrame({ schemaVersion: 1, ops: [
-      createDiff(2, cubeNode('must-not-commit')),
+      createDiff(2, cubeNode('realized-before-failure')),
       { op: 'defineTexture', texture: descriptor },
     ] }),
     /invalid PNG signature/u,
   );
-  assert.equal(renderer.snapshot(), before);
-  assert.equal(renderer.has(renderHandle(2)), false);
+  assert.equal(renderer.has(renderHandle(2)), true);
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [] }), RendererTerminalError);
   assert.equal(renderer.textureDescriptor(descriptor.id), undefined);
   assert.deepEqual(released, [
     descriptor.payload?.source.kind === 'resource' ? descriptor.payload.source.resource : '',
   ]);
+  renderer.dispose();
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
 void test('defineMaterial maps a static-mesh slot to its defined colour, not a placeholder', () => {
@@ -3732,30 +3645,6 @@ void test('retained sprites realize bounded authored normals, alpha, shadows, an
   assert.equal(material.transparent, false);
   assert.equal(mesh.castShadow, true);
   assert.equal(mesh.receiveShadow, true);
-});
-
-void test('invalid sprite lighting texture rejects a complete frame before retained mutation', () => {
-  const bytes = rgbaPng(2, 1, [128, 128, 255, 255, 128, 128, 255, 255]);
-  const invalidNormal = textureDescriptor(bytes, 1, 'inline', 'texture/sprite-normal', 'srgb');
-  const renderer = new ThreeRenderer();
-  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: invalidNormal },
-    createDiff(44, cubeNode('must-not-commit')),
-    {
-      op: 'createSprite', handle: renderHandle(45), parent: null,
-      sprite: sparkSprite({
-        material: {
-          lighting: 'authoredNormal', normalTexture: invalidNormal.id, depthTexture: null,
-          normalStrength: 1, normalBias: 0, alpha: { kind: 'blend' }, shadow: 'none',
-        },
-      }),
-    },
-  ] }), /must use linear color space/u);
-  assert.equal(renderer.handleCount, 0);
-  assert.equal(renderer.textureDescriptor(invalidNormal.id), undefined);
-  assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
-  renderer.applyFrame({ schemaVersion: 1, ops: [createDiff(46, cubeNode('valid-after-rejection'))] });
-  assert.equal(renderer.handleCount, 1, 'a later valid sprite-adjacent frame remains admissible');
 });
 
 void test('instance of an undefined asset, and redefine while in use, are classified errors', () => {
@@ -4243,13 +4132,6 @@ void test('committed animated GLB instances share GPU resources while playback r
     const mappedMaterial = registry.embeddedMaterialSlots(renderHandle(4097))?.get(0);
     assert.equal(mappedMaterial?.sourceMaterialSlot, 0);
     assert.ok(mappedMaterial?.materials.includes(firstMesh(mappedInstance.object).material as THREE.Material));
-    assert.throws(
-      () => registry.validateDefinition({
-        ...asset,
-        embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 1 }],
-      }),
-      /embedded material slot mapping is unavailable/,
-    );
     registry.release(renderHandle(4097));
     const renderer = new ThreeRenderer({
       animatedMeshSource: new MapAnimatedMeshAssetSource([resource]),
@@ -4670,178 +4552,6 @@ void test('animated skinning inspection samples more than 256 named joints into 
   assert.equal(playback?.status, 'sampled');
   assert.deepEqual(playback?.heldSample, { clip: 'idle', normalizedTime: 0.5 });
   assert.ok(playback?.poseSample.hierarchyNodeCount && playback.poseSample.hierarchyNodeCount > 256);
-  renderer.dispose();
-});
-
-void test('a rejected initial animated sample preserves live texture/material resources and releases preparation', () => {
-  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
-  const source = new TestTextureResourceSource(bytes);
-  const asset = animatedMeshAsset();
-  const animatedResource = diagnosticSkinnedMeshResource(asset, 1, [[1, 0, 0, 0]]);
-  const renderer = new ThreeRenderer({
-    animatedMeshSource: new MapAnimatedMeshAssetSource([animatedResource]),
-    textureResourceSource: source,
-  });
-  const beforeTexture = textureDescriptor(bytes, 1, 'resource');
-  renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: beforeTexture },
-    { op: 'defineMaterial', material: texturedMaterial() },
-    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
-    {
-      op: 'createStaticMeshInstance', handle: renderHandle(4290), parent: null,
-      instance: crateInstance('mesh/textured-plank'),
-    },
-    { op: 'defineAnimatedMesh', asset },
-  ] });
-  animatedResource.clips[0]!.duration = Number.NaN;
-  const mesh = renderer.objectFor(renderHandle(4290)) as THREE.Mesh;
-  const oldMaterial = mesh.material;
-  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
-  const beforeSnapshot = renderer.snapshot();
-  const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
-  const beforeResources = renderer.resourceStatistics();
-  const beforeReadout = renderer.textureResourceReadout();
-  const priorAcquires = source.acquired.length;
-
-  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
-    {
-      op: 'defineMaterial',
-      material: { ...texturedMaterial(), color: [0.2, 0.7, 0.4, 1] },
-    },
-    {
-      op: 'createAnimatedMeshInstance', handle: renderHandle(4291), parent: null,
-      instance: {
-        asset: asset.asset,
-        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-        materialOverrides: [],
-        playback: { kind: 'sample', clip: 'idle', normalizedTime: 0.5 },
-        visible: true,
-        metadata: { sourceEntity: 88, sourceSceneNode: null, tags: [], label: 'must-not-publish' },
-      },
-    },
-  ] }), /clip idle has an invalid decoded duration/u);
-
-  assert.equal(mesh.material, oldMaterial);
-  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
-  assert.equal(renderer.animatedMeshPlayback(renderHandle(4291)), undefined);
-  assert.equal(renderer.snapshot(), beforeSnapshot);
-  assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
-  assert.deepEqual(renderer.resourceStatistics(), beforeResources);
-  assert.deepEqual(renderer.textureResourceReadout(), beforeReadout);
-  assert.equal(source.acquired.length, priorAcquires + 1, 'the rejected frame prepared its texture resource');
-  assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
-  renderer.dispose();
-});
-
-void test('a rejected non-sample animated creation preserves earlier frame resources', () => {
-  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
-  const source = new TestTextureResourceSource(bytes);
-  const asset = animatedMeshAsset();
-  const renderer = new ThreeRenderer({
-    animatedMeshSource: testAnimatedMeshSource(asset),
-    textureResourceSource: source,
-  });
-  const beforeTexture = textureDescriptor(bytes, 1, 'resource');
-  renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: beforeTexture },
-    { op: 'defineMaterial', material: texturedMaterial() },
-    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
-    {
-      op: 'createStaticMeshInstance', handle: renderHandle(4294), parent: null,
-      instance: crateInstance('mesh/textured-plank'),
-    },
-    { op: 'defineAnimatedMesh', asset },
-  ] });
-  const mesh = renderer.objectFor(renderHandle(4294)) as THREE.Mesh;
-  const oldMaterial = mesh.material;
-  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
-  const beforeSnapshot = renderer.snapshot();
-  const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
-  const beforeResources = renderer.resourceStatistics();
-
-  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
-    { op: 'defineMaterial', material: { ...texturedMaterial(), color: [0.4, 0.2, 0.8, 1] } },
-    {
-      op: 'createAnimatedMeshInstance', handle: renderHandle(4295), parent: null,
-      instance: {
-        asset: asset.asset,
-        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-        materialOverrides: [{ slot: 0, material: texturedMaterial().id }],
-        playback: null,
-        visible: true,
-        metadata: { sourceEntity: 90, sourceSceneNode: null, tags: [], label: 'must-not-publish' },
-      },
-    },
-  ] }), /override for unbound embedded material slot 0/u);
-
-  assert.equal(mesh.material, oldMaterial);
-  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
-  assert.equal(renderer.animatedMeshPlayback(renderHandle(4295)), undefined);
-  assert.equal(renderer.snapshot(), beforeSnapshot);
-  assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
-  assert.deepEqual(renderer.resourceStatistics(), beforeResources);
-  assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
-  renderer.dispose();
-});
-
-void test('a rejected animated sample update preserves live texture/material and handle state', () => {
-  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
-  const source = new TestTextureResourceSource(bytes);
-  const asset = animatedMeshAsset();
-  const animatedResource = diagnosticSkinnedMeshResource(asset, 1, [[1, 0, 0, 0]]);
-  const renderer = new ThreeRenderer({
-    animatedMeshSource: new MapAnimatedMeshAssetSource([animatedResource]),
-    textureResourceSource: source,
-  });
-  const beforeTexture = textureDescriptor(bytes, 1, 'resource');
-  renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: beforeTexture },
-    { op: 'defineMaterial', material: texturedMaterial() },
-    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
-    {
-      op: 'createStaticMeshInstance', handle: renderHandle(4292), parent: null,
-      instance: crateInstance('mesh/textured-plank'),
-    },
-    { op: 'defineAnimatedMesh', asset },
-    {
-      op: 'createAnimatedMeshInstance', handle: renderHandle(4293), parent: null,
-      instance: {
-        asset: asset.asset,
-        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-        materialOverrides: [], playback: null, visible: true,
-        metadata: { sourceEntity: 89, sourceSceneNode: null, tags: [], label: 'live-animated' },
-      },
-    },
-  ] });
-  animatedResource.clips[0]!.duration = Number.NaN;
-  const mesh = renderer.objectFor(renderHandle(4292)) as THREE.Mesh;
-  const oldMaterial = mesh.material;
-  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
-  const beforeSnapshot = renderer.snapshot();
-  const beforePlayback = renderer.animatedMeshPlayback(renderHandle(4293));
-  const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
-  const beforeResources = renderer.resourceStatistics();
-  const priorAcquires = source.acquired.length;
-
-  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
-    { op: 'defineMaterial', material: { ...texturedMaterial(), color: [0.8, 0.3, 0.1, 1] } },
-    {
-      op: 'setAnimatedMeshPlayback', handle: renderHandle(4293),
-      playback: { kind: 'sample', clip: 'idle', normalizedTime: 0.5 },
-    },
-  ] }), /clip idle has an invalid decoded duration/u);
-
-  assert.equal(mesh.material, oldMaterial);
-  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
-  assert.equal(renderer.snapshot(), beforeSnapshot);
-  assert.deepEqual(renderer.animatedMeshPlayback(renderHandle(4293)), beforePlayback);
-  assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
-  assert.deepEqual(renderer.resourceStatistics(), beforeResources);
-  assert.equal(source.acquired.length, priorAcquires + 1, 'the rejected frame prepared its texture resource');
-  assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
   renderer.dispose();
 });
 
