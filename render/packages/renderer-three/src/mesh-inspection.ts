@@ -59,12 +59,14 @@ export class MeshInspection {
   pendingBoundsRequest = 0;
   #lastBoundsRequest = 0;
   #modes = '';
+  #options: AnimatedMeshInspection = { wireframe: false, matte: false, wholeVoxelNormals: false, boundsRequest: 0 };
   constructor(object: THREE.Object3D) {
     object.traverse(node => {
       if (node instanceof THREE.Mesh) this.#meshes.push({ mesh: node, material: node.material, geometry: node.geometry, inspected: [], voxel: undefined });
     });
   }
   apply(options: AnimatedMeshInspection): void {
+    this.#options = options;
     if (options.boundsRequest !== this.#lastBoundsRequest) {
       this.#lastBoundsRequest = options.boundsRequest;
       this.pendingBoundsRequest = options.boundsRequest;
@@ -94,6 +96,20 @@ export class MeshInspection {
         if (item.voxel) this.voxelNormalMeshes++;
         item.mesh.geometry = item.voxel ?? item.geometry;
       } else item.mesh.geometry = item.geometry;
+    }
+  }
+  /** Material registry replacement operates on source bindings, then rebases the inspection clones. */
+  rebaseMaterials(replace: () => void): void {
+    for (const item of this.#meshes) {
+      item.mesh.material = item.material;
+      item.inspected.forEach(material => material.dispose());
+      item.inspected = [];
+    }
+    try { replace(); }
+    finally {
+      for (const item of this.#meshes) item.material = item.mesh.material;
+      this.#modes = '';
+      this.apply(this.#options);
     }
   }
   dispose(): void {

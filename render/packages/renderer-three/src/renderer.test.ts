@@ -4853,6 +4853,8 @@ void test('animated mesh overrides are instance-owned, live-redefined, and captu
   assert.ok(Math.abs(before.color.r - 0.6) < 1e-6);
   let redefinedDisposed = false;
   before.addEventListener('dispose', () => { redefinedDisposed = true; });
+  renderer.applyDiff({ op: 'setAnimatedMeshInspection', handle: renderHandle(881),
+    inspection: { wireframe: true, matte: true, wholeVoxelNormals: false, boundsRequest: 0 } });
   renderer.applyDiff({
     op: 'defineMaterial',
     material: { ...woodMaterial(), color: [0.1, 0.8, 0.2, 1] },
@@ -4861,6 +4863,14 @@ void test('animated mesh overrides are instance-owned, live-redefined, and captu
   assert.notEqual(after, before);
   assert.ok(Math.abs(after.color.g - 0.8) < 1e-6, 'redefinition reaches the owned animated override');
   assert.ok(redefinedDisposed, 'the prior owned animated override is disposed');
+  assert.equal(after.wireframe, true);
+  for (const enabled of [false, true, false]) {
+    renderer.applyDiff({ op: 'setAnimatedMeshInspection', handle: renderHandle(881),
+      inspection: { wireframe: enabled, matte: enabled, wholeVoxelNormals: false, boundsRequest: 0 } });
+    const current = firstMesh(renderer.objectFor(renderHandle(881))!).material as THREE.MeshStandardMaterial;
+    assert.ok(Math.abs(current.color.g - 0.8) < 1e-6, 'inspection rebases to the new material');
+    assert.equal(current.wireframe, enabled);
+  }
 });
 
 // ── Sprites, billboards, and picking ───────────────────────────────────────────

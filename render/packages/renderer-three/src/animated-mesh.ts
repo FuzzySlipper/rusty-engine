@@ -856,30 +856,33 @@ export class AnimatedMeshRegistry {
   /** Rebuild every instance-owned override that selects one redefined material. */
   replaceLiveMaterial(id: string, materialFactory: AnimatedMeshMaterialFactory): void {
     for (const instance of this.#instances.values()) {
-      for (const override of instance.materialOverrides.values()) {
-        if (override.binding.material !== id) continue;
-        const replacements = override.materials.map(() => materialFactory(override.binding));
-        let applied = 0;
-        try {
-          override.materials.forEach((material, index) => {
-            const references = replaceMaterialReferences(instance.object, material, replacements[index]!);
-            if (references === 0) {
-              throw new AnimatedMeshApplyError(
-                `replaceLiveMaterial: instance material override for ${id} is no longer attached`,
-              );
+      if (![...instance.materialOverrides.values()].some(value => value.binding.material === id)) continue;
+      instance.inspection.rebaseMaterials(() => {
+        for (const override of instance.materialOverrides.values()) {
+          if (override.binding.material !== id) continue;
+          const replacements = override.materials.map(() => materialFactory(override.binding));
+          let applied = 0;
+          try {
+            override.materials.forEach((material, index) => {
+              const references = replaceMaterialReferences(instance.object, material, replacements[index]!);
+              if (references === 0) {
+                throw new AnimatedMeshApplyError(
+                  `replaceLiveMaterial: instance material override for ${id} is no longer attached`,
+                );
+              }
+              applied += 1;
+            });
+          } catch (cause) {
+            for (let index = 0; index < applied; index += 1) {
+              replaceMaterialReferences(instance.object, replacements[index]!, override.materials[index]!);
             }
-            applied += 1;
-          });
-        } catch (cause) {
-          for (let index = 0; index < applied; index += 1) {
-            replaceMaterialReferences(instance.object, replacements[index]!, override.materials[index]!);
+            replacements.forEach((material) => material.dispose());
+            throw cause;
           }
-          replacements.forEach((material) => material.dispose());
-          throw cause;
+          override.materials.forEach((material) => material.dispose());
+          override.materials = replacements;
         }
-        override.materials.forEach((material) => material.dispose());
-        override.materials = replacements;
-      }
+      });
     }
   }
 

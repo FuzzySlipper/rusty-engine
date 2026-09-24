@@ -428,6 +428,8 @@ export class RenderProjection {
         return [this.#createStaticMeshInstance(diff)];
       case 'createAnimatedMeshInstance':
         return [this.#createAnimatedMeshInstance(diff)];
+      case 'setAnimatedMeshInspection':
+        return [this.#setAnimatedMeshInspection(diff)];
       case 'setAnimatedMeshPlayback':
         return [this.#setAnimatedMeshPlayback(diff)];
       case 'createVoxelObjectInstance':
@@ -1024,6 +1026,13 @@ export class RenderProjection {
     this.#validateViewmodelInsertion(record, 'createAnimatedMeshInstance');
     this.#mutableAnimatedMesh(instance.asset)!.refCount += 1;
     this.#insert(record);
+    return { op: 'upsertNode', node: snapshotNode(record) };
+  }
+
+  #setAnimatedMeshInspection(diff: Extract<RenderDiff, { op: 'setAnimatedMeshInspection' }>): RenderProjectionInstruction {
+    const record = this.#mutableNode(diff.handle, 'setAnimatedMeshInspection');
+    if (record.kind !== 'animatedMesh') throw new RenderProjectionError(`setAnimatedMeshInspection: handle ${diff.handle} is not an animated mesh`);
+    record.instance = { ...record.instance, inspection: clone(diff.inspection) };
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
 
