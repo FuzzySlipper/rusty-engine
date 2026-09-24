@@ -483,8 +483,10 @@ export class ThreeRenderer {
     });
     try {
       if (this.#isolatedCaptureLighting !== undefined) {
-        isolated.scene.add(...this.#isolatedCaptureLighting.createWorldLights());
-        isolated.viewmodelScene.add(...this.#isolatedCaptureLighting.createViewmodelLights());
+        const worldLights = this.#isolatedCaptureLighting.createWorldLights();
+        const viewmodelLights = this.#isolatedCaptureLighting.createViewmodelLights();
+        if (worldLights.length > 0) isolated.scene.add(...worldLights);
+        if (viewmodelLights.length > 0) isolated.viewmodelScene.add(...viewmodelLights);
       }
       isolated.establishBaseline(
         Object.freeze({ schemaVersion: 1 as const, ops: frame.ops }),

@@ -109,6 +109,20 @@ void test('isolated capture scenes realize a frozen frame without changing the l
   assert.equal(renderer.objectFor(handle), undefined);
 });
 
+void test('isolated captures allow disabled automatic lights without adding undefined objects', (context) => {
+  const errors = context.mock.method(console, 'error', () => undefined);
+  const renderer = new ThreeRenderer({
+    isolatedCaptureLighting: { createWorldLights: () => [], createViewmodelLights: () => [] },
+  });
+  const handle = renderHandle(94);
+  const capture = renderer.createIsolatedCaptureScene({ schemaVersion: 1,
+    ops: [createDiff(handle, cubeNode('product-lit-capture'))] });
+  assert.ok(capture.objectFor(handle));
+  assert.equal(errors.mock.callCount(), 0);
+  capture.dispose();
+  renderer.dispose();
+});
+
 void test('isolated capture scenes recreate mounted neutral lighting for world and viewmodel sources', () => {
   const renderer = new ThreeRenderer({
     isolatedCaptureLighting: {
