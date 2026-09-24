@@ -796,7 +796,7 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
         }
     }
     validate_webp_texture_extensions(&json_document)?;
-    let parsed = gltf::Gltf::from_slice(source).map_err(|error| {
+    let parsed = voxel_convert::parse_gltf_document(source).map_err(|error| {
         ImportDiagnostic::error(
             ImportCode::InvalidContainer,
             locus,
@@ -813,8 +813,10 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
         ));
     }
     let document = &parsed.document;
+    // Blender polygon hints are optional exporter metadata over core triangles.
+    // Preserve the bytes for GLTFLoader, but never accept this as required.
     for extension in document.extensions_used() {
-        if !is_admitted_extension(extension) {
+        if !is_admitted_extension(extension) && extension != "FB_ngon_encoding" {
             return Err(ImportDiagnostic::error(
                 ImportCode::UnsupportedFeature,
                 "source.extensionsUsed",
@@ -883,12 +885,14 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
     Ok(parsed)
 }
 
-fn is_admitted_extension(extension: &str) -> bool {
+pub(crate) fn is_admitted_extension(extension: &str) -> bool {
     matches!(
         extension,
         "EXT_texture_webp"
             | "KHR_materials_unlit"
             | "KHR_materials_emissive_strength"
+            | "KHR_materials_specular"
+            | "KHR_materials_volume"
             | "KHR_texture_transform"
     )
 }

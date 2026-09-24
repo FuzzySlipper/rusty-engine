@@ -419,6 +419,50 @@ fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
 }
 
 #[test]
+fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hints() {
+    let source = rewrite_glb_json(ANIMATED_GLB, |root| {
+        root["extensionsUsed"] = serde_json::json!([
+            "KHR_materials_specular", "KHR_materials_volume", "FB_ngon_encoding"
+        ]);
+        root["extensionsRequired"] = serde_json::json!([
+            "KHR_materials_specular", "KHR_materials_volume"
+        ]);
+        root["materials"][0]["extensions"] = serde_json::json!({
+            "KHR_materials_specular": {"specularFactor": 0.6, "specularColorFactor": [0.8, 0.7, 0.6]},
+            "KHR_materials_volume": {"thicknessFactor": 0.2, "attenuationDistance": 2.0}
+        });
+    });
+    let uri = SourceUri::RelativePath("content/physical.glb".to_owned());
+    let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default());
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let assets = imported.assets.unwrap();
+    assert_eq!(assets.runtime_resource_bytes, source);
+    assert_eq!(assets.receipt.clip_count, 3);
+    let closure = admit_glb_source(&GlbSourceClosure { root_glb: source.clone(), resources: Vec::new() }).unwrap();
+    let json = |bytes: &[u8]| -> serde_json::Value {
+        let glb = gltf::binary::Glb::from_slice(bytes).unwrap();
+        serde_json::from_slice(&glb.json).unwrap()
+    };
+    for key in ["materials", "extensionsUsed", "extensionsRequired"] {
+        assert_eq!(json(&closure.glb_bytes)[key], json(&source)[key]);
+    }
+    let invalid = rewrite_glb_json(&source, |root| {
+        root["accessors"][0]["componentType"] = serde_json::json!(0);
+    });
+    assert!(import_animated_glb_asset(&uri, &invalid, &ImportContext::default()).has_errors());
+
+    // Optional exporter metadata must not become support for required semantics.
+    for extension in ["FB_ngon_encoding", "VENDOR_unknown"] {
+        let required = rewrite_glb_json(&source, |root| {
+            root["extensionsRequired"] = serde_json::json!([extension]);
+        });
+        let rejected = import_animated_glb_asset(&uri, &required, &ImportContext::default());
+        assert!(rejected.assets.is_none());
+        assert!(rejected.diagnostics.iter().any(|d| d.code == ImportCode::UnsupportedFeature));
+    }
+}
+
+#[test]
 fn animated_glb_admits_required_embedded_webp_texture_extension_and_retains_exact_bytes() {
     let source = embedded_webp_texture_extension_glb();
     let uri = SourceUri::RelativePath("content/actors/webp-character.glb".to_owned());

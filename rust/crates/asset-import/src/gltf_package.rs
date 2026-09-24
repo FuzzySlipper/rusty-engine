@@ -325,7 +325,7 @@ fn require_exact_resources(
 }
 
 fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
-    let parsed = gltf::Gltf::from_slice(root_json).map_err(|failure| {
+    let parsed = voxel_convert::parse_gltf_document(root_json).map_err(|failure| {
         error(
             ImportCode::InvalidContainer,
             "source",
@@ -359,7 +359,7 @@ fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
             ));
         }
     }
-    let parsed = gltf::Gltf::from_slice(root_glb).map_err(|failure| {
+    let parsed = voxel_convert::parse_gltf_document(root_glb).map_err(|failure| {
         error(
             ImportCode::InvalidContainer,
             "source",
@@ -379,15 +379,11 @@ fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
     Ok(parsed)
 }
 
-/// The shared parser must allow an omitted core texture source so an admitted
-/// `EXT_texture_webp` asset can reach the animated importer. Do not let that
-/// parser feature expand the package-level required-extension contract.
+/// Closure packing and animated admission share the renderer capability set.
+/// Parser features alone do not admit an unsupported required extension.
 fn validate_required_extensions(parsed: &gltf::Gltf) -> Result<(), ImportDiagnostic> {
     for extension in parsed.document.extensions_required() {
-        if !matches!(
-            extension,
-            "EXT_texture_webp" | "KHR_materials_unlit" | "KHR_texture_transform"
-        ) {
+        if !crate::animated_glb::is_admitted_extension(extension) {
             return Err(error(
                 ImportCode::UnsupportedFeature,
                 "source.extensionsRequired",

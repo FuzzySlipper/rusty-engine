@@ -42,7 +42,7 @@ pub(super) fn parse_animated_glb(
 }
 
 fn parse_embedded_glb(source: &[u8]) -> Result<gltf::Gltf, ConversionError> {
-    let parsed = gltf::Gltf::from_slice(source).map_err(|error| {
+    let parsed = crate::parse_gltf_document(source).map_err(|error| {
         ConversionError::one(
             "conversion.invalidSource",
             "source",

@@ -1653,3 +1653,12 @@ Expose a product command through the ordinary generated debug catalog and use
 `rusty-doom` does). The CLI transports the command; the product supplies semantic
 annotations and the Engine owns the spatial read. Rendering and fast-controller
 experiments are independent of this capability.
+
+### Source GLB material extensions
+
+Live GLB admission preserves `KHR_materials_specular` and `KHR_materials_volume`
+through the existing Engine loader, including required declarations. Optional
+`FB_ngon_encoding` exporter hints over core triangles are accepted; declaring
+that metadata as required is still unsupported. Material textures/factors stay
+in the source resource and are realized by the Engine renderer. Unknown required
+extensions still produce an import diagnostic without replacing the current view.

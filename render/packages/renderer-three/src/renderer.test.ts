@@ -4093,6 +4093,43 @@ void test('animated GLB loader realizes KHR_texture_transform from retained sour
   }
 });
 
+void test('animated GLB loader preserves physical material extension values and texture', async () => {
+  const testGlobal = globalThis as unknown as {
+    self: unknown;
+    createImageBitmap?: (blob: Blob, options?: ImageBitmapOptions) => Promise<ImageBitmap>;
+  };
+  const priorSelf = testGlobal.self;
+  const priorBitmap = testGlobal.createImageBitmap;
+  testGlobal.self = globalThis;
+  testGlobal.createImageBitmap = async () => ({ width: 1, height: 1, close() {} }) as ImageBitmap;
+  try {
+    const source = readFileSync(resolve(import.meta.dirname,
+      '../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb'));
+    const data = rewriteGlbJson(source, (untypedRoot) => {
+      const root = untypedRoot as { extensionsUsed: string[]; materials: Array<{ extensions: unknown }> };
+      root.extensionsUsed = ['KHR_materials_specular', 'KHR_materials_volume', 'FB_ngon_encoding'];
+      root.materials[0]!.extensions = {
+        KHR_materials_specular: { specularFactor: 0.6, specularColorFactor: [0.8, 0.7, 0.6] },
+        KHR_materials_volume: { thicknessFactor: 0.2, attenuationDistance: 2 },
+      };
+    });
+    const resource = await loadAnimatedMeshGlbResource('mesh/physical', data, undefined,
+      [{ slot: 0, sourceMaterialSlot: 0 }]);
+    const material = resource.embeddedMaterialSlots?.get(0)?.materials[0] as THREE.MeshPhysicalMaterial;
+    assert.ok(material instanceof THREE.MeshPhysicalMaterial);
+    assert.ok(material.map instanceof THREE.Texture);
+    assert.equal(material.specularIntensity, 0.6);
+    assert.deepEqual(material.specularColor.toArray(), [0.8, 0.7, 0.6]);
+    assert.equal(material.thickness, 0.2);
+    assert.equal(material.attenuationDistance, 2);
+    assert.deepEqual(resource.clips.map((clip) => clip.name).sort(), ['idle', 'jump', 'run']);
+  } finally {
+    testGlobal.self = priorSelf;
+    if (priorBitmap === undefined) delete testGlobal.createImageBitmap;
+    else testGlobal.createImageBitmap = priorBitmap;
+  }
+});
+
 void test('committed animated GLB instances share GPU resources while playback remains independent', async () => {
   const testGlobal = globalThis as unknown as { self: unknown };
   const priorSelf = testGlobal.self;

@@ -8,6 +8,7 @@
 mod animation;
 mod convert;
 mod diagnostic;
+mod gltf_document;
 mod import;
 mod material;
 mod object_conversion;
@@ -35,6 +36,7 @@ pub use animation::{
 };
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
+pub use gltf_document::parse_gltf_document;
 pub use import::{
     flatten_static_scene, import_static_glb, import_static_glb_scene,
     texture_coordinate_source_hash, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
