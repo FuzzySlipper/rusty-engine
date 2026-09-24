@@ -528,6 +528,9 @@ export class AnimatedMeshRegistry {
       );
     }
     const object = SkeletonUtils.clone(record.scene);
+    // A cached bind-pose sphere cannot conservatively cull a changing skin.
+    // Keep skins drawable without a second per-frame CPU vertex scan.
+    object.traverse(node => { if (node instanceof THREE.SkinnedMesh) node.frustumCulled = false; });
     const materialOverrides = materialFactory === undefined
       ? new Map<number, AnimatedMeshInstanceMaterialOverride>()
       : applyMaterialOverrides(object, record.embeddedMaterialSlots, instance.materialOverrides, materialFactory);
@@ -758,6 +761,7 @@ export class AnimatedMeshRegistry {
     // independent skeleton and mixer.
     const object = SkeletonUtils.clone(instance.object);
     const captureOwnedMaterials = cloneCaptureOverrideMaterials(object, instance.materialOverrides);
+    const captureInspection = instance.inspection.cloneForCapture(object);
     object.visible = true;
     const mixer = new THREE.AnimationMixer(object);
     const action = mixer.clipAction(clip);
@@ -812,6 +816,7 @@ export class AnimatedMeshRegistry {
           if (node instanceof THREE.SkinnedMesh) node.skeleton.dispose();
         });
         captureOwnedMaterials.forEach((material) => material.dispose());
+        captureInspection.dispose();
         if (record.generation === this.#assets.get(record.asset.asset)?.generation) {
           record.captureCount = Math.max(0, record.captureCount - 1);
           this.#onCaptureReleased?.();

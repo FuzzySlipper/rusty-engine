@@ -98,6 +98,31 @@ export class MeshInspection {
       } else item.mesh.geometry = item.geometry;
     }
   }
+  /** A frozen capture owns copies of temporary resources that the source may retire. */
+  cloneForCapture(object: THREE.Object3D): { dispose(): void } {
+    const temporaryMaterials = new Set(this.#meshes.flatMap(item => item.inspected));
+    const temporaryGeometry = new Set(this.#meshes.flatMap(item => item.voxel ? [item.voxel] : []));
+    const materials = new Map<THREE.Material, THREE.Material>();
+    const geometries = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+    const copyMaterial = (source: THREE.Material): THREE.Material => {
+      if (!temporaryMaterials.has(source)) return source;
+      if (!materials.has(source)) materials.set(source, source.clone());
+      return materials.get(source)!;
+    };
+    object.traverse(node => {
+      if (!(node instanceof THREE.Mesh)) return;
+      node.material = Array.isArray(node.material) ? node.material.map(copyMaterial) : copyMaterial(node.material);
+      if (temporaryGeometry.has(node.geometry)) {
+        if (!geometries.has(node.geometry)) geometries.set(node.geometry, node.geometry.clone());
+        node.geometry = geometries.get(node.geometry)!;
+      }
+    });
+    return { dispose: () => {
+      materials.forEach(material => material.dispose());
+      geometries.forEach(geometry => geometry.dispose());
+    } };
+  }
+
   /** Material registry replacement operates on source bindings, then rebases the inspection clones. */
   rebaseMaterials(replace: () => void): void {
     for (const item of this.#meshes) {

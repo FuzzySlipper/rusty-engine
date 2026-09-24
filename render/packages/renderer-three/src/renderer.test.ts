@@ -4832,9 +4832,13 @@ void test('animated mesh overrides are instance-owned, live-redefined, and captu
   assert.notEqual(live, base, 'the override never mutates the admitted GLB material');
   let liveDisposed = false;
   live.addEventListener('dispose', () => { liveDisposed = true; });
+  registry.setInspection(renderHandle(880), { wireframe: true, matte: true, wholeVoxelNormals: true, boundsRequest: 0 });
   const capture = registry.createCaptureAppearance(renderHandle(880), 'idle', 0.5);
   const captured = firstMesh(capture.object).material as THREE.Material;
   assert.notEqual(captured, live, 'capture owns a clone of the source instance override');
+  const inspected = firstMesh(record.object).material;
+  assert.notEqual(captured, inspected, 'capture also owns the active inspection material');
+  assert.equal((captured as THREE.MeshStandardMaterial).wireframe, true);
   let captureDisposed = false;
   captured.addEventListener('dispose', () => { captureDisposed = true; });
   registry.release(renderHandle(880));
@@ -5388,7 +5392,8 @@ void test('inspection bounds follow the displayed pose without replacing playbac
   const descriptor = { asset: asset.asset, transform: { translation: [0,0,0] as const, rotation: [0,0,0,1] as const, scale: [1,1,1] as const }, visible: true,
     materialOverrides: [], playback: null, inspection,
     metadata: { sourceEntity: 88, sourceSceneNode: null, tags: [], label: 'inspection' } };
-  registry.create(handle, descriptor);
+  const created = registry.create(handle, descriptor);
+  assert.equal(firstMesh(created.object).frustumCulled, false);
   registry.setPlayback(handle, { kind: 'sample', clip: 'run', normalizedTime: 0 });
   registry.advance(0);
   const first = facts[0]!;

@@ -37,3 +37,19 @@ void test('whole-voxel normals accept integer unit faces, reject ordinary meshes
   assert.equal(mesh.geometry, geometry); assert.equal(inspection.voxelNormalMeshes, 0);
   inspection.dispose(); normals.dispose();
 });
+
+void test('capture owns active inspection geometry and materials across source toggles and release', () => {
+  const original = new THREE.BoxGeometry().translate(0.5,0.5,0.5);
+  const mesh = new THREE.Mesh(original, new THREE.MeshStandardMaterial());
+  const inspection = new MeshInspection(mesh);
+  inspection.apply({ wireframe: true, matte: true, wholeVoxelNormals: true, boundsRequest: 1 });
+  const capture = mesh.clone();
+  const owned = inspection.cloneForCapture(capture);
+  assert.notEqual(capture.geometry, mesh.geometry); assert.notEqual(capture.material, mesh.material);
+  let disposed = 0;
+  capture.geometry.addEventListener('dispose', () => disposed++);
+  capture.material.addEventListener('dispose', () => disposed++);
+  inspection.apply({ wireframe: false, matte: false, wholeVoxelNormals: false, boundsRequest: 2 });
+  inspection.dispose(); assert.equal(disposed, 0);
+  owned.dispose(); assert.equal(disposed, 2);
+});

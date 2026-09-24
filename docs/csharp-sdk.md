@@ -1668,7 +1668,9 @@ extensions still produce an import diagnostic without replacing the current view
 `Animation.SetMeshInspection(new(appearance, wireframe, matte, wholeVoxelNormals,
 boundsRequest))` selects retained inspection for an animated-mesh appearance,
 including GLBs without clips. Publish the appearance in the normal Graphics
-snapshot. Inspection updates preserve playback and target identity. Renderer
+snapshot. This appearance-level setting applies to every instance selecting that
+appearance; use separate appearances for independent inspection. Inspection
+updates preserve playback and target identity. Renderer
 instances own temporary material/geometry clones; admitted source resources and
 textures remain shared and unchanged. Matte keeps textures and sets PBR roughness
 1, metalness 0 and environment intensity 0.35. Whole-voxel normals affect only
