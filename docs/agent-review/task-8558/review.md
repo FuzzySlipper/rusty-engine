@@ -23,6 +23,9 @@ without poisoning an otherwise valid product update.
   reads mesh/clip facts, catches malformed admission, then publishes and releases
   the valid animated model. This proves the C# marshalling and real CoreCLR update
   callback as well as the Rust service tests.
+- Browser feedback uses camel-case variant fields, matching the supported
+  browser transport. A literal wire regression covers playback and natural
+  completion; all 58 product-dev-host unit tests pass.
 - SDK/runtime pair publication and workbench browser consumption are recorded in
   the Den task closeout; source proof alone is not browser fidelity acceptance.
 

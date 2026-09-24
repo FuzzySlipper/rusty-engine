@@ -492,7 +492,7 @@ impl ProductDevVideoFeedback {
 /// Copied browser-renderer animation observations. Playback is deliberately an
 /// observation, never a claim that a one-shot completed naturally.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ProductDevAnimationFeedbackFact {
     PlaybackObservation {
         fact_id: CanonicalU64,
@@ -3542,6 +3542,24 @@ pub trait ProductDevRuntime: Send + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animation_feedback_accepts_browser_camel_case_fields() {
+        let wire = serde_json::json!({
+            "kind": "playbackObservation", "factId": "1", "objectId": "42",
+            "generation": "1", "sequence": 1, "status": "sampled",
+            "selectedClip": "idle", "sampledAtSeconds": 0.5
+        });
+        let fact: ProductDevAnimationFeedbackFact = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(fact).unwrap(), wire);
+        let completion = serde_json::json!({
+            "kind": "naturalCompletion", "factId": "2", "objectId": "42",
+            "generation": "1", "clip": "idle"
+        });
+        let fact: ProductDevAnimationFeedbackFact = serde_json::from_value(completion.clone()).unwrap();
+        assert_eq!(serde_json::to_value(fact).unwrap(), completion);
+    }
+
 
     #[test]
     fn worker_receipt_conversion_preserves_resource_inventory_and_retired_leases() {
