@@ -5,7 +5,7 @@
 //! its path and SHA-256 identity can be persisted by product code and resolved
 //! exactly in a later runtime.
 
-use crate::{NativeByteLease, NativeByteLeaseHandle, NativeUtf8Slice};
+use crate::{NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeUtf8Slice};
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -163,5 +163,32 @@ pub type NativeReadContentBundleFiles = unsafe extern "C" fn(
 pub type NativeOpenContentBundleReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentBundleReferenceRequest,
+    *mut NativeContentReferenceHandle,
+) -> i32;
+
+/// One caller-supplied immutable dependency, named relative to the admission
+/// root. Borrowed bytes are copied during the call; Engine never opens a file.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentSourceFile {
+    pub path: NativeUtf8Slice,
+    pub bytes: NativeByteSlice,
+}
+
+/// Admit a transient source and its private dependency context. The path is a
+/// logical identity (and format hint), not a filesystem path. This does not
+/// replace startup catalog entries or make the source persistently resolvable.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentAdmissionRequest {
+    pub path: NativeUtf8Slice,
+    pub bytes: NativeByteSlice,
+    pub dependencies: *const NativeContentSourceFile,
+    pub dependencies_len: usize,
+}
+
+pub type NativeAdmitContentReference = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentAdmissionRequest,
     *mut NativeContentReferenceHandle,
 ) -> i32;

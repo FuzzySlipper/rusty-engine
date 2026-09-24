@@ -1703,6 +1703,16 @@ struct ImportedAnimatedContent {
     resource: CsharpRenderResource,
 }
 
+struct AnimationClipInfoLease {
+    _clips: Vec<AnimationClipDescriptor>,
+    _readout: Box<[NativeAnimationClipInfo]>,
+}
+
+struct AnimationAdmissionDiagnostic {
+    _error: CsharpEngineServicesError,
+    readout: Box<[NativeEngineDiagnostic]>,
+}
+
 pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
@@ -1711,6 +1721,10 @@ pub(crate) struct RuntimeAppearanceBridge {
     imported_static: BTreeMap<String, ImportedStaticContent>,
     imported_mesh: BTreeMap<String, CsharpRenderResource>,
     imported_animated: BTreeMap<String, ImportedAnimatedContent>,
+    admission_diagnostics: BTreeMap<u64, AnimationAdmissionDiagnostic>,
+    next_admission_diagnostic: u64,
+    clip_info_leases: BTreeMap<u64, AnimationClipInfoLease>,
+    next_clip_info_lease: u64,
     content: Option<*const crate::content::RuntimeContentBridge>,
     camera_view: Option<*const crate::camera_view::RuntimeCameraViewBridge>,
     staged: Option<RuntimeAppearanceCall>,
@@ -1790,6 +1804,10 @@ impl RuntimeAppearanceBridge {
             imported_static: BTreeMap::new(),
             imported_mesh: BTreeMap::new(),
             imported_animated: BTreeMap::new(),
+            admission_diagnostics: BTreeMap::new(),
+            next_admission_diagnostic: 1,
+            clip_info_leases: BTreeMap::new(),
+            next_clip_info_lease: 1,
             content: None,
             camera_view: None,
             staged: None,
@@ -1852,6 +1870,7 @@ impl RuntimeAppearanceBridge {
             path: path.to_owned(),
             sha256: NativeContentSha256::default(),
             bytes,
+            transient: false,
             files: Arc::new(self.content_resources.clone()),
         })
     }
@@ -5949,30 +5968,43 @@ impl RuntimeAppearanceBridge {
         content: crate::content::RetainedContent,
         clip_pack: bool,
     ) -> Result<NativeRenderResourceHandle, CsharpEngineServicesError> {
-        let key = content.path.clone();
-        let matches_source = self.imported_animated.get(&key).is_some_and(|imported| {
-            Arc::ptr_eq(&imported.source, &content.bytes)
-                && imported.dependencies.iter().all(|(path, bytes)| {
-                    content
-                        .files
-                        .get(path)
-                        .is_some_and(|current| Arc::ptr_eq(current, bytes))
-                })
-        });
-        if !matches_source {
+        // Live imports belong only to reference/resource owners. Immutable
+        // startup sources retain the existing import cache across opens.
+        let mut resource = if content.transient {
             let packed = pack_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
-            let browser_path = format!("content/{}", content.path);
-            let resource = CsharpRenderResource::admit_animated_mesh(browser_path, packed.bytes)?;
-            self.imported_animated.insert(
-                key.clone(),
-                ImportedAnimatedContent {
-                    source: content.bytes,
-                    dependencies: packed.dependencies,
-                    resource,
-                },
-            );
-        }
-        let mut resource = self.imported_animated[&key].resource.clone();
+            CsharpRenderResource::admit_animated_mesh(
+                format!("content/{}", content.path),
+                packed.bytes,
+            )?
+        } else {
+            let key = content.path.clone();
+            let matches_source = self.imported_animated.get(&key).is_some_and(|imported| {
+                Arc::ptr_eq(&imported.source, &content.bytes)
+                    && imported.dependencies.iter().all(|(path, bytes)| {
+                        content
+                            .files
+                            .get(path)
+                            .is_some_and(|current| Arc::ptr_eq(current, bytes))
+                    })
+            });
+            if !matches_source {
+                let packed =
+                    pack_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
+                let resource = CsharpRenderResource::admit_animated_mesh(
+                    format!("content/{}", content.path),
+                    packed.bytes,
+                )?;
+                self.imported_animated.insert(
+                    key.clone(),
+                    ImportedAnimatedContent {
+                        source: content.bytes,
+                        dependencies: packed.dependencies,
+                        resource,
+                    },
+                );
+            }
+            self.imported_animated[&key].resource.clone()
+        };
         if clip_pack {
             if resource
                 .animated_mesh
@@ -9355,7 +9387,11 @@ pub(crate) unsafe extern "C" fn read_animation_realization_fact_at(
 
 pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnimationApi {
     NativeAnimationApi {
+        destroy_operation_diagnostic_lease: destroy_animation_admission_diagnostic,
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
+        read_mesh_info: read_animated_mesh_info,
+        read_clips: read_animation_clips,
+        destroy_clip_info_lease: destroy_animation_clip_info_lease,
         open_animated_mesh,
         open_animated_mesh_from_content,
         open_animation_clip_pack_from_content,
@@ -10052,32 +10088,200 @@ pub(crate) unsafe extern "C" fn create_static_mesh_from_content_reference(
     })
 }
 
+pub(crate) unsafe extern "C" fn read_animated_mesh_info(
+    context: *mut c_void,
+    resource: NativeRenderResourceHandle,
+    result: *mut NativeAnimatedMeshInfo,
+) -> i32 {
+    animation_result(context, result, |bridge| {
+        let mesh = bridge
+            .resource(resource.value)?
+            .animated_mesh
+            .as_ref()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_RESOURCE",
+                    "resource is not an animated mesh",
+                )
+            })?;
+        let vector = |v: [f32; 3]| NativeVec3 {
+            x: v[0],
+            y: v[1],
+            z: v[2],
+        };
+        Ok(NativeAnimatedMeshInfo {
+            bounds_min: vector(mesh.bounds.min),
+            bounds_max: vector(mesh.bounds.max),
+            clip_count: mesh.clips.len() as u32,
+            material_count: mesh.embedded_material_slots.len() as u32,
+            joint_count: mesh.rig.as_ref().map_or(0, |rig| rig.joints.len() as u32),
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn read_animation_clips(
+    context: *mut c_void,
+    resource: NativeRenderResourceHandle,
+    result: *mut NativeAnimationClipInfoLease,
+) -> i32 {
+    animation_result(context, result, |bridge| {
+        let clips = bridge
+            .resource(resource.value)?
+            .animated_mesh
+            .as_ref()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_RESOURCE",
+                    "resource is not an animated mesh",
+                )
+            })?
+            .clips
+            .clone();
+        let utf8 = |value: &str| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let readout = clips
+            .iter()
+            .map(|clip| NativeAnimationClipInfo {
+                id: utf8(&clip.id),
+                name: utf8(clip.name.as_deref().unwrap_or(&clip.id)),
+                duration_seconds: clip.duration_seconds.unwrap_or_default(),
+                has_duration: clip.duration_seconds.is_some(),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let handle = bridge.next_clip_info_lease;
+        bridge.next_clip_info_lease += 1;
+        let receipt = NativeAnimationClipInfoLease {
+            handle: NativeAnimationClipInfoLeaseHandle { value: handle },
+            clips: readout.as_ptr(),
+            clips_len: readout.len(),
+        };
+        bridge.clip_info_leases.insert(
+            handle,
+            AnimationClipInfoLease {
+                _clips: clips,
+                _readout: readout,
+            },
+        );
+        Ok(receipt)
+    })
+}
+
+pub(crate) unsafe extern "C" fn destroy_animation_clip_info_lease(
+    context: *mut c_void,
+    handle: NativeAnimationClipInfoLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    if bridge.clip_info_leases.remove(&handle.value).is_some() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+// Content import is a recoverable editing operation. A rejected source has not
+// staged a resource and must not poison the surrounding product callback.
+fn animation_content_result(
+    context: *mut c_void,
+    request: *const NativeAnimationContentRequest,
+    result: *mut NativeRenderResourceHandle,
+    receipt: *mut NativeOperationErrorReceipt,
+    clip_pack: bool,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    let outcome = bridge
+        .content_reference(unsafe { (*request).content })
+        .and_then(|content| {
+            if clip_pack {
+                bridge.admit_animation_clip_pack(content)
+            } else {
+                bridge.admit_animated_mesh(content)
+            }
+        });
+    match outcome {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            if !receipt.is_null() {
+                let handle = bridge.next_admission_diagnostic;
+                bridge.next_admission_diagnostic += 1;
+                let utf8 = |value: &str| NativeUtf8Slice {
+                    bytes: value.as_ptr(),
+                    len: value.len(),
+                };
+                let lease = AnimationAdmissionDiagnostic {
+                    readout: vec![NativeEngineDiagnostic {
+                        code: utf8(error.code()),
+                        message: utf8(error.detail()),
+                        source: utf8(""),
+                    }]
+                    .into_boxed_slice(),
+                    _error: error,
+                };
+                unsafe {
+                    *receipt = NativeOperationErrorReceipt {
+                        service: utf8("Animation"),
+                        operation: utf8(if clip_pack {
+                            "OpenAnimationClipPackFromContent"
+                        } else {
+                            "OpenAnimatedMeshFromContent"
+                        }),
+                        status: 0,
+                        diagnostics: NativeEngineDiagnosticLease {
+                            handle: NativeEngineDiagnosticLeaseHandle { value: handle },
+                            diagnostics: lease.readout.as_ptr(),
+                            diagnostics_len: lease.readout.len(),
+                        },
+                    };
+                }
+                bridge.admission_diagnostics.insert(handle, lease);
+            }
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn destroy_animation_admission_diagnostic(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    if bridge.admission_diagnostics.remove(&handle.value).is_some() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
 pub(crate) unsafe extern "C" fn open_animated_mesh_from_content(
     context: *mut c_void,
     request: *const NativeAnimationContentRequest,
     result: *mut NativeRenderResourceHandle,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        let content = bridge.content_reference(unsafe { (*request).content })?;
-        bridge.admit_animated_mesh(content)
-    })
+    animation_content_result(context, request, result, receipt, false)
 }
 
 pub(crate) unsafe extern "C" fn open_animation_clip_pack_from_content(
     context: *mut c_void,
     request: *const NativeAnimationContentRequest,
     result: *mut NativeRenderResourceHandle,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        let content = bridge.content_reference(unsafe { (*request).content })?;
-        bridge.admit_animation_clip_pack(content)
-    })
+    animation_content_result(context, request, result, receipt, true)
 }
 
 #[cfg(test)]
@@ -12077,6 +12281,97 @@ pub(super) mod tests {
                 normalized_time: 0.0,
             })
             .expect("embedded clip playback");
+    }
+
+    #[test]
+    fn live_animated_admission_releases_resources_and_recovers_after_bad_source() {
+        const CHARACTER: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::new());
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.bind_content(&content);
+        bridge.begin_call();
+        let admit = |content: &mut crate::content::RuntimeContentBridge, bytes: &[u8]| {
+            let mut handle = NativeContentReferenceHandle::default();
+            let request = NativeContentAdmissionRequest {
+                path: NativeUtf8Slice {
+                    bytes: b"live.glb".as_ptr(),
+                    len: 8,
+                },
+                bytes: NativeByteSlice {
+                    bytes: bytes.as_ptr(),
+                    len: bytes.len(),
+                },
+                dependencies: std::ptr::null(),
+                dependencies_len: 0,
+            };
+            assert_eq!(
+                unsafe {
+                    crate::content::admit_reference(
+                        (content as *mut crate::content::RuntimeContentBridge).cast(),
+                        &request,
+                        &mut handle,
+                    )
+                },
+                ABI_OK
+            );
+            handle
+        };
+        let reference = admit(&mut content, CHARACTER);
+        let resource = bridge
+            .admit_animated_mesh(content.retained_content(reference).unwrap())
+            .unwrap();
+        assert!(bridge.imported_animated.is_empty());
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .unwrap();
+        let bad = admit(&mut content, b"not a GLB");
+        let mut result = NativeRenderResourceHandle::default();
+        let mut receipt = std::mem::MaybeUninit::<NativeOperationErrorReceipt>::uninit();
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        assert_eq!(
+            unsafe {
+                open_animated_mesh_from_content(
+                    context,
+                    &NativeAnimationContentRequest { content: bad },
+                    &mut result,
+                    receipt.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        let receipt = unsafe { receipt.assume_init() };
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        assert!(bridge.callback_error.is_none());
+        assert!(bridge.resource(resource.value).is_ok());
+        assert_eq!(
+            unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
+            ABI_OK
+        );
+        assert!(bridge.admission_diagnostics.is_empty());
+        let external = external_image_glb(CHARACTER, "texture.png");
+        let external_reference = admit(&mut content, &external);
+        let mut external_content = content.retained_content(external_reference).unwrap();
+        // The missing companion cannot resolve from the previous model.
+        assert!(bridge
+            .admit_animated_mesh(external_content.clone())
+            .is_err());
+        Arc::make_mut(&mut external_content.files)
+            .insert("texture.png".into(), Arc::from(RGBA_PNG));
+        let external_resource = bridge.admit_animated_mesh(external_content).unwrap();
+        assert!(glb_relative_resource_uris(
+            &bridge.resource(external_resource.value).unwrap().bytes
+        )
+        .unwrap()
+        .is_empty());
+        assert!(bridge.imported_animated.is_empty());
+        bridge.destroy_resource(external_resource).unwrap();
+        bridge.destroy_appearance(appearance).unwrap();
+        bridge.destroy_resource(resource).unwrap();
+        assert!(bridge.resource(resource.value).is_err());
+        assert!(bridge.take_staged_call().unwrap().is_some());
     }
 
     #[test]

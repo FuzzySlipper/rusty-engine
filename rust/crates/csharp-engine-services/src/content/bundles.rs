@@ -31,7 +31,7 @@ struct FileDefinition {
     sha256: String,
 }
 
-fn relative(path: &str) -> bool {
+pub(super) fn relative(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(['\\', ':', '\0'])
         && path
@@ -135,6 +135,7 @@ impl ProductContentBundles {
                             path,
                             sha256: hashes[file.path.as_str()],
                             bytes,
+                            transient: false,
                             files: Arc::clone(&bodies),
                         },
                     )

@@ -255,8 +255,37 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
 
     private RenderResource OpenAnimatedMesh(ProductContentBundle bundle)
     {
-        using ContentReference reference = bundle.OpenReference("character.glb");
-        return engine.Animation.OpenAnimatedMeshFromContent(new AnimationContentRequest(reference));
+        // Exercise ordinary managed bytes, copied dependency entries, and a
+        // failed replacement in a later update (not startup admission).
+        byte[] bytes = bundle.ReadBytes("character.glb").ToArray();
+        using ContentReference reference = engine.Content.AdmitReference(new ContentAdmissionRequest(
+            "live/character.glb", bytes,
+            new ContentSourceFile[] { new("live/texture.png", bundle.ReadBytes("texture.png")) }));
+        bytes[0] = 0; // Engine owns a snapshot, not a borrowed managed array.
+        RenderResource resource = engine.Animation.OpenAnimatedMeshFromContent(new AnimationContentRequest(reference));
+        try
+        {
+            AnimatedMeshInfo info = engine.Animation.ReadMeshInfo(resource);
+            Require(info.ClipCount > 0 && info.JointCount > 0 && info.BoundsMax.Y > info.BoundsMin.Y,
+                "live mesh exposes Engine-admitted bounds, rig and clips");
+            AnimationClipInfo clip = engine.Animation.ReadClips(resource).Span[0];
+            Require(clip.Id.Length > 0 && clip.HasDuration && clip.DurationSeconds > 0,
+                "live clip metadata is copied into safe C# values");
+            using ContentReference malformed = engine.Content.AdmitReference(new ContentAdmissionRequest(
+                "live/character.glb", bytes, ReadOnlyMemory<ContentSourceFile>.Empty));
+            try
+            {
+                using RenderResource rejected = engine.Animation.OpenAnimatedMeshFromContent(new AnimationContentRequest(malformed));
+                throw new InvalidOperationException("Malformed live GLB was accepted");
+            }
+            catch (EngineCallException error)
+            {
+                Require(error.Message.Contains("OpenAnimatedMeshFromContent", StringComparison.Ordinal),
+                    "live import error names its operation");
+            }
+            return resource;
+        }
+        catch { resource.Dispose(); throw; }
     }
 
     private RenderResource OpenClipPack(ProductContentBundle bundle)

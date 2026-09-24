@@ -387,3 +387,49 @@ pub struct NativeAnimationReadout {
     pub retained_controllers: u32,
     pub pending_playback_commands: u32,
 }
+
+/// Copied facts from the Engine-admitted GLB, for editor framing and controls.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimatedMeshInfo {
+    pub bounds_min: crate::NativeVec3,
+    pub bounds_max: crate::NativeVec3,
+    pub clip_count: u32,
+    pub material_count: u32,
+    pub joint_count: u32,
+}
+
+/// Strings are retained by the clip-info lease; the safe SDK copies them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationClipInfo {
+    pub id: NativeUtf8Slice,
+    pub name: NativeUtf8Slice,
+    pub duration_seconds: f32,
+    pub has_duration: bool,
+}
+
+pub type NativeReadAnimatedMeshInfo = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeRenderResourceHandle,
+    *mut NativeAnimatedMeshInfo,
+) -> i32;
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAnimationClipInfoLeaseHandle {
+    pub value: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationClipInfoLease {
+    pub handle: NativeAnimationClipInfoLeaseHandle,
+    pub clips: *const NativeAnimationClipInfo,
+    pub clips_len: usize,
+}
+pub type NativeReadAnimationClips = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeRenderResourceHandle,
+    *mut NativeAnimationClipInfoLease,
+) -> i32;
+pub type NativeDestroyAnimationClipInfoLease =
+    unsafe extern "C" fn(*mut std::ffi::c_void, NativeAnimationClipInfoLeaseHandle) -> i32;

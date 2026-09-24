@@ -1088,6 +1088,7 @@ pub struct NativePresentationApi {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeContentApi {
     pub context: *mut c_void,
+    pub admit_reference: NativeAdmitContentReference,
     pub list_bundles: NativeListContentBundles,
     pub destroy_bundle_info_lease: NativeDestroyContentBundleInfoLease,
     pub open_bundle: NativeOpenContentBundle,
@@ -1146,6 +1147,10 @@ pub struct NativeAuthoredContentApi {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationApi {
     pub context: *mut c_void,
+    pub destroy_operation_diagnostic_lease: NativeDestroyAnimationOperationDiagnosticLease,
+    pub read_mesh_info: NativeReadAnimatedMeshInfo,
+    pub read_clips: NativeReadAnimationClips,
+    pub destroy_clip_info_lease: NativeDestroyAnimationClipInfoLease,
     pub open_animated_mesh: NativeOpenAnimatedMesh,
     pub open_animated_mesh_from_content: NativeOpenAnimationResourceFromContent,
     pub open_animation_clip_pack_from_content: NativeOpenAnimationResourceFromContent,
@@ -1575,7 +1580,10 @@ pub type NativeOpenAnimationResourceFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationContentRequest,
     *mut NativeRenderResourceHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeDestroyAnimationOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeCreateStaticMeshFromContentReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeStaticMeshContentReferenceRequest,

@@ -15,6 +15,7 @@ struct AdmittedContent {
     path: String,
     sha256: NativeContentSha256,
     bytes: Arc<[u8]>,
+    transient: bool,
     files: Arc<BTreeMap<String, Arc<[u8]>>>,
 }
 
@@ -23,6 +24,7 @@ pub(crate) struct RetainedContent {
     pub(crate) path: String,
     pub(crate) sha256: NativeContentSha256,
     pub(crate) bytes: Arc<[u8]>,
+    pub(crate) transient: bool,
     /// Immutable dependency context of this source, never other open bundles.
     pub(crate) files: Arc<BTreeMap<String, Arc<[u8]>>>,
 }
@@ -57,6 +59,7 @@ impl RuntimeContentBridge {
                         path,
                         sha256,
                         bytes,
+                        transient: false,
                         files: Arc::clone(&files),
                     },
                 )
@@ -103,6 +106,7 @@ impl RuntimeContentBridge {
                 path: content.path.clone(),
                 sha256: content.sha256,
                 bytes: Arc::clone(&content.bytes),
+                transient: content.transient,
                 files: Arc::clone(&content.files),
             })
     }
@@ -117,6 +121,7 @@ impl RuntimeContentBridge {
             path: content.path.clone(),
             sha256: content.sha256,
             bytes: Arc::clone(&content.bytes),
+            transient: content.transient,
             files: Arc::clone(&content.files),
         })
     }
@@ -204,6 +209,7 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         destroy_bundle: bundles::destroy_bundle,
         read_bundle_files: bundles::read_bundle_files,
         open_bundle_reference: bundles::open_bundle_reference,
+        admit_reference,
         open_reference,
         resolve_reference,
         destroy_reference,
@@ -212,6 +218,65 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         read_bytes,
         destroy_byte_lease,
     }
+}
+
+/// Admission owns the only copy across the ABI. Normal decoders validate their
+/// format when a resource is opened; no GLB/schema policy lives in Content.
+pub(crate) unsafe extern "C" fn admit_reference(
+    context: *mut c_void,
+    request: *const NativeContentAdmissionRequest,
+    result: *mut NativeContentReferenceHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let read_file = |path: NativeUtf8Slice,
+                     bytes: NativeByteSlice|
+     -> Option<(String, Arc<[u8]>)> {
+        let path = unsafe { borrowed_utf8(path.bytes, path.len, "content path") }.ok()?;
+        if !bundles::relative(path) {
+            return None;
+        }
+        let bytes =
+            unsafe { crate::composition::borrowed_slice(bytes.bytes, bytes.len, "content bytes") }
+                .ok()?;
+        Some((path.to_owned(), Arc::from(bytes)))
+    };
+    let Some((path, bytes)) = read_file(request.path, request.bytes) else {
+        return 0;
+    };
+    let Ok(dependencies) = (unsafe {
+        crate::composition::borrowed_slice(
+            request.dependencies,
+            request.dependencies_len,
+            "content dependencies",
+        )
+    }) else {
+        return 0;
+    };
+    let mut files = BTreeMap::from([(path.clone(), Arc::clone(&bytes))]);
+    for dependency in dependencies {
+        let Some((path, bytes)) = read_file(dependency.path, dependency.bytes) else {
+            return 0;
+        };
+        if files.insert(path, bytes).is_some() {
+            return 0;
+        }
+    }
+    let content = AdmittedContent {
+        path,
+        sha256: sha256(&bytes),
+        bytes,
+        transient: true,
+        files: Arc::new(files),
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
+    let Some(handle) = bridge.retain(content) else {
+        return 0;
+    };
+    unsafe { *result = handle };
+    ABI_OK
 }
 
 unsafe extern "C" fn open_reference(
@@ -362,6 +427,50 @@ fn sha256_words(digest: &[u8]) -> NativeContentSha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_admission_copies_private_dependencies_and_releases_ownership() {
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let text = |s: &str| NativeUtf8Slice {
+            bytes: s.as_ptr(),
+            len: s.len(),
+        };
+        let mut source = vec![1, 2, 3];
+        let dependency = vec![4, 5];
+        let files = [NativeContentSourceFile {
+            path: text("model/texture.png"),
+            bytes: NativeByteSlice {
+                bytes: dependency.as_ptr(),
+                len: dependency.len(),
+            },
+        }];
+        let request = NativeContentAdmissionRequest {
+            path: text("model/scene.glb"),
+            bytes: NativeByteSlice {
+                bytes: source.as_ptr(),
+                len: source.len(),
+            },
+            dependencies: files.as_ptr(),
+            dependencies_len: files.len(),
+        };
+        let mut handle = NativeContentReferenceHandle::default();
+        assert_eq!(
+            unsafe { admit_reference(context, &request, &mut handle) },
+            ABI_OK
+        );
+        source[0] = 99;
+        let retained = bridge.retained_content(handle).unwrap();
+        assert_eq!(&*retained.bytes, &[1, 2, 3]);
+        assert_eq!(&*retained.files["model/texture.png"], &[4, 5]);
+        assert!(retained.transient);
+        assert!(bridge.catalog.is_empty());
+        let weak = Arc::downgrade(&retained.bytes);
+        drop(retained);
+        assert_eq!(unsafe { destroy_reference(context, handle) }, ABI_OK);
+        assert!(weak.upgrade().is_none());
+        assert!(bridge.retained_content(handle).is_none());
+    }
 
     #[test]
     fn byte_lease_borrows_large_and_empty_ranges() {
