@@ -154,7 +154,7 @@ function fixtureResolver(): Promise<ArrayBuffer> {
 
 void test('cue definition validation is typed and preserves the prior retained cue snapshot', () => {
   const host = new RendererAnimationHost({
-    subscribeNaturalCompletions: () => () => undefined,
+    subscribeInspections: () => () => undefined, subscribeNaturalCompletions: () => () => undefined,
   } as never);
   const valid = [{
     cueId: 'footfall', asset: 'mesh/player', clip: 'walk', atSeconds: 0.1,

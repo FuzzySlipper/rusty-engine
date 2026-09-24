@@ -600,6 +600,8 @@ include = [
     "NativeReplaceStaticMeshAppearance",
     "NativeReplaceStaticMeshContentAppearance",
     "NativeUpdateStaticMeshMaterials",
+    "NativeSetAnimatedMeshInspection",
+    "NativeAnimatedMeshInspectionRequest",
     "NativeUpdateAnimatedMeshMaterials",
     "NativeCreateSpriteAppearance",
     "NativeReplaceSpriteAppearance",

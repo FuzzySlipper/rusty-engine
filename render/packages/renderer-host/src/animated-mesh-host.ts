@@ -210,6 +210,7 @@ export interface RendererAnimatedMeshProjection {
   ) => void;
   readonly hasAnimationClips: (handle: RenderHandle, clipIds: readonly string[]) => boolean;
   readonly clearAnimationControllerWeights: (handle: RenderHandle) => void;
+  readonly subscribeInspections: (listener: (observation: import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation) => void) => () => void;
   readonly subscribeNaturalCompletions: (
     listener: (completion: RendererAnimatedMeshNaturalCompletion) => void,
   ) => () => void;
@@ -394,6 +395,7 @@ function createProjectionController(
     },
     hasAnimationClips: (handle, clipIds) => renderer.hasAnimationControllerClips(handle, clipIds),
     clearAnimationControllerWeights: (handle) => renderer.clearAnimationControllerWeights(handle),
+    subscribeInspections: (listener) => renderer.subscribeAnimatedMeshInspections(listener),
     subscribeNaturalCompletions: (listener) => renderer.subscribeAnimatedMeshNaturalCompletions(listener),
   };
 }

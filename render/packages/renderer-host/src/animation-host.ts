@@ -72,6 +72,7 @@ export interface RendererAnimationFrameReceipt {
  * value is a renderer or projection handle.
  */
 export type RendererAnimationRealizedFact =
+  | (import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation & { readonly kind: 'meshInspection'; readonly factId: number })
   | {
     readonly kind: 'playbackObservation';
     readonly factId: number;
@@ -123,6 +124,7 @@ export interface RendererAnimationRealizedFactsReadout {
 }
 
 type RendererAnimationRealizedFactInput =
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'meshInspection' }>, 'factId'>
   | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'playbackObservation' }>, 'factId'>
   | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'diagnostic' }>, 'factId'>
   | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'cue' }>, 'factId'>
@@ -165,6 +167,7 @@ export class RendererAnimationHost {
   #epoch = 1;
   #sampledFrames = 0;
   #compatibilityFallbacks = 0;
+  readonly #unsubscribeInspections: () => void;
   readonly #unsubscribeNaturalCompletions: () => void;
 
   constructor(
@@ -174,6 +177,7 @@ export class RendererAnimationHost {
     this.#projection = projection;
     this.#cues = validateCueDefinitions(options.cues ?? []);
     this.#maxRetainedFacts = 128;
+    this.#unsubscribeInspections = projection.subscribeInspections(observation => this.#appendFact({ kind: 'meshInspection', ...observation }));
     this.#unsubscribeNaturalCompletions = projection.subscribeNaturalCompletions((completion) => {
       this.#appendFact({ kind: 'naturalCompletion', ...completion });
     });
@@ -337,6 +341,7 @@ export class RendererAnimationHost {
       });
     }
     this.#controllers.clear();
+    this.#unsubscribeInspections();
     this.#unsubscribeNaturalCompletions();
     return { applied, diagnostics, cues: [], readout: this.readout() };
   }

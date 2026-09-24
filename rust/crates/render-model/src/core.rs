@@ -343,6 +343,10 @@ pub enum RenderDiff {
         parent: Option<RenderHandle>,
         instance: crate::AnimatedMeshInstanceDescriptor,
     },
+    SetAnimatedMeshInspection {
+        handle: RenderHandle,
+        inspection: crate::AnimatedMeshInspection,
+    },
     SetAnimatedMeshPlayback {
         handle: RenderHandle,
         playback: AnimatedMeshPlaybackCommand,
@@ -471,7 +475,7 @@ impl RenderDiff {
             Self::CreateVoxelObjectInstance { instance, .. } => instance
                 .validate()
                 .map_err(RenderOperationError::VoxelObjectInstance),
-            Self::SetVoxelObjectFrame { .. } => Ok(()),
+            Self::SetVoxelObjectFrame { .. } | Self::SetAnimatedMeshInspection { .. } => Ok(()),
             Self::CreateSprite { sprite, .. } => {
                 sprite.validate().map_err(RenderOperationError::Sprite)
             }
@@ -502,6 +506,7 @@ impl RenderDiff {
             | Self::ReplaceMeshPayload { handle, .. }
             | Self::UpdateLight { handle, .. }
             | Self::SetMaterialInstanceParameters { handle, .. }
+            | Self::SetAnimatedMeshInspection { handle, .. }
             | Self::SetAnimatedMeshPlayback { handle, .. }
             | Self::SetVoxelObjectFrame { handle, .. }
             | Self::UpdateSprite { handle, .. } => handle.validate()?,

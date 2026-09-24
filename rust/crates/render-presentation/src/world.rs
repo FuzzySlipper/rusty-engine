@@ -756,6 +756,12 @@ impl PresentationWorld {
                     node.material_parameters.remove(slot);
                 }
             }
+            RenderDiff::SetAnimatedMeshInspection { handle, inspection } => {
+                match &mut self.node_mut(*handle)?.kind {
+                    NodeKind::AnimatedMesh(value) => value.inspection = inspection.clone(),
+                    _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
+                }
+            }
             RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
                 let now = self.elapsed_seconds;
                 let node = self.node_mut(*handle)?;

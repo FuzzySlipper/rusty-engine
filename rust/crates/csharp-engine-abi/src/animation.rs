@@ -120,6 +120,7 @@ pub enum NativeAnimationRealizationFactKind {
     Cue = 3,
     Stopped = 4,
     NaturalCompletion = 5,
+    MeshInspection = 6,
 }
 
 #[repr(C)]
@@ -134,8 +135,13 @@ pub struct NativeAnimationRealizationFactAtRequest {
     pub index: u32,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeAnimationRealizationFactAtReceipt {
+    pub bounds_request: u32,
+    pub bounds_min: crate::NativeVec3,
+    pub bounds_max: crate::NativeVec3,
+    pub has_bounds: bool,
+    pub voxel_normal_meshes: u32,
     pub present: bool,
     pub kind: NativeAnimationRealizationFactKind,
     pub fact_id: u64,
@@ -201,6 +207,16 @@ pub struct NativeAnimatedMeshAppearanceRequest {
 /// Replaces the complete Engine-owned material selection for one animated
 /// appearance. Bindings name importer-derived embedded GLB slots and retain
 /// the selected Engine material handles for ordinary lifetime checks.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimatedMeshInspectionRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub wireframe: bool,
+    pub matte: bool,
+    pub whole_voxel_normals: bool,
+    pub bounds_request: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimatedMeshMaterialUpdateRequest {

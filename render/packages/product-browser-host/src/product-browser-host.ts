@@ -169,6 +169,7 @@ export interface ProductBrowserVideoFeedback {
 
 /** Closed renderer-observation feedback; this is not an animation command route. */
 export type ProductBrowserAnimationFeedbackFact =
+  | { readonly kind: 'meshInspection'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly request: number; readonly boundsMin: readonly [number, number, number]; readonly boundsMax: readonly [number, number, number]; readonly hasBounds: boolean; readonly voxelNormalMeshes: number }
   | { readonly kind: 'playbackObservation'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly status: string; readonly selectedClip: string | null; readonly sampledAtSeconds: number | null }
   | { readonly kind: 'naturalCompletion'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly clip: string }
   | { readonly kind: 'diagnostic'; readonly factId: string; readonly objectId: string | null; readonly generation: string | null; readonly code: string; readonly sequence: number }
@@ -3153,6 +3154,11 @@ function snapshotAudioFeedbackFact(
 function snapshotAnimationFeedbackFact(
   value: NonNullable<ReturnType<RustyApplicationHost['renderer']['animationRealizedFacts']>>['facts'][number],
 ): ProductBrowserAnimationFeedbackFact {
+  if (value.kind === 'meshInspection') return Object.freeze({
+    ...value, factId: canonicalSafeU64(value.factId, 'inspection factId'),
+    objectId: canonicalSafeU64(value.objectId, 'inspection objectId'),
+    generation: canonicalSafeU64(value.generation, 'inspection generation'),
+  });
   if (value.kind === 'playbackObservation') return Object.freeze({
     kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
     objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),

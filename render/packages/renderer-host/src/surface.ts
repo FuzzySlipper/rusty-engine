@@ -1529,6 +1529,7 @@ function surfaceAnimationProjection(
     clearAnimationControllerWeights: (handle) => {
       surface.renderer.clearAnimationControllerWeights(handle);
     },
+    subscribeInspections: (listener) => surface.renderer.subscribeAnimatedMeshInspections(listener),
     subscribeNaturalCompletions: (listener) => surface.renderer.subscribeAnimatedMeshNaturalCompletions(listener),
   };
 }

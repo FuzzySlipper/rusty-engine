@@ -1962,6 +1962,21 @@ function snapshotGhostPlateFeedbackFact(value: unknown): ProductBrowserGhostPlat
 function snapshotAnimationFeedbackFact(value: unknown): ProductBrowserAnimationFeedbackFact {
   const record = requireRecord(value, 'animation feedback fact');
   const factId = requireU64Text(record['factId'], 'animation feedback factId');
+  if (record.kind === 'meshInspection') {
+    if (typeof record['hasBounds'] !== 'boolean') throw new TypeError('inspection hasBounds must be boolean');
+    const vector = (value: unknown): readonly [number, number, number] => {
+      if (!Array.isArray(value) || value.length !== 3) throw new Error('inspection bounds require three coordinates');
+      return [0,1,2].map(i => requireFiniteNumber(value[i], 'inspection coordinate', -Number.MAX_VALUE, Number.MAX_VALUE)) as [number, number, number];
+    };
+    return Object.freeze({ kind: 'meshInspection', factId,
+      objectId: requireU64Text(record['objectId'], 'inspection objectId'),
+      generation: requireU64Text(record['generation'], 'inspection generation'),
+      request: requireU32(record['request'], 'inspection request'),
+      boundsMin: vector(record['boundsMin']), boundsMax: vector(record['boundsMax']),
+      hasBounds: record['hasBounds'],
+      voxelNormalMeshes: requireU32(record['voxelNormalMeshes'], 'inspection voxel meshes'),
+    });
+  }
   if (record.kind === 'playbackObservation') {
     requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'sequence', 'status', 'selectedClip', 'sampledAtSeconds'], 'animation playback observation');
     return Object.freeze({ kind: 'playbackObservation', factId,

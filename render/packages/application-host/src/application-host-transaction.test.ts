@@ -260,7 +260,7 @@ function fakeSurface(
 ): unknown {
   return {
     canvas,
-    animationProjection: { subscribeNaturalCompletions: () => () => undefined },
+    animationProjection: { subscribeInspections: () => () => undefined, subscribeNaturalCompletions: () => () => undefined },
     projectWorldPoint: () => ({ x: 0, y: 0, visible: false }),
     createParticleSink: () => ({ dispose: () => undefined }),
     createGhostPlatePresentation: () => ({ dispose: () => undefined }),

@@ -1218,7 +1218,30 @@ pub enum AnimatedMeshAssetError {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimatedMeshInspection {
+    pub wireframe: bool,
+    pub matte: bool,
+    pub whole_voxel_normals: bool,
+    /// Nonzero product-selected correlation. A changed value requests world-space posed bounds.
+    pub bounds_request: u32,
+}
+
+impl Default for AnimatedMeshInspection {
+    fn default() -> Self {
+        Self {
+            wireframe: false,
+            matte: false,
+            whole_voxel_normals: false,
+            bounds_request: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimatedMeshInstanceDescriptor {
+    #[serde(default)]
+    pub inspection: AnimatedMeshInspection,
     pub asset: String,
     pub transform: Transform,
     pub visible: bool,

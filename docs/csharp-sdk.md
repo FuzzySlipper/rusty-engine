@@ -1662,3 +1662,23 @@ through the existing Engine loader, including required declarations. Optional
 that metadata as required is still unsupported. Material textures/factors stay
 in the source resource and are realized by the Engine renderer. Unknown required
 extensions still produce an import diagnostic without replacing the current view.
+
+### GLB inspection and displayed-pose bounds
+
+`Animation.SetMeshInspection(new(appearance, wireframe, matte, wholeVoxelNormals,
+boundsRequest))` selects retained inspection for an animated-mesh appearance,
+including GLBs without clips. Publish the appearance in the normal Graphics
+snapshot. Inspection updates preserve playback and target identity. Renderer
+instances own temporary material/geometry clones; admitted source resources and
+textures remain shared and unchanged. Matte keeps textures and sets PBR roughness
+1, metalness 0 and environment intensity 0.35. Whole-voxel normals affect only
+predominantly integer unit-face meshes; skinned/morph geometry stays authored.
+
+A changed nonzero `boundsRequest` asks for the displayed pose's world-space bounds
+once after the next renderer animation update. `Animation.ReadRealizationFactAt`
+returns `MeshInspection` with the logical object, renderer generation,
+`BoundsRequest`, `HasBounds`, `BoundsMin`, `BoundsMax`, and `VoxelNormalMeshes`.
+No bounds means an empty/unmeasurable mesh, not a zero-sized box. Match the object
+and request before consuming; cancel pending camera actions when the user moves
+it. A replacement renderer replays the retained request once. Zero disables the
+request. This is observation, not a second animation clock or automatic camera.

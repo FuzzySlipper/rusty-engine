@@ -257,7 +257,25 @@ export interface AnimatedMeshClipPose {
   readonly weight: number;
 }
 
+export interface AnimatedMeshInspectionObservation {
+  readonly objectId: number;
+  readonly generation: number;
+  readonly request: number;
+  readonly boundsMin: readonly [number, number, number];
+  readonly boundsMax: readonly [number, number, number];
+  readonly hasBounds: boolean;
+  readonly voxelNormalMeshes: number;
+}
+
+export interface AnimatedMeshInspection {
+  readonly wireframe: boolean;
+  readonly matte: boolean;
+  readonly wholeVoxelNormals: boolean;
+  readonly boundsRequest: number;
+}
+
 export interface AnimatedMeshInstanceDescriptor {
+  readonly inspection?: AnimatedMeshInspection;
   readonly asset: string;
   readonly transform: Transform;
   readonly visible: boolean;
@@ -586,6 +604,7 @@ export type RenderDiff =
   | { readonly op: 'releaseVoxelObject'; readonly asset: string }
   | { readonly op: 'createStaticMeshInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: StaticMeshInstanceDescriptor }
   | { readonly op: 'createAnimatedMeshInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: AnimatedMeshInstanceDescriptor }
+  | { readonly op: 'setAnimatedMeshInspection'; readonly handle: RenderHandle; readonly inspection: AnimatedMeshInspection }
   | { readonly op: 'setAnimatedMeshPlayback'; readonly handle: RenderHandle; readonly playback: AnimatedMeshPlaybackCommand }
   | { readonly op: 'createVoxelObjectInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: VoxelObjectInstanceDescriptor }
   | { readonly op: 'setVoxelObjectFrame'; readonly handle: RenderHandle; readonly frame: number }

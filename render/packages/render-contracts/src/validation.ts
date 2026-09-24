@@ -235,6 +235,12 @@ function renderDiff(input: unknown, path: string): void {
       animatedMeshInstance(value['instance'], `${path}.instance`);
       return;
     }
+    case 'setAnimatedMeshInspection': {
+      const value = record(input, path, ['op', 'handle', 'inspection']);
+      handle(value['handle'], `${path}.handle`);
+      meshInspection(value['inspection'], `${path}.inspection`);
+      return;
+    }
     case 'setAnimatedMeshPlayback': {
       const value = record(input, path, ['op', 'handle', 'playback']);
       handle(value['handle'], `${path}.handle`);
@@ -730,13 +736,14 @@ function orderedJointIds(input: unknown, path: string): string[] {
 
 function animatedMeshInstance(input: unknown, path: string): void {
   const value = record(input, path, [
-    'asset', 'transform', 'visible', 'materialOverrides', 'playback', 'metadata',
+    'asset', 'transform', 'visible', 'materialOverrides', 'playback', 'metadata', 'inspection',
   ]);
   nonEmptyText(value['asset'], `${path}.asset`);
   transform(value['transform'], `${path}.transform`);
   booleanValue(value['visible'], `${path}.visible`);
   materialSlots(value['materialOverrides'], `${path}.materialOverrides`);
   nullable(value['playback'], `${path}.playback`, playback);
+  if (value['inspection'] !== undefined) meshInspection(value['inspection'], `${path}.inspection`);
   metadata(value['metadata'], `${path}.metadata`);
 }
 
@@ -2055,4 +2062,12 @@ function enumeration<const T extends string>(
 
 function fail(path: string, message: string): never {
   throw new ContractDecodeError(`${path} ${message}`);
+}
+
+function meshInspection(input: unknown, path: string): void {
+  const value = record(input, path, ['wireframe', 'matte', 'wholeVoxelNormals', 'boundsRequest']);
+  booleanValue(value['wireframe'], `${path}.wireframe`);
+  booleanValue(value['matte'], `${path}.matte`);
+  booleanValue(value['wholeVoxelNormals'], `${path}.wholeVoxelNormals`);
+  integer(value['boundsRequest'], `${path}.boundsRequest`, 0, 4_294_967_295);
 }

@@ -207,6 +207,7 @@ fn create_operation(handle: RenderHandle, entity: &ProjectedEntity) -> RenderDif
             handle,
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
+                inspection: Default::default(),
                 asset: entity.asset.clone(),
                 transform: entity.transform,
                 visible: entity.visible,

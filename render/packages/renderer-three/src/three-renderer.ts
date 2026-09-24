@@ -757,6 +757,9 @@ export class ThreeRenderer {
       case 'createAnimatedMeshInstance':
         this.#createAnimatedMeshInstance(diff);
         break;
+      case 'setAnimatedMeshInspection':
+        this.#animatedMeshes.setInspection(diff.handle, diff.inspection);
+        break;
       case 'setAnimatedMeshPlayback':
         this.#setAnimatedMeshPlayback(diff);
         break;
@@ -1335,6 +1338,10 @@ export class ThreeRenderer {
   /** Projection/debug readback for animated mesh playback; never authority. */
   animatedMeshPlayback(handle: RenderHandle): AnimatedMeshPlaybackReadout | undefined {
     return this.#animatedMeshes.playback(handle);
+  }
+
+  subscribeAnimatedMeshInspections(listener: (observation: import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation) => void): () => void {
+    return this.#animatedMeshes.subscribeInspections(listener);
   }
 
   /** Subscribe to typed renderer-owned one-shot completion observations. */

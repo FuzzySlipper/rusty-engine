@@ -5363,3 +5363,37 @@ void test('uploaded chunks consolidate equivalent opaque groups and retain share
   assert.equal(renderer.resourceStatistics().materialResourceCount, 0);
   renderer.dispose();
 });
+
+void test('inspection bounds follow the displayed pose without replacing playback and survive baseline recreation', () => {
+  const asset = animatedMeshAsset();
+  const { scene } = diagnosticSkinnedMeshResource(asset, 1, [[1,0,0,0], [1,0,0,0], [1,0,0,0]]);
+  const clips = asset.clips.map(clip => new THREE.AnimationClip(clip.name ?? clip.id, clip.durationSeconds ?? 1,
+    clip.id === 'run' ? [new THREE.VectorKeyframeTrack('joint-0.position', [0,clip.durationSeconds ?? 1], [0,0,0,4,0,0])] : []));
+  const registry = new AnimatedMeshRegistry(new MapAnimatedMeshAssetSource([{ asset: asset.asset, contentHash: asset.contentHash, scene, clips }]));
+  const facts: import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation[] = [];
+  registry.subscribeInspections(fact => facts.push(fact));
+  registry.define(asset);
+  const handle = renderHandle(4900);
+  const inspection = { wireframe: true, matte: true, wholeVoxelNormals: false, boundsRequest: 1 };
+  const descriptor = { asset: asset.asset, transform: { translation: [0,0,0] as const, rotation: [0,0,0,1] as const, scale: [1,1,1] as const }, visible: true,
+    materialOverrides: [], playback: null, inspection,
+    metadata: { sourceEntity: 88, sourceSceneNode: null, tags: [], label: 'inspection' } };
+  registry.create(handle, descriptor);
+  registry.setPlayback(handle, { kind: 'sample', clip: 'run', normalizedTime: 0 });
+  registry.advance(0);
+  const first = facts[0]!;
+  registry.setPlayback(handle, { kind: 'sample', clip: 'run', normalizedTime: 1 });
+  registry.setInspection(handle, { ...inspection, boundsRequest: 2 });
+  const playback = registry.playback(handle);
+  registry.advance(0);
+  assert.equal(facts.length, 2); assert.equal(facts[1]!.request, 2);
+  assert.equal(facts[1]!.hasBounds, true);
+  assert.notDeepEqual(facts[1]!.boundsMin, first.boundsMin);
+  assert.deepEqual(registry.playback(handle), playback);
+  registry.advance(0.1); assert.equal(facts.length, 2);
+  registry.release(handle);
+  registry.create(handle, { ...descriptor, inspection: { ...inspection, boundsRequest: 2 } });
+  registry.advance(0);
+  assert.equal(facts.length, 3); assert.equal(facts[2]!.generation, 2);
+  registry.dispose();
+});

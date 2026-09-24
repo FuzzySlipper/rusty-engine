@@ -1,10 +1,13 @@
 import * as THREE from 'three';
+import { MeshInspection } from './mesh-inspection.js';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import type {
   AnimatedMeshAsset,
+  AnimatedMeshInspection,
+  AnimatedMeshInspectionObservation,
   AnimationClipPack,
   AnimatedMeshInstanceDescriptor,
   AnimatedMeshPlaybackCommand,
@@ -190,6 +193,7 @@ interface AnimatedMeshAssetRecord {
 }
 
 interface AnimatedMeshInstanceRecord {
+  readonly inspection: MeshInspection;
   readonly handle: RenderHandle;
   readonly asset: string;
   readonly object: THREE.Object3D;
@@ -384,6 +388,7 @@ export class AnimatedMeshRegistry {
   readonly #instances = new Map<RenderHandle, AnimatedMeshInstanceRecord>();
   readonly #assetGenerations = new Map<string, number>();
   readonly #nextGenerationByObject = new Map<number, number>();
+  readonly #inspectionListeners = new Set<(observation: AnimatedMeshInspectionObservation) => void>();
   readonly #naturalCompletionListeners = new Set<(completion: AnimatedMeshNaturalCompletion) => void>();
 
   constructor(
@@ -396,6 +401,11 @@ export class AnimatedMeshRegistry {
 
   get instanceCount(): number {
     return this.#instances.size;
+  }
+
+  subscribeInspections(listener: (observation: AnimatedMeshInspectionObservation) => void): () => void {
+    this.#inspectionListeners.add(listener);
+    return () => this.#inspectionListeners.delete(listener);
   }
 
   /** Subscribe to actual Three LoopOnce completion events with no handle escape. */
@@ -540,6 +550,7 @@ export class AnimatedMeshRegistry {
     const sourceEntity = instance.metadata.sourceEntity;
     const generation = sourceEntity === null ? 0 : this.#nextGeneration(sourceEntity);
     const instanceRecord: AnimatedMeshInstanceRecord = {
+      inspection: new MeshInspection(object),
       handle,
       asset: instance.asset,
       object,
@@ -586,9 +597,14 @@ export class AnimatedMeshRegistry {
     } else if (instance.playback) {
       applyPlaybackCommand(instanceRecord, instance.playback);
     }
+    if (instance.inspection) instanceRecord.inspection.apply(instance.inspection);
     this.#instances.set(handle, instanceRecord);
     record.refCount += 1;
     return instanceRecord;
+  }
+
+  setInspection(handle: RenderHandle, options: AnimatedMeshInspection): void {
+    this.#requireInstance(handle, 'setAnimatedMeshInspection').inspection.apply(options);
   }
 
   setPlayback(handle: RenderHandle, command: AnimatedMeshPlaybackCommand): void {
@@ -641,6 +657,21 @@ export class AnimatedMeshRegistry {
     }
     for (const instance of this.#instances.values()) {
       instance.mixer.update(deltaSeconds);
+      const request = instance.inspection.pendingBoundsRequest;
+      if (request !== 0 && instance.sourceEntity !== null) {
+        instance.inspection.pendingBoundsRequest = 0;
+        instance.object.updateWorldMatrix(true, true);
+        // Precise bounds sample actual skinned/morphed vertices, not cached bind-pose boxes.
+        const box = new THREE.Box3().setFromObject(instance.object, true);
+        const hasBounds = !box.isEmpty() && [...box.min.toArray(), ...box.max.toArray()].every(Number.isFinite);
+        const observation: AnimatedMeshInspectionObservation = {
+          objectId: instance.sourceEntity, generation: instance.generation, request,
+          boundsMin: hasBounds ? box.min.toArray() : [0,0,0],
+          boundsMax: hasBounds ? box.max.toArray() : [0,0,0],
+          hasBounds, voxelNormalMeshes: instance.inspection.voxelNormalMeshes,
+        };
+        for (const listener of this.#inspectionListeners) listener(observation);
+      }
     }
   }
 
@@ -801,6 +832,7 @@ export class AnimatedMeshRegistry {
     }
     instance.mixer.stopAllAction();
     instance.mixer.uncacheRoot(instance.object);
+    instance.inspection.dispose();
     instance.materialOverrides.forEach((override) => {
       override.materials.forEach((material) => material.dispose());
     });

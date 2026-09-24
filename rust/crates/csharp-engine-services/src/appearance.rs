@@ -80,6 +80,16 @@ pub struct AnimationCueDefinition {
 
 #[derive(Clone)]
 pub enum AnimationRealizationFact {
+    MeshInspection {
+        fact_id: u64,
+        object_id: u64,
+        generation: u64,
+        request: u32,
+        bounds_min: [f32; 3],
+        bounds_max: [f32; 3],
+        has_bounds: bool,
+        voxel_normal_meshes: u32,
+    },
     Playback {
         fact_id: u64,
         object_id: u64,
@@ -4082,6 +4092,39 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
+    fn set_mesh_inspection(
+        &mut self,
+        request: &NativeAnimatedMeshInspectionRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_APPEARANCE_HANDLE",
+                    "appearance handle is not live",
+                )
+            })?;
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::AnimatedMesh { inspection, .. }) => {
+                *inspection = render_model::AnimatedMeshInspection {
+                    wireframe: request.wireframe,
+                    matte: request.matte,
+                    whole_voxel_normals: request.whole_voxel_normals,
+                    bounds_request: request.bounds_request,
+                };
+                Ok(())
+            }
+            _ => Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATED_MESH_APPEARANCE",
+                "inspection requires an animated mesh appearance",
+            )),
+        }
+    }
+
     unsafe fn update_animated_mesh_materials(
         &mut self,
         request: &NativeAnimatedMeshMaterialUpdateRequest,
@@ -6190,6 +6233,7 @@ impl RuntimeAppearanceBridge {
             }
         }
         let appearance = self.allocate_appearance(Appearance::AnimatedMesh {
+            inspection: Default::default(),
             asset: asset.asset,
             material_overrides: Vec::new(),
             playback: None,
@@ -9160,6 +9204,17 @@ pub(crate) unsafe extern "C" fn replace_animated_mesh_appearance(
         bridge.replace_animated_mesh_appearance(appearance, unsafe { *request })
     })
 }
+pub(crate) unsafe extern "C" fn set_mesh_inspection(
+    context: *mut c_void,
+    request: *const NativeAnimatedMeshInspectionRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    animation_void(context, |bridge| unsafe {
+        bridge.set_mesh_inspection(&*request)
+    })
+}
 pub(crate) unsafe extern "C" fn update_animated_mesh_materials(
     context: *mut c_void,
     request: *const NativeAnimatedMeshMaterialUpdateRequest,
@@ -9401,6 +9456,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         associate_animation_clip_pack,
         create_animated_mesh_appearance,
         replace_animated_mesh_appearance,
+        set_mesh_inspection,
         update_animated_mesh_materials,
         destroy_appearance: destroy_animated_mesh_appearance,
         create_instance: create_animation_instance,
@@ -9467,6 +9523,36 @@ fn animation_realization_receipt(
             out.clip = animation_feedback_text(clip.as_deref().unwrap_or(""));
             out.has_sampled_millis = sampled_millis.is_some();
             out.sampled_millis = sampled_millis.unwrap_or(0);
+        }
+        AnimationRealizationFact::MeshInspection {
+            fact_id,
+            object_id,
+            generation,
+            request,
+            bounds_min,
+            bounds_max,
+            has_bounds,
+            voxel_normal_meshes,
+        } => {
+            out.kind = NativeAnimationRealizationFactKind::MeshInspection;
+            out.fact_id = *fact_id;
+            out.object_id = *object_id;
+            out.generation = *generation;
+            out.has_object_id = true;
+            out.has_generation = true;
+            out.bounds_request = *request;
+            out.bounds_min = NativeVec3 {
+                x: bounds_min[0],
+                y: bounds_min[1],
+                z: bounds_min[2],
+            };
+            out.bounds_max = NativeVec3 {
+                x: bounds_max[0],
+                y: bounds_max[1],
+                z: bounds_max[2],
+            };
+            out.has_bounds = *has_bounds;
+            out.voxel_normal_meshes = *voxel_normal_meshes;
         }
         AnimationRealizationFact::NaturalCompletion {
             fact_id,

@@ -492,8 +492,23 @@ impl ProductDevVideoFeedback {
 /// Copied browser-renderer animation observations. Playback is deliberately an
 /// observation, never a claim that a one-shot completed naturally.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum ProductDevAnimationFeedbackFact {
+    MeshInspection {
+        fact_id: CanonicalU64,
+        object_id: CanonicalU64,
+        generation: CanonicalU64,
+        request: u32,
+        bounds_min: [f32; 3],
+        bounds_max: [f32; 3],
+        has_bounds: bool,
+        voxel_normal_meshes: u32,
+    },
     PlaybackObservation {
         fact_id: CanonicalU64,
         object_id: CanonicalU64,
@@ -539,7 +554,8 @@ pub enum ProductDevAnimationFeedbackFact {
 impl ProductDevAnimationFeedbackFact {
     pub const fn fact_id(&self) -> CanonicalU64 {
         match self {
-            Self::PlaybackObservation { fact_id, .. }
+            Self::MeshInspection { fact_id, .. }
+            | Self::PlaybackObservation { fact_id, .. }
             | Self::NaturalCompletion { fact_id, .. }
             | Self::Diagnostic { fact_id, .. }
             | Self::Cue { fact_id, .. }
@@ -3556,10 +3572,10 @@ mod tests {
             "kind": "naturalCompletion", "factId": "2", "objectId": "42",
             "generation": "1", "clip": "idle"
         });
-        let fact: ProductDevAnimationFeedbackFact = serde_json::from_value(completion.clone()).unwrap();
+        let fact: ProductDevAnimationFeedbackFact =
+            serde_json::from_value(completion.clone()).unwrap();
         assert_eq!(serde_json::to_value(fact).unwrap(), completion);
     }
-
 
     #[test]
     fn worker_receipt_conversion_preserves_resource_inventory_and_retired_leases() {

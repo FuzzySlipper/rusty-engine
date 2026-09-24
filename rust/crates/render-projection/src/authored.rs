@@ -58,6 +58,8 @@ pub enum Appearance {
         material_overrides: Vec<MeshMaterialSlot>,
     },
     AnimatedMesh {
+        #[serde(default)]
+        inspection: render_model::AnimatedMeshInspection,
         asset: String,
         material_overrides: Vec<MeshMaterialSlot>,
         playback: Option<AnimatedMeshPlaybackCommand>,
@@ -623,6 +625,7 @@ fn validate_appearance(
             asset,
             material_overrides,
             playback,
+            inspection,
         } => {
             if !resources.animated_meshes.contains_key(asset) {
                 return Err(SceneProjectionError::MissingAnimatedMesh {
@@ -632,6 +635,7 @@ fn validate_appearance(
             }
             validate_material_references(asset, material_overrides, &resources.materials)?;
             AnimatedMeshInstanceDescriptor {
+                inspection: inspection.clone(),
                 asset: asset.clone(),
                 transform: node.transform,
                 visible: node.visible,
@@ -876,10 +880,12 @@ fn create_node(
             asset,
             material_overrides,
             playback,
+            inspection,
         } => RenderDiff::CreateAnimatedMeshInstance {
             handle,
             parent,
             instance: AnimatedMeshInstanceDescriptor {
+                inspection: inspection.clone(),
                 asset: asset.clone(),
                 transform: node.transform,
                 visible: node.visible,
@@ -931,11 +937,13 @@ fn append_node_updates(
             Appearance::AnimatedMesh {
                 material_overrides: old_slots,
                 playback: old_playback,
+                inspection: old_inspection,
                 ..
             },
             Appearance::AnimatedMesh {
                 material_overrides: new_slots,
                 playback: new_playback,
+                inspection: new_inspection,
                 ..
             },
         ) => {
@@ -950,6 +958,12 @@ fn append_node_updates(
                     material: None,
                     visible,
                     metadata,
+                });
+            }
+            if old_inspection != new_inspection {
+                operations.push(RenderDiff::SetAnimatedMeshInspection {
+                    handle,
+                    inspection: new_inspection.clone(),
                 });
             }
             if old_playback != new_playback {
@@ -1410,6 +1424,7 @@ mod tests {
                 metadata: RenderMetadata::default(),
                 availability: ProjectionAvailability::Both,
                 appearance: Appearance::AnimatedMesh {
+                    inspection: Default::default(),
                     asset: "mesh-animation/character".to_string(),
                     material_overrides: Vec::new(),
                     playback: None,
@@ -1421,6 +1436,20 @@ mod tests {
         projector
             .project(&scene, ProjectionMode::AuthoredPreview)
             .unwrap();
+
+        let original_handle = projector.node_handle(1);
+        if let Appearance::AnimatedMesh { inspection, .. } = &mut scene.nodes[0].appearance {
+            inspection.wireframe = true;
+            inspection.matte = true;
+            inspection.bounds_request = 7;
+        }
+        let inspected = projector
+            .project(&scene, ProjectionMode::AuthoredPreview)
+            .unwrap();
+        assert_eq!(projector.node_handle(1), original_handle);
+        assert!(
+            matches!(inspected.frame.ops.as_slice(), [RenderDiff::SetAnimatedMeshInspection { inspection, .. }] if inspection.wireframe && inspection.bounds_request == 7)
+        );
 
         scene.resources.animated_meshes[0].content_hash = Some("second".to_string());
         let edited = projector

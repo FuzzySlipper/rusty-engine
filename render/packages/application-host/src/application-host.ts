@@ -304,6 +304,7 @@ export interface RustyApplicationAnimationDiagnostic {
 }
 
 export type RustyApplicationAnimationRealizedFact =
+  | (import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation & { readonly kind: 'meshInspection'; readonly factId: number })
   | {
       readonly kind: 'playbackObservation';
       readonly factId: number;
