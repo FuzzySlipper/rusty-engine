@@ -143,6 +143,8 @@ pub enum NativePrimitiveGeometry {
     Sphere = 2,
     Quad = 3,
     Point = 4,
+    /// Transform-only retained node; no geometry is drawn. Children form a subtree.
+    Group = 5,
 }
 
 #[repr(u32)]

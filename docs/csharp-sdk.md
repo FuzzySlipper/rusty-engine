@@ -767,6 +767,10 @@ the typed configuration, motion, session, and canonical-content checks.
 `engine.RenderOutput` owns asynchronous output from the current retained
 appearance snapshot. `CaptureImage` and `ExportSceneGlb` select a product
 `AppearanceFact.ObjectId`, including its descendants and ancestor transforms.
+For an assembly, create a `PrimitiveGeometry.Group` appearance and publish a
+visible root `AppearanceFact` with each part parented to that root. The group
+draws no geometry; capture its object ID to include all descendants. A part's
+own object ID still selects only that part's subtree.
 They freeze the scene at successful callback completion; later product changes
 cannot alter that job. A missing source/camera or unsupported export feature
 produces a failed job with a UTF-8 diagnostic, rather than partial success.

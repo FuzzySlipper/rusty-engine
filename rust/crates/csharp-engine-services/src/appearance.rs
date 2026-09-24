@@ -4239,6 +4239,7 @@ impl RuntimeAppearanceBridge {
             NativePrimitiveGeometry::Sphere => Geometry::Sphere,
             NativePrimitiveGeometry::Quad => Geometry::Quad,
             NativePrimitiveGeometry::Point => Geometry::Point,
+            NativePrimitiveGeometry::Group => Geometry::Group,
         };
         self.allocate_appearance(Appearance::Primitive {
             geometry,
@@ -11073,7 +11074,12 @@ pub(super) mod tests {
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
         bridge.begin_call();
-        let parent = bridge.create_primitive(primitive_request()).unwrap();
+        let parent = bridge
+            .create_primitive(NativePrimitiveAppearanceRequest {
+                geometry: NativePrimitiveGeometry::Group,
+                ..primitive_request()
+            })
+            .unwrap();
         let child = bridge.create_primitive(primitive_request()).unwrap();
         let parent_fact = appearance_fact(parent);
         let mut child_fact = appearance_fact(child);
@@ -11096,7 +11102,14 @@ pub(super) mod tests {
                 .ops
                 .as_slice(),
             [
-                render_model::RenderDiff::Create { parent: None, .. },
+                render_model::RenderDiff::Create {
+                    parent: None,
+                    node: render_model::RenderNode {
+                        geometry: Geometry::Group,
+                        ..
+                    },
+                    ..
+                },
                 render_model::RenderDiff::Create {
                     parent: Some(_),
                     ..

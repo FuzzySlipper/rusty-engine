@@ -966,6 +966,57 @@ mod tests {
     }
 
     #[test]
+    fn group_capture_includes_every_part_without_unrelated_geometry() {
+        let mut world = PresentationWorld::default();
+        world
+            .apply(&frame(vec![
+                RenderDiff::Create {
+                    handle: RenderHandle::new(1),
+                    parent: None,
+                    node: RenderNode::new(Geometry::Group),
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(2),
+                    parent: Some(RenderHandle::new(1)),
+                    node: RenderNode::new(Geometry::Cube),
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(3),
+                    parent: Some(RenderHandle::new(1)),
+                    node: RenderNode::new(Geometry::Sphere),
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(4),
+                    parent: None,
+                    node: RenderNode::new(Geometry::Quad),
+                },
+            ]))
+            .unwrap();
+        let captured = world
+            .capture_output_scene(RenderHandle::new(1), false)
+            .unwrap();
+        let handles: Vec<_> = captured
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                RenderDiff::Create { handle, .. } => Some(handle.raw()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(handles, vec![1, 2, 3]);
+        assert!(captured.ops.iter().any(|op| matches!(op, RenderDiff::Create { handle, node, .. } if handle.raw() == 1 && node.geometry == Geometry::Group)));
+        world
+            .apply(&frame(vec![RenderDiff::Destroy {
+                handle: RenderHandle::new(3),
+            }]))
+            .unwrap();
+        assert!(captured
+            .ops
+            .iter()
+            .any(|op| matches!(op, RenderDiff::Create { handle, .. } if handle.raw() == 3)));
+    }
+
+    #[test]
     fn selected_child_capture_retains_ancestor_transform_without_ancestor_geometry() {
         let mut world = PresentationWorld::default();
         let mut parent = RenderNode::new(Geometry::Cube);
