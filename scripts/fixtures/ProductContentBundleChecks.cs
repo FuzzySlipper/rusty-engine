@@ -9,13 +9,15 @@ internal static class ProductContentBundleChecks
     {
         ProductContent content = context.Content;
         Require(content.Files.Length == 1 && content.ReadText("trial.txt").Contains("package-only"), "legacy snapshot excludes bundle bodies and inventory");
-        Require(content.ListBundles().Single(bundle => bundle.Id == "rules").Id == "rules", "rules metadata discovery");
+        Require(content.ListBundles().ToArray().Single(bundle => bundle.Id == "rules").Id == "rules", "rules metadata discovery");
+        try { content.OpenBundle("missing"); throw new Exception("missing bundle accepted"); }
+        catch (IOException) { }
         ProductContentBundle bundle = content.OpenBundle("rules");
         Require(bundle.Entries.Length == 4, "file inventory");
         Require(bundle.ReadDirectory().Select(file => file.Name).SequenceEqual(new[] { "_index.json", "large.bin", "renamed.json" }), "directory boundary/order");
         Require(bundle.ReadDirectory(recursive: true).Length == 4, "recursive directory read");
         Require(!bundle.TryReadFile("Renamed.json", out _), "case-sensitive read");
-        Require(bundle.ReadBytes("large.bin").Length == 1048589, "multi-chunk payload");
+        Require(bundle.ReadBytes("large.bin").Length == 1048589, "payload larger than the former chunk limit");
         ProductContentFile retained = bundle.ReadFile("renamed.json");
         ContentReference reference = bundle.OpenReference("renamed.json");
         bundle.Dispose();

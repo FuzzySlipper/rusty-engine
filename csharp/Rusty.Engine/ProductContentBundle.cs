@@ -11,11 +11,10 @@ namespace Rusty.Engine;
 /// </remarks>
 public sealed class ProductContentBundle : IDisposable
 {
-    private const uint ReadChunkBytes = 1024 * 1024;
     private readonly IContentService service;
     private readonly ContentBundle handle;
     private readonly Dictionary<string, ContentReferenceInfo> files;
-    private readonly ContentReferenceInfo[] entries;
+    private readonly ReadOnlyMemory<ContentReferenceInfo> entries;
     private bool disposed;
 
     internal ProductContentBundle(string id, IContentService service, ContentBundle handle)
@@ -23,14 +22,14 @@ public sealed class ProductContentBundle : IDisposable
         Id = id;
         this.service = service;
         this.handle = handle;
-        entries = service.ReadBundleFiles(handle).ToArray()
-            .OrderBy(file => file.Path, StringComparer.Ordinal).ToArray();
-        files = entries.ToDictionary(file => file.Path, StringComparer.Ordinal);
+        entries = service.ReadBundleFiles(handle);
+        files = new(StringComparer.Ordinal);
+        foreach (var file in entries.Span) files.Add(file.Path, file);
     }
 
     public string Id { get; }
 
-    /// <summary>Ordinal file inventory; accessing it does not copy file bodies.</summary>
+    /// <summary>File inventory in Engine UTF-8 path order; accessing it does not copy file bodies.</summary>
     public ReadOnlyMemory<ContentReferenceInfo> Entries { get { ThrowIfDisposed(); return entries; } }
 
     /// <summary>Retain Engine content for native services without copying through managed memory.</summary>
@@ -45,17 +44,8 @@ public sealed class ProductContentBundle : IDisposable
     {
         ThrowIfDisposed();
         ContentReferenceInfo info = RequireFile(path);
-        byte[] bytes = new byte[checked((int)info.ByteLength)];
-        using ContentReference reference = OpenReference(path);
-        int offset = 0;
-        while (offset < bytes.Length)
-        {
-            uint count = (uint)Math.Min((long)ReadChunkBytes, bytes.Length - offset);
-            ReadOnlyMemory<byte> chunk = service.ReadBytes(new(reference, (ulong)offset, count));
-            if (chunk.Length != count) throw new IOException($"Incomplete ProductContent bundle read: {Id}/{path}");
-            chunk.Span.CopyTo(bytes.AsSpan(offset));
-            offset += chunk.Length;
-        }
+        using ContentReference reference = service.OpenBundleReference(new(handle, path));
+        ReadOnlyMemory<byte> bytes = service.ReadBytes(new(reference, 0, checked((uint)info.ByteLength)));
         return new(Encoding.UTF8.GetBytes(path), bytes);
     }
 
@@ -77,9 +67,12 @@ public sealed class ProductContentBundle : IDisposable
         if (path.StartsWith('/')) return [];
         string directory = path.TrimEnd('/');
         string prefix = directory.Length == 0 ? "" : directory + "/";
-        return entries.Where(file => file.Path.StartsWith(prefix, StringComparison.Ordinal) &&
-            (recursive || !file.Path.AsSpan(prefix.Length).Contains('/')))
-            .Select(file => ReadFile(file.Path)).ToArray();
+        List<ProductContentFile> result = [];
+        foreach (var file in entries.Span)
+            if (file.Path.StartsWith(prefix, StringComparison.Ordinal) &&
+                (recursive || !file.Path.AsSpan(prefix.Length).Contains('/')))
+                result.Add(ReadFile(file.Path));
+        return result.ToArray();
     }
 
     private ContentReferenceInfo RequireFile(string path) => files.TryGetValue(path, out var file)

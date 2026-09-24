@@ -1941,7 +1941,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             .map(|entry| ProductDevWorkerBundleEntry {
                 path: entry.path().to_owned(),
                 content_type: entry.content_type().to_owned(),
-                bytes: entry.bytes().to_vec(),
+                bytes: entry.shared_bytes(),
             })
             .collect(),
     };

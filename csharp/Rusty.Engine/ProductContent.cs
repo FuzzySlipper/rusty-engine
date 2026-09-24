@@ -32,20 +32,19 @@ public sealed class ProductContent
     public ReadOnlyMemory<ProductContentFile> Files { get; }
 
     /// <summary>Discover build-declared bundles without loading their file bodies.</summary>
-    public ContentBundleInfo[] ListBundles() => service is null ? [] :
-        service.ListBundles().ToArray().OrderBy(bundle => bundle.Id, StringComparer.Ordinal).ToArray();
+    public ReadOnlyMemory<ContentBundleInfo> ListBundles() => service is null ? ReadOnlyMemory<ContentBundleInfo>.Empty : service.ListBundles();
 
     /// <summary>Load one immutable bundle. Dispose it when its collection is no longer needed.</summary>
     public ProductContentBundle OpenBundle(string id)
     {
         ArgumentNullException.ThrowIfNull(id);
-        if (service is null || !ListBundles().Any(bundle => bundle.Id == id))
+        if (service is null)
             throw new FileNotFoundException($"ProductContent bundle was not found: {id}", id);
         ContentBundle handle;
         try { handle = service.OpenBundle(new(id)); }
         catch (EngineCallException error)
         {
-            throw new IOException($"ProductContent bundle '{id}' could not be loaded. Its staged files must match the build inventory; restage the product after editing content.", error);
+            throw new IOException($"ProductContent bundle '{id}' could not be opened. Check its ID and rebuild/restage after editing bundled files.", error);
         }
         try { return new ProductContentBundle(id, service, handle); }
         catch { handle.Dispose(); throw; }

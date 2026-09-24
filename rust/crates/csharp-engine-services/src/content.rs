@@ -10,8 +10,6 @@ use crate::{composition::borrowed_utf8, composition::ABI_OK};
 mod bundles;
 pub use bundles::ProductContentBundles;
 
-const MAX_READ_BYTES: usize = 1024 * 1024;
-
 #[derive(Clone)]
 struct AdmittedContent {
     path: String,
@@ -178,20 +176,19 @@ impl RuntimeContentBridge {
     fn read_bytes(&mut self, request: NativeContentReadBytesRequest) -> Option<NativeByteLease> {
         let content = self.references.get(&request.reference.value)?;
         let offset = usize::try_from(request.offset).ok()?;
-        if offset > content.bytes.len() || usize::try_from(request.max_bytes).ok()? > MAX_READ_BYTES
-        {
+        if offset > content.bytes.len() {
             return None;
         }
         let len = usize::try_from(request.max_bytes)
             .ok()?
             .min(content.bytes.len().saturating_sub(offset));
-        let bytes: Arc<[u8]> = Arc::from(content.bytes[offset..offset + len].to_vec());
+        let bytes = Arc::clone(&content.bytes);
         let value = self.next_byte_lease;
         self.next_byte_lease = value.checked_add(1)?;
         let lease = NativeByteLease {
             handle: NativeByteLeaseHandle { value },
-            bytes: bytes.as_ptr(),
-            len: bytes.len(),
+            bytes: bytes[offset..].as_ptr(),
+            len,
         };
         self.byte_leases.insert(value, bytes);
         Some(lease)
@@ -348,7 +345,10 @@ unsafe extern "C" fn destroy_byte_lease(context: *mut c_void, lease: NativeByteL
 }
 
 fn sha256(bytes: &[u8]) -> NativeContentSha256 {
-    let digest = Sha256::digest(bytes);
+    sha256_words(&Sha256::digest(bytes))
+}
+
+fn sha256_words(digest: &[u8]) -> NativeContentSha256 {
     let word =
         |start| u64::from_be_bytes(digest[start..start + 8].try_into().expect("SHA-256 word"));
     NativeContentSha256 {
@@ -362,6 +362,38 @@ fn sha256(bytes: &[u8]) -> NativeContentSha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_lease_borrows_large_and_empty_ranges() {
+        let body: Arc<[u8]> = Arc::from(vec![7; 1024 * 1024 + 13]);
+        let mut bridge =
+            RuntimeContentBridge::new(BTreeMap::from([("large".to_owned(), body.clone())]));
+        let handle = bridge.retain(bridge.catalog["large"].clone()).unwrap();
+        let lease = bridge
+            .read_bytes(NativeContentReadBytesRequest {
+                reference: handle,
+                offset: 0,
+                max_bytes: u32::MAX,
+            })
+            .unwrap();
+        assert_eq!(lease.bytes, body.as_ptr());
+        assert_eq!(lease.len, body.len());
+        let empty = bridge
+            .read_bytes(NativeContentReadBytesRequest {
+                reference: handle,
+                offset: body.len() as u64,
+                max_bytes: 1,
+            })
+            .unwrap();
+        assert_eq!(empty.len, 0);
+        assert!(bridge
+            .read_bytes(NativeContentReadBytesRequest {
+                reference: handle,
+                offset: body.len() as u64 + 1,
+                max_bytes: 1,
+            })
+            .is_none());
+    }
 
     #[test]
     fn resolves_only_the_exact_persistable_path_and_hash_and_releases_leases() {
@@ -456,11 +488,17 @@ mod tests {
             ABI_OK
         );
         assert_eq!(
+            bytes.bytes,
+            bridge.references[&reopened.value].bytes[2..].as_ptr()
+        );
+        assert_eq!(unsafe { destroy_reference(context, reference) }, ABI_OK);
+        assert_eq!(unsafe { destroy_reference(context, reopened) }, ABI_OK);
+        bridge.catalog.clear();
+        assert_eq!(
             unsafe { std::slice::from_raw_parts(bytes.bytes, bytes.len) },
             b"rsis"
         );
         assert_eq!(unsafe { destroy_byte_lease(context, bytes.handle) }, ABI_OK);
-        assert_eq!(unsafe { destroy_reference(context, reference) }, ABI_OK);
-        assert_eq!(unsafe { destroy_reference(context, reopened) }, ABI_OK);
+        assert_eq!(unsafe { destroy_byte_lease(context, bytes.handle) }, 0);
     }
 }

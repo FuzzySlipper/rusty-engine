@@ -482,7 +482,10 @@ fn atlas_padding_tile_and_region_quota_boundaries_are_typed() {
 
 #[test]
 fn strict_reopen_and_catalog_replacement_are_atomic() {
-    let admitted = AdmittedAssetCatalog::admit(surface_catalog()).unwrap();
+    let source = surface_catalog();
+    let entries = source.entries.as_ptr();
+    let admitted = AdmittedAssetCatalog::admit(source).unwrap();
+    assert_eq!(admitted.catalog().entries.as_ptr(), entries);
     let reopened = AdmittedAssetCatalog::reopen(admitted.canonical_json()).unwrap();
     assert_eq!(reopened, admitted);
     assert!(admitted.canonical_hash().starts_with("sha256:"));

@@ -104,17 +104,18 @@ impl ProductContentBundles {
     fn load(&self, id: &str) -> Option<BTreeMap<String, AdmittedContent>> {
         let bundle = self.bundles.iter().find(|b| b.id == id)?;
         let mut bodies = BTreeMap::new();
+        let mut hashes = BTreeMap::new();
         for file in &bundle.files {
             let path = self.content_root.join(&bundle.root).join(&file.path);
-            if !fs::symlink_metadata(&path).ok()?.file_type().is_file() {
-                return None;
-            }
             let bytes = fs::read(path).ok()?;
-            if bytes.len() as u64 != file.byte_length
-                || format!("{:x}", Sha256::digest(&bytes)) != file.sha256.to_ascii_lowercase()
-            {
+            if bytes.len() as u64 != file.byte_length {
                 return None;
             }
+            let digest = Sha256::digest(&bytes);
+            if format!("{digest:x}") != file.sha256.to_ascii_lowercase() {
+                return None;
+            }
+            hashes.insert(file.path.as_str(), sha256_words(&digest));
             bodies.insert(
                 format!("{}/{}", bundle.root, file.path),
                 Arc::<[u8]>::from(bytes),
@@ -132,7 +133,7 @@ impl ProductContentBundles {
                         file.path.clone(),
                         AdmittedContent {
                             path,
-                            sha256: sha256(&bytes),
+                            sha256: hashes[file.path.as_str()],
                             bytes,
                             files: Arc::clone(&bodies),
                         },

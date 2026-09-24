@@ -35,7 +35,7 @@ pub struct ProductDevWorkerBundle {
 pub struct ProductDevWorkerBundleEntry {
     pub path: String,
     pub content_type: String,
-    pub bytes: Vec<u8>,
+    pub bytes: std::sync::Arc<[u8]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +381,38 @@ fn read_exact_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ready_bundle_serializes_shared_bodies_and_receives_owned_bytes() {
+        let body: std::sync::Arc<[u8]> = std::sync::Arc::from(&b"browser payload"[..]);
+        let entry = crate::ProductDevBundleEntry::new(
+            "index.html",
+            "text/html; charset=utf-8",
+            body.clone(),
+        )
+        .unwrap();
+        let event = ProductDevWorkerEvent::Ready {
+            bundle: ProductDevWorkerBundle {
+                entries: vec![ProductDevWorkerBundleEntry {
+                    path: entry.path().to_owned(),
+                    content_type: entry.content_type().to_owned(),
+                    bytes: entry.shared_bytes(),
+                }],
+            },
+            outputs: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let ProductDevWorkerEvent::Ready { bundle, .. } = &event else {
+            unreachable!()
+        };
+        assert!(std::sync::Arc::ptr_eq(&body, &bundle.entries[0].bytes));
+        let mut wire = Vec::new();
+        write_worker_frame(&mut wire, &event).unwrap();
+        assert_eq!(
+            read_worker_frame::<ProductDevWorkerEvent>(&mut wire.as_slice()).unwrap(),
+            event
+        );
+    }
 
     #[test]
     fn worker_frames_round_trip_one_closed_health_event() {

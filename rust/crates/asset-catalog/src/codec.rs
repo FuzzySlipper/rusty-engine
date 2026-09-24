@@ -191,7 +191,13 @@ pub struct StoredAssetLockEntry {
 }
 
 pub fn encode_catalog(catalog: &AssetCatalog) -> Result<String, AssetCatalogCodecError> {
-    let stored = StoredAssetCatalog::from_catalog(&catalog.canonical())?;
+    encode_canonical_catalog(&catalog.clone().canonical())
+}
+
+pub(crate) fn encode_canonical_catalog(
+    catalog: &AssetCatalog,
+) -> Result<String, AssetCatalogCodecError> {
+    let stored = StoredAssetCatalog::from_catalog(catalog)?;
     encode_json(&stored)
 }
 

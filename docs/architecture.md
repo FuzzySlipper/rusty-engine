@@ -135,6 +135,11 @@ without a scene-wide frame sweep or an Engine shadow-light quota; products choos
 their lighting workload. Generated C# bridges convert borrowed spans directly to
 native arrays while retaining the required pin and release lifetimes.
 
+Worker replacement starts with empty retained output history, preserving delivery
+counters without cloning retired events. Ready publication shares immutable
+bundle bodies until IPC serialization; the receiving process owns its decoded
+bodies. Catalog admission canonicalizes owned data once before encoding it.
+
 Output batches use ordered fragments without a default aggregate byte/count cap.
 The host serializes actual delivery bytes, not a discarded size preflight. The
 256-event reconnect history is a retention target rounded outward to whole

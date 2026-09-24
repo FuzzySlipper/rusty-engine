@@ -1,6 +1,5 @@
 use crate::{
-    decode_catalog, encode_catalog, validate_catalog, AssetCatalog, AssetCatalogCodecError,
-    CatalogValidationReport,
+    decode_catalog, validate_catalog, AssetCatalog, AssetCatalogCodecError, CatalogValidationReport,
 };
 use sha2::{Digest, Sha256};
 
@@ -18,7 +17,8 @@ impl AdmittedAssetCatalog {
         if !report.is_ok() {
             return Err(CatalogAdmissionError::Validation(report));
         }
-        let canonical_json = encode_catalog(&catalog).map_err(CatalogAdmissionError::Codec)?;
+        let canonical_json = crate::codec::encode_canonical_catalog(&catalog)
+            .map_err(CatalogAdmissionError::Codec)?;
         let canonical_hash = format!("sha256:{:x}", Sha256::digest(canonical_json.as_bytes()));
         Ok(Self {
             catalog,

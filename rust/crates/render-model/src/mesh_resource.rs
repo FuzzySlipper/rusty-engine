@@ -120,7 +120,7 @@ pub fn pack_mesh_resources(
         current += stream_bytes;
     }
     ranges.push(start..payloads.len());
-    let mut packed_payloads = payloads.to_vec();
+    let mut packed_payloads = Vec::with_capacity(payloads.len());
     let mut resources_by_id = BTreeMap::new();
     for range in ranges {
         let mut bytes = vec![0; MESH_RESOURCE_HEADER_BYTES as usize];
@@ -195,7 +195,8 @@ pub fn pack_mesh_resources(
                 colors_byte_offset,
                 indices_byte_offset,
             ) = offsets[local_index];
-            packed_payloads[payload_index].source = MeshPayloadSource::Resource {
+            let payload = &payloads[payload_index];
+            let source = MeshPayloadSource::Resource {
                 resource: resource.clone(),
                 content_hash: content_hash.clone(),
                 byte_length,
@@ -206,12 +207,13 @@ pub fn pack_mesh_resources(
                 colors_byte_offset,
                 indices_byte_offset,
             };
-            packed_payloads[payload_index]
-                .validate()
-                .map_err(|source| MeshResourceError::InvalidPackedPayload {
-                    index: payload_index,
-                    source,
-                })?;
+            packed_payloads.push(MeshPayloadDescriptor {
+                layout: payload.layout.clone(),
+                groups: payload.groups.clone(),
+                bounds: payload.bounds,
+                provenance: payload.provenance,
+                source,
+            });
         }
 
         resources_by_id
@@ -574,10 +576,6 @@ pub enum MeshResourceError {
     },
     ResourceTooLarge {
         bytes: usize,
-    },
-    InvalidPackedPayload {
-        index: usize,
-        source: MeshDescriptorError,
     },
     InvalidResourcePayload {
         source: MeshDescriptorError,

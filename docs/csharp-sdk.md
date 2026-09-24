@@ -170,7 +170,7 @@ letters/digits followed by letters/digits, `.`, `_` or `-`. Roots are relative,
 nonempty directories; duplicate IDs and overlapping roots are rejected.
 
 ```csharp
-ContentBundleInfo[] available = context.Content.ListBundles(); // metadata only
+ReadOnlyMemory<ContentBundleInfo> available = context.Content.ListBundles(); // metadata only
 using ProductContentBundle bundle = context.Content.OpenBundle("procgen");
 foreach (ContentReferenceInfo entry in bundle.Entries.Span) { /* metadata only */ }
 var index = bundle.ReadText("_index.json");
@@ -184,8 +184,12 @@ snapshot, global named reads and browser initial-content payload. Discovery
 reads only the inventory. Opening a bundle reads and verifies that collection's
 files into an immutable Rust snapshot; it does not load other bundles or copy
 all its bodies into C#. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
-`ReadText` and `ReadDirectory` copy the requested bodies. Directory semantics
-match ProductContent, with **bundle-relative** paths and ordinal ordering.
+`ReadText` and `ReadDirectory` copy the requested bodies. A read borrows the Rust
+source through a range lease and copies it once into managed storage, with no
+intermediate chunk buffers. Bundle/file inventories already arrive in Engine UTF-8 path
+order; helpers do not sort them again or list every bundle before an open.
+Directory semantics
+match ProductContent, with **bundle-relative** paths; bundle ordering follows UTF-8 path order.
 Each open has independent ownership; a second open is not a global cached mount.
 
 Disposing a bundle releases its collection ownership and prevents further
@@ -200,7 +204,12 @@ references to the typed services. A reference also retains its source
 collection's immutable dependency context: GLB companion images/buffers resolve
 relative to that GLB inside the same bundle. Opening an unrelated bundle cannot
 change resolution. After admission, the Engine resource retains its own payload;
-it no longer needs the source reference or bundle.
+it no longer needs the source reference or bundle. Appearance keeps imported
+results for the current service lifetime so repeated opens of the same admitted
+source avoid decoding, packing and hashing again. Reuse checks immutable buffer
+identity, including each GLB dependency. A newly admitted source snapshot is
+imported afresh; service reload discards these derived results. Resource handles
+still acquire and release their own per-open ownership.
 
 Use the same asset admissions during Create or a later product update:
 

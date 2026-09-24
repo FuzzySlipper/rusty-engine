@@ -14,7 +14,7 @@ runtime-publication.workspace = true
 runtime-diagnostics.workspace = true
 runtime-timeline.workspace = true
 runtime-ui.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 sha2.workspace = true
 

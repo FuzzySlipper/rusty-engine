@@ -474,19 +474,18 @@ impl RunningProductDevHost {
                 "projection replacement lock is poisoned",
             )
         })?;
-        let new_binding = outputs
-            .iter()
-            .find_map(ProductDevRuntimeOutput::binding_marker);
         let mut bus = self.outputs.lock().map_err(|_| {
             ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
         })?;
-        let mut staged = bus.clone();
-        if new_binding.is_some_and(|binding| Some(binding) != staged.active_binding) {
-            staged.events.clear();
-            staged.floor_cursor = staged.next_id;
-            staged.active_binding = None;
-            staged.pending_baseline = None;
-        }
+        // Every worker replacement publishes a complete baseline. Retired
+        // history has no place in that baseline, even if its binding is reused.
+        let mut staged = OutputBus {
+            next_id: bus.next_id,
+            next_transfer_id: bus.next_transfer_id,
+            floor_cursor: bus.next_id,
+            retained_event_limit: bus.retained_event_limit,
+            ..OutputBus::default()
+        };
         let through = push_outputs_staged(&mut staged, outputs)?;
         let mut current = self.bundle.write().map_err(|_| {
             ProductDevHostError::new(
@@ -2853,7 +2852,6 @@ fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()
     stream.flush()
 }
 
-#[derive(Clone)]
 struct OutputBus {
     next_id: u64,
     next_transfer_id: u64,
@@ -3462,6 +3460,82 @@ mod tests {
             generation: CanonicalU64::new(1),
             control_revision: CanonicalU64::new(2),
         }
+    }
+
+    #[test]
+    fn worker_replacement_preserves_old_projection_until_activation_then_drops_history() {
+        let bundle = |body: &[u8]| {
+            ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                "index.html",
+                "text/html; charset=utf-8",
+                body.to_vec(),
+            )
+            .unwrap()])
+            .unwrap()
+        };
+        let baseline = |runtime| {
+            vec![
+                ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                ProductDevRuntimeOutput::complete_baseline(runtime),
+            ]
+        };
+        let (_publisher, receiver) = mpsc::channel();
+        let (failures, _failure_rx) = mpsc::sync_channel(1);
+        let generation = Arc::new(AtomicUsize::new(1));
+        let host = ProductDevHost::start(
+            BlockingRealtimeRuntime,
+            ProductDevHostConfig::new(0, bundle(b"old")).with_worker_outputs(
+                receiver,
+                generation.clone(),
+                failures,
+                baseline(binding()),
+                1,
+            ),
+        )
+        .unwrap();
+        let old_cursor = host.outputs.lock().unwrap().next_id;
+        let mut next = binding();
+        next.instance_id = CanonicalU64::new(8);
+        let prepared = || {
+            runtime_session::PreparedRuntimeReplacement::prepare(|| {
+                Ok::<_, ()>(((), bundle(b"new"), baseline(next), 2))
+            })
+            .unwrap()
+        };
+        assert!(host
+            .replace_worker_projection(prepared(), |_| Err(blocking_runtime_error()))
+            .is_err());
+        assert_eq!(host.outputs.lock().unwrap().next_id, old_cursor);
+        assert_eq!(
+            host.bundle
+                .read()
+                .unwrap()
+                .entries()
+                .next()
+                .unwrap()
+                .bytes(),
+            b"old"
+        );
+        host.replace_worker_projection(prepared(), |_| Ok(()))
+            .unwrap();
+        {
+            let bus = host.outputs.lock().unwrap();
+            assert_eq!(bus.floor_cursor, old_cursor);
+            assert_eq!(bus.active_binding, Some(next));
+            assert!(bus.events.iter().all(|event| event.id > old_cursor));
+        }
+        assert_eq!(
+            host.bundle
+                .read()
+                .unwrap()
+                .entries()
+                .next()
+                .unwrap()
+                .bytes(),
+            b"new"
+        );
+        assert_eq!(generation.load(Ordering::Acquire), 2);
+        host.shutdown().unwrap();
     }
 
     #[test]

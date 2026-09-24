@@ -206,15 +206,13 @@ impl AssetCatalog {
             })
     }
 
-    /// A deterministic copy. Entry identity controls order; dependency order is
-    /// normalized without changing authored multiplicity so validation can still
+    /// Deterministically order owned catalog data by entry identity. Normalize
+    /// dependencies without changing authored multiplicity so validation can still
     /// report the original semantic content.
-    pub fn canonical(&self) -> Self {
-        let mut catalog = self.clone();
-        catalog
-            .entries
+    pub fn canonical(mut self) -> Self {
+        self.entries
             .sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
-        for entry in &mut catalog.entries {
+        for entry in &mut self.entries {
             entry.dependencies.sort_by(|left, right| {
                 left.id()
                     .as_str()
@@ -230,7 +228,7 @@ impl AssetCatalog {
                 atlas.regions.sort_by(|left, right| left.id.cmp(&right.id));
             }
         }
-        catalog
+        self
     }
 }
 
