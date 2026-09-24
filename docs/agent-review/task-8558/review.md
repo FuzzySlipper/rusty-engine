@@ -11,10 +11,13 @@ without poisoning an otherwise valid product update.
 
 ## Proof
 
-- `cargo test -p csharp-engine-services --lib`: 153 passed, 2 existing ignored.
+- `cargo test -p csharp-engine-services --lib`: 154 passed, 2 existing ignored.
   Live-source tests cover copied bytes, source release, private external image
   closure, resource release, and keeping a previous appearance usable after a
-  malformed replacement.
+  malformed replacement. Direct-instance teardown is also exercised after an
+  unchanged snapshot and after a removal snapshot: ordered outputs stop a live
+  target but never address an already-removed renderer object. Playback and
+  completion readouts mark their mandatory object/generation fields present.
 - `scripts/test-csharp-sdk-package.sh --coreclr-smoke`: passed. The generated
   package consumer admits managed bytes after Create, mutates the source array,
   reads mesh/clip facts, catches malformed admission, then publishes and releases
@@ -29,7 +32,11 @@ without poisoning an otherwise valid product update.
   resource owners extended, no competing renderer or resolution authority.
 - Existing owner reuse: passed; private source context and transient cache policy
   remain in RuntimeContentBridge/RuntimeAppearanceBridge.
-- Runtime trust/error paths: pending.
+- Runtime trust/error paths: admission/lifetime path reviewed. The initial
+  concern about unchanged ReplaceAnimatedMeshAppearance is outside this path:
+  live replacement admits a resource before creating a new appearance. The
+  final direct-instance teardown/readout fixes passed focused recheck; the
+  earlier unrelated finding was withdrawn.
 
 No product file-selection policy, filesystem access route, renderer, startup
 bundle rebuild, or independent asset catalog was added upstream. The workbench

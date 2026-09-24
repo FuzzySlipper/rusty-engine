@@ -238,8 +238,9 @@ The existing animation renderer preserves materials, textures, skins and clips;
 `Animation.ReadMeshInfo(resource)` exposes admitted bounds and material/joint/clip
 counts; `ReadClips(resource)` copies each
 clip ID, name and duration. Use its ordinary instance/playback APIs for animation.
-Dispose instances, then
-appearances, then resources. The source reference can be disposed immediately
+Dispose instances, publish the snapshot without their appearances, then dispose
+appearances and resources. Direct-instance teardown also accepts an already
+published removal snapshot and avoids sending a stop to that retired target. The source reference can be disposed immediately
 after resource admission. Transient animation imports do not enter the
 startup-source import cache, so closing the reference and resource releases
 these snapshots. A malformed or incomplete GLB throws `EngineCallException`

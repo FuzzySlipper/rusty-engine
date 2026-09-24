@@ -6354,13 +6354,15 @@ impl RuntimeAppearanceBridge {
                 "dispose the animation controller before disposing its instance",
             ));
         }
-        if staged.frame.is_some() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                "dispose the animation instance before publishing its removal snapshot",
-            ));
-        }
-        if let Some(target) = instance.last_playback_target {
+        // Outputs retain call order. Stop a target that still belongs to this
+        // instance; if a prior snapshot already removed/replaced it, its
+        // renderer teardown has done that work. Editors can replace more than
+        // one selection in a single update without a callback-order gate.
+        if let Some(target) = instance.last_playback_target.filter(|target| {
+            staged.state.projector.object_handle(instance.object_id) == Some(*target)
+                && staged.state.retained_appearances.get(&instance.object_id)
+                    == Some(&instance.appearance)
+        }) {
             let frame = render_model::RenderFrameDiff::try_from_ops(vec![
                 render_model::RenderDiff::SetAnimatedMeshPlayback {
                     handle: target,
@@ -9458,6 +9460,8 @@ fn animation_realization_receipt(
             out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
+            out.has_object_id = true;
+            out.has_generation = true;
             out.sequence = *sequence;
             out.status = animation_feedback_text(status);
             out.clip = animation_feedback_text(clip.as_deref().unwrap_or(""));
@@ -9474,6 +9478,8 @@ fn animation_realization_receipt(
             out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
+            out.has_object_id = true;
+            out.has_generation = true;
             out.clip = animation_feedback_text(clip);
         }
         AnimationRealizationFact::Diagnostic {
@@ -9507,6 +9513,8 @@ fn animation_realization_receipt(
             out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
+            out.has_object_id = true;
+            out.has_generation = true;
             out.cue_id = animation_feedback_text(cue_id);
             out.clip = animation_feedback_text(clip);
             out.marker_millis = *marker_millis;
@@ -9526,6 +9534,8 @@ fn animation_realization_receipt(
             out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
+            out.has_object_id = true;
+            out.has_generation = true;
             out.sequence = *sequence;
             out.reason = animation_feedback_text(reason);
         }
@@ -12145,19 +12155,9 @@ pub(super) mod tests {
             .expect("second staged frame")
             .extra_frames
             .is_empty());
-        assert_eq!(
-            bridge
-                .destroy_animation_instance(instance)
-                .expect_err("snapshot and disposal must be ordered across product calls")
-                .code(),
-            "CSHARP_ANIMATION_SNAPSHOT_ORDER"
-        );
-        bridge.discard_call();
-
-        bridge.begin_call();
         bridge
             .destroy_animation_instance(instance)
-            .expect("direct instance teardown");
+            .expect("teardown after an unchanged snapshot keeps output order");
         assert_eq!(
             bridge
                 .staged
@@ -12166,6 +12166,26 @@ pub(super) mod tests {
                 .extra_frames
                 .len(),
             1
+        );
+        let completed = bridge.take_staged_call().unwrap();
+        bridge.commit(completed);
+        bridge.begin_call();
+        let replacement = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: fact.object_id,
+            })
+            .unwrap();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+        let frames_before = bridge.staged.as_ref().unwrap().extra_frames.len();
+        bridge
+            .destroy_animation_instance(replacement)
+            .expect("teardown after removal snapshot");
+        assert_eq!(
+            bridge.staged.as_ref().unwrap().extra_frames.len(),
+            frames_before,
+            "do not send Stop to a renderer target already removed by the snapshot"
         );
     }
 
@@ -12281,6 +12301,29 @@ pub(super) mod tests {
                 normalized_time: 0.0,
             })
             .expect("embedded clip playback");
+    }
+
+    #[test]
+    fn animation_realization_marks_present_object_and_generation() {
+        let receipt = animation_realization_receipt(&AnimationRealizationFact::Playback {
+            fact_id: 1,
+            object_id: 42,
+            generation: 3,
+            sequence: 1,
+            status: "playing".into(),
+            clip: Some("walk".into()),
+            sampled_millis: Some(500),
+        });
+        assert!(receipt.has_object_id && receipt.has_generation);
+        assert_eq!(receipt.object_id, 42);
+        let completion =
+            animation_realization_receipt(&AnimationRealizationFact::NaturalCompletion {
+                fact_id: 2,
+                object_id: 42,
+                generation: 3,
+                clip: "walk".into(),
+            });
+        assert!(completion.has_object_id && completion.has_generation);
     }
 
     #[test]
