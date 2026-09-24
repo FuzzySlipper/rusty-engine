@@ -86,13 +86,19 @@ fn import_glb_scene(
             "animation and skin sampling belong to the animated import stage",
         ));
     }
-    let default_scene = parsed.document.default_scene().ok_or_else(|| {
-        ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.scene",
-            "GLB conversion requires an explicit default scene",
-        )
-    })?;
+    // Match GLTFLoader: the default-scene property is optional; use the first
+    // scene when it is omitted so imported bounds and visible geometry agree.
+    let default_scene = parsed
+        .document
+        .default_scene()
+        .or_else(|| parsed.document.scenes().next())
+        .ok_or_else(|| {
+            ConversionError::one(
+                "conversion.unsupportedFeature",
+                "source.scene",
+                "GLB conversion requires at least one scene",
+            )
+        })?;
     let source_scene_index = u32::try_from(default_scene.index()).map_err(|_| {
         ConversionError::one(
             "conversion.resourceLimit",

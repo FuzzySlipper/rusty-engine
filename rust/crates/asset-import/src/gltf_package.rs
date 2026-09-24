@@ -200,6 +200,17 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
     let resources = validate_resources(&source.resources)?;
     require_exact_resources(&expected_uris, &resources)?;
 
+    // Preserve already packed sources exactly, but normalize embedded data URIs
+    // through the same resource packer used for declared companions.
+    if document_resource_uris(&parsed).is_empty() {
+        return Ok(PackedGltfSource {
+            glb_bytes: source.root_glb.clone(),
+            source_hash: closure_hash(&source.root_glb, &resources),
+            source_byte_count: closure_byte_count_parts(source.root_glb.len(), &source.resources)?,
+            external_resource_uris: expected_uris,
+        });
+    }
+
     let mut root = glb_json_document(&source.root_glb, "source")?;
     let root_object = root.as_object_mut().ok_or_else(|| {
         error(

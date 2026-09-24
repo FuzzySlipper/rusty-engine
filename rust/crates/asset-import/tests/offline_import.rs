@@ -422,10 +422,15 @@ fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
 fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hints() {
     let source = rewrite_glb_json(ANIMATED_GLB, |root| {
         root["extensionsUsed"] = serde_json::json!([
-            "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior", "FB_ngon_encoding"
+            "KHR_materials_specular",
+            "KHR_materials_volume",
+            "KHR_materials_ior",
+            "FB_ngon_encoding"
         ]);
         root["extensionsRequired"] = serde_json::json!([
-            "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior"
+            "KHR_materials_specular",
+            "KHR_materials_volume",
+            "KHR_materials_ior"
         ]);
         root["materials"][0]["extensions"] = serde_json::json!({
             "KHR_materials_specular": {"specularFactor": 0.6, "specularColorFactor": [0.8, 0.7, 0.6]},
@@ -439,7 +444,11 @@ fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hint
     let assets = imported.assets.unwrap();
     assert_eq!(assets.runtime_resource_bytes, source);
     assert_eq!(assets.receipt.clip_count, 3);
-    let closure = admit_glb_source(&GlbSourceClosure { root_glb: source.clone(), resources: Vec::new() }).unwrap();
+    let closure = admit_glb_source(&GlbSourceClosure {
+        root_glb: source.clone(),
+        resources: Vec::new(),
+    })
+    .unwrap();
     let json = |bytes: &[u8]| -> serde_json::Value {
         let glb = gltf::binary::Glb::from_slice(bytes).unwrap();
         serde_json::from_slice(&glb.json).unwrap()
@@ -459,7 +468,10 @@ fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hint
         });
         let rejected = import_animated_glb_asset(&uri, &required, &ImportContext::default());
         assert!(rejected.assets.is_none());
-        assert!(rejected.diagnostics.iter().any(|d| d.code == ImportCode::UnsupportedFeature));
+        assert!(rejected
+            .diagnostics
+            .iter()
+            .any(|d| d.code == ImportCode::UnsupportedFeature));
     }
 }
 
@@ -1984,4 +1996,50 @@ fn external_gltf(glb: &[u8], buffer_uri: &str, image_uri: Option<&str>) -> GltfS
         root_json: serde_json::to_vec(&root).unwrap(),
         resources,
     }
+}
+
+#[test]
+fn glb_embedded_buffer_is_packed_without_companions() {
+    let original = static_triangle_glb();
+    let parsed = gltf::Gltf::from_slice(&original).unwrap();
+    let data = BASE64.encode(parsed.blob.as_ref().unwrap());
+    let source = rewrite_glb_json(&original, |root| {
+        let mut buffer = root["buffers"][0].clone();
+        buffer["uri"] = serde_json::json!(format!("data:application/octet-stream;base64,{data}"));
+        root["buffers"].as_array_mut().unwrap().push(buffer);
+        for view in root["bufferViews"].as_array_mut().unwrap() {
+            view["buffer"] = serde_json::json!(1);
+        }
+    });
+    assert!(glb_relative_resource_uris(&source).unwrap().is_empty());
+    let packed = admit_glb_source(&GlbSourceClosure {
+        root_glb: source,
+        resources: vec![],
+    })
+    .unwrap();
+    let parsed = gltf::Gltf::from_slice(&packed.glb_bytes).unwrap();
+    assert_eq!(parsed.buffers().count(), 1);
+    assert!(parsed
+        .buffers()
+        .all(|buffer| matches!(buffer.source(), gltf::buffer::Source::Bin)));
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("embedded.glb".into()),
+        &packed.glb_bytes,
+        &ImportContext::default(),
+    );
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+}
+
+#[test]
+fn animated_glb_uses_first_scene_when_default_is_omitted() {
+    let source = rewrite_glb_json(&static_triangle_glb(), |root| {
+        root.as_object_mut().unwrap().remove("scene");
+    });
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("no-default.glb".into()),
+        &source,
+        &ImportContext::default(),
+    );
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    assert_eq!(imported.assets.unwrap().runtime_resource_bytes, source);
 }

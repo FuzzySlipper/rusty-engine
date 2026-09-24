@@ -1359,12 +1359,6 @@ fn pack_animated_glb_closure(
             ),
         )
     })?;
-    if resource_uris.is_empty() {
-        return Ok(PackedAnimatedSource {
-            bytes: root_bytes.to_vec(),
-            dependencies: Vec::new(),
-        });
-    }
     let directory = root_path
         .rsplit_once('/')
         .map_or("", |(directory, _)| directory);
@@ -12318,6 +12312,28 @@ pub(super) mod tests {
                 expected_asset
             );
         }
+    }
+
+    #[test]
+    fn animated_embedded_image_is_packed_without_external_dependencies() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let embedded = external_image_glb(CHARACTER_GLB,
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
+        let packed = pack_animated_glb_closure("character.glb", &embedded, &BTreeMap::new())
+            .expect("embedded image is packed without companion files");
+        assert!(packed.dependencies.is_empty());
+        assert_ne!(packed.bytes, embedded);
+        let imported = asset_import::import_animated_glb_asset(
+            &asset_import::SourceUri::RelativePath("character.glb".to_owned()),
+            &packed.bytes,
+            &asset_import::ImportContext::default(),
+        );
+        assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+        let unchanged =
+            pack_animated_glb_closure("character.glb", CHARACTER_GLB, &BTreeMap::new()).unwrap();
+        assert_eq!(unchanged.bytes, CHARACTER_GLB);
     }
 
     #[test]
