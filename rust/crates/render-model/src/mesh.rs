@@ -1216,7 +1216,7 @@ pub enum AnimatedMeshAssetError {
     MaterialSlot(MeshMaterialSlotError),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimatedMeshInspection {
     pub wireframe: bool,
@@ -1224,17 +1224,6 @@ pub struct AnimatedMeshInspection {
     pub whole_voxel_normals: bool,
     /// Nonzero product-selected correlation. A changed value requests world-space posed bounds.
     pub bounds_request: u32,
-}
-
-impl Default for AnimatedMeshInspection {
-    fn default() -> Self {
-        Self {
-            wireframe: false,
-            matte: false,
-            whole_voxel_normals: false,
-            bounds_request: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
