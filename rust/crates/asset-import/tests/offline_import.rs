@@ -2043,3 +2043,25 @@ fn animated_glb_uses_first_scene_when_default_is_omitted() {
     assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
     assert_eq!(imported.assets.unwrap().runtime_resource_bytes, source);
 }
+
+#[test]
+fn glb_exact_byte_fast_path_preserves_embedded_buffer_validation() {
+    for count in [0, 2] {
+        let source = rewrite_glb_json(&static_triangle_glb(), |root| {
+            root.as_object_mut().unwrap().remove("bufferViews");
+            root.as_object_mut().unwrap().remove("accessors");
+            root.as_object_mut().unwrap().remove("meshes");
+            root["nodes"] = serde_json::json!([{}]);
+            root["buffers"] = serde_json::Value::Array(
+                (0..count)
+                    .map(|_| serde_json::json!({"byteLength": 4}))
+                    .collect(),
+            );
+        });
+        assert!(admit_glb_source(&GlbSourceClosure {
+            root_glb: source,
+            resources: vec![]
+        })
+        .is_err());
+    }
+}

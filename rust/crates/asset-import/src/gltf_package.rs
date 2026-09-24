@@ -202,7 +202,13 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
 
     // Preserve already packed sources exactly, but normalize embedded data URIs
     // through the same resource packer used for declared companions.
-    if document_resource_uris(&parsed).is_empty() {
+    if document_resource_uris(&parsed).is_empty()
+        && parsed.document.buffers().count() == 1
+        && parsed
+            .document
+            .buffers()
+            .all(|buffer| matches!(buffer.source(), BufferSource::Bin))
+    {
         return Ok(PackedGltfSource {
             glb_bytes: source.root_glb.clone(),
             source_hash: closure_hash(&source.root_glb, &resources),
