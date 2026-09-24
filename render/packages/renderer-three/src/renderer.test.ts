@@ -4107,10 +4107,11 @@ void test('animated GLB loader preserves physical material extension values and 
       '../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb'));
     const data = rewriteGlbJson(source, (untypedRoot) => {
       const root = untypedRoot as { extensionsUsed: string[]; materials: Array<{ extensions: unknown }> };
-      root.extensionsUsed = ['KHR_materials_specular', 'KHR_materials_volume', 'FB_ngon_encoding'];
+      root.extensionsUsed = ['KHR_materials_specular', 'KHR_materials_volume', 'KHR_materials_ior', 'FB_ngon_encoding'];
       root.materials[0]!.extensions = {
         KHR_materials_specular: { specularFactor: 0.6, specularColorFactor: [0.8, 0.7, 0.6] },
         KHR_materials_volume: { thicknessFactor: 0.2, attenuationDistance: 2 },
+        KHR_materials_ior: { ior: 1.7 },
       };
     });
     const resource = await loadAnimatedMeshGlbResource('mesh/physical', data, undefined,
@@ -4118,6 +4119,7 @@ void test('animated GLB loader preserves physical material extension values and 
     const material = resource.embeddedMaterialSlots?.get(0)?.materials[0] as THREE.MeshPhysicalMaterial;
     assert.ok(material instanceof THREE.MeshPhysicalMaterial);
     assert.ok(material.map instanceof THREE.Texture);
+    assert.equal(material.ior, 1.7);
     assert.equal(material.specularIntensity, 0.6);
     assert.deepEqual(material.specularColor.toArray(), [0.8, 0.7, 0.6]);
     assert.equal(material.thickness, 0.2);

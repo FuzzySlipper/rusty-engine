@@ -893,6 +893,7 @@ pub(crate) fn is_admitted_extension(extension: &str) -> bool {
             | "KHR_materials_emissive_strength"
             | "KHR_materials_specular"
             | "KHR_materials_volume"
+            | "KHR_materials_ior"
             | "KHR_texture_transform"
     )
 }

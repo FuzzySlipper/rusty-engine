@@ -422,14 +422,15 @@ fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
 fn animated_glb_preserves_physical_material_extensions_and_optional_polygon_hints() {
     let source = rewrite_glb_json(ANIMATED_GLB, |root| {
         root["extensionsUsed"] = serde_json::json!([
-            "KHR_materials_specular", "KHR_materials_volume", "FB_ngon_encoding"
+            "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior", "FB_ngon_encoding"
         ]);
         root["extensionsRequired"] = serde_json::json!([
-            "KHR_materials_specular", "KHR_materials_volume"
+            "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior"
         ]);
         root["materials"][0]["extensions"] = serde_json::json!({
             "KHR_materials_specular": {"specularFactor": 0.6, "specularColorFactor": [0.8, 0.7, 0.6]},
-            "KHR_materials_volume": {"thicknessFactor": 0.2, "attenuationDistance": 2.0}
+            "KHR_materials_volume": {"thicknessFactor": 0.2, "attenuationDistance": 2.0},
+            "KHR_materials_ior": {"ior": 1.7}
         });
     });
     let uri = SourceUri::RelativePath("content/physical.glb".to_owned());
