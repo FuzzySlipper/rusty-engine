@@ -50,6 +50,157 @@ fn no_gravity() -> RigidBodyStepRequest {
     }
 }
 
+fn hanging_tether() -> engine_spatial::DynamicsTether {
+    use engine_spatial::{DynamicsBodyId, DynamicsTether, DynamicsTetherEndpoint};
+    DynamicsTether {
+        id: 41,
+        first: DynamicsTetherEndpoint::Fixed([0.0; 3]),
+        second: DynamicsTetherEndpoint::Body {
+            body: DynamicsBodyId(1),
+            local_anchor: [0.0; 3],
+        },
+        maximum_length: 3.0,
+        target_length: 3.0,
+        reel_speed: 0.25,
+        was_taut: false,
+        wake: true,
+        contacts_enabled: true,
+    }
+}
+
+#[test]
+fn tether_edit_invalidates_prepared_body_publication() {
+    let mut entities = body_state([(
+        EntityId::new(1),
+        Vec3::new(0.0, -3.0, 0.0),
+        RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.2 }, 1.0),
+    )]);
+    let mut service = RigidBodyService::default();
+    let scene = empty_scene();
+    service
+        .replace_tethers(&entities, vec![hanging_tether()])
+        .unwrap();
+    let prepared = service
+        .prepare(&entities, &scene, RigidBodyStepRequest::single(1.0 / 60.0))
+        .unwrap();
+    let before = entities.view(EntityId::new(1)).unwrap().transform;
+    service.replace_tethers(&entities, Vec::new()).unwrap();
+    assert!(matches!(
+        service.commit(&mut entities, &scene, prepared),
+        Err(RigidBodyStepError::StaleTethers)
+    ));
+    assert_eq!(entities.view(EntityId::new(1)).unwrap().transform, before);
+}
+
+#[test]
+fn rope_solver_configuration_is_bounded_and_invalidates_candidates() {
+    use engine_spatial::DynamicsRopeSolverConfig;
+    let mut entities = body_state([(
+        EntityId::new(1),
+        Vec3::new(0.0, -3.0, 0.0),
+        RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.2 }, 1.0),
+    )]);
+    let mut service = RigidBodyService::default();
+    service
+        .replace_tethers(&entities, vec![hanging_tether()])
+        .unwrap();
+    let scene = empty_scene();
+    let prepared = service.prepare(&entities, &scene, no_gravity()).unwrap();
+    let previous = service.rope_solver();
+    assert!(service
+        .configure_rope_solver(DynamicsRopeSolverConfig {
+            substeps: 9,
+            iterations: 16
+        })
+        .is_err());
+    assert_eq!(service.rope_solver(), previous);
+    service
+        .configure_rope_solver(DynamicsRopeSolverConfig {
+            substeps: 8,
+            iterations: 16,
+        })
+        .unwrap();
+    assert!(matches!(
+        service.commit(&mut entities, &scene, prepared),
+        Err(RigidBodyStepError::StaleTethers)
+    ));
+    let result = service
+        .step(
+            &mut entities,
+            &scene,
+            RigidBodyStepRequest::single(1.0 / 60.0),
+        )
+        .unwrap();
+    assert!((result.tethers[0].force_proxy - 9.81).abs() < 0.005);
+    assert!(result.tethers[0].distance <= 3.001);
+}
+
+#[test]
+fn tether_continuation_restores_lengths_and_catch_state() {
+    let mut entities = body_state([(
+        EntityId::new(1),
+        Vec3::new(0.0, -3.0, 0.0),
+        RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.2 }, 1.0),
+    )]);
+    let mut service = RigidBodyService::default();
+    let scene = empty_scene();
+    service
+        .replace_tethers(&entities, vec![hanging_tether()])
+        .unwrap();
+    let first = service
+        .step(
+            &mut entities,
+            &scene,
+            RigidBodyStepRequest::single(1.0 / 60.0),
+        )
+        .unwrap();
+    assert!(first.tethers[0].caught);
+    let checkpoint = service.capture_ropes();
+    let mut reopened = decode_snapshot(&encode_snapshot(&entities).unwrap()).unwrap();
+    let mut restored = RigidBodyService::default();
+    restored
+        .restore_ropes(&reopened, checkpoint.clone())
+        .unwrap();
+    let expected = service
+        .prepare(&entities, &scene, RigidBodyStepRequest::single(1.0 / 60.0))
+        .unwrap();
+    let actual = restored
+        .prepare(&reopened, &scene, RigidBodyStepRequest::single(1.0 / 60.0))
+        .unwrap();
+    // Commit each candidate against the same captured canonical body state.
+    let receipt = service.commit(&mut entities, &scene, expected).unwrap();
+    assert!(!receipt.tethers[0].caught);
+    let restored_receipt = restored.commit(&mut reopened, &scene, actual).unwrap();
+    assert_eq!(receipt.tethers, restored_receipt.tethers);
+    assert_eq!(
+        encode_snapshot(&entities).unwrap(),
+        encode_snapshot(&reopened).unwrap()
+    );
+    assert!(checkpoint.definitions[0].was_taut);
+}
+
+#[test]
+fn new_tether_outside_radius_rejects_without_replacing_old_definitions() {
+    let entities = body_state([(
+        EntityId::new(1),
+        Vec3::new(0.0, -3.0, 0.0),
+        RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.2 }, 1.0),
+    )]);
+    let mut service = RigidBodyService::default();
+    service
+        .replace_tethers(&entities, vec![hanging_tether()])
+        .unwrap();
+    let before = service.capture_tethers();
+    let mut invalid = hanging_tether();
+    invalid.id += 1;
+    invalid.maximum_length = 1.0;
+    assert!(matches!(
+        service.replace_tethers(&entities, vec![invalid]),
+        Err(RigidBodyStepError::TetherOutOfReach { .. })
+    ));
+    assert_eq!(service.capture_tethers(), before);
+}
+
 #[test]
 fn explicit_mass_policy_maps_through_spatial_step_and_survives_publication() {
     let entity = EntityId::new(5);

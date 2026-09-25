@@ -8,8 +8,10 @@ use entity_state::{
     RigidBodyStateReplacement, TransformComponent,
 };
 use svc_collision::{
-    simulate_dynamics, DynamicsAction, DynamicsBodyId, DynamicsBodyInput, DynamicsContact,
-    DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsStepInput, DynamicsStepOutput,
+    simulate_dynamics_with_rope_solver, validate_dynamics_tethers, DynamicsAction, DynamicsBodyId,
+    DynamicsBodyInput, DynamicsContact, DynamicsError, DynamicsMassProperties,
+    DynamicsRopeSolverConfig, DynamicsShape, DynamicsStepInput, DynamicsStepOutput, DynamicsTether,
+    DynamicsTetherEndpoint, DynamicsTetherReadout,
 };
 
 use crate::VoxelCollisionScene;
@@ -175,6 +177,7 @@ pub struct RigidBodyStepReceipt {
     pub woken_bodies: usize,
     pub facts: Vec<RigidBodyMotionFact>,
     pub contacts: Vec<RigidBodyContactReadout>,
+    pub tethers: Vec<DynamicsTetherReadout>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -187,6 +190,9 @@ pub struct RigidBodyWorldReadout {
 
 #[derive(Debug)]
 pub enum RigidBodyStepError {
+    StaleTethers,
+    TetherOutputOutOfRange { id: u64 },
+    TetherOutOfReach { id: u64 },
     MissingTransform { entity: EntityId },
     KinematicConflict { entity: EntityId },
     ParentedBody { entity: EntityId },
@@ -204,6 +210,9 @@ pub enum RigidBodyStepError {
 impl RigidBodyStepError {
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::TetherOutputOutOfRange { .. } => "rigid-body-tether-output-out-of-range",
+            Self::StaleTethers => "stale-rigid-body-tethers",
+            Self::TetherOutOfReach { .. } => "rigid-body-tether-out-of-reach",
             Self::MissingTransform { .. } => "missing-rigid-body-transform",
             Self::KinematicConflict { .. } => "kinematic-rigid-body-conflict",
             Self::ParentedBody { .. } => "parented-rigid-body-transform",
@@ -240,10 +249,20 @@ impl From<RigidBodyStatePublicationError> for RigidBodyStepError {
     }
 }
 
-#[derive(Debug, Default)]
+/// Canonical rope continuation, separate from derived Rapier state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RigidBodyRopeSnapshot {
+    pub definitions: Vec<DynamicsTether>,
+    pub solver: DynamicsRopeSolverConfig,
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct RigidBodyService {
     generation: u64,
     last_readout: Option<RigidBodyWorldReadout>,
+    tethers: Vec<DynamicsTether>,
+    tether_revision: u64,
+    rope_solver: DynamicsRopeSolverConfig,
 }
 
 #[derive(Clone)]
@@ -266,6 +285,7 @@ pub struct PreparedRigidBodyStep {
     candidate: DynamicsStepOutput,
     steps: u8,
     environment: RigidBodyEnvironmentIdentity,
+    tether_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +297,153 @@ struct RigidBodyEnvironmentIdentity {
 }
 
 impl RigidBodyService {
+    pub fn capture_ropes(&self) -> RigidBodyRopeSnapshot {
+        RigidBodyRopeSnapshot {
+            definitions: self.tethers.clone(),
+            solver: self.rope_solver,
+        }
+    }
+
+    /// Restore alongside the matching body snapshot. A solver's accepted small
+    /// extension is continuation state, not a new out-of-reach attachment.
+    pub fn restore_ropes(
+        &mut self,
+        entities: &EntityState,
+        mut snapshot: RigidBodyRopeSnapshot,
+    ) -> Result<(), RigidBodyStepError> {
+        snapshot.solver.validate().map_err(DynamicsError::Tether)?;
+        let canonical = collect_canonical_bodies(entities)?;
+        let bodies: Vec<_> = canonical.iter().map(body_input).collect();
+        validate_dynamics_tethers(&mut snapshot.definitions, &bodies)
+            .map_err(DynamicsError::Tether)?;
+        let revision = self
+            .tether_revision
+            .checked_add(1)
+            .ok_or(RigidBodyStepError::GenerationExhausted)?;
+        self.tethers = snapshot.definitions;
+        self.rope_solver = snapshot.solver;
+        self.tether_revision = revision;
+        Ok(())
+    }
+
+    pub fn rope_solver(&self) -> DynamicsRopeSolverConfig {
+        self.rope_solver
+    }
+
+    pub fn configure_rope_solver(
+        &mut self,
+        config: DynamicsRopeSolverConfig,
+    ) -> Result<(), RigidBodyStepError> {
+        config.validate().map_err(DynamicsError::Tether)?;
+        let revision = self
+            .tether_revision
+            .checked_add(1)
+            .ok_or(RigidBodyStepError::GenerationExhausted)?;
+        self.rope_solver = config;
+        self.tether_revision = revision;
+        Ok(())
+    }
+
+    pub fn tether_count(&self) -> usize {
+        self.tethers.len()
+    }
+
+    pub fn tether(&self, id: u64) -> Option<DynamicsTether> {
+        self.tethers.iter().find(|tether| tether.id == id).copied()
+    }
+
+    /// Rebase fixed points with the same coordinate primitive as rigid bodies.
+    /// Body-local anchors, lengths and transition facts are unchanged.
+    pub fn rebase_tethers(
+        &mut self,
+        before: core_space::WorldOrigin,
+        after: core_space::WorldOrigin,
+        envelope: f32,
+    ) -> Result<(), RigidBodyStepError> {
+        let mut candidate = self.tethers.clone();
+        for tether in &mut candidate {
+            for endpoint in [&mut tether.first, &mut tether.second] {
+                if let DynamicsTetherEndpoint::Fixed(point) = endpoint {
+                    let invalid = || RigidBodyStepError::TetherOutOfReach { id: tether.id };
+                    let local = core_space::GlobalPosition::from_local(
+                        before,
+                        [point[0] as f32, point[1] as f32, point[2] as f32],
+                    )
+                    .map_err(|_| invalid())?
+                    .local(after, envelope)
+                    .map_err(|_| invalid())?;
+                    *point = local.map(f64::from);
+                }
+            }
+        }
+        let revision = self
+            .tether_revision
+            .checked_add(1)
+            .ok_or(RigidBodyStepError::GenerationExhausted)?;
+        self.tethers = candidate;
+        self.tether_revision = revision;
+        Ok(())
+    }
+
+    /// Copied canonical continuation: definitions, effective lengths and transition facts.
+    pub fn capture_tethers(&self) -> Vec<DynamicsTether> {
+        self.tethers.clone()
+    }
+
+    /// Admit a complete authored set. Existing effective lengths must be retained
+    /// during reeling; target_length is the live control. Empty removes all tethers.
+    pub fn replace_tethers(
+        &mut self,
+        entities: &EntityState,
+        mut tethers: Vec<DynamicsTether>,
+    ) -> Result<(), RigidBodyStepError> {
+        let canonical = collect_canonical_bodies(entities)?;
+        let bodies: Vec<_> = canonical.iter().map(body_input).collect();
+        validate_dynamics_tethers(&mut tethers, &bodies).map_err(DynamicsError::Tether)?;
+        for tether in &mut tethers {
+            let previous = self.tethers.iter().find(|old| old.id == tether.id);
+            let same_attachment = previous
+                .is_some_and(|old| old.first == tether.first && old.second == tether.second);
+            // A direct edit cannot bypass rate-limited length control. Restore
+            // uses restore_ropes instead of this authoring path.
+            if let Some(old) = previous.filter(|_| same_attachment) {
+                tether.maximum_length = old.maximum_length;
+                tether.was_taut = old.was_taut;
+            } else {
+                let point = |endpoint| -> Vec3 {
+                    match endpoint {
+                        DynamicsTetherEndpoint::Fixed(point) => {
+                            Vec3::new(point[0] as f32, point[1] as f32, point[2] as f32)
+                        }
+                        DynamicsTetherEndpoint::Body { body, local_anchor } => {
+                            let body = canonical
+                                .iter()
+                                .find(|candidate| candidate.entity.raw() == body.0)
+                                .expect("validated anchor");
+                            body.transform.transform().transform_point(Vec3::new(
+                                local_anchor[0] as f32,
+                                local_anchor[1] as f32,
+                                local_anchor[2] as f32,
+                            ))
+                        }
+                    }
+                };
+                let distance = (point(tether.second) - point(tether.first)).length();
+                if !distance.is_finite() || f64::from(distance) > tether.maximum_length + 0.001 {
+                    return Err(RigidBodyStepError::TetherOutOfReach { id: tether.id });
+                }
+            }
+            tether.wake |= previous.is_some_and(|old| old.wake || old != tether);
+        }
+        let revision = self
+            .tether_revision
+            .checked_add(1)
+            .ok_or(RigidBodyStepError::GenerationExhausted)?;
+        self.tethers = tethers;
+        self.tether_revision = revision;
+        Ok(())
+    }
+
     pub fn readout(&self) -> Option<&RigidBodyWorldReadout> {
         self.last_readout.as_ref()
     }
@@ -305,12 +472,18 @@ impl RigidBodyService {
             bodies: canonical.iter().map(body_input).collect(),
             actions: request.actions.iter().map(action_input).collect(),
         };
-        let candidate = simulate_dynamics(&scene.projection, input)?;
+        let candidate = simulate_dynamics_with_rope_solver(
+            &scene.projection,
+            input,
+            self.tethers.clone(),
+            self.rope_solver,
+        )?;
         Ok(PreparedRigidBodyStep {
             canonical,
             candidate,
             steps: request.steps,
             environment: environment_identity(scene),
+            tether_revision: self.tether_revision,
         })
     }
 
@@ -329,7 +502,15 @@ impl RigidBodyService {
             candidate,
             steps,
             environment,
+            tether_revision,
         } = prepared;
+        if tether_revision != self.tether_revision {
+            return Err(RigidBodyStepError::StaleTethers);
+        }
+        let next_tether_revision = self
+            .tether_revision
+            .checked_add(1)
+            .ok_or(RigidBodyStepError::GenerationExhausted)?;
         if environment != environment_identity(scene) {
             return Err(RigidBodyStepError::StaleEnvironment);
         }
@@ -390,7 +571,23 @@ impl RigidBodyService {
             .into_iter()
             .map(contact_readout)
             .collect::<Result<Vec<_>, _>>()?;
+        for tether in &candidate.tethers {
+            if vec3_f32(tether.first).is_none()
+                || vec3_f32(tether.second).is_none()
+                || ![tether.maximum_length, tether.distance, tether.force_proxy]
+                    .into_iter()
+                    .all(|value| (value as f32).is_finite())
+            {
+                return Err(RigidBodyStepError::TetherOutputOutOfRange { id: tether.id });
+            }
+        }
         let publication = replace_rigid_body_states(entities, replacements)?;
+        for (tether, readout) in self.tethers.iter_mut().zip(&candidate.tethers) {
+            tether.maximum_length = readout.maximum_length;
+            tether.was_taut = readout.taut;
+            tether.wake = false;
+        }
+        self.tether_revision = next_tether_revision;
         self.generation = generation;
         self.last_readout = Some(RigidBodyWorldReadout {
             generation,
@@ -425,6 +622,7 @@ impl RigidBodyService {
             woken_bodies,
             facts,
             contacts,
+            tethers: candidate.tethers,
         })
     }
 }

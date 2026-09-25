@@ -1,3 +1,5 @@
+mod chain;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
@@ -9,8 +11,9 @@ use core_math::Vec3;
 use core_space::{GlobalPosition, WorldOrigin};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    rigid_body_component_mass_properties, RigidBodyAction, RigidBodyContactReadout,
-    RigidBodyService, RigidBodyStepRequest, VoxelCollisionScene,
+    rigid_body_component_mass_properties, DynamicsBodyId, DynamicsTether, DynamicsTetherEndpoint,
+    DynamicsTetherReadout, RigidBodyAction, RigidBodyContactReadout, RigidBodyService,
+    RigidBodyStepRequest, VoxelCollisionScene,
 };
 use entity_state::{
     replace_rigid_body_states, EntityAuthoringService, EntityDefinition, EntityLifecycle,
@@ -69,6 +72,10 @@ struct DynamicsWorld {
     gravity: Vec3,
     last_contacts: BTreeMap<EntityId, BodyContactSummary>,
     last_contact_receipts: Vec<RigidBodyContactReadout>,
+    last_tethers: Vec<DynamicsTetherReadout>,
+    invalidated_tethers: BTreeSet<u64>,
+    chains: BTreeMap<u64, chain::DynamicsChain>,
+    invalidated_chains: BTreeSet<u64>,
 }
 
 type DynamicsRebaseSnapshot = (
@@ -95,6 +102,172 @@ enum BodySlot {
 }
 
 impl RuntimeDynamicsBridge {
+    fn tether_endpoint(
+        &self,
+        world: u64,
+        body: NativeDynamicsBodyHandle,
+        local: NativeVec3,
+    ) -> Result<DynamicsTetherEndpoint, CsharpEngineServicesError> {
+        let (owner, entity) = self.active_body(body.value)?;
+        if owner != world {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_DYNAMICS_TETHER",
+                "anchor belongs to another world",
+            ));
+        }
+        Ok(DynamicsTetherEndpoint::Body {
+            body: DynamicsBodyId(entity.raw()),
+            local_anchor: [f64::from(local.x), f64::from(local.y), f64::from(local.z)],
+        })
+    }
+
+    fn set_tether(
+        &mut self,
+        world: u64,
+        config: NativeDynamicsTetherConfig,
+        first: DynamicsTetherEndpoint,
+        second: DynamicsTetherEndpoint,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let world = self.active_world_mut(world)?;
+        if world
+            .chains
+            .values()
+            .any(|chain| chain.links.contains(&config.id))
+        {
+            return Err(chain::error("identity belongs to a chain link"));
+        }
+        if world.service.tether(config.id).is_none()
+            && !world.invalidated_tethers.contains(&config.id)
+            && chain::authored_count(world) >= chain::MAX_ROPES
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_DYNAMICS_TETHER",
+                "retained tether budget exhausted; remove unused tether identities",
+            ));
+        }
+        let mut definitions = world.service.capture_tethers();
+        definitions.retain(|definition| definition.id != config.id);
+        definitions.push(DynamicsTether {
+            id: config.id,
+            first,
+            second,
+            maximum_length: f64::from(config.maximum_length),
+            target_length: f64::from(config.target_length),
+            reel_speed: f64::from(config.reel_speed),
+            was_taut: false,
+            wake: true,
+            contacts_enabled: config.contacts_enabled,
+        });
+        world
+            .service
+            .replace_tethers(&world.entities, definitions)
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_DYNAMICS_TETHER", error.code())
+            })?;
+        world.last_tethers.retain(|readout| readout.id != config.id);
+        world.invalidated_tethers.remove(&config.id);
+        Ok(())
+    }
+
+    fn set_fixed_tether(
+        &mut self,
+        request: NativeDynamicsFixedTetherRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let endpoint =
+            self.tether_endpoint(request.world.value, request.body, request.local_anchor)?;
+        let point = request.world_anchor;
+        self.set_tether(
+            request.world.value,
+            request.config,
+            DynamicsTetherEndpoint::Fixed([
+                f64::from(point.x),
+                f64::from(point.y),
+                f64::from(point.z),
+            ]),
+            endpoint,
+        )
+    }
+
+    fn set_body_tether(
+        &mut self,
+        request: NativeDynamicsBodyTetherRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let first =
+            self.tether_endpoint(request.world.value, request.first, request.first_anchor)?;
+        let second =
+            self.tether_endpoint(request.world.value, request.second, request.second_anchor)?;
+        self.set_tether(request.world.value, request.config, first, second)
+    }
+
+    fn remove_tether(
+        &mut self,
+        request: NativeDynamicsTetherRequest,
+    ) -> Result<NativeDynamicsTetherReleaseReceipt, CsharpEngineServicesError> {
+        let world = self.active_world_mut(request.world.value)?;
+        if world
+            .chains
+            .values()
+            .any(|chain| chain.links.contains(&request.id))
+        {
+            return Err(chain::error(
+                "remove the owning chain instead of an internal link",
+            ));
+        }
+        let released = world.service.tether(request.id).is_some();
+        let mut definitions = world.service.capture_tethers();
+        definitions.retain(|definition| definition.id != request.id);
+        world
+            .service
+            .replace_tethers(&world.entities, definitions)
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_DYNAMICS_TETHER", error.code())
+            })?;
+        world
+            .last_tethers
+            .retain(|readout| readout.id != request.id);
+        world.invalidated_tethers.remove(&request.id);
+        Ok(NativeDynamicsTetherReleaseReceipt { released })
+    }
+
+    fn read_tether(
+        &self,
+        request: NativeDynamicsTetherRequest,
+    ) -> Result<NativeDynamicsTetherReadout, CsharpEngineServicesError> {
+        let world = self.active_world(request.world.value)?;
+        let Some(definition) = world.service.tether(request.id) else {
+            return Ok(NativeDynamicsTetherReadout {
+                invalidated: world.invalidated_tethers.contains(&request.id),
+                ..Default::default()
+            });
+        };
+        let mut result = NativeDynamicsTetherReadout {
+            present: true,
+            maximum_length: definition.maximum_length as f32,
+            target_length: definition.target_length as f32,
+            ..Default::default()
+        };
+        if let Some(readout) = world
+            .last_tethers
+            .iter()
+            .find(|readout| readout.id == request.id)
+        {
+            let point = |v: [f64; 3]| NativeVec3 {
+                x: v[0] as f32,
+                y: v[1] as f32,
+                z: v[2] as f32,
+            };
+            result.simulated = true;
+            result.first = point(readout.first);
+            result.second = point(readout.second);
+            result.distance = readout.distance as f32;
+            result.slack_distance = (result.maximum_length - result.distance).max(0.0);
+            result.taut = readout.taut;
+            result.caught = readout.caught;
+            result.force_proxy = readout.force_proxy as f32;
+        }
+        Ok(result)
+    }
+
     pub(crate) fn new(collision_source: SpatialCollisionSource) -> Self {
         Self {
             worlds: BTreeMap::new(),
@@ -197,6 +370,10 @@ impl RuntimeDynamicsBridge {
                 gravity,
                 last_contacts: BTreeMap::new(),
                 last_contact_receipts: Vec::new(),
+                last_tethers: Vec::new(),
+                invalidated_tethers: BTreeSet::new(),
+                chains: BTreeMap::new(),
+                invalidated_chains: BTreeSet::new(),
             }),
         );
         Ok(NativeDynamicsWorldHandle { value })
@@ -312,12 +489,32 @@ impl RuntimeDynamicsBridge {
             })?,
         };
 
+        let mut candidate_service = self.active_world(request.world.value)?.service.clone();
+        candidate_service
+            .rebase_tethers(
+                WorldOrigin::new([
+                    request.receipt.origin_before_cell_x,
+                    request.receipt.origin_before_cell_y,
+                    request.receipt.origin_before_cell_z,
+                ]),
+                WorldOrigin::new([
+                    request.receipt.origin_after_cell_x,
+                    request.receipt.origin_after_cell_y,
+                    request.receipt.origin_after_cell_z,
+                ]),
+                request.receipt.local_envelope,
+            )
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.code())
+            })?;
         // There are no fallible operations after this point. The body owners,
         // solver generation, and last contact facts remain intact while the
         // state and scene change as one committed Dynamics-world snapshot.
         let world = self.active_world_mut(request.world.value)?;
         world.entities = candidate;
         world.scene = latest_scene;
+        world.service = candidate_service;
+        world.last_tethers.clear();
         Ok(receipt)
     }
 
@@ -431,6 +628,56 @@ impl RuntimeDynamicsBridge {
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_DYNAMICS_DESTROY", error.to_string())
             })?;
+        let invalidated_chains: Vec<_> = world.chains.iter().filter_map(|(id, chain)| {
+            matches!(chain.anchor, DynamicsTetherEndpoint::Body { body, .. } if body.0 == entity.raw()).then_some(*id)
+        }).collect();
+        let mut removed_chain_bodies = Vec::new();
+        let mut removed_links = BTreeSet::new();
+        for id in &invalidated_chains {
+            let chain = &world.chains[id];
+            removed_links.extend(chain.links.iter().copied());
+            for (handle, bead) in &chain.bodies {
+                let revision = candidate.revision();
+                EntityAuthoringService
+                    .destroy(&mut candidate, revision, *bead)
+                    .map_err(|error| chain::error(&error.to_string()))?;
+                removed_chain_bodies.push((*handle, *bead));
+            }
+        }
+        let mut candidate_service = world.service.clone();
+        let mut tethers = candidate_service.capture_tethers();
+        tethers.retain(|tether| !removed_links.contains(&tether.id));
+        let attached = |tether: &DynamicsTether| {
+            [tether.first, tether.second].into_iter().any(|endpoint|
+            matches!(endpoint, DynamicsTetherEndpoint::Body { body, .. } if body.0 == entity.raw()))
+        };
+        let invalidated: Vec<_> = tethers
+            .iter()
+            .filter(|tether| attached(tether))
+            .map(|tether| tether.id)
+            .collect();
+        tethers.retain(|tether| !attached(tether));
+        candidate_service
+            .replace_tethers(&candidate, tethers)
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_DYNAMICS_DESTROY", error.code())
+            })?;
+        world.service = candidate_service;
+        world.invalidated_tethers.extend(invalidated);
+        world
+            .last_tethers
+            .retain(|readout| !removed_links.contains(&readout.id));
+        for id in invalidated_chains {
+            world.chains.remove(&id);
+            world.invalidated_chains.insert(id);
+        }
+        for (handle, bead) in &removed_chain_bodies {
+            world.bodies.remove(handle);
+            world.last_contacts.remove(bead);
+            world
+                .last_contact_receipts
+                .retain(|contact| contact.first != *bead && contact.second != Some(*bead));
+        }
         world.entities = candidate;
         world.bodies.remove(&handle);
         world.last_contacts.remove(&entity);
@@ -438,6 +685,9 @@ impl RuntimeDynamicsBridge {
             .last_contact_receipts
             .retain(|contact| contact.first != entity && contact.second != Some(entity));
         self.bodies.insert(handle, BodySlot::Tombstoned);
+        for (handle, _) in removed_chain_bodies {
+            self.bodies.insert(handle, BodySlot::Tombstoned);
+        }
         Ok(())
     }
 
@@ -628,7 +878,25 @@ impl RuntimeDynamicsBridge {
             })?;
         world.last_contacts = contacts_by_body(&receipt);
         world.last_contact_receipts = receipt.contacts.clone();
+        world.last_tethers = receipt.tethers;
+        let solver = world.service.rope_solver();
+        let links = world.service.tether_count() as u32;
         Ok(NativeDynamicsStepReceipt {
+            rope_substeps: if links == 0 {
+                0
+            } else {
+                solver.substeps as u32
+            },
+            rope_iterations: if links == 0 {
+                0
+            } else {
+                solver.iterations as u32
+            },
+            rope_link_count: links,
+            rope_solver_link_steps: u32::from(steps)
+                * solver.substeps as u32
+                * solver.iterations as u32
+                * links,
             generation: receipt.generation,
             body_count: u32::try_from(receipt.bodies_considered).map_err(|_| {
                 CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "body count exceeded u32")
@@ -1863,6 +2131,17 @@ unsafe extern "C" fn replace_capsule_body(
 pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
     NativeDynamicsApi {
         context: (bridge as *mut RuntimeDynamicsBridge).cast(),
+        configure_ropes: chain::configure_ropes,
+        set_chain_length: chain::set_chain_length,
+        create_fixed_chain: chain::create_fixed_chain,
+        create_body_chain: chain::create_body_chain,
+        read_chain: chain::read_chain,
+        read_chain_point: chain::read_chain_point,
+        remove_chain: chain::remove_chain,
+        set_fixed_tether,
+        set_body_tether,
+        remove_tether,
+        read_tether,
         create_world,
         destroy_world,
         create_body,
@@ -1886,6 +2165,65 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         replace_cuboid_body,
         replace_sphere_body,
         replace_capsule_body,
+    }
+}
+
+unsafe extern "C" fn set_fixed_tether(
+    context: *mut c_void,
+    request: NativeDynamicsFixedTetherRequest,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_fixed_tether(request) {
+        Ok(()) => ABI_OK,
+        Err(_) => 0,
+    }
+}
+unsafe extern "C" fn set_body_tether(
+    context: *mut c_void,
+    request: NativeDynamicsBodyTetherRequest,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_body_tether(request) {
+        Ok(()) => ABI_OK,
+        Err(_) => 0,
+    }
+}
+unsafe extern "C" fn remove_tether(
+    context: *mut c_void,
+    request: NativeDynamicsTetherRequest,
+    result: *mut NativeDynamicsTetherReleaseReceipt,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.remove_tether(request) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+unsafe extern "C" fn read_tether(
+    context: *mut c_void,
+    request: NativeDynamicsTetherRequest,
+    output: *mut NativeDynamicsTetherReadout,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    match unsafe { &*context.cast::<RuntimeDynamicsBridge>() }.read_tether(request) {
+        Ok(value) => {
+            unsafe {
+                *output = value;
+            }
+            ABI_OK
+        }
+        Err(_) => 0,
     }
 }
 
@@ -1938,6 +2276,415 @@ mod tests {
                 continuous_collision: false,
             },
         }
+    }
+
+    fn chain_config(id: u64, bead_count: u32) -> NativeDynamicsChainConfig {
+        let mut properties = body_config(NativeVec3::default()).properties;
+        properties.mass = 1.0;
+        properties.gravity_scale = 1.0;
+        properties.continuous_collision = true;
+        NativeDynamicsChainConfig {
+            id,
+            bead_count,
+            link_length: 0.5,
+            radius: 0.15,
+            properties,
+        }
+    }
+
+    #[test]
+    fn chain_creation_removal_and_anchor_invalidation_are_atomic() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: body_config(NativeVec3::default()),
+            })
+            .unwrap();
+        let request = NativeDynamicsBodyChainRequest {
+            world,
+            body,
+            local_anchor: NativeVec3::default(),
+            end: NativeVec3 {
+                x: 2.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            config: chain_config(8, 4),
+        };
+        let before = bridge
+            .active_world(world.value)
+            .unwrap()
+            .entities
+            .revision();
+        let mut invalid = request;
+        invalid.config.bead_count = 9;
+        assert!(bridge.create_body_chain(invalid).is_err());
+        invalid = request;
+        invalid.config.properties.mass = -1.0;
+        assert!(bridge.create_body_chain(invalid).is_err());
+        assert_eq!(
+            bridge
+                .active_world(world.value)
+                .unwrap()
+                .entities
+                .revision(),
+            before
+        );
+        assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 1);
+        bridge.create_body_chain(request).unwrap();
+        assert!(bridge.create_body_chain(request).is_err());
+        let query = NativeDynamicsChainRequest { world, id: 8 };
+        assert_eq!(bridge.read_chain(query).unwrap().point_count, 5);
+        assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 5);
+        let point = bridge
+            .read_chain_point(NativeDynamicsChainPointRequest {
+                world,
+                id: 8,
+                index: 4,
+            })
+            .unwrap();
+        assert!(point.present);
+        assert_eq!(point.position.x, 2.0);
+        bridge.destroy_body(body).unwrap();
+        assert!(bridge.read_chain(query).unwrap().invalidated);
+        assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 0);
+        assert!(bridge
+            .active_world(world.value)
+            .unwrap()
+            .service
+            .capture_tethers()
+            .is_empty());
+        bridge.remove_chain(query).unwrap();
+        assert!(!bridge.read_chain(query).unwrap().invalidated);
+        bridge
+            .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                world,
+                anchor: NativeVec3::default(),
+                end: request.end,
+                config: request.config,
+            })
+            .unwrap();
+        let receipt = bridge.remove_chain(query).unwrap();
+        assert!(receipt.released);
+        assert_eq!(receipt.removed_bodies, 4);
+        assert!(!bridge.remove_chain(query).unwrap().released);
+        assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 0);
+    }
+
+    #[test]
+    fn short_chain_collides_with_terrain_and_repeats_exactly() {
+        let run = |restore: bool| {
+            let spatial = crate::spatial::RuntimeSpatialBridge::new();
+            let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+            let world = bridge
+                .create_world(NativeDynamicsWorldConfig {
+                    gravity: NativeVec3 {
+                        x: 0.0,
+                        y: -9.81,
+                        z: 0.0,
+                    },
+                })
+                .unwrap();
+            let ground = (-6..7).flat_map(|x| (-2..3).map(move |z| [x, -1, z]));
+            bridge.active_world_mut(world.value).unwrap().scene =
+                Arc::new(VoxelCollisionScene::from_solid_voxels(1.0, 8, ground).unwrap());
+            bridge
+                .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                    world,
+                    anchor: NativeVec3 {
+                        x: 0.0,
+                        y: 2.0,
+                        z: 0.0,
+                    },
+                    end: NativeVec3 {
+                        x: 4.0,
+                        y: 2.0,
+                        z: 0.0,
+                    },
+                    config: chain_config(1, 8),
+                })
+                .unwrap();
+            let mut touched_ground = false;
+            for tick in 0..300 {
+                if restore && tick == 150 {
+                    let state = bridge.active_world_mut(world.value).unwrap();
+                    let snapshot = state.service.capture_ropes();
+                    state.entities = entity_state::decode_snapshot(
+                        &entity_state::encode_snapshot(&state.entities).unwrap(),
+                    )
+                    .unwrap();
+                    state.service = RigidBodyService::default();
+                    state
+                        .service
+                        .restore_ropes(&state.entities, snapshot)
+                        .unwrap();
+                }
+                bridge
+                    .step(&NativeDynamicsStepRequest {
+                        world,
+                        step_seconds: ONE_SIXTIETH_SECOND,
+                        steps: 1,
+                        actions: std::ptr::null(),
+                        actions_len: 0,
+                    })
+                    .unwrap();
+                touched_ground |= bridge
+                    .active_world(world.value)
+                    .unwrap()
+                    .last_contact_receipts
+                    .iter()
+                    .any(|contact| contact.second.is_none());
+                for index in 1..=8 {
+                    let point = bridge
+                        .read_chain_point(NativeDynamicsChainPointRequest {
+                            world,
+                            id: 1,
+                            index,
+                        })
+                        .unwrap();
+                    assert!(
+                        point.position.y >= 0.13,
+                        "bead passed through terrain: {}",
+                        point.position.y
+                    );
+                }
+            }
+            assert!(touched_ground);
+            assert!(
+                bridge
+                    .read_chain(NativeDynamicsChainRequest { world, id: 1 })
+                    .unwrap()
+                    .simulated
+            );
+            (0..=8)
+                .map(|index| {
+                    let point = bridge
+                        .read_chain_point(NativeDynamicsChainPointRequest {
+                            world,
+                            id: 1,
+                            index,
+                        })
+                        .unwrap()
+                        .position;
+                    [point.x, point.y, point.z]
+                })
+                .collect::<Vec<_>>()
+        };
+        let baseline = run(false);
+        assert_eq!(baseline, run(false));
+        assert_eq!(baseline, run(true));
+    }
+
+    #[test]
+    fn chain_quotas_and_length_controls_do_not_partially_publish() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        for id in 0..64 {
+            bridge
+                .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                    world,
+                    anchor: NativeVec3 {
+                        x: id as f32,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    end: NativeVec3 {
+                        x: id as f32,
+                        y: -0.5,
+                        z: 0.0,
+                    },
+                    config: chain_config(id, 1),
+                })
+                .unwrap();
+        }
+        let before = bridge
+            .active_world(world.value)
+            .unwrap()
+            .entities
+            .revision();
+        assert!(bridge
+            .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                world,
+                anchor: NativeVec3::default(),
+                end: NativeVec3::default(),
+                config: chain_config(64, 1)
+            })
+            .is_err());
+        assert_eq!(
+            bridge
+                .active_world(world.value)
+                .unwrap()
+                .entities
+                .revision(),
+            before
+        );
+        let control = NativeDynamicsChainLengthRequest {
+            world,
+            id: 0,
+            target_length: 0.25,
+            reel_speed: 0.25,
+        };
+        assert!(bridge
+            .set_chain_length(NativeDynamicsChainLengthRequest {
+                reel_speed: 1.0,
+                ..control
+            })
+            .is_err());
+        bridge.set_chain_length(control).unwrap();
+        bridge
+            .step(&NativeDynamicsStepRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: std::ptr::null(),
+                actions_len: 0,
+            })
+            .unwrap();
+        let query = NativeDynamicsChainRequest { world, id: 0 };
+        let shortened = bridge.read_chain(query).unwrap();
+        assert!((shortened.effective_length - (0.5 - 0.25 * ONE_SIXTIETH_SECOND)).abs() < 1e-6);
+        assert_eq!(shortened.target_length, 0.25);
+        bridge
+            .set_chain_length(NativeDynamicsChainLengthRequest {
+                target_length: 0.75,
+                ..control
+            })
+            .unwrap();
+        bridge
+            .step(&NativeDynamicsStepRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: std::ptr::null(),
+                actions_len: 0,
+            })
+            .unwrap();
+        assert!((bridge.read_chain(query).unwrap().effective_length - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chain_suppresses_adjacent_contacts_and_respects_self_collision_groups() {
+        for self_collision in [true, false] {
+            let spatial = crate::spatial::RuntimeSpatialBridge::new();
+            let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+            let world = bridge
+                .create_world(NativeDynamicsWorldConfig {
+                    gravity: NativeVec3::default(),
+                })
+                .unwrap();
+            let mut config = chain_config(1, 3);
+            config.properties.collision_groups = 1;
+            config.properties.collision_mask = if self_collision { u32::MAX } else { !1 };
+            bridge
+                .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                    world,
+                    anchor: NativeVec3::default(),
+                    end: NativeVec3 {
+                        x: 0.03,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    config,
+                })
+                .unwrap();
+            bridge
+                .step(&NativeDynamicsStepRequest {
+                    world,
+                    step_seconds: ONE_SIXTIETH_SECOND,
+                    steps: 1,
+                    actions: std::ptr::null(),
+                    actions_len: 0,
+                })
+                .unwrap();
+            let state = bridge.active_world(world.value).unwrap();
+            let beads = &state.chains[&1].bodies;
+            for contact in &state.last_contact_receipts {
+                assert_ne!(
+                    (contact.first, contact.second),
+                    (beads[0].1, Some(beads[1].1))
+                );
+                assert_ne!(
+                    (contact.first, contact.second),
+                    (beads[1].1, Some(beads[2].1))
+                );
+            }
+            assert_eq!(
+                state.last_contact_receipts.iter().any(
+                    |contact| contact.first == beads[0].1 && contact.second == Some(beads[2].1)
+                ),
+                self_collision
+            );
+        }
+    }
+
+    #[test]
+    fn tether_bridge_steps_and_invalidates_when_anchor_is_destroyed() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        let mut config = body_config(NativeVec3 {
+            x: 0.0,
+            y: -3.0,
+            z: 0.0,
+        });
+        config.properties.gravity_scale = 1.0;
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        bridge
+            .set_fixed_tether(NativeDynamicsFixedTetherRequest {
+                world,
+                body,
+                local_anchor: NativeVec3::default(),
+                world_anchor: NativeVec3::default(),
+                config: NativeDynamicsTetherConfig {
+                    id: 7,
+                    maximum_length: 3.0,
+                    target_length: 3.0,
+                    reel_speed: 0.25,
+                    contacts_enabled: true,
+                },
+            })
+            .unwrap();
+        let query = NativeDynamicsTetherRequest { world, id: 7 };
+        assert!(!bridge.read_tether(query).unwrap().simulated);
+        bridge
+            .execute_step(world.value, ONE_SIXTIETH_SECOND, 1, Vec::new())
+            .unwrap();
+        let readout = bridge.read_tether(query).unwrap();
+        assert!(readout.present && readout.simulated && readout.caught && !readout.invalidated);
+        assert!((readout.force_proxy - 19.62).abs() < 0.01);
+        bridge.destroy_body(body).unwrap();
+        let invalid = bridge.read_tether(query).unwrap();
+        assert!(!invalid.present && invalid.invalidated);
+        bridge
+            .execute_step(world.value, ONE_SIXTIETH_SECOND, 1, Vec::new())
+            .unwrap();
+        bridge.remove_tether(query).unwrap();
+        assert!(!bridge.read_tether(query).unwrap().invalidated);
     }
 
     #[test]
@@ -2797,6 +3544,25 @@ mod tests {
             })
             .unwrap();
         assert!(step.contact_count > 0);
+        bridge
+            .set_fixed_tether(NativeDynamicsFixedTetherRequest {
+                world,
+                body,
+                local_anchor: NativeVec3::default(),
+                world_anchor: NativeVec3 {
+                    x: 0.0,
+                    y: 2.0,
+                    z: 0.0,
+                },
+                config: NativeDynamicsTetherConfig {
+                    id: 71,
+                    maximum_length: 3.0,
+                    target_length: 3.0,
+                    reel_speed: 0.0,
+                    contacts_enabled: false,
+                },
+            })
+            .unwrap();
 
         let mut origin = NativeWorldOriginReadout::default();
         assert_eq!(
@@ -2854,6 +3620,24 @@ mod tests {
             expected_solver_generation: before_world.generation,
         };
         let rebase = bridge.rebase_world_origin(request).unwrap();
+        let rebased_tether = bridge
+            .active_world(world.value)
+            .unwrap()
+            .service
+            .tether(71)
+            .unwrap();
+        assert_eq!(
+            rebased_tether.first,
+            DynamicsTetherEndpoint::Fixed([-5.0, 2.0, 0.0])
+        );
+        assert_eq!(rebased_tether.maximum_length, 3.0);
+        assert_eq!(
+            rebased_tether.second,
+            DynamicsTetherEndpoint::Body {
+                body: DynamicsBodyId(bridge.active_body(body.value).unwrap().1.raw()),
+                local_anchor: [0.0; 3]
+            }
+        );
         let after_world = bridge
             .read_world(NativeDynamicsWorldReadRequest { world })
             .unwrap();

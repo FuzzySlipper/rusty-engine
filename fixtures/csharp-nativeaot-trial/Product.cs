@@ -444,6 +444,7 @@ public sealed class Product : IEngineProduct
         ExerciseCharacterController();
         ExerciseLook();
         ExerciseDynamics();
+        ExerciseTethers();
         PublishPresentation();
         GhostPlateCaptureLighting ghostLighting = new(
             GhostPlateCaptureLightingMode.Isolated,
@@ -1103,6 +1104,52 @@ public sealed class Product : IEngineProduct
         {
             // Pure managed request validation no longer crosses the native ABI.
         }
+    }
+
+    private void ExerciseTethers()
+    {
+        const ulong tetherId = 1;
+        const float length = 3.0f;
+        const float stepSeconds = 1.0f / 60.0f;
+        using DynamicsWorld world = _engine.Dynamics.CreateWorld(new DynamicsWorldConfig(Vector3.Zero));
+        using DynamicsBody body = _engine.Dynamics.CreateBody(new DynamicsCreateBodyRequest(world,
+            new DynamicsBodyConfig(new Transform(new Vector3(length, 0, 0), Quaternion.Identity, Vector3.One),
+                new Vector3(0.2f), 2.0f,
+                new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
+                new AxisLocks(false, false, false, false, false, false), 0.0f)));
+        _engine.Dynamics.ConfigureRopes(new(world, 8, 16));
+        DynamicsTetherRequest query = new(world, tetherId);
+        _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero,
+            new DynamicsTetherConfig(tetherId, length, length, 0.25f, true)));
+        DynamicsStepReceipt work = _engine.Dynamics.Step(new(world, stepSeconds, 1,
+            new[] { new DynamicsAction(body, Vector3.Zero, Vector3.Zero, new Vector3(6, 0, 0), Vector3.Zero, true) }));
+        Require(work.RopeLinkCount == 1 && work.RopeSubsteps == 8 && work.RopeIterations == 16 && work.RopeSolverLinkSteps == 128,
+            "generated tether work budget is wrong");
+        DynamicsTetherReadout caught = _engine.Dynamics.ReadTether(query);
+        Require(caught.Present && caught.Simulated && caught.Caught && caught.Taut, "generated tether did not report catch");
+        Require(caught.Distance <= length + 0.01f, "generated tether exceeded radius");
+        _engine.Dynamics.RemoveTether(query);
+        Require(!_engine.Dynamics.ReadTether(query).Present, "generated tether release retained attachment");
+        _engine.Dynamics.Step(new(world, stepSeconds, 1,
+            new[] { new DynamicsAction(body, Vector3.Zero, Vector3.Zero, new Vector3(6, 0, 0), Vector3.Zero, true) }));
+        Require(_engine.Dynamics.Read(new DynamicsReadRequest(body)).LinearVelocity.X > 2.9f,
+            "released tether still constrained body velocity");
+        const ulong chainId = 2;
+        const uint beadCount = 4;
+        DynamicsBodyProperties bead = new(1.0f, new(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
+            Vector3.Zero, Vector3.Zero, default, 0.0f, 0.0f, 1.0f, 0.5f, 0.0f,
+            uint.MaxValue, uint.MaxValue, true, false, true);
+        _engine.Dynamics.CreateFixedChain(new(world, Vector3.Zero, new Vector3(0, -2, 0),
+            new DynamicsChainConfig(chainId, beadCount, 0.5f, 0.05f, bead)));
+        DynamicsChainRequest chain = new(world, chainId);
+        Require(_engine.Dynamics.ReadChain(chain).PointCount == beadCount + 1, "generated chain lost ordered points");
+        _engine.Dynamics.Step(new(world, stepSeconds, 1, ReadOnlyMemory<DynamicsAction>.Empty));
+        Require(_engine.Dynamics.ReadChain(chain).Simulated, "generated chain did not step");
+        Require(_engine.Dynamics.ReadChainPoint(new(world, chainId, beadCount)).Position.Y < -1.9f,
+            "generated chain point order changed");
+        DynamicsChainReleaseReceipt removed = _engine.Dynamics.RemoveChain(chain);
+        Require(removed.Released && removed.RemovedBodies == beadCount && !_engine.Dynamics.ReadChain(chain).Present,
+            "generated chain removal was incomplete");
     }
 
     private void ExerciseDynamics()

@@ -441,6 +441,37 @@ machines are ordinary managed helpers, not native context services. See the
 [current capability map](csharp-capabilities.md) and do not assume a Rust API
 is callable from C# simply because its crate is public.
 
+### Bounded dynamics ropes
+
+`Dynamics.SetFixedTether` and `SetBodyTether` attach a caller-selected ID to
+world/body-local endpoints in one `DynamicsWorld`. Initial attachments outside
+the maximum distance reject. Updating the same attachment changes its target;
+its effective length approaches that target at the supplied rate, capped at
+0.25 m/s. `ReadTether` reports effective/target length, distance/slack, caught/taut
+state and a sampled force proxy in N. `RemoveTether` returns a released receipt
+and preserves body velocity. A removed body invalidates its attached tethers.
+
+`CreateFixedChain` and `CreateBodyChain` own one anchored end and up to eight
+sphere beads; the final bead is free. Supply ordinary body properties and an
+initial end position. Engine spaces the initial beads along that segment and
+creates all bodies/links atomically. `ReadChainPoint` returns the anchor at index
+zero followed by bead centers in order. `SetChainLength` distributes total
+length and reel rate evenly across links. `RemoveChain` removes all its bodies
+and links; destroying a body anchor invalidates and removes the chain. Adjacent
+bead contacts are suppressed. Ordinary collision groups select nonadjacent
+self-collision; terrain collision uses the same dynamics scene as other bodies.
+The segments between beads have no collision geometry.
+
+The world admits 64 tethers/chains in total and chain beads consume its existing
+body budget. Remove invalidated identities when no longer needed. Defaults are
+four subdivisions and eight solver iterations per supplied tick;
+`ConfigureRopes` selects 1–8 subdivisions and 1–16 iterations. `Dynamics.Step`
+reports actual rope link/subdivision/iteration work over the requested ticks.
+Higher counts cost more work; they do not create a new update clock. Preserve
+ordinary body CCD/sleep policies. Fixed endpoints follow `WorldOrigin` rebasing.
+Force readouts sample terminal solver-substep impulses, so they are not peak
+catch loads or a breakage policy. See the [physics contract](rope-physics.md).
+
 ### Composing graphics
 
 Use `context.Graphics` for resources and retained facts; `Appearance` still

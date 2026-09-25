@@ -745,6 +745,7 @@ static void ExerciseAppearanceEntityComposition()
 
 sealed class SpatialServiceFake : ISpatialService
 {
+    public CollisionReplaceReceipt ApplyCollisionResidency(CollisionResidencyRequest request) => throw new NotSupportedException();
     public int ReconcileCalls { get; private set; }
     public int CharacterStepCalls { get; private set; }
     public SpatialSession Session { get; } = new(new SpatialSessionHandle(2), () => { });
@@ -946,6 +947,8 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
+    public IVideoService Video => throw new NotSupportedException();
+    public IRenderOutputService RenderOutput => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
@@ -1146,6 +1149,17 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsBody CreateBody(DynamicsCreateBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();
+    public void ConfigureRopes(DynamicsRopeSolverRequest request) => throw new NotSupportedException();
+    public void SetChainLength(DynamicsChainLengthRequest request) => throw new NotSupportedException();
+    public void CreateFixedChain(DynamicsFixedChainRequest request) => throw new NotSupportedException();
+    public void CreateBodyChain(DynamicsBodyChainRequest request) => throw new NotSupportedException();
+    public DynamicsChainReadout ReadChain(DynamicsChainRequest request) => throw new NotSupportedException();
+    public DynamicsChainPointReadout ReadChainPoint(DynamicsChainPointRequest request) => throw new NotSupportedException();
+    public DynamicsChainReleaseReceipt RemoveChain(DynamicsChainRequest request) => throw new NotSupportedException();
+    public void SetFixedTether(DynamicsFixedTetherRequest request) => throw new NotSupportedException();
+    public void SetBodyTether(DynamicsBodyTetherRequest request) => throw new NotSupportedException();
+    public DynamicsTetherReleaseReceipt RemoveTether(DynamicsTetherRequest request) => throw new NotSupportedException();
+    public DynamicsTetherReadout ReadTether(DynamicsTetherRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBodyWithProperties(DynamicsCreateSphereBodyPropertiesRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCapsuleBody(DynamicsCreateCapsuleBodyRequest request) => throw new NotSupportedException();
     public void BindWorldCollision(DynamicsWorldCollisionBindingRequest request) => throw new NotSupportedException();

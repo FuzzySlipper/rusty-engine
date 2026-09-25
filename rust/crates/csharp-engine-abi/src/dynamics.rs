@@ -1,5 +1,151 @@
 use crate::*;
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsTetherConfig {
+    pub id: u64,
+    pub maximum_length: f32,
+    pub target_length: f32,
+    pub reel_speed: f32,
+    pub contacts_enabled: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsFixedTetherRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub body: NativeDynamicsBodyHandle,
+    pub local_anchor: NativeVec3,
+    pub world_anchor: NativeVec3,
+    pub config: NativeDynamicsTetherConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsBodyTetherRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub first: NativeDynamicsBodyHandle,
+    pub second: NativeDynamicsBodyHandle,
+    pub first_anchor: NativeVec3,
+    pub second_anchor: NativeVec3,
+    pub config: NativeDynamicsTetherConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsTetherRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsTetherReadout {
+    pub present: bool,
+    pub invalidated: bool,
+    pub simulated: bool,
+    pub first: NativeVec3,
+    pub second: NativeVec3,
+    pub maximum_length: f32,
+    pub target_length: f32,
+    pub slack_distance: f32,
+    pub distance: f32,
+    pub taut: bool,
+    pub caught: bool,
+    /// Sampled terminal solver-substep force in N; not a peak or breaking load.
+    pub force_proxy: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsTetherReleaseReceipt {
+    pub released: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsChainLengthRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub id: u64,
+    pub target_length: f32,
+    /// Total rope length change per second, distributed equally across links.
+    pub reel_speed: f32,
+}
+
+/// Engine-owned sphere-bead chain. The first point is anchored; the final bead is free.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsChainConfig {
+    pub id: u64,
+    pub bead_count: u32,
+    pub link_length: f32,
+    pub radius: f32,
+    pub properties: NativeDynamicsBodyProperties,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsFixedChainRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub anchor: NativeVec3,
+    /// Initial final bead position; intermediate beads are evenly spaced.
+    pub end: NativeVec3,
+    pub config: NativeDynamicsChainConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsBodyChainRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub body: NativeDynamicsBodyHandle,
+    pub local_anchor: NativeVec3,
+    pub end: NativeVec3,
+    pub config: NativeDynamicsChainConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsChainRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsChainPointRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub id: u64,
+    pub index: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsChainReadout {
+    pub present: bool,
+    pub invalidated: bool,
+    pub simulated: bool,
+    pub point_count: u32,
+    pub effective_length: f32,
+    pub target_length: f32,
+    pub force_proxy: f32,
+    pub taut_links: u32,
+    pub caught_links: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsChainPointReadout {
+    pub present: bool,
+    pub position: NativeVec3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsChainReleaseReceipt {
+    pub released: bool,
+    pub removed_bodies: u32,
+}
+
 /// Opaque Engine-owned retained dynamics world and body identities. Values are
 /// only transport tokens for the generated owner types; product code does not
 /// derive meaning from their numeric representation.
@@ -238,6 +384,11 @@ pub struct NativeDynamicsStepRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeDynamicsStepReceipt {
+    pub rope_substeps: u32,
+    pub rope_iterations: u32,
+    pub rope_link_count: u32,
+    /// Link/substep/iteration work for all requested ticks (zero without ropes).
+    pub rope_solver_link_steps: u32,
     pub generation: u64,
     pub body_count: u32,
     pub contact_count: u32,
@@ -427,4 +578,12 @@ pub struct NativeDynamicsReplaceSphereBodyRequest {
 pub struct NativeDynamicsReplaceCapsuleBodyRequest {
     pub body: NativeDynamicsBodyHandle,
     pub replacement: NativeDynamicsCapsuleBodyConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRopeSolverRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub substeps: u32,
+    pub iterations: u32,
 }

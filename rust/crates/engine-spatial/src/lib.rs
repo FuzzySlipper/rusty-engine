@@ -67,8 +67,12 @@ pub use physics::{
 pub use rigid_body::{
     cuboid_mass_properties, rigid_body_component_mass_properties, rigid_body_mass_properties,
     PreparedRigidBodyStep, RigidBodyAction, RigidBodyContactReadout, RigidBodyMassProperties,
-    RigidBodyMotionFact, RigidBodyService, RigidBodyStepError, RigidBodyStepReceipt,
-    RigidBodyStepRequest, RigidBodyWorldReadout,
+    RigidBodyMotionFact, RigidBodyRopeSnapshot, RigidBodyService, RigidBodyStepError,
+    RigidBodyStepReceipt, RigidBodyStepRequest, RigidBodyWorldReadout,
+};
+pub use svc_collision::{
+    DynamicsBodyId, DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherEndpoint,
+    DynamicsTetherReadout, MAX_DYNAMICS_BODIES, MAX_DYNAMICS_TETHERS, MAX_TETHER_REEL_SPEED,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerLifecycleReceipt, TriggerOverlapFact,

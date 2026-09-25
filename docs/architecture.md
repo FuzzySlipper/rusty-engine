@@ -31,6 +31,7 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | --- | --- | --- |
 | ABI declarations | Rust | [`csharp-engine-abi`](../rust/crates/csharp-engine-abi) defines the C ABI and named function tables. |
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
+| Rigid-body ropes | Rust | `svc-collision` solves maximum-distance links in the existing derived Rapier world; `engine-spatial::RigidBodyService` publishes exact-revision body and rope facts. The Dynamics bridge owns atomic chain creation/removal and generated C# access. No product bead simulation or second clock. |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
 | Session serialization and recovery facts | Rust | `runtime-session` owns the serialized runtime guard, logical receipt, prepared replacement boundary, and recovery vocabulary; `product-dev-host` adapts these to its development transport. |
 | Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser/worker DTOs and applies delivery byte limits. Progress and input acknowledgements remain host observations. |

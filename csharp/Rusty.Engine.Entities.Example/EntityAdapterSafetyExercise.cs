@@ -75,6 +75,17 @@ internal static class EntityAdapterSafetyExercise
         public DynamicsBody CreateBody(DynamicsCreateBodyRequest request) => throw new NotSupportedException();
         public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
         public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();
+        public void ConfigureRopes(DynamicsRopeSolverRequest request) => throw new NotSupportedException();
+        public void SetChainLength(DynamicsChainLengthRequest request) => throw new NotSupportedException();
+        public void CreateFixedChain(DynamicsFixedChainRequest request) => throw new NotSupportedException();
+        public void CreateBodyChain(DynamicsBodyChainRequest request) => throw new NotSupportedException();
+        public DynamicsChainReadout ReadChain(DynamicsChainRequest request) => throw new NotSupportedException();
+        public DynamicsChainPointReadout ReadChainPoint(DynamicsChainPointRequest request) => throw new NotSupportedException();
+        public DynamicsChainReleaseReceipt RemoveChain(DynamicsChainRequest request) => throw new NotSupportedException();
+        public void SetFixedTether(DynamicsFixedTetherRequest request) => throw new NotSupportedException();
+        public void SetBodyTether(DynamicsBodyTetherRequest request) => throw new NotSupportedException();
+        public DynamicsTetherReleaseReceipt RemoveTether(DynamicsTetherRequest request) => throw new NotSupportedException();
+        public DynamicsTetherReadout ReadTether(DynamicsTetherRequest request) => throw new NotSupportedException();
         public DynamicsBody CreateSphereBodyWithProperties(DynamicsCreateSphereBodyPropertiesRequest request) => throw new NotSupportedException();
         public DynamicsBody CreateCapsuleBody(DynamicsCreateCapsuleBodyRequest request) => throw new NotSupportedException();
         public void BindWorldCollision(DynamicsWorldCollisionBindingRequest request) => throw new NotSupportedException();

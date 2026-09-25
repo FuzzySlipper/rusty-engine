@@ -1,5 +1,21 @@
+pub type NativeConfigureDynamicsRopes =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsRopeSolverRequest) -> i32;
 use crate::*;
 use std::ffi::c_void;
+pub type NativeSetDynamicsFixedTether =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsFixedTetherRequest) -> i32;
+pub type NativeSetDynamicsBodyTether =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsBodyTetherRequest) -> i32;
+pub type NativeRemoveDynamicsTether = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsTetherRequest,
+    *mut NativeDynamicsTetherReleaseReceipt,
+) -> i32;
+pub type NativeReadDynamicsTether = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsTetherRequest,
+    *mut NativeDynamicsTetherReadout,
+) -> i32;
 pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldConfig,
@@ -890,10 +906,43 @@ pub type NativePublishContentStore = unsafe extern "C" fn(
     *mut NativeContentStorePublishReceipt,
 ) -> i32;
 
+pub type NativeSetDynamicsChainLength =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsChainLengthRequest) -> i32;
+pub type NativeCreateDynamicsFixedChain =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsFixedChainRequest) -> i32;
+pub type NativeCreateDynamicsBodyChain =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsBodyChainRequest) -> i32;
+pub type NativeReadDynamicsChain = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsChainRequest,
+    *mut NativeDynamicsChainReadout,
+) -> i32;
+pub type NativeReadDynamicsChainPoint = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsChainPointRequest,
+    *mut NativeDynamicsChainPointReadout,
+) -> i32;
+pub type NativeRemoveDynamicsChain = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsChainRequest,
+    *mut NativeDynamicsChainReleaseReceipt,
+) -> i32;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsApi {
     pub context: *mut c_void,
+    pub configure_ropes: NativeConfigureDynamicsRopes,
+    pub set_chain_length: NativeSetDynamicsChainLength,
+    pub create_fixed_chain: NativeCreateDynamicsFixedChain,
+    pub create_body_chain: NativeCreateDynamicsBodyChain,
+    pub read_chain: NativeReadDynamicsChain,
+    pub read_chain_point: NativeReadDynamicsChainPoint,
+    pub remove_chain: NativeRemoveDynamicsChain,
+    pub set_fixed_tether: NativeSetDynamicsFixedTether,
+    pub set_body_tether: NativeSetDynamicsBodyTether,
+    pub remove_tether: NativeRemoveDynamicsTether,
+    pub read_tether: NativeReadDynamicsTether,
     pub create_world: NativeCreateDynamicsWorld,
     pub destroy_world: NativeDestroyDynamicsWorld,
     pub create_body: NativeCreateDynamicsBody,

@@ -84,10 +84,13 @@ shortening. A future faster rate requires measured acceptance, not increasing
 the cap just to satisfy a downstream control.
 
 Return actual endpoint separation, effective/target length, slack distance,
-slack/taut/caught state, ordered points, and accumulated constraint impulse
-magnitude over the tick. Dividing accumulated impulse magnitude by tick time
-is an average force proxy, not a peak load or certified breaking tension.
-Specify units (metres, seconds, kilograms, N s); report substeps, iterations,
+slack/taut/caught state, ordered points, and a sampled force proxy. Rapier 0.34
+subdivides each solver iteration in time and retains only the last internal
+substep's limit impulse. Divide that impulse by its internal substep duration
+and take the maximum across observed outer subdivisions. This matches a hanging
+mass's weight, but can miss catch peaks; it is neither a whole-tick accumulated
+impulse nor a certified breaking tension. Specify units (metres, seconds,
+kilograms, N); report substeps, iterations,
 body/link counts and any exhausted budget. A caught transition compares prior
 canonical slack state with this result, not cached Rapier state. Removal returns
 a released receipt; missing anchors return invalidated. Downstream decides
@@ -150,6 +153,26 @@ Engine does not mutate another owner or step dynamics inside a character step.
 Stale proposals reject without mutation. With a saturated reaction, report any
 unresolved distance; do not silently promise both a perfectly rigid constraint
 and a capped physical impulse.
+
+## Implemented dynamics slice (#6994)
+
+The source now exposes generated Dynamics tether and Engine-owned chain APIs;
+see [SDK use](csharp-sdk.md#bounded-dynamics-ropes). A chain has one fixed or
+body-local anchor and a free terminal bead. Its ordered readout is the anchor
+followed by bead centers; a second terminal attachment is not part of this
+bounded API. Chain body creation/removal is atomic in the existing Dynamics
+world. Canonical body snapshots plus captured tether definitions and solver
+configuration provide rebuild continuation; Rapier state is never serialized.
+
+Owning tests cover terrain contacts, adjacent suppression/nonadjacent collision
+masks, unequal body masses and rotating off-center anchors, slack catch energy,
+pendulum/release, reel direction changes, CCD selection, explicit sleep/wake,
+invalid anchors/configuration, 64-rope/eight-bead limits, stale prepared commits,
+fixed-point rebasing and snapshot/rebuild repetition. The generated fixture
+exercises attachment, catch, release, chain points/removal and solver work counts
+through the actual CoreCLR host. This source proof does not establish a published
+SDK/runtime pair or CraftSurvive gameplay acceptance. Character coupling remains
+#6995 and the paired downstream playground remains #6996.
 
 ## Evidence and remaining implementation proof
 

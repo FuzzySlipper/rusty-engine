@@ -5,6 +5,9 @@ use rapier3d_f64::prelude::{
     MassProperties, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Rotation, SharedShape, Vector,
 };
 
+use crate::tether::{
+    self, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout, SolverTether,
+};
 use crate::CollisionProjection;
 
 pub const MAX_DYNAMICS_BODIES: usize = 1_024;
@@ -122,10 +125,12 @@ pub struct DynamicsContact {
 pub struct DynamicsStepOutput {
     pub bodies: Vec<DynamicsBodyOutput>,
     pub contacts: Vec<DynamicsContact>,
+    pub tethers: Vec<DynamicsTetherReadout>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DynamicsError {
+    Tether(DynamicsTetherError),
     InvalidStep {
         actual: f64,
     },
@@ -176,6 +181,7 @@ pub enum DynamicsError {
 impl DynamicsError {
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::Tether(error) => error.code(),
             Self::InvalidStep { .. } => "invalid-dynamics-step",
             Self::InvalidStepCount { .. } => "invalid-dynamics-step-count",
             Self::TooManyBodies { .. } => "dynamics-body-quota-exceeded",
@@ -225,8 +231,32 @@ struct AxisLocks {
 /// their own exact-revision transaction succeeds.
 pub fn simulate_dynamics(
     projection: &CollisionProjection,
-    mut input: DynamicsStepInput,
+    input: DynamicsStepInput,
 ) -> Result<DynamicsStepOutput, DynamicsError> {
+    simulate_dynamics_with_tethers(projection, input, Vec::new())
+}
+
+/// Simulate admitted bodies and maximum-distance tethers in the same derived world.
+pub fn simulate_dynamics_with_tethers(
+    projection: &CollisionProjection,
+    input: DynamicsStepInput,
+    tethers: Vec<DynamicsTether>,
+) -> Result<DynamicsStepOutput, DynamicsError> {
+    simulate_dynamics_with_rope_solver(
+        projection,
+        input,
+        tethers,
+        tether::DynamicsRopeSolverConfig::default(),
+    )
+}
+
+pub fn simulate_dynamics_with_rope_solver(
+    projection: &CollisionProjection,
+    mut input: DynamicsStepInput,
+    mut tethers: Vec<DynamicsTether>,
+    solver: tether::DynamicsRopeSolverConfig,
+) -> Result<DynamicsStepOutput, DynamicsError> {
+    solver.validate().map_err(DynamicsError::Tether)?;
     validate_header(&input)?;
     input.bodies.sort_by_key(|body| body.id);
     let mut seen = BTreeSet::new();
@@ -246,11 +276,23 @@ pub fn simulate_dynamics(
     }
     let actions = aggregate_actions(&input.actions, &body_locks)?;
     validate_motion(&input, &actions)?;
+    tether::validate_dynamics_tethers(&mut tethers, &input.bodies)
+        .map_err(DynamicsError::Tether)?;
+    let subdivisions = if tethers.is_empty() {
+        1
+    } else {
+        solver.substeps
+    };
 
     let mut world = PhysicsWorld {
         gravity: vector(input.gravity),
         integration_parameters: IntegrationParameters {
-            dt: input.step_seconds,
+            dt: input.step_seconds / subdivisions as f64,
+            num_solver_iterations: if tethers.is_empty() {
+                IntegrationParameters::default().num_solver_iterations
+            } else {
+                solver.iterations
+            },
             ..IntegrationParameters::default()
         },
         ..PhysicsWorld::default()
@@ -317,8 +359,18 @@ pub fn simulate_dynamics(
             target.wake_up(true);
         }
     }
-    for _ in 0..input.steps {
+    let mut solver_tethers: Vec<_> = tethers
+        .into_iter()
+        .map(|definition| SolverTether::insert(definition, &mut world, &handles))
+        .collect();
+    for _ in 0..usize::from(input.steps) * subdivisions {
+        for tether in &mut solver_tethers {
+            tether.reel(&mut world, input.step_seconds / subdivisions as f64);
+        }
         world.step();
+        for tether in &mut solver_tethers {
+            tether.accumulate(&world);
+        }
     }
 
     let mut bodies = Vec::with_capacity(handles.len());
@@ -373,7 +425,16 @@ pub fn simulate_dynamics(
         });
     }
     contacts.sort_by_key(|contact| (contact.first, contact.second));
-    Ok(DynamicsStepOutput { bodies, contacts })
+    let tethers = solver_tethers
+        .iter()
+        .map(|tether| tether.readout(&world))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DynamicsError::Tether)?;
+    Ok(DynamicsStepOutput {
+        bodies,
+        contacts,
+        tethers,
+    })
 }
 
 fn validate_header(input: &DynamicsStepInput) -> Result<(), DynamicsError> {
@@ -679,6 +740,228 @@ mod tests {
             bodies: vec![body],
             actions: Vec::new(),
         }
+    }
+
+    fn tether() -> DynamicsTether {
+        DynamicsTether {
+            id: 7,
+            first: crate::DynamicsTetherEndpoint::Fixed([0.0; 3]),
+            second: crate::DynamicsTetherEndpoint::Body {
+                body: DynamicsBodyId(1),
+                local_anchor: [0.0; 3],
+            },
+            maximum_length: 3.0,
+            target_length: 3.0,
+            reel_speed: 0.25,
+            was_taut: false,
+            wake: true,
+            contacts_enabled: true,
+        }
+    }
+
+    #[test]
+    fn tether_hanging_mass_reports_weight_impulse_and_rebuilds() {
+        let mut body = body();
+        body.translation = [0.0, -3.0, 0.0];
+        body.gravity_scale = 1.0;
+        let mut tether = tether();
+        for tick in 0..60 {
+            let mut request = input(body);
+            request.gravity = [0.0, -9.81, 0.0];
+            let result =
+                simulate_dynamics_with_tethers(&empty_projection(), request, vec![tether]).unwrap();
+            let readout = result.tethers[0];
+            assert!(readout.taut);
+            assert_eq!(readout.caught, tick == 0);
+            assert!((readout.distance - 3.0).abs() < 0.001);
+            assert!((readout.force_proxy - 9.81).abs() < 0.005, "{readout:?}");
+            body.translation = result.bodies[0].translation;
+            body.linear_velocity = result.bodies[0].linear_velocity;
+            tether.was_taut = readout.taut;
+            tether.wake = false;
+        }
+    }
+
+    #[test]
+    fn tether_two_dynamic_bodies_exchange_momentum_and_preserve_local_anchor() {
+        let mut first = body();
+        first.translation = [-1.5, 0.0, 0.0];
+        first.linear_velocity = [-3.0, 0.0, 0.0];
+        let mut second = first;
+        second.id = DynamicsBodyId(2);
+        second.translation = [1.5, 0.0, 0.0];
+        second.linear_velocity = [3.0, 0.0, 0.0];
+        let mut rope = tether();
+        rope.first = crate::DynamicsTetherEndpoint::Body {
+            body: first.id,
+            local_anchor: [0.5, 0.0, 0.0],
+        };
+        rope.second = crate::DynamicsTetherEndpoint::Body {
+            body: second.id,
+            local_anchor: [-0.5, 0.0, 0.0],
+        };
+        rope.maximum_length = 2.0;
+        rope.target_length = 2.0;
+        let mut request = input(first);
+        request.bodies.push(second);
+        let result =
+            simulate_dynamics_with_tethers(&empty_projection(), request.clone(), vec![rope])
+                .unwrap();
+        assert_eq!(
+            result,
+            simulate_dynamics_with_tethers(&empty_projection(), request, vec![rope]).unwrap()
+        );
+        assert!(
+            (result.bodies[0].linear_velocity[0] + result.bodies[1].linear_velocity[0]).abs()
+                < 1e-9
+        );
+        assert!((result.tethers[0].first[0] - result.bodies[0].translation[0] - 0.5).abs() < 1e-9);
+        assert!(result.tethers[0].distance < 2.01);
+        assert!(result
+            .bodies
+            .iter()
+            .all(|body| body.linear_velocity[0].abs() < 0.01));
+    }
+
+    #[test]
+    fn tether_slack_catch_swing_and_release_do_not_create_energy() {
+        let mut body = body();
+        body.translation = [1.0, -1.0, 0.0];
+        body.linear_velocity = [8.0, -15.0, 0.0];
+        body.gravity_scale = 1.0;
+        body.continuous_collision = true;
+        let initial_energy =
+            0.5 * vector(body.linear_velocity).length_squared() + 9.81 * body.translation[1];
+        let mut rope = tether();
+        let mut caught = false;
+        let mut crossed = false;
+        for _ in 0..600 {
+            let mut request = input(body);
+            request.gravity = [0.0, -9.81, 0.0];
+            let result =
+                simulate_dynamics_with_tethers(&empty_projection(), request, vec![rope]).unwrap();
+            let after = result.bodies[0];
+            let energy =
+                0.5 * vector(after.linear_velocity).length_squared() + 9.81 * after.translation[1];
+            assert!(energy <= initial_energy + 0.01, "energy grew: {energy}");
+            assert!(result.tethers[0].distance < 3.01);
+            caught |= result.tethers[0].caught;
+            crossed |= after.translation[0] < -0.5;
+            body.translation = after.translation;
+            body.linear_velocity = after.linear_velocity;
+            body.rotation = after.rotation;
+            body.angular_velocity = after.angular_velocity;
+            rope.was_taut = result.tethers[0].taut;
+            rope.wake = false;
+        }
+        assert!(caught && crossed);
+        let released = simulate_dynamics(&empty_projection(), input(body)).unwrap();
+        assert_eq!(released.bodies[0].linear_velocity, body.linear_velocity);
+    }
+
+    #[test]
+    fn tether_off_center_anchor_rotates_body_and_unequal_masses_conserve_momentum() {
+        let mut first = body();
+        first.mass = 1.0;
+        first.translation = [-1.0, 0.0, 0.0];
+        first.linear_velocity = [-2.0, 0.0, 0.0];
+        let mut second = first;
+        second.id = DynamicsBodyId(2);
+        second.mass = 4.0;
+        second.translation = [1.0, 0.0, 0.0];
+        second.linear_velocity = [0.5, 0.0, 0.0];
+        let mut rope = tether();
+        rope.first = crate::DynamicsTetherEndpoint::Body {
+            body: first.id,
+            local_anchor: [0.0, 0.5, 0.0],
+        };
+        rope.second = crate::DynamicsTetherEndpoint::Body {
+            body: second.id,
+            local_anchor: [0.0, 0.5, 0.0],
+        };
+        rope.maximum_length = 2.0;
+        rope.target_length = 2.0;
+        let mut request = input(first);
+        request.bodies.push(second);
+        let result =
+            simulate_dynamics_with_tethers(&empty_projection(), request, vec![rope]).unwrap();
+        assert!(result.bodies[0].angular_velocity[2].abs() > 0.01);
+        assert!(
+            (result.bodies[0].linear_velocity[0] + 4.0 * result.bodies[1].linear_velocity[0]).abs()
+                < 1e-8
+        );
+        assert!(result.tethers[0].distance < 2.001);
+        let rotation = Rotation::from_xyzw(
+            result.bodies[0].rotation[0],
+            result.bodies[0].rotation[1],
+            result.bodies[0].rotation[2],
+            result.bodies[0].rotation[3],
+        );
+        let anchor = vector(result.bodies[0].translation) + rotation * Vector::new(0.0, 0.5, 0.0);
+        assert!((anchor - vector(result.tethers[0].first)).length() < 1e-9);
+    }
+
+    #[test]
+    fn tether_rebuild_preserves_sleep_until_reel_or_attachment_wakes() {
+        let mut body = body();
+        body.translation = [0.0, -2.0, 0.0];
+        body.sleeping = true;
+        let mut rope = tether();
+        rope.wake = false;
+        let sleeping =
+            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
+        assert!(sleeping.bodies[0].sleeping);
+        assert_eq!(sleeping.bodies[0].translation, body.translation);
+        rope.target_length = 1.0;
+        let reeled =
+            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
+        assert!(!reeled.bodies[0].sleeping);
+        rope.target_length = rope.maximum_length;
+        rope.wake = true;
+        let attached =
+            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
+        assert!(!attached.bodies[0].sleeping);
+    }
+
+    #[test]
+    fn tether_reeling_changes_effective_length_at_bounded_rate() {
+        let mut body = body();
+        body.translation = [0.0, -3.0, 0.0];
+        let mut rope = tether();
+        rope.target_length = 1.0;
+        let result =
+            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
+        assert!((result.tethers[0].maximum_length - (3.0 - 0.25 / 60.0)).abs() < 1e-9);
+        assert!(result.bodies[0].linear_velocity[1] < 0.3);
+    }
+
+    #[test]
+    fn tether_invalid_anchors_duplicates_and_budgets_reject_before_simulation() {
+        let mut rope = tether();
+        rope.second = crate::DynamicsTetherEndpoint::Body {
+            body: DynamicsBodyId(99),
+            local_anchor: [0.0; 3],
+        };
+        assert!(matches!(
+            simulate_dynamics_with_tethers(&empty_projection(), input(body()), vec![rope]),
+            Err(DynamicsError::Tether(DynamicsTetherError::InvalidAnchor {
+                id: 7
+            }))
+        ));
+        assert!(matches!(
+            simulate_dynamics_with_tethers(&empty_projection(), input(body()), vec![tether(); 2]),
+            Err(DynamicsError::Tether(DynamicsTetherError::DuplicateId {
+                id: 7
+            }))
+        ));
+        assert!(matches!(
+            simulate_dynamics_with_tethers(
+                &empty_projection(),
+                input(body()),
+                vec![tether(); crate::MAX_DYNAMICS_TETHERS + 1]
+            ),
+            Err(DynamicsError::Tether(DynamicsTetherError::BudgetExceeded))
+        ));
     }
 
     #[test]
