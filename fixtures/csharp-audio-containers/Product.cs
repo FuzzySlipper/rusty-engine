@@ -8,6 +8,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
 {
     private readonly List<AudioClip> clips = [];
     private readonly List<AudioVoice> voices = [];
+    private ulong nextSignalId;
     public void Start()
     {
         foreach (string extension in new[] { "wav", "ogg", "opus", "mp3", "flac" })
@@ -28,7 +29,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         {
             AudioSourceDescriptor descriptor = new(clips[index], AudioBus.Ambient, 0.08f, 1, true, 0, 1, 0, AudioEmitterKind.Global2d, Vector3.Zero, 0, Vector3.Zero);
             voices.Add(context.Engine.Audio.CreateVoice(descriptor));
-            context.Engine.Audio.Emit(new($"container-{index}", descriptor with { Looping = false }));
+            context.Engine.Audio.Emit(new($"container-{nextSignalId++}", descriptor with { Looping = false }));
         }
         return Inspect();
     }
