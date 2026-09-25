@@ -680,6 +680,9 @@ fn insert_static_environment(world: &mut PhysicsWorld, projection: &CollisionPro
         world.insert(
             RigidBodyBuilder::fixed(),
             ColliderBuilder::new(shape)
+                // Fixed terrain contributes no dynamic mass. Avoid walking every
+                // voxel child to derive unused compound inertia on each step.
+                .mass_properties(MassProperties::default())
                 .collision_groups(InteractionGroups::all())
                 .user_data(0),
         );
@@ -727,7 +730,7 @@ impl CollisionProjection {
         shapes.extend(
             self.chunks
                 .values()
-                .map(|chunk| SharedShape::new(chunk.shape.clone())),
+                .map(|chunk| SharedShape(chunk.shape.clone())),
         );
         shapes.extend(self.static_meshes.dynamics_shapes());
         shapes

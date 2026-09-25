@@ -11,8 +11,8 @@ pub(super) struct DynamicsChain {
     pub(super) anchor: DynamicsTetherEndpoint,
 }
 
-pub(super) fn error(message: &str) -> CsharpEngineServicesError {
-    CsharpEngineServicesError::new("CSHARP_DYNAMICS_CHAIN", message)
+pub(super) fn error(code: &'static str, message: &str) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(code, message)
 }
 
 pub(super) fn authored_count(world: &DynamicsWorld) -> usize {
@@ -39,9 +39,14 @@ fn endpoint_point(
             let transform = world
                 .entities
                 .view(EntityId::new(body.0))
-                .map_err(|_| error("missing chain anchor"))?
+                .map_err(|_| error("dynamics-chain-invalid-anchor", "missing chain anchor"))?
                 .transform
-                .ok_or_else(|| error("missing chain anchor transform"))?;
+                .ok_or_else(|| {
+                    error(
+                        "dynamics-chain-invalid-anchor",
+                        "missing chain anchor transform",
+                    )
+                })?;
             Ok(transform.transform().transform_point(Vec3::new(
                 local_anchor[0] as f32,
                 local_anchor[1] as f32,
@@ -62,13 +67,16 @@ impl RuntimeDynamicsBridge {
             || !request.reel_speed.is_finite()
             || !(0.0..=MAX_TOTAL_REEL_SPEED).contains(&request.reel_speed)
         {
-            return Err(error("invalid chain length control"));
+            return Err(error(
+                "invalid-dynamics-chain-length",
+                "invalid chain length control",
+            ));
         }
         let world = self.active_world_mut(request.world.value)?;
         let chain = world
             .chains
             .get(&request.id)
-            .ok_or_else(|| error("missing chain"))?;
+            .ok_or_else(|| error("dynamics-chain-not-found", "missing chain"))?;
         let mut definitions = world.service.capture_tethers();
         for definition in &mut definitions {
             if chain.links.contains(&definition.id) {
@@ -80,7 +88,7 @@ impl RuntimeDynamicsBridge {
         world
             .service
             .replace_tethers(&world.entities, definitions)
-            .map_err(|failure| error(failure.code()))?;
+            .map_err(|failure| error(failure.code(), failure.code()))?;
         world
             .last_tethers
             .retain(|readout| !chain.links.contains(&readout.id));
@@ -122,6 +130,7 @@ impl RuntimeDynamicsBridge {
         let world = self.active_world(world_handle)?;
         if world.chains.contains_key(&config.id) {
             return Err(error(
+                "dynamics-chain-duplicate-id",
                 "chain identity already exists; remove before recreation",
             ));
         }
@@ -133,12 +142,18 @@ impl RuntimeDynamicsBridge {
             || config.radius <= 0.0
             || !config.properties.enabled
         {
-            return Err(error("invalid chain configuration"));
+            return Err(error(
+                "invalid-dynamics-chain-configuration",
+                "invalid chain configuration",
+            ));
         }
         if (!world.invalidated_chains.contains(&config.id) && authored_count(world) >= MAX_ROPES)
             || world.bodies.len() + config.bead_count as usize > MAX_WORLD_BODIES
         {
-            return Err(error("chain or body budget exceeded"));
+            return Err(error(
+                "dynamics-chain-budget-exceeded",
+                "chain or body budget exceeded",
+            ));
         }
         let start = endpoint_point(world, anchor)?;
         let end = native_vec3_value(end);
@@ -148,7 +163,10 @@ impl RuntimeDynamicsBridge {
             || !separation.is_finite()
             || separation > config.link_length * config.bead_count as f32 + 0.001
         {
-            return Err(error("chain endpoints are nonfinite or out of reach"));
+            return Err(error(
+                "dynamics-chain-invalid-anchor",
+                "chain endpoints are nonfinite or out of reach",
+            ));
         }
         let mut entities = world.entities.clone();
         let mut service = world.service.clone();
@@ -185,9 +203,9 @@ impl RuntimeDynamicsBridge {
                 .any(|definition| definition.id == next_link)
                 || world.invalidated_tethers.contains(&next_link)
             {
-                next_link = next_link
-                    .checked_sub(1)
-                    .ok_or_else(|| error("link identity exhausted"))?;
+                next_link = next_link.checked_sub(1).ok_or_else(|| {
+                    error("dynamics-chain-budget-exceeded", "link identity exhausted")
+                })?;
             }
             let endpoint = DynamicsTetherEndpoint::Body {
                 body: DynamicsBodyId(entity.raw()),
@@ -210,7 +228,7 @@ impl RuntimeDynamicsBridge {
         }
         service
             .replace_tethers(&entities, definitions)
-            .map_err(|failure| error(failure.code()))?;
+            .map_err(|failure| error(failure.code(), failure.code()))?;
         // No canonical mutation precedes full body/link validation.
         let world = self.active_world_mut(world_handle)?;
         world.entities = entities;
@@ -256,7 +274,7 @@ impl RuntimeDynamicsBridge {
             let definition = world
                 .service
                 .tether(*link)
-                .ok_or_else(|| error("missing chain link"))?;
+                .ok_or_else(|| error("dynamics-chain-not-found", "missing chain link"))?;
             result.effective_length += definition.maximum_length as f32;
             result.target_length += definition.target_length as f32;
             if let Some(readout) = world
@@ -287,7 +305,7 @@ impl RuntimeDynamicsBridge {
             world
                 .service
                 .tether(chain.links[0])
-                .ok_or_else(|| error("missing chain link"))?
+                .ok_or_else(|| error("dynamics-chain-not-found", "missing chain link"))?
                 .first
         } else if let Some((_, entity)) = chain.bodies.get(request.index as usize - 1) {
             DynamicsTetherEndpoint::Body {
@@ -317,7 +335,7 @@ impl RuntimeDynamicsBridge {
             let revision = entities.revision();
             EntityAuthoringService
                 .destroy(&mut entities, revision, *entity)
-                .map_err(|failure| error(&failure.to_string()))?;
+                .map_err(|failure| error("dynamics-chain-release-failed", &failure.to_string()))?;
         }
         let mut service = world.service.clone();
         let definitions = service
@@ -327,7 +345,7 @@ impl RuntimeDynamicsBridge {
             .collect();
         service
             .replace_tethers(&entities, definitions)
-            .map_err(|failure| error(failure.code()))?;
+            .map_err(|failure| error(failure.code(), failure.code()))?;
         let chain = world.chains.remove(&request.id).expect("validated chain");
         world.entities = entities;
         world.service = service;
@@ -354,32 +372,61 @@ impl RuntimeDynamicsBridge {
 pub(super) unsafe extern "C" fn create_fixed_chain(
     context: *mut c_void,
     request: NativeDynamicsFixedChainRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.create_fixed_chain(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"CreateFixedChain",
+            );
+            0
+        }
     }
 }
 pub(super) unsafe extern "C" fn create_body_chain(
     context: *mut c_void,
     request: NativeDynamicsBodyChainRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.create_body_chain(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"CreateBodyChain",
+            );
+            0
+        }
     }
 }
 pub(super) unsafe extern "C" fn read_chain(
     context: *mut c_void,
     request: NativeDynamicsChainRequest,
     result: *mut NativeDynamicsChainReadout,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -388,14 +435,26 @@ pub(super) unsafe extern "C" fn read_chain(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"ReadChain",
+            );
+            0
+        }
     }
 }
 pub(super) unsafe extern "C" fn read_chain_point(
     context: *mut c_void,
     request: NativeDynamicsChainPointRequest,
     result: *mut NativeDynamicsChainPointReadout,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -404,14 +463,26 @@ pub(super) unsafe extern "C" fn read_chain_point(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"ReadChainPoint",
+            );
+            0
+        }
     }
 }
 pub(super) unsafe extern "C" fn remove_chain(
     context: *mut c_void,
     request: NativeDynamicsChainRequest,
     result: *mut NativeDynamicsChainReleaseReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -420,41 +491,75 @@ pub(super) unsafe extern "C" fn remove_chain(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"RemoveChain",
+            );
+            0
+        }
     }
 }
 
 pub(super) unsafe extern "C" fn set_chain_length(
     context: *mut c_void,
     request: NativeDynamicsChainLengthRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_chain_length(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"SetChainLength",
+            );
+            0
+        }
     }
 }
 
 pub(super) unsafe extern "C" fn configure_ropes(
     context: *mut c_void,
     request: NativeDynamicsRopeSolverRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() };
-    let Ok(world) = bridge.active_world_mut(request.world.value) else {
-        return 0;
-    };
-    match world
-        .service
-        .configure_rope_solver(engine_spatial::DynamicsRopeSolverConfig {
-            substeps: request.substeps as usize,
-            iterations: request.iterations as usize,
-        }) {
+    let result = bridge
+        .active_world_mut(request.world.value)
+        .and_then(|world| {
+            world
+                .service
+                .configure_rope_solver(engine_spatial::DynamicsRopeSolverConfig {
+                    substeps: request.substeps as usize,
+                    iterations: request.iterations as usize,
+                })
+                .map_err(|error| CsharpEngineServicesError::new(error.code(), error.code()))
+        });
+    match result {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"ConfigureRopes",
+            );
+            0
+        }
     }
 }

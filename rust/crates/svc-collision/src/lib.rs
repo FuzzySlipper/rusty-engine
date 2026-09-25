@@ -65,6 +65,7 @@ pub use static_mesh::{
 };
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use core_space::{ChunkCoord, ChunkRegion, Face, VoxelCoord, VoxelGridSpec, WorldPos, WorldVec};
 use core_voxel::VoxelValue;
@@ -222,7 +223,7 @@ struct ChunkCollider {
     /// `content_hash` of the `VoxelChunk` this was built from — the staleness key.
     source_hash: u64,
     /// World-positioned solid cuboids. A chunk with no solids has no collider entry.
-    shape: Compound,
+    shape: Arc<Compound>,
     /// The canonical voxel owning each Compound child, in the same order as
     /// `shape.shapes()`. Ray queries need this rather than reconstructing a
     /// cell from an impact point: a ray may strike a top face precisely at an
@@ -662,7 +663,7 @@ impl CollisionProjection {
                 &moving_shape,
                 &obstacle_pose,
                 Vector::ZERO,
-                &collider.shape,
+                &*collider.shape,
                 options,
             )
             .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
@@ -741,7 +742,7 @@ impl CollisionProjection {
                 &capsule_pose,
                 &capsule_shape,
                 &obstacle_pose,
-                &collider.shape,
+                &*collider.shape,
                 0.0,
             )
             .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
@@ -806,7 +807,7 @@ impl CollisionProjection {
                 &moving_shape,
                 &obstacle_pose,
                 Vector::ZERO,
-                &collider.shape,
+                &*collider.shape,
                 options,
             )
             .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
@@ -962,7 +963,7 @@ impl CollisionProjection {
                     coord,
                     ChunkCollider {
                         source_hash: chunk.content_hash().0,
-                        shape,
+                        shape: Arc::new(shape),
                         voxels,
                         bounds,
                     },
@@ -1050,7 +1051,7 @@ impl CollisionProjection {
         let parry_ray = ParryRay::new(world_to_point(ray.origin), Vector::new(dir.x, dir.y, dir.z));
         let mut best: Option<(Real, Vector, VoxelCoord)> = None;
         for collider in self.chunks.values() {
-            if let Some((primitive, hit)) = CompositeShapeRef(&collider.shape)
+            if let Some((primitive, hit)) = CompositeShapeRef(&*collider.shape)
                 .cast_local_ray_and_get_normal(&parry_ray, max_distance, true)
             {
                 let Some(&voxel) = collider.voxels.get(primitive as usize) else {
@@ -1126,7 +1127,7 @@ impl CollisionProjection {
         });
         for chunk in span.iter() {
             if let Some(collider) = self.chunks.get(&chunk) {
-                if intersection_test(&pose, &cuboid, &id, &collider.shape) == Ok(true) {
+                if intersection_test(&pose, &cuboid, &id, &*collider.shape) == Ok(true) {
                     return true;
                 }
             }
@@ -1208,7 +1209,7 @@ impl CollisionProjection {
         });
         span.iter().any(|chunk| {
             self.chunks.get(&chunk).is_some_and(|collider| {
-                intersection_test(&pose, &cuboid, &id, &collider.shape) == Ok(true)
+                intersection_test(&pose, &cuboid, &id, &*collider.shape) == Ok(true)
             })
         })
     }
@@ -1440,6 +1441,31 @@ mod tests {
         }
         world.drain_dirty();
         world
+    }
+
+    #[test]
+    fn dynamics_reuses_immutable_chunk_shapes_across_snapshots() {
+        let coord = ChunkCoord::new(0, 0, 0);
+        let mut world = world_with(coord, &[LocalVoxelCoord::new(0, 0, 0)]);
+        let mut projection = CollisionProjection::build(&world);
+        let snapshot = projection.clone();
+        assert!(Arc::ptr_eq(
+            &projection.chunks[&coord].shape,
+            &snapshot.chunks[&coord].shape
+        ));
+        // Replacing a chunk must leave the prior snapshot intact.
+        world
+            .get_mut(coord)
+            .unwrap()
+            .set(LocalVoxelCoord::new(1, 0, 0), VoxelValue::solid_raw(1))
+            .unwrap();
+        projection.rebuild_chunk(&world, coord);
+        assert!(!Arc::ptr_eq(
+            &projection.chunks[&coord].shape,
+            &snapshot.chunks[&coord].shape
+        ));
+        assert_eq!(snapshot.chunks[&coord].shape.shapes().len(), 1);
+        assert_eq!(projection.chunks[&coord].shape.shapes().len(), 2);
     }
 
     #[test]

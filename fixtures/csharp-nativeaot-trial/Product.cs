@@ -1160,6 +1160,17 @@ public sealed class Product : IEngineProduct
             "character release discarded accepted momentum");
     }
 
+    private static void ExpectRopeDiagnostic(Action action, string expectedCode)
+    {
+        try { action(); throw new InvalidOperationException("invalid rope operation was accepted"); }
+        catch (EngineCallException error)
+        {
+            Require(error.Service == "Dynamics" && error.Diagnostics.Length == 1
+                && error.Diagnostics.Span[0].Code == expectedCode,
+                "generated rope call lost its typed diagnostic");
+        }
+    }
+
     private void ExerciseTethers()
     {
         const ulong tetherId = 1;
@@ -1172,6 +1183,19 @@ public sealed class Product : IEngineProduct
                 new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
                 new AxisLocks(false, false, false, false, false, false), 0.0f)));
         _engine.Dynamics.ConfigureRopes(new(world, 8, 16));
+        ExpectRopeDiagnostic(() => _engine.Dynamics.ConfigureRopes(new(world, 0, 16)),
+            "invalid-dynamics-rope-solver-configuration");
+        DynamicsWorldReadout beforeBudget = _engine.Dynamics.ReadWorld(new(world));
+        for (ulong id = 100; id < 164; id++)
+            _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero, new(id, length, length, 0, true)));
+        ExpectRopeDiagnostic(() => _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero,
+            new(164, length, length, 0, true))), "dynamics-tether-budget-exceeded");
+        Require(!_engine.Dynamics.ReadTether(new(world, 164)).Present,
+            "rejected rope budget call mutated the world");
+        Require(_engine.Dynamics.ReadWorld(new(world)).BodyCount == beforeBudget.BodyCount,
+            "rejected rope call mutated body membership");
+        for (ulong id = 100; id < 164; id++) _engine.Dynamics.RemoveTether(new(world, id));
+
         DynamicsTetherRequest query = new(world, tetherId);
         _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero,
             new DynamicsTetherConfig(tetherId, length, length, 0.25f, true)));

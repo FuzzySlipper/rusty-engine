@@ -1,20 +1,31 @@
-pub type NativeConfigureDynamicsRopes =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsRopeSolverRequest) -> i32;
+pub type NativeConfigureDynamicsRopes = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRopeSolverRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 use crate::*;
 use std::ffi::c_void;
-pub type NativeSetDynamicsFixedTether =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsFixedTetherRequest) -> i32;
-pub type NativeSetDynamicsBodyTether =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsBodyTetherRequest) -> i32;
+pub type NativeSetDynamicsFixedTether = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsFixedTetherRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsBodyTether = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsBodyTetherRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeRemoveDynamicsTether = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsTetherRequest,
     *mut NativeDynamicsTetherReleaseReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadDynamicsTether = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsTetherRequest,
     *mut NativeDynamicsTetherReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
@@ -906,31 +917,47 @@ pub type NativePublishContentStore = unsafe extern "C" fn(
     *mut NativeContentStorePublishReceipt,
 ) -> i32;
 
-pub type NativeSetDynamicsChainLength =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsChainLengthRequest) -> i32;
-pub type NativeCreateDynamicsFixedChain =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsFixedChainRequest) -> i32;
-pub type NativeCreateDynamicsBodyChain =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsBodyChainRequest) -> i32;
+pub type NativeSetDynamicsChainLength = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsChainLengthRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCreateDynamicsFixedChain = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsFixedChainRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCreateDynamicsBodyChain = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsBodyChainRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadDynamicsChain = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsChainRequest,
     *mut NativeDynamicsChainReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadDynamicsChainPoint = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsChainPointRequest,
     *mut NativeDynamicsChainPointReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRemoveDynamicsChain = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsChainRequest,
     *mut NativeDynamicsChainReleaseReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
+
+pub type NativeDestroyDynamicsOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsApi {
+    pub destroy_operation_diagnostic_lease: NativeDestroyDynamicsOperationDiagnosticLease,
     pub context: *mut c_void,
     pub observe_anchor: NativeObserveDynamicsAnchor,
     pub refresh_anchor: NativeRefreshDynamicsAnchor,

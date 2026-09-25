@@ -66,6 +66,12 @@ limits bound solver work; they are not hostile-input checks or ABI safeguards.
 Outside the proven envelope return a typed budget/configuration outcome rather
 than silently trimming bodies, points or substeps.
 
+Generated C# tether/chain operations and `ConfigureRopes` preserve these failures
+in `EngineCallException.Diagnostics`, including `dynamics-tether-budget-exceeded`
+and `invalid-dynamics-rope-solver-configuration`. Rejected operations leave the
+world unchanged. The generated call copies and releases the operation's owned
+diagnostic receipt before throwing.
+
 Use the pinned solver's default inelastic limit response. Do not expose
 `RopeJoint.softness` as a claimed elastic-rope material: its public description
 concerns locked degrees of freedom, and a rope has no locked axes. A spring or

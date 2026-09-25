@@ -1,5 +1,6 @@
 mod anchor;
 mod chain;
+mod errors;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -43,6 +44,8 @@ pub(crate) struct RuntimeDynamicsBridge {
     next_entity: u64,
     step_and_read_leases: BTreeMap<u64, DynamicsStepAndReadLeaseBacking>,
     next_step_and_read_lease: u64,
+    diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
+    next_diagnostic_lease: u64,
     staged: Option<RuntimeDynamicsCall>,
 }
 
@@ -135,14 +138,17 @@ impl RuntimeDynamicsBridge {
             .values()
             .any(|chain| chain.links.contains(&config.id))
         {
-            return Err(chain::error("identity belongs to a chain link"));
+            return Err(chain::error(
+                "dynamics-tether-duplicate-id",
+                "identity belongs to a chain link",
+            ));
         }
         if world.service.tether(config.id).is_none()
             && !world.invalidated_tethers.contains(&config.id)
             && chain::authored_count(world) >= chain::MAX_ROPES
         {
             return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_TETHER",
+                "dynamics-tether-budget-exceeded",
                 "retained tether budget exhausted; remove unused tether identities",
             ));
         }
@@ -162,9 +168,7 @@ impl RuntimeDynamicsBridge {
         world
             .service
             .replace_tethers(&world.entities, definitions)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_TETHER", error.code())
-            })?;
+            .map_err(|error| CsharpEngineServicesError::new(error.code(), error.code()))?;
         world.last_tethers.retain(|readout| readout.id != config.id);
         world.invalidated_tethers.remove(&config.id);
         Ok(())
@@ -211,6 +215,7 @@ impl RuntimeDynamicsBridge {
             .any(|chain| chain.links.contains(&request.id))
         {
             return Err(chain::error(
+                "dynamics-tether-owned-chain-link",
                 "remove the owning chain instead of an internal link",
             ));
         }
@@ -220,9 +225,7 @@ impl RuntimeDynamicsBridge {
         world
             .service
             .replace_tethers(&world.entities, definitions)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_TETHER", error.code())
-            })?;
+            .map_err(|error| CsharpEngineServicesError::new(error.code(), error.code()))?;
         world
             .last_tethers
             .retain(|readout| readout.id != request.id);
@@ -279,6 +282,8 @@ impl RuntimeDynamicsBridge {
             next_entity: 1,
             step_and_read_leases: BTreeMap::new(),
             next_step_and_read_lease: 1,
+            diagnostic_leases: BTreeMap::new(),
+            next_diagnostic_lease: 1,
             staged: None,
         }
     }
@@ -641,7 +646,9 @@ impl RuntimeDynamicsBridge {
                 let revision = candidate.revision();
                 EntityAuthoringService
                     .destroy(&mut candidate, revision, *bead)
-                    .map_err(|error| chain::error(&error.to_string()))?;
+                    .map_err(|error| {
+                        chain::error("dynamics-chain-release-failed", &error.to_string())
+                    })?;
                 removed_chain_bodies.push((*handle, *bead));
             }
         }
@@ -2136,6 +2143,7 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         refresh_anchor: anchor::refresh_anchor,
         step_with_reactions: anchor::step_with_reactions,
         configure_ropes: chain::configure_ropes,
+        destroy_operation_diagnostic_lease: errors::destroy_operation_diagnostic_lease,
         set_chain_length: chain::set_chain_length,
         create_fixed_chain: chain::create_fixed_chain,
         create_body_chain: chain::create_body_chain,
@@ -2175,32 +2183,61 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
 unsafe extern "C" fn set_fixed_tether(
     context: *mut c_void,
     request: NativeDynamicsFixedTetherRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_fixed_tether(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"SetFixedTether",
+            );
+            0
+        }
     }
 }
 unsafe extern "C" fn set_body_tether(
     context: *mut c_void,
     request: NativeDynamicsBodyTetherRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_body_tether(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"SetBodyTether",
+            );
+            0
+        }
     }
 }
 unsafe extern "C" fn remove_tether(
     context: *mut c_void,
     request: NativeDynamicsTetherRequest,
     result: *mut NativeDynamicsTetherReleaseReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -2209,14 +2246,26 @@ unsafe extern "C" fn remove_tether(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"RemoveTether",
+            );
+            0
+        }
     }
 }
 unsafe extern "C" fn read_tether(
     context: *mut c_void,
     request: NativeDynamicsTetherRequest,
     output: *mut NativeDynamicsTetherReadout,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -2227,7 +2276,14 @@ unsafe extern "C" fn read_tether(
             }
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
+                &error,
+                receipt,
+                b"ReadTether",
+            );
+            0
+        }
     }
 }
 
