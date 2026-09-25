@@ -14,7 +14,7 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         {
             string path = $"content/tone.{extension}";
             AudioClip clip = context.Engine.Audio.OpenClip(new(path));
-            using ContentReference content = context.Engine.Content.OpenReference(new(path));
+            using ContentReference content = context.Engine.Content.OpenReference(new($"tone.{extension}"));
             using AudioClip same = context.Engine.Audio.OpenClipFromContent(new(content));
             if (clip.Handle != same.Handle) throw new InvalidOperationException("content and path admission diverged");
             clips.Add(clip);
@@ -33,7 +33,14 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         return Inspect();
     }
     [DebugCommand("audio.proof.inspect", Description = "Read admission and browser realization facts.")]
-    public string Inspect() => $"{context.Engine.Audio.Read()};realization={context.Engine.Audio.ReadRealization()}";
+    public string Inspect()
+    {
+        AudioRealizationReadout realization = context.Engine.Audio.ReadRealization();
+        List<string> facts = [];
+        for (uint index = 0; index < realization.RetainedFactCount; index++)
+            facts.Add(context.Engine.Audio.ReadRealizationFactAt(new(index)).ToString());
+        return $"{context.Engine.Audio.Read()};realization={realization};facts={string.Join(";", facts)}";
+    }
     [DebugCommand("audio.proof.stop")]
     public void Stop() { foreach (AudioVoice voice in voices) voice.Dispose(); voices.Clear(); }
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);

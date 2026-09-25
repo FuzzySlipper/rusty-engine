@@ -10,6 +10,7 @@
     <RustyEngineProductTitle>Recorded Audio Containers</RustyEngineProductTitle>
     <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
     <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/../audio-containers</RustyEngineProductContentRoot>
+    <RustyEngineWatchPaths>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)/../audio-containers</RustyEngineWatchPaths>
     <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
     <RustyEngineProductUiProjectionStream>audio-containers</RustyEngineProductUiProjectionStream>
     <RustyEngineProductUiProjectionContract>audio-containers.panel.v1</RustyEngineProductUiProjectionContract>
