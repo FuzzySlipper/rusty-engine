@@ -8,6 +8,8 @@ already exposed to C#.
 
 - [Architecture overview](architecture.md) explains the Rust, generated C#,
   C# product, and TypeScript lanes.
+- [Rope physics contract](rope-physics.md) records campaign #6992's bounded
+  solver design and probes; the proposed services are not yet SDK capabilities.
 - [C# SDK guide](csharp-sdk.md) explains the current product bootstrap,
   lifecycle, services, generated output, leases, and optional managed helper
   packages. Ordinary gameplay lives in its entity/mechanics sections:
