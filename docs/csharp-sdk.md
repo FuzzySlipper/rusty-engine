@@ -9,6 +9,10 @@ agent-friendly testing, start with [world interaction](controller-interaction.md
 `WorldInteraction` shares ordinary actions with explicit target-ID assistance;
 `InteractionDebugModule` exposes discoverable `interaction.inspect` / `use` commands.
 
+For movement-mode support, block-state ownership and callback/thread affinity,
+read the [world streaming contract](world-streaming-contract.md) before designing
+a streaming worker or promising a world view distance.
+
 ## Build a product through the packaged surface
 
 `Rusty.Engine` is one immutable NuGet package containing the public C# service

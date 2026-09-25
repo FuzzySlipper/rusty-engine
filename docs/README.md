@@ -28,6 +28,8 @@ already exposed to C#.
   contracts and their Rust ABI sources remain authoritative over this summary.
 - [CoreCLR diagnostics](coreclr-diagnostics.md) covers worker discovery, standard
   managed profiling, callback breakpoints over SSH, and dumps.
+- [World streaming and state contract](world-streaming-contract.md) covers movement
+  support, sparse block state, Engine call affinity and voxel budget measurements.
 - [Runtime profiling](runtime-profiling.md) explains worker timing, runtime
   correlation, and optimized Rust CPU captures.
 - [Validation inventory](validation-inventory.md) explains the searchable validation/limit

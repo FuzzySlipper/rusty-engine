@@ -10,6 +10,16 @@ path is the runtime pack's `rusty dev` command; NativeAOT is an explicit
 fidelity and release path. Product code should use the public service APIs and
 must not add handwritten P/Invoke, ABI declarations, or a second host.
 
+Engine services and native handles are callback-confined: call them synchronously
+from an Engine-invoked product callback that permits the operation. This includes
+read-only calls and disposal. Do not call services from background tasks, timers,
+finalizers or async continuations after the callback returns. The callback lane
+is serialized but does not promise a permanent managed thread ID.
+`SimulationScheduler` runs synchronously within admitted updates; it is not a
+worker scheduler. Pure product computation can use copied data off-thread, with
+bounded results admitted later from Update. See the repository's
+`docs/world-streaming-contract.md` for the supported pattern and ownership rules.
+
 The package carries its generated ABI identity in build metadata. Select a
 matching runtime pack rather than attempting compatibility negotiation or
 recreating a missing Engine capability in the product.

@@ -10,7 +10,10 @@ namespace Rusty.Engine.Application;
 /// Engine persistence format. Call <see cref="Advance"/> once from the
 /// product's admitted update path, or use <see cref="Attach"/> with an
 /// <see cref="UpdatePipeline"/>. A non-running lifecycle update performs no
-/// work. A new Engine lifecycle generation cancels all pending work so a
+/// work. Callbacks run synchronously on the caller; this helper neither starts
+/// background workers nor preempts expensive callbacks. Engine service calls
+/// remain confined to an Engine-invoked callback that permits the operation.
+/// A new Engine lifecycle generation cancels all pending work so a
 /// product restart cannot execute callbacks retained from the prior run.
 /// </remarks>
 public sealed class SimulationScheduler

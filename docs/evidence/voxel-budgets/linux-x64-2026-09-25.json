@@ -1,0 +1,38 @@
+[
+  {
+    "shape": "solid",
+    "chunks": 1,
+    "stdout": "shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us\nsolid,1,4096,3540,5707,5903,1,6,1008,2306,2577\n",
+    "stderr": "VmHWM:\t   10212 kB\n"
+  },
+  {
+    "shape": "solid",
+    "chunks": 16,
+    "stdout": "shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us\nsolid,16,65536,56044,71221,90663,1,96,16128,25599,26779\n",
+    "stderr": "VmHWM:\t   81696 kB\n"
+  },
+  {
+    "shape": "solid",
+    "chunks": 64,
+    "stdout": "shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us\nsolid,64,262144,237745,279496,363959,1,384,64512,96395,101248\n",
+    "stderr": "VmHWM:\t  314648 kB\n"
+  },
+  {
+    "shape": "checker",
+    "chunks": 1,
+    "stdout": "shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us\nchecker,1,2048,9532,10668,15619,1,12288,1867872,6157,7989\n",
+    "stderr": "VmHWM:\t   12948 kB\n"
+  },
+  {
+    "shape": "checker",
+    "chunks": 16,
+    "stdout": "shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us\nchecker,16,32768,112471,112432,148829,1,196608,29885952,22646,25531\n",
+    "stderr": "VmHWM:\t  133616 kB\n"
+  },
+  {
+    "shape": "sparse",
+    "chunks": 256,
+    "stdout": "shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us\nsparse,256,256,220088,368015,428499,0,1536,258048,188101,196957\n",
+    "stderr": "VmHWM:\t  136828 kB\n"
+  }
+]
