@@ -1107,8 +1107,17 @@ impl CharacterControllerService {
                 snapped_distance: 0.0,
             });
         let mut floor_probe = None;
-        if controlled.y <= 0.0
-            && controlled.y.abs() <= config.surface.floor_snap_speed_limit
+        // Tethered airborne momentum lives in external_velocity. Snapping from
+        // only the controlled gravity contribution would pull an ascending
+        // character back onto the floor, then turn each rope correction into
+        // another launch impulse.
+        let floor_probe_vertical_speed = if tether.fact.attached {
+            controlled.y + motion.external_velocity.y
+        } else {
+            controlled.y
+        };
+        if floor_probe_vertical_speed <= 0.0
+            && floor_probe_vertical_speed.abs() <= config.surface.floor_snap_speed_limit
             && ground.is_none()
             && config.surface.floor_snap_distance > 0.0
             && cast_count < config.solver.maximum_queries_per_step
@@ -1128,14 +1137,22 @@ impl CharacterControllerService {
                 let normal = vec3_from_world(hit.normal)?;
                 if standable(normal, config) {
                     let snap = config.surface.floor_snap_distance * finite_f32(hit.time_of_impact)?;
-                    center.y -= f64::from(snap);
-                    controlled.y = 0.0;
-                    accepted_support = Some(CharacterGroundFact {
-                        source: hit.source,
-                        point: vec3_from_pos(hit.point)?,
-                        normal,
-                        snapped_distance: snap,
-                    });
+                    let snapped_center =
+                        add_world(center, WorldVec::new(0.0, -f64::from(snap), 0.0));
+                    if tether.admits_floor_snap(vec3_from_pos(snapped_center)?) {
+                        center = snapped_center;
+                        controlled.y = if tether.fact.attached {
+                            -motion.external_velocity.y
+                        } else {
+                            0.0
+                        };
+                        accepted_support = Some(CharacterGroundFact {
+                            source: hit.source,
+                            point: vec3_from_pos(hit.point)?,
+                            normal,
+                            snapped_distance: snap,
+                        });
+                    }
                 } else {
                     rejected_hit = Some(contact_fact(
                         hit,
@@ -1156,14 +1173,22 @@ impl CharacterControllerService {
                             if standable(support_normal, config) {
                                 let snap = config.surface.floor_snap_distance
                                     * finite_f32(support.time_of_impact)?;
-                                center.y -= f64::from(snap);
-                                controlled.y = 0.0;
-                                accepted_support = Some(CharacterGroundFact {
-                                    source: support.source,
-                                    point: vec3_from_pos(support.point)?,
-                                    normal: support_normal,
-                                    snapped_distance: snap,
-                                });
+                                let snapped_center =
+                                    add_world(center, WorldVec::new(0.0, -f64::from(snap), 0.0));
+                                if tether.admits_floor_snap(vec3_from_pos(snapped_center)?) {
+                                    center = snapped_center;
+                                    controlled.y = if tether.fact.attached {
+                                        -motion.external_velocity.y
+                                    } else {
+                                        0.0
+                                    };
+                                    accepted_support = Some(CharacterGroundFact {
+                                        source: support.source,
+                                        point: vec3_from_pos(support.point)?,
+                                        normal: support_normal,
+                                        snapped_distance: snap,
+                                    });
+                                }
                             }
                         }
                     }

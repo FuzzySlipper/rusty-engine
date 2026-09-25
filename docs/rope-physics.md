@@ -132,7 +132,9 @@ have been composed, and before `move_and_slide`. Work relative to the anchor's
 point velocity. When the predicted displacement exhausts slack, eliminate the
 outward radial component and preserve the tangent. Reconcile the accepted
 collision result against the length constraint through bounded collision sweeps;
-never teleport a post-solve correction through geometry. Apply correction within
+never teleport a post-solve correction through geometry. Optional floor adhesion
+must not snap outside the rope and create a compensating launch impulse; its
+vertical eligibility uses total tethered motion. Apply correction within
 the existing displacement/query/recovery budgets. If terrain makes the length
 constraint infeasible, report unresolved constraint and actual separation
 without corrupting the prior canonical controller state.

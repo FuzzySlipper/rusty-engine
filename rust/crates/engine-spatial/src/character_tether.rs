@@ -225,6 +225,14 @@ impl CharacterTetherSolve {
         velocity + self.apply_velocity_change(self.coupled_change(correction * (1.0 / self.dt)))
     }
 
+    /// Floor snapping is optional adhesion, not a collision response. Do not
+    /// snap outside the rope and then manufacture a compensating launch.
+    pub fn admits_floor_snap(&self, position: Vec3) -> bool {
+        !self.fact.attached
+            || (position + self.offset - self.fact.anchor_point).length()
+                <= self.fact.maximum_length + LENGTH_TOLERANCE
+    }
+
     pub fn requested_correction(&mut self, position: Vec3, maximum_distance: f32) -> Vec3 {
         if !self.fact.attached {
             return Vec3::ZERO;

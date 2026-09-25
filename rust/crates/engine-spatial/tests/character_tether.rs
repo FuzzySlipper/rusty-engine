@@ -468,3 +468,50 @@ fn local_anchor_edit_readmits_reach_and_release_keeps_endpoint_identity() {
         attached.tether.maximum_length
     );
 }
+
+#[test]
+fn floor_snap_does_not_launch_a_reeling_character() {
+    let mut entities = character(Vec3::new(0.0, 3.911, -7.0), Vec3::ZERO);
+    let mut service = CharacterControllerService::default();
+    let scene = VoxelCollisionScene::from_solid_voxels(
+        1.0,
+        8,
+        (-12..=12).flat_map(|x| (-12..=12).map(move |z| [x, 2, z])),
+    )
+    .unwrap();
+    let mut config = config();
+    config.vertical.gravity = 24.0;
+    config.shape.standing_height = 1.75;
+    config.shape.radius = 0.3;
+    config.shape.contact_skin = 0.015;
+    config.surface.floor_snap_distance = 0.25;
+    config.surface.floor_snap_speed_limit = 10.0;
+    config.external_motion.maximum_external_speed = 20.0;
+    let mut rope = CharacterTetherRequest::fixed(1, Vec3::new(0.0, 11.0, -2.0), 8.975);
+    rope.target_length = 4.0;
+    rope.reel_speed = 0.25;
+    let mut catches = 0;
+    let mut max_speed = 0.0_f32;
+    for tick in 1..=2400 {
+        let mut input = command(tick, Some(rope));
+        input.step_seconds = 1.0 / 120.0;
+        let receipt = service
+            .step(&mut entities, &scene, EntityId::new(1), &config, input)
+            .unwrap();
+        max_speed = max_speed.max(
+            (receipt.motion_after.controlled_velocity + receipt.motion_after.external_velocity)
+                .length(),
+        );
+        if tick > 1200 {
+            catches += u32::from(receipt.tether.caught);
+        }
+    }
+    assert!(
+        max_speed < 5.0,
+        "floor adhesion injected a launch: {max_speed}"
+    );
+    assert_eq!(
+        catches, 0,
+        "a loaded pendulum should not repeatedly lose taut state"
+    );
+}
