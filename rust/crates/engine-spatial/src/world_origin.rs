@@ -540,6 +540,12 @@ fn replace_character_continuations(
                 .ok_or(WorldOriginRebaseError::MissingTransform { entity: support })?
                 .translation;
         }
+        if motion.tether_attached {
+            let point = GlobalPosition::from_local(previous, motion.tether_anchor_point.to_array())
+                .and_then(|point| point.local(target, envelope))
+                .map_err(|reason| WorldOriginRebaseError::Position { entity, reason })?;
+            motion.tether_anchor_point = Vec3::new(point[0], point[1], point[2]);
+        }
         motion.fall_origin_y = shifted_height(motion.fall_origin_y, delta_y, envelope)
             .ok_or(WorldOriginRebaseError::InvalidContinuationHeight { entity })?;
         motion.peak_y = shifted_height(motion.peak_y, delta_y, envelope)

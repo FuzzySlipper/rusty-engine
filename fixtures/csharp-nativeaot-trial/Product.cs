@@ -445,6 +445,7 @@ public sealed class Product : IEngineProduct
         ExerciseLook();
         ExerciseDynamics();
         ExerciseTethers();
+        ExerciseCharacterTether();
         PublishPresentation();
         GhostPlateCaptureLighting ghostLighting = new(
             GhostPlateCaptureLightingMode.Isolated,
@@ -1104,6 +1105,59 @@ public sealed class Product : IEngineProduct
         {
             // Pure managed request validation no longer crosses the native ABI.
         }
+    }
+
+    private void ExerciseCharacterTether()
+    {
+        const float stepSeconds = 1.0f / 60.0f;
+        const float mass = 80.0f;
+        const float maximumImpulse = 80.0f;
+        const float ropeLength = 3.0f;
+        const ulong attachmentId = 41;
+        using SpatialSession spatial = _engine.Spatial.CreateSession(new(1.0, 16, VoxelSurfaceMode.GreedyCubes));
+        using DynamicsWorld world = _engine.Dynamics.CreateWorld(new(Vector3.Zero));
+        using DynamicsBody body = _engine.Dynamics.CreateBody(new(world,
+            new DynamicsBodyConfig(new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One), new Vector3(0.2f), mass,
+                new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default), default, 0.0f)));
+        DynamicsAnchorObservation anchor = _engine.Dynamics.ObserveAnchor(new(world, body, Vector3.Zero));
+        Require(anchor.Valid, "generated dynamic anchor was not resolved");
+        CharacterControllerConfig config = _engine.Spatial.DefaultCharacterControllerConfig();
+        config = config with
+        {
+            Vertical = config.Vertical with { Gravity = 0.0f },
+            ExternalMotion = config.ExternalMotion with { AuthoredMass = mass, MaximumDynamicImpulse = maximumImpulse, ExternalDecayPerSecond = 0.0f },
+        };
+        Vector3 initialVelocity = new(0, -10, 0);
+        CharacterMotion motion = new(Vector3.Zero, initialVelocity, false, CharacterStance.Standing, 0, 0, 0, false, 0,
+            Vector3.Zero, Vector3.Zero, Quaternion.Identity, Vector3.Zero, -ropeLength, -ropeLength, 0, 0);
+        CharacterStepRequest request = new(spatial, new Vector3(0, -ropeLength, 0), motion, default,
+            ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config,
+            new CharacterControllerCommand(Vector2.Zero, 0, false, false, false, Vector3.Zero, Vector3.Zero, stepSeconds, 1));
+        request = request with { Tether = CharacterTetherRequest.AtDynamicAnchor(attachmentId, anchor, ropeLength) };
+        CharacterStepReceipt caught = _engine.Spatial.ProposeCharacterStep(request);
+        Require(caught.Tether.Attached && caught.Tether.Caught && caught.Tether.Saturated && caught.Tether.Unresolved,
+            "generated character tether did not report bounded catch");
+        Require(caught.Tether.Reaction.Present && caught.Tether.Reaction.Impulse.Length() <= maximumImpulse + 0.001f,
+            "generated character reaction exceeded its bound");
+        DynamicsStepWithReactionsRequest update = new(world, stepSeconds, 1, ReadOnlyMemory<DynamicsAction>.Empty,
+            new[] { caught.Tether.Reaction });
+        DynamicsStepReceipt applied = _engine.Dynamics.StepWithReactions(update);
+        Vector3 bodyVelocity = _engine.Dynamics.Read(new(body)).LinearVelocity;
+        Vector3 characterChange = caught.Motion.ControlledVelocity + caught.Motion.ExternalVelocity - initialVelocity;
+        Require((bodyVelocity * mass + characterChange * mass).Length() < 0.001f, "generated reaction lost opposite momentum");
+        ExpectEngineFailure(() => _engine.Dynamics.StepWithReactions(update));
+        Require(_engine.Dynamics.ReadWorld(new(world)).Generation == applied.Generation, "stale reaction changed the world");
+        Require(_engine.Dynamics.RefreshAnchor(new(world, anchor)).SolverGeneration == applied.Generation,
+            "dynamic anchor refresh retained old motion facts");
+        CharacterStepReceipt released = _engine.Spatial.ProposeCharacterStep(request with
+        {
+            Tether = default, Position = caught.Transform.Translation, Motion = caught.Motion,
+            Command = request.Command with { Sequence = 2 },
+        });
+        Require(released.Tether.Released && !released.Motion.TetherAttached, "generated character release retained attachment");
+        Require((released.Motion.ControlledVelocity + released.Motion.ExternalVelocity
+            - caught.Motion.ControlledVelocity - caught.Motion.ExternalVelocity).Length() < 0.001f,
+            "character release discarded accepted momentum");
     }
 
     private void ExerciseTethers()

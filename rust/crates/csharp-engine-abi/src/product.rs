@@ -932,6 +932,9 @@ pub type NativeRemoveDynamicsChain = unsafe extern "C" fn(
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsApi {
     pub context: *mut c_void,
+    pub observe_anchor: NativeObserveDynamicsAnchor,
+    pub refresh_anchor: NativeRefreshDynamicsAnchor,
+    pub step_with_reactions: NativeStepDynamicsWithReactions,
     pub configure_ropes: NativeConfigureDynamicsRopes,
     pub set_chain_length: NativeSetDynamicsChainLength,
     pub create_fixed_chain: NativeCreateDynamicsFixedChain,
@@ -1644,3 +1647,19 @@ pub type NativeCreateStaticMeshFromContentReference = unsafe extern "C" fn(
 
 pub type NativeDestroyRenderResource =
     unsafe extern "C" fn(*mut c_void, NativeRenderResourceHandle) -> i32;
+
+pub type NativeObserveDynamicsAnchor = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsObserveAnchorRequest,
+    *mut NativeDynamicsAnchorObservation,
+) -> i32;
+pub type NativeRefreshDynamicsAnchor = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRefreshAnchorRequest,
+    *mut NativeDynamicsAnchorObservation,
+) -> i32;
+pub type NativeStepDynamicsWithReactions = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsStepWithReactionsRequest,
+    *mut NativeDynamicsStepReceipt,
+) -> i32;

@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rapier3d_f64::prelude::{
     ColliderBuilder, Group, IntegrationParameters, InteractionGroups, InteractionTestMode,
-    MassProperties, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Rotation, SharedShape, Vector,
+    MassProperties, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation,
+    SharedShape, Vector,
 };
 
 use crate::tether::{
@@ -224,6 +225,51 @@ struct AxisLocks {
     rotation: [bool; 3],
 }
 
+/// Linear point-velocity response to unit world impulses, including locked
+/// axes and rotational inertia. No solver world or step is created.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicsAnchorObservation {
+    pub point: [f64; 3],
+    pub point_velocity: [f64; 3],
+    pub center_of_mass: [f64; 3],
+    pub response: [[f64; 3]; 3],
+}
+
+pub fn observe_dynamics_anchor(
+    body: DynamicsBodyInput,
+    local_anchor: [f64; 3],
+) -> Result<DynamicsAnchorObservation, DynamicsError> {
+    validate_body(&body)?;
+    if !body.enabled || !local_anchor.into_iter().all(f64::is_finite) {
+        return Err(DynamicsError::InvalidBody { body: body.id });
+    }
+    let (builder, collider) = body_builders(&body);
+    let rigid_body = builder.build();
+    let mut properties = rigid_body.mass_properties().clone();
+    properties.local_mprops = collider.build().mass_properties();
+    properties.update_world_mass_properties(RigidBodyType::Dynamic, rigid_body.position());
+    let point = rigid_body.position().transform_point(vector(local_anchor));
+    let lever = point - properties.world_com;
+    let point_velocity = vector(body.linear_velocity) + vector(body.angular_velocity).cross(lever);
+    let response = [Vector::X, Vector::Y, Vector::Z].map(|impulse| {
+        let angular = properties.effective_world_inv_inertia * lever.cross(impulse);
+        (impulse * properties.effective_inv_mass + angular.cross(lever)).to_array()
+    });
+    if !point.is_finite()
+        || !point_velocity.is_finite()
+        || !properties.world_com.is_finite()
+        || !response.iter().flatten().all(|value| value.is_finite())
+    {
+        return Err(DynamicsError::OutputNotFinite { body: body.id });
+    }
+    Ok(DynamicsAnchorObservation {
+        point: point.to_array(),
+        point_velocity: point_velocity.to_array(),
+        center_of_mass: properties.world_com.to_array(),
+        response,
+    })
+}
+
 /// Run one bounded candidate simulation from canonical inputs.
 ///
 /// The Rapier world is rebuilt off-side for every call. It is a derived cache,
@@ -301,50 +347,7 @@ pub fn simulate_dynamics_with_rope_solver(
 
     let mut handles = BTreeMap::<DynamicsBodyId, RigidBodyHandle>::new();
     for body in &input.bodies {
-        let mut builder = RigidBodyBuilder::dynamic()
-            .translation(vector(body.translation))
-            .rotation(vector3(body.rotation))
-            .linvel(vector(body.linear_velocity))
-            .angvel(vector(body.angular_velocity))
-            .enabled_translations(
-                !body.locked_translation_axes[0],
-                !body.locked_translation_axes[1],
-                !body.locked_translation_axes[2],
-            )
-            .enabled_rotations(
-                !body.locked_rotation_axes[0],
-                !body.locked_rotation_axes[1],
-                !body.locked_rotation_axes[2],
-            )
-            .linear_damping(body.linear_damping)
-            .angular_damping(body.angular_damping)
-            .gravity_scale(body.gravity_scale)
-            .ccd_enabled(body.continuous_collision)
-            .sleeping(body.sleeping)
-            .enabled(body.enabled)
-            .user_data(u128::from(body.id.0) + 1);
-        if !body.sleeping {
-            builder = builder.can_sleep(true);
-        }
-        let collider = ColliderBuilder::new(shared_shape(body.shape));
-        let collider = if let Some(properties) = body.mass_properties {
-            collider.mass_properties(MassProperties::with_principal_inertia_frame(
-                vector(properties.center_of_mass),
-                body.mass,
-                vector(properties.principal_inertia),
-                rotation(properties.principal_inertia_local_frame),
-            ))
-        } else {
-            collider.mass(body.mass)
-        }
-        .friction(body.friction)
-        .restitution(body.restitution)
-        .collision_groups(InteractionGroups::new(
-            Group::from_bits_retain(body.collision_groups),
-            Group::from_bits_retain(body.collision_mask),
-            InteractionTestMode::And,
-        ))
-        .user_data(u128::from(body.id.0) + 1);
+        let (builder, collider) = body_builders(body);
         let (handle, _) = world.insert(builder, collider);
         handles.insert(body.id, handle);
     }
@@ -435,6 +438,54 @@ pub fn simulate_dynamics_with_rope_solver(
         contacts,
         tethers,
     })
+}
+
+fn body_builders(body: &DynamicsBodyInput) -> (RigidBodyBuilder, ColliderBuilder) {
+    let mut builder = RigidBodyBuilder::dynamic()
+        .translation(vector(body.translation))
+        .rotation(vector3(body.rotation))
+        .linvel(vector(body.linear_velocity))
+        .angvel(vector(body.angular_velocity))
+        .enabled_translations(
+            !body.locked_translation_axes[0],
+            !body.locked_translation_axes[1],
+            !body.locked_translation_axes[2],
+        )
+        .enabled_rotations(
+            !body.locked_rotation_axes[0],
+            !body.locked_rotation_axes[1],
+            !body.locked_rotation_axes[2],
+        )
+        .linear_damping(body.linear_damping)
+        .angular_damping(body.angular_damping)
+        .gravity_scale(body.gravity_scale)
+        .ccd_enabled(body.continuous_collision)
+        .sleeping(body.sleeping)
+        .enabled(body.enabled)
+        .user_data(u128::from(body.id.0) + 1);
+    if !body.sleeping {
+        builder = builder.can_sleep(true);
+    }
+    let collider = ColliderBuilder::new(shared_shape(body.shape));
+    let collider = if let Some(properties) = body.mass_properties {
+        collider.mass_properties(MassProperties::with_principal_inertia_frame(
+            vector(properties.center_of_mass),
+            body.mass,
+            vector(properties.principal_inertia),
+            rotation(properties.principal_inertia_local_frame),
+        ))
+    } else {
+        collider.mass(body.mass)
+    }
+    .friction(body.friction)
+    .restitution(body.restitution)
+    .collision_groups(InteractionGroups::new(
+        Group::from_bits_retain(body.collision_groups),
+        Group::from_bits_retain(body.collision_mask),
+        InteractionTestMode::And,
+    ))
+    .user_data(u128::from(body.id.0) + 1);
+    (builder, collider)
 }
 
 fn validate_header(input: &DynamicsStepInput) -> Result<(), DynamicsError> {
@@ -756,6 +807,33 @@ mod tests {
             was_taut: false,
             wake: true,
             contacts_enabled: true,
+        }
+    }
+
+    #[test]
+    fn anchor_response_matches_off_center_impulse_with_rotated_inertia_and_locks() {
+        for locked in [false, true] {
+            let mut body = explicit_body();
+            body.rotation = [0.0, 0.0, (0.3_f64).sin(), (0.3_f64).cos()];
+            body.locked_translation_axes = [locked, false, false];
+            body.locked_rotation_axes = [false, locked, false];
+            let anchor = observe_dynamics_anchor(body, [0.7, 0.4, -0.3]).unwrap();
+            let lever = vector(anchor.point) - vector(anchor.center_of_mass);
+            let impulse = Vector::new(0.2, -0.1, 0.3);
+            let expected = vector(anchor.response[0]) * impulse.x
+                + vector(anchor.response[1]) * impulse.y
+                + vector(anchor.response[2]) * impulse.z;
+            let mut request = input(body);
+            let mut action = DynamicsAction::impulse(body.id, impulse.to_array());
+            action.torque_impulse = lever.cross(impulse).to_array();
+            request.actions.push(action);
+            let result = simulate_dynamics(&empty_projection(), request).unwrap();
+            let actual = vector(result.bodies[0].linear_velocity)
+                + vector(result.bodies[0].angular_velocity).cross(lever);
+            assert!(
+                (actual - expected).length() < 0.0001,
+                "{actual:?} vs {expected:?}"
+            );
         }
     }
 

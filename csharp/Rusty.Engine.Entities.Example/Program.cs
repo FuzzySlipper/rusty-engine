@@ -1149,6 +1149,9 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsBody CreateBody(DynamicsCreateBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();
+    public DynamicsAnchorObservation ObserveAnchor(DynamicsObserveAnchorRequest request) => throw new NotSupportedException();
+    public DynamicsAnchorObservation RefreshAnchor(DynamicsRefreshAnchorRequest request) => throw new NotSupportedException();
+    public DynamicsStepReceipt StepWithReactions(DynamicsStepWithReactionsRequest request) => throw new NotSupportedException();
     public void ConfigureRopes(DynamicsRopeSolverRequest request) => throw new NotSupportedException();
     public void SetChainLength(DynamicsChainLengthRequest request) => throw new NotSupportedException();
     public void CreateFixedChain(DynamicsFixedChainRequest request) => throw new NotSupportedException();

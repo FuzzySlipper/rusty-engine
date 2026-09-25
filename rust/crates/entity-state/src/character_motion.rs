@@ -13,6 +13,7 @@ pub const MAX_CHARACTER_TIMER_SECONDS: f32 = 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharacterMotionValidationError {
+    InvalidTether,
     InvalidControlledVelocity,
     InvalidExternalVelocity,
     InvalidTimer,
@@ -25,6 +26,7 @@ pub enum CharacterMotionValidationError {
 impl CharacterMotionValidationError {
     pub const fn code(self) -> &'static str {
         match self {
+            Self::InvalidTether => "invalid-character-tether-state",
             Self::InvalidControlledVelocity => "invalid-character-controlled-velocity",
             Self::InvalidExternalVelocity => "invalid-character-external-velocity",
             Self::InvalidTimer => "invalid-character-motion-timer",
@@ -47,6 +49,14 @@ impl std::error::Error for CharacterMotionValidationError {}
 pub fn validate_character_motion(
     value: &CharacterMotionComponent,
 ) -> Result<(), CharacterMotionValidationError> {
+    if !value.tether_length.is_finite()
+        || value.tether_length < 0.0
+        || (value.tether_attached && value.tether_length <= 0.0)
+        || !bounded_vector(value.tether_anchor_point, MAX_ABS_TRANSLATION)
+        || !bounded_vector(value.tether_local_anchor, MAX_ABS_TRANSLATION)
+    {
+        return Err(CharacterMotionValidationError::InvalidTether);
+    }
     if !bounded_vector(value.controlled_velocity, MAX_ABS_VELOCITY) {
         return Err(CharacterMotionValidationError::InvalidControlledVelocity);
     }
@@ -102,6 +112,20 @@ pub(crate) fn character_motion_registration() -> ComponentRegistration<Character
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CharacterMotionSnapshotV1 {
+    #[serde(default)]
+    tether_attached: bool,
+    #[serde(default)]
+    tether_id: u64,
+    #[serde(default)]
+    tether_length: f32,
+    #[serde(default)]
+    tether_taut: bool,
+    #[serde(default)]
+    tether_anchor_id: u64,
+    #[serde(default)]
+    tether_anchor_point: [f32; 3],
+    #[serde(default)]
+    tether_local_anchor: [f32; 3],
     controlled_velocity: [f32; 3],
     external_velocity: [f32; 3],
     stance: CharacterStanceV1,
@@ -141,6 +165,13 @@ fn decode(value: serde_json::Value) -> Result<CharacterMotionComponent, String> 
 impl From<CharacterMotionComponent> for CharacterMotionSnapshotV1 {
     fn from(value: CharacterMotionComponent) -> Self {
         Self {
+            tether_attached: value.tether_attached,
+            tether_id: value.tether_id,
+            tether_length: value.tether_length,
+            tether_taut: value.tether_taut,
+            tether_anchor_id: value.tether_anchor_id,
+            tether_anchor_point: value.tether_anchor_point.to_array(),
+            tether_local_anchor: value.tether_local_anchor.to_array(),
             controlled_velocity: value.controlled_velocity.to_array(),
             external_velocity: value.external_velocity.to_array(),
             stance: match value.stance {
@@ -172,6 +203,13 @@ impl From<CharacterMotionComponent> for CharacterMotionSnapshotV1 {
 impl From<CharacterMotionSnapshotV1> for CharacterMotionComponent {
     fn from(value: CharacterMotionSnapshotV1) -> Self {
         Self {
+            tether_attached: value.tether_attached,
+            tether_id: value.tether_id,
+            tether_length: value.tether_length,
+            tether_taut: value.tether_taut,
+            tether_anchor_id: value.tether_anchor_id,
+            tether_anchor_point: vec3(value.tether_anchor_point),
+            tether_local_anchor: vec3(value.tether_local_anchor),
             controlled_velocity: vec3(value.controlled_velocity),
             external_velocity: vec3(value.external_velocity),
             stance: match value.stance {

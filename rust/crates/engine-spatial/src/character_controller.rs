@@ -16,7 +16,8 @@ use svc_collision::{
     CharacterCollisionSource, CharacterObstacle, StaticMeshInstanceId,
 };
 
-use crate::VoxelCollisionScene;
+use crate::character_tether::CharacterTetherSolve;
+use crate::{CharacterTetherFact, CharacterTetherRequest, VoxelCollisionScene};
 
 const PITCH_EPSILON: f32 = 0.001;
 
@@ -322,6 +323,7 @@ impl std::error::Error for CharacterConfigError {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CharacterControllerCommand {
+    pub tether: Option<CharacterTetherRequest>,
     pub planar_intent: Vec2,
     pub heading_yaw_radians: f32,
     pub jump_pressed: bool,
@@ -336,6 +338,7 @@ pub struct CharacterControllerCommand {
 impl CharacterControllerCommand {
     pub const fn idle(step_seconds: f32, sequence: u64) -> Self {
         Self {
+            tether: None,
             planar_intent: Vec2::ZERO,
             heading_yaw_radians: 0.0,
             jump_pressed: false,
@@ -477,6 +480,7 @@ pub enum CharacterBlockKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CharacterControllerReceipt {
+    pub tether: CharacterTetherFact,
     pub generation: u64,
     pub revision_before: u64,
     pub revision_after: u64,
@@ -516,6 +520,8 @@ pub struct CharacterControllerReadout {
 
 #[derive(Debug)]
 pub enum CharacterControllerError {
+    InvalidTether,
+    TetherOutOfReach,
     InvalidConfig(CharacterConfigError),
     InvalidCommand,
     DisplacementEnvelopeExceeded { requested: f32, maximum: f32 },
@@ -542,6 +548,8 @@ pub enum CharacterControllerError {
 impl CharacterControllerError {
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::InvalidTether => "invalid-character-tether",
+            Self::TetherOutOfReach => "character-tether-out-of-reach",
             Self::InvalidConfig(_) => "invalid-character-controller-config",
             Self::InvalidCommand => "invalid-character-controller-command",
             Self::DisplacementEnvelopeExceeded { .. } => {
@@ -602,6 +610,7 @@ struct CharacterEnvironmentIdentity {
 
 #[derive(Clone)]
 pub struct PreparedCharacterControllerStep {
+    tether: CharacterTetherFact,
     entity: EntityId,
     transform_revision: ComponentRevision,
     motion_revision: ComponentRevision,
@@ -970,6 +979,28 @@ impl CharacterControllerService {
             }
         }
 
+        let local_anchor = command
+            .tether
+            .map_or(motion.tether_local_anchor, |request| request.local_anchor);
+        let offset = transform_before
+            .transform()
+            .transform_direction(local_anchor);
+        let mut tether = CharacterTetherSolve::prepare(
+            &mut motion,
+            command.tether,
+            vec3_from_pos(center)?,
+            offset,
+            dt,
+            config.external_motion.authored_mass,
+            config.external_motion.maximum_dynamic_impulse,
+        )?;
+        if tether.fact.attached && !motion.grounded {
+            // Existing external motion is the inertial lane. Planar control is
+            // an acceleration contribution while attached, not a replacement
+            // or planar speed clamp on swing momentum.
+            motion.external_velocity = motion.external_velocity + motion.controlled_velocity;
+            motion.controlled_velocity = Vec3::ZERO;
+        }
         let input = normalized_intent(command.planar_intent);
         let wish_velocity = wish_velocity(input, command.heading_yaw_radians, &config.ground);
         let mut controlled = motion.controlled_velocity;
@@ -1016,7 +1047,10 @@ impl CharacterControllerService {
                 .min(config.external_motion.maximum_external_speed);
             motion.external_velocity = motion.external_velocity * (next_speed / external_speed);
         }
-        let total_velocity = controlled + motion.external_velocity;
+        let total_velocity = tether.constrain_velocity(
+            vec3_from_pos(center)?,
+            controlled + motion.external_velocity,
+        );
         let mut requested = total_velocity * dt;
         if motion.grounded && requested.y < 0.0 {
             requested.y = 0.0;
@@ -1141,6 +1175,34 @@ impl CharacterControllerService {
                 accepted_support,
             });
         }
+        let correction = tether.requested_correction(
+            vec3_from_pos(center)?,
+            (config.solver.maximum_displacement_per_step - requested_distance).max(0.0),
+        );
+        if correction.length_squared() > 1.0e-10
+            && cast_count < config.solver.maximum_queries_per_step
+        {
+            cast_count += 1;
+            let fraction = cast_world(
+                &scene.projection,
+                &obstacles,
+                capsule(center),
+                vec3_world(correction),
+                f64::from(config.shape.contact_skin),
+                &mut query_stats,
+            )?
+            .map(|hit| finite_f32(hit.time_of_impact))
+            .transpose()?
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+            let accepted = correction * fraction;
+            center = add_world(center, vec3_world(accepted));
+            controlled = tether.accept_correction(accepted, controlled + motion.external_velocity)
+                - motion.external_velocity;
+            if accepted.y > config.recovery.normal_nudge {
+                ground = None;
+            }
+        }
         motion.grounded = ground.is_some();
         if motion.grounded {
             // Ground-plane clipping can turn horizontal travel into an upward
@@ -1161,6 +1223,22 @@ impl CharacterControllerService {
             &mut platform,
             config,
         )?;
+        let accepted_velocity = tether.finish(
+            vec3_from_pos(center)?,
+            controlled + motion.external_velocity,
+            &mut motion,
+        );
+        if tether.fact.attached && !motion.grounded {
+            motion.external_velocity = accepted_velocity;
+            controlled = Vec3::ZERO;
+        } else if tether.fact.attached {
+            // Landing hands accepted momentum back to ordinary ground control,
+            // so friction/braking continue to apply while the rope is slack.
+            controlled = accepted_velocity;
+            motion.external_velocity = Vec3::ZERO;
+        } else {
+            controlled = accepted_velocity - motion.external_velocity;
+        }
         let dynamic_impulses = dynamic_impulse_proposals(
             entities,
             &contacts,
@@ -1181,6 +1259,7 @@ impl CharacterControllerService {
             ..transform_before
         };
         Ok(PreparedCharacterControllerStep {
+            tether: tether.fact,
             entity,
             transform_revision,
             motion_revision,
@@ -1267,6 +1346,7 @@ impl CharacterControllerService {
             collision_world_hash: prepared.motion_after.collision_world_hash,
         });
         Ok(CharacterControllerReceipt {
+            tether: prepared.tether,
             generation: self.generation,
             revision_before: publication.revision_before,
             revision_after: publication.revision_after,
@@ -1834,6 +1914,9 @@ fn validate_command(
     command: CharacterControllerCommand,
     config: &CharacterControllerConfig,
 ) -> Result<(), CharacterControllerError> {
+    if let Some(tether) = command.tether {
+        tether.validate()?;
+    }
     let vectors = [
         command.planar_intent.x,
         command.planar_intent.y,

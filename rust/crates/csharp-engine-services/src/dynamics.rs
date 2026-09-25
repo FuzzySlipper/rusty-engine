@@ -1,3 +1,4 @@
+mod anchor;
 mod chain;
 
 use std::{
@@ -2131,6 +2132,9 @@ unsafe extern "C" fn replace_capsule_body(
 pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
     NativeDynamicsApi {
         context: (bridge as *mut RuntimeDynamicsBridge).cast(),
+        observe_anchor: anchor::observe_anchor,
+        refresh_anchor: anchor::refresh_anchor,
+        step_with_reactions: anchor::step_with_reactions,
         configure_ropes: chain::configure_ropes,
         set_chain_length: chain::set_chain_length,
         create_fixed_chain: chain::create_fixed_chain,
@@ -2626,6 +2630,313 @@ mod tests {
                 ),
                 self_collision
             );
+        }
+    }
+
+    #[test]
+    fn anchor_observation_resolves_angular_velocity_and_reactions_reject_replay() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let mut config = body_config(NativeVec3 {
+            x: 3.0,
+            y: 0.0,
+            z: 0.0,
+        });
+        config.properties.linear_velocity.x = 1.0;
+        config.properties.angular_velocity.z = 2.0;
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        let anchor = bridge
+            .observe_anchor(NativeDynamicsObserveAnchorRequest {
+                world,
+                body,
+                local_anchor: NativeVec3 {
+                    x: 0.0,
+                    y: 1.0,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        assert!(anchor.valid);
+        assert_eq!(anchor.point.x, 3.0);
+        assert_eq!(anchor.point.y, 1.0);
+        assert_eq!(anchor.point_velocity.x, -1.0);
+        let reaction = NativeDynamicsAnchorReaction {
+            source_identity: 10,
+            source_generation: 1,
+            present: true,
+            anchor,
+            impulse: NativeVec3 {
+                x: 2.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            maximum_impulse: 2.0,
+        };
+        let duplicates = [reaction; 2];
+        let request = NativeDynamicsStepWithReactionsRequest {
+            world,
+            step_seconds: ONE_SIXTIETH_SECOND,
+            steps: 1,
+            actions: std::ptr::null(),
+            actions_len: 0,
+            reactions: duplicates.as_ptr(),
+            reactions_len: duplicates.len(),
+        };
+        let before = bridge
+            .active_world(world.value)
+            .unwrap()
+            .entities
+            .revision();
+        assert!(bridge.step_with_reactions(&request).is_err());
+        assert_eq!(
+            bridge
+                .active_world(world.value)
+                .unwrap()
+                .entities
+                .revision(),
+            before
+        );
+        let request = NativeDynamicsStepWithReactionsRequest {
+            reactions: &reaction,
+            reactions_len: 1,
+            ..request
+        };
+        bridge.step_with_reactions(&request).unwrap();
+        let after = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!((after.linear_velocity.x - 2.0).abs() < 1e-5);
+        assert!((after.angular_velocity.z + 4.0).abs() < 1e-4);
+        let revision = bridge
+            .active_world(world.value)
+            .unwrap()
+            .entities
+            .revision();
+        assert!(bridge.step_with_reactions(&request).is_err());
+        assert_eq!(
+            bridge
+                .active_world(world.value)
+                .unwrap()
+                .entities
+                .revision(),
+            revision
+        );
+        let refreshed = bridge
+            .refresh_anchor(NativeDynamicsRefreshAnchorRequest { world, anchor })
+            .unwrap();
+        assert!(refreshed.valid && refreshed.entity_revision > anchor.entity_revision);
+        bridge.destroy_body(body).unwrap();
+        assert!(
+            !bridge
+                .refresh_anchor(NativeDynamicsRefreshAnchorRequest { world, anchor })
+                .unwrap()
+                .valid
+        );
+    }
+
+    #[test]
+    fn character_reaction_and_dynamic_body_exchange_equal_and_opposite_momentum() {
+        use engine_spatial::{
+            CharacterControllerCommand, CharacterControllerConfig, CharacterControllerService,
+            CharacterTetherRequest,
+        };
+        use entity_state::CharacterMotionComponent;
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let mut config = body_config(NativeVec3::default());
+        config.properties.mass = 80.0;
+        config.properties.linear_velocity.x = 1.0;
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        let anchor = bridge
+            .observe_anchor(NativeDynamicsObserveAnchorRequest {
+                world,
+                body,
+                local_anchor: NativeVec3::default(),
+            })
+            .unwrap();
+        let mut motion = CharacterMotionComponent::at_rest(-3.0);
+        motion.external_velocity = Vec3::new(0.0, -10.0, 0.0);
+        let entity = EntityId::new(1);
+        let mut entities =
+            EntityState::from_definitions([EntityDefinition::new(entity, "character")
+                .with_transform(Vec3::new(0.0, -3.0, 0.0))
+                .with_character_motion(motion)])
+            .unwrap();
+        let mut controller = CharacterControllerConfig::default();
+        controller.vertical.gravity = 0.0;
+        controller.external_motion.external_decay_per_second = 0.0;
+        controller.external_motion.authored_mass = 80.0;
+        controller.external_motion.maximum_dynamic_impulse = 80.0;
+        let tether = CharacterTetherRequest {
+            anchor_id: anchor.body.value,
+            anchor_point: native_vec3_value(anchor.point),
+            anchor_velocity: native_vec3_value(anchor.point_velocity),
+            anchor_response: [
+                native_vec3_value(anchor.response_x),
+                native_vec3_value(anchor.response_y),
+                native_vec3_value(anchor.response_z),
+            ],
+            ..CharacterTetherRequest::fixed(1, Vec3::ZERO, 3.0)
+        };
+        let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+        let receipt = CharacterControllerService::default()
+            .step(
+                &mut entities,
+                &scene,
+                entity,
+                &controller,
+                CharacterControllerCommand {
+                    tether: Some(tether),
+                    ..CharacterControllerCommand::idle(ONE_SIXTIETH_SECOND, 1)
+                },
+            )
+            .unwrap();
+        let reaction = NativeDynamicsAnchorReaction {
+            source_identity: 1,
+            source_generation: receipt.generation,
+            present: true,
+            anchor,
+            impulse: native_vec3(receipt.tether.reaction_impulse),
+            maximum_impulse: controller.external_motion.maximum_dynamic_impulse,
+        };
+        bridge
+            .step_with_reactions(&NativeDynamicsStepWithReactionsRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: std::ptr::null(),
+                actions_len: 0,
+                reactions: &reaction,
+                reactions_len: 1,
+            })
+            .unwrap();
+        let body_after = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        let character_delta = (receipt.motion_after.controlled_velocity
+            + receipt.motion_after.external_velocity
+            - motion.external_velocity)
+            * 80.0;
+        let body_delta =
+            (native_vec3_value(body_after.linear_velocity) - Vec3::new(1.0, 0.0, 0.0)) * 80.0;
+        assert!((character_delta + body_delta).length() < 0.001);
+        assert!(receipt.tether.saturated && receipt.tether.unresolved);
+    }
+
+    #[test]
+    fn light_dynamic_anchor_does_not_create_catch_energy() {
+        use engine_spatial::{
+            CharacterControllerCommand, CharacterControllerConfig, CharacterControllerService,
+            CharacterTetherRequest,
+        };
+        use entity_state::CharacterMotionComponent;
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let mut config = body_config(NativeVec3::default());
+        config.properties.mass = 2.0;
+        config.properties.continuous_collision = true;
+        config.properties.linear_velocity.x = 1.0;
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap();
+        let mut motion = CharacterMotionComponent::at_rest(-3.0);
+        motion.external_velocity = Vec3::new(0.0, -10.0, 0.0);
+        let entity = EntityId::new(1);
+        let mut entities =
+            EntityState::from_definitions([EntityDefinition::new(entity, "character")
+                .with_transform(Vec3::new(0.0, -3.0, 0.0))
+                .with_character_motion(motion)])
+            .unwrap();
+        let mut controller = CharacterControllerConfig::default();
+        controller.vertical.gravity = 0.0;
+        controller.external_motion.external_decay_per_second = 0.0;
+        controller.external_motion.authored_mass = 80.0;
+        controller.external_motion.maximum_dynamic_impulse = 500.0;
+        let mut service = CharacterControllerService::default();
+        for tick in 1..=240 {
+            let anchor = bridge
+                .observe_anchor(NativeDynamicsObserveAnchorRequest {
+                    world,
+                    body,
+                    local_anchor: NativeVec3::default(),
+                })
+                .unwrap();
+            let tether = CharacterTetherRequest {
+                anchor_id: anchor.body.value,
+                anchor_point: native_vec3_value(anchor.point),
+                anchor_velocity: native_vec3_value(anchor.point_velocity),
+                anchor_response: [
+                    native_vec3_value(anchor.response_x),
+                    native_vec3_value(anchor.response_y),
+                    native_vec3_value(anchor.response_z),
+                ],
+                ..CharacterTetherRequest::fixed(1, Vec3::ZERO, 3.0)
+            };
+            let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+            let receipt = service
+                .step(
+                    &mut entities,
+                    &scene,
+                    entity,
+                    &controller,
+                    CharacterControllerCommand {
+                        tether: Some(tether),
+                        ..CharacterControllerCommand::idle(ONE_SIXTIETH_SECOND, tick)
+                    },
+                )
+                .unwrap();
+            let reaction = NativeDynamicsAnchorReaction {
+                source_identity: 1,
+                source_generation: receipt.generation,
+                present: true,
+                anchor,
+                impulse: native_vec3(receipt.tether.reaction_impulse),
+                maximum_impulse: controller.external_motion.maximum_dynamic_impulse,
+            };
+            bridge
+                .step_with_reactions(&NativeDynamicsStepWithReactionsRequest {
+                    world,
+                    step_seconds: ONE_SIXTIETH_SECOND,
+                    steps: 1,
+                    actions: std::ptr::null(),
+                    actions_len: 0,
+                    reactions: &reaction,
+                    reactions_len: 1,
+                })
+                .unwrap();
+            let body_after = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+            let character_velocity =
+                receipt.motion_after.controlled_velocity + receipt.motion_after.external_velocity;
+            let energy = 0.5 * 80.0 * character_velocity.length_squared()
+                + native_vec3_value(body_after.linear_velocity).length_squared();
+            assert!(energy <= 4001.01, "catch created energy: {energy}");
+            let momentum =
+                character_velocity * 80.0 + native_vec3_value(body_after.linear_velocity) * 2.0;
+            assert!((momentum - Vec3::new(2.0, -800.0, 0.0)).length() < 0.02);
         }
     }
 

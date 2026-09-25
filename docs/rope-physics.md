@@ -123,7 +123,8 @@ One optional tether participates in the existing character step. Supply a
 stable attachment ID, character-local attachment offset, fixed anchor or an
 Engine-resolved dynamic anchor, effective/target length and previous attachment
 state. A dynamic anchor observation carries body/world identity and revision,
-world attachment point and point velocity (including angular motion). Resolve
+world attachment point, point velocity (including angular motion), center of
+mass and effective point-impulse response including inertia and locked axes. Resolve
 it through Dynamics; C# must not duplicate transform/inertia calculations.
 
 Integrate after controlled/external velocity, gravity and platform departure
@@ -143,7 +144,9 @@ through the same controller. Release retains the accepted world velocity.
 Explicitly test that ordinary planar input does not overwrite swing momentum.
 
 Use caller-selected effective character mass to convert the accepted tether
-velocity change into a reaction proposal. Clamp both sides of this exchange
+velocity change into a reaction proposal. Share the relative correction using
+the anchor point response and character mass; treating a light anchor as an
+infinite mass before applying its reaction can create energy. Clamp both sides of this exchange
 consistently to the existing maximum dynamic impulse: report saturation rather
 than claiming an equal-and-opposite impulse when only one side was clamped.
 The receipt includes radial/tangential velocity, correction, resolved endpoints,
@@ -171,8 +174,16 @@ invalid anchors/configuration, 64-rope/eight-bead limits, stale prepared commits
 fixed-point rebasing and snapshot/rebuild repetition. The generated fixture
 exercises attachment, catch, release, chain points/removal and solver work counts
 through the actual CoreCLR host. This source proof does not establish a published
-SDK/runtime pair or CraftSurvive gameplay acceptance. Character coupling remains
-#6995 and the paired downstream playground remains #6996.
+SDK/runtime pair or CraftSurvive gameplay acceptance.
+
+The #6995 source adds optional character tethers to the existing collision/slide
+step, canonical attachment continuation, Engine-resolved dynamic observations
+and explicit revision-bound reaction batches. The same displacement/query
+budgets bound swept corrections. Native regressions cover fixed swing/release,
+catch energy including a light dynamic anchor, capped momentum exchange, loaded
+reeling, terrain obstruction, ground/ledge/platform transitions, deterministic
+continuation and invalid inputs. See [character tether use](csharp-sdk.md#character-tethers).
+The paired downstream playground and matched release adoption remain #6996.
 
 ## Evidence and remaining implementation proof
 

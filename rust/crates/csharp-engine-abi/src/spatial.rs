@@ -972,6 +972,13 @@ pub enum NativeCharacterBlockFlags {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCharacterMotion {
+    pub tether_attached: bool,
+    pub tether_id: u64,
+    pub tether_length: f32,
+    pub tether_taut: bool,
+    pub tether_anchor_id: u64,
+    pub tether_anchor_point: NativeVec3,
+    pub tether_local_anchor: NativeVec3,
     pub controlled_velocity: NativeVec3,
     pub external_velocity: NativeVec3,
     pub grounded: bool,
@@ -1186,6 +1193,7 @@ pub struct NativeCharacterMeshInstance {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterStepRequest {
+    pub tether: NativeCharacterTetherRequest,
     pub session: NativeSpatialSessionHandle,
     pub position: NativeVec3,
     pub motion: NativeCharacterMotion,
@@ -1381,6 +1389,7 @@ pub struct NativeCharacterControllerReadout {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCharacterStepReceipt {
+    pub tether: NativeCharacterTetherFact,
     pub generation: u64,
     pub revision_before: u64,
     pub revision_after: u64,
@@ -1480,4 +1489,39 @@ pub struct NativeSpatialMapLease {
     pub collision_revision: u64,
     pub navigation_revision: u64,
     pub navigation_present: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterTetherRequest {
+    pub enabled: bool,
+    pub id: u64,
+    pub local_anchor: NativeVec3,
+    pub dynamic: bool,
+    pub fixed_anchor: NativeVec3,
+    pub dynamic_anchor: NativeDynamicsAnchorObservation,
+    pub maximum_length: f32,
+    pub target_length: f32,
+    pub reel_speed: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterTetherFact {
+    pub id: u64,
+    pub attached: bool,
+    pub released: bool,
+    pub invalidated: bool,
+    pub taut: bool,
+    pub caught: bool,
+    pub saturated: bool,
+    pub unresolved: bool,
+    pub character_point: NativeVec3,
+    pub anchor_point: NativeVec3,
+    pub maximum_length: f32,
+    pub distance: f32,
+    pub radial_velocity: f32,
+    pub tangential_velocity: NativeVec3,
+    pub correction: NativeVec3,
+    pub reaction: NativeDynamicsAnchorReaction,
 }

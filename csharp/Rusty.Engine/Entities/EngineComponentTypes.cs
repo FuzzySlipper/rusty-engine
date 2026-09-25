@@ -63,7 +63,11 @@ public static class EngineComponentTypes
 
     private static void ValidateCharacterMotion(in CharacterMotion value)
     {
-        if (!IsBounded(value.ControlledVelocity, MaxAbsVelocity)
+        if (!float.IsFinite(value.TetherLength) || value.TetherLength < 0
+            || (value.TetherAttached && value.TetherLength <= 0)
+            || !IsBounded(value.TetherAnchorPoint, MaxAbsTranslation)
+            || !IsBounded(value.TetherLocalAnchor, MaxAbsTranslation)
+            || !IsBounded(value.ControlledVelocity, MaxAbsVelocity)
             || !IsBounded(value.ExternalVelocity, MaxAbsVelocity)
             || !IsTimer(value.JumpBufferRemaining) || !IsTimer(value.CoyoteRemaining)
             || !IsTimer(value.LandingLockoutRemaining)

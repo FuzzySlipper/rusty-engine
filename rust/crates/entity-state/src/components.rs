@@ -82,6 +82,13 @@ pub enum CharacterStance {
 /// them between direct service calls.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CharacterMotionComponent {
+    pub tether_attached: bool,
+    pub tether_id: u64,
+    pub tether_length: f32,
+    pub tether_taut: bool,
+    pub tether_anchor_id: u64,
+    pub tether_anchor_point: Vec3,
+    pub tether_local_anchor: Vec3,
     pub controlled_velocity: Vec3,
     pub external_velocity: Vec3,
     pub stance: CharacterStance,
@@ -103,6 +110,13 @@ pub struct CharacterMotionComponent {
 impl CharacterMotionComponent {
     pub const fn at_rest(height: f32) -> Self {
         Self {
+            tether_attached: false,
+            tether_id: 0,
+            tether_length: 0.0,
+            tether_taut: false,
+            tether_anchor_id: 0,
+            tether_anchor_point: Vec3::ZERO,
+            tether_local_anchor: Vec3::ZERO,
             controlled_velocity: Vec3::ZERO,
             external_velocity: Vec3::ZERO,
             stance: CharacterStance::Standing,

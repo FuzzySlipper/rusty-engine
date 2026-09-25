@@ -214,3 +214,16 @@ never searches for an adjacent checkout.
 When a product needs a mechanism that current generated services cannot
 express, name that mechanism precisely and create or link the upstream request.
 Stopping there is preferable to a local substitute.
+
+## Character tether ownership
+
+The existing `CharacterControllerService` owns optional tether projection,
+collision-swept correction and canonical motion continuation. Dynamics resolves
+body-local anchor observations and effective impulse response, including mass,
+inertia and locked axes. The character returns bounded equal-and-opposite
+reaction proposals; the product explicitly applies them through
+`Dynamics.StepWithReactions` at its chosen update order. This is one ordinary
+Dynamics step, with exact-revision validation before mutation. Attachment
+selection, reel controls, consequences and presentation remain product policy.
+See [character tether use](csharp-sdk.md#character-tethers) and the
+[bounded rope contract](rope-physics.md#kinematic-character-coupling).

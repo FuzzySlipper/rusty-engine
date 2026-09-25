@@ -587,3 +587,61 @@ pub struct NativeDynamicsRopeSolverRequest {
     pub substeps: u32,
     pub iterations: u32,
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsObserveAnchorRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub body: NativeDynamicsBodyHandle,
+    pub local_anchor: NativeVec3,
+}
+
+/// Copied point observation; references do not confer body disposal ownership.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsAnchorObservation {
+    pub valid: bool,
+    pub world_identity: u64,
+    pub body: NativeDynamicsBodyReference,
+    pub entity_revision: u64,
+    pub solver_generation: u64,
+    pub local_anchor: NativeVec3,
+    pub point: NativeVec3,
+    pub point_velocity: NativeVec3,
+    pub center_of_mass: NativeVec3,
+    /// Point velocity per unit X/Y/Z world impulse, including angular response.
+    pub response_x: NativeVec3,
+    pub response_y: NativeVec3,
+    pub response_z: NativeVec3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRefreshAnchorRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub anchor: NativeDynamicsAnchorObservation,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsAnchorReaction {
+    pub source_identity: u64,
+    pub source_generation: u64,
+    pub present: bool,
+    pub anchor: NativeDynamicsAnchorObservation,
+    pub impulse: NativeVec3,
+    pub maximum_impulse: f32,
+}
+
+/// Explicit caller-owned Dynamics update, with revision-checked point reactions.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsStepWithReactionsRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub step_seconds: f32,
+    pub steps: u32,
+    pub actions: *const NativeDynamicsAction,
+    pub actions_len: usize,
+    pub reactions: *const NativeDynamicsAnchorReaction,
+    pub reactions_len: usize,
+}

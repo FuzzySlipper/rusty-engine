@@ -47,11 +47,12 @@ pub use tether::{
 };
 
 pub use dynamics::{
-    simulate_dynamics, simulate_dynamics_with_rope_solver, simulate_dynamics_with_tethers,
-    DynamicsAction, DynamicsBodyId, DynamicsBodyInput, DynamicsBodyOutput, DynamicsContact,
-    DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsStepInput, DynamicsStepOutput,
-    MAX_CCD_TRANSLATION_PER_STEP, MAX_DISCRETE_TRANSLATION_PER_STEP, MAX_DYNAMICS_ACTIONS,
-    MAX_DYNAMICS_BODIES, MAX_DYNAMICS_CONTACTS, MAX_DYNAMICS_STEPS, MAX_DYNAMICS_STEP_SECONDS,
+    observe_dynamics_anchor, simulate_dynamics, simulate_dynamics_with_rope_solver,
+    simulate_dynamics_with_tethers, DynamicsAction, DynamicsAnchorObservation, DynamicsBodyId,
+    DynamicsBodyInput, DynamicsBodyOutput, DynamicsContact, DynamicsError, DynamicsMassProperties,
+    DynamicsShape, DynamicsStepInput, DynamicsStepOutput, MAX_CCD_TRANSLATION_PER_STEP,
+    MAX_DISCRETE_TRANSLATION_PER_STEP, MAX_DYNAMICS_ACTIONS, MAX_DYNAMICS_BODIES,
+    MAX_DYNAMICS_CONTACTS, MAX_DYNAMICS_STEPS, MAX_DYNAMICS_STEP_SECONDS,
     MIN_DYNAMICS_STEP_SECONDS,
 };
 

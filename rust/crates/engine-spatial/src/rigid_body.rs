@@ -16,6 +16,53 @@ use svc_collision::{
 
 use crate::VoxelCollisionScene;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RigidBodyAnchorObservation {
+    pub point: Vec3,
+    pub point_velocity: Vec3,
+    pub center_of_mass: Vec3,
+    pub response: [Vec3; 3],
+}
+
+pub fn observe_rigid_body_anchor(
+    entities: &EntityState,
+    entity: EntityId,
+    local_anchor: Vec3,
+) -> Result<RigidBodyAnchorObservation, RigidBodyStepError> {
+    if entities.lifecycle(entity) != Some(EntityLifecycle::Active) {
+        return Err(RigidBodyStepError::InactiveBody { entity });
+    }
+    if entities.transform_parent(entity).is_some() {
+        return Err(RigidBodyStepError::ParentedBody { entity });
+    }
+    let transform = entities
+        .transform(entity)
+        .copied()
+        .ok_or(RigidBodyStepError::MissingTransform { entity })?;
+    if transform.scale != Vec3::ONE {
+        return Err(RigidBodyStepError::NonUnitScale { entity });
+    }
+    let body = entities
+        .rigid_body(entity)
+        .copied()
+        .ok_or(RigidBodyStepError::InactiveBody { entity })?;
+    let observation = svc_collision::observe_dynamics_anchor(
+        component_body_input(entity, transform, body),
+        vec3_f64(local_anchor),
+    )?;
+    let convert = |value| vec3_f32(value).ok_or(RigidBodyStepError::OutputOutOfRange { entity });
+    Ok(RigidBodyAnchorObservation {
+        point: convert(observation.point)?,
+        point_velocity: convert(observation.point_velocity)?,
+        center_of_mass: convert(observation.center_of_mass)?,
+        response: [
+            convert(observation.response[0])?,
+            convert(observation.response[1])?,
+            convert(observation.response[2])?,
+        ],
+    })
+}
+
 /// Purpose-neutral mass facts for an admitted dynamic primitive. The native C#
 /// bridge reports these values so product control code can use Engine's shape
 /// and mass policy without copying an inertia formula downstream.
@@ -704,16 +751,24 @@ fn collect_canonical_bodies(
 }
 
 fn body_input(body: &CanonicalBody) -> DynamicsBodyInput {
+    component_body_input(body.entity, body.transform, body.body)
+}
+
+fn component_body_input(
+    entity: EntityId,
+    transform: TransformComponent,
+    body: RigidBodyComponent,
+) -> DynamicsBodyInput {
     DynamicsBodyInput {
-        id: DynamicsBodyId(body.entity.raw()),
-        translation: vec3_f64(body.transform.translation),
+        id: DynamicsBodyId(entity.raw()),
+        translation: vec3_f64(transform.translation),
         rotation: [
-            f64::from(body.transform.rotation.x),
-            f64::from(body.transform.rotation.y),
-            f64::from(body.transform.rotation.z),
-            f64::from(body.transform.rotation.w),
+            f64::from(transform.rotation.x),
+            f64::from(transform.rotation.y),
+            f64::from(transform.rotation.z),
+            f64::from(transform.rotation.w),
         ],
-        shape: match body.body.shape {
+        shape: match body.shape {
             RigidBodyShape::Sphere { radius } => DynamicsShape::Sphere {
                 radius: f64::from(radius),
             },
@@ -728,8 +783,8 @@ fn body_input(body: &CanonicalBody) -> DynamicsBodyInput {
                 radius: f64::from(radius),
             },
         },
-        mass: f64::from(body.body.mass),
-        mass_properties: match body.body.inertia {
+        mass: f64::from(body.mass),
+        mass_properties: match body.inertia {
             entity_state::RigidBodyInertiaPolicy::DeriveFromShapeAndMass => None,
             entity_state::RigidBodyInertiaPolicy::Explicit {
                 center_of_mass,
@@ -746,20 +801,20 @@ fn body_input(body: &CanonicalBody) -> DynamicsBodyInput {
                 ],
             }),
         },
-        linear_velocity: vec3_f64(body.body.linear_velocity),
-        angular_velocity: vec3_f64(body.body.angular_velocity),
-        locked_translation_axes: body.body.locked_translation_axes,
-        locked_rotation_axes: body.body.locked_rotation_axes,
-        linear_damping: f64::from(body.body.linear_damping),
-        angular_damping: f64::from(body.body.angular_damping),
-        gravity_scale: f64::from(body.body.gravity_scale),
-        friction: f64::from(body.body.friction),
-        restitution: f64::from(body.body.restitution),
-        collision_groups: body.body.collision_groups,
-        collision_mask: body.body.collision_mask,
-        enabled: body.body.enabled,
-        sleeping: body.body.sleeping,
-        continuous_collision: body.body.continuous_collision,
+        linear_velocity: vec3_f64(body.linear_velocity),
+        angular_velocity: vec3_f64(body.angular_velocity),
+        locked_translation_axes: body.locked_translation_axes,
+        locked_rotation_axes: body.locked_rotation_axes,
+        linear_damping: f64::from(body.linear_damping),
+        angular_damping: f64::from(body.angular_damping),
+        gravity_scale: f64::from(body.gravity_scale),
+        friction: f64::from(body.friction),
+        restitution: f64::from(body.restitution),
+        collision_groups: body.collision_groups,
+        collision_mask: body.collision_mask,
+        enabled: body.enabled,
+        sleeping: body.sleeping,
+        continuous_collision: body.continuous_collision,
     }
 }
 

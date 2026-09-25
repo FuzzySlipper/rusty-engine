@@ -2040,7 +2040,10 @@ impl RuntimeSpatialBridge {
                 &session.scene,
                 EntityId::new(1),
                 &character_config(request.config)?,
-                character_command(request.command),
+                CharacterControllerCommand {
+                    tether: character_tether(request.tether),
+                    ..character_command(request.command)
+                },
                 CharacterStepColliders::new(&obstacle_overrides, &mesh_instances),
             )
             .map_err(|error| {
@@ -2051,8 +2054,16 @@ impl RuntimeSpatialBridge {
         session.last_character_content_authority_hash = Some(session.scene.authority_hash());
         session.last_character_mesh_entities = mesh_entities;
         let query_stats = receipt.collision_query_stats;
-        let native_receipt =
+        let mut native_receipt =
             native_character_receipt(&receipt, &session.last_character_mesh_entities);
+        native_receipt.tether.reaction = NativeDynamicsAnchorReaction {
+            source_identity: request.session.value,
+            source_generation: receipt.generation,
+            present: request.tether.dynamic && receipt.tether.reaction_impulse != Vec3::ZERO,
+            anchor: request.tether.dynamic_anchor,
+            impulse: native_vec3(receipt.tether.reaction_impulse),
+            maximum_impulse: request.config.external_motion.maximum_dynamic_impulse,
+        };
         self.last_character_query_stats = query_stats;
         Ok(native_receipt)
     }
@@ -3076,6 +3087,13 @@ fn character_motion(
         NativeCharacterStance::Crouched => CharacterStance::Crouched,
     };
     Ok(CharacterMotionComponent {
+        tether_attached: value.tether_attached,
+        tether_id: value.tether_id,
+        tether_length: value.tether_length,
+        tether_taut: value.tether_taut,
+        tether_anchor_id: value.tether_anchor_id,
+        tether_anchor_point: native_vec3_value(value.tether_anchor_point),
+        tether_local_anchor: native_vec3_value(value.tether_local_anchor),
         controlled_velocity: native_vec3_value(value.controlled_velocity),
         external_velocity: native_vec3_value(value.external_velocity),
         stance,
@@ -3536,6 +3554,7 @@ fn native_character_config(value: CharacterControllerConfig) -> NativeCharacterC
 
 fn character_command(value: NativeCharacterControllerCommand) -> CharacterControllerCommand {
     CharacterControllerCommand {
+        tether: None,
         planar_intent: Vec2::new(value.planar_intent.x, value.planar_intent.y),
         heading_yaw_radians: value.heading_yaw_radians,
         jump_pressed: value.jump_pressed,
@@ -3550,6 +3569,13 @@ fn character_command(value: NativeCharacterControllerCommand) -> CharacterContro
 
 fn native_character_motion(value: CharacterMotionComponent) -> NativeCharacterMotion {
     NativeCharacterMotion {
+        tether_attached: value.tether_attached,
+        tether_id: value.tether_id,
+        tether_length: value.tether_length,
+        tether_taut: value.tether_taut,
+        tether_anchor_id: value.tether_anchor_id,
+        tether_anchor_point: native_vec3(value.tether_anchor_point),
+        tether_local_anchor: native_vec3(value.tether_local_anchor),
         controlled_velocity: native_vec3(value.controlled_velocity),
         external_velocity: native_vec3(value.external_velocity),
         grounded: value.grounded,
@@ -3811,6 +3837,7 @@ fn native_character_receipt(
         }
     });
     NativeCharacterStepReceipt {
+        tether: native_character_tether_fact(receipt.tether),
         generation: receipt.generation,
         revision_before: receipt.revision_before,
         revision_after: receipt.revision_after,
@@ -5812,6 +5839,69 @@ fn native_trigger_cause_value(value: TriggerReconcileCause) -> NativeSpatialTrig
     }
 }
 
+fn character_tether(
+    value: NativeCharacterTetherRequest,
+) -> Option<engine_spatial::CharacterTetherRequest> {
+    value
+        .enabled
+        .then_some(engine_spatial::CharacterTetherRequest {
+            id: value.id,
+            local_anchor: native_vec3_value(value.local_anchor),
+            anchor_id: if value.dynamic {
+                value.dynamic_anchor.body.value
+            } else {
+                0
+            },
+            anchor_valid: !value.dynamic
+                || (value.dynamic_anchor.valid && value.dynamic_anchor.body.value != 0),
+            anchor_point: native_vec3_value(if value.dynamic {
+                value.dynamic_anchor.point
+            } else {
+                value.fixed_anchor
+            }),
+            anchor_velocity: if value.dynamic {
+                native_vec3_value(value.dynamic_anchor.point_velocity)
+            } else {
+                Vec3::ZERO
+            },
+            anchor_response: if value.dynamic {
+                [
+                    native_vec3_value(value.dynamic_anchor.response_x),
+                    native_vec3_value(value.dynamic_anchor.response_y),
+                    native_vec3_value(value.dynamic_anchor.response_z),
+                ]
+            } else {
+                [Vec3::ZERO; 3]
+            },
+            maximum_length: value.maximum_length,
+            target_length: value.target_length,
+            reel_speed: value.reel_speed,
+        })
+}
+
+fn native_character_tether_fact(
+    value: engine_spatial::CharacterTetherFact,
+) -> NativeCharacterTetherFact {
+    NativeCharacterTetherFact {
+        id: value.id,
+        attached: value.attached,
+        released: value.released,
+        invalidated: value.invalidated,
+        taut: value.taut,
+        caught: value.caught,
+        saturated: value.saturated,
+        unresolved: value.unresolved,
+        character_point: native_vec3(value.character_point),
+        anchor_point: native_vec3(value.anchor_point),
+        maximum_length: value.maximum_length,
+        distance: value.distance,
+        radial_velocity: value.radial_velocity,
+        tangential_velocity: native_vec3(value.tangential_velocity),
+        correction: native_vec3(value.correction),
+        reaction: NativeDynamicsAnchorReaction::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7338,6 +7428,7 @@ mod tests {
             .expect("character session creates");
         let receipt = bridge
             .propose_character(NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
                 session,
                 position: NativeVec3 {
                     x: 0.0,
@@ -7386,6 +7477,7 @@ mod tests {
         let config = bridge.default_character_controller_config();
         let request = |obstacles: *const NativeCharacterObstacle, obstacles_len: usize| {
             NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
                 session,
                 position: NativeVec3 {
                     x: 0.0,
@@ -7523,6 +7615,7 @@ mod tests {
                     motion: NativeCharacterMotion,
                     position: NativeVec3,
                     sequence: u64| NativeCharacterStepRequest {
+            tether: NativeCharacterTetherRequest::default(),
             session,
             position,
             motion,
@@ -7715,6 +7808,7 @@ mod tests {
         let first_obstacles = [platform(0.0)];
         let first = bridge
             .propose_character(NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
                 session,
                 position: NativeVec3 {
                     x: 0.0,
@@ -7755,6 +7849,7 @@ mod tests {
         let second_obstacles = [platform(0.2)];
         let second = bridge
             .propose_character(NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
                 session,
                 position: first.transform.translation,
                 motion: first.motion,
@@ -7808,6 +7903,7 @@ mod tests {
             ..Default::default()
         };
         let step = |session, position, motion, sequence| NativeCharacterStepRequest {
+            tether: NativeCharacterTetherRequest::default(),
             session,
             position,
             motion,
@@ -8044,6 +8140,7 @@ mod tests {
         let obstacles = [platform];
         let first = bridge
             .propose_character(NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
                 session: source,
                 position: NativeVec3 {
                     x: 0.0,
@@ -8095,6 +8192,7 @@ mod tests {
             transform: platform.transform,
         };
         let next = |session, motion| NativeCharacterStepRequest {
+            tether: NativeCharacterTetherRequest::default(),
             session,
             position: first.transform.translation,
             motion,

@@ -778,6 +778,41 @@ reads its pose from residency. An unadmitted mesh remains collision-only.
 Product persistence keeps the instance/entity IDs
 and pose as ordinary values; no native handle is part of the saved state.
 
+### Character tethers
+
+Set `CharacterStepRequest.Tether` with `CharacterTetherRequest.AtFixedAnchor`
+or `AtDynamicAnchor`; the default request remains untethered. Use a stable
+nonzero attachment ID and a character-local point. Maximum length admits the
+initial attachment; target length changes at the authored reel speed. Resubmit
+the request each step, or omit it to release while retaining accepted momentum.
+`CharacterMotion` carries attachment and effective-length continuation alongside
+the existing controlled/external velocity, with no separate swing state.
+
+For a dynamic anchor, call `Dynamics.ObserveAnchor` with its body and local
+point. On subsequent steps use `RefreshAnchor` to obtain current copied facts;
+a removed or disabled body returns an invalid observation and the character
+receipt reports invalidation. Engine resolves point velocity, center of mass,
+and impulse response including inertia and locked axes. Product code need not
+calculate these. The character uses effective mass and this response to share
+the velocity correction, capped by `MaximumDynamicImpulse` on both sides.
+
+`CharacterStepReceipt.Tether` reports endpoints (in character-to-anchor order),
+effective maximum length, separation, taut/caught/released/invalidated state,
+radial and tangential velocity, swept correction, saturation and unresolved
+separation. A dynamic receipt also contains `Reaction`. Apply the chosen
+reactions explicitly through `Dynamics.StepWithReactions` together with ordinary
+actions; this performs one normal Dynamics step. Observations and reactions are
+bound to the exact world, entity revision and solver generation. Stale or
+duplicate proposals reject the entire batch before mutation. Observe anchors,
+propose character steps, then apply reactions before other Dynamics mutations.
+There is no hidden Dynamics step inside the character controller.
+
+Terrain can prevent a length correction, and the impulse cap can leave the rope
+extended; inspect `Unresolved` rather than assuming an exact rigid constraint.
+Reeling is caller-authorized work, not a promise of energy conservation. Use the
+receipt endpoints for ordinary debug-line presentation. The public-facade
+exercise is in `fixtures/csharp-nativeaot-trial/Product.cs`.
+
 To save an admitted character continuation, call
 `CaptureCharacterContinuation` with the latest `CharacterStepReceipt.Generation`
 and persist the copied `CharacterContinuationCheckpoint` beside the
