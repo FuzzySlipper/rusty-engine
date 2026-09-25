@@ -449,9 +449,16 @@ mod tests {
     #[test]
     fn renderer_and_runtime_evictions_accumulate_independently() {
         let mut bridge = RuntimeVideoBridge::new(BTreeMap::new());
-        bridge.ingest_realized_feedback(true, 2, (1..=129).map(|fact_id|
-            VideoRealizationFact::Completed { fact_id, handle: fact_id }
-        )).unwrap();
+        bridge
+            .ingest_realized_feedback(
+                true,
+                2,
+                (1..=129).map(|fact_id| VideoRealizationFact::Completed {
+                    fact_id,
+                    handle: fact_id,
+                }),
+            )
+            .unwrap();
         bridge.ingest_realized_feedback(false, 4, []).unwrap();
         bridge.begin_call();
         assert_eq!(bridge.read_realization().unwrap().evicted_fact_count, 5);
