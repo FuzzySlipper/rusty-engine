@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod assets;
+mod audio_resource;
 mod core;
 mod editor_grid;
 mod lighting;
@@ -16,6 +17,7 @@ mod mesh_resource;
 mod voxel_object;
 
 pub use assets::*;
+pub use audio_resource::*;
 pub use core::*;
 pub use editor_grid::*;
 pub use lighting::*;

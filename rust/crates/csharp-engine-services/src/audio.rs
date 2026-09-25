@@ -1701,6 +1701,108 @@ mod tests {
         Arc::from(bytes)
     }
 
+    #[test]
+    fn mixed_containers_share_encoded_byte_count_and_owner_budgets() {
+        let samples: &[(&str, &[u8])] = &[
+            (
+                "wav",
+                include_bytes!("../../../../fixtures/audio-containers/tone.wav"),
+            ),
+            (
+                "ogg",
+                include_bytes!("../../../../fixtures/audio-containers/tone.ogg"),
+            ),
+            (
+                "opus",
+                include_bytes!("../../../../fixtures/audio-containers/tone.opus"),
+            ),
+            (
+                "mp3",
+                include_bytes!("../../../../fixtures/audio-containers/tone.mp3"),
+            ),
+            (
+                "flac",
+                include_bytes!("../../../../fixtures/audio-containers/tone.flac"),
+            ),
+        ];
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.begin_call();
+        for (extension, bytes) in samples {
+            let path = format!("audio/tone.{extension}");
+            let first = bridge.admit_clip(path.clone(), Arc::from(*bytes)).unwrap();
+            assert_eq!(
+                bridge.admit_clip(path, Arc::from(*bytes)).unwrap().value,
+                first.value
+            );
+        }
+        let state = &bridge.staged_ref().unwrap().state;
+        assert_eq!(state.clips.len(), 5);
+        assert_eq!(
+            state
+                .clips
+                .values()
+                .map(|c| c.resource.bytes().len())
+                .sum::<usize>(),
+            samples.iter().map(|(_, b)| b.len()).sum::<usize>()
+        );
+        for n in 5..MAX_AUDIO_RESOURCE_COUNT {
+            let mut bytes = samples[3].1.to_vec();
+            bytes.extend_from_slice(&(n as u64).to_le_bytes());
+            bridge
+                .admit_clip(format!("audio/{n}.mp3"), Arc::from(bytes))
+                .unwrap();
+        }
+        let mut extra = samples[3].1.to_vec();
+        extra.push(255);
+        assert_eq!(
+            bridge
+                .admit_clip("audio/extra.mp3".into(), Arc::from(extra))
+                .unwrap_err()
+                .code(),
+            "CSHARP_AUDIO_RESOURCE_COUNT"
+        );
+        assert_eq!(
+            bridge.staged_ref().unwrap().state.clips.len(),
+            MAX_AUDIO_RESOURCE_COUNT
+        );
+
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.begin_call();
+        for (index, (extension, source)) in samples.iter().take(4).enumerate() {
+            let mut bytes = source.to_vec();
+            bytes.resize(MAX_AUDIO_RESOURCE_BYTES, index as u8);
+            bridge
+                .admit_clip(format!("audio/full.{extension}"), Arc::from(bytes))
+                .unwrap();
+        }
+        assert_eq!(
+            bridge
+                .admit_clip("audio/extra.flac".into(), Arc::from(samples[4].1))
+                .unwrap_err()
+                .code(),
+            "CSHARP_AUDIO_RESOURCE_TOTAL_SIZE"
+        );
+        let mut oversized = samples[4].1.to_vec();
+        oversized.resize(MAX_AUDIO_RESOURCE_BYTES + 1, 0);
+        assert_eq!(
+            bridge
+                .admit_clip("audio/large.flac".into(), Arc::from(oversized))
+                .unwrap_err()
+                .code(),
+            "CSHARP_AUDIO_RESOURCE_SIZE"
+        );
+        assert_eq!(
+            bridge
+                .admit_clip(
+                    "audio/unknown.aac".into(),
+                    Arc::from(b"not audio".as_slice())
+                )
+                .unwrap_err()
+                .code(),
+            "CSHARP_AUDIO_RESOURCE_CONTAINER"
+        );
+    }
+
     fn descriptor(clip: NativeAudioClipHandle, bus: NativeAudioBus) -> NativeAudioSourceDescriptor {
         NativeAudioSourceDescriptor {
             clip,

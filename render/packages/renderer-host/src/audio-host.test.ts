@@ -774,3 +774,93 @@ void test('blocked AudioContext and malformed frame return explicit failures', a
   );
   assert.equal(context.sources.length, 0, 'malformed framing rejects before host effects');
 });
+
+class FakeMediaElement {
+  readyState = 1; duration = 2; onloadedmetadata: (() => void) | null = null;
+  preload = ''; preservesPitch = true; src = ''; loop = false; currentTime = 0; playbackRate = 1;
+  onended: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  error: { message: string } | null = null;
+  plays = 0; pauses = 0; loads = 0;
+  rejection: Error | null = null;
+  play(): Promise<void> { this.plays++; return this.rejection ? Promise.reject(this.rejection) : Promise.resolve(); }
+  pause(): void { this.pauses++; }
+  load(): void { this.loads++; }
+  removeAttribute(name: string): void { if (name === 'src') this.src = ''; }
+}
+
+for (const mediaType of ['audio/ogg', 'audio/mpeg', 'audio/flac']) {
+  test(`compressed ${mediaType} streams through the ordinary graph without whole-clip decoding`, async () => {
+    const context = new FakeContext();
+    const media: FakeMediaElement[] = [];
+    const nodes: FakeNode[] = [];
+    const streamingContext = Object.assign(context, {
+      createMediaElementSource: () => { const node = new FakeNode(); nodes.push(node); return node; },
+    });
+    const audio = new RendererAudioHost({
+      createContext: () => streamingContext as unknown as RendererAudioContext,
+      createMediaElement: () => { const element = new FakeMediaElement(); media.push(element); return element as unknown as HTMLAudioElement; },
+      resolveResource: async () => ({ bytes: new Uint8Array([1, 2, 3]).buffer, contentHash: FIXTURE_AUDIO_HASH, mediaType }),
+    });
+    const voice = audioHandle(7);
+    const result = await audio.applyPresentation(frame([operation(1, { op: 'create', handle: voice, descriptor: { ...descriptor(), looping: true, pitch: 1.5 } })]));
+    assert.equal(result.applied, 1);
+    assert.equal(context.decodeCount, 0);
+    assert.equal(context.sources.length, 0);
+    assert.equal(media[0]!.loop, true);
+    assert.equal(media[0]!.preservesPitch, false);
+    assert.equal(media[0]!.playbackRate, 1.5);
+    assert.equal(media[0]!.plays, 1);
+    assert.equal(nodes[0]!.connections.length, 2);
+    media[0]!.currentTime = 0.75;
+    await audio.applyPresentation(frame([operation(2, { op: 'voiceControl', handle: voice, control: 'pause' })]));
+    assert.equal(media[0]!.src, '');
+    await audio.applyPresentation(frame([operation(3, { op: 'voiceControl', handle: voice, control: 'resume' })]));
+    assert.equal(media[1]!.currentTime, 0.75);
+    const staleEnded = media[1]!.onended;
+    audio.reset(); staleEnded?.();
+    assert.equal(media[1]!.src, '');
+    assert.equal(nodes[1]!.disconnected, true);
+    assert.equal(audio.realizedFacts().facts.length, 0);
+    assert.equal(audio.readout().cachedClips, 0);
+    await audio.dispose();
+  });
+}
+
+test('compressed streams bound concurrent decoders and cancel late metadata on reset', async () => {
+  const context = Object.assign(new FakeContext(), { createMediaElementSource: () => new FakeNode() });
+  const media: FakeMediaElement[] = [];
+  const audio = new RendererAudioHost({
+    createContext: () => context as unknown as RendererAudioContext,
+    createMediaElement: () => { const element = new FakeMediaElement(); element.readyState = 0; media.push(element); return element as unknown as HTMLAudioElement; },
+    resolveResource: async () => ({ bytes: new Uint8Array([1]).buffer, contentHash: FIXTURE_AUDIO_HASH, mediaType: 'audio/ogg' }),
+  });
+  const receipt = await audio.applyPresentation(frame(Array.from({ length: 65 }, (_, index) => operation(index, {
+    op: 'create', handle: audioHandle(index + 1), descriptor: { ...descriptor(), looping: true },
+  }))));
+  assert.equal(receipt.applied, 64);
+  assert.equal(receipt.diagnostics.length, 1);
+  assert.match(receipt.diagnostics[0]!.message, /streaming voice budget/);
+  assert.equal(context.decodeCount, 0);
+  const late = media[0]!.onloadedmetadata;
+  audio.reset(); late?.();
+  assert.equal(media[0]!.plays, 0);
+  assert.ok(media.every(element => element.src === ''));
+  await audio.dispose();
+});
+
+test('compressed asynchronous play rejection reports failure and releases the media source', async () => {
+  const context = Object.assign(new FakeContext(), { createMediaElementSource: () => new FakeNode() });
+  const element = new FakeMediaElement(); element.rejection = new Error('autoplay denied');
+  const audio = new RendererAudioHost({
+    createContext: () => context as unknown as RendererAudioContext,
+    createMediaElement: () => element as unknown as HTMLAudioElement,
+    resolveResource: async () => ({ bytes: new Uint8Array([1]).buffer, contentHash: FIXTURE_AUDIO_HASH, mediaType: 'audio/ogg' }),
+  });
+  await audio.applyPresentation(frame([operation(1, { op: 'create', handle: audioHandle(1), descriptor: descriptor() })]));
+  await Promise.resolve();
+  assert.match(audio.readout().diagnostics[0]!.message, /autoplay denied/);
+  assert.equal(element.src, '');
+  assert.equal(audio.realizedFacts().facts[0]!.kind, 'diagnostic');
+  await audio.dispose();
+});

@@ -14,8 +14,11 @@ import type {
   AudioProjectionDiagnostic,
   AudioProjectionReadout,
 } from './host-types.js';
+const MAX_COMPRESSED_STREAMING_VOICES = 64;
+
 export interface RendererAudioResource {
   readonly bytes: ArrayBuffer;
+  readonly mediaType?: string;
   readonly contentHash: string;
 }
 
@@ -74,6 +77,7 @@ type RendererAudioListener = RendererAudioParamListener | RendererAudioMethodLis
 
 interface RendererBufferSourceNode extends RendererAudioNode {
   buffer: unknown;
+  readonly mediaTime?: number;
   loop: boolean;
   onended: (() => void) | null;
   readonly playbackRate: RendererAudioParam;
@@ -88,6 +92,7 @@ export interface RendererAudioContext {
   readonly state: AudioContextState;
   close(): Promise<void>;
   createBufferSource(): RendererBufferSourceNode;
+  createMediaElementSource(element: HTMLMediaElement): RendererAudioNode;
   createGain(): RendererGainNode;
   createPanner(): RendererPannerNode;
   createStereoPanner(): RendererStereoPannerNode;
@@ -97,6 +102,7 @@ export interface RendererAudioContext {
 
 export interface RendererAudioHostOptions {
   readonly createContext?: () => RendererAudioContext;
+  readonly createMediaElement?: () => HTMLAudioElement;
   /** Maximum realized facts retained for product-owned feedback consumption. */
   readonly maxRetainedFacts?: number;
   /** Maximum host diagnostics retained for local renderer inspection. */
@@ -181,6 +187,7 @@ interface RendererAudioBusState {
 
 export class RendererAudioHost {
   readonly #context: RendererAudioContext;
+  readonly #createMediaElement: () => HTMLAudioElement;
   readonly #resolveEntityPosition: RendererAudioEntityPositionResolver;
   readonly #resolveResource: RendererAudioResourceResolver;
   readonly #buses: Readonly<Record<AudioBus, RendererGainNode>>;
@@ -190,6 +197,7 @@ export class RendererAudioHost {
     ui: { volume: 1, muted: false },
   };
   readonly #cache = new Map<string, Promise<unknown>>();
+  readonly #streams = new Set<StreamingAudioSource>();
   #retainedResourceHashes: ReadonlySet<string> | null = null;
   readonly #retained = new Map<number, RendererRetainedVoice>();
   readonly #oneShots = new Set<RendererAudioSourceGraph>();
@@ -216,6 +224,7 @@ export class RendererAudioHost {
     }
     this.#context = options.createContext?.() ?? createBrowserAudioContext();
     this.#resolveResource = options.resolveResource;
+    this.#createMediaElement = options.createMediaElement ?? (() => new Audio());
     this.#resolveEntityPosition = options.resolveEntityPosition ?? (() => null);
     const sfx = this.#context.createGain();
     const ambient = this.#context.createGain();
@@ -360,6 +369,7 @@ export class RendererAudioHost {
   reset(): void {
     if (this.#disposed) return;
     this.#epoch += 1;
+    for (const stream of this.#streams) { stream.stop(); stream.disconnect(); }
     const retainedGraphs = [...this.#retained.values()]
       .flatMap((voice) => voice.graph === null ? [] : [voice.graph]);
     for (const graph of [...retainedGraphs, ...this.#oneShots]) disposeGraph(graph);
@@ -616,8 +626,18 @@ export class RendererAudioHost {
   ): Promise<RendererAudioSourceGraph> {
     const buffer = await this.#decodeClip(descriptor.clip);
     this.#assertCurrentEpoch(epoch);
-    const source = this.#context.createBufferSource();
+    if (buffer instanceof StreamingAudioResource && this.#streams.size >= MAX_COMPRESSED_STREAMING_VOICES) {
+      throw new RendererAudioResourceError('decodeFailed', 'compressed audio streaming voice budget (64) exhausted');
+    }
+    const source = buffer instanceof StreamingAudioResource
+      ? new StreamingAudioSource(this.#context, this.#createMediaElement(), buffer, (error) => {
+        if (!this.#isCurrentEpoch(epoch)) return;
+        this.#recordDiagnostic({ code: 'decodeFailed', sequence, handle: null,
+          message: errorMessage(error, 'streamed audio playback failed') });
+      }, () => { this.#streams.delete(source as StreamingAudioSource); })
+      : this.#context.createBufferSource();
     source.buffer = buffer;
+    if (source instanceof StreamingAudioSource) this.#streams.add(source);
     const graph: RendererAudioSourceGraph = {
       descriptor,
       sequence,
@@ -662,6 +682,12 @@ export class RendererAudioHost {
     }
     const decoded = this.#resolveResource(clip).then(async (resource) => {
       try {
+        if (resource.mediaType !== undefined && resource.mediaType !== 'audio/wav') {
+          if (!['audio/ogg', 'audio/mpeg', 'audio/flac'].includes(resource.mediaType)) {
+            throw new Error('unsupported recorded audio container MIME');
+          }
+          return new StreamingAudioResource(resource.bytes, resource.mediaType);
+        }
         // Web Audio may detach its input; retain the resolver's bytes for a
         // later cache miss or other owner.
         return await this.#context.decodeAudioData(resource.bytes.slice(0));
@@ -788,6 +814,84 @@ export class RendererAudioHost {
   }
 }
 
+/** Compressed bodies remain encoded; each playing voice uses the browser's streaming decoder. */
+class StreamingAudioResource {
+  readonly blob: Blob;
+  constructor(bytes: ArrayBuffer, mediaType: string) { this.blob = new Blob([bytes], { type: mediaType }); }
+}
+
+class StreamingAudioSource implements RendererBufferSourceNode {
+  buffer: unknown;
+  onended: (() => void) | null = null;
+  readonly playbackRate: RendererAudioParam;
+  readonly #node: RendererAudioNode;
+  readonly #url: string;
+  #stopped = false;
+
+  constructor(
+    context: RendererAudioContext,
+    readonly element: HTMLAudioElement,
+    resource: StreamingAudioResource,
+    readonly failed: (error: unknown) => void,
+    readonly released: () => void,
+  ) {
+    this.#url = URL.createObjectURL(resource.blob);
+    element.preload = 'metadata';
+    element.preservesPitch = false;
+    element.src = this.#url;
+    try {
+      this.#node = context.createMediaElementSource(element);
+    } catch (error) {
+      element.removeAttribute('src'); element.load(); URL.revokeObjectURL(this.#url);
+      throw error;
+    }
+    this.playbackRate = { setValueAtTime: (value) => { element.playbackRate = value; } };
+    element.onended = () => { if (!this.#stopped) this.onended?.(); };
+    element.onerror = () => {
+      if (this.#stopped) return;
+      failed(new Error(element.error?.message ?? 'streamed audio decoding failed'));
+      this.stop();
+    };
+  }
+
+  get loop(): boolean { return this.element.loop; }
+  set loop(value: boolean) { this.element.loop = value; }
+  get mediaTime(): number { return this.element.currentTime; }
+  connect(destination: RendererAudioNode): unknown { return this.#node.connect(destination); }
+  disconnect(): void { this.#node.disconnect(); }
+  start(_when = 0, offset = 0): void {
+    if (this.#stopped) return;
+    const startReady = () => {
+      if (this.#stopped) return;
+      this.element.onloadedmetadata = null;
+      const duration = Number.isFinite(this.element.duration) && this.element.duration > 0 ? this.element.duration : null;
+      const cursor = normalizeCursor(offset, duration, this.loop);
+      if (!this.loop && duration !== null && cursor >= duration) { this.onended?.(); return; }
+      this.element.currentTime = cursor;
+      void this.element.play().catch((error: unknown) => {
+        if (this.#stopped) return;
+        this.failed(error);
+        this.stop();
+      });
+    };
+    if (this.element.readyState >= 1) startReady();
+    else { this.element.onloadedmetadata = startReady; this.element.load(); }
+  }
+  stop(): void {
+    if (this.#stopped) return;
+    this.#stopped = true;
+    this.element.onended = null;
+    this.element.onerror = null;
+    this.element.onloadedmetadata = null;
+    this.element.pause();
+    this.element.removeAttribute('src');
+    this.element.load();
+    URL.revokeObjectURL(this.#url);
+    this.#node.disconnect();
+    this.released();
+  }
+}
+
 class StaleAudioOperation extends Error {}
 
 class RendererAudioResourceError extends Error {
@@ -905,6 +1009,7 @@ function startGraph(
 }
 
 function playbackCursor(graph: RendererAudioSourceGraph, time: number): number {
+  if (graph.source.mediaTime !== undefined) return graph.source.mediaTime;
   const elapsed = Math.max(0, time - graph.startedAt);
   return normalizeCursor(
     graph.startedOffset + elapsed * graph.playbackRate,

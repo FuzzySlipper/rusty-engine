@@ -187,7 +187,7 @@ export class RustyApplicationResourceCatalog {
     return (clip) => {
       const resource = this.#byHash.get(clip.contentHash);
       return resource?.kind === 'audio'
-        ? Promise.resolve({ bytes: resource.bytes, contentHash: resource.contentHash })
+        ? Promise.resolve({ bytes: resource.bytes, contentHash: resource.contentHash, mediaType: resource.mediaType })
         : Promise.reject(new Error(`audio resource ${clip.asset} (${clip.contentHash}) is unavailable`));
     };
   }

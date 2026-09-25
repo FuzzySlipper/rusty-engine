@@ -82,3 +82,13 @@ test('a late response cannot populate a replacement runtime cache', async () => 
   await rejected;
   assert.throws(() => cache.resources([resource], '2'), /was not prefetched/u);
 });
+
+test('dynamic audio preserves the admitted container MIME instead of forcing WAV', async () => {
+  const body = new Uint8Array([79, 103, 103, 83]);
+  const audio = identity('audio-resource', body);
+  for (const mediaType of ['audio/ogg', 'audio/mpeg', 'audio/flac']) {
+    const cache = new ProductBrowserDynamicRendererResources(async () => new Response(body, { headers: { 'Content-Type': mediaType } }));
+    const [resource] = await cache.ensure([audio], '1');
+    assert.equal(resource?.mediaType, mediaType);
+  }
+});

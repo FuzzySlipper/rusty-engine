@@ -108,7 +108,7 @@ async function loadResource(
   return Object.freeze({
     identity,
     contentHash: expectedHash,
-    mediaType: descriptor.mediaType,
+    mediaType: identity.startsWith('audio-resource/') ? (response.headers.get('content-type') ?? descriptor.mediaType).split(';')[0]! : descriptor.mediaType,
     bytes,
   });
 }

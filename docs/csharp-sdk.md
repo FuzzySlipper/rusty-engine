@@ -257,7 +257,7 @@ Use the same asset admissions during Create or a later product update:
 | Authored static mesh | `Graphics.CreateStaticMeshFromContentReference` | StaticMeshAsset JSON with inline payload |
 | Animated meshes and animation packs | `Animation.OpenAnimatedMeshFromContent`, `OpenAnimationClipPackFromContent` | GLB, including same-bundle relative dependencies |
 | Fonts | `Graphics.OpenResourceFromContent` | WOFF2 |
-| Audio clips | `Audio.OpenClipFromContent` | WAV |
+| Audio clips | `Audio.OpenClipFromContent` | WAV, Ogg Vorbis, Ogg Opus, MP3, FLAC ([memory policy](recorded-audio.md)) |
 | Full-viewport video | `Video.Play`, `Video.Stop`, `Video.Skip` | WebM (`video/webm`; VP9+Opus or video-only VP9) |
 | Voxel assets, objects and annotations | `VoxelContent.LoadAssetFromContent`, `LoadObjectFromContent`, `LoadAnnotationFromContent` | Existing typed JSON formats |
 | Imported voxel models | `VoxelContent.LoadMagicaVoxelFromContent` | MagicaVoxel `.vox` |
@@ -531,7 +531,8 @@ The current 256-group/binding restriction remains a separate review candidate.
 
 Packed mesh resources use `u32` byte lengths and offsets; they have no 64 MiB
 per-resource or 256 MiB retained-set policy cap. Explicit pack sizing remains
-a caller choice. Texture/audio byte and collection quotas are removed; texture
+a caller choice. Renderer-preload byte and collection quotas are removed; the
+Audio service retains its encoded clip budgets ([audio policy](recorded-audio.md)). Texture
 dimensions are checked against the active browser GPU before retained PNG
 decoding, with no fixed 4,096-pixel or texel-count policy in the model/catalog.
 Generated presentation output has no default aggregate

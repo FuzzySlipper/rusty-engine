@@ -139,15 +139,14 @@ impl ProductDevRendererResource {
     ) -> Result<Self, ProductDevHostError> {
         use sha2::{Digest, Sha256};
 
-        let path = renderer_path(path.into(), ".wav")?;
-        if bytes.len() < 44 || bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE")
-        {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_RENDERER_AUDIO",
-                "audio resource is not an admitted RIFF/WAVE body",
-            ));
-        }
-        validate_bundle_entry_metadata(&path, "audio/wav")?;
+        let container = render_model::AudioContainer::identify(&bytes).ok_or_else(|| {
+            ProductDevHostError::new(
+                "DEV_HOST_RENDERER_AUDIO_CONTAINER",
+                render_model::AUDIO_CONTAINER_POLICY,
+            )
+        })?;
+        let path = renderer_path(path.into(), container.extension())?;
+        validate_bundle_entry_metadata(&path, container.media_type())?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "audio-resource/{}",
@@ -325,7 +324,11 @@ impl ProductDevRendererResource {
             ProductDevRendererResourceKind::Texture => "image/png",
             ProductDevRendererResourceKind::Mesh => "application/octet-stream",
             ProductDevRendererResourceKind::Font => "font/woff2",
-            ProductDevRendererResourceKind::Audio => "audio/wav",
+            ProductDevRendererResourceKind::Audio => {
+                render_model::AudioContainer::identify(&self.bytes)
+                    .expect("retained audio was admitted by its Engine owner")
+                    .media_type()
+            }
             ProductDevRendererResourceKind::Video => "video/webm",
             ProductDevRendererResourceKind::AnimatedMesh => "model/gltf-binary",
             ProductDevRendererResourceKind::AnimationClipPack => "model/gltf-binary",
@@ -649,6 +652,9 @@ fn is_allowed_content_type(value: &str) -> bool {
             | "image/jpeg"
             | "font/woff2"
             | "audio/wav"
+            | "audio/ogg"
+            | "audio/mpeg"
+            | "audio/flac"
             | "video/webm"
             | "model/gltf-binary"
             | "application/octet-stream"
@@ -669,6 +675,48 @@ mod tests {
         255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
         130,
     ];
+
+    #[test]
+    fn all_audio_containers_keep_their_mime_through_worker_delivery() {
+        for (extension, mime, bytes) in [
+            (
+                "wav",
+                "audio/wav",
+                include_bytes!("../../../../fixtures/audio-containers/tone.wav").as_slice(),
+            ),
+            (
+                "ogg",
+                "audio/ogg",
+                include_bytes!("../../../../fixtures/audio-containers/tone.ogg").as_slice(),
+            ),
+            (
+                "opus",
+                "audio/ogg",
+                include_bytes!("../../../../fixtures/audio-containers/tone.opus").as_slice(),
+            ),
+            (
+                "mp3",
+                "audio/mpeg",
+                include_bytes!("../../../../fixtures/audio-containers/tone.mp3").as_slice(),
+            ),
+            (
+                "flac",
+                "audio/flac",
+                include_bytes!("../../../../fixtures/audio-containers/tone.flac").as_slice(),
+            ),
+        ] {
+            let path = format!("content/audio/tone.{extension}");
+            let resource =
+                ProductDevRendererResource::admit_audio(path.clone(), bytes.to_vec()).unwrap();
+            assert_eq!(resource.media_type(), mime);
+            let carried =
+                ProductDevRendererResource::from_worker_value(resource.to_worker_value()).unwrap();
+            assert_eq!(carried.media_type(), mime);
+            assert_eq!(carried.path(), path);
+            assert_eq!(carried.bytes(), bytes);
+            assert_eq!(carried.bundle_entry().unwrap().content_type(), mime);
+        }
+    }
 
     #[test]
     fn admits_bounded_wav_bundle_bytes_without_opening_a_product_path() {
@@ -724,7 +772,7 @@ mod tests {
 
     #[test]
     fn rejects_media_types_outside_the_fixed_bundle_allowlist() {
-        let error = ProductDevBundleEntry::new("content/renderer/theme.ogg", "audio/ogg", vec![1])
+        let error = ProductDevBundleEntry::new("content/renderer/theme.m4a", "audio/mp4", vec![1])
             .expect_err("unadmitted media type");
         assert!(error.to_string().contains("DEV_HOST_BUNDLE_CONTENT_TYPE"));
     }

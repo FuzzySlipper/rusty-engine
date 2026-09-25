@@ -3788,6 +3788,10 @@ fn content_type(path: &str) -> Option<&'static str> {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "woff2" => Some("font/woff2"),
+        "wav" => Some("audio/wav"),
+        "ogg" | "opus" => Some("audio/ogg"),
+        "mp3" => Some("audio/mpeg"),
+        "flac" => Some("audio/flac"),
         _ => None,
     }
 }

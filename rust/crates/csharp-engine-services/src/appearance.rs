@@ -289,14 +289,13 @@ impl CsharpRenderResource {
     ) -> Result<Self, CsharpEngineServicesError> {
         use sha2::{Digest, Sha256};
 
-        let path = renderer_path(path, ".wav")?;
-        if bytes.len() < 44 || bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE")
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_WAV",
-                "audio resource must be an admitted RIFF/WAVE body",
-            ));
-        }
+        let container = render_model::AudioContainer::identify(&bytes).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_RESOURCE_CONTAINER",
+                render_model::AUDIO_CONTAINER_POLICY,
+            )
+        })?;
+        let path = renderer_path(path, container.extension())?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "audio-resource/{}",
