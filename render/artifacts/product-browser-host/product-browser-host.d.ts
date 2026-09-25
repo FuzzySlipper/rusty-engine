@@ -138,6 +138,16 @@ export interface ProductBrowserVideoFeedback {
 }
 /** Closed renderer-observation feedback; this is not an animation command route. */
 export type ProductBrowserAnimationFeedbackFact = {
+    readonly kind: 'meshInspection';
+    readonly factId: string;
+    readonly objectId: string;
+    readonly generation: string;
+    readonly request: number;
+    readonly boundsMin: readonly [number, number, number];
+    readonly boundsMax: readonly [number, number, number];
+    readonly hasBounds: boolean;
+    readonly voxelNormalMeshes: number;
+} | {
     readonly kind: 'playbackObservation';
     readonly factId: string;
     readonly objectId: string;

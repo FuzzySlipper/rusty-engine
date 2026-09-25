@@ -778,6 +778,11 @@ reads its pose from residency. An unadmitted mesh remains collision-only.
 Product persistence keeps the instance/entity IDs
 and pose as ordinary values; no native handle is part of the saved state.
 
+PrimitiveGeometry.Line creates an ordinary retained line from local `(0, 0, 0)`
+to `(0, 1, 0)`. Set its appearance translation to the first endpoint, rotate
+local +Y toward the second, and scale Y by their distance. Publish it through
+the ordinary appearance snapshot; Engine owns line realization and cleanup.
+
 ### Character tethers
 
 Set `CharacterStepRequest.Tether` with `CharacterTetherRequest.AtFixedAnchor`

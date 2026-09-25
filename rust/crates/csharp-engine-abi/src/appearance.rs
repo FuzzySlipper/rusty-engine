@@ -145,6 +145,8 @@ pub enum NativePrimitiveGeometry {
     Point = 4,
     /// Transform-only retained node; no geometry is drawn. Children form a subtree.
     Group = 5,
+    /// Retained line from local (0, 0, 0) to (0, 1, 0); place through its appearance transform.
+    Line = 6,
 }
 
 #[repr(u32)]

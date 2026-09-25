@@ -436,6 +436,7 @@ async function handleRequest(
           readout: READOUT,
         }
         : operation === 'audio-feedback'
+          || operation === 'video-feedback'
           || operation === 'animation-feedback'
           || operation === 'ghost-plate-feedback'
           || operation === 'renderer-diagnostics'

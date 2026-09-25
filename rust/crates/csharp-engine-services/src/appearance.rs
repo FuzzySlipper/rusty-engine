@@ -4240,6 +4240,10 @@ impl RuntimeAppearanceBridge {
             NativePrimitiveGeometry::Quad => Geometry::Quad,
             NativePrimitiveGeometry::Point => Geometry::Point,
             NativePrimitiveGeometry::Group => Geometry::Group,
+            NativePrimitiveGeometry::Line => Geometry::Line {
+                a: [0.0, 0.0, 0.0],
+                b: [0.0, 1.0, 0.0],
+            },
         };
         self.allocate_appearance(Appearance::Primitive {
             geometry,
@@ -11067,6 +11071,36 @@ pub(super) mod tests {
             })
             .unwrap();
         assert_ne!(replacement.value, appearance.value);
+    }
+
+    #[test]
+    fn line_primitive_uses_existing_retained_geometry_and_snapshot_lifecycle() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let line = bridge
+            .create_primitive(NativePrimitiveAppearanceRequest {
+                geometry: NativePrimitiveGeometry::Line,
+                ..primitive_request()
+            })
+            .unwrap();
+        let fact = appearance_fact(line);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        assert!(bridge.destroy_appearance(line).is_err());
+        let staged = bridge.take_staged_call().unwrap().unwrap();
+        assert!(matches!(
+            staged.frame.unwrap().ops.as_slice(),
+            [render_model::RenderDiff::Create {
+                node: render_model::RenderNode {
+                    geometry: Geometry::Line {
+                        a: [0.0, 0.0, 0.0],
+                        b: [0.0, 1.0, 0.0]
+                    },
+                    ..
+                },
+                ..
+            }]
+        ));
     }
 
     #[test]

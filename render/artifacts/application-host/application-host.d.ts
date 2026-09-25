@@ -224,7 +224,10 @@ export interface RustyApplicationAnimationDiagnostic {
     readonly target: number | null;
     readonly message: string;
 }
-export type RustyApplicationAnimationRealizedFact = {
+export type RustyApplicationAnimationRealizedFact = (import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation & {
+    readonly kind: 'meshInspection';
+    readonly factId: number;
+}) | {
     readonly kind: 'playbackObservation';
     readonly factId: number;
     readonly objectId: number;
