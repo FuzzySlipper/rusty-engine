@@ -530,6 +530,12 @@
       "handle": 4,
       "parent": null,
       "instance": {
+        "inspection": {
+          "wireframe": false,
+          "matte": false,
+          "wholeVoxelNormals": false,
+          "boundsRequest": 0
+        },
         "asset": "mesh-animation/character",
         "transform": {
           "translation": [

@@ -436,8 +436,8 @@ mod tests {
             bytes: s.as_ptr(),
             len: s.len(),
         };
-        let mut source = vec![1, 2, 3];
-        let dependency = vec![4, 5];
+        let mut source = [1, 2, 3];
+        let dependency = [4, 5];
         let files = [NativeContentSourceFile {
             path: text("model/texture.png"),
             bytes: NativeByteSlice {
@@ -460,6 +460,7 @@ mod tests {
             ABI_OK
         );
         source[0] = 99;
+        assert_eq!(source, [99, 2, 3]);
         let retained = bridge.retained_content(handle).unwrap();
         assert_eq!(&*retained.bytes, &[1, 2, 3]);
         assert_eq!(&*retained.files["model/texture.png"], &[4, 5]);
