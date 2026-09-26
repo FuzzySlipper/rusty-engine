@@ -395,6 +395,30 @@ pub struct NativeVoxelHistoryRestoreReceipt {
     pub source_revision: u64,
 }
 
+/// Collision policy for one occupied material slot; visuals retain the cell.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelMaterialCollision {
+    pub material_slot: u32,
+    pub collidable: bool,
+}
+
+/// Configure a fresh session's product-owned material collision declarations.
+/// Unlisted slots collide. Configure before residency or edits.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelMaterialCollisionRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub materials: *const NativeVoxelMaterialCollision,
+    pub materials_len: usize,
+}
+
+pub type NativeConfigureVoxelMaterialCollision = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelMaterialCollisionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeReadVoxelScene = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelSceneReadRequest,
@@ -534,6 +558,7 @@ pub type NativeRestoreVoxelHistory = unsafe extern "C" fn(
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelApi {
     pub context: *mut c_void,
+    pub configure_material_collision: NativeConfigureVoxelMaterialCollision,
     pub read_scene: NativeReadVoxelScene,
     pub read: NativeReadVoxel,
     pub sample_direct_lighting: NativeSampleVoxelDirectLighting,

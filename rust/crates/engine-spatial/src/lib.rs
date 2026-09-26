@@ -245,6 +245,7 @@ pub struct VoxelCollisionScene {
     chunk_size: u32,
     solid_voxels: Vec<[i64; 3]>,
     material_voxels: Vec<MaterialVoxel>,
+    noncollidable_materials: BTreeSet<u16>,
     mesh_chunks: Vec<VoxelMeshChunk>,
     mesh_options: SurfaceMeshOptions,
     mesh_update: VoxelChunkMeshUpdate,
@@ -660,6 +661,7 @@ impl VoxelCollisionScene {
             chunk_size,
             solid_voxels,
             material_voxels,
+            noncollidable_materials: BTreeSet::new(),
             mesh_chunks,
             mesh_options,
             mesh_update: VoxelChunkMeshUpdate {
@@ -754,6 +756,9 @@ impl VoxelCollisionScene {
             self.mesh_options,
             None,
         )?;
+        if !self.noncollidable_materials.is_empty() {
+            candidate.set_noncollidable_materials(self.noncollidable_materials.clone());
+        }
         let previous = self.world_origin.cell();
         let delta = WorldVec::new(
             (i128::from(previous[0]) - i128::from(target_cell[0])) as f64,
@@ -1021,7 +1026,54 @@ impl VoxelCollisionScene {
         )
     }
 
-    fn preserve_static_mesh_projection_from(&mut self, source: &Self) {
+    /// Select collision participation independently of retained visual voxels.
+    /// Material slots omitted from this set retain ordinary solid collision.
+    pub fn noncollidable_materials(&self) -> &BTreeSet<u16> {
+        &self.noncollidable_materials
+    }
+
+    pub fn set_noncollidable_materials(&mut self, materials: BTreeSet<u16>) {
+        self.noncollidable_materials = materials;
+        let mut collision_world = self.voxel_world.clone();
+        for (coordinate, chunk) in self.voxel_world.resident_chunks() {
+            let excluded: Vec<_> = chunk
+                .iter()
+                .filter_map(|(local, value)| {
+                    value
+                        .material()
+                        .filter(|material| self.noncollidable_materials.contains(&material.raw()))
+                        .map(|_| local)
+                })
+                .collect();
+            if excluded.is_empty() {
+                continue;
+            }
+            let chunk = collision_world
+                .get_mut(coordinate)
+                .expect("resident source chunk");
+            for local in excluded {
+                chunk
+                    .set(local, VoxelValue::EMPTY)
+                    .expect("local coordinate came from chunk");
+            }
+        }
+        let mut projection = CollisionProjection::build(&collision_world);
+        projection.copy_static_meshes_from(&self.projection);
+        self.projection = projection;
+        self.navigation = build_nav_projection(
+            &collision_world,
+            NavProjectionConfig {
+                agent_height_voxels: 1,
+                require_solid_floor: false,
+            },
+        )
+        .expect("positive navigation agent height");
+    }
+
+    fn preserve_scene_configuration_from(&mut self, source: &Self) {
+        if !source.noncollidable_materials.is_empty() {
+            self.set_noncollidable_materials(source.noncollidable_materials.clone());
+        }
         self.projection.copy_static_meshes_from(&source.projection);
     }
 

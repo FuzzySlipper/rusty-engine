@@ -379,7 +379,7 @@ impl VoxelEditHistory {
             None,
         )
         .map_err(VoxelEditHistoryError::Rebuild)?;
-        candidate.preserve_static_mesh_projection_from(scene);
+        candidate.preserve_scene_configuration_from(scene);
         let current_map = material_map(scene.material_voxels());
         let diff = summarize_diff(
             &current_map,

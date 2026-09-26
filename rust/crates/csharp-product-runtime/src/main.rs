@@ -304,8 +304,10 @@ fn run_supervised_shell(args: Arguments) -> Result<(), String> {
     let browser_shutdown = headless_browser
         .map(headless_browser::HeadlessBrowser::shutdown)
         .unwrap_or(Ok(()));
+    // Keep delivery alive while the worker settles its final callback and
+    // diagnostics. Closing the host queues first can interrupt that settlement.
+    let worker_shutdown = runtime.shutdown_generation(runtime.active_generation());
     let host_shutdown = host.shutdown().map_err(|error| error.to_string());
-    let worker_shutdown = runtime.stop_generation(runtime.active_generation());
     browser_shutdown?;
     host_shutdown?;
     worker_shutdown?;
@@ -722,6 +724,64 @@ impl WorkerRuntime {
         }
         *inflight = None;
         Some(generation)
+    }
+
+    /// Ordinary process termination permits managed disposal. Fault replacement
+    /// still uses stop_generation: a tainted or stuck callback must not reenter.
+    fn shutdown_generation(&self, generation: u64) -> Result<(), String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DEV_HOST_WORKER_LOCK: worker connection lock is poisoned".to_owned())?;
+        if connection.generation != generation {
+            return Ok(());
+        }
+        // Shutdown remains bounded even when normal debugger callbacks are not.
+        connection.operation_timeout = Some(Duration::from_secs(10));
+        if let Err(error) = invoke_connection::<ProductDevOperationResult>(
+            &self.failures,
+            &mut connection,
+            |request_id| ProductDevWorkerRequest::Shutdown { request_id },
+        ) {
+            stop_worker(&mut connection);
+            return Err(format!(
+                "DEV_HOST_WORKER_SHUTDOWN: {}: {}",
+                error.code(),
+                error.diagnostic()
+            ));
+        }
+        connection.retiring.store(true, Ordering::Release);
+        connection
+            .writer
+            .shutdown(Shutdown::Write)
+            .map_err(|error| format!("DEV_HOST_WORKER_SHUTDOWN: {error}"))?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = connection
+                .child
+                .try_wait()
+                .map_err(|error| format!("DEV_HOST_WORKER_SHUTDOWN: {error}"))?
+            {
+                if let Some(reader) = connection.reader.take() {
+                    let _ = reader.join();
+                }
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "DEV_HOST_WORKER_SHUTDOWN: worker exited with {status}"
+                    ))
+                };
+            }
+            if Instant::now() >= deadline {
+                stop_worker(&mut connection);
+                return Err(
+                    "DEV_HOST_WORKER_SHUTDOWN_TIMEOUT: worker did not dispose within 10 seconds"
+                        .to_owned(),
+                );
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn stop_generation(&self, generation: u64) -> Result<(), String> {
@@ -1978,7 +2038,14 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             }
         };
         let activate = matches!(request, ProductDevWorkerRequest::Activate { .. });
-        if scheduler.is_none() && !activate {
+        let stopping = matches!(request, ProductDevWorkerRequest::Shutdown { .. });
+        if stopping {
+            scheduler_shutdown.store(true, Ordering::Release);
+            if let Some(scheduler) = scheduler.take() {
+                let _ = scheduler.join();
+            }
+        }
+        if scheduler.is_none() && !activate && !stopping {
             let result = worker_fault_response(
                 worker_request_id(&request),
                 ProductDevRuntimeError::new_not_applied(
@@ -2088,6 +2155,10 @@ fn run_worker(args: Arguments) -> Result<(), String> {
     if let Some(scheduler) = scheduler {
         let _ = scheduler.join();
     }
+    // Closing supervision is the ordinary exit path. Drop the sole runtime
+    // owner before flushing so Product.Dispose diagnostics reach the log too.
+    drop(owner);
+    diagnostics.flush();
     Ok(())
 }
 

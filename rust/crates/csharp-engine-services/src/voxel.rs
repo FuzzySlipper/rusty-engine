@@ -850,6 +850,70 @@ unsafe extern "C" fn read_resident_chunk_at(
     }
 }
 
+unsafe extern "C" fn configure_material_collision(
+    context: *mut c_void,
+    request: *const NativeVoxelMaterialCollisionRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    let request = unsafe { &*request };
+    let result = (|| {
+        let materials = unsafe {
+            crate::composition::borrowed_slice(
+                request.materials,
+                request.materials_len,
+                "voxel material collision declarations",
+            )
+        }?;
+        let mut declared = std::collections::BTreeSet::new();
+        let mut excluded = std::collections::BTreeSet::new();
+        for material in materials {
+            let slot = u16::try_from(material.material_slot).ok().ok_or_else(|| {
+                voxel_error(
+                    "CSHARP_VOXEL_MATERIAL_COLLISION",
+                    "material slot must be in 0..=65535",
+                )
+            })?;
+            if !declared.insert(slot) {
+                return Err(voxel_error(
+                    "CSHARP_VOXEL_MATERIAL_COLLISION",
+                    "duplicate material slot",
+                ));
+            }
+            if !material.collidable {
+                excluded.insert(slot);
+            }
+        }
+        let session = bridge.session_mut(request.session)?;
+        if session.scene.source_revision().raw() != 0 || session.scene.resident_chunk_count() != 0 {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_MATERIAL_COLLISION_LIFECYCLE",
+                "configure material collision before residency or edits",
+            ));
+        }
+        let mut scene = (*session.scene).clone();
+        scene.set_noncollidable_materials(excluded);
+        let scene = Arc::new(scene);
+        session.scene = Arc::clone(&scene);
+        bridge.publish_scene(request.session, scene);
+        Ok::<_, CsharpEngineServicesError>(())
+    })();
+    match result {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            retain_voxel_operation_error(bridge, &error, receipt, b"ConfigureMaterialCollision");
+            0
+        }
+    }
+}
+
 unsafe extern "C" fn apply_edits(
     context: *mut c_void,
     request: *const NativeVoxelEditTransaction,
@@ -1172,6 +1236,7 @@ unsafe extern "C" fn restore_history(
 pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
     NativeVoxelApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
+        configure_material_collision,
         read_scene,
         read,
         sample_direct_lighting,
@@ -1223,6 +1288,68 @@ mod tests {
             ABI_OK
         );
         session
+    }
+
+    #[test]
+    fn material_collision_configuration_survives_edits_and_rejects_late_changes() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let materials = [NativeVoxelMaterialCollision {
+            material_slot: 11,
+            collidable: false,
+        }];
+        let request = NativeVoxelMaterialCollisionRequest {
+            session,
+            materials: materials.as_ptr(),
+            materials_len: materials.len(),
+        };
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.configure_material_collision)(api.context, &request, &mut receipt) },
+            ABI_OK
+        );
+        let edits = [
+            NativeVoxelEdit {
+                kind: NativeVoxelEditKind::Set,
+                address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
+                material_slot: 1,
+                state: 0,
+            },
+            NativeVoxelEdit {
+                kind: NativeVoxelEditKind::Set,
+                address: NativeVoxelAddress { x: 0, y: 1, z: 0 },
+                material_slot: 11,
+                state: 0,
+            },
+        ];
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                expected_revision: 0,
+                edits: edits.as_ptr(),
+                edits_len: edits.len(),
+            })
+            .unwrap();
+        let scene = &bridge.session_mut(session).unwrap().scene;
+        assert_eq!(scene.material_voxels().len(), 2);
+        assert_eq!(
+            scene
+                .raycast([0.5, 3.0, 0.5], [0.0, -1.0, 0.0], 5.0)
+                .unwrap()
+                .voxel,
+            [0, 0, 0]
+        );
+        assert_ne!(
+            unsafe { (api.configure_material_collision)(api.context, &request, &mut receipt) },
+            ABI_OK
+        );
+        assert!(bridge
+            .session_mut(session)
+            .unwrap()
+            .scene
+            .noncollidable_materials()
+            .contains(&11));
     }
 
     #[test]

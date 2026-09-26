@@ -242,6 +242,7 @@ pub type NativeProposeCharacterStep = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCharacterStepRequest,
     *mut NativeCharacterStepReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCaptureCharacterContinuation = unsafe extern "C" fn(
     *mut c_void,

@@ -302,6 +302,7 @@ fn history_codec_preserves_redo_tail_and_rejects_corruption() {
 #[test]
 fn history_restore_keeps_live_static_collision_and_rebase_context() {
     let mut scene = scene();
+    scene.set_noncollidable_materials([2].into());
     let mut history = VoxelEditHistory::new(&scene);
     history
         .apply(
@@ -349,6 +350,8 @@ fn history_restore_keeps_live_static_collision_and_rebase_context() {
         static_instances
     );
     assert!(has_voxel(&runtime_restored, [4, 0, 0]));
+    assert_eq!(runtime_restored.noncollidable_materials(), &[2].into());
+    assert_eq!(scene.noncollidable_materials(), &[2].into());
 }
 
 #[test]

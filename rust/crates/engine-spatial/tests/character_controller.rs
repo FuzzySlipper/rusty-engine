@@ -1575,3 +1575,60 @@ fn representative_character_controller_performance_budget() {
         EntityState::from_definitions(definitions).unwrap(),
     );
 }
+
+#[test]
+fn noncollidable_material_layer_preserves_cells_but_rays_and_characters_reach_floor() {
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    scene.set_noncollidable_materials([11].into());
+    let mut edits = Vec::new();
+    for x in -2..=2 {
+        for z in -2..=2 {
+            for y in 0..=3 {
+                edits.push(VoxelEdit::Set {
+                    address: [x, y, z],
+                    material_slot: if y == 0 { 1 } else { 11 },
+                });
+            }
+        }
+    }
+    let expected_revision = scene.source_revision();
+    VoxelEditService::apply(
+        &mut scene,
+        VoxelEditTransaction {
+            expected_revision,
+            edits: &edits,
+        },
+    )
+    .unwrap();
+    assert_eq!(scene.material_voxels().len(), 100);
+    assert!(!scene.mesh_chunks().is_empty());
+    assert_eq!(
+        scene
+            .raycast([0.5, 8.0, 0.5], [0.0, -1.0, 0.0], 10.0)
+            .unwrap()
+            .voxel,
+        [0, 0, 0]
+    );
+    let (entity, mut state) = character_at(Vec3::new(0.5, 6.0, 0.5));
+    let config = CharacterControllerConfig::default();
+    let mut service = CharacterControllerService::default();
+    for tick in 1..=180 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(tick, Vec2::ZERO),
+            )
+            .unwrap();
+        if tick == 180 {
+            assert!(receipt.motion_after.grounded);
+            assert!(
+                (receipt.transform_after.translation.y - 1.9).abs() < 0.05,
+                "character must rest on floor, not passable layer: {:?}",
+                receipt.transform_after.translation
+            );
+        }
+    }
+}

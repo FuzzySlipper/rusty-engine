@@ -679,7 +679,7 @@ impl RuntimeSpatialBridge {
         let cells = resolve_voxel_asset(asset).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VOXEL_ASSET_SPATIAL_RESOLVE", error.to_string())
         })?;
-        let candidate = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        let mut candidate = VoxelCollisionScene::from_material_voxels_with_mesh_options(
             asset.grid.cell_size,
             asset.grid.chunk_size,
             cells.into_iter().map(|cell| MaterialVoxel {
@@ -692,6 +692,7 @@ impl RuntimeSpatialBridge {
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VOXEL_ASSET_SPATIAL_BUILD", error.to_string())
         })?;
+        candidate.set_noncollidable_materials(scene_before.noncollidable_materials().clone());
         let candidate = Arc::new(candidate);
         let facts = VoxelAssetSpatialPublishFacts {
             revision_before: scene_before.source_revision().raw(),
@@ -2051,9 +2052,7 @@ impl RuntimeSpatialBridge {
                 },
                 CharacterStepColliders::new(&obstacle_overrides, &mesh_instances),
             )
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_CHARACTER_STEP", error.code())
-            })?;
+            .map_err(|error| CsharpEngineServicesError::new(error.code(), error.to_string()))?;
         session.last_character_receipt = Some(receipt.clone());
         session.last_character_config = Some(request.config);
         session.last_character_content_authority_hash = Some(session.scene.authority_hash());
@@ -4304,7 +4303,12 @@ unsafe extern "C" fn propose_character_step(
     context: *mut c_void,
     request: *const NativeCharacterStepRequest,
     receipt: *mut NativeCharacterStepReceipt,
+    error_receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if error_receipt.is_null() {
+        return 0;
+    }
+    unsafe { *error_receipt = std::mem::zeroed() };
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -4323,7 +4327,15 @@ unsafe extern "C" fn propose_character_step(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            retain_character_validation_error(
+                bridge,
+                &SpatialCharacterValidationError::Service(error),
+                error_receipt,
+                b"ProposeCharacterStep",
+            );
+            0
+        }
     }
 }
 
@@ -7526,6 +7538,79 @@ mod tests {
             .expect("empty obstacle input is a valid borrowed span");
 
         assert_eq!(receipt.command_sequence, 1);
+    }
+
+    #[test]
+    fn embedded_character_failure_has_a_retained_native_reason() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .unwrap();
+        let mut solids = Vec::new();
+        for x in -2..=2 {
+            for y in 0..=4 {
+                for z in -2..=2 {
+                    solids.push([x, y, z]);
+                }
+            }
+        }
+        bridge.session_mut(session).unwrap().scene =
+            Arc::new(VoxelCollisionScene::from_solid_voxels(1.0, 8, solids).unwrap());
+        let request = NativeCharacterStepRequest {
+            tether: NativeCharacterTetherRequest::default(),
+            session,
+            position: NativeVec3 {
+                x: 0.0,
+                y: 2.0,
+                z: 0.0,
+            },
+            motion: NativeCharacterMotion {
+                stance: NativeCharacterStance::Standing,
+                fall_origin_y: 2.0,
+                peak_y: 2.0,
+                ..Default::default()
+            },
+            support: NativeCharacterSupport::default(),
+            obstacles: std::ptr::null(),
+            obstacles_len: 0,
+            mesh_instances: std::ptr::null(),
+            mesh_instances_len: 0,
+            config: bridge.default_character_controller_config(),
+            command: NativeCharacterControllerCommand {
+                movement: Default::default(),
+                planar_intent: NativeVec2::default(),
+                heading_yaw_radians: 0.0,
+                jump_pressed: false,
+                jump_held: false,
+                crouch_requested: false,
+                external_velocity: NativeVec3::default(),
+                external_impulse: NativeVec3::default(),
+                step_seconds: 1.0 / 60.0,
+                sequence: 1,
+            },
+        };
+        let api = api(&mut bridge);
+        let mut output: NativeCharacterStepReceipt = unsafe { std::mem::zeroed() };
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.propose_character_step)(api.context, &request, &mut output, &mut error) },
+            0
+        );
+        assert_ne!(error.diagnostics.handle.value, 0);
+        let diagnostic = unsafe { &*error.diagnostics.diagnostics };
+        let code =
+            unsafe { std::slice::from_raw_parts(diagnostic.code.bytes, diagnostic.code.len) };
+        assert_eq!(code, b"unresolved-character-controller-penetration");
+        assert!(bridge
+            .session_mut(session)
+            .unwrap()
+            .last_character_receipt
+            .is_none());
+        assert!(bridge.destroy_trigger_operation_diagnostic_lease(error.diagnostics.handle));
     }
 
     #[test]

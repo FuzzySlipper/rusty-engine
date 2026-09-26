@@ -75,7 +75,7 @@ impl VoxelEditHistoryRestore {
             None,
         )
         .map_err(VoxelEditHistoryCodecError::Scene)?;
-        scene.preserve_static_mesh_projection_from(live_scene);
+        scene.preserve_scene_configuration_from(live_scene);
         Ok(scene)
     }
 }

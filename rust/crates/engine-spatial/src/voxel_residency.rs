@@ -782,7 +782,7 @@ impl VoxelChunkResidencyService {
             Some((&scene.mesh_chunks, &dirty_coordinates)),
         )
         .map_err(VoxelChunkResidencyApplyError::ProjectionBuild)?;
-        candidate.preserve_static_mesh_projection_from(scene);
+        candidate.preserve_scene_configuration_from(scene);
         let candidate_residency_hash = residency_hash(&candidate);
         let receipt = VoxelChunkResidencyReceipt {
             revision_before: scene.source_revision,

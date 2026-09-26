@@ -530,7 +530,7 @@ impl VoxelEditService {
             Some((&scene.mesh_chunks, &dirty_mesh_chunks)),
         )
         .map_err(VoxelEditApplyError::ProjectionBuild)?;
-        rebuilt.preserve_static_mesh_projection_from(scene);
+        rebuilt.preserve_scene_configuration_from(scene);
         let changed_min = [0, 1, 2].map(|axis| {
             deltas
                 .iter()

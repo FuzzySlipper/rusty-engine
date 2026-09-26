@@ -723,6 +723,37 @@ stages the matching renderer destroys. Select `VoxelSurfaceMode` in
 Engine-derived mesh posture and is retained through subsequent voxel changes.
 Changing the mode of an existing session is not currently a C# API.
 
+### Voxel material collision
+
+Immediately after creating a Spatial session, call
+`Voxel.ConfigureMaterialCollision(new(session, declarations))` with
+`VoxelMaterialCollision(slot, collidable)` values from the product's material
+definitions. Do this before residency, edits, or history restoration. Unlisted
+slots collide, preserving the default occupied-cell behavior. Duplicate slots
+and configuration after residency/edits return named operation diagnostics.
+
+A false declaration keeps the canonical voxel, material, and visual mesh while
+excluding that slot from collision and navigation. Rays, sweeps, and character
+steps therefore pass through water and reach solid ground below it. The session
+retains the declarations through edits, undo/redo, residency, restoration, and
+origin rebases. Recreate the session to change this configuration.
+
+Collision has no dependency on Graphics resources or a browser. Authored
+`Solid`, `Collidable`, and `Occludes` metadata on a rendered material alone
+does not configure a Spatial session: pass the same product-owned
+`Collidable` values to Voxel. Occlusion and transparency remain separate
+rendering concerns. See `fixtures/csharp-voxel-collision` for a packaged
+water-over-floor and multi-cell update-loop exercise.
+
+A multi-cell edit may legitimately fill the space occupied by a character.
+The edit and character step are separate operations. If bounded penetration
+recovery cannot find a valid contact result, `Spatial.ProposeCharacterStep`
+returns an `EngineCallException` carrying the native reason (for example
+`unresolved-character-controller-penetration`, including remaining depth).
+The product decides whether to prevent such edits, relocate the actor, or
+otherwise handle the rejected motion. There is no two-cell transaction limit;
+the fixture exercises 64-cell batches and subsequent updates.
+
 ### Voxel scene material palettes and atlases
 
 A `GreedyCubes` scene can bind materials from multiple authored voxel atlases,
@@ -1823,3 +1854,12 @@ it. A replacement renderer replays the retained request once. Zero disables the
 request. This is observation, not a second animation clock or automatic camera.
 
 See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/model semantics over loose files and bundles.
+
+### Stopping the development supervisor
+
+On Unix, SIGINT or SIGTERM sent to `rusty dev` closes its supervision pipe and
+waits for the host and managed worker to shut down. The worker stops updating,
+runs product disposal, and flushes diagnostics before a successful exit.
+A worker that cannot finish disposal within ten seconds is terminated with
+`DEV_HOST_WORKER_SHUTDOWN_TIMEOUT`; the supervisor also bounds host shutdown.
+Faulted worker replacement retains its separate force-stop behavior.

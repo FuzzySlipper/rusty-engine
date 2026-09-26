@@ -9,9 +9,12 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use serde::Deserialize;
@@ -46,7 +49,23 @@ fn main() -> Result<(), String> {
     }
 }
 
+#[cfg(unix)]
+fn install_termination_signal_hook() -> Result<Arc<AtomicBool>, String> {
+    let requested = Arc::new(AtomicBool::new(false));
+    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        signal_hook::flag::register(signal, Arc::clone(&requested))
+            .map_err(|error| format!("RUSTY_DEV_SIGNAL: {error}"))?;
+    }
+    Ok(requested)
+}
+
+#[cfg(not(unix))]
+fn install_termination_signal_hook() -> Result<Arc<AtomicBool>, String> {
+    Ok(Arc::new(AtomicBool::new(false)))
+}
+
 fn dev(options: DevOptions) -> Result<(), String> {
+    let termination = install_termination_signal_hook()?;
     let runtime = RuntimePack::resolve(&options)?;
     runtime.verify()?;
 
@@ -82,6 +101,16 @@ fn dev(options: DevOptions) -> Result<(), String> {
     );
 
     loop {
+        if termination.load(Ordering::Acquire) {
+            if let Some(mut active_child) = child.take() {
+                active_child.shutdown()?;
+            }
+            diagnostic(
+                "stopped",
+                serde_json::json!({ "reason": "termination-signal" }),
+            );
+            return Ok(());
+        }
         if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
                 let exited_child = child.take().expect("observed child is present");
@@ -778,6 +807,30 @@ impl SupervisedHost {
             stdin: Some(stdin),
             runtime_instance_id,
         })
+    }
+
+    fn shutdown(&mut self) -> Result<(), String> {
+        // Closing the existing supervision pipe asks the host to drain its
+        // worker and product disposal. Keep inherited output open until reaped.
+        self.stdin.take();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "RUSTY_DEV_CHILD_SHUTDOWN: host exited with {status}"
+                    ))
+                };
+            }
+            if Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: host did not finish disposal within 30 seconds".into());
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, String> {
