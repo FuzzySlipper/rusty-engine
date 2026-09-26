@@ -1,8 +1,5 @@
-//! Authored scene documents, validation, editing, and atomic entity admission.
-//!
-//! The scene is durable authoring data. Runtime state begins only when an
-//! explicit admission plan is applied to `entity-state`; there is no runtime
-//! session facade, replay record, or project-bundle routing in this crate.
+//! Authored scene documents, validation, editing, and resolved plan facts.
+//! Products apply these facts to their own state through named Engine services.
 
 #![forbid(unsafe_code)]
 
@@ -15,8 +12,8 @@ mod validation;
 
 pub use admission::{
     AvailableSceneAsset, PlannedSceneEntity, PlannedSceneLight, PlannedSceneRenderable,
-    ResolvedSceneInstance, SceneAdmissionError, SceneAdmissionPlan, SceneAdmissionReceipt,
-    SceneReferenceError, SceneResolutionContext, DEFAULT_BASE_ENTITY_ID,
+    ResolvedSceneInstance, SceneAdmissionError, SceneAdmissionPlan, SceneReferenceError,
+    SceneResolutionContext, DEFAULT_BASE_ENTITY_ID,
 };
 pub use codec::{decode_scene, decode_scene_unvalidated, encode_scene, SceneCodecError};
 pub use edit::{

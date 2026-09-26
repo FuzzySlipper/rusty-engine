@@ -2876,7 +2876,6 @@ impl Default for OutputBus {
     }
 }
 
-#[derive(Clone)]
 struct PendingBaseline {
     binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
@@ -2889,7 +2888,7 @@ struct OutputEvent {
     id: u64,
     publication_end_id: u64,
     event: Option<&'static str>,
-    json: String,
+    json: Arc<str>,
 }
 
 struct OutputSnapshot {
@@ -2925,19 +2924,15 @@ impl OutputBus {
     fn after(&self, cursor: u64) -> OutputSnapshot {
         OutputSnapshot {
             floor_cursor: self.floor_cursor,
-            events: self
-                .events
-                .iter()
-                .filter(|event| event.id > cursor)
-                .map(|event| OutputEvent {
-                    generation: event.generation,
-                    resources: Arc::clone(&event.resources),
-                    id: event.id,
-                    publication_end_id: event.publication_end_id,
-                    event: event.event,
-                    json: event.json.clone(),
-                })
-                .collect(),
+            events: if cursor < self.floor_cursor {
+                Vec::new()
+            } else {
+                self.events
+                    .iter()
+                    .filter(|event| event.id > cursor)
+                    .cloned()
+                    .collect()
+            },
         }
     }
 }
@@ -3109,12 +3104,14 @@ struct OutputPushStage {
 }
 
 impl OutputPushStage {
-    fn new(bus: &OutputBus) -> Self {
+    fn new(bus: &mut OutputBus) -> Self {
         Self {
             next_id: bus.next_id,
             next_transfer_id: bus.next_transfer_id,
             active_binding: bus.active_binding,
-            pending_baseline: bus.pending_baseline.clone(),
+            // A failed push fences the binding and discards this partial baseline.
+            // Transfer the accumulated prefix instead of copying it per fragment.
+            pending_baseline: bus.pending_baseline.take(),
             retained_start: 0,
             floor_cursor: bus.floor_cursor,
             new_events: VecDeque::new(),
@@ -3231,7 +3228,7 @@ fn append_staged_output_events(
             id: staged.next_id,
             publication_end_id: final_id,
             event: encoded.event,
-            json: encoded.json,
+            json: encoded.json.into(),
         });
     }
     staged.trim_history(bus);
@@ -3883,6 +3880,68 @@ mod tests {
             .renderer_resource(&identity, binding().generation.get())
             .is_none());
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn sse_snapshot_keeps_shared_json_alive_after_history_retirement() {
+        let mut bus = OutputBus {
+            retained_event_limit: 1,
+            ..OutputBus::default()
+        };
+        append_output_events(
+            &mut bus,
+            binding(),
+            vec![ProductDevRuntimeOutput::runtime_progress()],
+        )
+        .unwrap();
+        let snapshot = bus.after(0);
+        assert!(Arc::ptr_eq(&snapshot.events[0].json, &bus.events[0].json));
+        let expected = snapshot.events[0].json.to_string();
+        append_output_events(
+            &mut bus,
+            binding(),
+            vec![ProductDevRuntimeOutput::runtime_progress()],
+        )
+        .unwrap();
+        assert_eq!(bus.floor_cursor, 1);
+        assert!(bus.after(0).events.is_empty());
+        drop(bus);
+        assert_eq!(&*snapshot.events[0].json, expected);
+    }
+
+    #[test]
+    fn baseline_fragments_accumulate_across_pushes_until_completion() {
+        let runtime = binding();
+        let bus = Mutex::new(OutputBus::default());
+        push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::binding(
+                runtime,
+                CanonicalU64::new(0),
+            )],
+        )
+        .unwrap();
+        for tick in 0..3 {
+            push_outputs(
+                &bus,
+                vec![ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"tick": tick}),
+                )],
+            )
+            .unwrap();
+            assert!(bus.lock().unwrap().events.is_empty());
+        }
+        push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::complete_baseline(runtime)],
+        )
+        .unwrap();
+        let bus = bus.lock().unwrap();
+        assert!(bus.pending_baseline.is_none());
+        assert_eq!(bus.active_binding, Some(runtime));
+        let batch: serde_json::Value = serde_json::from_str(&bus.events[0].json).unwrap();
+        // Completion attaches its frontiers to the binding rather than emitting a record.
+        assert_eq!(batch["outputs"].as_array().unwrap().len(), 4);
     }
 
     #[test]

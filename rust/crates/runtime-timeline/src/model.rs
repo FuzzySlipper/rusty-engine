@@ -2,24 +2,14 @@ use std::fmt;
 
 use runtime_lifecycle::{
     validate_runtime_identity as validate_neutral_identity, RuntimeControlRevision,
-    RuntimeGeneration, RuntimeInstanceId, SimulationStep,
+    RuntimeGeneration, RuntimeInstanceId,
 };
 use serde_json::Value;
 
-/// Maximum number of scheduled operations retained by one timeline lane.
-pub const MAX_TIMELINE_OPERATIONS: usize = 1_024;
-/// Maximum number of completion tickets retained by one timeline lane.
-pub const MAX_TIMELINE_COMPLETION_TICKETS: usize = 1_024;
-/// Maximum number of released events returned from one call.
-pub const MAX_TIMELINE_RELEASE_PREFIX: usize = 256;
-/// Maximum UTF-8 bytes in a caller correlation or provenance label.
+/// Maximum UTF-8 bytes in a completion correlation label.
 pub const MAX_RUNTIME_CORRELATION_BYTES: usize = runtime_lifecycle::MAX_RUNTIME_IDENTITY_BYTES;
-/// Maximum finite recurrence occurrences accepted for one operation.
-pub const MAX_RECURRENCE_OCCURRENCES: u32 = 1_024;
-/// Maximum number of operations or tickets represented by one typed snapshot.
-pub const MAX_TIMELINE_SNAPSHOT_ITEMS: usize = MAX_TIMELINE_OPERATIONS;
 
-/// Identity and lifecycle epoch of one explicit timeline owner.
+/// Identity and lifecycle epoch carried by a completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RuntimeTimelineBinding {
     instance_id: RuntimeInstanceId,
@@ -53,54 +43,7 @@ impl RuntimeTimelineBinding {
     }
 }
 
-/// Caller-chosen operation identity. The lane never invents game meaning for
-/// this value; it uses it only for uniqueness, exact mutation guards, and
-/// deterministic release tie-breaking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TimelineOperationIdentity(u64);
-
-impl TimelineOperationIdentity {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-}
-
-/// Lane-issued insertion ordering. It is distinct from due step and caller
-/// operation identity so equal-deadline releases remain deterministic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TimelineInsertionSequence(u64);
-
-impl TimelineInsertionSequence {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-}
-
-/// Exact mutation revision for one live operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TimelineOperationRevision(u64);
-
-impl TimelineOperationRevision {
-    pub const ZERO: Self = Self(0);
-
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-}
-
-/// Lane-issued completion ticket identity.
+/// Product-issued completion ticket identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimelineCompletionTicketId(u64);
 
@@ -111,27 +54,6 @@ impl TimelineCompletionTicketId {
 
     pub const fn value(self) -> u64 {
         self.0
-    }
-}
-
-/// The only external completion source categories admitted by the timeline
-/// lane. They are source facts, not host services or dispatch handles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RuntimeSourceKind {
-    Filesystem,
-    Network,
-    Inference,
-    External,
-}
-
-impl RuntimeSourceKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Filesystem => "filesystem",
-            Self::Network => "network",
-            Self::Inference => "inference",
-            Self::External => "external",
-        }
     }
 }
 
@@ -187,161 +109,7 @@ impl RuntimeProvenance {
     }
 }
 
-/// A finite recurrence declaration. `remaining` includes the first release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimelineRecurrence {
-    Once,
-    Every { interval_steps: u64, remaining: u32 },
-}
-
-impl TimelineRecurrence {
-    pub fn validate(self) -> Result<(), RuntimeTimelineDataError> {
-        match self {
-            Self::Once => Ok(()),
-            Self::Every {
-                interval_steps,
-                remaining,
-            } => {
-                if interval_steps == 0 {
-                    return Err(RuntimeTimelineDataError::ZeroRecurrenceInterval);
-                }
-                if remaining == 0 || remaining > MAX_RECURRENCE_OCCURRENCES {
-                    return Err(RuntimeTimelineDataError::InvalidRecurrenceCount {
-                        received: remaining,
-                        maximum: MAX_RECURRENCE_OCCURRENCES,
-                    });
-                }
-                Ok(())
-            }
-        }
-    }
-
-    pub const fn remaining(self) -> Option<u32> {
-        match self {
-            Self::Once => None,
-            Self::Every { remaining, .. } => Some(remaining),
-        }
-    }
-}
-
-/// Caller description used to enqueue a timeline operation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimelineOperationSpec {
-    timeline_id: String,
-    step_id: String,
-    operation_id: TimelineOperationIdentity,
-    due_step: SimulationStep,
-    recurrence: TimelineRecurrence,
-    provenance: RuntimeProvenance,
-}
-
-impl TimelineOperationSpec {
-    pub fn new(
-        timeline_id: impl Into<String>,
-        step_id: impl Into<String>,
-        operation_id: TimelineOperationIdentity,
-        due_step: SimulationStep,
-        recurrence: TimelineRecurrence,
-        provenance: RuntimeProvenance,
-    ) -> Result<Self, RuntimeTimelineDataError> {
-        let timeline_id = timeline_id.into();
-        let step_id = step_id.into();
-        if timeline_id.is_empty() || step_id.is_empty() {
-            return Err(RuntimeTimelineDataError::EmptyIdentity);
-        }
-        recurrence.validate()?;
-        Ok(Self {
-            timeline_id,
-            step_id,
-            operation_id,
-            due_step,
-            recurrence,
-            provenance,
-        })
-    }
-
-    pub fn timeline_id(&self) -> &str {
-        &self.timeline_id
-    }
-
-    pub fn step_id(&self) -> &str {
-        &self.step_id
-    }
-
-    pub const fn operation_id(&self) -> TimelineOperationIdentity {
-        self.operation_id
-    }
-
-    pub const fn due_step(&self) -> SimulationStep {
-        self.due_step
-    }
-
-    pub const fn recurrence(&self) -> TimelineRecurrence {
-        self.recurrence
-    }
-
-    pub fn provenance(&self) -> &RuntimeProvenance {
-        &self.provenance
-    }
-}
-
-/// Full replacement candidate for a live operation. The caller cannot alter
-/// its lane-issued insertion sequence.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimelineOperationReplacement {
-    timeline_id: String,
-    step_id: String,
-    due_step: SimulationStep,
-    recurrence: TimelineRecurrence,
-    provenance: RuntimeProvenance,
-}
-
-impl TimelineOperationReplacement {
-    pub fn new(
-        timeline_id: impl Into<String>,
-        step_id: impl Into<String>,
-        due_step: SimulationStep,
-        recurrence: TimelineRecurrence,
-        provenance: RuntimeProvenance,
-    ) -> Result<Self, RuntimeTimelineDataError> {
-        let timeline_id = timeline_id.into();
-        let step_id = step_id.into();
-        if timeline_id.is_empty() || step_id.is_empty() {
-            return Err(RuntimeTimelineDataError::EmptyIdentity);
-        }
-        recurrence.validate()?;
-        Ok(Self {
-            timeline_id,
-            step_id,
-            due_step,
-            recurrence,
-            provenance,
-        })
-    }
-
-    pub fn timeline_id(&self) -> &str {
-        &self.timeline_id
-    }
-
-    pub fn step_id(&self) -> &str {
-        &self.step_id
-    }
-
-    pub const fn due_step(&self) -> SimulationStep {
-        self.due_step
-    }
-
-    pub const fn recurrence(&self) -> TimelineRecurrence {
-        self.recurrence
-    }
-
-    pub fn provenance(&self) -> &RuntimeProvenance {
-        &self.provenance
-    }
-}
-
-/// Completion outcome data. Failure closes a completion-order gap just as a
-/// successful completion does; the later mutation owner decides its meaning.
+/// Completion outcome data whose meaning belongs to the product.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TimelineCompletionOutcome {
     Success(Option<RuntimeOpaqueData>),
@@ -408,13 +176,8 @@ impl TimelineCompletionEnvelope {
 /// Errors from constructing bounded caller-supplied timeline data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeTimelineDataError {
-    EmptyIdentity,
     InvalidIdentity,
     TextTooLarge { maximum: usize },
-    ZeroRecurrenceInterval,
-    InvalidRecurrenceCount { received: u32, maximum: u32 },
-    DescriptorTooLarge { kind: &'static str, maximum: usize },
-    DuplicateDescriptor(String),
 }
 
 impl fmt::Display for RuntimeTimelineDataError {

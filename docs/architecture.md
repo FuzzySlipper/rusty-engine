@@ -136,6 +136,13 @@ without a scene-wide frame sweep or an Engine shadow-light quota; products choos
 their lighting workload. Generated C# bridges convert borrowed spans directly to
 native arrays while retaining the required pin and release lifetimes.
 
+Auxiliary publication frontier checks read only the stream revision; they do
+not fork retained graphics maps. Commit rechecks after asynchronous realization.
+SSE readers share immutable encoded JSON outside the output lock, and fragmented
+baselines transfer accumulated ownership between pushes. Product artifact
+resolution checks paths/metadata without reading bodies that it would discard;
+actual loaders and UI staging consume those bodies when needed.
+
 Worker replacement starts with empty retained output history, preserving delivery
 counters without cloning retired events. Ready publication shares immutable
 bundle bodies until IPC serialization; the receiving process owns its decoded

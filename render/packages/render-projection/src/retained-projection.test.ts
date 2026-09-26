@@ -511,7 +511,7 @@ void test('retained mesh copies isolate incoming data and returned snapshots', (
   assert.deepEqual(projection.node(handle)?.meshPayload, original);
 });
 
-void test('small atomic frames structurally share unrelated retained definitions', () => {
+void test('small frames leave unrelated retained definitions unchanged', () => {
   const projection = new RenderProjection();
   projection.applyFrame({
     schemaVersion: 1,
@@ -538,12 +538,6 @@ void test('small atomic frames structurally share unrelated retained definitions
         visible: null,
         metadata: null,
       }],
-    });
-    assert.deepEqual(projection.lastFrameStagingStatistics(), {
-      copiedNodeRecords: 1,
-      copiedLightRecords: 0,
-      copiedResourceRecords: 0,
-      sharedDefinitionRecords: 1,
     });
   }
 
@@ -1518,4 +1512,15 @@ void test('static mesh stream copies isolate caller, instruction and readback ow
   mutateLeaves(projection.staticMesh('mesh/crate')!);
   mutateLeaves(projection.snapshot());
   assert.deepEqual(projection.snapshot(), retained);
+});
+
+void test('publication validation does not advance and commit rechecks an intervening publication', () => {
+  const projection = new RenderProjection();
+  const publication = { stream: 'auxiliary', baseRevision: 0, revision: 1, operationCount: 0 };
+  projection.validatePublication(publication, 0);
+  projection.validatePublication(publication, 0);
+  assert.deepEqual(projection.publicationFrontiers(), []);
+  projection.commitPublication(publication, 0);
+  assert.throws(() => projection.commitPublication(publication, 0), /stale publication/u);
+  assert.deepEqual(projection.publicationFrontiers(), [{ stream: 'auxiliary', revision: 1 }]);
 });

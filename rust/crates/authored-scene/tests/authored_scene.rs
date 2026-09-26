@@ -12,7 +12,6 @@ use authored_scene::{
 use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use core_ids::{EntityId, PrefabId, SceneId, SceneNodeId};
 use core_math::Vec3;
-use entity_state::{EntityDefinition, EntitySource, EntityState};
 
 #[test]
 fn tree_flat_roundtrip_and_world_transforms_are_deterministic() {
@@ -456,13 +455,13 @@ fn selection_does_not_canonicalize_or_mutate_the_authored_document() {
 }
 
 #[test]
-fn admission_resolves_every_reference_and_applies_as_one_entity_transaction() {
+fn admission_resolves_references_and_retains_plan_facts() {
     let mut document = complete_document();
     document.schema_version = 5;
     document.metadata.authoring_format_version = 5;
     document.nodes[1].renderable_transform = translated(0.0, -1.5, 0.0);
     let empty_context = SceneResolutionContext::default();
-    let error = SceneAdmissionPlan::prepare(&document, &empty_context).unwrap_err();
+    let error = SceneAdmissionPlan::prepare(&mut document, &empty_context).unwrap_err();
     let SceneAdmissionError::UnresolvedReferences { errors } = error else {
         panic!("expected reference rejection")
     };
@@ -481,7 +480,7 @@ fn admission_resolves_every_reference_and_applies_as_one_entity_transaction() {
 
     let context = complete_context();
     let plan =
-        SceneAdmissionPlan::prepare_with_base(&document, EntityId::new(100), &context).unwrap();
+        SceneAdmissionPlan::prepare_with_base(&mut document, EntityId::new(100), &context).unwrap();
     assert_eq!(
         plan.allocations()
             .iter()
@@ -504,102 +503,19 @@ fn admission_resolves_every_reference_and_applies_as_one_entity_transaction() {
     );
     assert!(plan.resolved_instances()[0].spawn_marker_id.is_some());
 
-    let mut state = EntityState::default();
-    let receipt = plan.apply(&mut state, 0).unwrap();
     assert_eq!(
-        (
-            receipt.authoring.revision_before,
-            receipt.authoring.revision_after
-        ),
-        (0, 1)
-    );
-    assert_eq!(state.total_count(), 7);
-    assert_eq!(
-        state
-            .world_transform(EntityId::new(101))
-            .unwrap()
-            .translation
-            .x,
-        12.0
-    );
-    assert_eq!(
-        state
-            .world_transform(EntityId::new(103))
-            .unwrap()
-            .translation
-            .x,
-        14.0
-    );
-    assert_eq!(
-        state.view(EntityId::new(103)).unwrap().transform_parent,
-        None
-    );
-    assert_eq!(
-        state.core(EntityId::new(101)).unwrap().source,
-        EntitySource::AuthoredScene {
-            scene: SceneId::new(42),
-            node: SceneNodeId::new(2),
-        }
-    );
-    assert_eq!(
-        state
-            .view(EntityId::new(101))
-            .unwrap()
-            .renderable
-            .unwrap()
-            .asset,
-        "mesh/room"
-    );
-    assert_eq!(
-        state
-            .view(EntityId::new(101))
-            .unwrap()
-            .renderable
-            .unwrap()
-            .local_transform,
-        translated(0.0, -1.5, 0.0)
-    );
-    assert_eq!(
-        state
-            .world_transform(EntityId::new(101))
-            .unwrap()
-            .translation,
+        plan.renderables()[0].world_transform.translation,
         Vec3::new(12.0, 0.0, 0.0)
     );
-}
-
-#[test]
-fn admission_conflicts_and_stale_state_leave_existing_state_unchanged() {
-    let document = simple_document();
-    let plan =
-        SceneAdmissionPlan::prepare_with_base(&document, EntityId::new(100), &complete_context())
-            .unwrap();
-    let mut state =
-        EntityState::from_definitions([EntityDefinition::new(EntityId::new(100), "Existing")])
-            .unwrap();
-    let before_count = state.total_count();
-    let before_revision = state.revision();
-    assert!(matches!(
-        plan.apply(&mut state, before_revision),
-        Err(SceneAdmissionError::EntityAuthoring(_))
-    ));
-    assert_eq!(state.total_count(), before_count);
-    assert_eq!(state.revision(), before_revision);
-    assert_eq!(state.core(EntityId::new(100)).unwrap().name, "Existing");
-
-    let non_conflicting =
-        SceneAdmissionPlan::prepare_with_base(&document, EntityId::new(200), &complete_context())
-            .unwrap();
-    assert!(matches!(
-        non_conflicting.apply(&mut state, before_revision + 1),
-        Err(SceneAdmissionError::EntityAuthoring(_))
-    ));
-    assert_eq!(state.total_count(), before_count);
+    assert_eq!(
+        plan.renderables()[0].renderable_local_transform,
+        translated(0.0, -1.5, 0.0)
+    );
 }
 
 #[test]
 fn asset_version_and_hash_pins_are_checked_before_admission() {
-    let document = simple_document();
+    let mut document = simple_document();
     let mut context = complete_context();
     context.available_assets.insert(
         AssetId::parse("mesh/room").unwrap(),
@@ -609,7 +525,7 @@ fn asset_version_and_hash_pins_are_checked_before_admission() {
         },
     );
     let SceneAdmissionError::UnresolvedReferences { errors } =
-        SceneAdmissionPlan::prepare(&document, &context).unwrap_err()
+        SceneAdmissionPlan::prepare(&mut document, &context).unwrap_err()
     else {
         panic!("expected reference rejection")
     };
@@ -632,7 +548,7 @@ fn node_asset_pins_must_match_the_declared_dependency_exactly() {
     document.nodes[1].kind = SceneNodeKind::StaticMesh(mismatched);
 
     let before = document.clone();
-    let error = SceneAdmissionPlan::prepare(&document, &complete_context()).unwrap_err();
+    let error = SceneAdmissionPlan::prepare(&mut document, &complete_context()).unwrap_err();
     assert!(matches!(error, SceneAdmissionError::InvalidScene(_)));
     assert!(validate_scene(&document)
         .errors

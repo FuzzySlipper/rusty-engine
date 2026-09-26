@@ -162,13 +162,6 @@ fn invalid_renderable_local_transform_is_typed_and_rejected() {
 }
 
 #[test]
-fn snapshot_rejects_unknown_fields() {
-    let encoded = encode_snapshot(&door_fixture()).expect("encode");
-    let invalid = encoded.replacen("\"revision\": 0", "\"revision\": 0, \"mystery\": true", 1);
-    assert!(decode_snapshot(&invalid).is_err());
-}
-
-#[test]
 fn kinematic_component_round_trips_and_changes_atomically_with_position() {
     let id = EntityId::new(20);
     let mut entities =

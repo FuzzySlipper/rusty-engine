@@ -223,8 +223,9 @@ pub fn decode_scene(input: &str) -> Result<FlatSceneDocument, SceneCodecError> {
 }
 
 /// Decode the strict stored shape while preserving semantically invalid values
-/// for read-only authoring diagnostics. Runtime admission should use
-/// [`decode_scene`], which validates before returning.
+/// for authoring diagnostics or a subsequent [`crate::SceneAdmissionPlan`]
+/// preparation, which validates and canonicalizes once. Use [`decode_scene`]
+/// when a validated document is needed without preparing a plan.
 pub fn decode_scene_unvalidated(input: &str) -> Result<FlatSceneDocument, SceneCodecError> {
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let stored: StoredSceneDocument =

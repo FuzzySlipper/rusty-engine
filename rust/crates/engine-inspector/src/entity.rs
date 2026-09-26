@@ -101,8 +101,13 @@ pub fn inspect_entity_state(state: &EntityState) -> EntityStateInspection {
 }
 
 pub fn inspect_entity_state_json(input: &str) -> Result<EntityStateInspection, DiagnosticSet> {
-    let state = decode_snapshot(input).map_err(entity_decode_failure)?;
+    let state = decode_entity_state_json(input)?;
     Ok(inspect_entity_state(&state))
+}
+
+/// Decode once for a selected inspection command, preserving its diagnostics.
+pub fn decode_entity_state_json(input: &str) -> Result<EntityState, DiagnosticSet> {
+    decode_snapshot(input).map_err(entity_decode_failure)
 }
 
 pub fn inspect_entity(state: &EntityState, id: u64) -> Option<EntityInspection> {
@@ -285,7 +290,6 @@ fn entity_decode_failure(error: EntityStateSnapshotError) -> DiagnosticSet {
     let code = match &error {
         EntityStateSnapshotError::Encode(_) => "entityState.encode",
         EntityStateSnapshotError::Decode(_) => "entityState.decode",
-        EntityStateSnapshotError::MissingSchema => "entityState.missingSchema",
         EntityStateSnapshotError::UnsupportedSchema { .. } => "entityState.unsupportedSchema",
         EntityStateSnapshotError::DuplicateEntity { .. } => "entityState.duplicateEntity",
         EntityStateSnapshotError::InvalidLifecycleState { .. } => {

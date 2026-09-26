@@ -321,11 +321,15 @@ fn relative_path(value: &str, field: &str) -> Result<PathBuf, String> {
 
 fn resolve_regular_file(root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
     let path = root.join(relative_path(value, field)?);
-    read_regular_file(root, &path, field)?;
-    fs::canonicalize(path).map_err(|error| field_error(field, error.to_string()))
+    canonical_regular_file(root, &path, field)
 }
 
 fn read_regular_file(root: &Path, path: &Path, field: &str) -> Result<Vec<u8>, String> {
+    let path = canonical_regular_file(root, path, field)?;
+    fs::read(path).map_err(|error| field_error(field, error.to_string()))
+}
+
+fn canonical_regular_file(root: &Path, path: &Path, field: &str) -> Result<PathBuf, String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         field_error(
             field,
@@ -340,7 +344,7 @@ fn read_regular_file(root: &Path, path: &Path, field: &str) -> Result<Vec<u8>, S
     if !canonical.starts_with(root) {
         return Err(field_error(field, "resolved outside Product root"));
     }
-    fs::read(path).map_err(|error| field_error(field, error.to_string()))
+    Ok(canonical)
 }
 
 fn resolve_directory(root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {

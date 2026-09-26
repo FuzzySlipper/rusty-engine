@@ -608,13 +608,11 @@ internal static class Emit
     private static void EmitConversions(StringBuilder output, BindingModel model)
     {
         output.AppendLine("internal static unsafe class NativeConversions").AppendLine("{");
-        output.AppendLine("    private const nuint MaxOwnedLeaseBytes = 256u * 1024u * 1024u;");
-        output.AppendLine("    private const nuint MaxOwnedLeaseItems = 1_000_000u;");
         output.AppendLine("    private static readonly UTF8Encoding StrictUtf8 = new(false, true);");
         output.AppendLine("    internal static string FromNative(NativeAnimationFeedbackText value) { if (value.len > 96) throw new InvalidOperationException(\"Inline animation feedback text exceeded its ABI bound.\"); return StrictUtf8.GetString(MemoryMarshal.CreateReadOnlySpan(ref value.bytes.e0, checked((int)value.len))); }");
         output.AppendLine("    internal static NativeAnimationFeedbackText ToNative(string value) => throw new NotSupportedException(\"Animation feedback text is observation-only.\");");
-        output.AppendLine("    internal static string CopyUtf8(NativeUtf8Slice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native UTF-8 lease exceeded the supported copy bound.\"); if (value.len == 0) return string.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native UTF-8 lease had length without bytes.\"); return StrictUtf8.GetString(new ReadOnlySpan<byte>(value.bytes, checked((int)value.len))); }");
-        output.AppendLine("    private static ReadOnlyMemory<byte> CopyBytes(NativeByteSlice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native byte lease exceeded the supported copy bound.\"); if (value.len == 0) return ReadOnlyMemory<byte>.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native byte lease had length without bytes.\"); byte[] copy = new byte[checked((int)value.len)]; new ReadOnlySpan<byte>(value.bytes, copy.Length).CopyTo(copy); return copy; }");
+        output.AppendLine("    internal static string CopyUtf8(NativeUtf8Slice value) { if (value.len == 0) return string.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native UTF-8 lease had length without bytes.\"); return StrictUtf8.GetString(new ReadOnlySpan<byte>(value.bytes, checked((int)value.len))); }");
+        output.AppendLine("    private static ReadOnlyMemory<byte> CopyBytes(NativeByteSlice value) { if (value.len == 0) return ReadOnlyMemory<byte>.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native byte lease had length without bytes.\"); byte[] copy = new byte[checked((int)value.len)]; new ReadOnlySpan<byte>(value.bytes, copy.Length).CopyTo(copy); return copy; }");
         output.AppendLine("    internal static NativeVec2 ToNative(Vector2 value) => new() { x = value.X, y = value.Y };");
         output.AppendLine("    internal static Vector2 FromNative(NativeVec2 value) => new(value.x, value.y);");
         output.AppendLine("    internal static NativeVec3 ToNative(Vector3 value) => new() { x = value.X, y = value.Y, z = value.Z };");
@@ -673,7 +671,6 @@ internal static class Emit
                 string safeElement = SafeType(model, element);
                 string copyMethod = pointers.Length == 1 ? "CopyLease" : $"CopyLease{Pascal(pointer.Name)}";
                 output.AppendLine($"    internal static ReadOnlyMemory<{safeElement}> {copyMethod}({lease.Name} value)").AppendLine("    {");
-                output.AppendLine($"        if (value.{RawIdentifier($"{pointer.Name}_len")} > MaxOwnedLeaseItems) throw new InvalidOperationException(\"Native collection lease exceeded the supported item bound.\");");
                 output.AppendLine($"        if (value.{RawIdentifier($"{pointer.Name}_len")} == 0) return ReadOnlyMemory<{safeElement}>.Empty;");
                 output.AppendLine($"        if (value.{RawIdentifier(pointer.Name)} is null) throw new InvalidOperationException(\"Native collection lease had count without elements.\");");
                 output.AppendLine($"        int count = checked((int)value.{RawIdentifier($"{pointer.Name}_len")});");

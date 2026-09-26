@@ -1,44 +1,14 @@
-//! Instance-owned, host-neutral runtime timeline operations.
+//! Host-neutral completion data transported to the C# product callback.
 //!
-//! Timeline descriptors are static caller-owned data. This crate retains one
-//! bounded queue and completion-ticket lane per explicit runtime instance.
-//! It emits immutable operation/completion data for downstream owners; it
-//! never invokes operations, stores callbacks, reads a clock, or owns product
-//! state or persistence.
+//! Scheduling and ticket ownership belong to the product. This crate does not
+//! retain a queue, invoke work, or own a clock or product state.
 
 #![forbid(unsafe_code)]
 
-mod compile;
-mod error;
-mod inspection;
 mod model;
-mod runtime;
 
-pub use compile::{
-    TimelineCatalog, TimelineDescriptor, TimelineStep, TimelineStepDescriptor, MAX_TIMELINES,
-    MAX_TIMELINE_DESCRIPTOR_STEPS, MAX_TIMELINE_STEPS,
-};
-pub use error::RuntimeTimelineError;
-pub use inspection::{
-    RuntimeTimelineInspection, TimelineInspection, TimelineOperationInspection,
-    TimelineStepInspection,
-};
-/// Compatibility vocabulary for callers that name the closed completion
-/// source dimension directly.
-pub use model::RuntimeSourceKind as CompletionSourceKind;
 pub use model::{
-    RuntimeOpaqueData, RuntimeProvenance, RuntimeSourceKind, RuntimeTimelineBinding,
-    RuntimeTimelineDataError, TimelineCompletionEnvelope, TimelineCompletionOutcome,
-    TimelineCompletionTicketId, TimelineInsertionSequence, TimelineOperationIdentity,
-    TimelineOperationReplacement, TimelineOperationRevision, TimelineOperationSpec,
-    TimelineRecurrence, MAX_RECURRENCE_OCCURRENCES, MAX_RUNTIME_CORRELATION_BYTES,
-    MAX_TIMELINE_COMPLETION_TICKETS, MAX_TIMELINE_OPERATIONS, MAX_TIMELINE_RELEASE_PREFIX,
-    MAX_TIMELINE_SNAPSHOT_ITEMS,
-};
-pub use runtime::{
-    ReleasedCompletionStatus, ReleasedTimelineCompletion, ReleasedTimelineEvent,
-    ReleasedTimelineOperation, RuntimeTimeline, RuntimeTimelineReadout,
-    TimelineCompletionAdmission, TimelineCompletionSpec, TimelineCompletionTicket,
-    TimelineOperationReceipt, TimelineOperationSnapshot, TimelineRebindReceipt, TimelineRelease,
-    TimelineSnapshot, TimelineTicketSnapshot, TimelineTicketSnapshotStatus,
+    RuntimeOpaqueData, RuntimeProvenance, RuntimeTimelineBinding, RuntimeTimelineDataError,
+    TimelineCompletionEnvelope, TimelineCompletionOutcome, TimelineCompletionTicketId,
+    MAX_RUNTIME_CORRELATION_BYTES,
 };

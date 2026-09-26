@@ -92,36 +92,21 @@ fn tombstones_round_trip_without_resurrecting_components() {
 }
 
 #[test]
-fn strict_decode_rejects_nested_unknown_fields_and_trailing_input() {
+fn decode_ignores_extra_metadata_but_rejects_trailing_input() {
     let state = EntityState::from_definitions([
         EntityDefinition::new(EntityId::new(30), "strict").with_transform(Vec3::ZERO)
     ])
     .unwrap();
     let encoded = encode_snapshot(&state).unwrap();
     let nested = encoded.replacen("\"scale\": [", "\"mystery\": true, \"scale\": [", 1);
-    assert!(decode_snapshot(&nested).is_err());
+    assert_eq!(
+        decode_snapshot(&nested).unwrap().snapshot(),
+        state.snapshot()
+    );
     assert!(decode_snapshot(&(encoded + " trailing")).is_err());
 }
 
 #[test]
-fn schema_two_snapshots_upgrade_with_explicit_defaults() {
-    let legacy = r#"{
-      "schemaVersion": 2,
-      "revision": 4,
-      "entities": [{
-        "id": 40,
-        "name": "legacy",
-        "lifecycle": "disabled",
-        "translation": [1.0, 2.0, 3.0],
-        "collision": null,
-        "renderable": null,
-        "kinematic": null
-      }]
-    }"#;
-    let state = decode_snapshot(legacy).expect("legacy migration");
-    let view = state.view(EntityId::new(40)).unwrap();
-    assert_eq!(state.revision(), 4);
-    assert_eq!(view.lifecycle, EntityLifecycle::Disabled);
-    assert_eq!(view.transform.unwrap().scale, Vec3::ONE);
-    assert_eq!(view.source, EntitySource::RuntimeCreated { by: None });
+fn unsupported_snapshot_version_is_not_migrated() {
+    assert!(decode_snapshot(r#"{"schemaVersion":2,"revision":0,"entities":[]}"#).is_err());
 }

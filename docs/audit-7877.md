@@ -4,6 +4,11 @@ Task **#7877**, 2026-09-07. This records the narrow dispositions for timeline
 inspection and retained runtime diagnostics. It does not redesign the host
 writer, worker transport, browser route, or ring retention.
 
+Subsequent disposition (#8638): the legacy native timeline queue/catalog and
+its inspection API/tests have been removed. The timeline statements below are
+historical evidence for #7877, not a current capability or retention requirement.
+The completion transport data remains; runtime diagnostics are unchanged.
+
 ## Removed preflights
 
 `runtime-timeline::TimelineCatalog::new` constructs and retains a typed

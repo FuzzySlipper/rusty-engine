@@ -188,8 +188,9 @@ host state rather than gameplay meaning:
   update steps without owning a product scheduler or clock.
 - [`runtime-input`](../rust/crates/runtime-input) normalizes physical/direct
   input, held state, ordering, and lifecycle fences.
-- [`runtime-timeline`](../rust/crates/runtime-timeline) owns bounded timeline
-  operation and completion-ticket queues; C# decides ticket meaning.
+- [`runtime-timeline`](../rust/crates/runtime-timeline) carries completion binding,
+  ticket and outcome data to product callbacks. The legacy native queue/catalog
+  is removed; C# owns scheduling and ticket meaning.
 - [`runtime-ui`](../rust/crates/runtime-ui) transports bounded copied UI
   projections and owns no DOM or gameplay state.
 - [`product-dev-host`](../rust/crates/product-dev-host) supplies the local

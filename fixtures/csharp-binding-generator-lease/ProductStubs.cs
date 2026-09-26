@@ -6,6 +6,7 @@ public readonly record struct ProductUpdateFacts;
 public readonly record struct ProductTimelineOutcome;
 public readonly record struct StructuredValueNode;
 public enum ProductUpdateResult : uint { None }
+public enum InputCursorMode : uint { PointerLock, Unlocked }
 public enum InputValueKind : uint { None }
 public enum InputTriggerKind : uint { None }
 public enum InputEdge : uint { None }

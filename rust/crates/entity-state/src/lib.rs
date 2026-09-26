@@ -2,6 +2,11 @@
 //!
 //! This crate owns reusable entity invariants and one atomic mutation boundary.
 //! It contains no door, encounter, render-host, or legacy runtime topology.
+//!
+//! Explicit JSON snapshots use schema 3. The decoder reads the typed format once;
+//! legacy schema-2 migration is removed. Extra JSON metadata is ignored, while
+//! required fields, complete-input parsing and entity invariants still apply.
+//! These snapshots are not the C# product's persistence format.
 
 #![forbid(unsafe_code)]
 

@@ -9,10 +9,11 @@ use asset_catalog::{
     VoxelAtlasDefinition, VoxelSurfaceBinding, VoxelSurfaceMapping, VoxelSurfaceResolutionError,
 };
 use authored_scene::{
-    decode_scene, AvailableSceneAsset, FlatSceneDocument, NodeMetadata, PlannedSceneLight, Quat,
-    SceneAdmissionPlan, SceneBootstrapBindings, SceneCatalogBinding, SceneEntityInstance,
-    SceneEntityReference, SceneGeneratorBinding, SceneLight, SceneLightShadowIntent, SceneMarker,
-    SceneMetadata, SceneNodeKind, SceneNodeRecord, SceneResolutionContext, SceneTransform,
+    decode_scene_unvalidated, AvailableSceneAsset, FlatSceneDocument, NodeMetadata,
+    PlannedSceneLight, Quat, SceneAdmissionPlan, SceneBootstrapBindings, SceneCatalogBinding,
+    SceneEntityInstance, SceneEntityReference, SceneGeneratorBinding, SceneLight,
+    SceneLightShadowIntent, SceneMarker, SceneMetadata, SceneNodeKind, SceneNodeRecord,
+    SceneResolutionContext, SceneTransform,
 };
 use content_store::{
     asset_catalog_body, decode_prefab_registry, prefab_registry_body,
@@ -1189,7 +1190,7 @@ impl RuntimeAuthoredContentBridge {
             generator_presets,
             catalog_ids,
         )?;
-        let document = scene_document_from_rows(
+        let mut document = scene_document_from_rows(
             request,
             dependencies,
             nodes,
@@ -1201,7 +1202,7 @@ impl RuntimeAuthoredContentBridge {
             catalog_bindings,
         )?;
         let plan = SceneAdmissionPlan::prepare_with_base(
-            &document,
+            &mut document,
             EntityId::new(request.base_entity),
             &resolution,
         )
@@ -1237,13 +1238,14 @@ impl RuntimeAuthoredContentBridge {
             .ok_or_else(|| AuthoredError::simple("unknown content reference"))?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| AuthoredError::simple("scene content was not UTF-8"))?;
-        let document = decode_scene(text).map_err(|error| AuthoredError::Simple {
-            code: "AUTHORED_SCENE_CONTENT",
-            message: error.message,
-            source: error.path,
-        })?;
+        let mut document =
+            decode_scene_unvalidated(text).map_err(|error| AuthoredError::Simple {
+                code: "AUTHORED_SCENE_CONTENT",
+                message: error.message,
+                source: error.path,
+            })?;
         let plan = SceneAdmissionPlan::prepare_with_base(
-            &document,
+            &mut document,
             EntityId::new(request.base_entity),
             &resolution,
         )
@@ -1297,13 +1299,14 @@ impl RuntimeAuthoredContentBridge {
         )?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| AuthoredError::simple("stored scene body was not UTF-8"))?;
-        let document = decode_scene(text).map_err(|error| AuthoredError::Simple {
-            code: "AUTHORED_SCENE_STORE",
-            message: error.message,
-            source: error.path,
-        })?;
+        let mut document =
+            decode_scene_unvalidated(text).map_err(|error| AuthoredError::Simple {
+                code: "AUTHORED_SCENE_STORE",
+                message: error.message,
+                source: error.path,
+            })?;
         let plan = SceneAdmissionPlan::prepare_with_base(
-            &document,
+            &mut document,
             EntityId::new(request.base_entity_id),
             &resolution,
         )

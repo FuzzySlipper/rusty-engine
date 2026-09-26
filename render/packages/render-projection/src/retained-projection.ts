@@ -166,26 +166,6 @@ export interface RenderProjectionResourceCounts {
   readonly voxelObjects: number;
 }
 
-/**
- * Bounded diagnostics for the most recently committed fail-atomic frame stage.
- *
- * Definition records counted as shared are immutable retained values reused by
- * the stage. Only records named by a mutating operation are copied.
- */
-export interface RenderProjectionStagingStatistics {
-  readonly copiedNodeRecords: number;
-  readonly copiedLightRecords: number;
-  readonly copiedResourceRecords: number;
-  readonly sharedDefinitionRecords: number;
-}
-
-interface MutableStagingStatistics {
-  copiedNodeRecords: number;
-  copiedLightRecords: number;
-  copiedResourceRecords: number;
-  sharedDefinitionRecords: number;
-}
-
 type NodeRecord = MutablePrimitiveNode | MutableStaticMeshNode | MutableAnimatedMeshNode | MutableVoxelObjectNode | MutableSpriteNode;
 
 interface MutableNodeBase {
@@ -269,8 +249,6 @@ export class RenderProjection {
   #animatedMeshes = new Map<string, AnimatedMeshRecord>();
   #voxelObjects = new Map<string, VoxelObjectRecord>();
   #publishedRevisions = new Map<string, number>();
-  #stagingStatistics: MutableStagingStatistics = emptyStagingStatistics();
-  #collectStagingStatistics = false;
 
   /**
    * Apply a frame in authored order and return renderer-neutral instructions.
@@ -316,22 +294,8 @@ export class RenderProjection {
     return instructions;
   }
 
-  /**
-   * Validate and project a complete frame against a private clone without
-   * committing it. Backends use this as the first phase of a composed
-   * transaction so a bad later operation cannot partially mutate rendering.
-   */
-  validateFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
-    return this.#stageFrame(frame).instructions;
-  }
-
-  /** Shared continuation check for graphics and other presentation domains. */
+  /** Read-only continuation check for graphics and other presentation domains. */
   validatePublication(publication: RenderFramePublication | undefined, operationCount: number): void {
-    this.#fork().commitPublication(publication, operationCount);
-  }
-
-  /** Advance only after the corresponding browser realization succeeded. */
-  commitPublication(publication: RenderFramePublication | undefined, operationCount: number): void {
     if (publication !== undefined) {
       if (publication.operationCount !== operationCount) {
         throw new RenderProjectionError(
@@ -355,6 +319,13 @@ export class RenderProjection {
           `publication gap for ${publication.stream}; expected base ${String(expectedBase)}, received ${String(publication.baseRevision)}`,
         );
       }
+    }
+  }
+
+  /** Recheck after realization, which may have yielded to another publication. */
+  commitPublication(publication: RenderFramePublication | undefined, operationCount: number): void {
+    this.validatePublication(publication, operationCount);
+    if (publication !== undefined) {
       this.#publishedRevisions.set(publication.stream, publication.revision);
     }
   }
@@ -453,10 +424,6 @@ export class RenderProjection {
 
   get handleCount(): number {
     return this.#nodes.size + this.#lights.size;
-  }
-
-  lastFrameStagingStatistics(): RenderProjectionStagingStatistics {
-    return { ...this.#stagingStatistics };
   }
 
   node(handle: RenderHandle): RenderProjectionNode | undefined {
@@ -1353,18 +1320,12 @@ export class RenderProjection {
   #mutableNode(handle: RenderHandle, ctx: string): NodeRecord {
     const record = copyNodeRecord(this.#require(handle, ctx));
     this.#nodes.set(handle, record);
-    if (this.#collectStagingStatistics) {
-      this.#stagingStatistics.copiedNodeRecords += 1;
-    }
     return record;
   }
 
   #mutableLight(handle: RenderHandle, ctx: string): MutableLight {
     const record = { ...this.#requireLight(handle, ctx) };
     this.#lights.set(handle, record);
-    if (this.#collectStagingStatistics) {
-      this.#stagingStatistics.copiedLightRecords += 1;
-    }
     return record;
   }
 
@@ -1373,9 +1334,6 @@ export class RenderProjection {
     if (current === undefined) return undefined;
     const record = { ...current };
     this.#staticMeshes.set(asset, record);
-    if (this.#collectStagingStatistics) {
-      this.#stagingStatistics.copiedResourceRecords += 1;
-    }
     return record;
   }
 
@@ -1384,9 +1342,6 @@ export class RenderProjection {
     if (current === undefined) return undefined;
     const record = { ...current };
     this.#animatedMeshes.set(asset, record);
-    if (this.#collectStagingStatistics) {
-      this.#stagingStatistics.copiedResourceRecords += 1;
-    }
     return record;
   }
 
@@ -1395,9 +1350,6 @@ export class RenderProjection {
     if (current === undefined) return undefined;
     const record = { ...current };
     this.#voxelObjects.set(asset, record);
-    if (this.#collectStagingStatistics) {
-      this.#stagingStatistics.copiedResourceRecords += 1;
-    }
     return record;
   }
 
@@ -1414,17 +1366,6 @@ export class RenderProjection {
     projection.#animatedMeshes = new Map(this.#animatedMeshes);
     projection.#voxelObjects = new Map(this.#voxelObjects);
     projection.#publishedRevisions = new Map(this.#publishedRevisions);
-    projection.#stagingStatistics = {
-      ...emptyStagingStatistics(),
-      sharedDefinitionRecords:
-        this.#materials.size
-        + this.#textures.size
-        + this.#spriteAtlases.size
-        + this.#staticMeshes.size
-        + this.#animatedMeshes.size
-        + this.#voxelObjects.size,
-    };
-    projection.#collectStagingStatistics = true;
     return projection;
   }
 
@@ -1440,8 +1381,6 @@ export class RenderProjection {
     this.#animatedMeshes = projection.#animatedMeshes;
     this.#voxelObjects = projection.#voxelObjects;
     this.#publishedRevisions = projection.#publishedRevisions;
-    this.#stagingStatistics = projection.#stagingStatistics;
-    this.#collectStagingStatistics = false;
   }
 
   #stageFrame(frame: RenderFrameDiff): {
@@ -1555,15 +1494,6 @@ function viewmodelAssetKey(record: NodeRecord): string | null {
     case 'sprite':
       return `sprite:${record.sprite.asset}`;
   }
-}
-
-function emptyStagingStatistics(): MutableStagingStatistics {
-  return {
-    copiedNodeRecords: 0,
-    copiedLightRecords: 0,
-    copiedResourceRecords: 0,
-    sharedDefinitionRecords: 0,
-  };
 }
 
 function snapshotLight(record: MutableLight): RenderProjectionLight {

@@ -3611,7 +3611,6 @@ name = "runtime-timeline"
 version = "0.1.0"
 dependencies = [
  "runtime-lifecycle",
- "serde",
  "serde_json",
 ]
 

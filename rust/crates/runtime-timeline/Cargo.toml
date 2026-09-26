@@ -5,7 +5,6 @@ edition.workspace = true
 
 [dependencies]
 runtime-lifecycle.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
 [lints]

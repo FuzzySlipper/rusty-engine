@@ -23,8 +23,8 @@ pub use diagnostic::{
     RemedyAction,
 };
 pub use entity::{
-    entity_ids_in_category, inspect_entity, inspect_entity_state, inspect_entity_state_json,
-    EntityCategory, EntityInspection, EntityStateInspection,
+    decode_entity_state_json, entity_ids_in_category, inspect_entity, inspect_entity_state,
+    inspect_entity_state_json, EntityCategory, EntityInspection, EntityStateInspection,
 };
 pub use imports::{
     inspect_import_manifest, inspect_import_manifest_json, inspect_import_source,

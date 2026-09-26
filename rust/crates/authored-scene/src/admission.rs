@@ -2,10 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use core_ids::{EntityId, PrefabId, SceneId, SceneNodeId};
-use entity_state::{
-    EntityAuthoringError, EntityAuthoringReceipt, EntityAuthoringService, EntityDefinition,
-    EntitySource, EntityState,
-};
 
 use crate::{
     composed_world_transforms, validate_scene, FlatSceneDocument, SceneBootstrapBindings,
@@ -112,7 +108,6 @@ pub enum SceneAdmissionError {
         base_entity: EntityId,
         node: SceneNodeId,
     },
-    EntityAuthoring(EntityAuthoringError),
 }
 
 impl std::fmt::Display for SceneAdmissionError {
@@ -123,45 +118,28 @@ impl std::fmt::Display for SceneAdmissionError {
 
 impl std::error::Error for SceneAdmissionError {}
 
-impl From<EntityAuthoringError> for SceneAdmissionError {
-    fn from(error: EntityAuthoringError) -> Self {
-        Self::EntityAuthoring(error)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneAdmissionPlan {
     scene_id: SceneId,
     scene_revision: u64,
     allocations: Vec<PlannedSceneEntity>,
-    definitions: Vec<EntityDefinition>,
     resolved_instances: Vec<ResolvedSceneInstance>,
     lights: Vec<PlannedSceneLight>,
     renderables: Vec<PlannedSceneRenderable>,
     bootstrap_bindings: Option<SceneBootstrapBindings>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SceneAdmissionReceipt {
-    pub scene_id: SceneId,
-    pub scene_revision: u64,
-    pub authoring: EntityAuthoringReceipt,
-    pub allocations: Vec<PlannedSceneEntity>,
-    pub resolved_instances: Vec<ResolvedSceneInstance>,
-    pub lights: Vec<PlannedSceneLight>,
-    pub bootstrap_bindings: Option<SceneBootstrapBindings>,
-}
-
 impl SceneAdmissionPlan {
     pub fn prepare(
-        document: &FlatSceneDocument,
+        document: &mut FlatSceneDocument,
         resolution: &SceneResolutionContext,
     ) -> Result<Self, SceneAdmissionError> {
         Self::prepare_with_base(document, DEFAULT_BASE_ENTITY_ID, resolution)
     }
 
+    /// Validate and canonicalize the caller-owned document once, then derive plan facts.
     pub fn prepare_with_base(
-        document: &FlatSceneDocument,
+        document: &mut FlatSceneDocument,
         base_entity: EntityId,
         resolution: &SceneResolutionContext,
     ) -> Result<Self, SceneAdmissionError> {
@@ -169,8 +147,8 @@ impl SceneAdmissionPlan {
         if !report.is_valid() {
             return Err(SceneAdmissionError::InvalidScene(report));
         }
-        let document = document.canonical();
-        let reference_errors = resolve_references(&document, resolution);
+        document.canonicalize();
+        let reference_errors = resolve_references(document, resolution);
         if !reference_errors.is_empty() {
             return Err(SceneAdmissionError::UnresolvedReferences {
                 errors: reference_errors,
@@ -193,7 +171,7 @@ impl SceneAdmissionPlan {
                 Ok::<_, SceneAdmissionError>((node.id, entity))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let authored_world = composed_world_transforms(&document);
+        let authored_world = composed_world_transforms(document);
         let marker_world = document
             .nodes
             .iter()
@@ -206,7 +184,6 @@ impl SceneAdmissionPlan {
             .collect::<BTreeMap<_, _>>();
 
         let mut allocations = Vec::with_capacity(document.nodes.len());
-        let mut definitions = Vec::with_capacity(document.nodes.len());
         let mut resolved_instances = Vec::new();
         let mut lights = Vec::new();
         let mut renderables = Vec::new();
@@ -237,25 +214,7 @@ impl SceneAdmissionPlan {
                 world_transform,
             });
 
-            let name = node
-                .metadata
-                .label
-                .clone()
-                .unwrap_or_else(|| format!("scene-node-{}", node.id.raw()));
-            let mut definition = EntityDefinition::new(entity, name)
-                .with_source(EntitySource::AuthoredScene {
-                    scene: document.id,
-                    node: node.id,
-                })
-                .with_full_transform(local_transform);
-            if let Some(parent) = parent_entity {
-                definition = definition.with_transform_parent(parent);
-            }
             if let Some(asset) = node.kind.asset() {
-                definition = definition
-                    .with_renderable(asset.id().as_str(), true)
-                    .with_renderable_local_transform(node.renderable_transform)
-                    .with_asset_binding(asset.clone());
                 renderables.push(PlannedSceneRenderable {
                     node: node.id,
                     entity,
@@ -264,7 +223,6 @@ impl SceneAdmissionPlan {
                     renderable_local_transform: node.renderable_transform,
                 });
             }
-            definitions.push(definition);
 
             if let SceneNodeKind::EntityInstance(instance) = &node.kind {
                 resolved_instances.push(ResolvedSceneInstance {
@@ -294,7 +252,6 @@ impl SceneAdmissionPlan {
             scene_id: document.id,
             scene_revision: document.revision,
             allocations,
-            definitions,
             resolved_instances,
             lights,
             renderables,
@@ -328,27 +285,6 @@ impl SceneAdmissionPlan {
 
     pub fn bootstrap_bindings(&self) -> Option<&SceneBootstrapBindings> {
         self.bootstrap_bindings.as_ref()
-    }
-
-    pub fn apply(
-        &self,
-        state: &mut EntityState,
-        expected_state_revision: u64,
-    ) -> Result<SceneAdmissionReceipt, SceneAdmissionError> {
-        let authoring = EntityAuthoringService.admit(
-            state,
-            expected_state_revision,
-            self.definitions.clone(),
-        )?;
-        Ok(SceneAdmissionReceipt {
-            scene_id: self.scene_id,
-            scene_revision: self.scene_revision,
-            authoring,
-            allocations: self.allocations.clone(),
-            resolved_instances: self.resolved_instances.clone(),
-            lights: self.lights.clone(),
-            bootstrap_bindings: self.bootstrap_bindings.clone(),
-        })
     }
 }
 

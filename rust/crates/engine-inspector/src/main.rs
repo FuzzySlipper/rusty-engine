@@ -3,9 +3,10 @@ use std::process::ExitCode;
 
 use asset_import::ImportContext;
 use engine_inspector::{
-    entity_ids_in_category, inspect_catalog_json, inspect_content_manifest_json, inspect_entity,
-    inspect_entity_state_json, inspect_import_manifest_json, inspect_import_source,
-    inspect_scene_json, inspect_voxel_asset_json, DiagnosticSet, EntityCategory,
+    decode_entity_state_json, entity_ids_in_category, inspect_catalog_json,
+    inspect_content_manifest_json, inspect_entity, inspect_entity_state_json,
+    inspect_import_manifest_json, inspect_import_source, inspect_scene_json,
+    inspect_voxel_asset_json, DiagnosticSet, EntityCategory,
 };
 
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
@@ -142,11 +143,10 @@ fn command_entity_state<O: Write, E: Write>(args: &[String], out: &mut O, err: &
             let Some(input) = read_text(path, MAX_ENTITY_STATE_BYTES, err) else {
                 return 2;
             };
-            if let Err(diagnostics) = inspect_entity_state_json(&input) {
-                return finish_failure(&diagnostics, err);
-            }
-            let state = entity_state::decode_snapshot(&input)
-                .expect("the inspection decode already accepted this snapshot");
+            let state = match decode_entity_state_json(&input) {
+                Ok(state) => state,
+                Err(diagnostics) => return finish_failure(&diagnostics, err),
+            };
             match inspect_entity(&state, id) {
                 Some(report) => {
                     let _ = write!(out, "{}", report.to_text());
@@ -171,11 +171,10 @@ fn command_entity_state<O: Write, E: Write>(args: &[String], out: &mut O, err: &
             let Some(input) = read_text(path, MAX_ENTITY_STATE_BYTES, err) else {
                 return 2;
             };
-            if let Err(diagnostics) = inspect_entity_state_json(&input) {
-                return finish_failure(&diagnostics, err);
-            }
-            let state = entity_state::decode_snapshot(&input)
-                .expect("the inspection decode already accepted this snapshot");
+            let state = match decode_entity_state_json(&input) {
+                Ok(state) => state,
+                Err(diagnostics) => return finish_failure(&diagnostics, err),
+            };
             let ids = entity_ids_in_category(&state, category);
             if ids.is_empty() {
                 let _ = writeln!(err, "empty category: {}", category.label());

@@ -21,7 +21,7 @@ use crate::model::{
 pub const ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct EntityStateSnapshot {
     pub schema_version: u32,
     pub revision: u64,
@@ -31,7 +31,7 @@ pub struct EntityStateSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct EntitySnapshot {
     pub id: u64,
     pub name: String,
@@ -59,7 +59,7 @@ pub enum SnapshotLifecycle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntitySourceSnapshot {
     AuthoredScene {
         scene: u64,
@@ -84,7 +84,7 @@ pub enum EntitySourceSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct TransformSnapshot {
     pub translation: [f32; 3],
     pub rotation: [f32; 4],
@@ -92,21 +92,21 @@ pub struct TransformSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct BoundsSnapshot {
     pub min: [f32; 3],
     pub max: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct CollisionSnapshot {
     pub enabled: bool,
     pub static_collider: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RenderableSnapshot {
     pub visible: bool,
     pub asset: String,
@@ -115,21 +115,21 @@ pub struct RenderableSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct KinematicSnapshot {
     pub half_extents: [f32; 3],
     pub velocity: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ControllerSnapshot {
     Process { id: u64, active: bool },
     Subject { id: u64, active: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct AssetReferenceSnapshot {
     pub id: String,
     pub version: AssetVersionSnapshot,
@@ -137,7 +137,7 @@ pub struct AssetReferenceSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum AssetVersionSnapshot {
     Any,
     Exact { value: u32 },
@@ -148,7 +148,6 @@ pub enum AssetVersionSnapshot {
 pub enum EntityStateSnapshotError {
     Encode(serde_json::Error),
     Decode(serde_json::Error),
-    MissingSchema,
     UnsupportedSchema {
         actual: u64,
     },
@@ -467,25 +466,9 @@ pub fn decode_snapshot_with_registry(
     input: &str,
     registry: ComponentRegistry,
 ) -> Result<EntityState, EntityStateSnapshotError> {
-    let header: serde_json::Value =
+    let snapshot: EntityStateSnapshot =
         serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
-    let schema = header
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or(EntityStateSnapshotError::MissingSchema)?;
-    match schema {
-        value if value == u64::from(ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION) => {
-            let snapshot: EntityStateSnapshot =
-                serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
-            EntityState::from_snapshot_with_registry(snapshot, registry)
-        }
-        2 => {
-            let legacy: LegacyEntityStateSnapshot =
-                serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
-            EntityState::from_snapshot_with_registry(legacy.upgrade(), registry)
-        }
-        actual => Err(EntityStateSnapshotError::UnsupportedSchema { actual }),
-    }
+    EntityState::from_snapshot_with_registry(snapshot, registry)
 }
 
 fn lifecycle_to_snapshot(value: EntityLifecycle) -> SnapshotLifecycle {
@@ -654,70 +637,4 @@ fn validate_tombstone_shape(entity: &EntitySnapshot) -> Result<(), EntityStateSn
 
 fn vec3(value: [f32; 3]) -> Vec3 {
     Vec3::new(value[0], value[1], value[2])
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct LegacyEntityStateSnapshot {
-    schema_version: u32,
-    revision: u64,
-    entities: Vec<LegacyEntitySnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct LegacyEntitySnapshot {
-    id: u64,
-    name: String,
-    lifecycle: LegacySnapshotLifecycle,
-    translation: Option<[f32; 3]>,
-    collision: Option<CollisionSnapshot>,
-    renderable: Option<RenderableSnapshot>,
-    kinematic: Option<KinematicSnapshot>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum LegacySnapshotLifecycle {
-    Active,
-    Disabled,
-}
-
-impl LegacyEntityStateSnapshot {
-    fn upgrade(self) -> EntityStateSnapshot {
-        debug_assert_eq!(self.schema_version, 2);
-        EntityStateSnapshot {
-            schema_version: ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION,
-            revision: self.revision,
-            entities: self
-                .entities
-                .into_iter()
-                .map(|entity| EntitySnapshot {
-                    id: entity.id,
-                    name: entity.name,
-                    lifecycle: match entity.lifecycle {
-                        LegacySnapshotLifecycle::Active => SnapshotLifecycle::Active,
-                        LegacySnapshotLifecycle::Disabled => SnapshotLifecycle::Disabled,
-                    },
-                    source: EntitySourceSnapshot::RuntimeCreated { by: None },
-                    labels: Vec::new(),
-                    transform: entity.translation.map(|translation| TransformSnapshot {
-                        translation,
-                        rotation: [0.0, 0.0, 0.0, 1.0],
-                        scale: [1.0, 1.0, 1.0],
-                    }),
-                    bounds: None,
-                    collision: entity.collision,
-                    renderable: entity.renderable,
-                    kinematic: entity.kinematic,
-                    controller: None,
-                    asset_binding: None,
-                    transform_parent: None,
-                    contained_in: None,
-                    derived_from: None,
-                })
-                .collect(),
-            registered_components: Vec::new(),
-        }
-    }
 }
