@@ -364,7 +364,7 @@ impl ProductDevHost {
                 })
                 .expect("worker output thread creation")
         });
-        let worker_diagnostic_thread = worker_diagnostics.map(|receiver| {
+        let worker_diagnostic_thread = worker_diagnostics.clone().map(|receiver| {
             let diagnostics = config.diagnostics.clone();
             let shutdown = Arc::clone(&shutdown);
             thread::Builder::new()
@@ -404,6 +404,7 @@ impl ProductDevHost {
             worker_generation,
             worker_output_thread,
             worker_diagnostic_thread,
+            worker_diagnostics,
             telemetry: Arc::clone(&state.telemetry),
         })
     }
@@ -427,6 +428,7 @@ pub struct RunningProductDevHost {
     worker_generation: Option<Arc<AtomicUsize>>,
     worker_output_thread: Option<JoinHandle<()>>,
     worker_diagnostic_thread: Option<JoinHandle<()>>,
+    worker_diagnostics: Option<WorkerDiagnosticReceiver>,
     telemetry: Arc<Mutex<HostTelemetry>>,
 }
 
@@ -530,6 +532,19 @@ impl RunningProductDevHost {
         }
         if let Some(thread) = self.worker_diagnostic_thread.take() {
             let _ = thread.join();
+        }
+        // The worker is stopped and its socket reader joined before host
+        // shutdown. The consumer may already have observed the shutdown flag;
+        // persist all final relayed events before flushing the host file.
+        if let Some(receiver) = self.worker_diagnostics.take() {
+            let receiver = receiver.lock().map_err(|_| {
+                ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "diagnostic relay lock poisoned")
+            })?;
+            while let Ok(diagnostic) = receiver.recv_timeout(Duration::ZERO) {
+                if let Ok(event) = diagnostic.into_log_event() {
+                    let _ = self.diagnostics.publish(event);
+                }
+            }
         }
         // Wake a nonblocking accept loop promptly. The connection is accepted
         // and observes the same shutdown flag before it parses a request.
@@ -3295,6 +3310,61 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_persists_final_diagnostics_when_consumer_is_held_back() {
+        let path = std::env::temp_dir().join(format!(
+            "rusty-final-diagnostics-{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let diagnostics =
+            ProductDevLog::new(crate::ProductDevLogConfig::default().with_path(&path)).unwrap();
+        let bundle = ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+            "index.html",
+            "text/html; charset=utf-8",
+            b"test".to_vec(),
+        )
+        .unwrap()])
+        .unwrap();
+        let (sender, receiver) = crate::worker_diagnostic_relay();
+        let config = ProductDevHostConfig::new(0, bundle)
+            .with_diagnostics(diagnostics)
+            .with_worker_diagnostics(receiver);
+        let held_receiver = config.worker_diagnostics.as_ref().unwrap().clone();
+        let guard = held_receiver.lock().unwrap();
+        let host = ProductDevHost::start(BlockingRealtimeRuntime, config).unwrap();
+        host.shutdown.store(true, Ordering::Release);
+        // No consumer can take these events until both the stop flag and the
+        // final worker event exist. A consumer already inside recv can take at
+        // most the first event before it observes the flag and exits.
+        for code in ["shutdown.started", "cue.retired"] {
+            assert!(sender.try_send(crate::ProductDevWorkerDiagnostic {
+                severity: crate::ProductDevLogSeverity::Info,
+                disposition: crate::ProductDevLogDisposition::Accepted,
+                source: "product".to_owned(),
+                code: code.to_owned(),
+                message: code.to_owned(),
+                runtime: None,
+                correlation: None,
+                fields: Vec::new(),
+            }));
+        }
+        drop(guard);
+        host.shutdown().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        for code in ["shutdown.started", "cue.retired"] {
+            assert_eq!(
+                events.iter().filter(|event| event["code"] == code).count(),
+                1
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn response_delivery_certainty_distinguishes_receipts_mailbox_and_observations() {
