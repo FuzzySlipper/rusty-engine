@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::{composition::borrowed_utf8, composition::ABI_OK};
 
 mod bundles;
+mod portable;
 pub use bundles::ProductContentBundles;
 
 #[derive(Clone)]
@@ -36,6 +37,7 @@ struct ContentReferenceInfoLease {
 }
 
 pub(crate) struct RuntimeContentBridge {
+    portable: portable::PortableState,
     catalog: BTreeMap<String, AdmittedContent>,
     references: BTreeMap<u64, AdmittedContent>,
     info_leases: BTreeMap<u64, ContentReferenceInfoLease>,
@@ -66,6 +68,7 @@ impl RuntimeContentBridge {
             })
             .collect();
         Self {
+            portable: portable::PortableState::default(),
             catalog,
             references: BTreeMap::new(),
             info_leases: BTreeMap::new(),
@@ -202,6 +205,12 @@ impl RuntimeContentBridge {
 
 pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
     NativeContentApi {
+        load_portable_asset: portable::load,
+        destroy_portable_asset: portable::destroy,
+        read_portable_asset: portable::read,
+        destroy_portable_asset_readout_lease: portable::destroy_readout,
+        open_portable_asset_member: portable::open_member,
+        destroy_operation_diagnostic_lease: portable::destroy_diagnostic,
         context: (bridge as *mut RuntimeContentBridge).cast(),
         list_bundles: bundles::list_bundles,
         destroy_bundle_info_lease: bundles::destroy_bundle_info_lease,

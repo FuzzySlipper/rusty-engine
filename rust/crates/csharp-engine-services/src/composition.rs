@@ -95,8 +95,12 @@ fn engine_api(
         authored_content: crate::authored_content::api(authored_content_bridge),
         content_store: crate::content_store::api(content_store_bridge),
         graphics: NativeGraphicsApi {
+            publish_attached_snapshot: crate::appearance::publish_attached_snapshot,
+            destroy_operation_diagnostic_lease:
+                crate::appearance::destroy_animation_admission_diagnostic,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
+            read_texture_info: crate::appearance::read_texture_info,
             destroy_resource: crate::appearance::destroy_render_resource,
             open_resource_from_content: crate::appearance::open_render_resource_from_content,
             create_static_mesh_from_content_reference:

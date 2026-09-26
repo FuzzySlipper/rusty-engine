@@ -5458,3 +5458,40 @@ test('sky blend retains shader and geometry while the product clock changes', ()
   renderer.dispose();
   assert.equal(sky.parent, null);
 });
+
+void test('retained joint attachment follows sampled poses, detaches, and dies with its body', () => {
+  const scene = rigScene(true);
+  const asset = animatedMeshAsset({ clips: [{ id: 'move', name: 'move', durationSeconds: 1 }], defaultClip: null,
+    rig: { joints: [{ id: 'Root', parent: null }], bindRestHash: animationRigFingerprint(scene),
+      bindRestConvention: 'localMatrixV1', rootConvention: 'authoredRootTranslation', rootJointId: 'Root',
+      structuralRootIds: ['Root'], designatedMotionRootIds: ['Root'], authoredPoseTranslationJointIds: [] } });
+  const source = new MapAnimatedMeshAssetSource([{ asset: asset.asset, contentHash: asset.contentHash, scene,
+    clips: [new THREE.AnimationClip('move', 1, [new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 2, 0, 0])])] }]);
+  const renderer = new ThreeRenderer({ animatedMeshSource: source });
+  const body = renderHandle(8654), child = renderHandle(8655);
+  renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
+  renderer.applyDiff({ op: 'createAnimatedMeshInstance', handle: body, parent: null, instance: {
+    asset: asset.asset, transform: { translation: [0,0,0], rotation: [0,0,0,1], scale: [1,1,1] }, materialOverrides: [], playback: null, visible: true,
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'body' },
+  } });
+  renderer.applyDiff({ op: 'create', handle: child, parent: body, node: {
+    geometry: { kind: 'cube' }, material: { color: [1,0,0,1], wireframe: false },
+    transform: { translation: [0,1,0], rotation: [0,0,0,1], scale: [.1,.1,.1] }, visible: true, layer: 'scene',
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'weapon' },
+  } });
+  renderer.applyDiff({ op: 'setParentJoint', handle: child, joint: 'Root' });
+  const weapon = renderer.scene.getObjectByName('weapon')!;
+  const position = () => weapon.getWorldPosition(new THREE.Vector3()).toArray();
+  renderer.applyDiff({ op: 'setAnimatedMeshPlayback', handle: body, playback: { kind: 'sample', clip: 'move', normalizedTime: 0 } });
+  assert.deepEqual(position(), [0,1,0]);
+  renderer.applyDiff({ op: 'setAnimatedMeshPlayback', handle: body, playback: { kind: 'sample', clip: 'move', normalizedTime: 1 } });
+  assert.deepEqual(position(), [2,1,0]);
+  assert.throws(() => renderer.applyDiff({ op: 'setParentJoint', handle: child, joint: 'UnknownHand' }), /missing joint 'UnknownHand'/);
+  assert.deepEqual(position(), [2,1,0]);
+  renderer.applyDiff({ op: 'setParentJoint', handle: child, joint: null });
+  assert.deepEqual(position(), [0,1,0]);
+  renderer.applyDiff({ op: 'setParentJoint', handle: child, joint: 'Root' });
+  renderer.applyDiff({ op: 'destroy', handle: body });
+  assert.equal(renderer.scene.getObjectByName('weapon'), undefined);
+  renderer.dispose();
+});

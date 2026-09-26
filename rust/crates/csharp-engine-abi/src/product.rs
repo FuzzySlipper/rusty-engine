@@ -1094,6 +1094,7 @@ pub struct NativeUiApi {
 pub struct NativeGraphicsApi {
     pub context: *mut c_void,
     pub open_resource: NativeOpenRenderResource,
+    pub read_texture_info: NativeReadTextureResourceInfo,
     pub destroy_resource: NativeDestroyRenderResource,
     pub open_resource_from_content: NativeOpenRenderResourceFromContent,
     pub create_static_mesh_from_content_reference: NativeCreateStaticMeshFromContentReference,
@@ -1134,6 +1135,8 @@ pub struct NativeGraphicsApi {
     pub read_sprite_playback: NativeReadSpritePlayback,
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
+    pub publish_attached_snapshot: NativePublishAttachedAppearanceSnapshot,
+    pub destroy_operation_diagnostic_lease: NativeDestroyAnimationOperationDiagnosticLease,
     pub create_light: NativeCreateLight,
     pub update_light: NativeUpdateLight,
     pub replace_light: NativeReplaceLight,
@@ -1171,6 +1174,12 @@ pub struct NativePresentationApi {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeContentApi {
     pub context: *mut c_void,
+    pub load_portable_asset: NativeLoadPortableAsset,
+    pub destroy_portable_asset: NativeDestroyPortableAsset,
+    pub read_portable_asset: NativeReadPortableAsset,
+    pub destroy_portable_asset_readout_lease: NativeDestroyPortableAssetReadoutLease,
+    pub open_portable_asset_member: NativeOpenPortableAssetMember,
+    pub destroy_operation_diagnostic_lease: NativeDestroyContentOperationDiagnosticLease,
     pub admit_reference: NativeAdmitContentReference,
     pub list_bundles: NativeListContentBundles,
     pub destroy_bundle_info_lease: NativeDestroyContentBundleInfoLease,

@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "sheet",
+      "kind": "texture",
+      "path": "tiles.png"
+    },
+    {
+      "id": "sprite",
+      "kind": "sprite",
+      "frames": [
+        {
+          "id": "left",
+          "texture": "sheet",
+          "region": "cell",
+          "cell": [
+            0,
+            0
+          ],
+          "extent": [
+            2,
+            2
+          ],
+          "canvas": [
+            2,
+            2
+          ],
+          "pivot": [
+            1,
+            1
+          ]
+        },
+        {
+          "id": "right",
+          "texture": "sheet",
+          "region": "rect",
+          "origin": [
+            2,
+            0
+          ],
+          "extent": [
+            2,
+            2
+          ],
+          "canvas": [
+            2,
+            2
+          ],
+          "pivot": [
+            1,
+            1
+          ]
+        }
+      ],
+      "animations": {
+        "blink": {
+          "frames": [
+            "right",
+            "left",
+            "right"
+          ],
+          "timing": {
+            "kind": "durations",
+            "seconds": [
+              0.2,
+              0.4,
+              0.2
+            ]
+          },
+          "looping": true
+        }
+      },
+      "directions": {
+        "convention": "right-handed-y-up-yaw-zero-positive-z-toward-positive-x",
+        "sectors": [
+          {
+            "id": "front",
+            "yawDegrees": 0
+          },
+          {
+            "id": "right",
+            "yawDegrees": 90
+          }
+        ],
+        "actions": {
+          "idle": {
+            "front": "blink"
+          }
+        }
+      }
+    },
+    {
+      "id": "body",
+      "kind": "model",
+      "path": "body.glb",
+      "clips": {
+        "standing": "idle"
+      },
+      "materials": {
+        "skin": "paint"
+      }
+    },
+    {
+      "id": "paint",
+      "kind": "material",
+      "textures": {
+        "baseColor": "sheet"
+      }
+    }
+  ]
+}

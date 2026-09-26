@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "body",
+      "kind": "model",
+      "path": "body.glb",
+      "clips": {
+        "motion": "run"
+      }
+    },
+    {
+      "id": "weapon",
+      "kind": "model",
+      "path": "weapon.glb"
+    },
+    {
+      "id": "grip",
+      "kind": "attachment",
+      "target": "body",
+      "child": "weapon",
+      "joint": "RightHand",
+      "convention": "gltf-right-handed-y-up-meters",
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        0.01,
+        0.01,
+        0.01
+      ]
+    }
+  ]
+}

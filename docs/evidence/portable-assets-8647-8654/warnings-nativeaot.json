@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "captureProtocol": "rusty-engine.playtest-warning-delta/v1",
+  "compatibility": {
+    "exerciseId": "joint-attachments-8654",
+    "pageOrigin": "http://127.0.0.1:37495",
+    "engineOrigin": "http://127.0.0.1:37495"
+  },
+  "run": {
+    "startedAt": "2026-09-26T05:41:00.470Z",
+    "completedAt": "2026-09-26T05:41:03.920Z",
+    "url": "http://127.0.0.1:37495/",
+    "exerciseId": "joint-attachments-8654",
+    "nodeVersion": "v26.8.1",
+    "gitRevision": "3c98dc21e1ebca53cd7da1ec79ffb0a6d7c07925",
+    "gitDirty": true,
+    "browserVersion": "149.0.7827.55"
+  },
+  "capture": {
+    "browser": {
+      "status": "complete"
+    },
+    "engine": {
+      "status": "complete",
+      "origin": "http://127.0.0.1:37495",
+      "checkpointCursor": "2",
+      "finalCursor": "4",
+      "reads": 2,
+      "lagged": false,
+      "droppedCount": "0",
+      "checkpoint": {
+        "status": "complete",
+        "initialCursor": "2",
+        "checkpointCursor": "2",
+        "reads": 1
+      },
+      "events": [
+        {
+          "sequence": "3",
+          "monotonicNanoseconds": "131618245073",
+          "severity": "info",
+          "disposition": "accepted",
+          "source": "browser-host",
+          "code": "BROWSER_HOST_STATUS",
+          "message": "Product Browser Host transition snapshot",
+          "fields": [
+            {
+              "key": "host-state",
+              "value": "ready"
+            },
+            {
+              "key": "runtime-progress",
+              "value": "0"
+            },
+            {
+              "key": "transport",
+              "value": "open"
+            },
+            {
+              "key": "output",
+              "value": "open"
+            },
+            {
+              "key": "attachment-id",
+              "value": "browser-c63016fcb95efc073110e3afd0b97a57"
+            },
+            {
+              "key": "replaces-attachment-id",
+              "value": "none"
+            },
+            {
+              "key": "baseline-established",
+              "value": "false"
+            },
+            {
+              "key": "baseline-facts",
+              "value": "none"
+            }
+          ]
+        },
+        {
+          "sequence": "4",
+          "monotonicNanoseconds": "131688716393",
+          "severity": "info",
+          "disposition": "accepted",
+          "source": "browser-host",
+          "code": "BROWSER_HOST_STATUS",
+          "message": "Product Browser Host transition snapshot",
+          "fields": [
+            {
+              "key": "host-state",
+              "value": "ready"
+            },
+            {
+              "key": "runtime-progress",
+              "value": "2"
+            },
+            {
+              "key": "transport",
+              "value": "open"
+            },
+            {
+              "key": "output",
+              "value": "open"
+            },
+            {
+              "key": "attachment-id",
+              "value": "browser-c63016fcb95efc073110e3afd0b97a57"
+            },
+            {
+              "key": "replaces-attachment-id",
+              "value": "none"
+            },
+            {
+              "key": "baseline-established",
+              "value": "true"
+            },
+            {
+              "key": "baseline-facts",
+              "value": "runtime=3633257/1/1;next-input=3;revisions=13"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "findings": [
+    {
+      "source": "playwright",
+      "kind": "console",
+      "severity": "warning",
+      "message": "[.WebGL-<hex>]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "url": "http://127.0.0.1:37495/",
+      "fingerprint": "19d053cdbc71b5bad93e35c36daf5afc0df7c0885eb63f42925eb1b0f059c2c1",
+      "occurrenceCount": 3
+    },
+    {
+      "source": "playwright",
+      "kind": "console",
+      "severity": "warning",
+      "message": "[.WebGL-<hex>]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+      "url": "http://127.0.0.1:37495/",
+      "fingerprint": "26a1605cdb8388677fc9fb104b537dedcc40bb99620596e22e9ab541e8d39b4a",
+      "occurrenceCount": 1
+    }
+  ],
+  "comparison": {
+    "status": "unavailable",
+    "reason": "no baseline was supplied"
+  },
+  "cleanClaimEligible": false,
+  "blockers": [
+    "baseline comparison is unavailable"
+  ]
+}

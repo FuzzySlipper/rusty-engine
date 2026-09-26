@@ -44,3 +44,5 @@ wholesale or use it to reintroduce superseded authoring or downstream-language
 assumptions.
 
 - [Lighting and skies](lighting-and-sky.md) covers retained torch lighting, voxel irradiance queries, persistence and product-clock panorama blending.
+
+See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/model semantics over loose files and bundles.

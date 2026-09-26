@@ -582,6 +582,7 @@ export type LightDescriptor =
     };
 
 export type RenderDiff =
+  | { readonly op: 'setParentJoint'; readonly handle: RenderHandle; readonly joint: string | null }
   | { readonly op: 'create'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly node: RenderNode }
   | { readonly op: 'update'; readonly handle: RenderHandle; readonly transform: Transform | null; readonly material: Material | null; readonly visible: boolean | null; readonly metadata: RenderMetadata | null }
   | { readonly op: 'destroy'; readonly handle: RenderHandle }

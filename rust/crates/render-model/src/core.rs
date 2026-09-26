@@ -273,6 +273,12 @@ pub enum NodeError {
     deny_unknown_fields
 )]
 pub enum RenderDiff {
+    /// Select a named joint within this node's retained animated-mesh parent.
+    /// Local TRS remains relative to that joint; None restores the parent root.
+    SetParentJoint {
+        handle: RenderHandle,
+        joint: Option<String>,
+    },
     Create {
         handle: RenderHandle,
         parent: Option<RenderHandle>,
@@ -413,6 +419,13 @@ impl RenderDiff {
                 }
                 Ok(())
             }
+            Self::SetParentJoint { joint, .. } => {
+                if joint.as_ref().is_some_and(|name| name.trim().is_empty()) {
+                    Err(RenderOperationError::InvalidParentJoint)
+                } else {
+                    Ok(())
+                }
+            }
             Self::Destroy { .. }
             | Self::SetMaterialInstanceParameters {
                 parameters: None, ..
@@ -518,6 +531,7 @@ impl RenderDiff {
                 }
             }
             Self::Update { handle, .. }
+            | Self::SetParentJoint { handle, .. }
             | Self::Destroy { handle }
             | Self::ReplaceMeshPayload { handle, .. }
             | Self::UpdateLight { handle, .. }
@@ -553,6 +567,7 @@ fn valid_color<const N: usize>(color: [f32; N]) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderOperationError {
+    InvalidParentJoint,
     Handle(RenderHandleError),
     Node(NodeError),
     Transform(TransformError),

@@ -1,0 +1,17 @@
+{
+  "base": "3c98dc21e1ebca53cd7da1ec79ffb0a6d7c07925",
+  "exitCodes": {
+    "rust": 0,
+    "csharp": 0,
+    "render": 0,
+    "docs": 0,
+    "artifactFreshness": 0
+  },
+  "logs": {
+    "rust": "/tmp/8647-8654-verify-rust.log",
+    "csharp": "/tmp/8647-8654-verify-csharp.log",
+    "render": "/tmp/8647-8654-verify-render.log",
+    "docs": "/tmp/8647-8654-verify-docs.log",
+    "artifactFreshness": "/tmp/8647-8654-artifact-freshness.log"
+  }
+}

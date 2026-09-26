@@ -73,6 +73,15 @@ function c(e, t) {
 			at(n.handle, `${t}.handle`), R(n.transform, `${t}.transform`, p), R(n.material, `${t}.material`, f), R(n.visible, `${t}.visible`, gt), R(n.metadata, `${t}.metadata`, m);
 			return;
 		}
+		case "setParentJoint": {
+			let n = L(e, t, [
+				"op",
+				"handle",
+				"joint"
+			]);
+			at(n.handle, `${t}.handle`), R(n.joint, `${t}.joint`, V);
+			return;
+		}
 		case "destroy":
 			at(L(e, t, ["op", "handle"]).handle, `${t}.handle`);
 			return;
@@ -1899,6 +1908,18 @@ var Nt, W = class extends Error {
 		switch (nn(e), e.op) {
 			case "create": return [this.#d(e)];
 			case "update": return [this.#f(e)];
+			case "setParentJoint": {
+				let t = this.#X(e.handle, "setParentJoint");
+				if (e.joint !== null) {
+					let n = t.parent === null ? void 0 : this.#e.get(t.parent), r = (n?.kind === "animatedMesh" ? this.#c.get(n.asset)?.asset.rig : void 0)?.joints.filter((t) => t.id === e.joint).length ?? 0;
+					if (r !== 1) throw new W(`setParentJoint: ${r === 0 ? "missing" : "ambiguous"} joint '${e.joint}' on retained parent ${String(t.parent)}`);
+					t.parentJoint = e.joint;
+				} else delete t.parentJoint;
+				return [{
+					op: "upsertNode",
+					node: Ht(t)
+				}];
+			}
 			case "destroy": return this.#p(e.handle);
 			case "replaceMeshPayload": return [this.#m(e)];
 			case "createLight": return [this.#h(e)];
@@ -2645,6 +2666,7 @@ function Ht(e) {
 	let t = {
 		handle: e.handle,
 		parent: e.parent,
+		...e.parentJoint === void 0 ? {} : { parentJoint: e.parentJoint },
 		children: [...e.children].sort(un),
 		layer: e.layer,
 		transform: G(e.transform),
@@ -2843,6 +2865,7 @@ function nn(e) {
 		case "createSprite":
 			rn(e.handle, `${e.op}.handle`), e.parent !== null && rn(e.parent, `${e.op}.parent`);
 			return;
+		case "setParentJoint":
 		case "update":
 		case "destroy":
 		case "replaceMeshPayload":
@@ -17835,7 +17858,14 @@ var Gh = class {
 				s.set(n.id, o.clipAction(yg(t, n.id, n.name))), c.set(n.id, "pack");
 			}
 		}
-		let l = t.metadata.sourceEntity, u = l === null ? 0 : this.#u(l), d = {
+		let l = t.metadata.sourceEntity, u = l === null ? 0 : this.#u(l), d = /* @__PURE__ */ new Map();
+		i.traverse((e) => {
+			if (!e.isBone) return;
+			let t = d.get(e.name) ?? [];
+			t.push(e), d.set(e.name, t);
+		});
+		let f = {
+			joints: d,
 			inspection: new mm(i),
 			handle: e,
 			asset: t.asset,
@@ -17859,17 +17889,22 @@ var Gh = class {
 			weight: null,
 			controllerClips: []
 		};
-		return d.finishedListener = (e) => {
-			let t = d.completionToken;
-			if (!(t === null || e.action !== t.action || t.epoch !== d.completionEpoch) && (d.completionToken = null, d.status = "stopped", d.sourceEntity !== null)) {
+		return f.finishedListener = (e) => {
+			let t = f.completionToken;
+			if (!(t === null || e.action !== t.action || t.epoch !== f.completionEpoch) && (f.completionToken = null, f.status = "stopped", f.sourceEntity !== null)) {
 				let e = {
-					objectId: d.sourceEntity,
-					generation: d.generation,
+					objectId: f.sourceEntity,
+					generation: f.generation,
 					clip: t.clip
 				};
 				for (let t of this.#s) t(e);
 			}
-		}, o.addEventListener("finished", d.finishedListener), t.playback?.kind === "sample" ? xg(d, r, t.playback.clip, t.playback.normalizedTime) : t.playback?.kind === "samplePose" ? Sg(d, t.playback) : t.playback && bg(d, t.playback), t.inspection && d.inspection.apply(t.inspection), this.#r.set(e, d), r.refCount += 1, d;
+		}, o.addEventListener("finished", f.finishedListener), t.playback?.kind === "sample" ? xg(f, r, t.playback.clip, t.playback.normalizedTime) : t.playback?.kind === "samplePose" ? Sg(f, t.playback) : t.playback && bg(f, t.playback), t.inspection && f.inspection.apply(t.inspection), this.#r.set(e, f), r.refCount += 1, f;
+	}
+	joint(e, t) {
+		let n = this.#l(e, "setParentJoint").joints.get(t) ?? [];
+		if (n.length !== 1) throw new Q(`setParentJoint: ${n.length === 0 ? "missing" : "ambiguous"} joint '${t}' on parent ${e}`);
+		return n[0];
 	}
 	setInspection(e, t) {
 		this.#l(e, "setAnimatedMeshInspection").inspection.apply(t);
@@ -19447,18 +19482,18 @@ var $ = class extends Error {
 	#n = new ka();
 	#r = new ka();
 	#i = /* @__PURE__ */ new Map();
-	#a = /* @__PURE__ */ new Set();
-	#o = /* @__PURE__ */ new Map();
+	#a = /* @__PURE__ */ new Map();
+	#o = /* @__PURE__ */ new Set();
 	#s = /* @__PURE__ */ new Map();
 	#c = /* @__PURE__ */ new Map();
 	#l = /* @__PURE__ */ new Map();
-	#u = new cm();
-	#d = 0;
-	#f = /* @__PURE__ */ new Set();
-	#p = /* @__PURE__ */ new Map();
+	#u = /* @__PURE__ */ new Map();
+	#d = new cm();
+	#f = 0;
+	#p = /* @__PURE__ */ new Set();
 	#m = /* @__PURE__ */ new Map();
-	#h = 0;
-	#g;
+	#h = /* @__PURE__ */ new Map();
+	#g = 0;
 	#_;
 	#v;
 	#y;
@@ -19467,44 +19502,45 @@ var $ = class extends Error {
 	#S;
 	#C;
 	#w;
-	#T = /* @__PURE__ */ new Set();
+	#T;
 	#E = /* @__PURE__ */ new Set();
-	#D = /* @__PURE__ */ new Map();
-	#O = /* @__PURE__ */ new Set();
-	#k = /* @__PURE__ */ new Map();
-	#A = null;
+	#D = /* @__PURE__ */ new Set();
+	#O = /* @__PURE__ */ new Map();
+	#k = /* @__PURE__ */ new Set();
+	#A = /* @__PURE__ */ new Map();
 	#j = null;
 	#M = null;
 	#N = null;
 	#P = null;
 	#F = null;
-	#I = /* @__PURE__ */ new Map();
+	#I = null;
 	#L = /* @__PURE__ */ new Map();
-	#R = /* @__PURE__ */ new WeakSet();
-	#z = 1;
+	#R = /* @__PURE__ */ new Map();
+	#z = /* @__PURE__ */ new WeakSet();
 	#B = 1;
-	#V = !1;
-	#H = null;
+	#V = 1;
+	#H = !1;
+	#U = null;
 	constructor(e = {}) {
-		if (this.#C = e.maximumTextureDimension, this.#C !== void 0 && (!Number.isSafeInteger(this.#C) || this.#C < 1)) throw RangeError("maximumTextureDimension must be a positive device capability");
-		if (this.#g = e.meshBufferSource, this.#_ = e.meshResourceSource, this.#v = e.textureResourceSource, this.#y = e.animatedMeshSource, this.#b = e.isolatedCaptureLighting, this.#x = new Gh(this.#y, () => this.#J()), this.#S = e.shadowsEnabled ?? !1, this.#w = e.projection ?? new Pt(), e.projection === void 0) this.#w.replacePublicationFrontiers(e.publicationFrontiers ?? []);
+		if (this.#w = e.maximumTextureDimension, this.#w !== void 0 && (!Number.isSafeInteger(this.#w) || this.#w < 1)) throw RangeError("maximumTextureDimension must be a positive device capability");
+		if (this.#_ = e.meshBufferSource, this.#v = e.meshResourceSource, this.#y = e.textureResourceSource, this.#b = e.animatedMeshSource, this.#x = e.isolatedCaptureLighting, this.#S = new Gh(this.#b, () => this.#Y()), this.#C = e.shadowsEnabled ?? !1, this.#T = e.projection ?? new Pt(), e.projection === void 0) this.#T.replacePublicationFrontiers(e.publicationFrontiers ?? []);
 		else if (e.publicationFrontiers !== void 0) throw RangeError("a shared projection establishes publication frontiers with its baseline");
 		this.#e.name = "scene", this.#t.name = "debug", this.#n.name = "ui", this.#r.name = "viewmodel", this.viewmodelScene.name = "viewmodel", this.scene.add(this.#e, this.#t, this.#n), this.viewmodelScene.add(this.#r);
 	}
 	createIsolatedCaptureScene(t) {
-		if (this.#V) throw new lv();
-		if (this.#H !== null) throw this.#H;
+		if (this.#H) throw new lv();
+		if (this.#U !== null) throw this.#U;
 		let n = new e({
-			...this.#g === void 0 ? {} : { meshBufferSource: this.#g },
-			...this.#_ === void 0 ? {} : { meshResourceSource: this.#_ },
-			...this.#v === void 0 ? {} : { textureResourceSource: this.#v },
-			...this.#y === void 0 ? {} : { animatedMeshSource: this.#y },
-			...this.#C === void 0 ? {} : { maximumTextureDimension: this.#C },
-			shadowsEnabled: this.#S
+			...this.#_ === void 0 ? {} : { meshBufferSource: this.#_ },
+			...this.#v === void 0 ? {} : { meshResourceSource: this.#v },
+			...this.#y === void 0 ? {} : { textureResourceSource: this.#y },
+			...this.#b === void 0 ? {} : { animatedMeshSource: this.#b },
+			...this.#w === void 0 ? {} : { maximumTextureDimension: this.#w },
+			shadowsEnabled: this.#C
 		});
 		try {
-			if (this.#b !== void 0) {
-				let e = this.#b.createWorldLights(), t = this.#b.createViewmodelLights();
+			if (this.#x !== void 0) {
+				let e = this.#x.createWorldLights(), t = this.#x.createViewmodelLights();
 				e.length > 0 && n.scene.add(...e), t.length > 0 && n.viewmodelScene.add(...t);
 			}
 			n.establishBaseline(Object.freeze({
@@ -19520,7 +19556,7 @@ var $ = class extends Error {
 			objectFor: (e) => n.objectFor(e),
 			sceneFor: (e) => {
 				let t = n.objectFor(e);
-				if (t !== void 0) return n.#ne(t) === "viewmodel" ? n.viewmodelScene : n.scene;
+				if (t !== void 0) return n.#re(t) === "viewmodel" ? n.viewmodelScene : n.scene;
 			},
 			animationClipSourcesInSubtree: (e) => n.animationClipSourcesInSubtree(e),
 			sampleAnimatedMesh: (e, t, r) => {
@@ -19532,7 +19568,7 @@ var $ = class extends Error {
 			dispose: () => n.dispose()
 		});
 	}
-	#U(e) {
+	#W(e) {
 		switch (e) {
 			case "scene": return this.#e;
 			case "debug": return this.#t;
@@ -19542,57 +19578,57 @@ var $ = class extends Error {
 	}
 	setViewportSize(e, t) {
 		if (!Number.isFinite(e) || !Number.isFinite(t) || e <= 0 || t <= 0) throw new $("sprite viewport dimensions must be finite and positive");
-		this.#z = e, this.#B = t;
+		this.#B = e, this.#V = t;
 	}
 	applyFrame(e) {
-		if (this.#V) throw new lv();
-		if (this.#H !== null) throw this.#H;
+		if (this.#H) throw new lv();
+		if (this.#U !== null) throw this.#U;
 		try {
-			this.#w.applyFrame(e, () => {
-				this.#W(e);
+			this.#T.applyFrame(e, () => {
+				this.#G(e);
 			});
 		} catch (e) {
 			throw e instanceof W ? new $(e.message) : e;
 		}
 	}
 	establishBaseline(e, t) {
-		if (this.#V) throw new lv();
-		if (this.#H !== null) throw this.#H;
-		if (this.#i.size !== 0 || this.#o.size !== 0 || this.#s.size !== 0 || this.#l.size !== 0 || this.#p.size !== 0 || this.#m.size !== 0) throw new $("baseline realization requires a fresh ThreeRenderer");
+		if (this.#H) throw new lv();
+		if (this.#U !== null) throw this.#U;
+		if (this.#a.size !== 0 || this.#s.size !== 0 || this.#c.size !== 0 || this.#u.size !== 0 || this.#m.size !== 0 || this.#h.size !== 0) throw new $("baseline realization requires a fresh ThreeRenderer");
 		let n = new Pt();
 		try {
 			n.establishBaseline(e, t);
 		} catch (e) {
 			throw e instanceof W ? new $(e.message) : e;
 		}
-		this.#W(e), this.#w.establishBaseline(e, t);
+		this.#G(e), this.#T.establishBaseline(e, t);
 	}
-	#W(e) {
-		let t = this.#Ce(e), n = /* @__PURE__ */ new Set(), r = /* @__PURE__ */ new Set(), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set();
+	#G(e) {
+		let t = this.#Te(e), n = /* @__PURE__ */ new Set(), r = /* @__PURE__ */ new Set(), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set();
 		try {
 			for (let t = 0; t < e.ops.length; t += 1) {
 				let o = e.ops[t];
 				if (o.op === "destroy") {
-					if (!this.#i.has(o.handle) && n.has(o.handle)) continue;
-					this.#ie(o, n);
-				} else this.#K(o, r, i, a);
+					if (!this.#a.has(o.handle) && n.has(o.handle)) continue;
+					this.#oe(o, n);
+				} else this.#q(o, r, i, a);
 			}
-			if (i.size > 0) for (let e of this.#l.values()) e.texture !== null && i.has(e.texture) && r.add(e.id);
-			for (let e of r) this.#Fe(e);
-			this.#Je(i, a), (e.ops.some((e) => e.op === "setSkyBackground" || e.op === "setBackgroundColor") || this.#j !== null && i.has(this.#j) || this.#M !== null && i.has(this.#M.texture)) && this.#Pe();
+			if (i.size > 0) for (let e of this.#u.values()) e.texture !== null && i.has(e.texture) && r.add(e.id);
+			for (let e of r) this.#Le(e);
+			this.#Xe(i, a), (e.ops.some((e) => e.op === "setSkyBackground" || e.op === "setBackgroundColor") || this.#M !== null && i.has(this.#M) || this.#N !== null && i.has(this.#N.texture)) && this.#Ie();
 		} catch (e) {
-			throw this.#G("frame_mutation", e);
+			throw this.#K("frame_mutation", e);
 		}
 		if (t) try {
-			this.#xe();
+			this.#Ce();
 		} catch (e) {
-			throw this.#G("static_instance_batch", e);
+			throw this.#K("static_instance_batch", e);
 		}
-		this.#Y(e), this.#J();
+		this.#X(e), this.#Y();
 	}
-	#G(e, t) {
+	#K(e, t) {
 		let n = new uv(`renderer entered terminal state during ${e} realization: ${t instanceof Error ? t.message : String(t)}`, e);
-		return this.#H = n, n;
+		return this.#U = n, n;
 	}
 	applyEncodedFrame(e) {
 		this.applyFrame(a(e));
@@ -19603,136 +19639,139 @@ var $ = class extends Error {
 			ops: [e]
 		});
 	}
-	#K(e, t, n, r) {
+	#q(e, t, n, r) {
 		switch (e.op) {
 			case "create":
-				this.#ee(e);
+				this.#te(e);
 				break;
 			case "update":
-				this.#re(e);
-				break;
-			case "destroy":
 				this.#ie(e);
 				break;
-			case "replaceMeshPayload":
-				this.#Ye(e);
+			case "setParentJoint":
+				this.#ae(e);
 				break;
-			case "createLight":
-				this.#Qe(e);
-				break;
-			case "updateLight":
-				this.#$e(e);
-				break;
-			case "defineMaterial":
-				this.#De(e.material, t);
-				break;
-			case "releaseMaterial":
-				this.#Oe(e.id);
-				break;
-			case "setMaterialInstanceParameters":
-				this.#Ie(e);
-				break;
-			case "defineTexture":
-				this.#ke(e.texture, n);
-				break;
-			case "releaseTexture":
-				this.#Ae(e.id);
-				break;
-			case "setSkyBackground":
-				this.#j = e.background?.texture ?? null, this.#M = e.background?.blend ?? null, this.#F = null;
-				break;
-			case "setBackgroundColor":
-				this.#j = null, this.#M = null, this.#F = e.color;
-				break;
-			case "defineSpriteAtlas":
-				this.#m.set(e.atlas.id, e.atlas), r.add(e.atlas.id);
-				break;
-			case "releaseSpriteAtlas":
-				this.#je(e.id);
-				break;
-			case "defineStaticMesh":
-				this.#ae(e.asset);
-				break;
-			case "releaseStaticMesh":
-				this.#ce(e.asset);
-				break;
-			case "defineAnimatedMesh":
-				this.#ue(e);
-				break;
-			case "releaseAnimatedMesh":
-				this.#de(e.asset);
-				break;
-			case "createAnimatedMeshInstance":
-				this.#fe(e);
-				break;
-			case "setAnimatedMeshInspection":
-				this.#x.setInspection(e.handle, e.inspection);
-				break;
-			case "setAnimatedMeshPlayback":
-				this.#pe(e);
-				break;
-			case "defineVoxelObject":
-				this.#he(e.asset);
-				break;
-			case "releaseVoxelObject":
-				this.#ge(e.asset);
-				break;
-			case "createVoxelObjectInstance":
-				this.#_e(e);
-				break;
-			case "setVoxelObjectFrame":
-				this.#ve(e);
-				break;
-			case "createStaticMeshInstance":
+			case "destroy":
 				this.#oe(e);
 				break;
+			case "replaceMeshPayload":
+				this.#Ze(e);
+				break;
+			case "createLight":
+				this.#et(e);
+				break;
+			case "updateLight":
+				this.#tt(e);
+				break;
+			case "defineMaterial":
+				this.#ke(e.material, t);
+				break;
+			case "releaseMaterial":
+				this.#Ae(e.id);
+				break;
+			case "setMaterialInstanceParameters":
+				this.#Re(e);
+				break;
+			case "defineTexture":
+				this.#je(e.texture, n);
+				break;
+			case "releaseTexture":
+				this.#Me(e.id);
+				break;
+			case "setSkyBackground":
+				this.#M = e.background?.texture ?? null, this.#N = e.background?.blend ?? null, this.#I = null;
+				break;
+			case "setBackgroundColor":
+				this.#M = null, this.#N = null, this.#I = e.color;
+				break;
+			case "defineSpriteAtlas":
+				this.#h.set(e.atlas.id, e.atlas), r.add(e.atlas.id);
+				break;
+			case "releaseSpriteAtlas":
+				this.#Ne(e.id);
+				break;
+			case "defineStaticMesh":
+				this.#se(e.asset);
+				break;
+			case "releaseStaticMesh":
+				this.#ue(e.asset);
+				break;
+			case "defineAnimatedMesh":
+				this.#fe(e);
+				break;
+			case "releaseAnimatedMesh":
+				this.#pe(e.asset);
+				break;
+			case "createAnimatedMeshInstance":
+				this.#me(e);
+				break;
+			case "setAnimatedMeshInspection":
+				this.#S.setInspection(e.handle, e.inspection);
+				break;
+			case "setAnimatedMeshPlayback":
+				this.#he(e);
+				break;
+			case "defineVoxelObject":
+				this.#_e(e.asset);
+				break;
+			case "releaseVoxelObject":
+				this.#ve(e.asset);
+				break;
+			case "createVoxelObjectInstance":
+				this.#ye(e);
+				break;
+			case "setVoxelObjectFrame":
+				this.#be(e);
+				break;
+			case "createStaticMeshInstance":
+				this.#ce(e);
+				break;
 			case "createSprite":
-				this.#We(e);
+				this.#Ke(e);
 				break;
 			case "updateSprite":
-				this.#Ge(e);
+				this.#qe(e);
 				break;
 		}
 	}
 	registerSlotColor(e, t, n, r) {
-		this.#c.set(e, new X(t, n, r));
+		this.#l.set(e, new X(t, n, r));
 	}
-	#q(e) {
-		let t = this.#c.get(e);
+	#J(e) {
+		let t = this.#l.get(e);
 		if (t) return t.clone();
 		let n = e * .61803398875 % 1;
 		return new X().setHSL(n, .7, .5);
 	}
 	has(e) {
-		return this.#i.has(e);
+		return this.#a.has(e);
 	}
 	get handleCount() {
-		return this.#i.size;
+		return this.#a.size;
 	}
 	resourceStatistics() {
 		return Object.freeze({
-			renderHandleCount: this.#i.size,
-			geometryResourceCount: this.#T.size,
-			materialResourceCount: this.#E.size,
-			textureResourceCount: this.#O.size,
-			animatedInstanceCount: this.#x.instanceCount
+			renderHandleCount: this.#a.size,
+			geometryResourceCount: this.#E.size,
+			materialResourceCount: this.#D.size,
+			textureResourceCount: this.#k.size,
+			animatedInstanceCount: this.#S.instanceCount
 		});
 	}
 	retainResources(e) {
-		if (this.#V) throw new lv();
-		if (this.#H !== null) throw this.#H;
-		this.#A = new Set(e), this.#J();
+		if (this.#H) throw new lv();
+		if (this.#U !== null) throw this.#U;
+		this.#j = new Set(e), this.#Y();
 	}
-	#J() {
-		let e = this.#A;
-		if (!(this.#V || e === null)) {
-			for (let [t, n] of this.#o) n.refCount !== 0 || n.resource === null || e.has(n.resource) || (this.#le(n), this.#o.delete(t));
-			this.#x.retainResources(e);
-			for (let [t, n] of [...this.#k]) {
+	#Y() {
+		let e = this.#j;
+		if (!(this.#H || e === null)) {
+			for (let [t, n] of this.#s) n.refCount !== 0 || n.resource === null || e.has(n.resource) || (this.#de(n), this.#s.delete(t));
+			this.#S.retainResources(e);
+			for (let [t, n] of [...this.#A]) {
 				let r = n.readout.resource;
 				if (!(r === null || e.has(r))) {
-					if (this.#k.delete(t), this.#Ne(t), this.#j === t || this.#M?.texture === t || (this.#D.get(n.texture) ?? 0) !== 0) {
-						this.#k.set(t, n);
+					if (this.#A.delete(t), this.#Fe(t), this.#M === t || this.#N?.texture === t || (this.#O.get(n.texture) ?? 0) !== 0) {
+						this.#A.set(t, n);
 						continue;
 					}
 					n.texture.dispose();
@@ -19740,8 +19779,8 @@ var $ = class extends Error {
 			}
 		}
 	}
-	#Y(e) {
-		let t = this.#A;
+	#X(e) {
+		let t = this.#j;
 		if (t === null) return;
 		let n = new Set(t);
 		for (let t of e.ops) if (t.op === "defineTexture" && t.texture.payload?.source.kind === "resource") n.add(t.texture.payload.source.resource);
@@ -19749,51 +19788,51 @@ var $ = class extends Error {
 			let e = kv(t.asset.payload);
 			e !== null && n.add(e);
 			for (let e of t.asset.materialSlots) {
-				let t = this.#l.get(e.material)?.texture, r = (t == null ? void 0 : this.#k.get(t))?.readout.resource;
+				let t = this.#u.get(e.material)?.texture, r = (t == null ? void 0 : this.#A.get(t))?.readout.resource;
 				r != null && n.add(r);
 			}
 		} else t.op === "defineAnimatedMesh" && Av(t.asset).forEach((e) => n.add(e));
-		this.#A = n;
-	}
-	#X(e) {
-		e.traverse((e) => {
-			let t = e;
-			t.geometry instanceof No && this.#Z(t.geometry), Array.isArray(t.material) ? t.material.forEach((e) => this.#Q(e)) : t.material instanceof Ro && this.#Q(t.material);
-		});
+		this.#j = n;
 	}
 	#Z(e) {
-		this.#T.has(e) || (this.#T.add(e), e.addEventListener("dispose", () => this.#T.delete(e)));
+		e.traverse((e) => {
+			let t = e;
+			t.geometry instanceof No && this.#Q(t.geometry), Array.isArray(t.material) ? t.material.forEach((e) => this.#$(e)) : t.material instanceof Ro && this.#$(t.material);
+		});
 	}
 	#Q(e) {
-		if (this.#E.has(e)) return;
-		this.#E.add(e);
+		this.#E.has(e) || (this.#E.add(e), e.addEventListener("dispose", () => this.#E.delete(e)));
+	}
+	#$(e) {
+		if (this.#D.has(e)) return;
+		this.#D.add(e);
 		let t = sy(e);
 		for (let e of t) {
-			let t = this.#D.get(e) ?? 0;
-			this.#$(e), this.#D.set(e, t + 1);
+			let t = this.#O.get(e) ?? 0;
+			this.#ee(e), this.#O.set(e, t + 1);
 		}
 		e.addEventListener("dispose", () => {
-			if (this.#E.delete(e)) for (let e of t) {
-				let t = this.#D.get(e);
-				t === void 0 || t <= 1 ? this.#D.delete(e) : this.#D.set(e, t - 1);
+			if (this.#D.delete(e)) for (let e of t) {
+				let t = this.#O.get(e);
+				t === void 0 || t <= 1 ? this.#O.delete(e) : this.#O.set(e, t - 1);
 			}
 		});
 	}
-	#$(e) {
-		this.#O.has(e) || (this.#O.add(e), e.addEventListener("dispose", () => {
-			this.#O.delete(e), this.#D.delete(e);
+	#ee(e) {
+		this.#k.has(e) || (this.#k.add(e), e.addEventListener("dispose", () => {
+			this.#k.delete(e), this.#O.delete(e);
 		}));
 	}
 	lightReadout() {
-		return [...this.#i.entries()].filter((e) => e[1].kind === "light" && e[1].light !== void 0).sort(([e], [t]) => e - t).map(([e, t]) => ({
+		return [...this.#a.entries()].filter((e) => e[1].kind === "light" && e[1].light !== void 0).sort(([e], [t]) => e - t).map(([e, t]) => ({
 			descriptor: structuredClone(t.light),
 			handle: e,
-			parent: Wg(t.object.parent, this.#i),
-			shadowStatus: Ug(t.light, this.#S)
+			parent: this.#i.get(e) ?? Wg(t.object.parent, this.#a),
+			shadowStatus: Ug(t.light, this.#C)
 		}));
 	}
 	meshPresentationReadout() {
-		return [...this.#i.entries()].filter(([, e]) => e.meshProvenance !== void 0).sort(([e], [t]) => e - t).map(([e, t]) => ({
+		return [...this.#a.entries()].filter(([, e]) => e.meshProvenance !== void 0).sort(([e], [t]) => e - t).map(([e, t]) => ({
 			handle: e,
 			lit: Xg(t.object).every((e) => e instanceof ll),
 			materialSlots: [...t.meshMaterialSlots ?? []],
@@ -19802,34 +19841,34 @@ var $ = class extends Error {
 		}));
 	}
 	dispose() {
-		if (this.#V) return;
-		this.#Ee();
-		let e = [...this.#i.entries()].sort((e, t) => uy(t[1].object) - uy(e[1].object)).map(([e]) => e);
-		for (let t of e) this.#i.has(t) && this.#ie({
+		if (this.#H) return;
+		this.#Oe();
+		let e = [...this.#a.entries()].sort((e, t) => uy(t[1].object) - uy(e[1].object)).map(([e]) => e);
+		for (let t of e) this.#a.has(t) && this.#oe({
 			op: "destroy",
 			handle: t
 		});
-		this.#a.clear();
-		for (let e of this.#o.values()) e.geometry.dispose(), e.materials.forEach((e) => e.dispose());
 		this.#o.clear();
-		for (let e of this.#s.values()) e.geometries.forEach((e) => e.dispose()), e.materials.forEach((e) => e.dispose());
-		this.#s.clear(), this.#x.dispose(), this.#c.clear(), this.#l.clear(), this.#f.clear(), this.#N?.dispose(), this.#N = null, this.#P?.dispose(), this.#P = null, this.#j = null, this.#F = null;
-		for (let e of this.#k.values()) e.texture.dispose();
-		this.#k.clear(), this.#p.clear(), this.#m.clear(), this.scene.clear(), this.viewmodelScene.clear();
-		for (let e of this.#T) e.dispose();
+		for (let e of this.#s.values()) e.geometry.dispose(), e.materials.forEach((e) => e.dispose());
+		this.#s.clear();
+		for (let e of this.#c.values()) e.geometries.forEach((e) => e.dispose()), e.materials.forEach((e) => e.dispose());
+		this.#c.clear(), this.#S.dispose(), this.#l.clear(), this.#u.clear(), this.#p.clear(), this.#P?.dispose(), this.#P = null, this.#F?.dispose(), this.#F = null, this.#M = null, this.#I = null;
+		for (let e of this.#A.values()) e.texture.dispose();
+		this.#A.clear(), this.#m.clear(), this.#h.clear(), this.scene.clear(), this.viewmodelScene.clear();
 		for (let e of this.#E) e.dispose();
-		for (let e of this.#O) e.dispose();
-		this.#T.clear(), this.#E.clear(), this.#D.clear(), this.#O.clear(), this.#V = !0;
+		for (let e of this.#D) e.dispose();
+		for (let e of this.#k) e.dispose();
+		this.#E.clear(), this.#D.clear(), this.#O.clear(), this.#k.clear(), this.#H = !0;
 	}
 	objectFor(e) {
-		return this.#i.get(e)?.object;
+		return this.#a.get(e)?.object;
 	}
 	animationClipSourcesInSubtree(e) {
 		let t = this.objectFor(e);
 		if (t === void 0) return Object.freeze([]);
-		let n = [...this.#i.entries()].sort(([e], [t]) => e - t).flatMap(([e, n]) => {
+		let n = [...this.#a.entries()].sort(([e], [t]) => e - t).flatMap(([e, n]) => {
 			if (n.object !== t && !gv(n.object, t)) return [];
-			let r = this.#x.clips(e);
+			let r = this.#S.clips(e);
 			return r === void 0 ? [] : [Object.freeze({
 				handle: e,
 				object: n.object,
@@ -19840,46 +19879,46 @@ var $ = class extends Error {
 	}
 	projectionIdentityForObject(e, t) {
 		if (e instanceof qs && t !== void 0) {
-			let n = this.#L.get(e)?.handles[t], r = n === void 0 ? void 0 : this.#i.get(n);
+			let n = this.#R.get(e)?.handles[t], r = n === void 0 ? void 0 : this.#a.get(n);
 			if (n !== void 0 && r !== void 0) return {
 				handle: n,
-				layer: this.#ne(r.object),
+				layer: this.#re(r.object),
 				metadata: iy(r.object)
 			};
 		}
 		let n = e;
 		for (; n !== null;) {
-			for (let [e, t] of this.#i.entries()) if (t.object === n) return {
+			for (let [e, t] of this.#a.entries()) if (t.object === n) return {
 				handle: e,
-				layer: this.#ne(t.object),
+				layer: this.#re(t.object),
 				metadata: iy(t.object)
 			};
 			n = n.parent;
 		}
 	}
 	projectionWorldNormalForObject(e, t, n) {
-		if (e instanceof qs && t !== void 0 && this.#L.has(e)) {
+		if (e instanceof qs && t !== void 0 && this.#R.has(e)) {
 			let r = new Y();
 			return e.getMatrixAt(t, r), r.premultiply(e.matrixWorld), n.clone().applyNormalMatrix(new Fi().getNormalMatrix(r));
 		}
 		return n.clone().transformDirection(e.matrixWorld);
 	}
 	prepareStaticInstanceBatches(e) {
-		if (this.#V) throw new $("renderer is disposed");
+		if (this.#H) throw new $("renderer is disposed");
 		this.scene.updateMatrixWorld(!0), e.updateMatrixWorld(!0);
 		let t = new Y().multiplyMatrices(e.projectionMatrix, e.matrixWorldInverse), n = new tc().setFromProjectionMatrix(t);
-		for (let e of this.#I.values()) {
+		for (let e of this.#L.values()) {
 			let t = e.candidateHandles.filter((e) => {
-				let t = this.#i.get(e);
+				let t = this.#a.get(e);
 				return t !== void 0 && t.object instanceof xs && n.intersectsObject(t.object);
 			});
-			this.#Se(e, t);
+			this.#we(e, t);
 		}
 	}
 	visibilityReadout(e, t = this.scene) {
-		if (this.#V) throw new $("renderer is disposed");
+		if (this.#H) throw new $("renderer is disposed");
 		e.updateMatrixWorld(!0), t.updateMatrixWorld(!0), this.prepareSpritesForCamera(e, t);
-		let n = new Y().multiplyMatrices(e.projectionMatrix, e.matrixWorldInverse), r = new tc().setFromProjectionMatrix(n), i = [...this.#i.entries()].filter(([, e]) => gv(e.object, t)).sort(([e], [t]) => e - t).map(([e, n]) => {
+		let n = new Y().multiplyMatrices(e.projectionMatrix, e.matrixWorldInverse), r = new tc().setFromProjectionMatrix(n), i = [...this.#a.entries()].filter(([, e]) => gv(e.object, t)).sort(([e], [t]) => e - t).map(([e, n]) => {
 			let i = Zv(n.object, t), a = Qv(n), o = a && $v(r, n.object);
 			return Object.freeze({
 				handle: e,
@@ -19897,9 +19936,9 @@ var $ = class extends Error {
 		});
 	}
 	prepareSpritesForCamera(e, t = this.scene) {
-		if (this.#V) throw new $("renderer is disposed");
+		if (this.#H) throw new $("renderer is disposed");
 		e.updateMatrixWorld(!0), t.updateMatrixWorld(!0);
-		let n = new J().setFromMatrixPosition(e.matrixWorld), r = e.getWorldQuaternion(new Mi()), i = new J(), a = new J(), o = new Mi(), s = new Mi(), c = new Mi(), l = new Mi(), u = new J(), d = new J(), f = new J(0, 1, 0), p = new Y(), m = [...this.#a].map((e) => this.#i.get(e)).filter((e) => e !== void 0 && e.kind === "sprite" && e.sprite !== void 0 && gv(e.object, t)).sort((e, t) => uy(e.object) - uy(t.object));
+		let n = new J().setFromMatrixPosition(e.matrixWorld), r = e.getWorldQuaternion(new Mi()), i = new J(), a = new J(), o = new Mi(), s = new Mi(), c = new Mi(), l = new Mi(), u = new J(), d = new J(), f = new J(0, 1, 0), p = new Y(), m = [...this.#o].map((e) => this.#a.get(e)).filter((e) => e !== void 0 && e.kind === "sprite" && e.sprite !== void 0 && gv(e.object, t)).sort((e, t) => uy(e.object) - uy(t.object));
 		for (let e of m) {
 			let t = e.sprite;
 			t !== void 0 && (e.object.matrixAutoUpdate = !0, ny(e.object, t.transform));
@@ -19909,77 +19948,77 @@ var $ = class extends Error {
 			let m = t.sprite;
 			if (m === void 0) continue;
 			if (m.viewportPlacement !== null && m.viewportPlacement !== void 0) {
-				this.#Ve(t.object, m, e);
+				this.#Ue(t.object, m, e);
 				continue;
 			}
-			if (m.sizeMode === "pixel" && this.#He(t.object, m, e), m.billboard === "none") continue;
+			if (m.sizeMode === "pixel" && this.#We(t.object, m, e), m.billboard === "none") continue;
 			let h = t.object;
 			h.updateMatrixWorld(!0), h.getWorldPosition(a), m.billboard === "spherical" ? o.copy(r) : (e instanceof cu ? (e.getWorldDirection(i), u.copy(i).negate()) : u.subVectors(n, a), u.y = 0, u.lengthSq() <= 2 ** -52 && (h.getWorldQuaternion(s), u.set(0, 0, 1).applyQuaternion(s), u.y = 0, u.lengthSq() <= 2 ** -52 && u.set(0, 0, 1)), u.normalize(), d.crossVectors(f, u).normalize(), p.makeBasis(d, f, u), o.setFromRotationMatrix(p).normalize()), h.parent === null ? h.quaternion.copy(o) : (h.parent.getWorldQuaternion(c), l.copy(c).invert().multiply(o).normalize(), h.quaternion.copy(l)), h.updateMatrixWorld(!0);
 		}
 		t.updateMatrixWorld(!0);
 	}
 	prepareStaticInstanceBatchesForPicking() {
-		if (this.#V) throw new $("renderer is disposed");
+		if (this.#H) throw new $("renderer is disposed");
 		this.scene.updateMatrixWorld(!0);
-		for (let e of this.#I.values()) this.#Se(e, e.candidateHandles);
+		for (let e of this.#L.values()) this.#we(e, e.candidateHandles);
 	}
 	advanceAnimation(e) {
 		try {
-			this.#x.advance(e);
+			this.#S.advance(e);
 		} catch (e) {
 			throw dy(e);
 		}
-		for (let [e, t] of this.#i.entries()) t.kind === "animatedMesh" && this.#me(e, t);
+		for (let [e, t] of this.#a.entries()) t.kind === "animatedMesh" && this.#ge(e, t);
 	}
 	animatedMeshPlayback(e) {
-		return this.#x.playback(e);
+		return this.#S.playback(e);
 	}
 	subscribeAnimatedMeshInspections(e) {
-		return this.#x.subscribeInspections(e);
+		return this.#S.subscribeInspections(e);
 	}
 	subscribeAnimatedMeshNaturalCompletions(e) {
-		return this.#x.subscribeNaturalCompletions(e);
+		return this.#S.subscribeNaturalCompletions(e);
 	}
 	sampleAnimatedMesh(e, t, n) {
 		try {
-			let r = this.#x.sample(e, t, n);
-			return this.#me(e, this.#et(e, "sampleAnimatedMesh")), r;
+			let r = this.#S.sample(e, t, n);
+			return this.#ge(e, this.#nt(e, "sampleAnimatedMesh")), r;
 		} catch (e) {
 			throw dy(e);
 		}
 	}
 	createAnimatedMeshCaptureAppearance(e, t, n) {
 		try {
-			return this.#x.createCaptureAppearance(e, t, n);
+			return this.#S.createCaptureAppearance(e, t, n);
 		} catch (e) {
 			throw dy(e);
 		}
 	}
 	setAnimationControllerWeights(e, t) {
 		try {
-			this.#x.setControllerWeights(e, t), this.#me(e, this.#et(e, "setAnimationControllerWeights"));
+			this.#S.setControllerWeights(e, t), this.#ge(e, this.#nt(e, "setAnimationControllerWeights"));
 		} catch (e) {
 			throw dy(e);
 		}
 	}
 	hasAnimationControllerClips(e, t) {
-		return this.#x.hasClips(e, t);
+		return this.#S.hasClips(e, t);
 	}
 	clearAnimationControllerWeights(e) {
 		try {
-			this.#x.clearControllerWeights(e), this.#me(e, this.#et(e, "clearAnimationControllerWeights"));
+			this.#S.clearControllerWeights(e), this.#ge(e, this.#nt(e, "clearAnimationControllerWeights"));
 		} catch (e) {
 			throw dy(e);
 		}
 	}
 	snapshot() {
-		let e = [...this.#i.entries()].sort((e, t) => e[0] - t[0]);
-		return e.length === 0 ? "(empty scene)\n" : e.map(([e, t]) => _v(e, t, this.#ne(t.object))).join("\n") + "\n";
+		let e = [...this.#a.entries()].sort((e, t) => e[0] - t[0]);
+		return e.length === 0 ? "(empty scene)\n" : e.map(([e, t]) => _v(e, t, this.#re(t.object))).join("\n") + "\n";
 	}
-	#ee(e) {
-		if (this.#i.has(e.handle)) throw new $(`create: handle ${e.handle} already exists`);
+	#te(e) {
+		if (this.#a.has(e.handle)) throw new $(`create: handle ${e.handle} already exists`);
 		let t = Sv(e.node);
-		this.#X(t), (e.parent === null ? this.#U(e.node.layer) : this.#et(e.parent, "create.parent").object).add(t), this.#te(t), this.#i.set(e.handle, {
+		this.#Z(t), (e.parent === null ? this.#W(e.node.layer) : this.#nt(e.parent, "create.parent").object).add(t), this.#ne(t), this.#a.set(e.handle, {
 			object: t,
 			kind: "primitive",
 			shape: e.node.geometry.kind,
@@ -19987,20 +20026,20 @@ var $ = class extends Error {
 			viewMaterial: e.node.material
 		});
 	}
-	#te(e) {
-		!this.#S || !gv(e, this.#e) || e.traverse((e) => {
+	#ne(e) {
+		!this.#C || !gv(e, this.#e) || e.traverse((e) => {
 			e instanceof xs && (e.castShadow = !0, e.receiveShadow = !0);
 		});
 	}
-	#ne(e) {
+	#re(e) {
 		return gv(e, this.#r) ? "viewmodel" : gv(e, this.#t) ? "debug" : gv(e, this.#n) ? "ui" : "scene";
 	}
-	#re(e) {
-		let t = this.#et(e.handle, "update");
+	#ie(e) {
+		let t = this.#nt(e.handle, "update");
 		e.transform && (t.object.matrixAutoUpdate = !0, ny(t.object, e.transform), t.kind === "sprite" && t.sprite !== void 0 && (t.sprite = {
 			...t.sprite,
 			transform: e.transform
-		})), e.material && (t.meshProvenance === void 0 ? ay(t, e.material) : this.#Ze(t, e.material), t.viewMaterial = e.material, this.#X(t.object)), e.visible !== null && (t.object.visible = e.visible, t.kind === "sprite" && t.sprite !== void 0 && (t.sprite = {
+		})), e.material && (t.meshProvenance === void 0 ? ay(t, e.material) : this.#$e(t, e.material), t.viewMaterial = e.material, this.#Z(t.object)), e.visible !== null && (t.object.visible = e.visible, t.kind === "sprite" && t.sprite !== void 0 && (t.sprite = {
 			...t.sprite,
 			visible: e.visible
 		})), e.metadata && (ry(t.object, e.metadata), t.kind === "sprite" && t.sprite !== void 0 && (t.sprite = {
@@ -20008,31 +20047,45 @@ var $ = class extends Error {
 			metadata: e.metadata
 		}));
 	}
-	#ie(e, t) {
-		let n = this.#et(e.handle, "destroy"), r = [...this.#i.entries()].filter(([, e]) => e.object.parent === n.object).map(([e]) => e).sort((e, t) => e - t);
-		for (let e of r) this.#ie({
+	#ae(e) {
+		let t = this.#nt(e.handle, "setParentJoint"), n = this.#i.get(e.handle) ?? Wg(t.object.parent, this.#a);
+		if (n == null) {
+			if (e.joint === null) return;
+			throw new $(`setParentJoint: child ${e.handle} has no retained parent for joint '${e.joint}'`);
+		}
+		let r = this.#nt(n, "setParentJoint.parent");
+		if (e.joint === null) {
+			r.object.add(t.object), this.#i.delete(e.handle);
+			return;
+		}
+		if (r.kind !== "animatedMesh") throw new $(`setParentJoint: parent ${n} is not an animated mesh`);
+		this.#S.joint(n, e.joint).add(t.object), this.#i.set(e.handle, n), t.object.updateWorldMatrix(!0, !0);
+	}
+	#oe(e, t) {
+		let n = this.#nt(e.handle, "destroy"), r = [...this.#a.entries()].filter(([t, r]) => r.object.parent === n.object || this.#i.get(t) === e.handle).map(([e]) => e).sort((e, t) => e - t);
+		for (let e of r) this.#oe({
 			op: "destroy",
 			handle: e
 		}, t);
-		if (n.object.parent?.remove(n.object), n.kind === "staticMesh" && n.asset !== void 0) yv(n), this.#se(n.asset);
-		else if (n.kind === "animatedMesh") this.#x.release(e.handle);
+		if (this.#i.delete(e.handle), n.object.parent?.remove(n.object), n.kind === "staticMesh" && n.asset !== void 0) yv(n), this.#le(n.asset);
+		else if (n.kind === "animatedMesh") this.#S.release(e.handle);
 		else if (n.kind === "voxelObject" && n.asset !== void 0) {
 			yv(n);
-			let e = this.#s.get(n.asset);
+			let e = this.#c.get(n.asset);
 			e !== void 0 && --e.refCount;
 		} else n.kind === "light" ? Gg(n.object) : oy(n.object);
-		this.#i.delete(e.handle), this.#a.delete(e.handle), t?.add(e.handle);
+		this.#a.delete(e.handle), this.#o.delete(e.handle), t?.add(e.handle);
 	}
-	#ae(e) {
-		let t = this.#o.get(e.asset);
+	#se(e) {
+		let t = this.#s.get(e.asset);
 		if (t) {
 			if (t.refCount > 0) throw new $(`defineStaticMesh: asset ${e.asset} is in use by ${t.refCount} instance(s)`);
 			t.geometry.dispose(), t.materials.forEach((e) => e.dispose());
 		}
-		let n = Tv(e.payload, e.materialSlots, this.#g, this.#_, "defineStaticMesh");
-		this.#Z(n);
-		let r = /* @__PURE__ */ new Map(), i = e.materialSlots.map((e, t) => (r.set(e.slot, t), this.#Le(e, void 0, n.hasAttribute("color"))));
-		this.#o.set(e.asset, {
+		let n = Tv(e.payload, e.materialSlots, this.#_, this.#v, "defineStaticMesh");
+		this.#Q(n);
+		let r = /* @__PURE__ */ new Map(), i = e.materialSlots.map((e, t) => (r.set(e.slot, t), this.#ze(e, void 0, n.hasAttribute("color"))));
+		this.#s.set(e.asset, {
 			geometry: n,
 			materials: i,
 			resource: kv(e.payload),
@@ -20042,18 +20095,18 @@ var $ = class extends Error {
 			refCount: 0
 		});
 	}
-	#oe(e) {
-		if (this.#i.has(e.handle)) throw new $(`createStaticMeshInstance: handle ${e.handle} already exists`);
-		let t = this.#o.get(e.instance.asset);
+	#ce(e) {
+		if (this.#a.has(e.handle)) throw new $(`createStaticMeshInstance: handle ${e.handle} already exists`);
+		let t = this.#s.get(e.instance.asset);
 		if (!t) throw new $(`createStaticMeshInstance: undefined static mesh asset ${e.instance.asset}`);
 		let n = t.materials.slice(), r = t.materialSlots.map((e) => e.material), i = /* @__PURE__ */ new Set();
 		for (let a of e.instance.materialOverrides) {
 			let o = t.slotIndex.get(a.slot);
 			if (o === void 0) throw new $(`createStaticMeshInstance: override for unbound slot ${a.slot} on ${e.instance.asset}`);
-			n[o] = this.#Le(a, void 0, t.geometry.hasAttribute("color")), r[o] = a.material, i.add(o);
+			n[o] = this.#ze(a, void 0, t.geometry.hasAttribute("color")), r[o] = a.material, i.add(o);
 		}
 		let a = new xs(t.geometry, n.length === 1 ? n[0] : n);
-		this.#R.add(a), ny(a, e.instance.transform), ry(a, e.instance.metadata), a.visible = e.instance.visible, (e.parent === null ? this.#e : this.#et(e.parent, "createStaticMeshInstance.parent").object).add(a), this.#te(a), t.refCount += 1, this.#i.set(e.handle, {
+		this.#z.add(a), ny(a, e.instance.transform), ry(a, e.instance.metadata), a.visible = e.instance.visible, (e.parent === null ? this.#e : this.#nt(e.parent, "createStaticMeshInstance.parent").object).add(a), this.#ne(a), t.refCount += 1, this.#a.set(e.handle, {
 			object: a,
 			kind: "staticMesh",
 			shape: "quad",
@@ -20064,65 +20117,65 @@ var $ = class extends Error {
 			materialParameterOverrides: /* @__PURE__ */ new Map()
 		});
 	}
-	#se(e) {
-		let t = this.#o.get(e);
+	#le(e) {
+		let t = this.#s.get(e);
 		t && --t.refCount;
 	}
-	#ce(e) {
-		let t = this.#o.get(e);
+	#ue(e) {
+		let t = this.#s.get(e);
 		if (t === void 0) throw new $(`releaseStaticMesh: undefined static mesh ${e}`);
 		if (t.refCount !== 0) throw new $(`releaseStaticMesh: ${e} is in use by ${t.refCount} instance(s)`);
-		this.#le(t), this.#o.delete(e);
-	}
-	#le(e) {
-		e.geometry.dispose(), e.materials.forEach((e) => e.dispose());
-	}
-	#ue(e) {
-		try {
-			this.#x.define(e.asset);
-		} catch (e) {
-			throw dy(e);
-		}
+		this.#de(t), this.#s.delete(e);
 	}
 	#de(e) {
+		e.geometry.dispose(), e.materials.forEach((e) => e.dispose());
+	}
+	#fe(e) {
 		try {
-			this.#x.releaseDefinition(e);
+			this.#S.define(e.asset);
 		} catch (e) {
 			throw dy(e);
 		}
 	}
-	#fe(e) {
-		if (this.#i.has(e.handle)) throw new $(`createAnimatedMeshInstance: handle ${e.handle} already exists`);
-		let t;
+	#pe(e) {
 		try {
-			t = this.#x.create(e.handle, e.instance, (e) => this.#Le(e));
+			this.#S.releaseDefinition(e);
 		} catch (e) {
 			throw dy(e);
 		}
-		ny(t.object, e.instance.transform), ry(t.object, e.instance.metadata), t.object.visible = e.instance.visible, this.#X(t.object), (e.parent === null ? this.#e : this.#et(e.parent, "createAnimatedMeshInstance.parent").object).add(t.object), this.#te(t.object), this.#i.set(e.handle, {
+	}
+	#me(e) {
+		if (this.#a.has(e.handle)) throw new $(`createAnimatedMeshInstance: handle ${e.handle} already exists`);
+		let t;
+		try {
+			t = this.#S.create(e.handle, e.instance, (e) => this.#ze(e));
+		} catch (e) {
+			throw dy(e);
+		}
+		ny(t.object, e.instance.transform), ry(t.object, e.instance.metadata), t.object.visible = e.instance.visible, this.#Z(t.object), (e.parent === null ? this.#e : this.#nt(e.parent, "createAnimatedMeshInstance.parent").object).add(t.object), this.#ne(t.object), this.#a.set(e.handle, {
 			object: t.object,
 			kind: "animatedMesh",
 			shape: "quad",
 			asset: e.instance.asset,
 			ownsGeometry: !1
-		}), this.#me(e.handle, this.#et(e.handle, "createAnimatedMeshInstance"));
+		}), this.#ge(e.handle, this.#nt(e.handle, "createAnimatedMeshInstance"));
 	}
-	#pe(e) {
-		let t = this.#et(e.handle, "setAnimatedMeshPlayback");
+	#he(e) {
+		let t = this.#nt(e.handle, "setAnimatedMeshPlayback");
 		try {
-			this.#x.setPlayback(e.handle, e.playback);
+			this.#S.setPlayback(e.handle, e.playback);
 		} catch (e) {
 			throw dy(e);
 		}
-		this.#me(e.handle, t);
+		this.#ge(e.handle, t);
 	}
-	#me(e, t) {
-		t.object.userData.animatedMeshPlayback = this.#x.playback(e);
+	#ge(e, t) {
+		t.object.userData.animatedMeshPlayback = this.#S.playback(e);
 	}
-	#he(e) {
-		let t = wv(e, this.#g, this.#_);
-		t.forEach((e) => this.#Z(e));
-		let n = /* @__PURE__ */ new Map(), r = e.materialSlots.map((e, t) => (n.set(e.slot, t), this.#Le(e))), i = this.#s.get(e.asset), a = {
+	#_e(e) {
+		let t = wv(e, this.#_, this.#v);
+		t.forEach((e) => this.#Q(e));
+		let n = /* @__PURE__ */ new Map(), r = e.materialSlots.map((e, t) => (n.set(e.slot, t), this.#ze(e))), i = this.#c.get(e.asset), a = {
 			geometries: t,
 			frames: e.frames,
 			meshMaterialSlots: e.meshes.map((e) => e.payload.groups.map((e) => e.materialSlot)),
@@ -20132,33 +20185,33 @@ var $ = class extends Error {
 			refCount: i?.refCount ?? 0
 		};
 		if (i !== void 0) {
-			for (let n of this.#i.values()) {
+			for (let n of this.#a.values()) {
 				if (n.kind !== "voxelObject" || n.asset !== e.asset) continue;
 				let i = n.voxelFrame ?? 0, o = a.frames[i], s = o === void 0 ? void 0 : a.geometries[o.mesh];
 				if (o === void 0 || s === void 0) throw t.forEach((e) => e.dispose()), r.forEach((e) => e.dispose()), new $(`defineVoxelObject: live frame ${i} is unavailable on ${e.asset}`);
-				let c = this.#be(a, n.voxelMaterialOverrides ?? []);
+				let c = this.#Se(a, n.voxelMaterialOverrides ?? []);
 				yv(n);
 				let l = n.object;
 				l.geometry = s, l.material = c.materials.length === 1 ? c.materials[0] : c.materials, n.materialIds = c.materialIds, n.ownedMaterialIndices = c.ownedMaterialIndices, n.meshMaterialSlots = e.meshes[o.mesh].payload.groups.map((e) => e.materialSlot);
 			}
 			i.geometries.forEach((e) => e.dispose()), i.materials.forEach((e) => e.dispose());
 		}
-		this.#s.set(e.asset, a);
+		this.#c.set(e.asset, a);
 	}
-	#ge(e) {
-		let t = this.#s.get(e);
+	#ve(e) {
+		let t = this.#c.get(e);
 		if (t === void 0) throw new $(`releaseVoxelObject: undefined voxel object ${e}`);
 		if (t.refCount !== 0) throw new $(`releaseVoxelObject: ${e} is in use by ${t.refCount} instance(s)`);
-		t.geometries.forEach((e) => e.dispose()), t.materials.forEach((e) => e.dispose()), this.#s.delete(e);
+		t.geometries.forEach((e) => e.dispose()), t.materials.forEach((e) => e.dispose()), this.#c.delete(e);
 	}
-	#_e(e) {
-		if (this.#i.has(e.handle)) throw new $(`createVoxelObjectInstance: handle ${e.handle} already exists`);
-		let t = this.#s.get(e.instance.asset);
+	#ye(e) {
+		if (this.#a.has(e.handle)) throw new $(`createVoxelObjectInstance: handle ${e.handle} already exists`);
+		let t = this.#c.get(e.instance.asset);
 		if (t === void 0) throw new $(`createVoxelObjectInstance: undefined voxel object ${e.instance.asset}`);
 		let n = t.frames[e.instance.frame], r = n === void 0 ? void 0 : t.geometries[n.mesh];
 		if (r === void 0) throw new $(`createVoxelObjectInstance: frame ${e.instance.frame} unavailable on ${e.instance.asset}`);
-		let i = this.#be(t, e.instance.materialOverrides), a = new xs(r, i.materials.length === 1 ? i.materials[0] : i.materials);
-		this.#R.add(a), ny(a, e.instance.transform), ry(a, e.instance.metadata), a.visible = e.instance.visible, (e.parent === null ? this.#e : this.#et(e.parent, "createVoxelObjectInstance.parent").object).add(a), this.#te(a), t.refCount += 1, this.#i.set(e.handle, {
+		let i = this.#Se(t, e.instance.materialOverrides), a = new xs(r, i.materials.length === 1 ? i.materials[0] : i.materials);
+		this.#z.add(a), ny(a, e.instance.transform), ry(a, e.instance.metadata), a.visible = e.instance.visible, (e.parent === null ? this.#e : this.#nt(e.parent, "createVoxelObjectInstance.parent").object).add(a), this.#ne(a), t.refCount += 1, this.#a.set(e.handle, {
 			object: a,
 			kind: "voxelObject",
 			shape: "quad",
@@ -20167,28 +20220,28 @@ var $ = class extends Error {
 			materialIds: i.materialIds,
 			ownedMaterialIndices: i.ownedMaterialIndices,
 			meshProvenance: "voxelObject",
-			meshMaterialSlots: this.#ye(e.instance.asset, e.instance.frame),
+			meshMaterialSlots: this.#xe(e.instance.asset, e.instance.frame),
 			voxelFrame: e.instance.frame,
 			voxelMaterialOverrides: structuredClone(e.instance.materialOverrides)
 		});
 	}
-	#ve(e) {
-		let t = this.#et(e.handle, "setVoxelObjectFrame");
+	#be(e) {
+		let t = this.#nt(e.handle, "setVoxelObjectFrame");
 		if (t.kind !== "voxelObject" || t.asset === void 0) throw new $(`setVoxelObjectFrame: handle ${e.handle} is not a voxel object`);
-		let n = this.#s.get(t.asset), r = n?.frames[e.frame], i = r === void 0 ? void 0 : n?.geometries[r.mesh];
+		let n = this.#c.get(t.asset), r = n?.frames[e.frame], i = r === void 0 ? void 0 : n?.geometries[r.mesh];
 		if (n === void 0 || r === void 0 || i === void 0) throw new $(`setVoxelObjectFrame: frame ${e.frame} unavailable on ${t.asset}`);
-		t.object.geometry = i, t.voxelFrame = e.frame, t.meshMaterialSlots = this.#ye(t.asset, e.frame), t.object.userData.voxelObjectFrame = e.frame;
+		t.object.geometry = i, t.voxelFrame = e.frame, t.meshMaterialSlots = this.#xe(t.asset, e.frame), t.object.userData.voxelObjectFrame = e.frame;
 	}
-	#ye(e, t) {
-		let n = this.#s.get(e), r = n?.frames[t];
+	#xe(e, t) {
+		let n = this.#c.get(e), r = n?.frames[t];
 		return n === void 0 || r === void 0 ? [] : [...n.meshMaterialSlots[r.mesh] ?? []];
 	}
-	#be(e, t) {
+	#Se(e, t) {
 		let n = e.materials.slice(), r = e.materialSlots.map((e) => e.material), i = /* @__PURE__ */ new Set();
 		for (let a of t) {
 			let t = e.slotIndex.get(a.slot);
 			if (t === void 0) throw new $(`voxel object material override uses unbound slot ${a.slot}`);
-			n[t] = this.#Le(a), r[t] = a.material, i.add(t);
+			n[t] = this.#ze(a), r[t] = a.material, i.add(t);
 		}
 		return {
 			materials: n,
@@ -20197,9 +20250,9 @@ var $ = class extends Error {
 		};
 	}
 	voxelObjectFrame(e) {
-		let t = this.#i.get(e);
+		let t = this.#a.get(e);
 		if (t?.kind !== "voxelObject" || t.asset === void 0 || t.voxelFrame === void 0) return;
-		let n = this.#s.get(t.asset)?.frames[t.voxelFrame];
+		let n = this.#c.get(t.asset)?.frames[t.voxelFrame];
 		if (n !== void 0) return {
 			handle: e,
 			asset: t.asset,
@@ -20209,15 +20262,15 @@ var $ = class extends Error {
 		};
 	}
 	instanceCountFor(e) {
-		return this.#o.get(e)?.refCount ?? 0;
+		return this.#s.get(e)?.refCount ?? 0;
 	}
-	#xe() {
+	#Ce() {
 		let e = /* @__PURE__ */ new Map();
-		for (let e of this.#i.values()) (e.kind === "staticMesh" || e.kind === "voxelObject") && e.object instanceof xs && e.object.layers.set(0);
+		for (let e of this.#a.values()) (e.kind === "staticMesh" || e.kind === "voxelObject") && e.object instanceof xs && e.object.layers.set(0);
 		this.scene.updateMatrixWorld(!0);
-		let t = [...this.#i.entries()].sort(([e], [t]) => e - t);
+		let t = [...this.#a.entries()].sort(([e], [t]) => e - t);
 		for (let [n, r] of t) {
-			if (r.kind !== "staticMesh" && r.kind !== "voxelObject" || !(r.object instanceof xs) || r.object instanceof qs || this.#ne(r.object) !== "scene" || !Zv(r.object, this.#e) || r.object.matrixWorld.determinant() <= 0 || !ty(r.object.matrixWorld) || r.object.customDepthMaterial !== void 0 || r.object.customDistanceMaterial !== void 0 || this.#S && r.object.castShadow) continue;
+			if (r.kind !== "staticMesh" && r.kind !== "voxelObject" || !(r.object instanceof xs) || r.object instanceof qs || this.#re(r.object) !== "scene" || !Zv(r.object, this.#e) || r.object.matrixWorld.determinant() <= 0 || !ty(r.object.matrixWorld) || r.object.customDepthMaterial !== void 0 || r.object.customDistanceMaterial !== void 0 || this.#C && r.object.castShadow) continue;
 			let t = Array.isArray(r.object.material) ? r.object.material : [r.object.material];
 			if (t.length === 0 || t.some((e) => e.transparent || e.opacity < 1)) continue;
 			let i = Xv(r.object, t), a = e.get(i) ?? [];
@@ -20232,41 +20285,41 @@ var $ = class extends Error {
 			if (i.length < mv) continue;
 			let a = `${t}|chunk:${String(Math.floor(e / pv))}`;
 			n.add(a);
-			let o = i[0].mesh, s = Array.isArray(o.material) ? o.material : [o.material], c = this.#I.get(a);
+			let o = i[0].mesh, s = Array.isArray(o.material) ? o.material : [o.material], c = this.#L.get(a);
 			if (c === void 0 || c.mesh.instanceMatrix.count < i.length) {
-				c !== void 0 && this.#Te(a, c);
+				c !== void 0 && this.#De(a, c);
 				let e = new qs(o.geometry, s.length === 1 ? s[0] : s, i.length);
 				e.name = `static-instance-batch:${t}`, e.castShadow = o.castShadow, e.receiveShadow = o.receiveShadow, e.renderOrder = o.renderOrder, e.frustumCulled = !0, e.instanceMatrix.setUsage(Gr), e.layers.set(0), this.#e.add(e), c = {
 					mesh: e,
 					candidateHandles: [],
 					handles: []
-				}, this.#I.set(a, c), this.#L.set(e, c);
+				}, this.#L.set(a, c), this.#R.set(e, c);
 			}
-			c.candidateHandles = i.map(({ handle: e }) => e), this.#Se(c, c.candidateHandles);
+			c.candidateHandles = i.map(({ handle: e }) => e), this.#we(c, c.candidateHandles);
 		}
-		for (let [e, t] of [...this.#I.entries()]) n.has(e) || this.#Te(e, t);
+		for (let [e, t] of [...this.#L.entries()]) n.has(e) || this.#De(e, t);
 	}
-	#Se(e, t) {
+	#we(e, t) {
 		for (let t of e.candidateHandles) {
-			let e = this.#i.get(t);
+			let e = this.#a.get(t);
 			e?.object instanceof xs && e.object.layers.set(fv);
 		}
 		if (t.length < mv) {
 			if (e.handles = [], e.mesh.count = 0, e.mesh.visible = !1, t.length === 1) {
-				let e = this.#i.get(t[0]);
+				let e = this.#a.get(t[0]);
 				e?.object instanceof xs && e.object.layers.set(0);
 			}
 			return;
 		}
 		e.handles = [...t], e.mesh.visible = !0, e.mesh.count = t.length;
 		for (let n = 0; n < t.length; n += 1) {
-			let r = this.#i.get(t[n]);
+			let r = this.#a.get(t[n]);
 			if (r === void 0) throw new $(`static instance batch references missing handle ${t[n]}`);
 			e.mesh.setMatrixAt(n, r.object.matrixWorld);
 		}
 		e.mesh.instanceMatrix.needsUpdate = !0, e.mesh.boundingBox = null, e.mesh.boundingSphere = null, e.mesh.computeBoundingBox(), e.mesh.computeBoundingSphere();
 	}
-	#Ce(e) {
+	#Te(e) {
 		return e.ops.some((e) => {
 			switch (e.op) {
 				case "defineMaterial":
@@ -20277,181 +20330,182 @@ var $ = class extends Error {
 				case "createStaticMeshInstance":
 				case "createVoxelObjectInstance":
 				case "setVoxelObjectFrame":
+				case "setParentJoint":
 				case "setMaterialInstanceParameters": return !0;
 				case "destroy":
 				case "replaceMeshPayload": {
-					let t = this.#i.get(e.handle);
-					return t !== void 0 && this.#we(t.object);
+					let t = this.#a.get(e.handle);
+					return t !== void 0 && this.#Ee(t.object);
 				}
 				case "update": {
 					if (e.transform === null && e.material === null && e.visible === null) return !1;
-					let t = this.#i.get(e.handle);
-					return t !== void 0 && this.#we(t.object);
+					let t = this.#a.get(e.handle);
+					return t !== void 0 && this.#Ee(t.object);
 				}
 				default: return !1;
 			}
 		});
 	}
-	#we(e) {
+	#Ee(e) {
 		let t = !1;
 		return e.traverse((e) => {
-			t ||= this.#R.has(e);
+			t ||= this.#z.has(e);
 		}), t;
 	}
-	#Te(e, t) {
-		t.mesh.parent?.remove(t.mesh), t.mesh.dispose(), this.#L.delete(t.mesh), this.#I.delete(e);
-	}
-	#Ee() {
-		for (let [e, t] of [...this.#I.entries()]) this.#Te(e, t);
-	}
 	#De(e, t) {
-		this.#l.set(e.id, e), t.add(e.id);
+		t.mesh.parent?.remove(t.mesh), t.mesh.dispose(), this.#R.delete(t.mesh), this.#L.delete(e);
 	}
-	#Oe(e) {
-		if (!this.#l.has(e)) throw new $(`releaseMaterial: undefined material ${e}`);
-		if (this.#Me(e) || this.#x.usesMaterial(e)) throw new $(`releaseMaterial: ${e} is still referenced by a retained mesh definition`);
-		this.#l.delete(e);
+	#Oe() {
+		for (let [e, t] of [...this.#L.entries()]) this.#De(e, t);
 	}
 	#ke(e, t) {
-		let n = e.payload === void 0 ? void 0 : xv(e, this.#v, "defineTexture", this.#C), r = this.#k.get(e.id);
-		this.#p.set(e.id, e), n === void 0 ? this.#k.delete(e.id) : (this.#k.set(e.id, n), this.#$(n.texture)), t.add(e.id), r?.texture.dispose();
+		this.#u.set(e.id, e), t.add(e.id);
 	}
 	#Ae(e) {
-		if (this.#p.get(e) === void 0) throw new $(`releaseTexture: undefined texture ${e}`);
-		if (this.#j === e || this.#M?.texture === e) throw new $(`releaseTexture: ${e} is the active sky background`);
-		if ([...this.#m.values()].some((t) => t.texture === e)) throw new $(`releaseTexture: ${e} is referenced by a retained sprite atlas`);
-		if ([...this.#l.values()].some((t) => cy(t, e))) throw new $(`releaseTexture: ${e} is referenced by a retained material`);
-		if ([...this.#i.values()].some((t) => t.kind === "sprite" && t.sprite !== void 0 && ly(t.sprite, e))) throw new $(`releaseTexture: ${e} is referenced by a live sprite material`);
-		this.#p.delete(e);
-		let t = this.#k.get(e);
-		this.#k.delete(e), t?.texture.dispose();
+		if (!this.#u.has(e)) throw new $(`releaseMaterial: undefined material ${e}`);
+		if (this.#Pe(e) || this.#S.usesMaterial(e)) throw new $(`releaseMaterial: ${e} is still referenced by a retained mesh definition`);
+		this.#u.delete(e);
 	}
-	#je(e) {
-		if (!this.#m.has(e)) throw new $(`releaseSpriteAtlas: undefined sprite atlas ${e}`);
-		if ([...this.#i.values()].some((t) => t.kind === "sprite" && t.sprite?.asset === e)) throw new $(`releaseSpriteAtlas: ${e} is in use by a sprite instance`);
-		this.#m.delete(e);
+	#je(e, t) {
+		let n = e.payload === void 0 ? void 0 : xv(e, this.#y, "defineTexture", this.#w), r = this.#A.get(e.id);
+		this.#m.set(e.id, e), n === void 0 ? this.#A.delete(e.id) : (this.#A.set(e.id, n), this.#ee(n.texture)), t.add(e.id), r?.texture.dispose();
 	}
 	#Me(e) {
-		return [...this.#o.values()].some((t) => t.materialSlots.some((t) => t.material === e)) || [...this.#s.values()].some((t) => t.materialSlots.some((t) => t.material === e));
+		if (this.#m.get(e) === void 0) throw new $(`releaseTexture: undefined texture ${e}`);
+		if (this.#M === e || this.#N?.texture === e) throw new $(`releaseTexture: ${e} is the active sky background`);
+		if ([...this.#h.values()].some((t) => t.texture === e)) throw new $(`releaseTexture: ${e} is referenced by a retained sprite atlas`);
+		if ([...this.#u.values()].some((t) => cy(t, e))) throw new $(`releaseTexture: ${e} is referenced by a retained material`);
+		if ([...this.#a.values()].some((t) => t.kind === "sprite" && t.sprite !== void 0 && ly(t.sprite, e))) throw new $(`releaseTexture: ${e} is referenced by a live sprite material`);
+		this.#m.delete(e);
+		let t = this.#A.get(e);
+		this.#A.delete(e), t?.texture.dispose();
 	}
 	#Ne(e) {
-		for (let t of this.#o.values()) if (t.refCount === 0) for (let n = 0; n < t.materialSlots.length; n += 1) {
-			let r = t.materialSlots[n];
-			if (this.#l.get(r.material)?.texture !== e) continue;
-			let i = t.materials[n];
-			t.materials[n] = this.#Le(r, void 0, t.geometry.hasAttribute("color")), i.dispose();
-		}
-		for (let t of this.#s.values()) if (t.refCount === 0) for (let n = 0; n < t.materialSlots.length; n += 1) {
-			let r = t.materialSlots[n];
-			if (this.#l.get(r.material)?.texture !== e) continue;
-			let i = t.materials[n];
-			t.materials[n] = this.#Le(r), i.dispose();
-		}
+		if (!this.#h.has(e)) throw new $(`releaseSpriteAtlas: undefined sprite atlas ${e}`);
+		if ([...this.#a.values()].some((t) => t.kind === "sprite" && t.sprite?.asset === e)) throw new $(`releaseSpriteAtlas: ${e} is in use by a sprite instance`);
+		this.#h.delete(e);
 	}
-	#Pe() {
-		let e = this.#P, t = this.#j === null ? void 0 : this.#k.get(this.#j), n = this.#M;
-		if (n !== null && t !== void 0) {
-			let r = this.#k.get(n.texture);
-			if (r === void 0) throw new $("sky blend texture is unavailable");
-			this.#N ??= new am(this.scene), this.#N.update(t.texture, r.texture, n.amount), this.scene.background = null, this.#P = null, e?.dispose();
-			return;
-		}
-		this.#N !== null && (this.#N.mesh.visible = !1);
-		let r = t?.texture.clone() ?? null;
-		r !== null && (r.mapping = 303, r.flipY = !0, r.needsUpdate = !0, this.#$(r)), this.#P = r, this.scene.background = r ?? (this.#F === null ? null : new X(this.#F[0], this.#F[1], this.#F[2])), e?.dispose();
+	#Pe(e) {
+		return [...this.#s.values()].some((t) => t.materialSlots.some((t) => t.material === e)) || [...this.#c.values()].some((t) => t.materialSlots.some((t) => t.material === e));
 	}
 	#Fe(e) {
-		let t = /* @__PURE__ */ new Set();
-		for (let n of this.#o.values()) for (let r = 0; r < n.materialSlots.length; r += 1) {
-			let i = n.materialSlots[r];
-			i.material === e && (t.add(n.materials[r]), n.materials[r] = this.#Le(i, void 0, n.geometry.hasAttribute("color")));
+		for (let t of this.#s.values()) if (t.refCount === 0) for (let n = 0; n < t.materialSlots.length; n += 1) {
+			let r = t.materialSlots[n];
+			if (this.#u.get(r.material)?.texture !== e) continue;
+			let i = t.materials[n];
+			t.materials[n] = this.#ze(r, void 0, t.geometry.hasAttribute("color")), i.dispose();
 		}
+		for (let t of this.#c.values()) if (t.refCount === 0) for (let n = 0; n < t.materialSlots.length; n += 1) {
+			let r = t.materialSlots[n];
+			if (this.#u.get(r.material)?.texture !== e) continue;
+			let i = t.materials[n];
+			t.materials[n] = this.#ze(r), i.dispose();
+		}
+	}
+	#Ie() {
+		let e = this.#F, t = this.#M === null ? void 0 : this.#A.get(this.#M), n = this.#N;
+		if (n !== null && t !== void 0) {
+			let r = this.#A.get(n.texture);
+			if (r === void 0) throw new $("sky blend texture is unavailable");
+			this.#P ??= new am(this.scene), this.#P.update(t.texture, r.texture, n.amount), this.scene.background = null, this.#F = null, e?.dispose();
+			return;
+		}
+		this.#P !== null && (this.#P.mesh.visible = !1);
+		let r = t?.texture.clone() ?? null;
+		r !== null && (r.mapping = 303, r.flipY = !0, r.needsUpdate = !0, this.#ee(r)), this.#F = r, this.scene.background = r ?? (this.#I === null ? null : new X(this.#I[0], this.#I[1], this.#I[2])), e?.dispose();
+	}
+	#Le(e) {
+		let t = /* @__PURE__ */ new Set();
 		for (let n of this.#s.values()) for (let r = 0; r < n.materialSlots.length; r += 1) {
 			let i = n.materialSlots[r];
-			i.material === e && (t.add(n.materials[r]), n.materials[r] = this.#Le(i));
+			i.material === e && (t.add(n.materials[r]), n.materials[r] = this.#ze(i, void 0, n.geometry.hasAttribute("color")));
 		}
-		this.#x.replaceLiveMaterial(e, (e) => this.#Le(e));
-		for (let t of this.#i.values()) {
+		for (let n of this.#c.values()) for (let r = 0; r < n.materialSlots.length; r += 1) {
+			let i = n.materialSlots[r];
+			i.material === e && (t.add(n.materials[r]), n.materials[r] = this.#ze(i));
+		}
+		this.#S.replaceLiveMaterial(e, (e) => this.#ze(e));
+		for (let t of this.#a.values()) {
 			if (t.kind === "primitive" && t.meshProvenance !== void 0 && t.meshMaterialSlots?.some((t) => `voxel-material/${String(t)}` === e)) {
-				this.#Ze(t, t.viewMaterial ?? Yg);
+				this.#$e(t, t.viewMaterial ?? Yg);
 				continue;
 			}
 			if (t.kind !== "staticMesh" && t.kind !== "voxelObject" || !t.materialIds || t.asset === void 0) continue;
-			let n = t.kind === "staticMesh" ? this.#o.get(t.asset) : this.#s.get(t.asset);
+			let n = t.kind === "staticMesh" ? this.#s.get(t.asset) : this.#c.get(t.asset);
 			if (n === void 0) continue;
 			let r = t.object, i = Array.isArray(r.material) ? r.material : [r.material], a = !1;
 			for (let r = 0; r < t.materialIds.length; r += 1) {
 				if (t.materialIds[r] !== e) continue;
 				t.ownedMaterialIndices?.has(r) && i[r]?.dispose();
 				let o = t.kind === "staticMesh" ? t.materialParameterOverrides?.get(r) : void 0, s = n.materialSlots[r], c = o === void 0 && s?.material === e;
-				i[r] = c ? n.materials[r] : this.#Le({
+				i[r] = c ? n.materials[r] : this.#ze({
 					slot: s?.slot ?? r,
 					material: e
 				}, o, t.kind === "staticMesh" && t.object.geometry.hasAttribute("color")), c ? t.ownedMaterialIndices?.delete(r) : t.ownedMaterialIndices?.add(r), a = !0;
 			}
 			a && (r.material = i.length === 1 ? i[0] : i);
 		}
-		for (let e of this.#i.values()) e.kind === "animatedMesh" && this.#X(e.object);
+		for (let e of this.#a.values()) e.kind === "animatedMesh" && this.#Z(e.object);
 		t.forEach((e) => e.dispose());
 	}
-	#Ie(e) {
-		let t = this.#et(e.handle, "setMaterialInstanceParameters");
+	#Re(e) {
+		let t = this.#nt(e.handle, "setMaterialInstanceParameters");
 		if (t.kind !== "staticMesh" || t.asset === void 0 || t.materialIds === void 0) throw new $(`setMaterialInstanceParameters: handle ${e.handle} is not a static-mesh instance`);
-		let n = this.#o.get(t.asset), r = n?.slotIndex.get(e.slot);
+		let n = this.#s.get(t.asset), r = n?.slotIndex.get(e.slot);
 		if (n === void 0 || r === void 0) throw new $(`setMaterialInstanceParameters: unbound slot ${e.slot} on ${t.asset}`);
 		let i = t.materialIds[r];
 		if (i == null) throw new $(`setMaterialInstanceParameters: slot ${e.slot} on ${t.asset} has no material`);
 		let a = t.object, o = Array.isArray(a.material) ? a.material : [a.material];
 		t.ownedMaterialIndices?.has(r) && o[r]?.dispose();
 		let s = n.materialSlots[r];
-		e.parameters === null ? (t.materialParameterOverrides?.delete(r), s.material === i ? (o[r] = n.materials[r], t.ownedMaterialIndices?.delete(r)) : (o[r] = this.#Le({
+		e.parameters === null ? (t.materialParameterOverrides?.delete(r), s.material === i ? (o[r] = n.materials[r], t.ownedMaterialIndices?.delete(r)) : (o[r] = this.#ze({
 			slot: e.slot,
 			material: i
-		}, void 0, a.geometry.hasAttribute("color")), t.ownedMaterialIndices?.add(r))) : (t.materialParameterOverrides?.set(r, e.parameters), o[r] = this.#Le({
+		}, void 0, a.geometry.hasAttribute("color")), t.ownedMaterialIndices?.add(r))) : (t.materialParameterOverrides?.set(r, e.parameters), o[r] = this.#ze({
 			slot: e.slot,
 			material: i
 		}, e.parameters, a.geometry.hasAttribute("color")), t.ownedMaterialIndices?.add(r)), a.material = o.length === 1 ? o[0] : o;
 	}
 	materialDescriptor(e) {
-		return this.#l.get(e);
+		return this.#u.get(e);
 	}
 	get fallbackMaterialCount() {
-		return this.#d;
+		return this.#f;
 	}
 	fallbackMaterials() {
-		return [...this.#f].sort();
+		return [...this.#p].sort();
 	}
-	#Le(e, t, n = !1) {
-		let r = this.#l.get(e.material);
+	#ze(e, t, n = !1) {
+		let r = this.#u.get(e.material);
 		if (r) {
-			let e = bv(r, t, r.texture === null ? void 0 : this.#k.get(r.texture)?.texture, r.texture === null ? void 0 : this.#p.get(r.texture));
-			return e.vertexColors = n, e.needsUpdate = !0, this.#Q(e), e;
+			let e = bv(r, t, r.texture === null ? void 0 : this.#A.get(r.texture)?.texture, r.texture === null ? void 0 : this.#m.get(r.texture));
+			return e.vertexColors = n, e.needsUpdate = !0, this.#$(e), e;
 		}
-		this.#d += 1, this.#f.add(e.material);
+		this.#f += 1, this.#p.add(e.material);
 		let i = new ll({
-			color: this.#q(e.slot),
+			color: this.#J(e.slot),
 			roughness: 1,
 			metalness: 0,
 			vertexColors: n
 		});
-		return this.#Q(i), i;
+		return this.#$(i), i;
 	}
 	textureDescriptor(e) {
-		let t = this.#p.get(e);
+		let t = this.#m.get(e);
 		return t === void 0 ? void 0 : structuredClone(t);
 	}
 	textureObjectFor(e) {
-		return this.#k.get(e)?.texture;
+		return this.#A.get(e)?.texture;
 	}
 	textureResourceReadout() {
-		return Object.freeze([...this.#k.values()].map((e) => Object.freeze({ ...e.readout })).sort((e, t) => e.id.localeCompare(t.id)));
+		return Object.freeze([...this.#A.values()].map((e) => Object.freeze({ ...e.readout })).sort((e, t) => e.id.localeCompare(t.id)));
 	}
 	skyBackgroundReadout() {
-		let e = this.#j, t = e === null ? void 0 : this.#k.get(e);
+		let e = this.#M, t = e === null ? void 0 : this.#A.get(e);
 		return Object.freeze({
-			...this.#M === null ? {} : { blend: Object.freeze({
-				textureId: this.#M.texture,
-				amount: this.#M.amount
+			...this.#N === null ? {} : { blend: Object.freeze({
+				textureId: this.#N.texture,
+				amount: this.#N.amount
 			}) },
 			textureId: e,
 			contentHash: t?.readout.contentHash ?? null,
@@ -20459,17 +20513,17 @@ var $ = class extends Error {
 		});
 	}
 	voxelSurfaceMaterialReadout() {
-		return Object.freeze([...this.#E].map((e) => e.userData.rustyVoxelSurface).filter((e) => e !== void 0).map((e) => Object.freeze(structuredClone(e))).sort((e, t) => e.material.localeCompare(t.material)));
+		return Object.freeze([...this.#D].map((e) => e.userData.rustyVoxelSurface).filter((e) => e !== void 0).map((e) => Object.freeze(structuredClone(e))).sort((e, t) => e.material.localeCompare(t.material)));
 	}
 	spriteAtlas(e) {
-		return this.#m.get(e);
+		return this.#h.get(e);
 	}
 	get spriteFallbackCount() {
-		return this.#h;
+		return this.#g;
 	}
-	#Re(e, t, n) {
-		let r = this.#m.get(t), i = r?.frames.find((e) => e.frame === n);
-		if (!i) return (r !== void 0 || this.#p.size > 0 || n !== 0) && (this.#h += 1), [
+	#Be(e, t, n) {
+		let r = this.#h.get(t), i = r?.frames.find((e) => e.frame === n);
+		if (!i) return (r !== void 0 || this.#m.size > 0 || n !== 0) && (this.#g += 1), [
 			0,
 			0,
 			1,
@@ -20483,50 +20537,50 @@ var $ = class extends Error {
 			c
 		];
 	}
-	#ze(e, t, n) {
-		return this.#m.get(e)?.frames.find((e) => e.frame === t)?.size ?? n;
-	}
-	#Be(e, t, n, r) {
-		return new J(t / this.#z * 2 - 1, n / this.#B * 2 - 1, r).unproject(e);
-	}
 	#Ve(e, t, n) {
+		return this.#h.get(e)?.frames.find((e) => e.frame === t)?.size ?? n;
+	}
+	#He(e, t, n, r) {
+		return new J(t / this.#B * 2 - 1, n / this.#V * 2 - 1, r).unproject(e);
+	}
+	#Ue(e, t, n) {
 		let r = t.viewportPlacement;
 		if (r == null) return;
-		let i = this.#z * r.size[0], a = this.#B * r.size[1], o = this.#ze(t.asset, t.frame, t.size), s = o[0] / o[1], c = i / a, l = r.fit === "stretch" || s >= c ? i : a * s, u = r.fit === "stretch" || s <= c ? a : i / s, d = this.#z * r.minimum[0] + (i - l) * r.alignment[0], f = this.#B * r.minimum[1] + (a - u) * r.alignment[1], p = this.#Be(n, d, f, 0), m = this.#Be(n, d + l, f, 0), h = this.#Be(n, d, f + u, 0), g = m.clone().add(h).multiplyScalar(.5), _ = n.getWorldQuaternion(new Mi()), v = new Y().compose(g, _, new J(m.distanceTo(p), h.distanceTo(p), 1)), y = e.parent === null ? v : new Y().copy(e.parent.matrixWorld).invert().multiply(v);
+		let i = this.#B * r.size[0], a = this.#V * r.size[1], o = this.#Ve(t.asset, t.frame, t.size), s = o[0] / o[1], c = i / a, l = r.fit === "stretch" || s >= c ? i : a * s, u = r.fit === "stretch" || s <= c ? a : i / s, d = this.#B * r.minimum[0] + (i - l) * r.alignment[0], f = this.#V * r.minimum[1] + (a - u) * r.alignment[1], p = this.#He(n, d, f, 0), m = this.#He(n, d + l, f, 0), h = this.#He(n, d, f + u, 0), g = m.clone().add(h).multiplyScalar(.5), _ = n.getWorldQuaternion(new Mi()), v = new Y().compose(g, _, new J(m.distanceTo(p), h.distanceTo(p), 1)), y = e.parent === null ? v : new Y().copy(e.parent.matrixWorld).invert().multiply(v);
 		e.matrixAutoUpdate = !1, e.matrix.copy(y), y.decompose(e.position, e.quaternion, e.scale), e.matrixWorldNeedsUpdate = !0, e.updateMatrixWorld(!0);
 	}
-	#He(e, t, n) {
+	#We(e, t, n) {
 		let r = e.getWorldPosition(new J()).clone().project(n);
 		if (!Number.isFinite(r.x) || !Number.isFinite(r.y) || !Number.isFinite(r.z)) {
 			e.scale.set(0, 0, 0);
 			return;
 		}
-		let i = (r.x + 1) * this.#z / 2, a = (r.y + 1) * this.#B / 2, o = this.#Be(n, i, a, r.z), s = this.#Be(n, i + t.size[0], a, r.z), c = this.#Be(n, i, a + t.size[1], r.z), l = this.#ze(t.asset, t.frame, t.size);
+		let i = (r.x + 1) * this.#B / 2, a = (r.y + 1) * this.#V / 2, o = this.#He(n, i, a, r.z), s = this.#He(n, i + t.size[0], a, r.z), c = this.#He(n, i, a + t.size[1], r.z), l = this.#Ve(t.asset, t.frame, t.size);
 		e.scale.multiply(new J(s.distanceTo(o) / l[0], c.distanceTo(o) / l[1], 1));
 	}
-	#Ue(e, t) {
+	#Ge(e, t) {
 		if (e.viewportPlacement !== null && e.viewportPlacement !== void 0) return new Zc(1, 1);
-		let n = this.#ze(e.asset, t, e.size), r = new Zc(n[0], n[1]);
+		let n = this.#Ve(e.asset, t, e.size), r = new Zc(n[0], n[1]);
 		return r.translate((.5 - e.pivot[0]) * n[0], (.5 - e.pivot[1]) * n[1], 0), r;
 	}
-	#We(e) {
-		if (this.#i.has(e.handle)) throw new $(`createSprite: handle ${e.handle} already exists`);
-		let t = e.sprite, n = this.#Ue(t, t.frame);
-		this.#Z(n);
-		let r = new xs(n, this.#Ke(t));
-		this.#X(r), r.renderOrder = t.renderOrder, ny(r, t.transform), ry(r, t.metadata), r.visible = t.visible, r.userData.frame = t.frame, r.userData.billboard = t.billboard, r.userData.uv = this.#Re(n, t.asset, t.frame);
+	#Ke(e) {
+		if (this.#a.has(e.handle)) throw new $(`createSprite: handle ${e.handle} already exists`);
+		let t = e.sprite, n = this.#Ge(t, t.frame);
+		this.#Q(n);
+		let r = new xs(n, this.#Je(t));
+		this.#Z(r), r.renderOrder = t.renderOrder, ny(r, t.transform), ry(r, t.metadata), r.visible = t.visible, r.userData.frame = t.frame, r.userData.billboard = t.billboard, r.userData.uv = this.#Be(n, t.asset, t.frame);
 		let i = Q_(t);
-		r.castShadow = this.#S && (i.shadow === "cast" || i.shadow === "castAndReceive"), r.receiveShadow = this.#S && (i.shadow === "receive" || i.shadow === "castAndReceive"), (e.parent === null ? this.#U(t.layer ?? "scene") : this.#et(e.parent, "createSprite.parent").object).add(r), this.#i.set(e.handle, {
+		r.castShadow = this.#C && (i.shadow === "cast" || i.shadow === "castAndReceive"), r.receiveShadow = this.#C && (i.shadow === "receive" || i.shadow === "castAndReceive"), (e.parent === null ? this.#W(t.layer ?? "scene") : this.#nt(e.parent, "createSprite.parent").object).add(r), this.#a.set(e.handle, {
 			object: r,
 			kind: "sprite",
 			shape: "quad",
 			asset: t.asset,
 			ownsGeometry: !0,
 			sprite: t
-		}), (t.billboard !== "none" || t.viewportPlacement !== null && t.viewportPlacement !== void 0 || t.sizeMode === "pixel") && this.#a.add(e.handle);
+		}), (t.billboard !== "none" || t.viewportPlacement !== null && t.viewportPlacement !== void 0 || t.sizeMode === "pixel") && this.#o.add(e.handle);
 	}
-	#Ge(e) {
-		let t = this.#et(e.handle, "updateSprite");
+	#qe(e) {
+		let t = this.#nt(e.handle, "updateSprite");
 		if (t.kind !== "sprite" || !t.sprite) throw new $(`updateSprite: handle ${e.handle} is not a sprite`);
 		let n = t.object, r = n.material;
 		if (e.frame !== null) {
@@ -20534,8 +20588,8 @@ var $ = class extends Error {
 				...t.sprite,
 				frame: e.frame
 			}, n.userData.frame = e.frame;
-			let r = n.geometry, i = this.#Ue(t.sprite, e.frame);
-			n.geometry = i, this.#Z(i), n.userData.uv = this.#Re(i, t.sprite.asset, e.frame), r.dispose();
+			let r = n.geometry, i = this.#Ge(t.sprite, e.frame);
+			n.geometry = i, this.#Q(i), n.userData.uv = this.#Be(i, t.sprite.asset, e.frame), r.dispose();
 		}
 		e.tint !== null && (t.sprite = {
 			...t.sprite,
@@ -20548,32 +20602,32 @@ var $ = class extends Error {
 			visible: e.visible
 		});
 	}
-	#Ke(e) {
-		let t = this.#m.get(e.asset), n = t === void 0 ? void 0 : this.#k.get(t.texture)?.texture, r = Q_(e), i = this.#qe(r.normalTexture, "normal"), a = this.#qe(r.depthTexture, "depth"), o = $_(e, {
+	#Je(e) {
+		let t = this.#h.get(e.asset), n = t === void 0 ? void 0 : this.#A.get(t.texture)?.texture, r = Q_(e), i = this.#Ye(r.normalTexture, "normal"), a = this.#Ye(r.depthTexture, "depth"), o = $_(e, {
 			color: n ?? null,
 			normal: i,
 			depth: a
 		});
-		return this.#Q(o.material), o.material;
+		return this.#$(o.material), o.material;
 	}
-	#qe(e, t) {
+	#Ye(e, t) {
 		if (e === null) return null;
-		let n = this.#p.get(e), r = this.#k.get(e)?.texture;
+		let n = this.#m.get(e), r = this.#A.get(e)?.texture;
 		if (n === void 0 || r === void 0) throw new $(`sprite ${t} texture ${e} is not retained`);
 		if (n.payload?.colorSpace !== "linear") throw new $(`sprite ${t} texture ${e} must use linear color space`);
 		return r;
 	}
-	#Je(e, t) {
-		if (!(e.size === 0 && t.size === 0)) for (let n of this.#i.values()) {
+	#Xe(e, t) {
+		if (!(e.size === 0 && t.size === 0)) for (let n of this.#a.values()) {
 			if (n.kind !== "sprite" || n.sprite === void 0) continue;
-			let r = this.#m.get(n.sprite.asset), i = Q_(n.sprite);
+			let r = this.#h.get(n.sprite.asset), i = Q_(n.sprite);
 			if (!(e.has(i.normalTexture ?? "") || e.has(i.depthTexture ?? "")) && (r === void 0 || !t.has(n.sprite.asset) && !e.has(r.texture))) continue;
 			let a = n.object, o = a.material;
-			a.material = this.#Ke(n.sprite), t.has(n.sprite.asset) && (a.userData.uv = this.#Re(a.geometry, n.sprite.asset, n.sprite.frame)), o.dispose();
+			a.material = this.#Je(n.sprite), t.has(n.sprite.asset) && (a.userData.uv = this.#Be(a.geometry, n.sprite.asset, n.sprite.frame)), o.dispose();
 		}
 	}
 	pickSprite(e) {
-		let t = this.#i.get(e);
+		let t = this.#a.get(e);
 		if (!t || t.kind !== "sprite" || !t.sprite) return;
 		let n = t.sprite.attachment;
 		return {
@@ -20584,20 +20638,20 @@ var $ = class extends Error {
 			attachmentPoint: n.attachmentPoint
 		};
 	}
-	#Ye(e) {
-		let t = this.#et(e.handle, "replaceMeshPayload"), n = t.object;
+	#Ze(e) {
+		let t = this.#nt(e.handle, "replaceMeshPayload"), n = t.object;
 		if (!(n instanceof xs)) throw new $(`replaceMeshPayload: handle ${e.handle} is not a mesh`);
-		let r = Tv(e.payload, void 0, this.#g, this.#_, "replaceMeshPayload");
-		this.#Z(r);
-		let i = t.viewMaterial ?? Yg, a = e.payload.groups.map((e) => this.#Xe(e.materialSlot, i));
+		let r = Tv(e.payload, void 0, this.#_, this.#v, "replaceMeshPayload");
+		this.#Q(r);
+		let i = t.viewMaterial ?? Yg, a = e.payload.groups.map((e) => this.#Qe(e.materialSlot, i));
 		um(r, a);
 		let o = n.geometry, s = n.material;
 		n.geometry = r, n.material = a.length === 1 ? a[0] : a, o.dispose(), Array.isArray(s) ? s.forEach(sm) : sm(s), t.meshProvenance = e.payload.provenance, t.meshMaterialSlots = e.payload.groups.map((e) => e.materialSlot), t.viewMaterial = i;
 	}
-	#Xe(e, t) {
-		let n = this.#l.get(`voxel-material/${String(e)}`);
+	#Qe(e, t) {
+		let n = this.#u.get(`voxel-material/${String(e)}`);
 		if (n !== void 0) {
-			let e = n.texture === null ? void 0 : this.#k.get(n.texture)?.texture, r = n.texture === null ? void 0 : this.#p.get(n.texture), i = JSON.stringify([
+			let e = n.texture === null ? void 0 : this.#A.get(n.texture)?.texture, r = n.texture === null ? void 0 : this.#m.get(n.texture), i = JSON.stringify([
 				{
 					...n,
 					id: void 0
@@ -20605,13 +20659,13 @@ var $ = class extends Error {
 				e?.uuid,
 				t
 			]);
-			return this.#u.acquire(i, () => {
+			return this.#d.acquire(i, () => {
 				let i = bv(n, void 0, e, r);
-				return i.color.multiply(new X(t.color[0], t.color[1], t.color[2])), i.opacity *= t.color[3], i.transparent ||= i.opacity < 1, i.wireframe = t.wireframe, this.#Q(i), i;
+				return i.color.multiply(new X(t.color[0], t.color[1], t.color[2])), i.opacity *= t.color[3], i.transparent ||= i.opacity < 1, i.wireframe = t.wireframe, this.#$(i), i;
 			});
 		}
-		let r = this.#q(e);
-		return this.#u.acquire(JSON.stringify([
+		let r = this.#J(e);
+		return this.#d.acquire(JSON.stringify([
 			"fallback",
 			r.toArray(),
 			t
@@ -20624,18 +20678,18 @@ var $ = class extends Error {
 				roughness: 1,
 				metalness: 0
 			});
-			return this.#Q(e), e;
+			return this.#$(e), e;
 		});
 	}
-	#Ze(e, t) {
-		let n = e.object, r = Xg(n), i = (e.meshMaterialSlots ?? []).map((e) => this.#Xe(e, t));
+	#$e(e, t) {
+		let n = e.object, r = Xg(n), i = (e.meshMaterialSlots ?? []).map((e) => this.#Qe(e, t));
 		n.material = i.length === 1 ? i[0] : i, um(n.geometry, i), r.forEach(sm);
 	}
-	#Qe(e) {
-		if (this.#i.has(e.handle)) throw new $(`createLight: handle ${e.handle} already exists`);
+	#et(e) {
+		if (this.#a.has(e.handle)) throw new $(`createLight: handle ${e.handle} already exists`);
 		Kg(e.light, "createLight.light", (e) => new $(e));
-		let t = Vg(e.light, this.#S);
-		(e.parent === null ? this.#e : this.#et(e.parent, "createLight.parent").object).add(t), this.#i.set(e.handle, {
+		let t = Vg(e.light, this.#C);
+		(e.parent === null ? this.#e : this.#nt(e.parent, "createLight.parent").object).add(t), this.#a.set(e.handle, {
 			object: t,
 			kind: "light",
 			shape: "point",
@@ -20643,14 +20697,14 @@ var $ = class extends Error {
 			light: structuredClone(e.light)
 		});
 	}
-	#$e(e) {
-		let t = this.#et(e.handle, "updateLight");
+	#tt(e) {
+		let t = this.#nt(e.handle, "updateLight");
 		if (t.kind !== "light" || t.light === void 0) throw new $(`updateLight: handle ${e.handle} is not a light`);
 		if (Kg(e.light, "updateLight.light", (e) => new $(e)), t.light.kind !== e.light.kind) throw new $(`updateLight: handle ${e.handle} cannot change kind from ${t.light.kind} to ${e.light.kind}`);
-		Hg(t.object, e.light, this.#S), t.light = structuredClone(e.light);
+		Hg(t.object, e.light, this.#C), t.light = structuredClone(e.light);
 	}
 	pickMesh(e) {
-		let t = this.#i.get(e);
+		let t = this.#a.get(e);
 		if (!t || t.meshProvenance === void 0) return;
 		let n = iy(t.object);
 		return {
@@ -20660,8 +20714,8 @@ var $ = class extends Error {
 			sourceSceneNode: n.sourceSceneNode
 		};
 	}
-	#et(e, t) {
-		let n = this.#i.get(e);
+	#nt(e, t) {
+		let n = this.#a.get(e);
 		if (n === void 0) throw new $(`${t}: unknown handle ${e}`);
 		return n;
 	}

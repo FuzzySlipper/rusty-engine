@@ -80,3 +80,5 @@ copy them or check in generated interop/composition code.
 
 For details and the product coding lane, use the linked guides rather than
 duplicating architecture here.
+
+Portable sprite/model content: [Engine-owned descriptors](docs/portable-assets.md) load through the packaged Content service from loose files or existing bundles.

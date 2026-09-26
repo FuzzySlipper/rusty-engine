@@ -1535,6 +1535,7 @@ pub(crate) struct RuntimeAppearanceState {
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
     retained_appearances: BTreeMap<u64, u64>,
+    joint_attachments: BTreeMap<u64, String>,
     next_material: u64,
     retained_object_count: u32,
     retained_light_count: u32,
@@ -1637,6 +1638,7 @@ struct SpritePlaybackAdvanceLeaseBacking {
     _crossings: Box<[NativeSpritePlaybackMarkerCrossing]>,
 }
 
+#[derive(Clone)]
 pub(crate) struct RuntimeAppearanceCall {
     pub(crate) state: RuntimeAppearanceState,
     admitted_update: Option<NativeProductUpdateFacts>,
@@ -1817,6 +1819,7 @@ impl RuntimeAppearanceBridge {
                 materials: BTreeMap::new(),
                 appearance_materials: BTreeMap::new(),
                 retained_appearances: BTreeMap::new(),
+                joint_attachments: BTreeMap::new(),
                 next_material: 1,
                 retained_object_count: 0,
                 retained_light_count: 0,
@@ -7608,6 +7611,15 @@ impl RuntimeAppearanceBridge {
         facts: *const NativeAppearanceFact,
         fact_count: usize,
     ) -> Result<(), CsharpEngineServicesError> {
+        unsafe { self.stage_attached_snapshot(facts, fact_count, BTreeMap::new()) }
+    }
+
+    unsafe fn stage_attached_snapshot(
+        &mut self,
+        facts: *const NativeAppearanceFact,
+        fact_count: usize,
+        attachments: BTreeMap<u64, String>,
+    ) -> Result<(), CsharpEngineServicesError> {
         if fact_count > 0 && facts.is_null() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_VISUAL_FACTS_POINTER",
@@ -7682,7 +7694,67 @@ impl RuntimeAppearanceBridge {
                 ));
             }
         }
-        let projection = staged.state.projector.project(&owned).map_err(|error| {
+        for (child, joint) in &attachments {
+            let child_fact = owned
+                .iter()
+                .find(|fact| fact.object_id == *child)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_JOINT_ATTACHMENT",
+                        format!("attachment child object {child} is missing from the snapshot"),
+                    )
+                })?;
+            let parent_id = child_fact.parent_object_id.ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_JOINT_ATTACHMENT",
+                    format!("child {child} has no parent for joint '{joint}'"),
+                )
+            })?;
+            let parent = owned
+                .iter()
+                .find(|fact| fact.object_id == parent_id)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_JOINT_ATTACHMENT",
+                        format!("missing target object {parent_id} for joint '{joint}'"),
+                    )
+                })?;
+            let asset = match staged.state.projector.appearance_mut(&parent.appearance) {
+                Some(Appearance::AnimatedMesh { asset, .. }) => asset.clone(),
+                _ => {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_JOINT_ATTACHMENT",
+                        format!(
+                            "target object {parent_id} is not an animated mesh for joint '{joint}'"
+                        ),
+                    ))
+                }
+            };
+            let count = staged
+                .state
+                .projector
+                .resources_mut()
+                .animated_meshes
+                .iter()
+                .find(|mesh| mesh.asset == asset)
+                .and_then(|mesh| mesh.rig.as_ref())
+                .map_or(0, |rig| {
+                    rig.joints
+                        .iter()
+                        .filter(|candidate| candidate.id == *joint)
+                        .count()
+                });
+            if count != 1 {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_JOINT_ATTACHMENT",
+                    format!(
+                        "{} joint '{joint}' on target object {parent_id} ({asset})",
+                        if count == 0 { "missing" } else { "ambiguous" }
+                    ),
+                ));
+            }
+        }
+        let mut projection = staged.state.projector.project(&owned).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}"))
         })?;
         staged.state.retained_object_count = narrow_retained_count(
@@ -7693,7 +7765,27 @@ impl RuntimeAppearanceBridge {
             projection.retained_lights,
             "retained light count exceeded u32",
         )?;
+        for fact in &owned {
+            if attachments.contains_key(&fact.object_id)
+                || staged.state.joint_attachments.contains_key(&fact.object_id)
+            {
+                let handle = staged
+                    .state
+                    .projector
+                    .object_handle(fact.object_id)
+                    .expect("projected snapshot object");
+                projection.frame.ops.push(RenderDiff::SetParentJoint {
+                    handle,
+                    joint: attachments.get(&fact.object_id).cloned(),
+                });
+            }
+        }
+        // Projection publication counts must include the new retained relation facts.
+        if let Some(publication) = &mut projection.frame.publication {
+            publication.operation_count = projection.frame.ops.len() as u32;
+        }
         staged.state.retained_appearances = retained_appearances;
+        staged.state.joint_attachments = attachments;
         append_projection_frame(staged, projection.frame)?;
         if self.staged_ref()?.rebase_ghost_plates {
             self.rebase_ghost_plates()?;
@@ -10382,6 +10474,108 @@ pub(crate) unsafe extern "C" fn open_animation_clip_pack_from_content(
     animation_content_result(context, request, result, receipt, true)
 }
 
+pub(crate) unsafe extern "C" fn read_texture_info(
+    context: *mut c_void,
+    resource: NativeRenderResourceHandle,
+    result: *mut NativeTextureResourceInfo,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    let Some(texture) = bridge
+        .resource(resource.value)
+        .ok()
+        .and_then(CsharpRenderResource::texture)
+    else {
+        return 0;
+    };
+    unsafe {
+        *result = NativeTextureResourceInfo {
+            width: texture.width,
+            height: texture.height,
+        };
+    }
+    ABI_OK
+}
+
+pub(crate) unsafe extern "C" fn publish_attached_snapshot(
+    context: *mut c_void,
+    request: *const NativeAttachedAppearanceSnapshotRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    let request = unsafe { &*request };
+    let backup = bridge.staged.clone();
+    let outcome = (|| {
+        let rows = unsafe {
+            crate::composition::borrowed_slice(
+                request.attachments,
+                request.attachments_len,
+                "joint attachments",
+            )
+        }?;
+        let mut attachments = BTreeMap::new();
+        for row in rows {
+            let joint = unsafe { borrowed_utf8(row.joint.bytes, row.joint.len, "joint name") }?;
+            if joint.is_empty()
+                || attachments
+                    .insert(row.child_object_id, joint.to_owned())
+                    .is_some()
+            {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_JOINT_ATTACHMENT",
+                    format!(
+                        "empty joint or duplicate attachment for child {}",
+                        row.child_object_id
+                    ),
+                ));
+            }
+        }
+        unsafe { bridge.stage_attached_snapshot(request.facts, request.facts_len, attachments) }
+    })();
+    match outcome {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.staged = backup;
+            if !receipt.is_null() {
+                let value = bridge.next_admission_diagnostic;
+                bridge.next_admission_diagnostic += 1;
+                let text = |s: &str| NativeUtf8Slice {
+                    bytes: s.as_ptr(),
+                    len: s.len(),
+                };
+                let lease = AnimationAdmissionDiagnostic {
+                    readout: vec![NativeEngineDiagnostic {
+                        code: text(error.code()),
+                        message: text(error.detail()),
+                        source: text(""),
+                    }]
+                    .into_boxed_slice(),
+                    _error: error,
+                };
+                unsafe {
+                    *receipt = NativeOperationErrorReceipt {
+                        service: text("Graphics"),
+                        operation: text("PublishAttachedSnapshot"),
+                        status: 0,
+                        diagnostics: NativeEngineDiagnosticLease {
+                            handle: NativeEngineDiagnosticLeaseHandle { value },
+                            diagnostics: lease.readout.as_ptr(),
+                            diagnostics_len: lease.readout.len(),
+                        },
+                    };
+                }
+                bridge.admission_diagnostics.insert(value, lease);
+            }
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -10453,6 +10647,91 @@ pub(super) mod tests {
                 a: 1.0,
             },
         }
+    }
+
+    #[test]
+    fn attached_snapshot_rejects_missing_joint_without_poisoning_or_mutating_call() {
+        const BODY: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut bridge = RuntimeAppearanceBridge::new(
+            RuntimeAppearanceCatalog::default(),
+            BTreeMap::from([("body.glb".to_owned(), Arc::from(BODY))]),
+        );
+        bridge.begin_call();
+        let text = |s: &str| NativeUtf8Slice {
+            bytes: s.as_ptr(),
+            len: s.len(),
+        };
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: text("body.glb"),
+            })
+            .unwrap();
+        let body = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .unwrap();
+        let child = bridge.create_primitive(primitive_request()).unwrap();
+        let body_fact = appearance_fact(body);
+        let mut child_fact = appearance_fact(child);
+        child_fact.object_id = 8;
+        child_fact.has_parent_object = true;
+        child_fact.parent_object_id = body_fact.object_id;
+        let facts = [body_fact, child_fact];
+        let attachments = [NativeMeshJointAttachment {
+            child_object_id: 8,
+            joint: text("RightHand"),
+        }];
+        let mut request = NativeAttachedAppearanceSnapshotRequest {
+            facts: facts.as_ptr(),
+            facts_len: facts.len(),
+            attachments: attachments.as_ptr(),
+            attachments_len: 1,
+        };
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe { publish_attached_snapshot(context, &request, &mut receipt) },
+            ABI_OK
+        );
+        let outputs = bridge.staged_ref().unwrap().outputs.len();
+        let missing = [NativeMeshJointAttachment {
+            child_object_id: 8,
+            joint: text("MissingHand"),
+        }];
+        request.attachments = missing.as_ptr();
+        assert_eq!(
+            unsafe { publish_attached_snapshot(context, &request, &mut receipt) },
+            0
+        );
+        let message = unsafe {
+            borrowed_utf8(
+                (*receipt.diagnostics.diagnostics).message.bytes,
+                (*receipt.diagnostics.diagnostics).message.len,
+                "diagnostic",
+            )
+        }
+        .unwrap();
+        assert!(message.contains("MissingHand"));
+        assert!(message.contains("target object 7"));
+        assert_eq!(bridge.staged_ref().unwrap().outputs.len(), outputs);
+        assert_eq!(
+            bridge.staged_ref().unwrap().state.joint_attachments[&8],
+            "RightHand"
+        );
+        assert!(bridge.callback_error.is_none());
+        assert_eq!(
+            unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
+            ABI_OK
+        );
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        let mut world = render_presentation::PresentationWorld::default();
+        for output in call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(&frame).unwrap();
+            }
+        }
+        assert!(world.snapshot().frame.ops.iter().any(|op| matches!(op, RenderDiff::SetParentJoint { joint: Some(joint), .. } if joint == "RightHand")));
     }
 
     #[test]

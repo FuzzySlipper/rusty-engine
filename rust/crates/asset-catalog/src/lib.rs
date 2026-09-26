@@ -15,6 +15,7 @@ mod dependency;
 mod fallback;
 mod lock;
 mod material;
+pub mod portable;
 mod validation;
 mod voxel;
 

@@ -118,6 +118,12 @@ function renderDiff(input: unknown, path: string): void {
       nullable(value['metadata'], `${path}.metadata`, metadata);
       return;
     }
+    case 'setParentJoint': {
+      const value = record(input, path, ['op', 'handle', 'joint']);
+      handle(value['handle'], `${path}.handle`);
+      nullable(value['joint'], `${path}.joint`, nonEmptyText);
+      return;
+    }
     case 'destroy': {
       const value = record(input, path, ['op', 'handle']);
       handle(value['handle'], `${path}.handle`);

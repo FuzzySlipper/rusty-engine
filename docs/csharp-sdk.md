@@ -1791,3 +1791,5 @@ No bounds means an empty/unmeasurable mesh, not a zero-sized box. Match the obje
 and request before consuming; cancel pending camera actions when the user moves
 it. A replacement renderer replays the retained request once. Zero disables the
 request. This is observation, not a second animation clock or automatic camera.
+
+See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/model semantics over loose files and bundles.

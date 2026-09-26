@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RustyEngineSdkPackageVersion>$(RustyEngineFixtureSdkVersion)</RustyEngineSdkPackageVersion>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <RustyEngineProductEntryType>CsharpJointAttachments.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-joint-attachments</RustyEngineProductId>
+    <RustyEngineProductTitle>Joint attachments</RustyEngineProductTitle>
+    <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)" />
+  </ItemGroup>
+</Project>

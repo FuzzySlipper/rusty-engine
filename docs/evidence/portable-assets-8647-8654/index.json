@@ -1,0 +1,45 @@
+{
+  "proof": "local packaged SDK; final immutable pair proof recorded separately at release",
+  "captures": [
+    {
+      "name": "attachment-coreclr-pose0",
+      "original": "/tmp/8654-playtest-state/browser/85b99020-b4d3-434d-b503-a18517efb88c/d4f9290b-3c97-4cdf-8608-66934ded2d61.png",
+      "copy": "attachment-coreclr-pose0.png"
+    },
+    {
+      "name": "attachment-coreclr-pose05",
+      "original": "/tmp/8654-playtest-state/browser/85b99020-b4d3-434d-b503-a18517efb88c/6cf46f6a-f7c7-46f8-b77e-18e9f399ad63.png",
+      "copy": "attachment-coreclr-pose05.png"
+    },
+    {
+      "name": "attachment-coreclr-reloaded",
+      "original": "/tmp/8654-playtest-state/browser/85b99020-b4d3-434d-b503-a18517efb88c/20b93c84-4fe0-4130-b638-d26471f5d82f.png",
+      "copy": "attachment-coreclr-reloaded.png"
+    },
+    {
+      "name": "sprite-nativeaot-blue",
+      "original": "/tmp/8647-playtest-state/browser/b9f96d3e-36e4-4af3-9d0a-e628603d1d21/4a60f6d2-1b1e-4b00-b2f0-888738cf8963.png",
+      "copy": "sprite-nativeaot-blue.png"
+    },
+    {
+      "name": "sprite-nativeaot-red",
+      "original": "/tmp/8647-playtest-state/browser/b9f96d3e-36e4-4af3-9d0a-e628603d1d21/8e33c173-a1ee-4db2-8ef5-03f4cefc9ca0.png",
+      "copy": "sprite-nativeaot-red.png"
+    },
+    {
+      "name": "attachment-nativeaot-pose0",
+      "original": "/tmp/8654-playtest-state/browser/312a6d89-15ca-44f2-8829-d785cfe15fe8/35c10003-24bb-451f-b07e-d43cc2d10237.png",
+      "copy": "attachment-nativeaot-pose0.png"
+    },
+    {
+      "name": "attachment-nativeaot-pose05",
+      "original": "/tmp/8654-playtest-state/browser/312a6d89-15ca-44f2-8829-d785cfe15fe8/9f6e3638-ef36-46a7-a4a7-8136434e573b.png",
+      "copy": "attachment-nativeaot-pose05.png"
+    },
+    {
+      "name": "attachment-nativeaot-reloaded",
+      "original": "/tmp/8654-playtest-state/browser/312a6d89-15ca-44f2-8829-d785cfe15fe8/f353f34f-a623-4b0d-9165-8b03e85afeb4.png",
+      "copy": "attachment-nativeaot-reloaded.png"
+    }
+  ]
+}

@@ -357,6 +357,7 @@ export class ThreeRenderer {
   readonly #debugGroup = new THREE.Group();
   readonly #uiGroup = new THREE.Group();
   readonly #viewmodelGroup = new THREE.Group();
+  readonly #jointParents = new Map<RenderHandle, RenderHandle>();
   readonly #handles = new Map<RenderHandle, NodeEntry>();
   /** Retained sprite handles whose mode requires camera-dependent realization. */
   readonly #cameraSpriteHandles = new Set<RenderHandle>();
@@ -707,6 +708,9 @@ export class ThreeRenderer {
       case 'update':
         this.#update(diff);
         break;
+      case 'setParentJoint':
+        this.#setParentJoint(diff);
+        break;
       case 'destroy':
         this.#destroy(diff);
         break;
@@ -977,7 +981,7 @@ export class ThreeRenderer {
       .map(([handle, entry]) => ({
         descriptor: structuredClone(entry.light),
         handle,
-        parent: projectionParentHandle(entry.object.parent, this.#handles),
+        parent: this.#jointParents.get(handle) ?? projectionParentHandle(entry.object.parent, this.#handles),
         shadowStatus: lightShadowStatus(entry.light, this.#shadowsEnabled),
       }));
   }
@@ -1515,18 +1519,39 @@ export class ThreeRenderer {
     }
   }
 
+  #setParentJoint(diff: Extract<RenderDiff, { op: 'setParentJoint' }>): void {
+    const child = this.#require(diff.handle, 'setParentJoint');
+    const parentHandle = this.#jointParents.get(diff.handle)
+      ?? projectionParentHandle(child.object.parent, this.#handles);
+    if (parentHandle === null || parentHandle === undefined) {
+      if (diff.joint === null) return;
+      throw new RenderApplyError(`setParentJoint: child ${diff.handle} has no retained parent for joint '${diff.joint}'`);
+    }
+    const parent = this.#require(parentHandle, 'setParentJoint.parent');
+    if (diff.joint === null) {
+      parent.object.add(child.object);
+      this.#jointParents.delete(diff.handle);
+      return;
+    }
+    if (parent.kind !== 'animatedMesh') throw new RenderApplyError(`setParentJoint: parent ${parentHandle} is not an animated mesh`);
+    this.#animatedMeshes.joint(parentHandle, diff.joint).add(child.object);
+    this.#jointParents.set(diff.handle, parentHandle);
+    child.object.updateWorldMatrix(true, true);
+  }
+
   #destroy(
     diff: Extract<RenderDiff, { op: 'destroy' }>,
     recursivelyDestroyed?: Set<RenderHandle>,
   ): void {
     const entry = this.#require(diff.handle, 'destroy');
     const childHandles = [...this.#handles.entries()]
-      .filter(([, candidate]) => candidate.object.parent === entry.object)
+      .filter(([handle, candidate]) => candidate.object.parent === entry.object || this.#jointParents.get(handle) === diff.handle)
       .map(([handle]) => handle)
       .sort((left, right) => left - right);
     for (const child of childHandles) {
       this.#destroy({ op: 'destroy', handle: child }, recursivelyDestroyed);
     }
+    this.#jointParents.delete(diff.handle);
     entry.object.parent?.remove(entry.object);
     if (entry.kind === 'staticMesh' && entry.asset !== undefined) {
       // Shared definitions outlive their instances. Destroy only this instance's
@@ -2109,6 +2134,7 @@ export class ThreeRenderer {
         case 'createStaticMeshInstance':
         case 'createVoxelObjectInstance':
         case 'setVoxelObjectFrame':
+        case 'setParentJoint':
         case 'setMaterialInstanceParameters':
           return true;
         case 'destroy':

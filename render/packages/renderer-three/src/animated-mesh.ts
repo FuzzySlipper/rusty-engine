@@ -193,6 +193,7 @@ interface AnimatedMeshAssetRecord {
 }
 
 interface AnimatedMeshInstanceRecord {
+  readonly joints: ReadonlyMap<string, readonly THREE.Bone[]>;
   readonly inspection: MeshInspection;
   readonly handle: RenderHandle;
   readonly asset: string;
@@ -552,7 +553,15 @@ export class AnimatedMeshRegistry {
     }
     const sourceEntity = instance.metadata.sourceEntity;
     const generation = sourceEntity === null ? 0 : this.#nextGeneration(sourceEntity);
+    const joints = new Map<string, THREE.Bone[]>();
+    object.traverse((node) => {
+      if (!(node as THREE.Bone).isBone) return;
+      const matches = joints.get(node.name) ?? [];
+      matches.push(node as THREE.Bone);
+      joints.set(node.name, matches);
+    });
     const instanceRecord: AnimatedMeshInstanceRecord = {
+      joints,
       inspection: new MeshInspection(object),
       handle,
       asset: instance.asset,
@@ -604,6 +613,12 @@ export class AnimatedMeshRegistry {
     this.#instances.set(handle, instanceRecord);
     record.refCount += 1;
     return instanceRecord;
+  }
+
+  joint(handle: RenderHandle, name: string): THREE.Bone {
+    const matches = this.#requireInstance(handle, 'setParentJoint').joints.get(name) ?? [];
+    if (matches.length !== 1) throw new AnimatedMeshApplyError(`setParentJoint: ${matches.length === 0 ? 'missing' : 'ambiguous'} joint '${name}' on parent ${handle}`);
+    return matches[0]!;
   }
 
   setInspection(handle: RenderHandle, options: AnimatedMeshInspection): void {

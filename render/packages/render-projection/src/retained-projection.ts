@@ -59,6 +59,7 @@ export const MAX_RETAINED_LIGHTS = 256;
 export type RenderProjectionNodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'voxelObject' | 'sprite';
 
 export interface RenderProjectionNodeBase {
+  readonly parentJoint?: string;
   readonly handle: RenderHandle;
   readonly parent: RenderHandle | null;
   readonly children: readonly RenderHandle[];
@@ -169,6 +170,7 @@ export interface RenderProjectionResourceCounts {
 type NodeRecord = MutablePrimitiveNode | MutableStaticMeshNode | MutableAnimatedMeshNode | MutableVoxelObjectNode | MutableSpriteNode;
 
 interface MutableNodeBase {
+  parentJoint?: string;
   handle: RenderHandle;
   parent: RenderHandle | null;
   children: Set<RenderHandle>;
@@ -357,6 +359,17 @@ export class RenderProjection {
         return [this.#create(diff)];
       case 'update':
         return [this.#update(diff)];
+      case 'setParentJoint': {
+        const child = this.#require(diff.handle, 'setParentJoint');
+        if (diff.joint !== null) {
+          const parent = child.parent === null ? undefined : this.#nodes.get(child.parent);
+          const rig = parent?.kind === 'animatedMesh' ? this.#animatedMeshes.get(parent.asset)?.asset.rig : undefined;
+          const matches = rig?.joints.filter((joint) => joint.id === diff.joint).length ?? 0;
+          if (matches !== 1) throw new RenderProjectionError(`setParentJoint: ${matches === 0 ? 'missing' : 'ambiguous'} joint '${diff.joint}' on retained parent ${String(child.parent)}`);
+          child.parentJoint = diff.joint;
+        } else delete child.parentJoint;
+        return [{ op: 'upsertNode', node: snapshotNode(child) }];
+      }
       case 'destroy':
         return this.#destroy(diff.handle);
       case 'replaceMeshPayload':
@@ -1504,6 +1517,7 @@ function snapshotNode(record: NodeRecord): RenderProjectionNode {
   const base = {
     handle: record.handle,
     parent: record.parent,
+    ...(record.parentJoint === undefined ? {} : { parentJoint: record.parentJoint }),
     children: [...record.children].sort(numberCompare),
     layer: record.layer,
     transform: clone(record.transform),
@@ -1898,6 +1912,7 @@ function validateOperationHandles(diff: RenderDiff): void {
       requireSafeHandle(diff.handle, `${diff.op}.handle`);
       if (diff.parent !== null) requireSafeHandle(diff.parent, `${diff.op}.parent`);
       return;
+    case 'setParentJoint':
     case 'update':
     case 'destroy':
     case 'replaceMeshPayload':

@@ -301,6 +301,19 @@ pub struct NativeRenderResourceInfo {
     pub byte_length: u32,
 }
 
+/// Dimensions of an already admitted texture; no downstream image parsing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTextureResourceInfo {
+    pub width: u32,
+    pub height: u32,
+}
+pub type NativeReadTextureResourceInfo = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeRenderResourceHandle,
+    *mut NativeTextureResourceInfo,
+) -> i32;
+
 /// A retained immutable sprite atlas assembled from one already-admitted
 /// texture. The atlas owns frame metadata; texture bytes remain owned by the
 /// RenderResource admission path.
@@ -781,3 +794,26 @@ pub struct NativeStaticMeshContentReferenceRequest {
     pub content: NativeContentReferenceHandle,
     pub color: NativeColor,
 }
+
+/// Retained child-to-joint binding within a complete appearance snapshot.
+/// The child's existing parent_object_id selects the animated body. Its local
+/// transform uses glTF right-handed +Y-up meters, relative to the named joint.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMeshJointAttachment {
+    pub child_object_id: u64,
+    pub joint: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAttachedAppearanceSnapshotRequest {
+    pub facts: *const NativeAppearanceFact,
+    pub facts_len: usize,
+    pub attachments: *const NativeMeshJointAttachment,
+    pub attachments_len: usize,
+}
+pub type NativePublishAttachedAppearanceSnapshot = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeAttachedAppearanceSnapshotRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;

@@ -24,6 +24,7 @@ enum NodeKind {
 
 #[derive(Debug, Clone, PartialEq)]
 struct PresentationNode {
+    parent_joint: Option<String>,
     parent: Option<RenderHandle>,
     kind: NodeKind,
     mesh_payload: Option<MeshPayloadDescriptor>,
@@ -68,6 +69,7 @@ pub enum PresentationWorldError {
     UnknownNode(RenderHandle),
     DuplicateNode(RenderHandle),
     WrongNodeKind(RenderHandle),
+    InvalidParentJoint { handle: RenderHandle, joint: String },
     UndefinedStaticMesh(String),
     UndefinedResource(String),
     ReferencedResource(String),
@@ -114,7 +116,8 @@ impl PresentationWorld {
             // Named services may select the same immutable texture repeatedly
             // (for example, the active sky). Retain that fact once rather than
             // publishing a stale texture-version update to the realization.
-            if matches!(op, RenderDiff::DefineTexture { texture }
+            if matches!(op, RenderDiff::SetParentJoint { handle, joint } if candidate.nodes.get(handle).is_some_and(|node| &node.parent_joint == joint))
+                || matches!(op, RenderDiff::DefineTexture { texture }
                 if candidate.textures.get(&texture.id).is_some_and(|current| current.as_ref() == texture))
                 || matches!(op, RenderDiff::SetSkyBackground { background } if &candidate.sky == background && candidate.background_color.is_none())
                 || matches!(op, RenderDiff::SetBackgroundColor { color } if candidate.background_color == Some(*color) && candidate.sky.is_none())
@@ -566,6 +569,12 @@ impl PresentationWorld {
                 light: light.clone(),
             },
         });
+        if let Some(joint) = &node.parent_joint {
+            ops.push(RenderDiff::SetParentJoint {
+                handle,
+                joint: Some(joint.clone()),
+            });
+        }
         if let Some(material) = node.material_override {
             ops.push(RenderDiff::Update {
                 handle,
@@ -616,6 +625,7 @@ impl PresentationWorld {
         self.nodes.insert(
             handle,
             Arc::new(PresentationNode {
+                parent_joint: None,
                 playback,
                 parent,
                 kind,
@@ -639,6 +649,36 @@ impl PresentationWorld {
 
     fn apply_operation(&mut self, op: &RenderDiff) -> Result<(), PresentationWorldError> {
         match op {
+            RenderDiff::SetParentJoint { handle, joint } => {
+                if let Some(joint) = joint {
+                    let node = self
+                        .nodes
+                        .get(handle)
+                        .ok_or(PresentationWorldError::UnknownNode(*handle))?;
+                    let parent = node.parent.and_then(|parent| self.nodes.get(&parent));
+                    let valid = match parent.map(|parent| &parent.kind) {
+                        Some(NodeKind::AnimatedMesh(instance)) => self
+                            .animated_meshes
+                            .get(&instance.asset)
+                            .and_then(|asset| asset.rig.as_ref())
+                            .is_some_and(|rig| {
+                                rig.joints
+                                    .iter()
+                                    .filter(|candidate| candidate.id == *joint)
+                                    .count()
+                                    == 1
+                            }),
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(PresentationWorldError::InvalidParentJoint {
+                            handle: *handle,
+                            joint: joint.clone(),
+                        });
+                    }
+                }
+                self.node_mut(*handle)?.parent_joint = joint.clone();
+            }
             RenderDiff::Create {
                 handle,
                 parent,
@@ -1268,5 +1308,109 @@ mod tests {
             world.snapshot().frame.ops.as_slice(),
             [RenderDiff::SetSkyBackground { background: None }]
         ));
+    }
+}
+
+#[cfg(test)]
+mod joint_attachment_tests {
+    use super::*;
+    #[test]
+    fn joint_relation_survives_baselines_rejects_missing_joint_and_releases_with_parent() {
+        let body = RenderHandle::new(8654);
+        let child = RenderHandle::new(8655);
+        let asset = AnimatedMeshAsset {
+            asset: "mesh-animation/body".into(),
+            runtime_format: AnimatedMeshRuntimeFormat::Glb,
+            content_hash: None,
+            clips: vec![],
+            clip_packs: vec![],
+            default_clip: None,
+            embedded_material_slots: vec![],
+            material_slots: vec![],
+            bounds: MeshBoundsDescriptor {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+            rig: Some(AnimationRigSignature {
+                joints: vec![AnimationRigJoint {
+                    id: "Hand".into(),
+                    parent: None,
+                }],
+                bind_rest_hash: format!("sha256:{}", "a".repeat(64)),
+                bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+                root_convention: AnimationRootConvention::InPlace,
+                root_joint_id: "Hand".into(),
+                structural_root_ids: vec!["Hand".into()],
+                designated_motion_root_ids: vec![],
+                authored_pose_translation_joint_ids: vec![],
+            }),
+        };
+        let mut world = PresentationWorld::default();
+        let initial = RenderFrameDiff::try_from_ops(vec![
+            RenderDiff::DefineAnimatedMesh {
+                asset: asset.clone(),
+            },
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle: body,
+                parent: None,
+                instance: AnimatedMeshInstanceDescriptor {
+                    asset: asset.asset.clone(),
+                    transform: Transform::IDENTITY,
+                    material_overrides: vec![],
+                    playback: None,
+                    visible: true,
+                    metadata: RenderMetadata::default(),
+                    inspection: AnimatedMeshInspection::default(),
+                },
+            },
+            RenderDiff::Create {
+                handle: child,
+                parent: Some(body),
+                node: RenderNode::new(Geometry::Cube),
+            },
+            RenderDiff::SetParentJoint {
+                handle: child,
+                joint: Some("Hand".into()),
+            },
+        ])
+        .unwrap();
+        world.apply(&initial).unwrap();
+        let baseline = world.snapshot();
+        assert!(baseline.frame.ops.iter().any(|op| matches!(op, RenderDiff::SetParentJoint { handle, joint: Some(joint) } if *handle == child && joint == "Hand")));
+        let mut restored = PresentationWorld::default();
+        restored.apply(&baseline.frame).unwrap();
+        let revision = world.revision();
+        let repeated = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetParentJoint {
+            handle: child,
+            joint: Some("Hand".into()),
+        }])
+        .unwrap();
+        assert!(world.apply(&repeated).unwrap().ops.is_empty());
+        let bad = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetParentJoint {
+            handle: child,
+            joint: Some("MissingHand".into()),
+        }])
+        .unwrap();
+        assert!(world
+            .apply(&bad)
+            .unwrap_err()
+            .to_string()
+            .contains("MissingHand"));
+        assert_eq!(world.revision(), revision);
+        world
+            .apply(
+                &RenderFrameDiff::try_from_ops(vec![
+                    RenderDiff::Destroy { handle: body },
+                    RenderDiff::ReleaseAnimatedMesh { asset: asset.asset },
+                ])
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(!world
+            .snapshot()
+            .frame
+            .ops
+            .iter()
+            .any(|op| matches!(op, RenderDiff::SetParentJoint { .. })));
     }
 }
