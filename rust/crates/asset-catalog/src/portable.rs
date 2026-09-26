@@ -15,17 +15,58 @@ pub struct PortableAssets {
     pub provenance: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PortableAsset {
     pub id: String,
-    #[serde(flatten)]
     pub definition: PortableDefinition,
+}
+
+impl<'de> Deserialize<'de> for PortableAsset {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        let id = raw
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let definition =
+            serde_json::from_value(raw.clone()).unwrap_or_else(|error: serde_json::Error| {
+                PortableDefinition::Draft {
+                    raw,
+                    diagnostic: error.to_string(),
+                }
+            });
+        Ok(Self { id, definition })
+    }
+}
+impl Serialize for PortableAsset {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let PortableDefinition::Draft { raw, .. } = &self.definition {
+            return raw.serialize(serializer);
+        }
+        #[derive(Serialize)]
+        struct Complete<'a> {
+            id: &'a str,
+            #[serde(flatten)]
+            definition: &'a PortableDefinition,
+        }
+        Complete {
+            id: &self.id,
+            definition: &self.definition,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PortableDefinition {
+    /// Preserve structurally incomplete authoring entries until they are selected.
+    #[serde(skip)]
+    Draft {
+        raw: serde_json::Value,
+        diagnostic: String,
+    },
     Attachment {
         target: String,
         child: String,
@@ -158,6 +199,9 @@ impl PortableAssets {
         if id.is_empty() || matches.next().is_some() {
             return Err(error(format!("ambiguous or empty asset ID '{id}'")));
         }
+        if let PortableDefinition::Draft { diagnostic, .. } = &asset.definition {
+            return Err(error(format!("asset '{id}' is incomplete: {diagnostic}")));
+        }
         Ok(asset)
     }
 
@@ -180,6 +224,7 @@ impl PortableAssets {
             let asset = doc.asset(id)?;
             let mut dependencies = Vec::new();
             match &asset.definition {
+                PortableDefinition::Draft { .. } => unreachable!("asset() rejects selected drafts"),
                 PortableDefinition::Attachment {
                     target,
                     child,
@@ -462,6 +507,38 @@ mod tests {
             .to_string()
             .contains("path"));
     }
+    #[test]
+    fn incomplete_unselected_entries_are_preserved_but_rejected_when_required() {
+        let mut value: serde_json::Value = serde_json::from_str(SPRITE).unwrap();
+        let drafts = [
+            serde_json::json!({"id":"no-kind"}),
+            serde_json::json!({"id":"no-target","kind":"attachment","child":"sheet"}),
+        ];
+        value["assets"]
+            .as_array_mut()
+            .unwrap()
+            .extend(drafts.clone());
+        let document = PortableAssets::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(document.resolve("hero").unwrap().len(), 2);
+        let encoded = serde_json::to_value(&document).unwrap();
+        for draft in drafts {
+            assert!(encoded["assets"].as_array().unwrap().contains(&draft));
+            let id = draft["id"].as_str().unwrap();
+            let message = document.resolve(id).unwrap_err().to_string();
+            assert!(
+                message.contains(id) && message.contains("missing field"),
+                "{message}"
+            );
+        }
+        value["assets"][1]["frames"][0]["texture"] = serde_json::json!("no-kind");
+        let dependent = PortableAssets::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(dependent
+            .resolve("hero")
+            .unwrap_err()
+            .to_string()
+            .contains("no-kind"));
+    }
+
     #[test]
     fn rejects_version_reference_role_and_path_errors_at_resolution() {
         assert!(PortableAssets::decode(br#"{"schemaVersion":42}"#)

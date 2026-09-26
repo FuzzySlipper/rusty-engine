@@ -107,6 +107,14 @@
       "textures": {
         "baseColor": "sheet"
       }
+    },
+    {
+      "id": "draft-no-kind"
+    },
+    {
+      "id": "draft-attachment",
+      "kind": "attachment",
+      "child": "body"
     }
   ]
 }

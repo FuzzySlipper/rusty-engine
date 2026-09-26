@@ -13,7 +13,10 @@ The root has `schemaVersion: 1`, `assets: [...]` and optional `provenance`
 (authoring-only JSON, never required). Unsupported versions report the supplied
 version and the supported version. New optional fields may be added within a
 version; changed field meaning requires a new version. Parsing permits drafts;
-loading validates only the selected asset and its dependencies. IDs are local,
+loading validates only the selected asset and its dependencies. Structurally
+incomplete entries (including a missing `kind` or required field) are retained
+as drafts and do not block unrelated selections; selecting or referencing one
+reports its local ID and the missing field. IDs are local,
 case-sensitive stable strings, independent of file names. Referenced IDs must
 resolve uniquely. No hash or production-history fields are required.
 

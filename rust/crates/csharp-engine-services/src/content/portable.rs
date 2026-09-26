@@ -239,6 +239,7 @@ impl Readout {
             .expect("retained resolved descriptor")
         {
             let (kind, path) = match &member.definition {
+                PortableDefinition::Draft { .. } => unreachable!("resolved members are complete"),
                 PortableDefinition::Attachment {
                     target,
                     child,
@@ -454,7 +455,7 @@ pub(super) unsafe extern "C" fn destroy_diagnostic(
 mod tests {
     use super::*;
     fn source(prefix: &str) -> AdmittedContent {
-        let body: Arc<[u8]> = Arc::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"}}]}"#.as_slice());
+        let body: Arc<[u8]> = Arc::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"}},{"id":"draft-no-kind"},{"id":"draft-required-field","kind":"attachment"}]}"#.as_slice());
         let path = format!("{prefix}asset.json");
         let files = Arc::new(BTreeMap::from([
             (path.clone(), body.clone()),
