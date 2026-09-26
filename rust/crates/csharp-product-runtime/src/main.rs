@@ -1942,7 +1942,11 @@ fn worker_arguments(args: &Arguments, channel: SocketAddr) -> Result<Vec<String>
 }
 
 fn run_worker(args: Arguments) -> Result<(), String> {
-    let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
+    // The supervisor persists relayed events. A worker writing the inherited
+    // diagnostic path as well would duplicate every product lifecycle event.
+    let diagnostics =
+        ProductDevLog::new(product_dev_host::ProductDevLogConfig::default().without_file())
+            .map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
     let (library, runtimeconfig) = args.selected_artifacts()?;

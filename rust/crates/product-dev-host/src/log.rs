@@ -44,6 +44,12 @@ impl Default for ProductDevLogConfig {
 }
 
 impl ProductDevLogConfig {
+    /// Keep retained diagnostics for relay without writing a second host file.
+    pub fn without_file(mut self) -> Self {
+        self.path = None;
+        self
+    }
+
     pub fn with_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.path = Some(path.into());
         self
@@ -359,6 +365,33 @@ fn rotated_path(path: &Path, index: u8) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_only_log_retains_events_without_a_file_writer() {
+        let log = ProductDevLog::new(
+            ProductDevLogConfig::default()
+                .with_path("unused-relay-diagnostics.ndjson")
+                .without_file(),
+        )
+        .unwrap();
+        log.publish(
+            ProductDevLogEvent::new(
+                ProductDevLogSeverity::Info,
+                ProductDevLogDisposition::Accepted,
+                "product",
+                "DISPOSED",
+                "disposed",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        log.flush();
+        assert_eq!(log.snapshot().events.len(), 1);
+        assert_eq!(
+            log.snapshot().writer_state,
+            ProductDevLogWriterState::Disabled
+        );
+    }
 
     #[test]
     fn host_writer_uses_the_same_neutral_ring_and_rotates() {
