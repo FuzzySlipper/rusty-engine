@@ -1,6 +1,7 @@
 // Retained Three.js scene projector for Rusty Engine render diffs.
 
 import * as THREE from 'three';
+import { SkyBlend } from './sky-blend.js';
 import { UploadedMaterialPool, releaseUploadedMaterial, consolidateUploadedGroups } from './uploaded-mesh-batching.js';
 import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
@@ -265,6 +266,7 @@ export interface RendererTextureResourceReadout {
  * clone used by the equirectangular backend path.
  */
 export interface RendererSkyBackgroundReadout {
+  readonly blend?: { readonly textureId: string; readonly amount: number };
   readonly textureId: string | null;
   readonly contentHash: string | null;
   readonly resource: string | null;
@@ -402,6 +404,8 @@ export class ThreeRenderer {
   /** Latest host inventory; absent until the host explicitly begins pruning. */
   #retainedResourceIdentities: ReadonlySet<string> | null = null;
   #skyBackgroundTextureId: string | null = null;
+  #skyBlendSelection: { readonly texture: string; readonly amount: number } | null = null;
+  #skyBlend: SkyBlend | null = null;
   #skyBackgroundTexture: THREE.Texture | null = null;
   #backgroundColor: readonly [number, number, number, number] | null = null;
   /**
@@ -645,6 +649,7 @@ export class ThreeRenderer {
         frame.ops.some((operation) => operation.op === 'setSkyBackground' || operation.op === 'setBackgroundColor')
         || (this.#skyBackgroundTextureId !== null
           && changedTextureIds.has(this.#skyBackgroundTextureId))
+        || (this.#skyBlendSelection !== null && changedTextureIds.has(this.#skyBlendSelection.texture))
       ) {
         this.#syncSkyBackground();
       }
@@ -731,10 +736,12 @@ export class ThreeRenderer {
         break;
       case 'setSkyBackground':
         this.#skyBackgroundTextureId = diff.background?.texture ?? null;
+        this.#skyBlendSelection = diff.background?.blend ?? null;
         this.#backgroundColor = null;
         break;
       case 'setBackgroundColor':
         this.#skyBackgroundTextureId = null;
+        this.#skyBlendSelection = null;
         this.#backgroundColor = diff.color;
         break;
       case 'defineSpriteAtlas':
@@ -865,7 +872,7 @@ export class ThreeRenderer {
       // texture so their material disposal releases the final texture reference.
       this.#textureResources.delete(id);
       this.#detachUnusedDefinitionTextureReferences(id);
-      if (this.#skyBackgroundTextureId === id
+      if (this.#skyBackgroundTextureId === id || this.#skyBlendSelection?.texture === id
         || (this.#textureResourceReferences.get(retained.texture) ?? 0) !== 0) {
         this.#textureResources.set(id, retained);
         continue;
@@ -1016,6 +1023,8 @@ export class ThreeRenderer {
     this.#slotColors.clear();
     this.#materials.clear();
     this.#fallbackMaterials.clear();
+    this.#skyBlend?.dispose();
+    this.#skyBlend = null;
     this.#skyBackgroundTexture?.dispose();
     this.#skyBackgroundTexture = null;
     this.#skyBackgroundTextureId = null;
@@ -2193,7 +2202,7 @@ export class ThreeRenderer {
     if (descriptor === undefined) {
       throw new RenderApplyError(`releaseTexture: undefined texture ${id}`);
     }
-    if (this.#skyBackgroundTextureId === id) {
+    if (this.#skyBackgroundTextureId === id || this.#skyBlendSelection?.texture === id) {
       throw new RenderApplyError(`releaseTexture: ${id} is the active sky background`);
     }
     if ([...this.#atlases.values()].some((atlas) => atlas.texture === id)) {
@@ -2263,6 +2272,18 @@ export class ThreeRenderer {
     const retained = this.#skyBackgroundTextureId === null
       ? undefined
       : this.#textureResources.get(this.#skyBackgroundTextureId);
+    const blend = this.#skyBlendSelection;
+    if (blend !== null && retained !== undefined) {
+      const second = this.#textureResources.get(blend.texture);
+      if (second === undefined) throw new RenderApplyError('sky blend texture is unavailable');
+      this.#skyBlend ??= new SkyBlend(this.scene);
+      this.#skyBlend.update(retained.texture, second.texture, blend.amount);
+      this.scene.background = null;
+      this.#skyBackgroundTexture = null;
+      previous?.dispose();
+      return;
+    }
+    if (this.#skyBlend !== null) this.#skyBlend.mesh.visible = false;
     const next = retained?.texture.clone() ?? null;
     if (next !== null) {
       next.mapping = THREE.EquirectangularReflectionMapping;
@@ -2502,6 +2523,7 @@ export class ThreeRenderer {
     const textureId = this.#skyBackgroundTextureId;
     const retained = textureId === null ? undefined : this.#textureResources.get(textureId);
     return Object.freeze({
+      ...(this.#skyBlendSelection === null ? {} : { blend: Object.freeze({ textureId: this.#skyBlendSelection.texture, amount: this.#skyBlendSelection.amount }) }),
       textureId,
       contentHash: retained?.readout.contentHash ?? null,
       resource: retained?.readout.resource ?? null,

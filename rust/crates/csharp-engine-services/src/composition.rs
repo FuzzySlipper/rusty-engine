@@ -184,6 +184,7 @@ fn engine_api(
             set_active_camera: crate::camera_view::set_active_camera,
             clear_active_camera: crate::camera_view::clear_active_camera,
             set_sky_background: crate::camera_view::set_sky_background,
+            set_sky_background_blend: crate::camera_view::set_sky_background_blend,
             clear_sky_background: crate::camera_view::clear_sky_background,
             set_background_color: crate::camera_view::set_background_color,
         },

@@ -284,7 +284,12 @@ function renderDiff(input: unknown, path: string): void {
 }
 
 function skyBackground(input: unknown, path: string): void {
-  const value = record(input, path, ['texture']);
+  const value = recordOptional(input, path, ['texture'], ['blend']);
+  if (value['blend'] !== undefined) {
+    const blend = record(value['blend'], `${path}.blend`, ['texture', 'amount']);
+    skyBackground({ texture: blend['texture'] }, `${path}.blend`);
+    range(blend['amount'], `${path}.blend.amount`, 0, 1);
+  }
   const texture = nonEmptyText(value['texture'], `${path}.texture`);
   if (!texture.startsWith('texture/')) {
     fail(`${path}.texture`, 'must use the texture/ asset namespace');

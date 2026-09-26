@@ -167,6 +167,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         },
         RenderDiff::SetSkyBackground {
             background: Some(SkyBackgroundDescriptor {
+                blend: None,
                 texture: texture.id.clone(),
             }),
         },

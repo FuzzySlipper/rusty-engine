@@ -124,6 +124,7 @@ impl RenderAssetRequirement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenderAssetError {
+    InvalidSkyBlendAmount,
     EmptyId,
     WrongKind {
         id: String,

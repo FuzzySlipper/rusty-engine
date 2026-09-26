@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "captureProtocol": "rusty-engine.playtest-warning-delta/v1",
+  "compatibility": {
+    "exerciseId": "lighting-sky-8607",
+    "pageOrigin": "http://127.0.0.1:37494",
+    "engineOrigin": "http://127.0.0.1:37494"
+  },
+  "run": {
+    "startedAt": "2026-09-26T00:59:05.215Z",
+    "completedAt": "2026-09-26T00:59:06.134Z",
+    "url": "http://127.0.0.1:37494/",
+    "exerciseId": "lighting-sky-8607",
+    "nodeVersion": "v26.8.1",
+    "gitRevision": "660ed26e9d1fd02c22d480df7c20dc17e2375ad8",
+    "gitDirty": true,
+    "browserVersion": "149.0.7827.55"
+  },
+  "capture": {
+    "browser": {
+      "status": "complete"
+    },
+    "engine": {
+      "status": "complete",
+      "origin": "http://127.0.0.1:37494",
+      "checkpointCursor": "2",
+      "finalCursor": "2",
+      "reads": 2,
+      "lagged": false,
+      "droppedCount": "0",
+      "checkpoint": {
+        "status": "complete",
+        "initialCursor": "2",
+        "checkpointCursor": "2",
+        "reads": 1
+      },
+      "events": []
+    }
+  },
+  "findings": [],
+  "comparison": {
+    "status": "unavailable",
+    "reason": "no baseline was supplied"
+  },
+  "cleanClaimEligible": false,
+  "blockers": [
+    "baseline comparison is unavailable"
+  ]
+}

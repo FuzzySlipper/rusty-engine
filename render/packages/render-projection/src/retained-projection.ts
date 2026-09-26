@@ -784,7 +784,7 @@ export class RenderProjection {
     if (!this.#textures.has(id)) {
       throw new RenderProjectionError(`releaseTexture: undefined texture ${id}`);
     }
-    if (this.#skyBackground?.texture === id) {
+    if ((this.#skyBackground?.texture === id || this.#skyBackground?.blend?.texture === id)) {
       throw new RenderProjectionError(`releaseTexture: ${id} is the active sky background`);
     }
     if ([...this.#spriteAtlases.values()].some((atlas) => atlas.texture === id)) {
@@ -800,21 +800,21 @@ export class RenderProjection {
   #setSkyBackground(
     background: SkyBackgroundDescriptor | null,
   ): RenderProjectionInstruction {
-    if (background !== null) {
-      const texture = this.#textures.get(background.texture);
+    for (const id of background === null ? [] : [background.texture, ...(background.blend ? [background.blend.texture] : [])]) {
+      const texture = this.#textures.get(id);
       if (texture === undefined || texture.payload === undefined) {
         throw new RenderProjectionError(
-          `setSkyBackground: texture ${background.texture} is not a retained payload`,
+          `setSkyBackground: texture ${id} is not a retained payload`,
         );
       }
       if (texture.width !== texture.height * 2) {
         throw new RenderProjectionError(
-          `setSkyBackground: texture ${background.texture} must have a 2:1 aspect ratio`,
+          `setSkyBackground: texture ${id} must have a 2:1 aspect ratio`,
         );
       }
       if (texture.payload.colorSpace !== 'srgb' || texture.wrap !== 'clamp') {
         throw new RenderProjectionError(
-          `setSkyBackground: texture ${background.texture} must be sRGB with clamp wrapping`,
+          `setSkyBackground: texture ${id} must be sRGB with clamp wrapping`,
         );
       }
     }

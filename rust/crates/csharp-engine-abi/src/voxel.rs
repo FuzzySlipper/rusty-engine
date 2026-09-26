@@ -2,6 +2,7 @@ use crate::{
     NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeEngineDiagnosticLeaseHandle,
     NativeOperationErrorReceipt, NativeSpatialSessionHandle,
 };
+use crate::{NativeLightDescriptor, NativeVec3};
 use std::ffi::c_void;
 
 /// One signed voxel address in the session's canonical world grid.
@@ -535,6 +536,7 @@ pub struct NativeVoxelApi {
     pub context: *mut c_void,
     pub read_scene: NativeReadVoxelScene,
     pub read: NativeReadVoxel,
+    pub sample_direct_lighting: NativeSampleVoxelDirectLighting,
     pub read_at: NativeReadVoxelAt,
     pub read_chunk: NativeReadVoxelChunk,
     pub read_resident_chunk_at: NativeReadVoxelResidentChunkAt,
@@ -559,3 +561,36 @@ pub struct NativeVoxelApi {
     pub destroy_history_export_lease: NativeDestroyVoxelHistoryExportLease,
     pub restore_history: NativeRestoreVoxelHistory,
 }
+
+/// Samples direct incident light at address + offset (in voxel units). Descriptors
+/// use local world coordinates, identical to unparented Graphics lights. Zero
+/// normal measures incident light; nonzero normals select surface irradiance.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelLightSampleRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub address: NativeVoxelAddress,
+    pub offset: NativeVec3,
+    pub normal: NativeVec3,
+    pub directional_distance: f32,
+    pub lights: *const NativeLightDescriptor,
+    pub lights_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelLightSample {
+    pub irradiance: NativeVec3,
+    pub luminance: f32,
+    pub contributing_lights: u32,
+    pub occluded_lights: u32,
+    pub source_revision: u64,
+    pub collision_revision: u64,
+    pub static_collision_revision: u64,
+    pub rebase_revision: u64,
+}
+pub type NativeSampleVoxelDirectLighting = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelLightSampleRequest,
+    *mut NativeVoxelLightSample,
+    *mut NativeOperationErrorReceipt,
+) -> i32;

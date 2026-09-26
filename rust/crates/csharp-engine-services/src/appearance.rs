@@ -450,6 +450,62 @@ impl RuntimeAppearanceState {
     }
 }
 
+pub(crate) fn native_light_descriptor(
+    descriptor: NativeLightDescriptor,
+) -> Result<LightDescriptor, CsharpEngineServicesError> {
+    let shadow_intent = match descriptor.shadow_intent {
+        NativeLightShadowIntent::Disabled => LightShadowIntent::Disabled,
+        NativeLightShadowIntent::Requested => LightShadowIntent::Requested,
+    };
+    let color = native_vec3_array(descriptor.color);
+    let position = native_vec3_array(descriptor.position);
+    let direction = native_vec3_array(descriptor.direction);
+    let range = descriptor.has_range.then_some(descriptor.range);
+    let light = match descriptor.kind {
+        NativeLightKind::Ambient => LightDescriptor::Ambient {
+            color,
+            intensity: descriptor.intensity,
+            enabled: descriptor.enabled,
+            shadow_intent,
+        },
+        NativeLightKind::Directional => LightDescriptor::Directional {
+            color,
+            intensity: descriptor.intensity,
+            enabled: descriptor.enabled,
+            direction,
+            shadow_intent,
+        },
+        NativeLightKind::Point => LightDescriptor::Point {
+            color,
+            intensity: descriptor.intensity,
+            enabled: descriptor.enabled,
+            position,
+            range,
+            decay: descriptor.decay,
+            shadow_intent,
+        },
+        NativeLightKind::Spot => LightDescriptor::Spot {
+            color,
+            intensity: descriptor.intensity,
+            enabled: descriptor.enabled,
+            position,
+            direction,
+            range,
+            decay: descriptor.decay,
+            outer_angle_radians: descriptor.outer_angle_radians,
+            penumbra: descriptor.penumbra,
+            shadow_intent,
+        },
+    };
+    light.validate().map_err(|error| {
+        CsharpEngineServicesError::new(
+            "CSHARP_LIGHT_DESCRIPTOR",
+            format!("invalid light descriptor: {error:?}"),
+        )
+    })?;
+    Ok(light)
+}
+
 #[cfg(test)]
 fn atlas_sprite_request(
     atlas: NativeSpriteAtlasHandle,
@@ -8082,59 +8138,7 @@ fn narrow_retained_count(
 fn runtime_light_fact(
     request: NativeLightRequest,
 ) -> Result<RuntimeLightFact, CsharpEngineServicesError> {
-    let shadow_intent = match request.descriptor.shadow_intent {
-        NativeLightShadowIntent::Disabled => LightShadowIntent::Disabled,
-        NativeLightShadowIntent::Requested => LightShadowIntent::Requested,
-    };
-    let color = native_vec3_array(request.descriptor.color);
-    let position = native_vec3_array(request.descriptor.position);
-    let direction = native_vec3_array(request.descriptor.direction);
-    let range = request
-        .descriptor
-        .has_range
-        .then_some(request.descriptor.range);
-    let light = match request.descriptor.kind {
-        NativeLightKind::Ambient => LightDescriptor::Ambient {
-            color,
-            intensity: request.descriptor.intensity,
-            enabled: request.descriptor.enabled,
-            shadow_intent,
-        },
-        NativeLightKind::Directional => LightDescriptor::Directional {
-            color,
-            intensity: request.descriptor.intensity,
-            enabled: request.descriptor.enabled,
-            direction,
-            shadow_intent,
-        },
-        NativeLightKind::Point => LightDescriptor::Point {
-            color,
-            intensity: request.descriptor.intensity,
-            enabled: request.descriptor.enabled,
-            position,
-            range,
-            decay: request.descriptor.decay,
-            shadow_intent,
-        },
-        NativeLightKind::Spot => LightDescriptor::Spot {
-            color,
-            intensity: request.descriptor.intensity,
-            enabled: request.descriptor.enabled,
-            position,
-            direction,
-            range,
-            decay: request.descriptor.decay,
-            outer_angle_radians: request.descriptor.outer_angle_radians,
-            penumbra: request.descriptor.penumbra,
-            shadow_intent,
-        },
-    };
-    light.validate().map_err(|error| {
-        CsharpEngineServicesError::new(
-            "CSHARP_LIGHT_DESCRIPTOR",
-            format!("invalid light descriptor: {error:?}"),
-        )
-    })?;
+    let light = native_light_descriptor(request.descriptor)?;
     Ok(RuntimeLightFact {
         light_id: request.logical_id,
         parent_object_id: request

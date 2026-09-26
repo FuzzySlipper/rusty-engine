@@ -11,15 +11,31 @@ use crate::{
 ///
 /// The referenced retained texture is interpreted as one equirectangular
 /// panorama. It contributes no environment lighting, collision, or picking.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SkyBackgroundDescriptor {
     pub texture: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<SkyBackgroundBlend>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkyBackgroundBlend {
+    pub texture: String,
+    pub amount: f32,
 }
 
 impl SkyBackgroundDescriptor {
     pub fn validate(&self) -> Result<(), crate::RenderAssetError> {
-        crate::validate_asset_id(&self.texture, crate::RenderAssetKind::Texture)
+        crate::validate_asset_id(&self.texture, crate::RenderAssetKind::Texture)?;
+        if let Some(blend) = &self.blend {
+            crate::validate_asset_id(&blend.texture, crate::RenderAssetKind::Texture)?;
+            if !blend.amount.is_finite() || !(0.0..=1.0).contains(&blend.amount) {
+                return Err(crate::RenderAssetError::InvalidSkyBlendAmount);
+            }
+        }
+        Ok(())
     }
 }
 

@@ -591,7 +591,7 @@ single-primary-view convenience over this same retained composition. Use
 viewport clear color and replaces any selected sky. `SetSkyBackground` replaces
 that color with a retained panorama; `ClearSkyBackground` returns to the Engine
 default. Products choose the color or resource while the Engine owns renderer
-state and realization.
+state and realization. `SetSkyBackgroundBlend` blends two retained panoramas from a product-supplied value without rebuilding resources; see [lighting and skies](lighting-and-sky.md) for clock composition and voxel direct-light sampling.
 
 `UpdateCamera` still applies immediately. Opt into render-time sampling with
 `UpdateCameraSample(new CameraSampleRequest(camera, descriptor, sampleTimeSeconds,

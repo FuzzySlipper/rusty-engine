@@ -433,6 +433,9 @@ impl PresentationWorld {
         }
         if let Some(sky) = &captured.sky {
             textures.insert(sky.texture.clone());
+            if let Some(blend) = &sky.blend {
+                textures.insert(blend.texture.clone());
+            }
         }
         captured.textures.retain(|id, _| textures.contains(id));
         let mut frame = captured.snapshot().frame;
@@ -830,7 +833,7 @@ impl PresentationWorld {
                         VoxelSurfaceMappingDescriptor::Repeat { texture, .. } | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture == id,
                     }))
                     || self.atlases.values().any(|atlas| &atlas.texture == id)
-                    || self.sky.as_ref().is_some_and(|sky| &sky.texture == id)
+                    || self.sky.as_ref().is_some_and(|sky| &sky.texture == id || sky.blend.as_ref().is_some_and(|blend| &blend.texture == id))
                     || self.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
                     || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineTexture { texture } if &texture.id == id)));
                 if bound {

@@ -1,0 +1,174 @@
+{
+  "mission": "Observe packaged Engine lighting and sky fixture for tasks 8607 and 8608",
+  "profile": "engine-lighting-sky",
+  "service_url": "http://127.0.0.1:48314",
+  "product_url": "http://127.0.0.1:37494/",
+  "session_id": "ee755934-0d20-4df3-9858-e6cc72536bc3",
+  "backend": "browser",
+  "operational_outcome": "uncertain",
+  "neutral_observation": "The initial scene is a rectangular enclosed room rendered in warm yellow-orange light, with a bright pool across the foreground floor and a persistent dark instruction banner at the top. The canvas backing is 320x180 and is displayed at 1280x720.",
+  "acceptance_mapping": {
+    "torch_toggle": "Visible pass: lighting.torch false changed the room to black except for the instruction banner, and lighting.torch true restored the warm room illumination.",
+    "sky_gradient": "Visible pass: lighting.sky 0 showed a pale blue sky around a black room silhouette; 0.5 showed a darker blue-gray sky with a diagonal band of soft white features; 1 showed a deep navy sky with brighter diagonal white features.",
+    "panorama": "Uncertain: lighting.panorama returned a successful generic live-debug receipt and changed the view from the deep navy state to a pale blue sky, but did not restore the warm room until lighting.room was issued. The receipt did not expose an authored-day label.",
+    "cleanup": "lighting.room restored the warm room before the session was stopped."
+  },
+  "debug_actions": [
+    {
+      "command": "lighting.inspect",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 0
+      }
+    },
+    {
+      "command": "lighting.torch false",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 0,
+        "torch": false,
+        "clock": 0
+      }
+    },
+    {
+      "command": "lighting.torch true",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 0
+      }
+    },
+    {
+      "command": "lighting.sky 0",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 0
+      }
+    },
+    {
+      "command": "lighting.sky 0.5",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 0.5
+      }
+    },
+    {
+      "command": "lighting.sky 1",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 1
+      }
+    },
+    {
+      "command": "lighting.panorama",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 1
+      }
+    },
+    {
+      "command": "lighting.room",
+      "result": {
+        "roundTrip": true,
+        "lit": 24.3412,
+        "blocked": 0,
+        "dark": 0,
+        "current": 24.3412,
+        "torch": true,
+        "clock": 1
+      }
+    }
+  ],
+  "captures": [
+    {
+      "label": "initial-torch-on",
+      "capture_id": "719e8393-8a77-49be-b430-153529dfc0f4",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/79a3b89d-74cd-4f84-b9ef-01f9c739694e.png",
+      "indexed_path": "initial-torch-on.png"
+    },
+    {
+      "label": "torch-off",
+      "capture_id": "0850d158-7d21-4f7b-9191-4cd831f3d347",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/f995df50-d6a7-4e9e-8144-e5896bd572b6.png",
+      "indexed_path": "torch-off.png"
+    },
+    {
+      "label": "torch-on-restored",
+      "capture_id": "ac3ef474-8d46-4cef-9fe2-a2fe42d2eb64",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/e1b1790c-4812-4370-a7be-58c0dabb95db.png",
+      "indexed_path": "torch-on-restored.png"
+    },
+    {
+      "label": "sky-0-torch-on",
+      "capture_id": "f0b9d4c6-deb8-43da-803a-b3d368b5ae84",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/ee795ff6-afb0-4023-85bb-e15de409260d.png",
+      "indexed_path": "sky-0-torch-on.png"
+    },
+    {
+      "label": "sky-0.5-torch-on",
+      "capture_id": "615177a9-c30d-427e-a8ec-bbc2c68fd71a",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/523e6b4f-b1af-4cad-bbdb-8fe14ae59e58.png",
+      "indexed_path": "sky-0.5-torch-on.png"
+    },
+    {
+      "label": "sky-1-torch-on",
+      "capture_id": "6a8c23c6-39e9-47e4-b3a7-8403a47e6cf0",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/e56d9081-beca-4407-bc37-777a54742ed8.png",
+      "indexed_path": "sky-1-torch-on.png"
+    },
+    {
+      "label": "panorama-authored-day",
+      "capture_id": "b103daf8-97a0-4ded-b3fc-141ded8a4da9",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/4f4bebaf-e3cf-44cf-ba79-68e4e0473df8.png",
+      "indexed_path": "panorama-authored-day.png"
+    },
+    {
+      "label": "room-restored-cleanup",
+      "capture_id": "8ad0dd79-9ace-4993-bee4-ba81509c6a24",
+      "path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/3245f2c7-8453-419f-bc65-0fbe7d9b3688.png",
+      "indexed_path": "room-restored-cleanup.png"
+    }
+  ],
+  "warnings": [
+    "No page errors observed. Captures repeatedly reported the known WebGL ReadPixels GPU-stall warning; renderer, GPU completion, and frame freshness remained unavailable."
+  ],
+  "events_path": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3/events.jsonl",
+  "cleanup": {
+    "phase": "stopped",
+    "browser_closed": true,
+    "released": true,
+    "artifact_directory": "/tmp/8607-playtest-state/browser/ee755934-0d20-4df3-9858-e6cc72536bc3"
+  }
+}

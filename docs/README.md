@@ -42,3 +42,5 @@ The root [README](../README.md) is the repository landing page and
 documentation remains in Git history as donor material only; do not restore it
 wholesale or use it to reintroduce superseded authoring or downstream-language
 assumptions.
+
+- [Lighting and skies](lighting-and-sky.md) covers retained torch lighting, voxel irradiance queries, persistence and product-clock panorama blending.

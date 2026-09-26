@@ -5428,3 +5428,33 @@ void test('inspection bounds follow the displayed pose without replacing playbac
   assert.equal(facts.length, 3); assert.equal(facts[2]!.generation, 2);
   registry.dispose();
 });
+
+test('sky blend retains shader and geometry while the product clock changes', () => {
+  const firstBytes = rgbaPng(4, 2, Array(8).fill([255, 0, 0, 255]).flat());
+  const secondBytes = rgbaPng(4, 2, Array(8).fill([0, 0, 255, 255]).flat());
+  const renderer = new ThreeRenderer();
+  const first = { ...textureDescriptor(firstBytes, 1), id: 'texture/sky/day', width: 4, height: 2, wrap: 'clamp' as const };
+  const second = { ...textureDescriptor(secondBytes, 1), id: 'texture/sky/night', width: 4, height: 2, wrap: 'clamp' as const };
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: first }, { op: 'defineTexture', texture: second },
+    { op: 'setSkyBackground', background: { texture: first.id, blend: { texture: second.id, amount: 0 } } },
+  ] });
+  const sky = renderer.scene.getObjectByName('engine-sky-blend') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  assert.ok(sky);
+  const material = sky.material;
+  const geometry = sky.geometry;
+  const count = renderer.resourceStatistics().textureResourceCount;
+  for (const amount of [0.25, 0.5, 1, 0]) {
+    renderer.applyDiff({ op: 'setSkyBackground', background: { texture: first.id, blend: { texture: second.id, amount } } });
+    assert.equal(sky.material, material);
+    assert.equal(sky.geometry, geometry);
+    assert.equal(material.uniforms['amount']!.value, amount);
+    assert.deepEqual(renderer.skyBackgroundReadout().blend, { textureId: second.id, amount });
+    assert.equal(renderer.resourceStatistics().textureResourceCount, count);
+  }
+  renderer.applyDiff({ op: 'setSkyBackground', background: { texture: first.id } });
+  assert.equal(sky.visible, false);
+  assert.ok(renderer.scene.background instanceof THREE.Texture);
+  renderer.dispose();
+  assert.equal(sky.parent, null);
+});

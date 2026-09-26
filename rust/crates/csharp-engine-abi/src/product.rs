@@ -818,6 +818,8 @@ pub type NativeClearActiveCamera =
     unsafe extern "C" fn(*mut c_void, *const NativeClearActiveCameraRequest) -> i32;
 pub type NativeSetSkyBackground =
     unsafe extern "C" fn(*mut c_void, NativeRenderResourceHandle) -> i32;
+pub type NativeSetSkyBackgroundBlend =
+    unsafe extern "C" fn(*mut c_void, *const NativeSkyBackgroundBlendRequest) -> i32;
 pub type NativeClearSkyBackground =
     unsafe extern "C" fn(*mut c_void, *const NativeClearSkyBackgroundRequest) -> i32;
 pub type NativeSetBackgroundColor =
@@ -1319,6 +1321,7 @@ pub struct NativeCameraViewApi {
     pub set_active_camera: NativeSetActiveCamera,
     pub clear_active_camera: NativeClearActiveCamera,
     pub set_sky_background: NativeSetSkyBackground,
+    pub set_sky_background_blend: NativeSetSkyBackgroundBlend,
     pub clear_sky_background: NativeClearSkyBackground,
     pub set_background_color: NativeSetBackgroundColor,
 }

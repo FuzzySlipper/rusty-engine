@@ -25,3 +25,6 @@ pub use mesh::*;
 pub use mesh_partition::*;
 pub use mesh_resource::*;
 pub use voxel_object::*;
+
+mod irradiance;
+pub use irradiance::*;

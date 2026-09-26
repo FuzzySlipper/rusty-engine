@@ -225,3 +225,13 @@ pub struct NativeClearSkyBackgroundRequest {
 pub struct NativeSetBackgroundColorRequest {
     pub color: NativeColor,
 }
+
+/// Blends two retained equirectangular panoramas. Amount is in [0,1]; the
+/// product supplies its clock-derived value. Neither texture is recreated.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSkyBackgroundBlendRequest {
+    pub first: NativeRenderResourceHandle,
+    pub second: NativeRenderResourceHandle,
+    pub amount: f32,
+}

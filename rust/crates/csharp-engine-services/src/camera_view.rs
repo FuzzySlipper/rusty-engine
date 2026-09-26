@@ -19,6 +19,11 @@ use crate::{
 pub(crate) enum CameraBackground {
     Default,
     Sky(u64),
+    Blend {
+        first: u64,
+        second: u64,
+        amount: f32,
+    },
     Color([f32; 4]),
 }
 
@@ -130,12 +135,19 @@ impl RuntimeCameraViewBridge {
     /// Appearance resource release must observe a sky selected earlier in the
     /// same product callback as well as the committed retained selection.
     pub(crate) fn uses_sky_texture(&self, resource: u64) -> bool {
-        self.staged
+        match self
+            .staged
             .as_ref()
             .map(|staged| &staged.state)
             .unwrap_or(&self.state)
             .background
-            == CameraBackground::Sky(resource)
+        {
+            CameraBackground::Sky(id) => id == resource,
+            CameraBackground::Blend { first, second, .. } => {
+                first == resource || second == resource
+            }
+            _ => false,
+        }
     }
 
     /// Rebuilds the current retained camera composition without entering a
@@ -794,7 +806,36 @@ pub(crate) fn background_frame(
             let identity = texture.id.clone();
             operations.push(RenderDiff::DefineTexture { texture });
             operations.push(RenderDiff::SetSkyBackground {
-                background: Some(SkyBackgroundDescriptor { texture: identity }),
+                background: Some(SkyBackgroundDescriptor {
+                    texture: identity,
+                    blend: None,
+                }),
+            });
+        }
+        CameraBackground::Blend {
+            first,
+            second,
+            amount,
+        } => {
+            let appearance = appearance.ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SKY_TEXTURE",
+                    "sky blend requires retained textures",
+                )
+            })?;
+            let first = appearance.texture_descriptor(first)?;
+            let second = appearance.texture_descriptor(second)?;
+            let background = SkyBackgroundDescriptor {
+                texture: first.id.clone(),
+                blend: Some(render_model::SkyBackgroundBlend {
+                    texture: second.id.clone(),
+                    amount,
+                }),
+            };
+            operations.push(RenderDiff::DefineTexture { texture: first });
+            operations.push(RenderDiff::DefineTexture { texture: second });
+            operations.push(RenderDiff::SetSkyBackground {
+                background: Some(background),
             });
         }
         CameraBackground::Color(color) => operations.push(RenderDiff::SetBackgroundColor { color }),
@@ -1094,6 +1135,44 @@ impl RuntimeCameraViewCall {
         let mut camera = composition_camera(format!("capture-{id}"), camera)?;
         camera.motion = None;
         Ok(camera)
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_sky_background_blend(
+    context: *mut c_void,
+    request: *const NativeSkyBackgroundBlendRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    let request = unsafe { *request };
+    let result = (|| {
+        if request.first.value == 0
+            || request.second.value == 0
+            || !request.amount.is_finite()
+            || !(0.0..=1.0).contains(&request.amount)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SKY_BLEND",
+                "sky blend requires two live textures and amount in [0,1]",
+            ));
+        }
+        let staged = bridge.staged_mut()?;
+        staged.state.background = CameraBackground::Blend {
+            first: request.first.value,
+            second: request.second.value,
+            amount: request.amount,
+        };
+        staged.background = Some(staged.state.background);
+        Ok(())
+    })();
+    match result {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
     }
 }
 

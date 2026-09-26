@@ -342,6 +342,7 @@ export interface TextureDescriptor {
 /** A single equirectangular panorama used only as camera-relative background presentation. */
 export interface SkyBackgroundDescriptor {
   readonly texture: string;
+  readonly blend?: { readonly texture: string; readonly amount: number };
 }
 
 export interface SpriteFrameRect {

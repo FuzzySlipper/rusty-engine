@@ -1174,6 +1174,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
         read_scene,
         read,
+        sample_direct_lighting,
         read_at,
         read_chunk,
         read_resident_chunk_at,
@@ -1341,6 +1342,88 @@ mod tests {
     fn copied_utf8(value: NativeUtf8Slice) -> String {
         let bytes = unsafe { std::slice::from_raw_parts(value.bytes, value.len) };
         std::str::from_utf8(bytes).unwrap().to_owned()
+    }
+
+    #[test]
+    fn direct_light_sample_uses_live_voxel_occlusion_and_reports_revision() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let edits = [set(NativeVoxelAddress { x: 0, y: 0, z: 0 }, 1)];
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                expected_revision: 0,
+                edits: edits.as_ptr(),
+                edits_len: 1,
+            })
+            .unwrap();
+        let light = NativeLightDescriptor {
+            kind: NativeLightKind::Point,
+            color: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            intensity: 10.0,
+            enabled: true,
+            position: NativeVec3 {
+                x: 2.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            direction: NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            has_range: true,
+            range: 10.0,
+            decay: 2.0,
+            outer_angle_radians: 0.0,
+            penumbra: 0.0,
+            shadow_intent: NativeLightShadowIntent::Requested,
+        };
+        let mut request = NativeVoxelLightSampleRequest {
+            session,
+            address: NativeVoxelAddress { x: -1, y: 0, z: 0 },
+            offset: NativeVec3 {
+                x: 0.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            normal: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            directional_distance: 20.0,
+            lights: &light,
+            lights_len: 1,
+        };
+        let mut result: NativeVoxelLightSample = unsafe { std::mem::zeroed() };
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
+            ABI_OK
+        );
+        assert_eq!(result.luminance, 0.0);
+        assert_eq!(result.occluded_lights, 1);
+        assert!(result.source_revision > 0);
+        request.address.x = 1;
+        assert_eq!(
+            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
+            ABI_OK
+        );
+        assert!(result.luminance > 0.0);
+        assert_eq!(result.occluded_lights, 0);
+        request.directional_distance = f32::NAN;
+        assert_eq!(
+            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
+            0
+        );
+        assert_ne!(error.diagnostics.handle.value, 0);
+        bridge.destroy_voxel_operation_diagnostic_lease(error.diagnostics.handle);
     }
 
     #[test]
@@ -1937,3 +2020,82 @@ preparation_callback!(
     cancel_preparation,
     b"CancelResidencyPreparation"
 );
+
+unsafe extern "C" fn sample_direct_lighting(
+    context: *mut c_void,
+    request: *const NativeVoxelLightSampleRequest,
+    output: *mut NativeVoxelLightSample,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() || error.is_null() {
+        return 0;
+    }
+    unsafe { *error = std::mem::zeroed() };
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    let request = unsafe { &*request };
+    let result = (|| {
+        let offset = [request.offset.x, request.offset.y, request.offset.z];
+        let mut normal = [request.normal.x, request.normal.y, request.normal.z].map(f64::from);
+        if !offset.iter().all(|v| v.is_finite())
+            || !normal.iter().all(|v| v.is_finite())
+            || !request.directional_distance.is_finite()
+            || request.directional_distance <= 0.0
+        {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_LIGHT_SAMPLE",
+                "sample coordinates and directional horizon must be finite and horizon positive",
+            ));
+        }
+        let length = normal.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if length > 0.0 {
+            normal = normal.map(|v| v / length);
+        }
+        let input = unsafe {
+            crate::composition::borrowed_slice(
+                request.lights,
+                request.lights_len,
+                "voxel light descriptors",
+            )
+        }?;
+        let lights = input
+            .iter()
+            .copied()
+            .map(crate::appearance::native_light_descriptor)
+            .collect::<Result<Vec<_>, _>>()?;
+        let session = bridge.session_mut(request.session)?;
+        let scene = &session.scene;
+        let address = address(request.address);
+        let origin = scene.world_origin().cell();
+        let position = std::array::from_fn(|i| {
+            (address[i] as f64 + f64::from(offset[i])) * scene.voxel_size() - origin[i] as f64
+        });
+        let sample = render_model::sample_direct_lighting(
+            position,
+            normal,
+            f64::from(request.directional_distance),
+            &lights,
+            |direction, distance| scene.raycast_world(position, direction, distance).is_some(),
+        );
+        let [r, g, b] = sample.irradiance;
+        Ok(NativeVoxelLightSample {
+            irradiance: NativeVec3 { x: r, y: g, z: b },
+            luminance: 0.2126 * r + 0.7152 * g + 0.0722 * b,
+            contributing_lights: sample.contributing_lights,
+            occluded_lights: sample.occluded_lights,
+            source_revision: scene.source_revision().raw(),
+            collision_revision: scene.projection_revisions().collision().raw(),
+            static_collision_revision: scene.static_mesh_collision_revision(),
+            rebase_revision: scene.rebase_revision(),
+        })
+    })();
+    match result {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(e) => {
+            retain_voxel_operation_error(bridge, &e, error, b"SampleDirectLighting");
+            0
+        }
+    }
+}
