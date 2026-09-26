@@ -6146,6 +6146,7 @@ mod tests {
                         value: VOXEL_FAILURE_PRESENTATION.load(Ordering::SeqCst),
                     },
                     &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             };
             VOXEL_FAILURE_REFRESH_STATUS.store(refresh_status, Ordering::SeqCst);
@@ -6532,6 +6533,7 @@ mod tests {
                         materials_len: bindings.len(),
                     },
                     &mut presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -6685,6 +6687,7 @@ mod tests {
                     api.voxel_scene_presentation.context,
                     presentation,
                     &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK

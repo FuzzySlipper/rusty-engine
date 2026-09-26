@@ -1,0 +1,732 @@
+{
+  "loader": "nativeaot",
+  "session": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+  "observations": [
+    {
+      "command": "atlases.inspect",
+      "state": "two-atlas projection passed; materials=2; chunks=1; mode=0; caughtRejections=2",
+      "capture": {
+        "application_renderer": "unavailable",
+        "capture_id": "49a70607-70e7-4268-a6ff-73df156e5cc2",
+        "engine_presentation": {
+          "available": false,
+          "reason": "not requested; set engine_presentation or profile presentation_observations"
+        },
+        "engine_presentation_state": "unavailable",
+        "engine_readiness": "unavailable",
+        "frame_correlation": "unavailable",
+        "gpu_completion": "unavailable",
+        "hardware_acceleration": "unavailable",
+        "label": "",
+        "metadata_path": "/tmp/8640-playtest-state/capture-49a70607-70e7-4268-a6ff-73df156e5cc2.json",
+        "observation": {
+          "artifact_id": "70cbdaa9-3aa0-4469-b67a-ddbe1f881c6c",
+          "canvases": [
+            {
+              "backing": {
+                "height": 180,
+                "width": 320
+              },
+              "css": {
+                "height": 720,
+                "width": 1280,
+                "x": 0,
+                "y": 0
+              }
+            }
+          ],
+          "capture_ended_at": "2026-09-26T04:23:42.065874942Z",
+          "capture_ended_at_ns": 1790396622065874942,
+          "capture_started_at": "2026-09-26T04:23:42.035089226Z",
+          "capture_started_at_ns": 1790396622035089226,
+          "console": [
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400193800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            }
+          ],
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "dom_assistance": [],
+          "event": "observation",
+          "events_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/events.jsonl",
+          "frame_freshness": "not measured",
+          "game_readiness": "unknown",
+          "height": 720,
+          "lease_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+          "metadata_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/70cbdaa9-3aa0-4469-b67a-ddbe1f881c6c.json",
+          "page_errors": [],
+          "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/70cbdaa9-3aa0-4469-b67a-ddbe1f881c6c.png",
+          "pointer_lock": false,
+          "renderer": "unknown",
+          "source": "headless Chromium screenshot through the private Playwright context",
+          "title": "Voxel Atlases",
+          "url": "http://127.0.0.1:37495/",
+          "viewport": {
+            "device_pixel_ratio": 1,
+            "height": 720,
+            "width": 1280
+          },
+          "width": 1280
+        },
+        "overlay_policy": "preserve",
+        "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/70cbdaa9-3aa0-4469-b67a-ddbe1f881c6c.png",
+        "recorded_at": "2026-09-26T04:23:42.078740178Z",
+        "session_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+        "supplied_assistance": null,
+        "supplied_metadata_source": "caller; not independently verified",
+        "supplied_viewpoint": null
+      },
+      "repository_image": "native-0.png"
+    },
+    {
+      "command": "atlases.mode 0",
+      "state": "two-atlas projection passed; materials=2; chunks=1; mode=0; caughtRejections=2",
+      "capture": {
+        "application_renderer": "unavailable",
+        "capture_id": "3fce6bb4-1164-4cad-a622-eaf8418339a7",
+        "engine_presentation": {
+          "available": false,
+          "reason": "not requested; set engine_presentation or profile presentation_observations"
+        },
+        "engine_presentation_state": "unavailable",
+        "engine_readiness": "unavailable",
+        "frame_correlation": "unavailable",
+        "gpu_completion": "unavailable",
+        "hardware_acceleration": "unavailable",
+        "label": "",
+        "metadata_path": "/tmp/8640-playtest-state/capture-3fce6bb4-1164-4cad-a622-eaf8418339a7.json",
+        "observation": {
+          "artifact_id": "35d2a6fb-6675-4db7-b4ed-e9c68d5bd46a",
+          "canvases": [
+            {
+              "backing": {
+                "height": 180,
+                "width": 320
+              },
+              "css": {
+                "height": 720,
+                "width": 1280,
+                "x": 0,
+                "y": 0
+              }
+            }
+          ],
+          "capture_ended_at": "2026-09-26T04:23:42.264581839Z",
+          "capture_ended_at_ns": 1790396622264581839,
+          "capture_started_at": "2026-09-26T04:23:42.240355381Z",
+          "capture_started_at_ns": 1790396622240355381,
+          "console": [
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400193800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+              "truncated": false,
+              "type": "warning"
+            }
+          ],
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "dom_assistance": [],
+          "event": "observation",
+          "events_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/events.jsonl",
+          "frame_freshness": "not measured",
+          "game_readiness": "unknown",
+          "height": 720,
+          "lease_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+          "metadata_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/35d2a6fb-6675-4db7-b4ed-e9c68d5bd46a.json",
+          "page_errors": [],
+          "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/35d2a6fb-6675-4db7-b4ed-e9c68d5bd46a.png",
+          "pointer_lock": false,
+          "renderer": "unknown",
+          "source": "headless Chromium screenshot through the private Playwright context",
+          "title": "Voxel Atlases",
+          "url": "http://127.0.0.1:37495/",
+          "viewport": {
+            "device_pixel_ratio": 1,
+            "height": 720,
+            "width": 1280
+          },
+          "width": 1280
+        },
+        "overlay_policy": "preserve",
+        "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/35d2a6fb-6675-4db7-b4ed-e9c68d5bd46a.png",
+        "recorded_at": "2026-09-26T04:23:42.273801381Z",
+        "session_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+        "supplied_assistance": null,
+        "supplied_metadata_source": "caller; not independently verified",
+        "supplied_viewpoint": null
+      },
+      "repository_image": "native-1.png"
+    },
+    {
+      "command": "atlases.mode 1",
+      "state": "two-atlas projection passed; materials=2; chunks=1; mode=1; caughtRejections=2",
+      "capture": {
+        "application_renderer": "unavailable",
+        "capture_id": "1b891ef0-ef53-41e7-81a6-7a69ddcd238e",
+        "engine_presentation": {
+          "available": false,
+          "reason": "not requested; set engine_presentation or profile presentation_observations"
+        },
+        "engine_presentation_state": "unavailable",
+        "engine_readiness": "unavailable",
+        "frame_correlation": "unavailable",
+        "gpu_completion": "unavailable",
+        "hardware_acceleration": "unavailable",
+        "label": "",
+        "metadata_path": "/tmp/8640-playtest-state/capture-1b891ef0-ef53-41e7-81a6-7a69ddcd238e.json",
+        "observation": {
+          "artifact_id": "7e2dc407-10dc-44b7-9d7d-4ea3bcf74aca",
+          "canvases": [
+            {
+              "backing": {
+                "height": 180,
+                "width": 320
+              },
+              "css": {
+                "height": 720,
+                "width": 1280,
+                "x": 0,
+                "y": 0
+              }
+            }
+          ],
+          "capture_ended_at": "2026-09-26T04:23:42.466606801Z",
+          "capture_ended_at_ns": 1790396622466606801,
+          "capture_started_at": "2026-09-26T04:23:42.432991998Z",
+          "capture_started_at_ns": 1790396622432991998,
+          "console": [
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400193800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+              "truncated": false,
+              "type": "warning"
+            }
+          ],
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "dom_assistance": [],
+          "event": "observation",
+          "events_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/events.jsonl",
+          "frame_freshness": "not measured",
+          "game_readiness": "unknown",
+          "height": 720,
+          "lease_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+          "metadata_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/7e2dc407-10dc-44b7-9d7d-4ea3bcf74aca.json",
+          "page_errors": [],
+          "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/7e2dc407-10dc-44b7-9d7d-4ea3bcf74aca.png",
+          "pointer_lock": false,
+          "renderer": "unknown",
+          "source": "headless Chromium screenshot through the private Playwright context",
+          "title": "Voxel Atlases",
+          "url": "http://127.0.0.1:37495/",
+          "viewport": {
+            "device_pixel_ratio": 1,
+            "height": 720,
+            "width": 1280
+          },
+          "width": 1280
+        },
+        "overlay_policy": "preserve",
+        "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/7e2dc407-10dc-44b7-9d7d-4ea3bcf74aca.png",
+        "recorded_at": "2026-09-26T04:23:42.476818557Z",
+        "session_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+        "supplied_assistance": null,
+        "supplied_metadata_source": "caller; not independently verified",
+        "supplied_viewpoint": null
+      },
+      "repository_image": "native-2.png"
+    },
+    {
+      "command": "atlases.mode 2",
+      "state": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=2",
+      "capture": {
+        "application_renderer": "unavailable",
+        "capture_id": "97725eed-a01b-45a4-91da-49f417c48204",
+        "engine_presentation": {
+          "available": false,
+          "reason": "not requested; set engine_presentation or profile presentation_observations"
+        },
+        "engine_presentation_state": "unavailable",
+        "engine_readiness": "unavailable",
+        "frame_correlation": "unavailable",
+        "gpu_completion": "unavailable",
+        "hardware_acceleration": "unavailable",
+        "label": "",
+        "metadata_path": "/tmp/8640-playtest-state/capture-97725eed-a01b-45a4-91da-49f417c48204.json",
+        "observation": {
+          "artifact_id": "d999237e-a69f-4b55-871b-09d1011ac372",
+          "canvases": [
+            {
+              "backing": {
+                "height": 180,
+                "width": 320
+              },
+              "css": {
+                "height": 720,
+                "width": 1280,
+                "x": 0,
+                "y": 0
+              }
+            }
+          ],
+          "capture_ended_at": "2026-09-26T04:23:42.664415048Z",
+          "capture_ended_at_ns": 1790396622664415048,
+          "capture_started_at": "2026-09-26T04:23:42.638775905Z",
+          "capture_started_at_ns": 1790396622638775905,
+          "console": [
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400193800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+              "truncated": false,
+              "type": "warning"
+            }
+          ],
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "dom_assistance": [],
+          "event": "observation",
+          "events_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/events.jsonl",
+          "frame_freshness": "not measured",
+          "game_readiness": "unknown",
+          "height": 720,
+          "lease_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+          "metadata_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/d999237e-a69f-4b55-871b-09d1011ac372.json",
+          "page_errors": [],
+          "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/d999237e-a69f-4b55-871b-09d1011ac372.png",
+          "pointer_lock": false,
+          "renderer": "unknown",
+          "source": "headless Chromium screenshot through the private Playwright context",
+          "title": "Voxel Atlases",
+          "url": "http://127.0.0.1:37495/",
+          "viewport": {
+            "device_pixel_ratio": 1,
+            "height": 720,
+            "width": 1280
+          },
+          "width": 1280
+        },
+        "overlay_policy": "preserve",
+        "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/d999237e-a69f-4b55-871b-09d1011ac372.png",
+        "recorded_at": "2026-09-26T04:23:42.682752854Z",
+        "session_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+        "supplied_assistance": null,
+        "supplied_metadata_source": "caller; not independently verified",
+        "supplied_viewpoint": null
+      },
+      "repository_image": "native-3.png"
+    },
+    {
+      "command": "atlases.palette",
+      "state": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=4",
+      "capture": {
+        "application_renderer": "unavailable",
+        "capture_id": "7c4655b5-e3b5-4a09-a397-64226fe52592",
+        "engine_presentation": {
+          "available": false,
+          "reason": "not requested; set engine_presentation or profile presentation_observations"
+        },
+        "engine_presentation_state": "unavailable",
+        "engine_readiness": "unavailable",
+        "frame_correlation": "unavailable",
+        "gpu_completion": "unavailable",
+        "hardware_acceleration": "unavailable",
+        "label": "",
+        "metadata_path": "/tmp/8640-playtest-state/capture-7c4655b5-e3b5-4a09-a397-64226fe52592.json",
+        "observation": {
+          "artifact_id": "2e0418af-af9b-4e03-a894-320b9a65730b",
+          "canvases": [
+            {
+              "backing": {
+                "height": 180,
+                "width": 320
+              },
+              "css": {
+                "height": 720,
+                "width": 1280,
+                "x": 0,
+                "y": 0
+              }
+            }
+          ],
+          "capture_ended_at": "2026-09-26T04:23:42.881958116Z",
+          "capture_ended_at_ns": 1790396622881958116,
+          "capture_started_at": "2026-09-26T04:23:42.852284807Z",
+          "capture_started_at_ns": 1790396622852284807,
+          "console": [
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400193800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+              "truncated": false,
+              "type": "warning"
+            }
+          ],
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "dom_assistance": [],
+          "event": "observation",
+          "events_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/events.jsonl",
+          "frame_freshness": "not measured",
+          "game_readiness": "unknown",
+          "height": 720,
+          "lease_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+          "metadata_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/2e0418af-af9b-4e03-a894-320b9a65730b.json",
+          "page_errors": [],
+          "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/2e0418af-af9b-4e03-a894-320b9a65730b.png",
+          "pointer_lock": false,
+          "renderer": "unknown",
+          "source": "headless Chromium screenshot through the private Playwright context",
+          "title": "Voxel Atlases",
+          "url": "http://127.0.0.1:37495/",
+          "viewport": {
+            "device_pixel_ratio": 1,
+            "height": 720,
+            "width": 1280
+          },
+          "width": 1280
+        },
+        "overlay_policy": "preserve",
+        "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/2e0418af-af9b-4e03-a894-320b9a65730b.png",
+        "recorded_at": "2026-09-26T04:23:42.89579073Z",
+        "session_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+        "supplied_assistance": null,
+        "supplied_metadata_source": "caller; not independently verified",
+        "supplied_viewpoint": null
+      },
+      "repository_image": "native-4.png"
+    },
+    {
+      "command": "atlases.palette",
+      "state": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=6",
+      "capture": {
+        "application_renderer": "unavailable",
+        "capture_id": "294a6c9e-e974-4057-bbfa-d5699d03229c",
+        "engine_presentation": {
+          "available": false,
+          "reason": "not requested; set engine_presentation or profile presentation_observations"
+        },
+        "engine_presentation_state": "unavailable",
+        "engine_readiness": "unavailable",
+        "frame_correlation": "unavailable",
+        "gpu_completion": "unavailable",
+        "hardware_acceleration": "unavailable",
+        "label": "",
+        "metadata_path": "/tmp/8640-playtest-state/capture-294a6c9e-e974-4057-bbfa-d5699d03229c.json",
+        "observation": {
+          "artifact_id": "ab8be79b-9bcb-4662-bb4d-787e01ec6cb2",
+          "canvases": [
+            {
+              "backing": {
+                "height": 180,
+                "width": 320
+              },
+              "css": {
+                "height": 720,
+                "width": 1280,
+                "x": 0,
+                "y": 0
+              }
+            }
+          ],
+          "capture_ended_at": "2026-09-26T04:23:43.099334525Z",
+          "capture_ended_at_ns": 1790396623099334525,
+          "capture_started_at": "2026-09-26T04:23:43.063995598Z",
+          "capture_started_at_ns": 1790396623063995598,
+          "console": [
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400193800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+              "truncated": false,
+              "type": "warning"
+            },
+            {
+              "location": {
+                "column": 0,
+                "columnNumber": 0,
+                "line": 0,
+                "lineNumber": 0,
+                "url": "http://127.0.0.1:37495/"
+              },
+              "text": "[.WebGL-0x365400196800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+              "truncated": false,
+              "type": "warning"
+            }
+          ],
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "dom_assistance": [],
+          "event": "observation",
+          "events_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/events.jsonl",
+          "frame_freshness": "not measured",
+          "game_readiness": "unknown",
+          "height": 720,
+          "lease_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+          "metadata_path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/ab8be79b-9bcb-4662-bb4d-787e01ec6cb2.json",
+          "page_errors": [],
+          "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/ab8be79b-9bcb-4662-bb4d-787e01ec6cb2.png",
+          "pointer_lock": false,
+          "renderer": "unknown",
+          "source": "headless Chromium screenshot through the private Playwright context",
+          "title": "Voxel Atlases",
+          "url": "http://127.0.0.1:37495/",
+          "viewport": {
+            "device_pixel_ratio": 1,
+            "height": 720,
+            "width": 1280
+          },
+          "width": 1280
+        },
+        "overlay_policy": "preserve",
+        "path": "/tmp/8640-playtest-state/browser/7c3d869e-2d8c-4483-b94e-ace607fe8020/ab8be79b-9bcb-4662-bb4d-787e01ec6cb2.png",
+        "recorded_at": "2026-09-26T04:23:43.110779061Z",
+        "session_id": "7c3d869e-2d8c-4483-b94e-ace607fe8020",
+        "supplied_assistance": null,
+        "supplied_metadata_source": "caller; not independently verified",
+        "supplied_viewpoint": null
+      },
+      "repository_image": "native-5.png"
+    }
+  ]
+}

@@ -5,6 +5,8 @@
 //! normal incremental voxel projector, and stages renderer work.  No mesh or
 //! renderer object is ever admitted from C#.
 
+mod errors;
+
 use runtime_diagnostics::RuntimeUpdateAttribution;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -65,6 +67,8 @@ pub(crate) struct RuntimeVoxelScenePresentationBridge {
     staged: Option<RuntimeVoxelScenePresentationCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
     update_attribution: RuntimeUpdateAttribution,
+    diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
+    next_diagnostic_lease: u64,
 }
 
 impl RuntimeVoxelScenePresentationBridge {
@@ -81,6 +85,8 @@ impl RuntimeVoxelScenePresentationBridge {
             staged: None,
             appearance: None,
             update_attribution: RuntimeUpdateAttribution::default(),
+            diagnostic_leases: BTreeMap::new(),
+            next_diagnostic_lease: 1,
         }
     }
 
@@ -273,7 +279,12 @@ impl RuntimeVoxelScenePresentationBridge {
                 base_material_count: resolved.base_material_count,
             },
         );
-        self.refresh(NativeVoxelScenePresentationHandle { value })?;
+        if let Err(error) = self.refresh(NativeVoxelScenePresentationHandle { value }) {
+            let staged = self.staged_mut()?;
+            staged.state.presentations.remove(&value);
+            staged.state.next_presentation = value;
+            return Err(error);
+        }
         Ok(NativeVoxelScenePresentationHandle { value })
     }
 
@@ -410,6 +421,7 @@ impl RuntimeVoxelScenePresentationBridge {
             .presentations
             .get_mut(&request.presentation.value)
             .expect("presentation existence was checked before material resolution");
+        let previous = presentation.clone();
         presentation.base_materials = resolved.base_materials;
         presentation.face_materials = resolved.face_materials;
         presentation.textures = resolved.textures;
@@ -420,7 +432,16 @@ impl RuntimeVoxelScenePresentationBridge {
         presentation.base_material_provenance = resolved.base_material_provenance;
         presentation.face_material_provenance = resolved.face_material_provenance;
         presentation.base_material_count = resolved.base_material_count;
-        self.refresh(request.presentation)
+        match self.refresh(request.presentation) {
+            Ok(readout) => Ok(readout),
+            Err(error) => {
+                self.staged_mut()?
+                    .state
+                    .presentations
+                    .insert(request.presentation.value, previous);
+                Err(error)
+            }
+        }
     }
 
     fn destroy(
@@ -607,12 +628,20 @@ impl RuntimeVoxelScenePresentationBridge {
                     "voxel scene material slot exceeded the admitted scene slot range",
                 )
             })?;
-        if slots.len() != bindings.len()
-            || slots.keys().copied().collect::<BTreeSet<_>>() != expected
-        {
+        if slots.len() != bindings.len() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
-                "voxel scene presentation requires exactly one live material binding for every used scene material slot",
+                "voxel scene material bindings contain duplicate source slots",
+            ));
+        }
+        let missing = expected
+            .difference(&slots.keys().copied().collect())
+            .copied()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
+                format!("voxel scene material bindings are missing used source slots {missing:?}"),
             ));
         }
         if !face_bindings.is_empty()
@@ -635,10 +664,10 @@ impl RuntimeVoxelScenePresentationBridge {
                 )
             })?;
             let direction = native_direction(binding.face)?;
-            if !expected.contains(&slot) {
+            if !slots.contains_key(&slot) {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_SCENE_PRESENTATION_DIRECTIONAL",
-                    "face material override referenced an unused scene material slot",
+                    "face material override requires a base binding for its source slot",
                 ));
             }
             if overrides
@@ -957,6 +986,7 @@ pub(crate) fn api(
         update_scene_directional,
         read_material_mapping,
         destroy_material_mapping_lease,
+        destroy_operation_diagnostic_lease: errors::destroy_operation_diagnostic_lease,
     }
 }
 
@@ -964,8 +994,9 @@ unsafe extern "C" fn project_scene(
     context: *mut c_void,
     request: *const NativeProjectVoxelSceneRequest,
     output: *mut NativeVoxelScenePresentationHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || output.is_null() {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
@@ -979,7 +1010,10 @@ unsafe extern "C" fn project_scene(
             unsafe { *output = handle };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(failure) => {
+            bridge.retain_operation_error(&failure, error, b"ProjectScene");
+            0
+        }
     }
 }
 
@@ -987,8 +1021,9 @@ unsafe extern "C" fn project_scene_directional(
     context: *mut c_void,
     request: *const NativeProjectVoxelSceneDirectionalRequest,
     output: *mut NativeVoxelScenePresentationHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || output.is_null() {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
@@ -1002,7 +1037,10 @@ unsafe extern "C" fn project_scene_directional(
             unsafe { *output = handle };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(failure) => {
+            bridge.retain_operation_error(&failure, error, b"ProjectSceneDirectional");
+            0
+        }
     }
 }
 
@@ -1010,8 +1048,9 @@ unsafe extern "C" fn refresh_scene(
     context: *mut c_void,
     handle: NativeVoxelScenePresentationHandle,
     output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || output.is_null() {
+    if error.is_null() || context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
@@ -1024,7 +1063,10 @@ unsafe extern "C" fn refresh_scene(
             unsafe { *output = readout };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(failure) => {
+            bridge.retain_operation_error(&failure, error, b"RefreshScene");
+            0
+        }
     }
 }
 
@@ -1032,8 +1074,9 @@ unsafe extern "C" fn update_scene(
     context: *mut c_void,
     request: *const NativeUpdateVoxelScenePresentationRequest,
     output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || output.is_null() {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
@@ -1047,7 +1090,10 @@ unsafe extern "C" fn update_scene(
             unsafe { *output = readout };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(failure) => {
+            bridge.retain_operation_error(&failure, error, b"UpdateScene");
+            0
+        }
     }
 }
 
@@ -1055,8 +1101,9 @@ unsafe extern "C" fn update_scene_directional(
     context: *mut c_void,
     request: *const NativeUpdateVoxelScenePresentationDirectionalRequest,
     output: *mut NativeVoxelScenePresentationReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || output.is_null() {
+    if error.is_null() || context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
@@ -1070,7 +1117,10 @@ unsafe extern "C" fn update_scene_directional(
             unsafe { *output = readout };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(failure) => {
+            bridge.retain_operation_error(&failure, error, b"UpdateSceneDirectional");
+            0
+        }
     }
 }
 
@@ -1240,6 +1290,175 @@ mod tests {
     }
 
     #[test]
+    fn palette_can_precede_voxels_and_survive_removal_and_reintroduction() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel(&mut spatial);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let first = material(&mut appearance);
+        let second = material_with_color(
+            &mut appearance,
+            NativeColor {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+        );
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.bind_appearance(&mut appearance);
+        bridge.begin_call();
+        let bindings = [
+            NativeVoxelSceneMaterialBinding {
+                material_slot: 1,
+                material: first,
+            },
+            NativeVoxelSceneMaterialBinding {
+                material_slot: 2,
+                material: second,
+            },
+        ];
+        let faces = [NativeVoxelSceneFaceMaterialBinding {
+            variant: 0,
+            material_slot: 2,
+            face: NativeSpatialFace::PosY,
+            material: first,
+        }];
+        let presentation = bridge
+            .project_scene_directional(NativeProjectVoxelSceneDirectionalRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+                face_materials: faces.as_ptr(),
+                face_materials_len: faces.len(),
+            })
+            .expect("unused palette entry and override are retained");
+        let voxel = crate::voxel::api(&mut spatial);
+        for (revision, kind) in [
+            (1, NativeVoxelEditKind::Set),
+            (2, NativeVoxelEditKind::Clear),
+            (3, NativeVoxelEditKind::Set),
+        ] {
+            let edits = [NativeVoxelEdit {
+                state: 0,
+                kind,
+                address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
+                material_slot: 2,
+            }];
+            let mut receipt = NativeVoxelEditReceipt::default();
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            assert_eq!(
+                unsafe {
+                    (voxel.apply_edits)(
+                        voxel.context,
+                        &NativeVoxelEditTransaction {
+                            session,
+                            expected_revision: revision,
+                            edits: edits.as_ptr(),
+                            edits_len: edits.len(),
+                        },
+                        &mut receipt,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+            assert_eq!(bridge.refresh(presentation).unwrap().material_count, 2);
+        }
+        let mapping = bridge.read_material_mapping(presentation).unwrap();
+        let rows = unsafe { std::slice::from_raw_parts(mapping.mappings, mapping.mappings_len) };
+        assert!(rows
+            .iter()
+            .any(|r| r.source_slot == 2 && r.overridden && r.material_value == first.value));
+    }
+
+    #[test]
+    fn rejected_binding_diagnostics_are_copied_releasable_and_leave_projection_usable() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel(&mut spatial);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let material = material(&mut appearance);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        let mut rejected = NativeVoxelScenePresentationHandle::default();
+        let mut errors = Vec::new();
+        for _ in 0..32 {
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            assert_eq!(
+                unsafe {
+                    (api.project_scene)(
+                        api.context,
+                        &NativeProjectVoxelSceneRequest {
+                            session,
+                            materials: std::ptr::null(),
+                            materials_len: 0,
+                        },
+                        &mut rejected,
+                        &mut error,
+                    )
+                },
+                0
+            );
+            errors.push(error);
+        }
+        assert_eq!(rejected.value, 0);
+        assert!(bridge
+            .staged
+            .as_ref()
+            .unwrap()
+            .state
+            .presentations
+            .is_empty());
+        for error in errors {
+            let diagnostic = unsafe { &*error.diagnostics.diagnostics };
+            let message = unsafe {
+                std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len)
+            };
+            assert_eq!(
+                std::str::from_utf8(message).unwrap(),
+                "voxel scene material bindings are missing used source slots [1]"
+            );
+            assert_eq!(
+                unsafe {
+                    (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
+                },
+                ABI_OK
+            );
+            assert_eq!(
+                unsafe {
+                    (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
+                },
+                0
+            );
+        }
+        assert!(bridge.diagnostic_leases.is_empty());
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let projection = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .unwrap();
+        assert_eq!(projection.value, 1);
+        assert!(bridge
+            .update(NativeUpdateVoxelScenePresentationRequest {
+                presentation: projection,
+                materials: std::ptr::null(),
+                materials_len: 0
+            })
+            .is_err());
+        assert_eq!(bridge.refresh(projection).unwrap().material_count, 1);
+    }
+
+    #[test]
     fn projects_the_canonical_spatial_scene_incrementally_and_disposes_its_renderer_identity() {
         let mut spatial = RuntimeSpatialBridge::new();
         let session = session_with_voxel(&mut spatial);
@@ -1266,6 +1485,7 @@ mod tests {
                         materials_len: bindings.len(),
                     },
                     &mut presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -1304,7 +1524,14 @@ mod tests {
         let api = super::api(&mut bridge, &mut appearance);
         let mut readout = NativeVoxelScenePresentationReadout::default();
         assert_eq!(
-            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            unsafe {
+                (api.refresh_scene)(
+                    api.context,
+                    presentation,
+                    &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
             ABI_OK
         );
         assert!(readout.present);
@@ -1362,6 +1589,7 @@ mod tests {
                         materials_len: bindings.len(),
                     },
                     &mut presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -1421,7 +1649,14 @@ mod tests {
         let api = super::api(&mut bridge, &mut appearance);
         let mut readout = NativeVoxelScenePresentationReadout::default();
         assert_eq!(
-            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            unsafe {
+                (api.refresh_scene)(
+                    api.context,
+                    presentation,
+                    &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(readout.source_revision, receipt.accepted_revision);
@@ -1458,7 +1693,14 @@ mod tests {
         bridge.begin_call();
         let api = super::api(&mut bridge, &mut appearance);
         assert_eq!(
-            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            unsafe {
+                (api.refresh_scene)(
+                    api.context,
+                    presentation,
+                    &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
             ABI_OK
         );
         let ordinary = bridge.take_staged_call().expect("ordinary repair refresh");
@@ -1520,6 +1762,7 @@ mod tests {
                         face_materials_len: overrides.len(),
                     },
                     &mut presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -1629,6 +1872,7 @@ mod tests {
                         face_materials_len: overrides.len(),
                     },
                     &mut updated_readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -1693,6 +1937,7 @@ mod tests {
                         face_materials_len: duplicate.len(),
                     },
                     &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             0
@@ -1715,6 +1960,7 @@ mod tests {
                         face_materials_len: none.len(),
                     },
                     &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             0
@@ -1737,6 +1983,7 @@ mod tests {
                         face_materials_len: unknown.len(),
                     },
                     &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             0
@@ -1814,6 +2061,7 @@ mod tests {
                             materials_len: bindings.len(),
                         },
                         output,
+                        &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                     )
                 },
                 ABI_OK
@@ -1859,6 +2107,7 @@ mod tests {
                         face_materials_len: face.len(),
                     },
                     &mut rejected,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             0
@@ -1919,6 +2168,7 @@ mod tests {
                             materials_len: bindings.len(),
                         },
                         output,
+                        &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                     )
                 },
                 ABI_OK
@@ -2004,7 +2254,14 @@ mod tests {
         let api = super::api(&mut bridge, &mut appearance);
         let mut readout = NativeVoxelScenePresentationReadout::default();
         assert_eq!(
-            unsafe { (api.refresh_scene)(api.context, second, &mut readout) },
+            unsafe {
+                (api.refresh_scene)(
+                    api.context,
+                    second,
+                    &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
             ABI_OK
         );
         let staged = bridge.take_staged_call().expect("survivor refresh");
@@ -2075,6 +2332,7 @@ mod tests {
                         face_materials_len: top_override.len(),
                     },
                     &mut presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -2093,6 +2351,7 @@ mod tests {
                         materials_len: second_bindings.len(),
                     },
                     &mut second_presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK
@@ -2111,7 +2370,14 @@ mod tests {
             let api = super::api(bridge, appearance);
             let mut readout = NativeVoxelScenePresentationReadout::default();
             assert_eq!(
-                unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+                unsafe {
+                    (api.refresh_scene)(
+                        api.context,
+                        presentation,
+                        &mut readout,
+                        &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                    )
+                },
                 ABI_OK
             );
             assert!(readout.present);
@@ -2160,7 +2426,14 @@ mod tests {
         let api = super::api(&mut bridge, &mut appearance);
         let mut readout = NativeVoxelScenePresentationReadout::default();
         assert_eq!(
-            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            unsafe {
+                (api.refresh_scene)(
+                    api.context,
+                    presentation,
+                    &mut readout,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
+                )
+            },
             ABI_OK
         );
         let active = bridge
@@ -2188,6 +2461,8 @@ mod tests {
         ];
         let mut spatial = RuntimeSpatialBridge::new();
         let session = session_with_voxel(&mut spatial);
+        let reconstructed =
+            session_with_voxel_mode(&mut spatial, NativeVoxelSurfaceMode::MarchingCubes);
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         let mut resources = BTreeMap::new();
         resources.insert("surface.png".to_owned(), Arc::from(TEXTURE));
@@ -2249,6 +2524,51 @@ mod tests {
             ABI_OK
         );
 
+        bridge.bind_appearance(&mut appearance);
+        let textured = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let request = NativeProjectVoxelSceneRequest {
+            session: reconstructed,
+            materials: textured.as_ptr(),
+            materials_len: 1,
+        };
+        assert!(bridge.project_scene(request).is_err());
+        assert!(bridge
+            .staged
+            .as_ref()
+            .unwrap()
+            .state
+            .presentations
+            .is_empty());
+        let plain = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: super::tests::material(&mut appearance),
+        }];
+        let retained = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                materials: plain.as_ptr(),
+                ..request
+            })
+            .unwrap();
+        assert_eq!(
+            retained.value, 1,
+            "failed projection does not retain a candidate or consume its identity"
+        );
+        assert!(bridge
+            .update(NativeUpdateVoxelScenePresentationRequest {
+                presentation: retained,
+                materials: textured.as_ptr(),
+                materials_len: 1
+            })
+            .is_err());
+        assert!(
+            bridge.refresh(retained).is_ok(),
+            "failed replacement preserves the original untextured material"
+        );
+        bridge.destroy(retained).unwrap();
+
         let api = super::api(&mut bridge, &mut appearance);
         let bindings = [NativeVoxelSceneMaterialBinding {
             material_slot: 1,
@@ -2265,6 +2585,7 @@ mod tests {
                         materials_len: bindings.len(),
                     },
                     &mut presentation,
+                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
                 )
             },
             ABI_OK

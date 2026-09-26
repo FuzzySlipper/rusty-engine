@@ -705,6 +705,33 @@ stages the matching renderer destroys. Select `VoxelSurfaceMode` in
 Engine-derived mesh posture and is retained through subsequent voxel changes.
 Changing the mode of an existing session is not currently a C# API.
 
+### Voxel scene material palettes and atlases
+
+A `GreedyCubes` scene can bind materials from multiple authored voxel atlases,
+including distinct atlases over the same texture. Atlas identity, region,
+texture and alpha mode belong to each material; there is no scene-wide atlas.
+Create each material with `Graphics.CreateAuthoredMaterial` and its selected
+texture resource, then bind its source slot through `VoxelScenePresentation`.
+An atlas reference must retain the catalog's pinned version/hash. Structural
+class does not select a scene atlas or replace canonical voxel state.
+
+Base bindings must cover every currently meshed source slot, with no duplicate
+slots. The retained palette may also contain slots not currently meshed, so
+adding/removing voxels or streaming chunks does not require trimming the palette.
+Face overrides require a corresponding base binding, even when that slot is
+currently absent. `RefreshScene` uses the retained palette; use `UpdateScene`
+or `UpdateSceneDirectional` when adding a new material binding. `MaterialCount`
+counts the retained base palette, including currently unused slots.
+
+Projection, refresh and material-update failures throw `EngineCallException`.
+Inspect `Service`, `Operation` and `Diagnostics.Span` for the Engine code and
+message (for example, the missing source slots), rather than just the numeric
+status. A caught binding rejection leaves the existing projection usable.
+The packaged [two-atlas fixture](../fixtures/csharp-voxel-atlases) exercises
+solid/decorative and opaque/blend materials, unused palette entries, and caught
+rejections followed by successful refreshes.
+
+
 `Spatial.EvaluateNavigationStep` evaluates one bounded planar-navigation step
 against the retained session projection and returns the same typed outcome,
 next-waypoint, path-cell, and path facts as `ProposeNavigationStep`. Evaluation

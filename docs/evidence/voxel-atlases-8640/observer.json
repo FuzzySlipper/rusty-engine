@@ -1,0 +1,131 @@
+{
+  "schema_version": "rusty-engine-voxel-atlases-observer/v1",
+  "mission": "Observe two authored voxel atlases through the visible fixture, then exercise the supplied atlas debug commands and verify the scene remains visible with distinct materials.",
+  "profile": "engine-voxel-atlases",
+  "session_id": "cb9bd7f7-80f8-43dd-998b-a25337b3784e",
+  "service_url": "http://127.0.0.1:48315",
+  "origin": "http://127.0.0.1:37495",
+  "backend": "headless Chromium",
+  "configured_model_identity": "gpt-5.6-luna",
+  "authoritative_runtime_metadata": "unavailable",
+  "operational_outcome": "pass",
+  "neutral_observation": "The initial 1280x720 original capture shows a dark navy scene with two separated cubes near the center: a red cube on the left and a blue cube on the right. Both have visible top and side faces. No HUD or text is visible. Each post-command original capture retains both cubes in the same positions and preserves the red/blue distinction.",
+  "acceptance_mapping": "The scene stayed visible and the two cubes remained visually distinct across atlases.inspect, atlases.mode 0, atlases.mode 1, atlases.mode 2, and two atlases.palette calls. Debug receipts are retained as assisted semantic evidence separately from visual captures.",
+  "captures": [
+    {
+      "label": "initial",
+      "artifact_id": "85b0a00d-ac5f-4ce2-8c47-284b0f2f1081",
+      "image_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/85b0a00d-ac5f-4ce2-8c47-284b0f2f1081.png",
+      "metadata_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/85b0a00d-ac5f-4ce2-8c47-284b0f2f1081.json",
+      "repository_image": "initial.png"
+    },
+    {
+      "label": "after_mode_0",
+      "artifact_id": "d15c8a3f-6a50-4149-8aeb-0221dd37706b",
+      "image_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/d15c8a3f-6a50-4149-8aeb-0221dd37706b.png",
+      "repository_image": "after_mode_0.png"
+    },
+    {
+      "label": "after_mode_1",
+      "artifact_id": "8e6cc553-e966-4e53-b9e4-f8b036a4eb5e",
+      "image_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/8e6cc553-e966-4e53-b9e4-f8b036a4eb5e.png",
+      "repository_image": "after_mode_1.png"
+    },
+    {
+      "label": "after_mode_2",
+      "artifact_id": "648c53a1-4f5a-4a63-8473-f19f8392eff9",
+      "image_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/648c53a1-4f5a-4a63-8473-f19f8392eff9.png",
+      "repository_image": "after_mode_2.png"
+    },
+    {
+      "label": "after_palette_1",
+      "artifact_id": "962df095-385c-428f-a14a-0ddafc741819",
+      "image_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/962df095-385c-428f-a14a-0ddafc741819.png",
+      "repository_image": "after_palette_1.png"
+    },
+    {
+      "label": "after_palette_2",
+      "artifact_id": "29b9fedd-6017-4dcc-aabb-dbc3cdef8942",
+      "image_path": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e/29b9fedd-6017-4dcc-aabb-dbc3cdef8942.png",
+      "repository_image": "after_palette_2.png"
+    }
+  ],
+  "debug_receipts": [
+    {
+      "command": "atlases.inspect",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=0; caughtRejections=2"
+    },
+    {
+      "command": "atlases.mode 0",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=0; caughtRejections=2"
+    },
+    {
+      "command": "atlases.mode 1",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=1; caughtRejections=2"
+    },
+    {
+      "command": "atlases.mode 2",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=2"
+    },
+    {
+      "command": "atlases.palette",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=4"
+    },
+    {
+      "command": "atlases.palette",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=6"
+    },
+    {
+      "command": "atlases.mode 0",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=0; caughtRejections=6"
+    },
+    {
+      "command": "atlases.mode 1",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=1; caughtRejections=6"
+    },
+    {
+      "command": "atlases.mode 2",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=6"
+    },
+    {
+      "command": "atlases.palette",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=8"
+    },
+    {
+      "command": "atlases.palette",
+      "receipt": "two-atlas projection passed; materials=2; chunks=1; mode=2; caughtRejections=10"
+    }
+  ],
+  "browser_observation": {
+    "page_errors": [],
+    "title": "Voxel Atlases",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_pixel_ratio": 1
+    },
+    "canvas_css": {
+      "width": 1280,
+      "height": 720
+    },
+    "canvas_backing": {
+      "width": 320,
+      "height": 180
+    },
+    "renderer": "unknown",
+    "console_warnings": [
+      "WebGL GPU stall due to ReadPixels (repeated; final capture says this message will no longer repeat)"
+    ]
+  },
+  "cleanup": {
+    "stop_command": "playtest --url http://127.0.0.1:48315 stop cb9bd7f7-80f8-43dd-998b-a25337b3784e",
+    "artifact_directory": "/tmp/8640-playtest-state/browser/cb9bd7f7-80f8-43dd-998b-a25337b3784e",
+    "browser_closed": true,
+    "released": true,
+    "host_service_left_running": true
+  },
+  "warnings": [
+    "The generic MCP finalizer could not read the CLI-owned session record; CLI stop succeeded and released the browser.",
+    "The capture backend reported renderer unknown and did not measure frame freshness."
+  ]
+}

@@ -4,7 +4,10 @@
 //! Engine to project a Spatial session.  It never supplies mesh payloads,
 //! renderer handles, or a parallel scene representation.
 
-use crate::{NativeMaterialHandle, NativeSpatialFace, NativeSpatialSessionHandle};
+use crate::{
+    NativeEngineDiagnosticLeaseHandle, NativeMaterialHandle, NativeOperationErrorReceipt,
+    NativeSpatialFace, NativeSpatialSessionHandle,
+};
 use std::ffi::c_void;
 
 /// Opaque retained projection identity.  The generated C# facade owns its
@@ -16,6 +19,8 @@ pub struct NativeVoxelScenePresentationHandle {
 }
 
 /// One Engine material selected for one canonical voxel material slot.
+/// A retained palette may include currently unused slots; every meshed slot
+/// requires a base binding. Atlas identity and texture belong to each material.
 /// Bindings are borrowed for one callback and copied into the retained
 /// projection state before it returns.
 #[repr(C)]
@@ -137,26 +142,31 @@ pub type NativeProjectVoxelScene = unsafe extern "C" fn(
     *mut c_void,
     *const NativeProjectVoxelSceneRequest,
     *mut NativeVoxelScenePresentationHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeProjectVoxelSceneDirectional = unsafe extern "C" fn(
     *mut c_void,
     *const NativeProjectVoxelSceneDirectionalRequest,
     *mut NativeVoxelScenePresentationHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRefreshVoxelScenePresentation = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
     *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdateVoxelScenePresentation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUpdateVoxelScenePresentationRequest,
     *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdateVoxelScenePresentationDirectional = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUpdateVoxelScenePresentationDirectionalRequest,
     *mut NativeVoxelScenePresentationReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
     *mut c_void,
@@ -184,5 +194,9 @@ pub struct NativeVoxelScenePresentationApi {
     pub project_scene_directional: NativeProjectVoxelSceneDirectional,
     pub update_scene_directional: NativeUpdateVoxelScenePresentationDirectional,
     pub read_material_mapping: NativeReadVoxelSceneMaterialMapping,
+    pub destroy_operation_diagnostic_lease: NativeDestroyVoxelSceneOperationDiagnosticLease,
     pub destroy_material_mapping_lease: NativeDestroyVoxelSceneMaterialMappingLease,
 }
+
+pub type NativeDestroyVoxelSceneOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
