@@ -5193,7 +5193,7 @@ mod tests {
     }
 
     #[test]
-    fn prepares_typed_and_content_scenes_as_retained_owner_plans() {
+    fn prepares_and_publishes_scenes_as_retained_owner_plans() {
         use std::{collections::BTreeMap, sync::Arc};
 
         fn identity() -> NativeTransform {
@@ -5269,7 +5269,7 @@ mod tests {
         let catalog_ids = [NativeAuthoredSceneCatalogIdInput {
             catalog_id: slice(b"bootstrap-catalog"),
         }];
-        let nodes = [
+        let mut nodes = [
             NativeAuthoredSceneNodeInput {
                 id: 1,
                 has_parent: false,
@@ -5407,6 +5407,8 @@ mod tests {
                 label: slice(b""),
             },
         ];
+        // Admission must canonicalize the retained publication owner, not only its plan.
+        nodes.reverse();
         let dependencies = [
             NativeAuthoredSceneDependencyInput {
                 reference_id: slice(b"mesh/crate"),
@@ -5578,8 +5580,165 @@ mod tests {
             unsafe { (api.destroy_scene_plan_readout_lease)(api.context, typed_readout.handle) },
             ABI_OK
         );
+        assert_eq!(source.nodes[0].id.raw(), 8);
+        assert_eq!(
+            bridge.scene_plans[&typed.value]._document.nodes[0].id.raw(),
+            1
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let mut store_bridge =
+            crate::content_store::RuntimeContentStoreBridge::new(Some(root.path().to_path_buf()))
+                .unwrap();
+        bridge.bind_content_store(&mut store_bridge);
+        let store_api = crate::content_store::api(&mut store_bridge);
+        let mut store = NativeContentStoreHandle::default();
+        let mut snapshot = NativeContentStoreSnapshotHandle::default();
+        let mut snapshot_readout = unsafe { std::mem::zeroed::<NativeContentStoreSnapshotLease>() };
+        assert_eq!(
+            unsafe {
+                (store_api.open_store)(
+                    store_api.context,
+                    &NativeContentStoreOpenRequest {
+                        scope: slice(b"scene-roundtrip"),
+                    },
+                    &mut store,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.capture_snapshot)(store_api.context, store, &mut snapshot) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (store_api.read_snapshot)(store_api.context, snapshot, &mut snapshot_readout)
+            },
+            ABI_OK
+        );
+        let path = slice(b"scenes/main.json");
+        let mut published =
+            unsafe { std::mem::zeroed::<NativeAuthoredContentStorePublishReceipt>() };
+        let mut error = empty_receipt();
+        assert_eq!(
+            unsafe {
+                (api.publish_scene_to_store)(
+                    api.context,
+                    typed,
+                    &NativeAuthoredContentStorePublishRequest {
+                        store,
+                        expected: snapshot_readout.identity,
+                        path,
+                    },
+                    &mut published,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(published.status, NativeContentStorePublishStatus::Published);
+        assert_eq!(
+            unsafe {
+                (store_api.destroy_snapshot_lease)(store_api.context, snapshot_readout.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.destroy_snapshot)(store_api.context, snapshot) },
+            ABI_OK
+        );
         assert_eq!(
             unsafe { (api.destroy_scene_plan)(api.context, typed) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.capture_snapshot)(store_api.context, store, &mut snapshot) },
+            ABI_OK
+        );
+        let mut reopened = NativeAuthoredScenePlanHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.prepare_scene_from_store)(
+                    api.context,
+                    &NativeAuthoredScenePrepareFromStoreRequest {
+                        snapshot,
+                        expected: published.identity,
+                        path,
+                        body_hash: published.body_hash,
+                        catalog,
+                        prefab_registry: registry,
+                        base_entity_id: 200,
+                        entity_definition_ids: entity_definitions.as_ptr(),
+                        entity_definition_ids_len: entity_definitions.len(),
+                        generator_presets: generator_presets.as_ptr(),
+                        generator_presets_len: generator_presets.len(),
+                        catalog_ids: catalog_ids.as_ptr(),
+                        catalog_ids_len: catalog_ids.len(),
+                    },
+                    &mut reopened,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let mut reopened_readout =
+            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutLease>() };
+        assert_eq!(
+            unsafe { (api.read_scene_plan)(api.context, reopened, &mut reopened_readout) },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                reopened_readout.scene_id,
+                reopened_readout.scene_revision,
+                reopened_readout.allocations_len,
+                reopened_readout.resolved_instances_len,
+                reopened_readout.lights_len,
+                reopened_readout.renderables_len,
+                reopened_readout.generators_len,
+                reopened_readout.catalog_bindings_len
+            ),
+            (7, 3, 8, 1, 1, 4, 1, 1)
+        );
+        // A fresh allocation base proves store reopen derives a new plan from the document.
+        assert_eq!(unsafe { (*reopened_readout.allocations).entity_id }, 200);
+        assert_eq!(
+            unsafe {
+                (*reopened_readout.renderables)
+                    .world_transform
+                    .translation
+                    .x
+            },
+            10.0
+        );
+        assert_eq!(
+            unsafe {
+                (*reopened_readout.renderables)
+                    .renderable_local_transform
+                    .translation
+                    .y
+            },
+            -1.0
+        );
+        assert_eq!(
+            bridge.scene_plans[&reopened.value]._document,
+            source.canonical()
+        );
+        assert_eq!(
+            unsafe { (api.destroy_scene_plan_readout_lease)(api.context, reopened_readout.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_scene_plan)(api.context, reopened) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.destroy_snapshot)(store_api.context, snapshot) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.destroy_store)(store_api.context, store) },
             ABI_OK
         );
 
