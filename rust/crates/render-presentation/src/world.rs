@@ -46,6 +46,7 @@ pub struct PresentationWorld {
     revision: u64,
     elapsed_seconds: f64,
     effects: Arc<Vec<PresentationFrameDiff>>,
+    media_effects: Arc<Vec<PresentationFrameDiff>>,
     retained: SharedGraphics,
 }
 
@@ -187,8 +188,17 @@ impl PresentationWorld {
         self.effects = Arc::new(frames);
     }
 
+    /// Audio/video own their cursors independently of retained graphics effects.
+    pub fn retain_media_effects(&mut self, frames: Vec<PresentationFrameDiff>) {
+        self.media_effects = Arc::new(frames);
+    }
+
     pub fn effects_snapshot(&self) -> Vec<PresentationFrameDiff> {
-        self.effects.as_ref().clone()
+        self.effects
+            .iter()
+            .chain(self.media_effects.iter())
+            .cloned()
+            .collect()
     }
 
     pub fn apply_presentation(

@@ -1170,6 +1170,8 @@ function quadResourcePayload(): MeshPayloadDescriptor {
   };
 }
 
+const PACKED_QUAD_COLORS = [1, 0, 0, 1, 0, 1, 0, 0.5, 0, 0, 1, 0, 1, 1, 1, 1];
+
 function texturedQuadResourceBytes(): Uint8Array {
   const inline = texturedQuadPayload().source;
   assert.equal(inline.kind, 'inline');
@@ -1177,13 +1179,13 @@ function texturedQuadResourceBytes(): Uint8Array {
   const normals = inline.normals;
   const uvs = inline.uvs!;
   const indices = inline.indices;
-  const bytes = new Uint8Array(16 + (positions.length + normals.length + uvs.length + indices.length) * 4);
-  bytes.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x32]);
+  const bytes = new Uint8Array(16 + (positions.length + normals.length + uvs.length + PACKED_QUAD_COLORS.length + indices.length) * 4);
+  bytes.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x33]);
   const view = new DataView(bytes.buffer);
   view.setUint32(8, bytes.byteLength, true);
   view.setUint32(12, 1, true);
   let offset = 16;
-  for (const value of [...positions, ...normals, ...uvs]) {
+  for (const value of [...positions, ...normals, ...uvs, ...PACKED_QUAD_COLORS]) {
     view.setFloat32(offset, value, true);
     offset += 4;
   }
@@ -1198,16 +1200,18 @@ function texturedQuadResourcePayload(): MeshPayloadDescriptor {
   const payload = texturedQuadPayload();
   return {
     ...payload,
+    layout: { ...payload.layout, attributes: [...payload.layout.attributes, { name: 'color', components: 4, kind: 'f32' }] },
     source: {
       kind: 'resource',
       resource: RESOURCE_ID,
       contentHash: RESOURCE_HASH,
-      byteLength: 168,
-      encoding: 'packedStreamsLeV2',
+      byteLength: 232,
+      encoding: 'packedStreamsLeV3',
       positionsByteOffset: 16,
       normalsByteOffset: 64,
       uvsByteOffset: 112,
-      indicesByteOffset: 144,
+      colorsByteOffset: 144,
+      indicesByteOffset: 208,
     },
   };
 }
@@ -1246,7 +1250,7 @@ void test('resource mesh payloads produce equivalent geometry and release their 
   assert.deepEqual(source.released, [RESOURCE_ID]);
 });
 
-void test('inline and packed-v2 voxel meshes converge on one tile-coordinate attribute', () => {
+void test('packed-v3 meshes realize UV and RGBA streams with vertex-color materials', () => {
   const inlineRenderer = new ThreeRenderer();
   const handle = renderHandle(1);
   inlineRenderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
@@ -1255,18 +1259,24 @@ void test('inline and packed-v2 voxel meshes converge on one tile-coordinate att
   const source = new MapResourceSource();
   source.resources.set(RESOURCE_ID, texturedQuadResourceBytes());
   const packedRenderer = new ThreeRenderer({ meshResourceSource: source });
-  packedRenderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
-  packedRenderer.applyDiff({
-    op: 'replaceMeshPayload',
-    handle,
-    payload: texturedQuadResourcePayload(),
-  });
+  packedRenderer.applyDiff({ op: 'defineStaticMesh', asset: {
+    ...crateAsset(), payload: { ...texturedQuadResourcePayload(), provenance: 'staticAsset' },
+  } });
+  packedRenderer.applyDiff({ op: 'createStaticMeshInstance', handle, parent: null, instance: crateInstance() });
 
   const inlineUvs = (inlineRenderer.objectFor(handle) as THREE.Mesh).geometry.getAttribute('uv');
   const packedUvs = (packedRenderer.objectFor(handle) as THREE.Mesh).geometry.getAttribute('uv');
   assert.deepEqual(Array.from(inlineUvs.array), [0, 0, 1, 0, 1, 1, 0, 1]);
   assert.deepEqual(Array.from(packedUvs.array), Array.from(inlineUvs.array));
+  const mesh = packedRenderer.objectFor(handle) as THREE.Mesh;
+  const colors = mesh.geometry.getAttribute('color');
+  assert.equal(colors.itemSize, 4);
+  assert.deepEqual(Array.from(colors.array), PACKED_QUAD_COLORS);
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  assert.ok(materials.every((material) => material.vertexColors));
   assert.deepEqual(source.released, [RESOURCE_ID]);
+  inlineRenderer.dispose();
+  packedRenderer.dispose();
 });
 
 void test('resource mesh payloads fail closed on missing providers and invalid headers', () => {

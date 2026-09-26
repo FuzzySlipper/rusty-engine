@@ -437,6 +437,10 @@ impl CsharpRenderResource {
 }
 
 impl RuntimeAppearanceState {
+    pub(crate) fn shares_state(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     pub(crate) fn output_object_handle(
         &self,
         id: u64,
@@ -1479,6 +1483,12 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
     Ok(value.to_owned())
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static GRAPHICS_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static RESOURCE_INVENTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Monotonic slots keep stale handles invalid while released payloads leave memory.
 #[derive(Clone, Default)]
 pub(crate) struct RenderResourceSlots {
@@ -1496,6 +1506,8 @@ impl RenderResourceSlots {
         self.entries.remove(&index)
     }
     pub(crate) fn iter(&self) -> impl Iterator<Item = &CsharpRenderResource> {
+        #[cfg(test)]
+        RESOURCE_INVENTORY_READS.with(|count| count.set(count.get() + 1));
         self.entries.values()
     }
     fn len(&self) -> usize {
@@ -2108,12 +2120,6 @@ impl RuntimeAppearanceBridge {
     /// The result contains only retained creates. Direct particle emissions
     /// and animation realization/cue events are historical signals and are
     /// deliberately excluded.
-    pub(crate) fn snapshot_presentation_frames(
-        &self,
-    ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
-        Self::snapshot_presentation_state(&self.state)
-    }
-
     pub(crate) fn snapshot_call_presentation(
         call: &RuntimeAppearanceCall,
     ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
@@ -2123,6 +2129,8 @@ impl RuntimeAppearanceBridge {
     fn snapshot_presentation_state(
         state: &RuntimeAppearanceState,
     ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
+        #[cfg(test)]
+        GRAPHICS_SNAPSHOT_READS.with(|count| count.set(count.get() + 1));
         let mut ops = Vec::new();
         for (handle, descriptor) in state.billboard_projector.active_billboards() {
             ops.push(PresentationOp::Billboard {
@@ -13881,8 +13889,7 @@ pub(super) mod tests {
         bridge.commit(Some(call));
 
         let before = bridge.presentation_readout();
-        let baseline = bridge
-            .snapshot_presentation_frames()
+        let baseline = RuntimeAppearanceBridge::snapshot_presentation_state(&bridge.state)
             .expect("retained presentation baseline");
         assert_eq!(baseline.len(), 1);
         assert!(baseline[0].ops.iter().all(|op| !matches!(

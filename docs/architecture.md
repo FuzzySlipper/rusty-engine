@@ -176,7 +176,9 @@ Packed mesh decoding retains byte-range, encoding, and copy-out lifetime checks,
 without rescanning Engine-admitted indices, UVs, colors, or light semantics.
 
 The canonical Rust call candidate shares retained graphics and Appearance maps
-until its first write. Owned frame operations mutate that candidate directly,
+until its first write. Idle settlement reuses retained Appearance effect frames;
+audio/video cursors update separately. Render-output resource catalogs are copied
+only for a successful requested capture. Owned frame operations mutate the candidate directly,
 without another world clone per frame. Failure discards the call candidate;
 explicit scene captures remain independent snapshots. This boundary does not
 undo spatial mutations or make an uncertain C# callback safe to replay.

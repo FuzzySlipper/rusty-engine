@@ -243,7 +243,6 @@ impl RuntimeRenderOutputBridge {
         call: &mut RuntimeRenderOutputCall,
         world: &render_presentation::PresentationWorld,
         cameras: &RuntimeCameraViewCall,
-        resources: Vec<CsharpRenderResource>,
         appearance: &crate::appearance::RuntimeAppearanceState,
     ) -> Result<(), CsharpEngineServicesError> {
         for (&id, e) in &mut call.entries {
@@ -317,7 +316,7 @@ impl RuntimeRenderOutputBridge {
             }
             // Arc-backed immutable resources remain available even if the product
             // releases its source before the renderer fetches the frozen frame.
-            e.resources = resources.clone();
+            e.resources = appearance.render_resources.iter().cloned().collect();
         }
         Ok(())
     }

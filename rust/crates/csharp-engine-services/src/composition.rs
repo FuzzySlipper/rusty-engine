@@ -711,10 +711,14 @@ impl EngineServiceSet {
                 .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
-        let mut effects = match &call.appearance {
-            Some(appearance) => RuntimeAppearanceBridge::snapshot_call_presentation(appearance)?,
-            None => self.appearance.snapshot_presentation_frames()?,
-        };
+        if let Some(appearance) = &call.appearance {
+            if !appearance.state.shares_state(&self.appearance.state) {
+                call.presentation_world.retain_effects(
+                    RuntimeAppearanceBridge::snapshot_call_presentation(appearance)?,
+                );
+            }
+        }
+        let mut effects = Vec::new();
         let audio = RuntimeAudioBridge::snapshot_call_frame(&call.audio)?;
         if !audio.ops.is_empty() {
             effects.push(audio);
@@ -723,24 +727,11 @@ impl EngineServiceSet {
         if !video.ops.is_empty() {
             effects.push(video);
         }
-        call.presentation_world.retain_effects(effects);
-        let resources = call
-            .appearance
-            .as_ref()
-            .map(|appearance| appearance.state.render_resources.iter().cloned().collect())
-            .unwrap_or_else(|| {
-                self.appearance
-                    .state
-                    .render_resources
-                    .iter()
-                    .cloned()
-                    .collect()
-            });
+        call.presentation_world.retain_media_effects(effects);
         crate::render_output::RuntimeRenderOutputBridge::settle(
             &mut call.render_output,
             &call.presentation_world,
             &call.camera_view,
-            resources,
             call.appearance
                 .as_ref()
                 .map(|a| &a.state)
@@ -1002,6 +993,123 @@ impl std::error::Error for CsharpEngineServicesError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_settlement_does_not_snapshot_retained_graphics_or_resources() {
+        use crate::appearance::{GRAPHICS_SNAPSHOT_READS, RESOURCE_INVENTORY_READS};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::from([(
+                "sky.png".to_owned(),
+                Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+            )]),
+            None,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_call(binding());
+        let api = services.api();
+        let mut texture = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                (api.graphics.open_resource)(
+                    api.graphics.context,
+                    &crate::appearance::tests::resource_request("sky.png"),
+                    &mut texture,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let key = b"status";
+        let text = b"Ready";
+        let font = b"sans-serif";
+        let empty = NativeUtf8Slice {
+            bytes: std::ptr::null(),
+            len: 0,
+        };
+        let slice = |value: &[u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let anchor = NativePresentationAnchor {
+            kind: NativePresentationAnchorKind::World,
+            position: NativeVec3::default(),
+            entity: 0,
+            offset: NativeVec3::default(),
+        };
+        let color = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let billboard = services
+            .appearance
+            .presentation_create_billboard(&NativePresentationBillboardDescriptor {
+                logical_id: 7,
+                anchor,
+                content_kind: NativeBillboardContentKind::Text,
+                localization_key: slice(key),
+                fallback_text: slice(text),
+                value: empty,
+                unit_key: empty,
+                fallback_unit: empty,
+                texture: NativeRenderResourceReference::default(),
+                font_kind: NativePresentationFontKind::System,
+                font_asset: NativeRenderResourceReference::default(),
+                font_family: slice(font),
+                height_pixels: 16.0,
+                color,
+                background: NativeColor::default(),
+                max_distance: 100.0,
+                layer: NativePresentationBillboardLayer::AlwaysOnTop,
+                visible: true,
+            })
+            .expect("text billboard");
+        let call = services.take_call().unwrap();
+        services.commit_call(call);
+        assert!(!services.presentation_world.effects_snapshot().is_empty());
+        GRAPHICS_SNAPSHOT_READS.with(|c| c.set(0));
+        RESOURCE_INVENTORY_READS.with(|c| c.set(0));
+        for _ in 0..3 {
+            services.begin_update_call(
+                binding(),
+                NativeProductUpdateFacts {
+                    mode: NativeProductUpdateMode::Realtime,
+                    lifecycle_state: NativeProductLifecycleState::Running,
+                    generation: 1,
+                    control_revision: 1,
+                    observed_host_time_nanoseconds: 0,
+                    simulation_step: 1,
+                    fixed_step_hz: 60,
+                    admitted_step_count: 1,
+                    dropped_step_count: 0,
+                    fixed_delta_seconds: 1.0 / 60.0,
+                },
+            );
+            let call = services.take_call().unwrap();
+            services.commit_call(call);
+        }
+        GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
+        RESOURCE_INVENTORY_READS.with(|c| assert_eq!(c.get(), 0));
+        assert!(!services.presentation_world.effects_snapshot().is_empty());
+        services.begin_call(binding());
+        services
+            .appearance
+            .presentation_destroy_billboard(billboard)
+            .unwrap();
+        let call = services.take_call().unwrap();
+        services.commit_call(call);
+        assert!(!services
+            .presentation_world
+            .effects_snapshot()
+            .iter()
+            .flat_map(|f| &f.ops)
+            .any(|op| matches!(op, render_presentation::PresentationOp::Billboard { .. })));
+        GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 1));
+    }
 
     #[test]
     fn refused_audio_and_graphics_calls_retain_their_own_reason_until_exact_release() {
