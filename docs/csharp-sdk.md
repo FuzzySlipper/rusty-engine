@@ -723,6 +723,18 @@ currently absent. `RefreshScene` uses the retained palette; use `UpdateScene`
 or `UpdateSceneDirectional` when adding a new material binding. `MaterialCount`
 counts the retained base palette, including currently unused slots.
 
+There is no three-material limit. Source slots are unsigned 16-bit identities
+(0–65,535); base and face bindings share 65,536 renderer slots across retained
+voxel presentations. Sixteen base materials in one GreedyCubes scene are
+supported. Out-of-range source bindings name the slot, material handle and limit;
+renderer-slot exhaustion names the binding and total capacity in the typed
+operation diagnostic. Catch `EngineCallException` to keep using the previous
+projection. The [sixteen-material fixture](../fixtures/csharp-voxel-capacity)
+loads one atlas, renders all sixteen materials, rejects source slot 65,536 and
+successfully refreshes afterward. Consumers of older pairs should adopt the
+current matched SDK/runtime rather than keeping a three-binding product guard.
+
+
 Projection, refresh and material-update failures throw `EngineCallException`.
 Inspect `Service`, `Operation` and `Diagnostics.Span` for the Engine code and
 message (for example, the missing source slots), rather than just the numeric

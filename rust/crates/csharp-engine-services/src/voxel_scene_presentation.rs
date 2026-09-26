@@ -619,15 +619,14 @@ impl RuntimeVoxelScenePresentationBridge {
         let slots = bindings
             .iter()
             .map(|binding| {
-                u16::try_from(binding.material_slot).map(|slot| (slot, binding.material))
+                u16::try_from(binding.material_slot)
+                    .map(|slot| (slot, binding.material))
+                    .map_err(|_| CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
+                        format!("material binding source slot {} (material {}) exceeds source slot limit {}; capacity is {} slots", binding.material_slot, binding.material.value, u16::MAX, usize::from(u16::MAX) + 1),
+                    ))
             })
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
-                    "voxel scene material slot exceeded the admitted scene slot range",
-                )
-            })?;
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
         if slots.len() != bindings.len() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
@@ -660,7 +659,7 @@ impl RuntimeVoxelScenePresentationBridge {
             let slot = u16::try_from(binding.material_slot).map_err(|_| {
                 CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIALS",
-                    "face material slot exceeded the admitted scene slot range",
+                    format!("face material binding source slot {} (material {}) exceeds source slot limit {}", binding.material_slot, binding.material.value, u16::MAX),
                 )
             })?;
             let direction = native_direction(binding.face)?;
@@ -945,7 +944,7 @@ fn presentation_textures(
         .collect()
 }
 
-fn allocate_renderer_slots<K: Ord + Copy>(
+fn allocate_renderer_slots<K: Ord + Copy + std::fmt::Debug>(
     source_slots: impl IntoIterator<Item = (K, u16)>,
     occupied_slots: impl IntoIterator<Item = u16>,
 ) -> Result<BTreeMap<K, u16>, CsharpEngineServicesError> {
@@ -961,7 +960,7 @@ fn allocate_renderer_slots<K: Ord + Copy>(
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIAL_SLOTS",
-                    "voxel scene renderer material slot space is exhausted",
+                    format!("material binding {source_slot:?} cannot allocate a renderer slot: capacity {} slots is exhausted across retained base and face bindings", usize::from(u16::MAX) + 1),
                 )
             })?;
         occupied.insert(renderer_slot);
@@ -2283,7 +2282,9 @@ mod tests {
 
     #[test]
     fn renderer_slot_exhaustion_is_an_explicit_admission_error() {
-        assert!(allocate_renderer_slots([(1, 1)], 0..=u16::MAX).is_err());
+        let error = allocate_renderer_slots([(17, 17)], 0..=u16::MAX).unwrap_err();
+        assert!(error.detail().contains("17"));
+        assert!(error.detail().contains("capacity 65536"));
     }
 
     #[test]
