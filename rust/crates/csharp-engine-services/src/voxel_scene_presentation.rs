@@ -1281,6 +1281,7 @@ mod tests {
                         alpha_cutoff: 0.5,
                     },
                     &mut handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2487,6 +2488,7 @@ mod tests {
                         wrap: csharp_engine_abi::NativeTextureWrap::Clamp,
                     },
                     &mut resource,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2520,6 +2522,7 @@ mod tests {
                         alpha_cutoff: 0.5,
                     },
                     &mut material,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

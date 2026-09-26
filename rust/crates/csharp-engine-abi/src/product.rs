@@ -405,431 +405,710 @@ pub type NativeOpenRenderResource = unsafe extern "C" fn(
     *mut c_void,
     *const NativeRenderResourceRequest,
     *mut NativeRenderResourceInfo,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAudioClip = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioClipRequest,
     *mut NativeAudioClipHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativePlayVideo = unsafe extern "C" fn(
     *mut c_void,
     *const NativePlayVideoRequest,
     *mut NativeVideoPlaybackHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativePlayVideoFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativePlayVideoFromContentRequest,
     *mut NativeVideoPlaybackHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeStopVideo = unsafe extern "C" fn(*mut c_void, NativeVideoPlaybackHandle) -> i32;
-pub type NativeSkipVideo = unsafe extern "C" fn(*mut c_void, NativeVideoPlaybackHandle) -> i32;
-pub type NativeReadVideo = unsafe extern "C" fn(*mut c_void, *mut NativeVideoReadout) -> i32;
-pub type NativeReadVideoRealization =
-    unsafe extern "C" fn(*mut c_void, *mut NativeVideoRealizationReadout) -> i32;
+pub type NativeStopVideo = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVideoPlaybackHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSkipVideo = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVideoPlaybackHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadVideo = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeVideoReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadVideoRealization = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeVideoRealizationReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadVideoRealizationFactAt = unsafe extern "C" fn(
     *mut c_void,
     NativeVideoRealizationFactAtRequest,
     *mut NativeVideoRealizationFactAtReceipt,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAudioClipFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioClipFromContentRequest,
     *mut NativeAudioClipHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAudioClip = unsafe extern "C" fn(*mut c_void, NativeAudioClipHandle) -> i32;
+pub type NativeDestroyAudioClip = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAudioClipHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativePreloadOptionalAudioClip = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioClipRequest,
     *mut NativeAudioOptionalPreloadReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeEmitAudio = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioEmitRequest,
     *mut NativeAudioSignalHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateAudioVoice = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioSourceDescriptor,
     *mut NativeAudioVoiceHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeUpdateAudioVoice =
-    unsafe extern "C" fn(*mut c_void, *const NativeAudioVoiceUpdateRequest) -> i32;
+pub type NativeUpdateAudioVoice = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioVoiceUpdateRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceAudioVoice = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioVoiceReplaceRequest,
     *mut NativeAudioVoiceHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAudioVoice = unsafe extern "C" fn(*mut c_void, NativeAudioVoiceHandle) -> i32;
-pub type NativeControlAudioVoice =
-    unsafe extern "C" fn(*mut c_void, *const NativeAudioVoiceControlRequest) -> i32;
-pub type NativeSetAudioBusVolume =
-    unsafe extern "C" fn(*mut c_void, *const NativeAudioBusVolumeRequest) -> i32;
-pub type NativeSetAudioBusMuted =
-    unsafe extern "C" fn(*mut c_void, *const NativeAudioBusMutedRequest) -> i32;
-pub type NativeReadAudio = unsafe extern "C" fn(*mut c_void, *mut NativeAudioReadout) -> i32;
+pub type NativeDestroyAudioVoice = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAudioVoiceHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeControlAudioVoice = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioVoiceControlRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAudioBusVolume = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioBusVolumeRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAudioBusMuted = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioBusMutedRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadAudio = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeAudioReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAudioVoice = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioVoiceReadRequest,
     *mut NativeAudioVoiceReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadAudioBus = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioBusReadRequest,
     *mut NativeAudioBusReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadAudioDiagnosticAt = unsafe extern "C" fn(
     *mut c_void,
     NativeAudioDiagnosticAtRequest,
     *mut NativeAudioDiagnosticAtReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeReadAudioRealization =
-    unsafe extern "C" fn(*mut c_void, *mut NativeAudioRealizationReadout) -> i32;
+pub type NativeReadAudioRealization = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeAudioRealizationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAudioRealizationFactAt = unsafe extern "C" fn(
     *mut c_void,
     NativeAudioRealizationFactAtRequest,
     *mut NativeAudioRealizationFactAtReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeCreateMaterial =
-    unsafe extern "C" fn(*mut c_void, NativeMaterialRequest, *mut NativeMaterialHandle) -> i32;
+pub type NativeCreateMaterial = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMaterialRequest,
+    *mut NativeMaterialHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAuthoredMaterial = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredMaterialAppearanceRequest,
     *mut NativeMaterialHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeUpdateMaterial =
-    unsafe extern "C" fn(*mut c_void, NativeMaterialUpdateRequest) -> i32;
+pub type NativeUpdateMaterial = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMaterialUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceMaterial = unsafe extern "C" fn(
     *mut c_void,
     NativeMaterialUpdateRequest,
     *mut NativeMaterialHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyMaterial = unsafe extern "C" fn(*mut c_void, NativeMaterialHandle) -> i32;
+pub type NativeDestroyMaterial = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMaterialHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreatePrimitiveAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativePrimitiveAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplacePrimitiveAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativePrimitiveAppearanceReplaceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateMeshResource = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMeshResourceCreateRequest,
     *mut NativeMeshResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyMeshResource =
-    unsafe extern "C" fn(*mut c_void, NativeMeshResourceHandle) -> i32;
-pub type NativeCreateMeshAppearance =
-    unsafe extern "C" fn(*mut c_void, NativeMeshResourceHandle, *mut NativeAppearanceHandle) -> i32;
+pub type NativeDestroyMeshResource = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMeshResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCreateMeshAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMeshResourceHandle,
+    *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativePartitionMesh = unsafe extern "C" fn(
     *mut c_void,
     NativeMeshPartitionRequest,
     *mut NativeMeshPartitionHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMeshPartition = unsafe extern "C" fn(
     *mut c_void,
     NativeMeshPartitionHandle,
     *mut NativeMeshPartitionReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeTakeMeshPartitionPart = unsafe extern "C" fn(
     *mut c_void,
     NativeMeshPartitionPartRequest,
     *mut NativeMeshResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyMeshPartition =
-    unsafe extern "C" fn(*mut c_void, NativeMeshPartitionHandle) -> i32;
+pub type NativeDestroyMeshPartition = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMeshPartitionHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeCreateStaticMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeStaticMeshAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateStaticMeshContentAppearance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeStaticMeshContentAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceStaticMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeAppearanceHandle,
     *const NativeStaticMeshAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceStaticMeshContentAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeAppearanceHandle,
     *const NativeStaticMeshContentAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeUpdateStaticMeshMaterials =
-    unsafe extern "C" fn(*mut c_void, *const NativeStaticMeshMaterialUpdateRequest) -> i32;
+pub type NativeUpdateStaticMeshMaterials = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStaticMeshMaterialUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateSpriteAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceSpriteAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteAppearanceReplaceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateSpriteAtlas = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpriteAtlasCreateRequest,
     *mut NativeSpriteAtlasHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroySpriteAtlas =
-    unsafe extern "C" fn(*mut c_void, NativeSpriteAtlasHandle) -> i32;
+pub type NativeDestroySpriteAtlas = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteAtlasHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateSpriteFromAtlas = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteFromAtlasRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceSpriteFromAtlas = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteFromAtlasReplaceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeSetSpriteFrame =
-    unsafe extern "C" fn(*mut c_void, NativeSpriteFrameUpdateRequest) -> i32;
-pub type NativeSetSpriteViewport =
-    unsafe extern "C" fn(*mut c_void, NativeSpriteViewportUpdateRequest) -> i32;
-pub type NativeReadSprite =
-    unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle, *mut NativeSpriteReadout) -> i32;
+pub type NativeSetSpriteFrame = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteFrameUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetSpriteViewport = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteViewportUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadSprite = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAppearanceHandle,
+    *mut NativeSpriteReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpritePlaybackCreateRequest,
     *mut NativeSpritePlaybackHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroySpritePlayback =
-    unsafe extern "C" fn(*mut c_void, NativeSpritePlaybackHandle) -> i32;
+pub type NativeDestroySpritePlayback = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpritePlaybackHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeControlSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     NativeSpritePlaybackControlRequest,
     *mut NativeSpritePlaybackReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSelectSpritePlaybackFrame = unsafe extern "C" fn(
     *mut c_void,
     NativeSpritePlaybackFrameSelectionRequest,
     *mut NativeSpritePlaybackReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeAdvanceSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpritePlaybackAdvanceRequest,
     *mut NativeSpritePlaybackAdvanceLease,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroySpritePlaybackAdvanceLease =
-    unsafe extern "C" fn(*mut c_void, NativeSpritePlaybackAdvanceLeaseHandle) -> i32;
+pub type NativeDestroySpritePlaybackAdvanceLease = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpritePlaybackAdvanceLeaseHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSampleSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     NativeSpritePlaybackSampleRequest,
     *mut NativeSpritePlaybackSample,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     NativeSpritePlaybackHandle,
     *mut NativeSpritePlaybackReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAppearance = unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle) -> i32;
-pub type NativePublishAppearanceSnapshot =
-    unsafe extern "C" fn(*mut c_void, *const NativeAppearanceFact, usize) -> i32;
-pub type NativeCreateLight =
-    unsafe extern "C" fn(*mut c_void, NativeLightRequest, *mut NativeLightHandle) -> i32;
-pub type NativeUpdateLight = unsafe extern "C" fn(*mut c_void, NativeLightUpdateRequest) -> i32;
-pub type NativeReplaceLight =
-    unsafe extern "C" fn(*mut c_void, NativeLightUpdateRequest, *mut NativeLightHandle) -> i32;
-pub type NativeDestroyLight = unsafe extern "C" fn(*mut c_void, NativeLightHandle) -> i32;
-pub type NativeReadLight =
-    unsafe extern "C" fn(*mut c_void, NativeLightHandle, *mut NativeLightReadout) -> i32;
-pub type NativeReadPresentation =
-    unsafe extern "C" fn(*mut c_void, *mut NativePresentationReadout) -> i32;
+pub type NativeDestroyAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativePublishAppearanceSnapshot = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAppearanceFact,
+    usize,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCreateLight = unsafe extern "C" fn(
+    *mut c_void,
+    NativeLightRequest,
+    *mut NativeLightHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeUpdateLight = unsafe extern "C" fn(
+    *mut c_void,
+    NativeLightUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReplaceLight = unsafe extern "C" fn(
+    *mut c_void,
+    NativeLightUpdateRequest,
+    *mut NativeLightHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyLight = unsafe extern "C" fn(
+    *mut c_void,
+    NativeLightHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadLight = unsafe extern "C" fn(
+    *mut c_void,
+    NativeLightHandle,
+    *mut NativeLightReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadPresentation = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativePresentationReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreatePresentationBillboard = unsafe extern "C" fn(
     *mut c_void,
     *const NativePresentationBillboardDescriptor,
     *mut NativePresentationBillboardHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdatePresentationBillboard = unsafe extern "C" fn(
     *mut c_void,
     NativePresentationBillboardHandle,
     *const NativePresentationBillboardDescriptor,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreatePresentationStructuredBillboard = unsafe extern "C" fn(
     *mut c_void,
     *const NativePresentationStructuredBillboardDescriptor,
     *mut NativePresentationBillboardHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdatePresentationStructuredBillboard = unsafe extern "C" fn(
     *mut c_void,
     NativePresentationBillboardHandle,
     *const NativePresentationStructuredBillboardDescriptor,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyPresentationBillboard =
-    unsafe extern "C" fn(*mut c_void, NativePresentationBillboardHandle) -> i32;
+pub type NativeDestroyPresentationBillboard = unsafe extern "C" fn(
+    *mut c_void,
+    NativePresentationBillboardHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeEmitPresentationParticles = unsafe extern "C" fn(
     *mut c_void,
     *const NativePresentationParticleDescriptor,
     *mut NativePresentationParticleEmissionReceipt,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreatePresentationEmitter = unsafe extern "C" fn(
     *mut c_void,
     *const NativePresentationParticleDescriptor,
     *mut NativePresentationEmitterHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdatePresentationEmitter = unsafe extern "C" fn(
     *mut c_void,
     NativePresentationEmitterHandle,
     *const NativePresentationParticleDescriptor,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyPresentationEmitter =
-    unsafe extern "C" fn(*mut c_void, NativePresentationEmitterHandle) -> i32;
-pub type NativeReadPresentationFacts =
-    unsafe extern "C" fn(*mut c_void, *mut NativePresentationFactsReadout) -> i32;
+pub type NativeDestroyPresentationEmitter = unsafe extern "C" fn(
+    *mut c_void,
+    NativePresentationEmitterHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadPresentationFacts = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativePresentationFactsReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadPresentationDiagnosticAt = unsafe extern "C" fn(
     *mut c_void,
     NativePresentationDiagnosticAtRequest,
     *mut NativePresentationDiagnosticAtReceipt,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAnimatedMesh = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimatedMeshResourceRequest,
     *mut NativeRenderResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAnimationClipPack = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationClipPackResourceRequest,
     *mut NativeRenderResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeAssociateAnimationClipPack =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationClipPackAssociationRequest) -> i32;
+pub type NativeAssociateAnimationClipPack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationClipPackAssociationRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimatedMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimatedMeshAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceAnimatedMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeAppearanceHandle,
     *const NativeAnimatedMeshAppearanceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeSetAnimatedMeshInspection =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimatedMeshInspectionRequest) -> i32;
-pub type NativeUpdateAnimatedMeshMaterials =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimatedMeshMaterialUpdateRequest) -> i32;
+pub type NativeSetAnimatedMeshInspection = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimatedMeshInspectionRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeUpdateAnimatedMeshMaterials = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimatedMeshMaterialUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimationInstance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationInstanceRequest,
     *mut NativeAnimationInstanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAnimationInstance =
-    unsafe extern "C" fn(*mut c_void, NativeAnimationInstanceHandle) -> i32;
+pub type NativeDestroyAnimationInstance = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAnimationInstanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceAnimationInstance = unsafe extern "C" fn(
     *mut c_void,
     NativeAnimationInstanceHandle,
     *const NativeAnimationInstanceRequest,
     *mut NativeAnimationInstanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeSetAnimationPlayback =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationPlaybackRequest) -> i32;
-pub type NativeReplaceAnimationCueDefinitions =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationCueDefinitionReplaceRequest) -> i32;
+pub type NativeSetAnimationPlayback = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationPlaybackRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReplaceAnimationCueDefinitions = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationCueDefinitionReplaceRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimationGraph = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationGraphCreateRequest,
     *mut NativeAnimationGraphHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAnimationGraph =
-    unsafe extern "C" fn(*mut c_void, NativeAnimationGraphHandle) -> i32;
-pub type NativeDefineAnimationParameter =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationParameterDefinitionRequest) -> i32;
-pub type NativeDefineAnimationState =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationStateDefinitionRequest) -> i32;
+pub type NativeDestroyAnimationGraph = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAnimationGraphHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineAnimationParameter = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationParameterDefinitionRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineAnimationState = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationStateDefinitionRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeDefineAnimationTransition = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationTransitionDefinitionRequest,
     *mut NativeAnimationTransitionHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDefineAnimationCondition =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationConditionDefinitionRequest) -> i32;
+pub type NativeDefineAnimationCondition = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationConditionDefinitionRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimationController = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationControllerCreateRequest,
     *mut NativeAnimationControllerHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAnimationController =
-    unsafe extern "C" fn(*mut c_void, NativeAnimationControllerHandle) -> i32;
-pub type NativeSetAnimationFloat =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationSetFloatRequest) -> i32;
-pub type NativeSetAnimationBool =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationSetBoolRequest) -> i32;
-pub type NativeFireAnimationTrigger =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationFireTriggerRequest) -> i32;
-pub type NativeTickAnimation =
-    unsafe extern "C" fn(*mut c_void, *const NativeAnimationTickRequest) -> i32;
+pub type NativeDestroyAnimationController = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAnimationControllerHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAnimationFloat = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationSetFloatRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAnimationBool = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationSetBoolRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeFireAnimationTrigger = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationFireTriggerRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeTickAnimation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationTickRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAnimationController = unsafe extern "C" fn(
     *mut c_void,
     NativeAnimationControllerHandle,
     *mut NativeAnimationControllerReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeReadAnimation =
-    unsafe extern "C" fn(*mut c_void, *mut NativeAnimationReadout) -> i32;
-pub type NativeReadAnimationRealization =
-    unsafe extern "C" fn(*mut c_void, *mut NativeAnimationRealizationReadout) -> i32;
+pub type NativeReadAnimation = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeAnimationReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadAnimationRealization = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeAnimationRealizationReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAnimationRealizationFactAt = unsafe extern "C" fn(
     *mut c_void,
     NativeAnimationRealizationFactAtRequest,
     *mut NativeAnimationRealizationFactAtReceipt,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateCamera = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraDescriptor,
     *mut NativeCameraHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeUpdateCamera =
-    unsafe extern "C" fn(*mut c_void, *const NativeCameraUpdateRequest) -> i32;
-pub type NativeUpdateCameraSample =
-    unsafe extern "C" fn(*mut c_void, *const NativeCameraSampleRequest) -> i32;
+pub type NativeUpdateCamera = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeUpdateCameraSample = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraSampleRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceCamera = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraReplaceRequest,
     *mut NativeCameraHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyCamera = unsafe extern "C" fn(*mut c_void, NativeCameraHandle) -> i32;
+pub type NativeDestroyCamera = unsafe extern "C" fn(
+    *mut c_void,
+    NativeCameraHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateCameraTarget = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraTargetDescriptor,
     *mut NativeCameraTargetHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeUpdateCameraTarget =
-    unsafe extern "C" fn(*mut c_void, *const NativeCameraTargetUpdateRequest) -> i32;
+pub type NativeUpdateCameraTarget = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraTargetUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceCameraTarget = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraTargetReplaceRequest,
     *mut NativeCameraTargetHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyCameraTarget =
-    unsafe extern "C" fn(*mut c_void, NativeCameraTargetHandle) -> i32;
-pub type NativeSetCameraComposition =
-    unsafe extern "C" fn(*mut c_void, *const NativeCameraCompositionRequest) -> i32;
-pub type NativeSetActiveCamera = unsafe extern "C" fn(*mut c_void, NativeCameraHandle) -> i32;
-pub type NativeClearActiveCamera =
-    unsafe extern "C" fn(*mut c_void, *const NativeClearActiveCameraRequest) -> i32;
-pub type NativeSetSkyBackground =
-    unsafe extern "C" fn(*mut c_void, NativeRenderResourceHandle) -> i32;
-pub type NativeSetSkyBackgroundBlend =
-    unsafe extern "C" fn(*mut c_void, *const NativeSkyBackgroundBlendRequest) -> i32;
-pub type NativeClearSkyBackground =
-    unsafe extern "C" fn(*mut c_void, *const NativeClearSkyBackgroundRequest) -> i32;
-pub type NativeSetBackgroundColor =
-    unsafe extern "C" fn(*mut c_void, *const NativeSetBackgroundColorRequest) -> i32;
+pub type NativeDestroyCameraTarget = unsafe extern "C" fn(
+    *mut c_void,
+    NativeCameraTargetHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetCameraComposition = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraCompositionRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetActiveCamera = unsafe extern "C" fn(
+    *mut c_void,
+    NativeCameraHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeClearActiveCamera = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeClearActiveCameraRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetSkyBackground = unsafe extern "C" fn(
+    *mut c_void,
+    NativeRenderResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetSkyBackgroundBlend = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSkyBackgroundBlendRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeClearSkyBackground = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeClearSkyBackgroundRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetBackgroundColor = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSetBackgroundColorRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeOpenUiStream = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiStreamRequest,
     *mut NativeUiStreamHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyUiStream = unsafe extern "C" fn(*mut c_void, NativeUiStreamHandle) -> i32;
+pub type NativeDestroyUiStream = unsafe extern "C" fn(
+    *mut c_void,
+    NativeUiStreamHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativePublishUiProjection = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiProjection,
@@ -1151,6 +1430,7 @@ pub struct NativeGraphicsApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationApi {
+    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub create_billboard: NativeCreatePresentationBillboard,
     pub update_billboard: NativeUpdatePresentationBillboard,
@@ -1279,6 +1559,7 @@ pub struct NativeAnimationApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAudioApi {
+    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub open_clip: NativeOpenAudioClip,
     pub open_clip_from_content: NativeOpenAudioClipFromContent,
@@ -1303,6 +1584,7 @@ pub struct NativeAudioApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVideoApi {
+    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub play: NativePlayVideo,
     pub play_from_content: NativePlayVideoFromContent,
@@ -1316,6 +1598,7 @@ pub struct NativeVideoApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCameraViewApi {
+    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub create_camera: NativeCreateCamera,
     pub update_camera: NativeUpdateCamera,
@@ -1669,6 +1952,7 @@ pub type NativeOpenRenderResourceFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeRenderResourceContentRequest,
     *mut NativeRenderResourceInfo,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAnimationResourceFromContent = unsafe extern "C" fn(
     *mut c_void,
@@ -1682,10 +1966,14 @@ pub type NativeCreateStaticMeshFromContentReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeStaticMeshContentReferenceRequest,
     *mut NativeAppearanceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
-pub type NativeDestroyRenderResource =
-    unsafe extern "C" fn(*mut c_void, NativeRenderResourceHandle) -> i32;
+pub type NativeDestroyRenderResource = unsafe extern "C" fn(
+    *mut c_void,
+    NativeRenderResourceHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeObserveDynamicsAnchor = unsafe extern "C" fn(
     *mut c_void,

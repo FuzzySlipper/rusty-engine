@@ -4,6 +4,10 @@ const RESOURCE_ROUTE = '/__rusty/product/runtime/resource';
 const RESOURCE_IDENTITY = /^(animated-mesh|audio|mesh|clip-pack|texture|video)-resource\/([0-9a-f]{64})$/u;
 const FONT_IDENTITY = /^font\/([0-9a-f]{64})$/u;
 
+export function isRendererResourceIdentity(identity: string): boolean {
+  return RESOURCE_IDENTITY.test(identity) || FONT_IDENTITY.test(identity);
+}
+
 export interface ProductBrowserDynamicRendererResourceFetcher {
   (input: string | URL, init?: RequestInit): Promise<Response>;
 }

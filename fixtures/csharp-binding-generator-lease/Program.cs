@@ -108,6 +108,7 @@ internal static unsafe class Program
         {
             Require(error.Service == "LeaseFixture" && error.Operation == "ReadItems" && error.Status == -7, "stable operation identity was not copied");
             Require(error.Diagnostics.Length == 1, "owner diagnostic was not copied");
+            Require(error.Message.Contains("FIXTURE_DENIED: fixture rejected request", StringComparison.Ordinal), "exception message lost the native reason");
             EngineDiagnostic diagnostic = error.Diagnostics.Span[0];
             Require(diagnostic.Code == "FIXTURE_DENIED" && diagnostic.Message == "fixture rejected request" && diagnostic.Source == "fixture", "owner diagnostic fields were not copied");
         }

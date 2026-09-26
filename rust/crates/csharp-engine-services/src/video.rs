@@ -62,6 +62,7 @@ pub(crate) struct RuntimeVideoBridge {
     content_resources: BTreeMap<String, Arc<[u8]>>,
     staged: Option<RuntimeVideoCall>,
     callback_error: Option<CsharpEngineServicesError>,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     facts: VecDeque<VideoRealizationFact>,
     evicted: u64,
     renderer_evicted: u64,
@@ -80,6 +81,7 @@ impl RuntimeVideoBridge {
             content_resources,
             staged: None,
             callback_error: None,
+            operation_diagnostics: Default::default(),
             facts: VecDeque::new(),
             evicted: 0,
             renderer_evicted: 0,
@@ -315,22 +317,30 @@ impl RuntimeVideoBridge {
     }
 }
 
-macro_rules! call { ($name:ident, $method:ident $(, $arg:ident : $ty:ty )* => $out:ty) => { pub(crate) unsafe extern "C" fn $name(context: *mut c_void, $($arg: $ty,)* result: *mut $out) -> i32 { if context.is_null() || result.is_null() { return 0; } let bridge = unsafe { &mut *context.cast::<RuntimeVideoBridge>() }; match bridge.$method($($arg),*) { Ok(value) => { unsafe { *result = value; } ABI_OK }, Err(error) => { bridge.callback_error = Some(error); 0 } } } }; }
+macro_rules! call { ($name:ident, $method:ident $(, $arg:ident : $ty:ty )* => $out:ty) => { pub(crate) unsafe extern "C" fn $name(context: *mut c_void, $($arg: $ty,)* result: *mut $out, operation_error: *mut NativeOperationErrorReceipt) -> i32 { if !operation_error.is_null() { unsafe { *operation_error = std::mem::zeroed() }; } if context.is_null() || result.is_null() { return 0; } let bridge = unsafe { &mut *context.cast::<RuntimeVideoBridge>() }; match bridge.$method($($arg),*) { Ok(value) => { unsafe { *result = value; } ABI_OK }, Err(error) => { bridge.operation_diagnostics.retain(&error, operation_error); bridge.callback_error = Some(error); 0 } } } }; }
 pub(crate) unsafe extern "C" fn play_video(
     context: *mut c_void,
     request: *const NativePlayVideoRequest,
     result: *mut NativeVideoPlaybackHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if request.is_null() {
         return 0;
     }
-    unsafe { play_video_call(context, &*request, result) }
+    unsafe { play_video_call(context, &*request, result, operation_error) }
 }
 pub(crate) unsafe extern "C" fn play_video_from_content(
     context: *mut c_void,
     request: *const NativePlayVideoFromContentRequest,
     result: *mut NativeVideoPlaybackHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -343,6 +353,7 @@ pub(crate) unsafe extern "C" fn play_video_from_content(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -352,7 +363,11 @@ call!(play_video_call, play, request: &NativePlayVideoRequest => NativeVideoPlay
 pub(crate) unsafe extern "C" fn stop_video(
     context: *mut c_void,
     handle: NativeVideoPlaybackHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -360,6 +375,7 @@ pub(crate) unsafe extern "C" fn stop_video(
     match bridge.stop(handle, false) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -368,7 +384,11 @@ pub(crate) unsafe extern "C" fn stop_video(
 pub(crate) unsafe extern "C" fn skip_video(
     context: *mut c_void,
     handle: NativeVideoPlaybackHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -376,6 +396,7 @@ pub(crate) unsafe extern "C" fn skip_video(
     match bridge.stop(handle, true) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -388,6 +409,7 @@ call!(read_video_fact, read_fact, request: NativeVideoRealizationFactAtRequest =
 pub(crate) fn api(bridge: &mut RuntimeVideoBridge) -> NativeVideoApi {
     NativeVideoApi {
         context: (bridge as *mut RuntimeVideoBridge).cast(),
+        destroy_operation_diagnostic_lease,
         play: play_video,
         play_from_content: play_video_from_content,
         stop: stop_video,
@@ -396,6 +418,17 @@ pub(crate) fn api(bridge: &mut RuntimeVideoBridge) -> NativeVideoApi {
         read_realization: read_video_realization,
         read_realization_fact_at: read_video_fact,
     }
+}
+
+unsafe extern "C" fn destroy_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVideoBridge>() };
+    bridge.operation_diagnostics.destroy(handle)
 }
 
 #[cfg(test)]

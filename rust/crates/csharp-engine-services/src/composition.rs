@@ -151,6 +151,8 @@ fn engine_api(
             create_authored_material: crate::appearance::create_authored_material,
         },
         presentation: NativePresentationApi {
+            destroy_operation_diagnostic_lease:
+                crate::appearance::destroy_animation_admission_diagnostic,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             create_billboard: crate::presentation::create_billboard,
             update_billboard: crate::presentation::update_billboard,
@@ -174,6 +176,8 @@ fn engine_api(
         video: crate::video::api(video_bridge),
         render_output: crate::render_output::api(render_output_bridge),
         camera_view: NativeCameraViewApi {
+            destroy_operation_diagnostic_lease:
+                crate::camera_view::destroy_operation_diagnostic_lease,
             context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
             create_camera: crate::camera_view::create_camera,
             update_camera: crate::camera_view::update_camera,
@@ -998,6 +1002,116 @@ impl std::error::Error for CsharpEngineServicesError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refused_audio_and_graphics_calls_retain_their_own_reason_until_exact_release() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::new(),
+            None,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_call(binding());
+        let api = services.api();
+        let mut audio_error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let mut graphics_error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let mut voice = NativeAudioVoiceHandle::default();
+        let request = NativeAudioSourceDescriptor {
+            clip: NativeAudioClipHandle { value: 99 },
+            bus: NativeAudioBus::Sfx,
+            volume: 1.0,
+            pitch: 1.0,
+            looping: false,
+            spatial_blend: 0.0,
+            attenuation: 1.0,
+            pan: 0.0,
+            emitter_kind: NativeAudioEmitterKind::Global2d,
+            position: NativeVec3::default(),
+            entity: 0,
+            offset: NativeVec3::default(),
+        };
+        assert_eq!(
+            unsafe {
+                (api.audio.create_voice)(api.audio.context, &request, &mut voice, &mut audio_error)
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_sprite_atlas)(
+                    api.graphics.context,
+                    NativeSpriteAtlasHandle { value: 99 },
+                    &mut graphics_error,
+                )
+            },
+            0
+        );
+        for (receipt, code, detail) in [
+            (
+                &audio_error,
+                "CSHARP_AUDIO_CLIP_HANDLE",
+                "audio clip handle is not admitted",
+            ),
+            (
+                &graphics_error,
+                "CSHARP_SPRITE_ATLAS_HANDLE",
+                "sprite atlas is not live",
+            ),
+        ] {
+            assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+            let diagnostic = unsafe { &*receipt.diagnostics.diagnostics };
+            assert_eq!(
+                unsafe { borrowed_utf8(diagnostic.code.bytes, diagnostic.code.len, "code") }
+                    .unwrap(),
+                code
+            );
+            assert_eq!(
+                unsafe {
+                    borrowed_utf8(diagnostic.message.bytes, diagnostic.message.len, "message")
+                }
+                .unwrap(),
+                detail
+            );
+        }
+        assert_eq!(
+            unsafe {
+                (api.audio.destroy_operation_diagnostic_lease)(
+                    api.audio.context,
+                    audio_error.diagnostics.handle,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_operation_diagnostic_lease)(
+                    api.graphics.context,
+                    graphics_error.diagnostics.handle,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.audio.destroy_operation_diagnostic_lease)(
+                    api.audio.context,
+                    audio_error.diagnostics.handle,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_operation_diagnostic_lease)(
+                    api.graphics.context,
+                    graphics_error.diagnostics.handle,
+                )
+            },
+            0
+        );
+    }
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 
     fn binding() -> RuntimeUiRuntimeBinding {
@@ -1051,13 +1165,18 @@ mod tests {
                     api.graphics.context,
                     &crate::appearance::tests::resource_request("sky.png"),
                     &mut texture,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
         );
         assert_eq!(
             unsafe {
-                (api.camera_view.set_sky_background)(api.camera_view.context, texture.handle)
+                (api.camera_view.set_sky_background)(
+                    api.camera_view.context,
+                    texture.handle,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -1095,7 +1214,11 @@ mod tests {
         let api = services.api();
         assert_eq!(
             unsafe {
-                (api.camera_view.set_sky_background)(api.camera_view.context, texture.handle)
+                (api.camera_view.set_sky_background)(
+                    api.camera_view.context,
+                    texture.handle,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -1115,6 +1238,7 @@ mod tests {
                 (api.camera_view.set_sky_background)(
                     api.camera_view.context,
                     NativeRenderResourceHandle { value: u64::MAX },
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK,
@@ -1141,6 +1265,7 @@ mod tests {
                             a: 1.0,
                         },
                     },
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1161,6 +1286,7 @@ mod tests {
                 (api.camera_view.clear_sky_background)(
                     api.camera_view.context,
                     &NativeClearSkyBackgroundRequest::default(),
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

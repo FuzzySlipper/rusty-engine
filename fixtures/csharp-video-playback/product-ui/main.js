@@ -1,0 +1,1 @@
+export function mountProductUi(root) { const text = document.createElement('p'); text.textContent = 'Engine video playback proof. Use video.proof.play, then video.proof.inspect.'; root.append(text); return { dispose() { text.remove(); } }; }

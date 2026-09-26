@@ -18,312 +18,360 @@ pub(crate) unsafe extern "C" fn create_billboard(
     context: *mut c_void,
     request: *const NativePresentationBillboardDescriptor,
     result: *mut NativePresentationBillboardHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() || result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_create_billboard(unsafe { &*request }) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_create_billboard(unsafe { &*request }) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn update_billboard(
     context: *mut c_void,
     owner: NativePresentationBillboardHandle,
     request: *const NativePresentationBillboardDescriptor,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_update_billboard(owner, unsafe { &*request }) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
         }
-    }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_update_billboard(owner, unsafe { &*request }) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
+        }
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_structured_billboard(
     context: *mut c_void,
     request: *const NativePresentationStructuredBillboardDescriptor,
     result: *mut NativePresentationBillboardHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() || result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_create_structured_billboard(unsafe { &*request }) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_create_structured_billboard(unsafe { &*request }) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn update_structured_billboard(
     context: *mut c_void,
     owner: NativePresentationBillboardHandle,
     request: *const NativePresentationStructuredBillboardDescriptor,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_update_structured_billboard(owner, unsafe { &*request }) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
         }
-    }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_update_structured_billboard(owner, unsafe { &*request }) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
+        }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_billboard(
     context: *mut c_void,
     owner: NativePresentationBillboardHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_destroy_billboard(owner) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_destroy_billboard(owner) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn emit_particles(
     context: *mut c_void,
     request: *const NativePresentationParticleDescriptor,
     result: *mut NativePresentationParticleEmissionReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() || result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    let request = unsafe { &*request };
-    match bridge.presentation_emit_particles(request.signal_id, request) {
-        Ok(receipt) => {
-            unsafe { *result = receipt };
-            ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        let request = unsafe { &*request };
+        match bridge.presentation_emit_particles(request.signal_id, request) {
+            Ok(receipt) => {
+                unsafe { *result = receipt };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_emitter(
     context: *mut c_void,
     request: *const NativePresentationParticleDescriptor,
     result: *mut NativePresentationEmitterHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() || result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_create_emitter(unsafe { &*request }) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_create_emitter(unsafe { &*request }) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn update_emitter(
     context: *mut c_void,
     owner: NativePresentationEmitterHandle,
     request: *const NativePresentationParticleDescriptor,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_update_emitter(owner, unsafe { &*request }) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
         }
-    }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_update_emitter(owner, unsafe { &*request }) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
+        }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_emitter(
     context: *mut c_void,
     owner: NativePresentationEmitterHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_destroy_emitter(owner) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_destroy_emitter(owner) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn read(
     context: *mut c_void,
     result: *mut NativePresentationFactsReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    unsafe { *result = bridge.presentation_readout() };
-    ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if result.is_null() {
+            return 0;
+        }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        unsafe { *result = bridge.presentation_readout() };
+        ABI_OK
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_diagnostic_at(
     context: *mut c_void,
     request: NativePresentationDiagnosticAtRequest,
     result: *mut NativePresentationDiagnosticAtReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    unsafe { *result = bridge.presentation_diagnostic(request) };
-    ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if result.is_null() {
+            return 0;
+        }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        unsafe { *result = bridge.presentation_diagnostic(request) };
+        ABI_OK
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_ghost_plate(
     context: *mut c_void,
     request: *const NativeCreateGhostPlatePresentationRequest,
     result: *mut NativeGhostPlatePresentationHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() || result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_create_ghost_plate(unsafe { *request }) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_create_ghost_plate(unsafe { *request }) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn update_ghost_plate(
     context: *mut c_void,
     request: *const NativeUpdateGhostPlatePresentationRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_update_ghost_plate(unsafe { *request }) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
         }
-    }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_update_ghost_plate(unsafe { *request }) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
+        }
+    })
 }
 
 pub(crate) unsafe extern "C" fn recapture_ghost_plate(
     context: *mut c_void,
     request: *const NativeRecaptureGhostPlatePresentationRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_recapture_ghost_plate(unsafe { *request }) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
         }
-    }
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_recapture_ghost_plate(unsafe { *request }) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
+        }
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_ghost_plate(
     context: *mut c_void,
     presentation: NativeGhostPlatePresentationHandle,
     result: *mut NativeGhostPlatePresentationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if result.is_null() {
-        return 0;
-    }
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_read_ghost_plate(presentation) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    crate::appearance::appearance_operation(context, operation_error, || {
+        if result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_read_ghost_plate(presentation) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_ghost_plate(
     context: *mut c_void,
     presentation: NativeGhostPlatePresentationHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    let Some(bridge) = (unsafe { bridge(context) }) else {
-        return 0;
-    };
-    match bridge.presentation_destroy_ghost_plate(presentation) {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.record_callback_error(error);
-            0
+    crate::appearance::appearance_operation(context, operation_error, || {
+        let Some(bridge) = (unsafe { bridge(context) }) else {
+            return 0;
+        };
+        match bridge.presentation_destroy_ghost_plate(presentation) {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.record_callback_error(error);
+                0
+            }
         }
-    }
+    })
 }

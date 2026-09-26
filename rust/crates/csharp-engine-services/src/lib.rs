@@ -14,6 +14,7 @@ mod input;
 mod kinematic;
 mod magica_vox;
 mod motion;
+mod operation_diagnostics;
 mod perception;
 mod persistence;
 mod presentation;

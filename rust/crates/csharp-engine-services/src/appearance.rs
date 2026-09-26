@@ -1294,6 +1294,7 @@ fn sprite_playback_frame_selection_updates_cursor_and_renderer_atomically() {
                     frame_index: 1,
                 },
                 selected.as_mut_ptr(),
+                std::ptr::null_mut(),
             )
         },
         ABI_OK,
@@ -8524,56 +8525,71 @@ pub(crate) unsafe extern "C" fn open_render_resource(
     context: *mut c_void,
     request: *const NativeRenderResourceRequest,
     result: *mut NativeRenderResourceInfo,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.open_resource(unsafe { &*request }) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.open_resource(unsafe { &*request }) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_render_resource(
     context: *mut c_void,
     resource: NativeRenderResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_resource(resource))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_resource(resource))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_primitive_appearance(
     context: *mut c_void,
     request: NativePrimitiveAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| bridge.create_primitive(request))
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| bridge.create_primitive(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn replace_primitive_appearance(
     context: *mut c_void,
     request: NativePrimitiveAppearanceReplaceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| bridge.replace_primitive(request))
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| bridge.replace_primitive(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_mesh_resource(
     context: *mut c_void,
     request: *const NativeMeshResourceCreateRequest,
     result: *mut NativeMeshResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| unsafe {
-        bridge.create_mesh_resource(&*request)
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| unsafe {
+            bridge.create_mesh_resource(&*request)
+        })
     })
 }
 
@@ -8581,61 +8597,82 @@ pub(crate) unsafe extern "C" fn partition_mesh(
     context: *mut c_void,
     request: NativeMeshPartitionRequest,
     result: *mut NativeMeshPartitionHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| bridge.partition_mesh(request))
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| bridge.partition_mesh(request))
+    })
 }
 pub(crate) unsafe extern "C" fn read_mesh_partition(
     context: *mut c_void,
     partition: NativeMeshPartitionHandle,
     result: *mut NativeMeshPartitionReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        bridge.read_mesh_partition(partition)
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge.read_mesh_partition(partition)
+        })
     })
 }
 pub(crate) unsafe extern "C" fn take_mesh_partition_part(
     context: *mut c_void,
     request: NativeMeshPartitionPartRequest,
     result: *mut NativeMeshResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        bridge.take_mesh_partition_part(request)
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge.take_mesh_partition_part(request)
+        })
     })
 }
 pub(crate) unsafe extern "C" fn destroy_mesh_partition(
     context: *mut c_void,
     partition: NativeMeshPartitionHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_mesh_partition(partition))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_mesh_partition(partition))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_mesh_appearance(
     context: *mut c_void,
     resource: NativeMeshResourceHandle,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| {
-        bridge.create_mesh_appearance(resource)
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| {
+            bridge.create_mesh_appearance(resource)
+        })
     })
 }
 
 pub(crate) unsafe extern "C" fn destroy_mesh_resource(
     context: *mut c_void,
     resource: NativeMeshResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_mesh_resource(resource))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_mesh_resource(resource))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_static_mesh_appearance(
     context: *mut c_void,
     request: *const NativeStaticMeshAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    appearance_result(context, result, |bridge| unsafe {
-        bridge.create_static_mesh(&*request)
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        appearance_result(context, result, |bridge| unsafe {
+            bridge.create_static_mesh(&*request)
+        })
     })
 }
 
@@ -8643,12 +8680,15 @@ pub(crate) unsafe extern "C" fn create_static_mesh_from_content_appearance(
     context: *mut c_void,
     request: *const NativeStaticMeshContentAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    appearance_result(context, result, |bridge| {
-        bridge.create_static_mesh_from_content(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        appearance_result(context, result, |bridge| {
+            bridge.create_static_mesh_from_content(unsafe { &*request })
+        })
     })
 }
 
@@ -8657,14 +8697,17 @@ pub(crate) unsafe extern "C" fn replace_static_mesh_appearance(
     appearance: NativeAppearanceHandle,
     request: *const NativeStaticMeshAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    appearance_result(context, result, |bridge| unsafe {
-        let request = &*request;
-        bridge.destroy_appearance(appearance)?;
-        bridge.create_static_mesh(request)
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        appearance_result(context, result, |bridge| unsafe {
+            let request = &*request;
+            bridge.destroy_appearance(appearance)?;
+            bridge.create_static_mesh(request)
+        })
     })
 }
 
@@ -8673,26 +8716,32 @@ pub(crate) unsafe extern "C" fn replace_static_mesh_from_content_appearance(
     appearance: NativeAppearanceHandle,
     request: *const NativeStaticMeshContentAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    appearance_result(context, result, |bridge| {
-        let request = unsafe { &*request };
-        bridge.destroy_appearance(appearance)?;
-        bridge.create_static_mesh_from_content(request)
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        appearance_result(context, result, |bridge| {
+            let request = unsafe { &*request };
+            bridge.destroy_appearance(appearance)?;
+            bridge.create_static_mesh_from_content(request)
+        })
     })
 }
 
 pub(crate) unsafe extern "C" fn update_static_mesh_materials(
     context: *mut c_void,
     request: *const NativeStaticMeshMaterialUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() {
-        return 0;
-    }
-    appearance_void(context, |bridge| unsafe {
-        bridge.update_static_mesh_materials(&*request)
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        appearance_void(context, |bridge| unsafe {
+            bridge.update_static_mesh_materials(&*request)
+        })
     })
 }
 
@@ -8700,45 +8749,60 @@ pub(crate) unsafe extern "C" fn create_sprite_appearance(
     context: *mut c_void,
     request: NativeSpriteAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| bridge.create_sprite(request))
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| bridge.create_sprite(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn replace_sprite_appearance(
     context: *mut c_void,
     request: NativeSpriteAppearanceReplaceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| bridge.replace_sprite(request))
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| bridge.replace_sprite(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_sprite_atlas(
     context: *mut c_void,
     request: *const NativeSpriteAtlasCreateRequest,
     result: *mut NativeSpriteAtlasHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    sprite_atlas_result(context, result, |bridge| unsafe {
-        bridge.create_sprite_atlas(&*request)
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        sprite_atlas_result(context, result, |bridge| unsafe {
+            bridge.create_sprite_atlas(&*request)
+        })
     })
 }
 
 pub(crate) unsafe extern "C" fn destroy_sprite_atlas(
     context: *mut c_void,
     atlas: NativeSpriteAtlasHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_sprite_atlas(atlas))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_sprite_atlas(atlas))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_sprite_from_atlas(
     context: *mut c_void,
     request: NativeSpriteFromAtlasRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| {
-        bridge.create_sprite_from_atlas(request)
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| {
+            bridge.create_sprite_from_atlas(request)
+        })
     })
 }
 
@@ -8746,144 +8810,174 @@ pub(crate) unsafe extern "C" fn replace_sprite_from_atlas(
     context: *mut c_void,
     request: NativeSpriteFromAtlasReplaceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_result(context, result, |bridge| {
-        bridge.replace_sprite_from_atlas(request)
+    appearance_operation(context, operation_error, || {
+        appearance_result(context, result, |bridge| {
+            bridge.replace_sprite_from_atlas(request)
+        })
     })
 }
 
 pub(crate) unsafe extern "C" fn set_sprite_frame(
     context: *mut c_void,
     request: NativeSpriteFrameUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.set_sprite_frame(request))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.set_sprite_frame(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn set_sprite_viewport(
     context: *mut c_void,
     request: NativeSpriteViewportUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.set_sprite_viewport(request))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.set_sprite_viewport(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_sprite(
     context: *mut c_void,
     appearance: NativeAppearanceHandle,
     result: *mut NativeSpriteReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.read_sprite(appearance) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.read_sprite(appearance) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_sprite_playback(
     context: *mut c_void,
     request: *const NativeSpritePlaybackCreateRequest,
     result: *mut NativeSpritePlaybackHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match unsafe { bridge.create_sprite_playback(&*request) } {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match unsafe { bridge.create_sprite_playback(&*request) } {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_sprite_playback(
     context: *mut c_void,
     playback: NativeSpritePlaybackHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_sprite_playback(playback))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_sprite_playback(playback))
+    })
 }
 
 pub(crate) unsafe extern "C" fn control_sprite_playback(
     context: *mut c_void,
     request: NativeSpritePlaybackControlRequest,
     result: *mut NativeSpritePlaybackReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.control_sprite_playback(request) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.control_sprite_playback(request) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn select_sprite_playback_frame(
     context: *mut c_void,
     request: NativeSpritePlaybackFrameSelectionRequest,
     result: *mut NativeSpritePlaybackReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.select_sprite_playback_frame(request) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.select_sprite_playback_frame(request) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn advance_sprite_playback(
     context: *mut c_void,
     request: *const NativeSpritePlaybackAdvanceRequest,
     result: *mut NativeSpritePlaybackAdvanceLease,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.advance_sprite_playback(unsafe { *request }) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.advance_sprite_playback(unsafe { *request }) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_sprite_playback_advance_lease(
     context: *mut c_void,
     lease: NativeSpritePlaybackAdvanceLeaseHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| {
-        bridge.destroy_sprite_playback_advance_lease(lease)
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| {
+            bridge.destroy_sprite_playback_advance_lease(lease)
+        })
     })
 }
 
@@ -8891,157 +8985,197 @@ pub(crate) unsafe extern "C" fn sample_sprite_playback(
     context: *mut c_void,
     request: NativeSpritePlaybackSampleRequest,
     result: *mut NativeSpritePlaybackSample,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.sample_sprite_playback(request) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.sample_sprite_playback(request) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_sprite_playback(
     context: *mut c_void,
     playback: NativeSpritePlaybackHandle,
     result: *mut NativeSpritePlaybackReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.read_sprite_playback(playback) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.read_sprite_playback(playback) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_appearance(
     context: *mut c_void,
     appearance: NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_appearance(appearance))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_appearance(appearance))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_light(
     context: *mut c_void,
     request: NativeLightRequest,
     result: *mut NativeLightHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    light_result(context, result, |bridge| bridge.create_light(request))
+    appearance_operation(context, operation_error, || {
+        light_result(context, result, |bridge| bridge.create_light(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn update_light(
     context: *mut c_void,
     request: NativeLightUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.update_light(request))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.update_light(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn replace_light(
     context: *mut c_void,
     request: NativeLightUpdateRequest,
     result: *mut NativeLightHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    light_result(context, result, |bridge| bridge.replace_light(request))
+    appearance_operation(context, operation_error, || {
+        light_result(context, result, |bridge| bridge.replace_light(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_light(
     context: *mut c_void,
     light: NativeLightHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_light(light))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_light(light))
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_light(
     context: *mut c_void,
     light: NativeLightHandle,
     result: *mut NativeLightReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    match bridge.read_light(light) {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        match bridge.read_light(light) {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_material(
     context: *mut c_void,
     request: NativeMaterialRequest,
     result: *mut NativeMaterialHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    material_result(context, result, |bridge| bridge.create_material(request))
+    appearance_operation(context, operation_error, || {
+        material_result(context, result, |bridge| bridge.create_material(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_authored_material(
     context: *mut c_void,
     request: *const NativeAuthoredMaterialAppearanceRequest,
     result: *mut NativeMaterialHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let request = unsafe { *request };
-    let material_id = match unsafe {
-        borrowed_utf8(
-            request.material_id.bytes,
-            request.material_id.len,
-            "authored material id",
-        )
-    } {
-        Ok(material_id) => material_id,
-        Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.callback_error = Some(error);
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() || result.is_null() {
             return 0;
         }
-    };
-    material_result(context, result, |bridge| {
-        bridge.create_authored_material(request, material_id)
+        let request = unsafe { *request };
+        let material_id = match unsafe {
+            borrowed_utf8(
+                request.material_id.bytes,
+                request.material_id.len,
+                "authored material id",
+            )
+        } {
+            Ok(material_id) => material_id,
+            Err(error) => {
+                unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.callback_error =
+                    Some(error);
+                return 0;
+            }
+        };
+        material_result(context, result, |bridge| {
+            bridge.create_authored_material(request, material_id)
+        })
     })
 }
 
 pub(crate) unsafe extern "C" fn update_material(
     context: *mut c_void,
     request: NativeMaterialUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.update_material(request))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.update_material(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn replace_material(
     context: *mut c_void,
     request: NativeMaterialUpdateRequest,
     result: *mut NativeMaterialHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    material_result(context, result, |bridge| bridge.replace_material(request))
+    appearance_operation(context, operation_error, || {
+        material_result(context, result, |bridge| bridge.replace_material(request))
+    })
 }
 
 pub(crate) unsafe extern "C" fn destroy_material(
     context: *mut c_void,
     material: NativeMaterialHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    appearance_void(context, |bridge| bridge.destroy_material(material))
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.destroy_material(material))
+    })
 }
 
 fn appearance_result(
@@ -9157,57 +9291,63 @@ pub(crate) unsafe extern "C" fn publish_appearance_snapshot(
     context: *mut c_void,
     facts: *const NativeAppearanceFact,
     fact_count: usize,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    // SAFETY: context points at a box retained by `CsharpProductRuntime`.
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    // SAFETY: callback inputs are copied/validated before this method returns.
-    match unsafe { bridge.stage_snapshot(facts, fact_count) } {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+    appearance_operation(context, operation_error, || {
+        if context.is_null() {
+            return 0;
         }
-    }
+        // SAFETY: context points at a box retained by `CsharpProductRuntime`.
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        // SAFETY: callback inputs are copied/validated before this method returns.
+        match unsafe { bridge.stage_snapshot(facts, fact_count) } {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
+        }
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_presentation(
     context: *mut c_void,
     result: *mut NativePresentationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    let state = bridge
-        .staged
-        .as_ref()
-        .map(|call| &call.state)
-        .unwrap_or(&bridge.state);
-    let resource_count =
-        match u32::try_from(state.render_resources.len() + state.mesh_resources.len()) {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
+        }
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        let state = bridge
+            .staged
+            .as_ref()
+            .map(|call| &call.state)
+            .unwrap_or(&bridge.state);
+        let resource_count =
+            match u32::try_from(state.render_resources.len() + state.mesh_resources.len()) {
+                Ok(value) => value,
+                Err(_) => return 0,
+            };
+        let appearance_count = match u32::try_from(state.appearances.len()) {
             Ok(value) => value,
             Err(_) => return 0,
         };
-    let appearance_count = match u32::try_from(state.appearances.len()) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    let material_count = match u32::try_from(state.materials.len()) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    unsafe {
-        *result = NativePresentationReadout {
-            retained_object_count: state.retained_object_count,
-            appearance_count,
-            material_count,
-            resource_count,
+        let material_count = match u32::try_from(state.materials.len()) {
+            Ok(value) => value,
+            Err(_) => return 0,
         };
-    }
-    ABI_OK
+        unsafe {
+            *result = NativePresentationReadout {
+                retained_object_count: state.retained_object_count,
+                appearance_count,
+                material_count,
+                resource_count,
+            };
+        }
+        ABI_OK
+    })
 }
 
 fn animation_result<T: Copy>(
@@ -9242,47 +9382,59 @@ pub(crate) unsafe extern "C" fn open_animated_mesh(
     context: *mut c_void,
     request: *const NativeAnimatedMeshResourceRequest,
     result: *mut NativeRenderResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.open_animated_mesh(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.open_animated_mesh(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn open_animation_clip_pack(
     context: *mut c_void,
     request: *const NativeAnimationClipPackResourceRequest,
     result: *mut NativeRenderResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.open_animation_clip_pack(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.open_animation_clip_pack(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn associate_animation_clip_pack(
     context: *mut c_void,
     request: *const NativeAnimationClipPackAssociationRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.associate_animation_clip_pack(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.associate_animation_clip_pack(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn create_animated_mesh_appearance(
     context: *mut c_void,
     request: *const NativeAnimatedMeshAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.create_animated_mesh_appearance(unsafe { *request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.create_animated_mesh_appearance(unsafe { *request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn replace_animated_mesh_appearance(
@@ -9290,249 +9442,324 @@ pub(crate) unsafe extern "C" fn replace_animated_mesh_appearance(
     appearance: NativeAppearanceHandle,
     request: *const NativeAnimatedMeshAppearanceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.replace_animated_mesh_appearance(appearance, unsafe { *request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.replace_animated_mesh_appearance(appearance, unsafe { *request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn set_mesh_inspection(
     context: *mut c_void,
     request: *const NativeAnimatedMeshInspectionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| unsafe {
-        bridge.set_mesh_inspection(&*request)
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| unsafe {
+            bridge.set_mesh_inspection(&*request)
+        })
     })
 }
 pub(crate) unsafe extern "C" fn update_animated_mesh_materials(
     context: *mut c_void,
     request: *const NativeAnimatedMeshMaterialUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| unsafe {
-        bridge.update_animated_mesh_materials(&*request)
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| unsafe {
+            bridge.update_animated_mesh_materials(&*request)
+        })
     })
 }
 pub(crate) unsafe extern "C" fn destroy_animated_mesh_appearance(
     context: *mut c_void,
     appearance: NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_void(context, |bridge| bridge.destroy_appearance(appearance))
+    appearance_operation(context, operation_error, || {
+        animation_void(context, |bridge| bridge.destroy_appearance(appearance))
+    })
 }
 pub(crate) unsafe extern "C" fn create_animation_instance(
     context: *mut c_void,
     request: *const NativeAnimationInstanceRequest,
     result: *mut NativeAnimationInstanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.create_animation_instance(unsafe { *request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.create_animation_instance(unsafe { *request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn destroy_animation_instance(
     context: *mut c_void,
     value: NativeAnimationInstanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_void(context, |bridge| bridge.destroy_animation_instance(value))
+    appearance_operation(context, operation_error, || {
+        animation_void(context, |bridge| bridge.destroy_animation_instance(value))
+    })
 }
 pub(crate) unsafe extern "C" fn replace_animation_instance(
     context: *mut c_void,
     prior: NativeAnimationInstanceHandle,
     request: *const NativeAnimationInstanceRequest,
     result: *mut NativeAnimationInstanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.replace_animation_instance(prior, unsafe { *request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.replace_animation_instance(prior, unsafe { *request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn set_animation_playback(
     context: *mut c_void,
     request: *const NativeAnimationPlaybackRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.set_animation_playback(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.set_animation_playback(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn replace_animation_cue_definitions(
     context: *mut c_void,
     request: *const NativeAnimationCueDefinitionReplaceRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.replace_animation_cue_definitions(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.replace_animation_cue_definitions(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn create_animation_graph(
     context: *mut c_void,
     request: *const NativeAnimationGraphCreateRequest,
     result: *mut NativeAnimationGraphHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.create_animation_graph(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.create_animation_graph(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn destroy_animation_graph(
     context: *mut c_void,
     value: NativeAnimationGraphHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_void(context, |bridge| bridge.destroy_animation_graph(value))
+    appearance_operation(context, operation_error, || {
+        animation_void(context, |bridge| bridge.destroy_animation_graph(value))
+    })
 }
 pub(crate) unsafe extern "C" fn define_animation_parameter(
     context: *mut c_void,
     request: *const NativeAnimationParameterDefinitionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.define_animation_parameter(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.define_animation_parameter(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn define_animation_state(
     context: *mut c_void,
     request: *const NativeAnimationStateDefinitionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.define_animation_state(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.define_animation_state(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn define_animation_transition(
     context: *mut c_void,
     request: *const NativeAnimationTransitionDefinitionRequest,
     result: *mut NativeAnimationTransitionHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.define_animation_transition(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.define_animation_transition(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn define_animation_condition(
     context: *mut c_void,
     request: *const NativeAnimationConditionDefinitionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.define_animation_condition(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.define_animation_condition(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn create_animation_controller(
     context: *mut c_void,
     request: *const NativeAnimationControllerCreateRequest,
     result: *mut NativeAnimationControllerHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_result(context, result, |bridge| {
-        bridge.create_animation_controller(unsafe { *request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.create_animation_controller(unsafe { *request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn destroy_animation_controller(
     context: *mut c_void,
     value: NativeAnimationControllerHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_void(context, |bridge| bridge.destroy_animation_controller(value))
+    appearance_operation(context, operation_error, || {
+        animation_void(context, |bridge| bridge.destroy_animation_controller(value))
+    })
 }
 pub(crate) unsafe extern "C" fn set_animation_float(
     context: *mut c_void,
     request: *const NativeAnimationSetFloatRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.set_animation_float(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.set_animation_float(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn set_animation_bool(
     context: *mut c_void,
     request: *const NativeAnimationSetBoolRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.set_animation_bool(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.set_animation_bool(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn fire_animation_trigger(
     context: *mut c_void,
     request: *const NativeAnimationFireTriggerRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| {
-        bridge.fire_animation_trigger(unsafe { &*request })
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.fire_animation_trigger(unsafe { &*request })
+        })
     })
 }
 pub(crate) unsafe extern "C" fn tick_animation(
     context: *mut c_void,
     request: *const NativeAnimationTickRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    animation_void(context, |bridge| bridge.tick_animation(unsafe { *request }))
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| bridge.tick_animation(unsafe { *request }))
+    })
 }
 pub(crate) unsafe extern "C" fn read_animation_controller(
     context: *mut c_void,
     value: NativeAnimationControllerHandle,
     result: *mut NativeAnimationControllerReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        bridge.read_animation_controller(value)
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge.read_animation_controller(value)
+        })
     })
 }
 pub(crate) unsafe extern "C" fn read_animation(
     context: *mut c_void,
     result: *mut NativeAnimationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, RuntimeAppearanceBridge::read_animation)
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, RuntimeAppearanceBridge::read_animation)
+    })
 }
 
 pub(crate) unsafe extern "C" fn read_animation_realization(
     context: *mut c_void,
     result: *mut NativeAnimationRealizationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        bridge.read_animation_realization()
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge.read_animation_realization()
+        })
     })
 }
 pub(crate) unsafe extern "C" fn read_animation_realization_fact_at(
     context: *mut c_void,
     request: NativeAnimationRealizationFactAtRequest,
     result: *mut NativeAnimationRealizationFactAtReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        bridge.read_animation_realization_fact_at(request)
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge.read_animation_realization_fact_at(request)
+        })
     })
 }
 
@@ -10242,39 +10469,45 @@ pub(crate) unsafe extern "C" fn open_render_resource_from_content(
     context: *mut c_void,
     request: *const NativeRenderResourceContentRequest,
     result: *mut NativeRenderResourceInfo,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    let request = unsafe { *request };
-    match bridge
-        .content_reference(request.content)
-        .and_then(|content| bridge.admit_resource(content, request.filter, request.wrap))
-    {
-        Ok(value) => {
-            unsafe { *result = value };
-            ABI_OK
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() || result.is_null() {
+            return 0;
         }
-        Err(error) => {
-            bridge.callback_error = Some(error);
-            0
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        let request = unsafe { *request };
+        match bridge
+            .content_reference(request.content)
+            .and_then(|content| bridge.admit_resource(content, request.filter, request.wrap))
+        {
+            Ok(value) => {
+                unsafe { *result = value };
+                ABI_OK
+            }
+            Err(error) => {
+                bridge.callback_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 pub(crate) unsafe extern "C" fn create_static_mesh_from_content_reference(
     context: *mut c_void,
     request: *const NativeStaticMeshContentReferenceRequest,
     result: *mut NativeAppearanceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if request.is_null() {
-        return 0;
-    }
-    let request = unsafe { *request };
-    appearance_result(context, result, |bridge| {
-        let content = bridge.content_reference(request.content)?;
-        bridge.admit_static_mesh(content, request.color)
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        let request = unsafe { *request };
+        appearance_result(context, result, |bridge| {
+            let content = bridge.content_reference(request.content)?;
+            bridge.admit_static_mesh(content, request.color)
+        })
     })
 }
 
@@ -10282,29 +10515,32 @@ pub(crate) unsafe extern "C" fn read_animated_mesh_info(
     context: *mut c_void,
     resource: NativeRenderResourceHandle,
     result: *mut NativeAnimatedMeshInfo,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        let mesh = bridge
-            .resource(resource.value)?
-            .animated_mesh
-            .as_ref()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_RESOURCE",
-                    "resource is not an animated mesh",
-                )
-            })?;
-        let vector = |v: [f32; 3]| NativeVec3 {
-            x: v[0],
-            y: v[1],
-            z: v[2],
-        };
-        Ok(NativeAnimatedMeshInfo {
-            bounds_min: vector(mesh.bounds.min),
-            bounds_max: vector(mesh.bounds.max),
-            clip_count: mesh.clips.len() as u32,
-            material_count: mesh.embedded_material_slots.len() as u32,
-            joint_count: mesh.rig.as_ref().map_or(0, |rig| rig.joints.len() as u32),
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            let mesh = bridge
+                .resource(resource.value)?
+                .animated_mesh
+                .as_ref()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_ANIMATION_RESOURCE",
+                        "resource is not an animated mesh",
+                    )
+                })?;
+            let vector = |v: [f32; 3]| NativeVec3 {
+                x: v[0],
+                y: v[1],
+                z: v[2],
+            };
+            Ok(NativeAnimatedMeshInfo {
+                bounds_min: vector(mesh.bounds.min),
+                bounds_max: vector(mesh.bounds.max),
+                clip_count: mesh.clips.len() as u32,
+                material_count: mesh.embedded_material_slots.len() as u32,
+                joint_count: mesh.rig.as_ref().map_or(0, |rig| rig.joints.len() as u32),
+            })
         })
     })
 }
@@ -10313,65 +10549,71 @@ pub(crate) unsafe extern "C" fn read_animation_clips(
     context: *mut c_void,
     resource: NativeRenderResourceHandle,
     result: *mut NativeAnimationClipInfoLease,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    animation_result(context, result, |bridge| {
-        let clips = bridge
-            .resource(resource.value)?
-            .animated_mesh
-            .as_ref()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_RESOURCE",
-                    "resource is not an animated mesh",
-                )
-            })?
-            .clips
-            .clone();
-        let utf8 = |value: &str| NativeUtf8Slice {
-            bytes: value.as_ptr(),
-            len: value.len(),
-        };
-        let readout = clips
-            .iter()
-            .map(|clip| NativeAnimationClipInfo {
-                id: utf8(&clip.id),
-                name: utf8(clip.name.as_deref().unwrap_or(&clip.id)),
-                duration_seconds: clip.duration_seconds.unwrap_or_default(),
-                has_duration: clip.duration_seconds.is_some(),
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let handle = bridge.next_clip_info_lease;
-        bridge.next_clip_info_lease += 1;
-        let receipt = NativeAnimationClipInfoLease {
-            handle: NativeAnimationClipInfoLeaseHandle { value: handle },
-            clips: readout.as_ptr(),
-            clips_len: readout.len(),
-        };
-        bridge.clip_info_leases.insert(
-            handle,
-            AnimationClipInfoLease {
-                _clips: clips,
-                _readout: readout,
-            },
-        );
-        Ok(receipt)
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            let clips = bridge
+                .resource(resource.value)?
+                .animated_mesh
+                .as_ref()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_ANIMATION_RESOURCE",
+                        "resource is not an animated mesh",
+                    )
+                })?
+                .clips
+                .clone();
+            let utf8 = |value: &str| NativeUtf8Slice {
+                bytes: value.as_ptr(),
+                len: value.len(),
+            };
+            let readout = clips
+                .iter()
+                .map(|clip| NativeAnimationClipInfo {
+                    id: utf8(&clip.id),
+                    name: utf8(clip.name.as_deref().unwrap_or(&clip.id)),
+                    duration_seconds: clip.duration_seconds.unwrap_or_default(),
+                    has_duration: clip.duration_seconds.is_some(),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let handle = bridge.next_clip_info_lease;
+            bridge.next_clip_info_lease += 1;
+            let receipt = NativeAnimationClipInfoLease {
+                handle: NativeAnimationClipInfoLeaseHandle { value: handle },
+                clips: readout.as_ptr(),
+                clips_len: readout.len(),
+            };
+            bridge.clip_info_leases.insert(
+                handle,
+                AnimationClipInfoLease {
+                    _clips: clips,
+                    _readout: readout,
+                },
+            );
+            Ok(receipt)
+        })
     })
 }
 
 pub(crate) unsafe extern "C" fn destroy_animation_clip_info_lease(
     context: *mut c_void,
     handle: NativeAnimationClipInfoLeaseHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    if bridge.clip_info_leases.remove(&handle.value).is_some() {
-        ABI_OK
-    } else {
-        0
-    }
+    appearance_operation(context, operation_error, || {
+        if context.is_null() {
+            return 0;
+        }
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        if bridge.clip_info_leases.remove(&handle.value).is_some() {
+            ABI_OK
+        } else {
+            0
+        }
+    })
 }
 
 // Content import is a recoverable editing operation. A rejected source has not
@@ -10478,25 +10720,28 @@ pub(crate) unsafe extern "C" fn read_texture_info(
     context: *mut c_void,
     resource: NativeRenderResourceHandle,
     result: *mut NativeTextureResourceInfo,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    let Some(texture) = bridge
-        .resource(resource.value)
-        .ok()
-        .and_then(CsharpRenderResource::texture)
-    else {
-        return 0;
-    };
-    unsafe {
-        *result = NativeTextureResourceInfo {
-            width: texture.width,
-            height: texture.height,
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
+        }
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        let Some(texture) = bridge
+            .resource(resource.value)
+            .ok()
+            .and_then(CsharpRenderResource::texture)
+        else {
+            return 0;
         };
-    }
-    ABI_OK
+        unsafe {
+            *result = NativeTextureResourceInfo {
+                width: texture.width,
+                height: texture.height,
+            };
+        }
+        ABI_OK
+    })
 }
 
 pub(crate) unsafe extern "C" fn publish_attached_snapshot(
@@ -10574,6 +10819,69 @@ pub(crate) unsafe extern "C" fn publish_attached_snapshot(
             0
         }
     }
+}
+
+pub(crate) fn appearance_operation(
+    context: *mut c_void,
+    receipt: *mut NativeOperationErrorReceipt,
+    call: impl FnOnce() -> i32,
+) -> i32 {
+    if !receipt.is_null() {
+        unsafe { *receipt = std::mem::zeroed() };
+    }
+    if context.is_null() {
+        return 0;
+    }
+    // Isolate this operation's reason while preserving callback-level failure semantics.
+    let previous = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }
+        .callback_error
+        .take();
+    let status = call();
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    if status != ABI_OK && !receipt.is_null() {
+        let error = bridge
+            .callback_error
+            .as_ref()
+            .map(|error| CsharpEngineServicesError::new(error.code(), error.detail()))
+            .unwrap_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_GRAPHICS_OPERATION",
+                    "graphics operation refused its supplied handle or request",
+                )
+            });
+        let handle = bridge.next_admission_diagnostic;
+        bridge.next_admission_diagnostic += 1;
+        let text = |s: &str| NativeUtf8Slice {
+            bytes: s.as_ptr(),
+            len: s.len(),
+        };
+        let lease = AnimationAdmissionDiagnostic {
+            readout: vec![NativeEngineDiagnostic {
+                code: text(error.code()),
+                message: text(error.detail()),
+                source: text(""),
+            }]
+            .into_boxed_slice(),
+            _error: error,
+        };
+        unsafe {
+            *receipt = NativeOperationErrorReceipt {
+                service: text(""),
+                operation: text(""),
+                status,
+                diagnostics: NativeEngineDiagnosticLease {
+                    handle: NativeEngineDiagnosticLeaseHandle { value: handle },
+                    diagnostics: lease.readout.as_ptr(),
+                    diagnostics_len: 1,
+                },
+            };
+        }
+        bridge.admission_diagnostics.insert(handle, lease);
+    }
+    if bridge.callback_error.is_none() {
+        bridge.callback_error = previous;
+    }
+    status
 }
 
 #[cfg(test)]
@@ -12273,6 +12581,7 @@ pub(super) mod tests {
                 crate::camera_view::set_sky_background(
                     (&mut camera as *mut crate::camera_view::RuntimeCameraViewBridge).cast(),
                     sky.handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -12294,6 +12603,7 @@ pub(super) mod tests {
                 crate::camera_view::clear_sky_background(
                     (&mut camera as *mut crate::camera_view::RuntimeCameraViewBridge).cast(),
                     &clear,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

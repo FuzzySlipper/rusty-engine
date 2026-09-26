@@ -6070,6 +6070,7 @@ mod tests {
                         alpha_cutoff: 0.5,
                     },
                     &mut material,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6133,6 +6134,7 @@ mod tests {
                         bindings_len: bindings.len(),
                     },
                     &mut mesh,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6190,7 +6192,13 @@ mod tests {
             ABI_OK
         );
         assert_eq!(
-            unsafe { crate::appearance::destroy_mesh_resource(appearance_context, mesh) },
+            unsafe {
+                crate::appearance::destroy_mesh_resource(
+                    appearance_context,
+                    mesh,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
 

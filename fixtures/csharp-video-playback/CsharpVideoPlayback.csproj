@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RustyEngineSdkPackageVersion>$(RustyEngineFixtureSdkVersion)</RustyEngineSdkPackageVersion>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <RustyEngineProductEntryType>CsharpVideoPlayback.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-video-playback</RustyEngineProductId>
+    <RustyEngineProductTitle>Video Playback</RustyEngineProductTitle>
+    <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <RustyEngineWatchPaths>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)/content</RustyEngineWatchPaths>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductUiProjectionStream>video-playback</RustyEngineProductUiProjectionStream>
+    <RustyEngineProductUiProjectionContract>video-playback.panel.v1</RustyEngineProductUiProjectionContract>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)">
+      <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

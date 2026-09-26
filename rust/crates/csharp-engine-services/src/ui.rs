@@ -129,6 +129,7 @@ impl RuntimeUiBridge {
         &mut self,
         error: &CsharpEngineServicesError,
         receipt: *mut NativeOperationErrorReceipt,
+        operation: &'static [u8],
     ) {
         if receipt.is_null() {
             return;
@@ -150,7 +151,7 @@ impl RuntimeUiBridge {
         unsafe {
             *receipt = NativeOperationErrorReceipt {
                 service: native_utf8(b"Ui"),
-                operation: native_utf8(b"PublishProjection"),
+                operation: native_utf8(operation),
                 status: 0,
                 diagnostics: diagnostic_lease,
             };
@@ -342,7 +343,7 @@ unsafe extern "C" fn publish_ui_projection(
     match unsafe { bridge.stage_projection(projection) } {
         Ok(()) => 1,
         Err(error) => {
-            bridge.retain_operation_error(&error, receipt);
+            bridge.retain_operation_error(&error, receipt, b"PublishProjection");
             bridge.callback_error = Some(error);
             0
         }
@@ -366,7 +367,11 @@ unsafe extern "C" fn open_ui_stream(
     context: *mut c_void,
     request: *const NativeUiStreamRequest,
     handle: *mut NativeUiStreamHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -375,13 +380,21 @@ unsafe extern "C" fn open_ui_stream(
     match bridge.stage_open_stream(request, handle) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.retain_operation_error(&error, operation_error, b"OpenStream");
             bridge.callback_error = Some(error);
             0
         }
     }
 }
 
-unsafe extern "C" fn destroy_ui_stream(context: *mut c_void, handle: NativeUiStreamHandle) -> i32 {
+unsafe extern "C" fn destroy_ui_stream(
+    context: *mut c_void,
+    handle: NativeUiStreamHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -390,6 +403,7 @@ unsafe extern "C" fn destroy_ui_stream(context: *mut c_void, handle: NativeUiStr
     match bridge.destroy_stream(handle) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.retain_operation_error(&error, operation_error, b"DestroyStream");
             if bridge.staged_streams.is_some() {
                 bridge.callback_error = Some(error);
             }
@@ -675,7 +689,14 @@ mod tests {
 
         bridge.begin_call(binding(13));
         assert_eq!(
-            unsafe { (api.open_stream)(api.context, &stream_request(), &mut stream) },
+            unsafe {
+                (api.open_stream)(
+                    api.context,
+                    &stream_request(),
+                    &mut stream,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let initial_call = bridge.take_staged_call().expect("initial staged stream");
@@ -730,9 +751,12 @@ mod tests {
         bridge.commit(replaced_binding_call);
 
         bridge.begin_call(binding(14));
-        assert_eq!(unsafe { (api.destroy_stream)(api.context, stream) }, ABI_OK);
         assert_eq!(
-            unsafe { (api.destroy_stream)(api.context, stream) },
+            unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
             0,
             "duplicate staged close is rejected"
         );
@@ -742,12 +766,12 @@ mod tests {
         );
 
         assert_eq!(
-            unsafe { (api.destroy_stream)(api.context, stream) },
+            unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
             ABI_OK,
             "discard rolled the staged close back into committed state"
         );
         assert_eq!(
-            unsafe { (api.destroy_stream)(api.context, stream) },
+            unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
             0,
             "duplicate committed teardown is rejected"
         );
@@ -778,7 +802,14 @@ mod tests {
         let mut stream = NativeUiStreamHandle::default();
         bridge.begin_call(binding(13));
         assert_eq!(
-            unsafe { (api.open_stream)(api.context, &stream_request(), &mut stream) },
+            unsafe {
+                (api.open_stream)(
+                    api.context,
+                    &stream_request(),
+                    &mut stream,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let staged_stream = bridge.take_staged_call().expect("committed stream");

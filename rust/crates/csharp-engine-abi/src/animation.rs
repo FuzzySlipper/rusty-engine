@@ -429,6 +429,7 @@ pub type NativeReadAnimatedMeshInfo = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeRenderResourceHandle,
     *mut NativeAnimatedMeshInfo,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -446,6 +447,10 @@ pub type NativeReadAnimationClips = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeRenderResourceHandle,
     *mut NativeAnimationClipInfoLease,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAnimationClipInfoLease =
-    unsafe extern "C" fn(*mut std::ffi::c_void, NativeAnimationClipInfoLeaseHandle) -> i32;
+pub type NativeDestroyAnimationClipInfoLease = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeAnimationClipInfoLeaseHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;

@@ -53,6 +53,24 @@ keeps `IEngineContext` or the named services it needs. Exactly one concrete
 and NativeAOT bind implementations without assembly scanning or product-side
 registration infrastructure.
 
+### Diagnosing native service refusals
+
+Catch `EngineCallException` at the product boundary and inspect `Service`,
+`Operation`, `Status`, and `Diagnostics.Span`. Its message includes each returned
+Engine code and explanation. Generated wrappers copy and release the native
+operation receipt before throwing, including owned-resource disposal and
+borrowed/span request shapes; products retain only managed diagnostic values.
+Audio, Graphics, Animation, Presentation, CameraView, Video, UI stream lifetime,
+and implicit-field operations preserve their recorded native refusal reasons.
+For example, an unadmitted audio clip reports `CSHARP_AUDIO_CLIP_HANDLE`, and a
+stale sprite atlas reports `CSHARP_SPRITE_ATLAS_HANDLE`.
+
+A diagnostic receipt does not change the operation's commit/recovery contract.
+Catching an exception does not promise that a failed product callback or a
+partially completed collection of service calls can continue. Resource release
+still uses the exact owning service. Adopt the matching SDK **and** runtime:
+these receipts change the native function table.
+
 ### Runtime input remapping
 
 Use `context.Engine.Input.ReplacePhysicalMappings(mappings)` to replace the

@@ -447,7 +447,8 @@ internal static class Emit
         }
         output.AppendLine("public sealed class EngineCallException : Exception").AppendLine("{");
         output.AppendLine("    public EngineCallException(string service, string operation, int status) : this(service, operation, status, ReadOnlyMemory<EngineDiagnostic>.Empty) { }");
-        output.AppendLine("    public EngineCallException(string service, string operation, int status, ReadOnlyMemory<EngineDiagnostic> diagnostics) : base($\"Rusty Engine {service}.{operation} returned status {status}.\") { Service = service; Operation = operation; Status = status; Diagnostics = diagnostics; }");
+        output.AppendLine("    public EngineCallException(string service, string operation, int status, ReadOnlyMemory<EngineDiagnostic> diagnostics) : base(Describe(service, operation, status, diagnostics)) { Service = service; Operation = operation; Status = status; Diagnostics = diagnostics; }");
+        output.AppendLine("    private static string Describe(string service, string operation, int status, ReadOnlyMemory<EngineDiagnostic> diagnostics) { var text = new System.Text.StringBuilder($\"Rusty Engine {service}.{operation} returned status {status}.\"); foreach (EngineDiagnostic diagnostic in diagnostics.Span) text.Append(\" \").Append(diagnostic.Code).Append(\": \").Append(diagnostic.Message); return text.ToString(); }");
         output.AppendLine("    public string Service { get; }").AppendLine("    public string Operation { get; }").AppendLine("    public int Status { get; }").AppendLine("    public ReadOnlyMemory<EngineDiagnostic> Diagnostics { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly ref struct ProductUpdate").AppendLine("{");
         output.AppendLine("    public ProductUpdate(ProductUpdateFacts facts, ReadOnlySpan<ProductInputEvent> input) { Facts = facts; Input = input; }");

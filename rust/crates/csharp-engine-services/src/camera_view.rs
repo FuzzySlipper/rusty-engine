@@ -69,6 +69,7 @@ pub(crate) struct RuntimeCameraViewBridge {
     state: CameraState,
     staged: Option<RuntimeCameraViewCall>,
     callback_error: Option<CsharpEngineServicesError>,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
 
 impl RuntimeCameraViewBridge {
@@ -86,6 +87,7 @@ impl RuntimeCameraViewBridge {
             },
             staged: None,
             callback_error: None,
+            operation_diagnostics: Default::default(),
         }
     }
 
@@ -857,7 +859,11 @@ pub(crate) unsafe extern "C" fn create_camera(
     context: *mut c_void,
     request: *const NativeCameraDescriptor,
     result: *mut NativeCameraHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -868,6 +874,7 @@ pub(crate) unsafe extern "C" fn create_camera(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -877,7 +884,11 @@ pub(crate) unsafe extern "C" fn create_camera(
 pub(crate) unsafe extern "C" fn update_camera(
     context: *mut c_void,
     request: *const NativeCameraUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -885,6 +896,7 @@ pub(crate) unsafe extern "C" fn update_camera(
     match bridge.update(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -894,7 +906,11 @@ pub(crate) unsafe extern "C" fn update_camera(
 pub(crate) unsafe extern "C" fn update_camera_sample(
     context: *mut c_void,
     request: *const NativeCameraSampleRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -902,6 +918,7 @@ pub(crate) unsafe extern "C" fn update_camera_sample(
     match bridge.update_sample(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -912,7 +929,11 @@ pub(crate) unsafe extern "C" fn replace_camera(
     context: *mut c_void,
     request: *const NativeCameraReplaceRequest,
     result: *mut NativeCameraHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -923,6 +944,7 @@ pub(crate) unsafe extern "C" fn replace_camera(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -932,7 +954,11 @@ pub(crate) unsafe extern "C" fn replace_camera(
 pub(crate) unsafe extern "C" fn destroy_camera(
     context: *mut c_void,
     camera: NativeCameraHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -940,6 +966,7 @@ pub(crate) unsafe extern "C" fn destroy_camera(
     match bridge.destroy(camera) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -950,7 +977,11 @@ pub(crate) unsafe extern "C" fn create_camera_target(
     context: *mut c_void,
     request: *const NativeCameraTargetDescriptor,
     result: *mut NativeCameraTargetHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -961,6 +992,7 @@ pub(crate) unsafe extern "C" fn create_camera_target(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -970,7 +1002,11 @@ pub(crate) unsafe extern "C" fn create_camera_target(
 pub(crate) unsafe extern "C" fn update_camera_target(
     context: *mut c_void,
     request: *const NativeCameraTargetUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -978,6 +1014,7 @@ pub(crate) unsafe extern "C" fn update_camera_target(
     match bridge.update_target(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -988,7 +1025,11 @@ pub(crate) unsafe extern "C" fn replace_camera_target(
     context: *mut c_void,
     request: *const NativeCameraTargetReplaceRequest,
     result: *mut NativeCameraTargetHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -999,6 +1040,7 @@ pub(crate) unsafe extern "C" fn replace_camera_target(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1008,7 +1050,11 @@ pub(crate) unsafe extern "C" fn replace_camera_target(
 pub(crate) unsafe extern "C" fn destroy_camera_target(
     context: *mut c_void,
     target: NativeCameraTargetHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -1016,6 +1062,7 @@ pub(crate) unsafe extern "C" fn destroy_camera_target(
     match bridge.destroy_target(target) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1025,7 +1072,11 @@ pub(crate) unsafe extern "C" fn destroy_camera_target(
 pub(crate) unsafe extern "C" fn set_camera_composition(
     context: *mut c_void,
     request: *const NativeCameraCompositionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1033,6 +1084,7 @@ pub(crate) unsafe extern "C" fn set_camera_composition(
     match unsafe { bridge.set_composition(&*request) } {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1042,7 +1094,11 @@ pub(crate) unsafe extern "C" fn set_camera_composition(
 pub(crate) unsafe extern "C" fn set_active_camera(
     context: *mut c_void,
     camera: NativeCameraHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -1050,6 +1106,7 @@ pub(crate) unsafe extern "C" fn set_active_camera(
     match bridge.set_active(camera) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1059,7 +1116,11 @@ pub(crate) unsafe extern "C" fn set_active_camera(
 pub(crate) unsafe extern "C" fn clear_active_camera(
     context: *mut c_void,
     request: *const NativeClearActiveCameraRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1067,6 +1128,7 @@ pub(crate) unsafe extern "C" fn clear_active_camera(
     match bridge.clear_active() {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1076,7 +1138,11 @@ pub(crate) unsafe extern "C" fn clear_active_camera(
 pub(crate) unsafe extern "C" fn set_sky_background(
     context: *mut c_void,
     texture: NativeRenderResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -1084,6 +1150,7 @@ pub(crate) unsafe extern "C" fn set_sky_background(
     match bridge.set_sky(texture) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1093,7 +1160,11 @@ pub(crate) unsafe extern "C" fn set_sky_background(
 pub(crate) unsafe extern "C" fn clear_sky_background(
     context: *mut c_void,
     request: *const NativeClearSkyBackgroundRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1101,6 +1172,7 @@ pub(crate) unsafe extern "C" fn clear_sky_background(
     match bridge.clear_sky() {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1110,7 +1182,11 @@ pub(crate) unsafe extern "C" fn clear_sky_background(
 pub(crate) unsafe extern "C" fn set_background_color(
     context: *mut c_void,
     request: *const NativeSetBackgroundColorRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1118,6 +1194,7 @@ pub(crate) unsafe extern "C" fn set_background_color(
     match bridge.set_background_color(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1141,7 +1218,11 @@ impl RuntimeCameraViewCall {
 pub(crate) unsafe extern "C" fn set_sky_background_blend(
     context: *mut c_void,
     request: *const NativeSkyBackgroundBlendRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1170,10 +1251,22 @@ pub(crate) unsafe extern "C" fn set_sky_background_blend(
     match result {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
     }
+}
+
+pub(crate) unsafe extern "C" fn destroy_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    bridge.operation_diagnostics.destroy(handle)
 }
 
 #[cfg(test)]

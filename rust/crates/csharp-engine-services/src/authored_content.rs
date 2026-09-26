@@ -4274,6 +4274,7 @@ mod tests {
                     context,
                     &crate::appearance::tests::resource_request("pattern.png"),
                     &mut texture,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -4292,13 +4293,25 @@ mod tests {
             let mut material = NativeMaterialHandle::default();
             assert_eq!(
                 unsafe {
-                    crate::appearance::create_authored_material(context, &request, &mut material)
+                    crate::appearance::create_authored_material(
+                        context,
+                        &request,
+                        &mut material,
+                        std::ptr::null_mut(),
+                    )
                 },
                 ABI_OK
             );
         }
         assert_eq!(
-            unsafe { crate::appearance::publish_appearance_snapshot(context, std::ptr::null(), 0) },
+            unsafe {
+                crate::appearance::publish_appearance_snapshot(
+                    context,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let call = appearance

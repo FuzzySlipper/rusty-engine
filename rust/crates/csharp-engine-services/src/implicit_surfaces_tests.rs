@@ -68,14 +68,19 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     let mut material = NativeMaterialHandle::default();
     assert_eq!(
         unsafe {
-            appearance::create_material(appearance_context, opaque_material(), &mut material)
+            appearance::create_material(
+                appearance_context,
+                opaque_material(),
+                &mut material,
+                std::ptr::null_mut(),
+            )
         },
         ABI_OK
     );
 
     let mut field = NativeImplicitFieldHandle { value: 0 };
     assert_eq!(
-        unsafe { (api.create_field)(api.context, &mut field) },
+        unsafe { (api.create_field)(api.context, &mut field, std::ptr::null_mut()) },
         ABI_OK
     );
     let mut sphere = NativeImplicitNode { value: 0 };
@@ -89,6 +94,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     radius: 0.8,
                 },
                 &mut sphere,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -112,6 +118,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     },
                 },
                 &mut opening,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -127,6 +134,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     right: opening,
                 },
                 &mut carved,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -265,7 +273,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         bounded_leaf_vertices: 0,
     };
     assert_eq!(
-        unsafe { (api.read_generation)(api.context, field, &mut generation) },
+        unsafe { (api.read_generation)(api.context, field, &mut generation, std::ptr::null_mut()) },
         ABI_OK
     );
     assert!(generation.vertices > 0 && generation.triangles > 0);
@@ -278,23 +286,48 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     let mut first = NativeAppearanceHandle::default();
     let mut second = NativeAppearanceHandle::default();
     assert_eq!(
-        unsafe { appearance::create_mesh_appearance(appearance_context, mesh, &mut first) },
+        unsafe {
+            appearance::create_mesh_appearance(
+                appearance_context,
+                mesh,
+                &mut first,
+                std::ptr::null_mut(),
+            )
+        },
         ABI_OK
     );
     assert_eq!(
-        unsafe { appearance::create_mesh_appearance(appearance_context, mesh, &mut second) },
+        unsafe {
+            appearance::create_mesh_appearance(
+                appearance_context,
+                mesh,
+                &mut second,
+                std::ptr::null_mut(),
+            )
+        },
         ABI_OK
     );
     let facts = [fact(1, first), fact(2, second)];
     assert_eq!(
         unsafe {
-            appearance::publish_appearance_snapshot(appearance_context, facts.as_ptr(), facts.len())
+            appearance::publish_appearance_snapshot(
+                appearance_context,
+                facts.as_ptr(),
+                facts.len(),
+                std::ptr::null_mut(),
+            )
         },
         ABI_OK
     );
     let mut presentation = NativePresentationReadout::default();
     assert_eq!(
-        unsafe { appearance::read_presentation(appearance_context, &mut presentation) },
+        unsafe {
+            appearance::read_presentation(
+                appearance_context,
+                &mut presentation,
+                std::ptr::null_mut(),
+            )
+        },
         ABI_OK
     );
     assert_eq!(presentation.retained_object_count, 2);
@@ -319,7 +352,10 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);
-    assert_eq!(unsafe { (api.destroy_field)(api.context, field) }, ABI_OK);
+    assert_eq!(
+        unsafe { (api.destroy_field)(api.context, field, std::ptr::null_mut()) },
+        ABI_OK
+    );
     let after_field_appearance = appearance
         .take_staged_call()
         .expect("field destruction leaves appearance stage valid");
@@ -331,7 +367,9 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     implicit.begin_call();
     let appearance_context = (&mut appearance as *mut RuntimeAppearanceBridge).cast();
     assert_eq!(
-        unsafe { appearance::destroy_mesh_resource(appearance_context, mesh) },
+        unsafe {
+            appearance::destroy_mesh_resource(appearance_context, mesh, std::ptr::null_mut())
+        },
         0,
         "a mesh cannot be released while either appearance still owns it"
     );
@@ -344,23 +382,32 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     implicit.begin_call();
     let appearance_context = (&mut appearance as *mut RuntimeAppearanceBridge).cast();
     assert_eq!(
-        unsafe { appearance::publish_appearance_snapshot(appearance_context, std::ptr::null(), 0) },
+        unsafe {
+            appearance::publish_appearance_snapshot(
+                appearance_context,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        },
         ABI_OK
     );
     assert_eq!(
-        unsafe { appearance::destroy_appearance(appearance_context, first) },
+        unsafe { appearance::destroy_appearance(appearance_context, first, std::ptr::null_mut()) },
         ABI_OK
     );
     assert_eq!(
-        unsafe { appearance::destroy_appearance(appearance_context, second) },
+        unsafe { appearance::destroy_appearance(appearance_context, second, std::ptr::null_mut()) },
         ABI_OK
     );
     assert_eq!(
-        unsafe { appearance::destroy_mesh_resource(appearance_context, mesh) },
+        unsafe {
+            appearance::destroy_mesh_resource(appearance_context, mesh, std::ptr::null_mut())
+        },
         ABI_OK
     );
     assert_eq!(
-        unsafe { appearance::destroy_material(appearance_context, material) },
+        unsafe { appearance::destroy_material(appearance_context, material, std::ptr::null_mut()) },
         ABI_OK
     );
     let cleanup_appearance = appearance
@@ -386,13 +433,18 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
     let mut material = NativeMaterialHandle::default();
     assert_eq!(
         unsafe {
-            appearance::create_material(appearance_context, opaque_material(), &mut material)
+            appearance::create_material(
+                appearance_context,
+                opaque_material(),
+                &mut material,
+                std::ptr::null_mut(),
+            )
         },
         ABI_OK
     );
     let mut field = NativeImplicitFieldHandle { value: 0 };
     assert_eq!(
-        unsafe { (api.create_field)(api.context, &mut field) },
+        unsafe { (api.create_field)(api.context, &mut field, std::ptr::null_mut()) },
         ABI_OK
     );
     let mut sphere = NativeImplicitNode { value: 0 };
@@ -406,6 +458,7 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
                     radius: 0.65,
                 },
                 &mut sphere,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -581,11 +634,11 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
     let mut first_field = NativeImplicitFieldHandle { value: 0 };
     let mut second_field = NativeImplicitFieldHandle { value: 0 };
     assert_eq!(
-        unsafe { (api.create_field)(api.context, &mut first_field) },
+        unsafe { (api.create_field)(api.context, &mut first_field, std::ptr::null_mut()) },
         ABI_OK
     );
     assert_eq!(
-        unsafe { (api.create_field)(api.context, &mut second_field) },
+        unsafe { (api.create_field)(api.context, &mut second_field, std::ptr::null_mut()) },
         ABI_OK
     );
     let mut first_node = NativeImplicitNode { value: 0 };
@@ -600,6 +653,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     radius: 0.5,
                 },
                 &mut first_node,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -622,6 +676,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     },
                 },
                 &mut second_node,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -647,6 +702,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     position: NativeVec3::default(),
                 },
                 &mut sample,
+                std::ptr::null_mut(),
             )
         },
         0
@@ -668,6 +724,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     right: second_node,
                 },
                 &mut combined,
+                std::ptr::null_mut(),
             )
         },
         0
@@ -842,6 +899,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     radius: 0.25,
                 },
                 &mut discarded_node,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -863,6 +921,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     radius: 0.25,
                 },
                 &mut fresh_node,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -878,6 +937,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
                     position: NativeVec3::default(),
                 },
                 &mut sample,
+                std::ptr::null_mut(),
             )
         },
         0
@@ -896,7 +956,7 @@ fn native_implicit_frustum_samples_taper_with_start_to_end_orientation() {
 
     let mut field = NativeImplicitFieldHandle { value: 0 };
     assert_eq!(
-        unsafe { (api.create_field)(api.context, &mut field) },
+        unsafe { (api.create_field)(api.context, &mut field, std::ptr::null_mut()) },
         ABI_OK
     );
     let mut frustum = NativeImplicitNode { value: 0 };
@@ -921,6 +981,7 @@ fn native_implicit_frustum_samples_taper_with_start_to_end_orientation() {
                     end_radius: 1.0,
                 },
                 &mut frustum,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -938,6 +999,7 @@ fn native_implicit_frustum_samples_taper_with_start_to_end_orientation() {
                         position,
                     },
                     &mut value,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

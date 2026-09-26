@@ -312,6 +312,7 @@ pub type NativeReadTextureResourceInfo = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeRenderResourceHandle,
     *mut NativeTextureResourceInfo,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
 /// A retained immutable sprite atlas assembled from one already-admitted

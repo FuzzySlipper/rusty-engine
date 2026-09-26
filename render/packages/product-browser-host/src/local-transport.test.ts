@@ -1758,3 +1758,26 @@ for (const certainty of ['not-applied', 'unknown'] as const) {
     adapter.dispose();
   });
 }
+
+test('runtime output batches admit video resources and reject duplicate identities', () => {
+  for (const duplicate of [false, true]) {
+    FakeEventSource.instances.length = 0;
+    const errors: unknown[] = [];
+    const outputs: unknown[] = [];
+    const adapter = createProductBrowserLocalHttpAdapter({
+      fetch: async () => response({}), eventSource: FakeEventSource,
+      onTransportError: (error) => errors.push(error),
+    });
+    adapter.subscribeOutputs((output) => outputs.push(output));
+    const stream = FakeEventSource.instances[0]!;
+    completeConnectionBaseline(stream);
+    outputs.length = 0;
+    const identity = `video-resource/${'a'.repeat(64)}`;
+    stream.emit({ kind: 'runtime-output-batch', outputs: [{
+      kind: 'renderer-resources', rendererResources: duplicate ? [identity, identity] : [identity],
+    }] });
+    assert.equal(errors.length, duplicate ? 1 : 0);
+    assert.equal(outputs.length, duplicate ? 0 : 1);
+    adapter.dispose();
+  }
+});

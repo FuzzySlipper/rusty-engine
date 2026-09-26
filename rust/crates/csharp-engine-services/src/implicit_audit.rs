@@ -10,8 +10,12 @@ pub(super) struct AuditCollection {
 pub(super) unsafe extern "C" fn create_audit(
     context: *mut c_void,
     result: *mut NativeImplicitAuditHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let value = b.next_audit;
         b.next_audit = value
             .checked_add(1)
@@ -24,8 +28,12 @@ pub(super) unsafe extern "C" fn create_audit(
 pub(super) unsafe extern "C" fn destroy_audit(
     context: *mut c_void,
     handle: NativeImplicitAuditHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, &mut (), |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, &mut (), operation_error, |b| {
         b.stage()?
             .audits
             .remove(&handle.value)

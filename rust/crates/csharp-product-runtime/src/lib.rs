@@ -6514,6 +6514,7 @@ mod tests {
                         alpha_cutoff: 0.5,
                     },
                     &mut material,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6580,6 +6581,7 @@ mod tests {
                         },
                     },
                     &mut appearance,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6609,7 +6611,14 @@ mod tests {
             },
         };
         assert_eq!(
-            unsafe { (api.graphics.publish_snapshot)(api.graphics.context, &fact, 1) },
+            unsafe {
+                (api.graphics.publish_snapshot)(
+                    api.graphics.context,
+                    &fact,
+                    1,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let call = runtime.services.take_call().unwrap();
@@ -7303,6 +7312,7 @@ mod tests {
                         bus: NativeAudioBus::Sfx,
                         muted: true,
                     },
+                    std::ptr::null_mut(),
                 )
             },
             1

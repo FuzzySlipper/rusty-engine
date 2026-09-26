@@ -568,22 +568,29 @@ pub type NativeCreateGhostPlatePresentation = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     *const NativeCreateGhostPlatePresentationRequest,
     *mut NativeGhostPlatePresentationHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdateGhostPlatePresentation = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     *const NativeUpdateGhostPlatePresentationRequest,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRecaptureGhostPlatePresentation = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     *const NativeRecaptureGhostPlatePresentationRequest,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadGhostPlatePresentation = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeGhostPlatePresentationHandle,
     *mut NativeGhostPlatePresentationReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyGhostPlatePresentation =
-    unsafe extern "C" fn(*mut std::ffi::c_void, NativeGhostPlatePresentationHandle) -> i32;
+pub type NativeDestroyGhostPlatePresentation = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeGhostPlatePresentationHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 impl Default for NativePresentationDiagnosticAtReceipt {
     fn default() -> Self {

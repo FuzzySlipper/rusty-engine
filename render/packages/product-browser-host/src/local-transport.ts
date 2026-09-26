@@ -1,5 +1,6 @@
 import type { RenderOutputJob } from "@rusty-engine/render-contracts";
 import { browserAttachmentEvidence } from './attachment-evidence.js';
+import { isRendererResourceIdentity } from './dynamic-renderer-resources.js';
 import { snapshotRustyApplicationJson, snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
 import type {
   RustyApplicationFrame,
@@ -2674,10 +2675,10 @@ function optionalRendererResources(record: Record<string, unknown>): {
   const identities = values.map((value) => requireBoundedString(value, 'renderer resource identity'));
   const seen = new Set<string>();
   for (const identity of identities) {
-    if (!/^(?:(?:animated-mesh|audio|mesh|clip-pack|texture)-resource\/[0-9a-f]{64}|font\/[0-9a-f]{64})$/u.test(identity)
-      || !seen.add(identity)) {
+    if (!isRendererResourceIdentity(identity) || seen.has(identity)) {
       throw new TypeError('renderer resource identity is invalid or duplicated');
     }
+    seen.add(identity);
   }
   return { rendererResources: Object.freeze(identities) };
 }

@@ -151,6 +151,7 @@ pub(crate) struct RuntimeAudioBridge {
     content_resources: BTreeMap<String, Arc<[u8]>>,
     staged: Option<RuntimeAudioCall>,
     callback_error: Option<CsharpEngineServicesError>,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     realized_facts: VecDeque<AudioRealizationFact>,
     renderer_evicted_fact_count: u64,
     local_evicted_fact_count: u64,
@@ -178,6 +179,7 @@ impl RuntimeAudioBridge {
             content_resources,
             staged: None,
             callback_error: None,
+            operation_diagnostics: Default::default(),
             realized_facts: VecDeque::new(),
             renderer_evicted_fact_count: 0,
             local_evicted_fact_count: 0,
@@ -1288,7 +1290,11 @@ pub(crate) unsafe extern "C" fn open_audio_clip(
     context: *mut c_void,
     request: *const NativeAudioClipRequest,
     result: *mut NativeAudioClipHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1301,6 +1307,7 @@ pub(crate) unsafe extern "C" fn open_audio_clip(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1311,7 +1318,11 @@ pub(crate) unsafe extern "C" fn open_audio_clip_from_content(
     context: *mut c_void,
     request: *const NativeAudioClipFromContentRequest,
     result: *mut NativeAudioClipHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1324,6 +1335,7 @@ pub(crate) unsafe extern "C" fn open_audio_clip_from_content(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1334,7 +1346,11 @@ pub(crate) unsafe extern "C" fn preload_optional_audio_clip(
     context: *mut c_void,
     request: *const NativeAudioClipRequest,
     result: *mut NativeAudioOptionalPreloadReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1345,6 +1361,7 @@ pub(crate) unsafe extern "C" fn preload_optional_audio_clip(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1354,7 +1371,11 @@ pub(crate) unsafe extern "C" fn emit_audio(
     context: *mut c_void,
     request: *const NativeAudioEmitRequest,
     result: *mut NativeAudioSignalHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1367,6 +1388,7 @@ pub(crate) unsafe extern "C" fn emit_audio(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1376,7 +1398,11 @@ pub(crate) unsafe extern "C" fn create_audio_voice(
     context: *mut c_void,
     request: *const NativeAudioSourceDescriptor,
     result: *mut NativeAudioVoiceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1389,6 +1415,7 @@ pub(crate) unsafe extern "C" fn create_audio_voice(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1397,7 +1424,11 @@ pub(crate) unsafe extern "C" fn create_audio_voice(
 pub(crate) unsafe extern "C" fn update_audio_voice(
     context: *mut c_void,
     request: *const NativeAudioVoiceUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1405,6 +1436,7 @@ pub(crate) unsafe extern "C" fn update_audio_voice(
     match bridge.update_voice(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1414,7 +1446,11 @@ pub(crate) unsafe extern "C" fn replace_audio_voice(
     context: *mut c_void,
     request: *const NativeAudioVoiceReplaceRequest,
     result: *mut NativeAudioVoiceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1427,6 +1463,7 @@ pub(crate) unsafe extern "C" fn replace_audio_voice(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1436,7 +1473,11 @@ pub(crate) unsafe extern "C" fn replace_audio_voice(
 pub(crate) unsafe extern "C" fn destroy_audio_voice(
     context: *mut c_void,
     voice: NativeAudioVoiceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -1444,6 +1485,7 @@ pub(crate) unsafe extern "C" fn destroy_audio_voice(
     match bridge.destroy_voice(voice) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1453,7 +1495,11 @@ pub(crate) unsafe extern "C" fn destroy_audio_voice(
 pub(crate) unsafe extern "C" fn destroy_audio_clip(
     context: *mut c_void,
     clip: NativeAudioClipHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() {
         return 0;
     }
@@ -1461,6 +1507,7 @@ pub(crate) unsafe extern "C" fn destroy_audio_clip(
     match bridge.destroy_clip(clip) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1470,7 +1517,11 @@ pub(crate) unsafe extern "C" fn destroy_audio_clip(
 pub(crate) unsafe extern "C" fn control_audio_voice(
     context: *mut c_void,
     request: *const NativeAudioVoiceControlRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1479,6 +1530,7 @@ pub(crate) unsafe extern "C" fn control_audio_voice(
     match bridge.control_voice(request.voice, request.control) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1488,7 +1540,11 @@ pub(crate) unsafe extern "C" fn control_audio_voice(
 pub(crate) unsafe extern "C" fn set_audio_bus_volume(
     context: *mut c_void,
     request: *const NativeAudioBusVolumeRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1497,6 +1553,7 @@ pub(crate) unsafe extern "C" fn set_audio_bus_volume(
     match bridge.set_bus_volume(request.bus, request.volume) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1506,7 +1563,11 @@ pub(crate) unsafe extern "C" fn set_audio_bus_volume(
 pub(crate) unsafe extern "C" fn set_audio_bus_muted(
     context: *mut c_void,
     request: *const NativeAudioBusMutedRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1515,6 +1576,7 @@ pub(crate) unsafe extern "C" fn set_audio_bus_muted(
     match bridge.set_bus_muted(request.bus, request.muted) {
         Ok(()) => ABI_OK,
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1523,7 +1585,11 @@ pub(crate) unsafe extern "C" fn set_audio_bus_muted(
 pub(crate) unsafe extern "C" fn read_audio(
     context: *mut c_void,
     result: *mut NativeAudioReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -1536,6 +1602,7 @@ pub(crate) unsafe extern "C" fn read_audio(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1546,7 +1613,11 @@ pub(crate) unsafe extern "C" fn read_audio_voice(
     context: *mut c_void,
     request: *const NativeAudioVoiceReadRequest,
     result: *mut NativeAudioVoiceReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1559,6 +1630,7 @@ pub(crate) unsafe extern "C" fn read_audio_voice(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1569,7 +1641,11 @@ pub(crate) unsafe extern "C" fn read_audio_bus(
     context: *mut c_void,
     request: *const NativeAudioBusReadRequest,
     result: *mut NativeAudioBusReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -1582,6 +1658,7 @@ pub(crate) unsafe extern "C" fn read_audio_bus(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1591,7 +1668,11 @@ pub(crate) unsafe extern "C" fn read_audio_diagnostic_at(
     context: *mut c_void,
     request: NativeAudioDiagnosticAtRequest,
     result: *mut NativeAudioDiagnosticAtReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -1604,6 +1685,7 @@ pub(crate) unsafe extern "C" fn read_audio_diagnostic_at(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1613,7 +1695,11 @@ pub(crate) unsafe extern "C" fn read_audio_diagnostic_at(
 pub(crate) unsafe extern "C" fn read_audio_realization(
     context: *mut c_void,
     result: *mut NativeAudioRealizationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -1626,6 +1712,7 @@ pub(crate) unsafe extern "C" fn read_audio_realization(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1636,7 +1723,11 @@ pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
     context: *mut c_void,
     request: NativeAudioRealizationFactAtRequest,
     result: *mut NativeAudioRealizationFactAtReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -1649,6 +1740,7 @@ pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
             ABI_OK
         }
         Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
             bridge.callback_error = Some(error);
             0
         }
@@ -1658,6 +1750,7 @@ pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
 pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
     NativeAudioApi {
         context: (bridge as *mut RuntimeAudioBridge).cast(),
+        destroy_operation_diagnostic_lease,
         open_clip: open_audio_clip,
         open_clip_from_content: open_audio_clip_from_content,
         destroy_clip: destroy_audio_clip,
@@ -1677,6 +1770,17 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         read_realization: read_audio_realization,
         read_realization_fact_at: read_audio_realization_fact_at,
     }
+}
+
+unsafe extern "C" fn destroy_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    bridge.operation_diagnostics.destroy(handle)
 }
 
 #[cfg(test)]

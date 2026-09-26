@@ -1,4 +1,5 @@
 import type { RustyApplicationResource } from '@rusty-engine/application-host';
+export declare function isRendererResourceIdentity(identity: string): boolean;
 export interface ProductBrowserDynamicRendererResourceFetcher {
     (input: string | URL, init?: RequestInit): Promise<Response>;
 }

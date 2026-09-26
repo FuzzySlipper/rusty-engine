@@ -110,3 +110,6 @@ pub struct NativeWritableByteSlice {
     pub bytes: *mut u8,
     pub len: usize,
 }
+
+pub type NativeDestroyEngineDiagnosticLease =
+    unsafe extern "C" fn(*mut std::ffi::c_void, NativeEngineDiagnosticLeaseHandle) -> i32;

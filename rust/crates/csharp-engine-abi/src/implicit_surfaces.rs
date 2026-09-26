@@ -318,11 +318,17 @@ pub struct NativeImplicitGenerationReadout {
     pub bounded_leaf_vertices: u32,
 }
 
-pub type NativeCreateImplicitField =
-    unsafe extern "C" fn(*mut c_void, *mut NativeImplicitFieldHandle) -> i32;
+pub type NativeCreateImplicitField = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeImplicitFieldHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeDestroyImplicitField =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitFieldHandle) -> i32;
+pub type NativeDestroyImplicitField = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitFieldHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeCreateSampledVolume = unsafe extern "C" fn(
     *mut c_void,
@@ -331,8 +337,11 @@ pub type NativeCreateSampledVolume = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
-pub type NativeDestroySampledVolume =
-    unsafe extern "C" fn(*mut c_void, NativeSampledVolumeHandle) -> i32;
+pub type NativeDestroySampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeDescribeSampledVolume = unsafe extern "C" fn(
     *mut c_void,
@@ -384,55 +393,102 @@ pub type NativeReadSampledVolumeGeneration = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
-pub type NativeAddImplicitBox =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitBoxRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeAddImplicitBox = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitBoxRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeAddImplicitSphere =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitSphereRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeAddImplicitSphere = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitSphereRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeAddImplicitEllipsoid = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitEllipsoidRequest,
     *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
-pub type NativeAddImplicitCapsule =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitCapsuleRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeAddImplicitCapsule = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitCapsuleRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeAddImplicitFrustum =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitFrustumRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeAddImplicitFrustum = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitFrustumRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeAddImplicitPlane =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitPlaneRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeAddImplicitPlane = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitPlaneRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeImplicitUnion =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitBinaryRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeImplicitUnion = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitBinaryRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeImplicitIntersection =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitBinaryRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeImplicitIntersection = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitBinaryRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeImplicitDifference =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitBinaryRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeImplicitDifference = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitBinaryRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeImplicitSmoothUnion =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitBlendRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeImplicitSmoothUnion = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitBlendRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeImplicitDisplaceWaves =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitWaveRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeImplicitDisplaceWaves = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitWaveRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
-pub type NativeImplicitOffset =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitOffsetRequest, *mut NativeImplicitNode) -> i32;
+pub type NativeImplicitOffset = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitOffsetRequest,
+    *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeImplicitTransform = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitTransformRequest,
     *mut NativeImplicitNode,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
 pub type NativeSampleImplicitField = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitSampleRequest,
     *mut NativeImplicitSample,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
 pub type NativeGenerateImplicitSurface = unsafe extern "C" fn(
@@ -449,6 +505,7 @@ pub type NativeReadImplicitGeneration = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitFieldHandle,
     *mut NativeImplicitGenerationReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
 #[repr(C)]
@@ -559,10 +616,16 @@ pub struct NativeImplicitAuditReportLease {
     pub diagnostics_len: usize,
 }
 
-pub type NativeCreateImplicitAudit =
-    unsafe extern "C" fn(*mut c_void, *mut NativeImplicitAuditHandle) -> i32;
-pub type NativeDestroyImplicitAudit =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitAuditHandle) -> i32;
+pub type NativeCreateImplicitAudit = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeImplicitAuditHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyImplicitAudit = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitAuditHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCaptureImplicitAuditPiece = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitAuditPieceRequest,

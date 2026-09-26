@@ -437,7 +437,12 @@ impl ProductDevAudioFeedbackResult {
 /// Engine-issued playback handle, so a late HTMLVideoElement callback cannot
 /// advance a replacement presentation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum ProductDevVideoFeedbackFact {
     Completed {
         fact_id: CanonicalU64,
@@ -3558,6 +3563,19 @@ pub trait ProductDevRuntime: Send + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_terminal_feedback_accepts_browser_camel_case_fields() {
+        for kind in ["completed", "skipped", "failed"] {
+            let mut wire = serde_json::json!({"kind": kind, "factId": "7", "handle": "3"});
+            if kind == "failed" {
+                wire["code"] = serde_json::json!("decodeFailed");
+            }
+            let fact: ProductDevVideoFeedbackFact = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(fact.fact_id().get(), 7);
+            assert_eq!(serde_json::to_value(fact).unwrap(), wire);
+        }
+    }
 
     #[test]
     fn animation_feedback_accepts_browser_camel_case_fields() {

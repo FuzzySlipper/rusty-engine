@@ -499,6 +499,7 @@ pub(crate) fn api(
 fn call<T>(
     context: *mut c_void,
     result: *mut T,
+    operation_error: *mut NativeOperationErrorReceipt,
     action: impl FnOnce(&mut RuntimeImplicitBridge) -> Result<T>,
 ) -> i32 {
     if context.is_null() || result.is_null() {
@@ -513,6 +514,13 @@ fn call<T>(
             ABI_OK
         }
         Ok(Err(e)) => {
+            if !operation_error.is_null() {
+                bridge.retain_operation_error(
+                    b"",
+                    CsharpEngineServicesError::new(e.code(), e.detail()),
+                    operation_error,
+                );
+            }
             bridge.callback_error = Some(e);
             0
         }
@@ -563,8 +571,12 @@ fn call_operation<T>(
 unsafe extern "C" fn create_field(
     context: *mut c_void,
     result: *mut NativeImplicitFieldHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let value = b.next_field;
         b.next_field = value
             .checked_add(1)
@@ -580,8 +592,15 @@ unsafe extern "C" fn create_field(
         Ok(NativeImplicitFieldHandle { value })
     })
 }
-unsafe extern "C" fn destroy_field(context: *mut c_void, field: NativeImplicitFieldHandle) -> i32 {
-    call(context, &mut (), |b| {
+unsafe extern "C" fn destroy_field(
+    context: *mut c_void,
+    field: NativeImplicitFieldHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, &mut (), operation_error, |b| {
         b.stage()?
             .fields
             .remove(&field.value)
@@ -617,8 +636,12 @@ unsafe extern "C" fn create_sampled_volume(
 unsafe extern "C" fn destroy_sampled_volume(
     context: *mut c_void,
     volume: NativeSampledVolumeHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, &mut (), |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, &mut (), operation_error, |b| {
         b.stage()?
             .volumes
             .remove(&volume.value)
@@ -922,8 +945,12 @@ unsafe extern "C" fn read_generation(
     context: *mut c_void,
     field: NativeImplicitFieldHandle,
     result: *mut NativeImplicitGenerationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.retained(field)?
             .generation
             .ok_or_else(|| error("field has not produced a mesh"))
@@ -933,8 +960,12 @@ unsafe extern "C" fn sample(
     context: *mut c_void,
     r: NativeImplicitSampleRequest,
     result: *mut NativeImplicitSample,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let source = b.node(r.field, r.source)?;
         let values = b
             .retained(r.field)?
@@ -948,8 +979,12 @@ unsafe extern "C" fn add_box(
     context: *mut c_void,
     r: NativeImplicitBoxRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.edit(r.field, |f| {
             f.box_shape(Bounds {
                 min: v(r.minimum),
@@ -962,8 +997,12 @@ unsafe extern "C" fn add_sphere(
     context: *mut c_void,
     r: NativeImplicitSphereRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.edit(r.field, |f| f.sphere(v(r.center), r.radius))
     })
 }
@@ -971,8 +1010,12 @@ unsafe extern "C" fn add_ellipsoid(
     context: *mut c_void,
     r: NativeImplicitEllipsoidRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.edit(r.field, |f| f.ellipsoid(v(r.center), v(r.radii)))
     })
 }
@@ -980,8 +1023,12 @@ unsafe extern "C" fn add_capsule(
     context: *mut c_void,
     r: NativeImplicitCapsuleRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.edit(r.field, |f| f.capsule(v(r.start), v(r.end), r.radius))
     })
 }
@@ -989,8 +1036,12 @@ unsafe extern "C" fn add_frustum(
     context: *mut c_void,
     r: NativeImplicitFrustumRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.edit(r.field, |f| {
             f.frustum(v(r.start), v(r.end), r.start_radius, r.end_radius)
         })
@@ -1000,8 +1051,12 @@ unsafe extern "C" fn add_plane(
     context: *mut c_void,
     r: NativeImplicitPlaneRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         b.edit(r.field, |f| f.plane(v(r.normal), r.offset))
     })
 }
@@ -1009,8 +1064,12 @@ unsafe extern "C" fn union(
     context: *mut c_void,
     r: NativeImplicitBinaryRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let left = b.node(r.field, r.left)?;
         let right = b.node(r.field, r.right)?;
         b.edit(r.field, |f| f.union(left, right))
@@ -1020,8 +1079,12 @@ unsafe extern "C" fn intersection(
     context: *mut c_void,
     r: NativeImplicitBinaryRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let left = b.node(r.field, r.left)?;
         let right = b.node(r.field, r.right)?;
         b.edit(r.field, |f| f.intersection(left, right))
@@ -1031,8 +1094,12 @@ unsafe extern "C" fn difference(
     context: *mut c_void,
     r: NativeImplicitBinaryRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let left = b.node(r.field, r.left)?;
         let right = b.node(r.field, r.right)?;
         b.edit(r.field, |f| f.difference(left, right))
@@ -1042,8 +1109,12 @@ unsafe extern "C" fn smooth_union(
     context: *mut c_void,
     r: NativeImplicitBlendRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let left = b.node(r.field, r.left)?;
         let right = b.node(r.field, r.right)?;
         b.edit(r.field, |f| f.smooth_union(left, right, r.radius))
@@ -1053,8 +1124,12 @@ unsafe extern "C" fn displace_waves(
     context: *mut c_void,
     r: NativeImplicitWaveRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let source = b.node(r.field, r.source)?;
         b.edit(r.field, |f| {
             f.displace_waves(
@@ -1075,8 +1150,12 @@ unsafe extern "C" fn offset(
     context: *mut c_void,
     r: NativeImplicitOffsetRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let source = b.node(r.field, r.source)?;
         b.edit(r.field, |f| f.offset(source, r.amount))
     })
@@ -1085,8 +1164,12 @@ unsafe extern "C" fn transform(
     context: *mut c_void,
     r: NativeImplicitTransformRequest,
     result: *mut NativeImplicitNode,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call(context, result, |b| {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    call(context, result, operation_error, |b| {
         let source = b.node(r.field, r.source)?;
         b.edit(r.field, |f| {
             f.transform_trs(

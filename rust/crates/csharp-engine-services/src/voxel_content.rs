@@ -2763,6 +2763,7 @@ mod tests {
                         alpha_cutoff: 0.5,
                     },
                     &mut material,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2987,6 +2988,7 @@ mod tests {
                         alpha_cutoff: 0.5,
                     },
                     &mut conflicting_material,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
