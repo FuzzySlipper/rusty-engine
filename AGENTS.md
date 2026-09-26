@@ -125,9 +125,13 @@ not evidence that physical picking works. Keep product action rules downstream.
 
 ## Work and evidence
 
-- Add capabilities as coherent service families informed by real downstream
-  needs. The generated surface is not a claim that every Rust source API is
-  available in C#.
+- Add capabilities as coherent Engine service families. An identified or
+  already-running downstream consumer is not a prerequisite for an authorized
+  Engine feature. Use Engine fixtures to prove capabilities while product work
+  is ongoing; implement requested missing mechanisms rather than substituting
+  a documentation-only position. Document existing capabilities after verifying
+  their actual coverage. The generated surface is not a claim that every Rust
+  source API is available in C#.
 - Report a short milestone before expensive integration: goal advanced,
   necessary surfaces, proof scaffolding, drift/unsupported boundary, and any
   upstream request.

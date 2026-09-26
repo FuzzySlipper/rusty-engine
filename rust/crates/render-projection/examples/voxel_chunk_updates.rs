@@ -126,6 +126,7 @@ fn fixture(options: SurfaceMeshOptions) -> VoxelCollisionScene {
         fixture_voxels()
             .into_iter()
             .map(|(address, material_slot)| MaterialVoxel {
+                state: 0,
                 address,
                 material_slot,
             }),
@@ -146,14 +147,24 @@ fn fixture_voxels() -> BTreeMap<[i64; 3], u16> {
 }
 
 fn edited_fixture(options: SurfaceMeshOptions, edits: &[VoxelEdit]) -> VoxelCollisionScene {
-    let mut voxels = fixture_voxels();
+    let mut voxels: BTreeMap<_, _> = fixture_voxels()
+        .into_iter()
+        .map(|(a, m)| (a, (m, 0)))
+        .collect();
     for edit in edits {
         match *edit {
             VoxelEdit::Set {
                 address,
                 material_slot,
             } => {
-                voxels.insert(address, material_slot);
+                voxels.insert(address, (material_slot, 0));
+            }
+            VoxelEdit::SetState {
+                address,
+                material_slot,
+                state,
+            } => {
+                voxels.insert(address, (material_slot, state));
             }
             VoxelEdit::Clear { address } => {
                 voxels.remove(&address);
@@ -165,7 +176,8 @@ fn edited_fixture(options: SurfaceMeshOptions, edits: &[VoxelEdit]) -> VoxelColl
         16,
         voxels
             .into_iter()
-            .map(|(address, material_slot)| MaterialVoxel {
+            .map(|(address, (material_slot, state))| MaterialVoxel {
+                state,
                 address,
                 material_slot,
             }),

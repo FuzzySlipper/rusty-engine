@@ -30,6 +30,7 @@ pub struct NativeVoxelSceneMaterialBinding {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelSceneFaceMaterialBinding {
+    pub variant: u32,
     pub material_slot: u32,
     pub face: NativeSpatialFace,
     pub material: NativeMaterialHandle,
@@ -91,6 +92,7 @@ pub struct NativeVoxelSceneMaterialMappingLeaseHandle {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelSceneMaterialMappingRow {
+    pub variant: u32,
     pub source_slot: u32,
     pub face: NativeSpatialFace,
     pub material_value: u64,

@@ -10,7 +10,7 @@ use crate::{
     MAX_VOXEL_COORDINATE_ABS,
 };
 
-pub const VOXEL_EDIT_HISTORY_SCHEMA_VERSION: u32 = 3;
+pub const VOXEL_EDIT_HISTORY_SCHEMA_VERSION: u32 = 4;
 pub const MAX_VOXEL_EDIT_HISTORY_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -304,7 +304,16 @@ fn validate_document_shape(
                 && delta
                     .after_material
                     .is_none_or(|material| validate_voxel_material_slot(material).is_ok());
-            if !ordered || delta.before_material == delta.after_material || !valid_authority {
+            let valid_states = core_voxel::VoxelState::from_raw(delta.before_state).is_some()
+                && core_voxel::VoxelState::from_raw(delta.after_state).is_some()
+                && (delta.before_material.is_some() || delta.before_state == 0)
+                && (delta.after_material.is_some() || delta.after_state == 0);
+            if !ordered
+                || (delta.before_material == delta.after_material
+                    && delta.before_state == delta.after_state)
+                || !valid_authority
+                || !valid_states
+            {
                 return Err(VoxelEditHistoryCodecError::InvalidDelta {
                     entry_index,
                     delta_index,
@@ -452,6 +461,7 @@ mod tests {
             1.0,
             8,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             }],

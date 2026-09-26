@@ -323,6 +323,7 @@ impl std::error::Error for CharacterConfigError {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CharacterControllerCommand {
+    pub movement: crate::CharacterMovementRequest,
     pub tether: Option<CharacterTetherRequest>,
     pub planar_intent: Vec2,
     pub heading_yaw_radians: f32,
@@ -338,6 +339,18 @@ pub struct CharacterControllerCommand {
 impl CharacterControllerCommand {
     pub const fn idle(step_seconds: f32, sequence: u64) -> Self {
         Self {
+            movement: crate::CharacterMovementRequest {
+                mode: crate::CharacterMovementMode::Walking,
+                vertical_intent: 0.0,
+                speed: 0.0,
+                acceleration: 0.0,
+                drag: 0.0,
+                minimum: Vec3::ZERO,
+                maximum: Vec3::ZERO,
+                gravity_scale: 0.0,
+                buoyancy: 0.0,
+                climb_reach: 0.0,
+            },
             tether: None,
             planar_intent: Vec2::ZERO,
             heading_yaw_radians: 0.0,
@@ -480,6 +493,7 @@ pub enum CharacterBlockKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CharacterControllerReceipt {
+    pub movement: crate::CharacterMovementFact,
     pub tether: CharacterTetherFact,
     pub generation: u64,
     pub revision_before: u64,
@@ -610,6 +624,7 @@ struct CharacterEnvironmentIdentity {
 
 #[derive(Clone)]
 pub struct PreparedCharacterControllerStep {
+    movement: crate::CharacterMovementFact,
     tether: CharacterTetherFact,
     entity: EntityId,
     transform_revision: ComponentRevision,
@@ -1004,35 +1019,62 @@ impl CharacterControllerService {
         let input = normalized_intent(command.planar_intent);
         let wish_velocity = wish_velocity(input, command.heading_yaw_radians, &config.ground);
         let mut controlled = motion.controlled_velocity;
-        if motion.grounded {
-            controlled = ground_velocity(controlled, wish_velocity, config, dt);
-            motion.coyote_remaining = config.jump.coyote_seconds;
-        } else {
-            controlled = air_velocity(controlled, wish_velocity, config, dt);
-        }
-        let jump_available = motion.grounded || motion.coyote_remaining > 0.0;
-        let jump_requested = motion.jump_buffer_remaining > 0.0
-            || (config.jump.held_input_retriggers && command.jump_held);
-        if jump_available && jump_requested && motion.landing_lockout_remaining <= 0.0 {
-            if config.platform.inherit_departure_velocity && motion.support_entity.is_some() {
-                motion.external_velocity = motion.external_velocity
-                    + motion.support_point_velocity * config.platform.departure_velocity_factor;
-                if let Some(fact) = &mut platform {
-                    fact.departed = true;
-                }
-            }
-            controlled.y = config.vertical.jump_speed;
+        let movement = command.movement.observe(vec3_from_pos(center)?, height);
+        let free_mode = movement.mode != crate::CharacterMovementMode::Walking;
+        if free_mode {
+            clear_support(&mut motion);
+            motion.grounded = false;
             motion.jump_buffer_remaining = 0.0;
             motion.coyote_remaining = 0.0;
-            motion.grounded = false;
-            clear_support(&mut motion);
-        } else if !motion.grounded || controlled.y > 0.0 {
-            controlled.y = (controlled.y - config.vertical.gravity * dt).clamp(
-                -config.vertical.terminal_fall_speed,
-                config.vertical.terminal_rise_speed,
+            let direction = self::wish_velocity(
+                input,
+                command.heading_yaw_radians,
+                &crate::CharacterGroundConfig {
+                    forward_speed: 1.0,
+                    backward_speed: 1.0,
+                    strafe_speed: 1.0,
+                    ..config.ground
+                },
+            );
+            controlled = command.movement.velocity(
+                movement,
+                vec3_from_pos(center)?,
+                controlled,
+                direction,
+                config.vertical.gravity,
+                dt,
             );
         } else {
-            controlled.y = -config.vertical.grounded_downward_bias;
+            if motion.grounded {
+                controlled = ground_velocity(controlled, wish_velocity, config, dt);
+                motion.coyote_remaining = config.jump.coyote_seconds;
+            } else {
+                controlled = air_velocity(controlled, wish_velocity, config, dt);
+            }
+            let jump_available = motion.grounded || motion.coyote_remaining > 0.0;
+            let jump_requested = motion.jump_buffer_remaining > 0.0
+                || (config.jump.held_input_retriggers && command.jump_held);
+            if jump_available && jump_requested && motion.landing_lockout_remaining <= 0.0 {
+                if config.platform.inherit_departure_velocity && motion.support_entity.is_some() {
+                    motion.external_velocity = motion.external_velocity
+                        + motion.support_point_velocity * config.platform.departure_velocity_factor;
+                    if let Some(fact) = &mut platform {
+                        fact.departed = true;
+                    }
+                }
+                controlled.y = config.vertical.jump_speed;
+                motion.jump_buffer_remaining = 0.0;
+                motion.coyote_remaining = 0.0;
+                motion.grounded = false;
+                clear_support(&mut motion);
+            } else if !motion.grounded || controlled.y > 0.0 {
+                controlled.y = (controlled.y - config.vertical.gravity * dt).clamp(
+                    -config.vertical.terminal_fall_speed,
+                    config.vertical.terminal_rise_speed,
+                );
+            } else {
+                controlled.y = -config.vertical.grounded_downward_bias;
+            }
         }
         motion.external_velocity = motion.external_velocity
             + command.external_impulse * config.external_motion.impulse_scale;
@@ -1082,7 +1124,7 @@ impl CharacterControllerService {
 
         if let Some(contact) = contacts
             .iter()
-            .find(|contact| contact.kind == CharacterContactKind::SteepSlope)
+            .find(|contact| !free_mode && contact.kind == CharacterContactKind::SteepSlope)
         {
             let down = Vec3::new(0.0, -1.0, 0.0);
             let tangent = down - contact.normal * down.dot(contact.normal);
@@ -1116,7 +1158,8 @@ impl CharacterControllerService {
         } else {
             controlled.y
         };
-        if floor_probe_vertical_speed <= 0.0
+        if !free_mode
+            && floor_probe_vertical_speed <= 0.0
             && floor_probe_vertical_speed.abs() <= config.surface.floor_snap_speed_limit
             && ground.is_none()
             && config.surface.floor_snap_distance > 0.0
@@ -1228,6 +1271,9 @@ impl CharacterControllerService {
                 ground = None;
             }
         }
+        if free_mode {
+            ground = None;
+        }
         motion.grounded = ground.is_some();
         if motion.grounded {
             // Ground-plane clipping can turn horizontal travel into an upward
@@ -1284,6 +1330,7 @@ impl CharacterControllerService {
             ..transform_before
         };
         Ok(PreparedCharacterControllerStep {
+            movement: command.movement.observe(translation, height),
             tether: tether.fact,
             entity,
             transform_revision,
@@ -1371,6 +1418,7 @@ impl CharacterControllerService {
             collision_world_hash: prepared.motion_after.collision_world_hash,
         });
         Ok(CharacterControllerReceipt {
+            movement: prepared.movement,
             tether: prepared.tether,
             generation: self.generation,
             revision_before: publication.revision_before,
@@ -1939,6 +1987,7 @@ fn validate_command(
     command: CharacterControllerCommand,
     config: &CharacterControllerConfig,
 ) -> Result<(), CharacterControllerError> {
+    command.movement.validate()?;
     if let Some(tether) = command.tether {
         tether.validate()?;
     }

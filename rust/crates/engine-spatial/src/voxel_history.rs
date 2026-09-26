@@ -503,7 +503,7 @@ impl VoxelEditHistory {
     pub(crate) fn materials_at_cursor(
         &self,
         cursor: usize,
-    ) -> Result<BTreeMap<[i64; 3], u16>, VoxelEditHistoryError> {
+    ) -> Result<BTreeMap<[i64; 3], (u16, u16)>, VoxelEditHistoryError> {
         let mut materials = material_map(&self.base_voxels);
         for entry in &self.entries[..cursor] {
             let before_hash = crate::hash_material_voxels(&material_voxels(&materials));
@@ -569,22 +569,22 @@ impl VoxelEditHistory {
 }
 
 fn apply_deltas(
-    materials: &mut BTreeMap<[i64; 3], u16>,
+    materials: &mut BTreeMap<[i64; 3], (u16, u16)>,
     entry: &VoxelEditHistoryEntry,
 ) -> Result<(), VoxelEditHistoryError> {
     for delta in &entry.deltas {
         let actual = materials.get(&delta.address).copied();
-        if actual != delta.before_material {
+        if actual != delta.before_material.map(|m| (m, delta.before_state)) {
             return Err(VoxelEditHistoryError::CorruptEntry {
                 transaction_id: entry.transaction_id,
                 address: delta.address,
                 expected_material: delta.before_material,
-                actual_material: actual,
+                actual_material: actual.map(|v| v.0),
             });
         }
         match delta.after_material {
             Some(material) => {
-                materials.insert(delta.address, material);
+                materials.insert(delta.address, (material, delta.after_state));
             }
             None => {
                 materials.remove(&delta.address);
@@ -595,8 +595,8 @@ fn apply_deltas(
 }
 
 fn summarize_diff(
-    before: &BTreeMap<[i64; 3], u16>,
-    after: &BTreeMap<[i64; 3], u16>,
+    before: &BTreeMap<[i64; 3], (u16, u16)>,
+    after: &BTreeMap<[i64; 3], (u16, u16)>,
     included_transaction_ids: Vec<u64>,
     max_samples: usize,
 ) -> VoxelEditHistoryDiffSummary {
@@ -609,11 +609,13 @@ fn summarize_diff(
         if before_material != after_material {
             deltas.push(VoxelEditDelta {
                 address,
-                before_material,
-                after_material,
+                before_material: before_material.map(|v| v.0),
+                before_state: before_material.map_or(0, |v| v.1),
+                after_material: after_material.map(|v| v.0),
+                after_state: after_material.map_or(0, |v| v.1),
             });
             *material_counts
-                .entry((before_material, after_material))
+                .entry((before_material.map(|v| v.0), after_material.map(|v| v.0)))
                 .or_default() += 1;
         }
     }
@@ -663,17 +665,18 @@ fn transaction_ids_between(entries: &[VoxelEditHistoryEntry], from: usize, to: u
         .collect()
 }
 
-pub(crate) fn material_map(voxels: &[MaterialVoxel]) -> BTreeMap<[i64; 3], u16> {
+pub(crate) fn material_map(voxels: &[MaterialVoxel]) -> BTreeMap<[i64; 3], (u16, u16)> {
     voxels
         .iter()
-        .map(|voxel| (voxel.address, voxel.material_slot))
+        .map(|voxel| (voxel.address, (voxel.material_slot, voxel.state)))
         .collect()
 }
 
-pub(crate) fn material_voxels(materials: &BTreeMap<[i64; 3], u16>) -> Vec<MaterialVoxel> {
+pub(crate) fn material_voxels(materials: &BTreeMap<[i64; 3], (u16, u16)>) -> Vec<MaterialVoxel> {
     materials
         .iter()
-        .map(|(&address, &material_slot)| MaterialVoxel {
+        .map(|(&address, &(material_slot, state))| MaterialVoxel {
+            state,
             address,
             material_slot,
         })

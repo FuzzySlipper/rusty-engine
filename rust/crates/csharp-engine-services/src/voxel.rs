@@ -129,6 +129,7 @@ impl RuntimeSpatialBridge {
                 present: true,
                 address: request.address,
                 material_slot: u32::from(voxel.material_slot),
+                state: u32::from(voxel.state),
             })
             .unwrap_or(NativeVoxelReadout {
                 present: false,
@@ -150,6 +151,7 @@ impl RuntimeSpatialBridge {
                 present: true,
                 address: native_address(voxel.address),
                 material_slot: u32::from(voxel.material_slot),
+                state: u32::from(voxel.state),
             })
             .unwrap_or_default())
     }
@@ -249,49 +251,8 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeVoxelResidencyTransaction,
     ) -> Result<NativeVoxelResidencyReceipt, CsharpEngineServicesError> {
-        let operations = unsafe {
-            crate::composition::borrowed_slice(
-                request.operations,
-                request.operations_len,
-                "voxel residency operations",
-            )
-        }?;
-        let material_slots = unsafe {
-            crate::composition::borrowed_slice(
-                request.material_slots,
-                request.material_slots_len,
-                "voxel residency material slots",
-            )
-        }?;
         let session = self.session_mut(request.session)?;
-        let chunk_size = session.scene.chunk_size();
-        let mut translated = Vec::with_capacity(operations.len());
-        for operation in operations {
-            let chunk = chunk_identity(operation.chunk);
-            let translated_operation = match operation.kind {
-                NativeVoxelResidencyOperationKind::Admit => {
-                    let payload = native_payload(*operation, chunk_size, material_slots)?;
-                    VoxelChunkResidencyOperation::Admit { chunk, payload }
-                }
-                NativeVoxelResidencyOperationKind::Replace => {
-                    let payload = native_payload(*operation, chunk_size, material_slots)?;
-                    VoxelChunkResidencyOperation::Replace {
-                        chunk,
-                        expected_content_hash: VoxelChunkContentHash::new(
-                            operation.expected_content_hash,
-                        ),
-                        payload,
-                    }
-                }
-                NativeVoxelResidencyOperationKind::Evict => VoxelChunkResidencyOperation::Evict {
-                    chunk,
-                    expected_content_hash: VoxelChunkContentHash::new(
-                        operation.expected_content_hash,
-                    ),
-                },
-            };
-            translated.push(translated_operation);
-        }
+        let translated = translate_residency(request, session.scene.chunk_size())?;
         let policy = match request.history_policy {
             NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty => {
                 VoxelResidencyHistoryPolicy::RejectIfNonEmpty
@@ -404,6 +365,8 @@ impl RuntimeSpatialBridge {
             .get(request.entry_index as usize)
             .and_then(|entry| entry.deltas.get(request.delta_index as usize))
             .map(|delta| NativeVoxelHistoryDeltaReadout {
+                before_state: u32::from(delta.before_state),
+                after_state: u32::from(delta.after_state),
                 present: true,
                 address: native_address(delta.address),
                 before_material_present: delta.before_material.is_some(),
@@ -562,7 +525,9 @@ impl RuntimeSpatialBridge {
 fn native_edit(value: NativeVoxelEdit) -> Result<VoxelEdit, CsharpEngineServicesError> {
     let native_address_value = value.address;
     match value.kind {
-        NativeVoxelEditKind::Set => Ok(VoxelEdit::Set {
+        NativeVoxelEditKind::Set => Ok(VoxelEdit::SetState {
+            state: u16::try_from(value.state)
+                .map_err(|_| voxel_error("CSHARP_VOXEL_STATE", "state exceeded u16"))?,
             address: address(native_address_value),
             material_slot: u16::try_from(value.material_slot)
                 .map_err(|_| voxel_error("CSHARP_VOXEL_EDIT", "material slot exceeded u16"))?,
@@ -577,6 +542,7 @@ fn native_payload(
     operation: NativeVoxelResidencyOperation,
     chunk_size: u32,
     material_slots: &[u32],
+    states: &[u32],
 ) -> Result<VoxelChunkPayload, CsharpEngineServicesError> {
     let start = usize::try_from(operation.material_offset)
         .map_err(|_| voxel_error("CSHARP_VOXEL_RESIDENCY", "material offset exceeded usize"))?;
@@ -599,7 +565,19 @@ fn native_payload(
                 .map_err(|_| voxel_error("CSHARP_VOXEL_RESIDENCY", "material slot exceeded u16"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(VoxelChunkPayload::new([chunk_size; 3], values))
+    let mut payload = VoxelChunkPayload::new([chunk_size; 3], values);
+    if !states.is_empty() {
+        payload.states = states
+            .get(start..end)
+            .ok_or_else(|| voxel_error("CSHARP_VOXEL_STATE", "state range exceeded span"))?
+            .iter()
+            .map(|s| {
+                u16::try_from(*s)
+                    .map_err(|_| voxel_error("CSHARP_VOXEL_STATE", "state exceeded u16"))
+            })
+            .collect::<Result<_, _>>()?;
+    }
+    Ok(payload)
 }
 
 fn native_edit_receipt(receipt: &engine_spatial::VoxelEditReceipt) -> NativeVoxelEditReceipt {
@@ -1202,6 +1180,10 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         apply_edits,
         read_dirty_chunk_at,
         apply_residency,
+        start_residency_preparation,
+        poll_residency_preparation,
+        commit_residency_preparation,
+        cancel_residency_preparation,
         acquire_chunk_lease,
         destroy_chunk_lease,
         read_chunk_lease,
@@ -1242,8 +1224,114 @@ mod tests {
         session
     }
 
+    #[test]
+    fn preparation_copies_input_and_publishes_only_on_commit() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let operations = [NativeVoxelResidencyOperation {
+            kind: NativeVoxelResidencyOperationKind::Admit,
+            material_count: 512,
+            ..Default::default()
+        }];
+        let mut materials = vec![1u32; 512];
+        let request = NativeVoxelResidencyTransaction {
+            states: std::ptr::null(),
+            states_len: 0,
+            session,
+            expected_revision: 0,
+            history_policy: NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty,
+            operations: operations.as_ptr(),
+            operations_len: operations.len(),
+            material_slots: materials.as_ptr(),
+            material_slots_len: materials.len(),
+        };
+        let started = bridge.start_preparation(&request).unwrap();
+        materials.fill(0);
+        assert!(bridge.start_preparation(&request).is_err());
+        let request = NativeVoxelPreparationRequest {
+            session,
+            preparation: started.preparation,
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while bridge.poll_preparation(request).unwrap().status
+            == NativeVoxelPreparationStatus::Pending
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            bridge
+                .session_mut(session)
+                .unwrap()
+                .scene
+                .solid_voxel_count(),
+            0
+        );
+        let committed = bridge.commit_preparation(request).unwrap();
+        assert_eq!(committed.status, NativeVoxelPreparationStatus::Committed);
+        assert_eq!(
+            bridge
+                .session_mut(session)
+                .unwrap()
+                .scene
+                .solid_voxel_count(),
+            512
+        );
+        assert!(bridge.commit_preparation(request).is_err());
+    }
+
+    #[test]
+    fn cancelled_preparation_releases_snapshot_and_allows_another_start() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let operations = [NativeVoxelResidencyOperation {
+            material_count: 512,
+            ..Default::default()
+        }];
+        let materials = vec![1u32; 512];
+        let request = NativeVoxelResidencyTransaction {
+            states: std::ptr::null(),
+            states_len: 0,
+            session,
+            expected_revision: 0,
+            history_policy: NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty,
+            operations: operations.as_ptr(),
+            operations_len: 1,
+            material_slots: materials.as_ptr(),
+            material_slots_len: materials.len(),
+        };
+        let first = bridge.start_preparation(&request).unwrap();
+        assert_eq!(
+            bridge
+                .cancel_preparation(NativeVoxelPreparationRequest {
+                    session,
+                    preparation: first.preparation
+                })
+                .unwrap()
+                .status,
+            NativeVoxelPreparationStatus::Cancelled
+        );
+        assert_eq!(
+            bridge
+                .session_mut(session)
+                .unwrap()
+                .scene
+                .solid_voxel_count(),
+            0
+        );
+        let second = bridge.start_preparation(&request).unwrap();
+        assert_ne!(first.preparation, second.preparation);
+        bridge
+            .cancel_preparation(NativeVoxelPreparationRequest {
+                session,
+                preparation: second.preparation,
+            })
+            .unwrap();
+    }
+
     fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {
         NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address,
             material_slot,
@@ -1328,6 +1416,7 @@ mod tests {
         assert_eq!(stale.current_revision, accepted.accepted_revision);
 
         let invalid = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
             material_slot: u32::from(u16::MAX) + 1,
@@ -1568,3 +1657,283 @@ mod tests {
         );
     }
 }
+
+fn translate_residency(
+    request: &NativeVoxelResidencyTransaction,
+    chunk_size: u32,
+) -> Result<Vec<VoxelChunkResidencyOperation>, CsharpEngineServicesError> {
+    let operations = unsafe {
+        crate::composition::borrowed_slice(
+            request.operations,
+            request.operations_len,
+            "voxel residency operations",
+        )
+    }?;
+    let material_slots = unsafe {
+        crate::composition::borrowed_slice(
+            request.material_slots,
+            request.material_slots_len,
+            "voxel residency material slots",
+        )
+    }?;
+    let states = unsafe {
+        crate::composition::borrowed_slice(request.states, request.states_len, "voxel states")
+    }?;
+    if !states.is_empty() && states.len() != material_slots.len() {
+        return Err(voxel_error(
+            "CSHARP_VOXEL_STATE",
+            "states must be empty or match material slots",
+        ));
+    }
+    let mut translated = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let chunk = chunk_identity(operation.chunk);
+        let translated_operation = match operation.kind {
+            NativeVoxelResidencyOperationKind::Admit => {
+                let payload = native_payload(*operation, chunk_size, material_slots, states)?;
+                VoxelChunkResidencyOperation::Admit { chunk, payload }
+            }
+            NativeVoxelResidencyOperationKind::Replace => {
+                let payload = native_payload(*operation, chunk_size, material_slots, states)?;
+                VoxelChunkResidencyOperation::Replace {
+                    chunk,
+                    expected_content_hash: VoxelChunkContentHash::new(
+                        operation.expected_content_hash,
+                    ),
+                    payload,
+                }
+            }
+            NativeVoxelResidencyOperationKind::Evict => VoxelChunkResidencyOperation::Evict {
+                chunk,
+                expected_content_hash: VoxelChunkContentHash::new(operation.expected_content_hash),
+            },
+        };
+        translated.push(translated_operation);
+    }
+
+    Ok(translated)
+}
+
+pub(crate) struct PendingVoxelPreparation {
+    id: u64,
+    worker: engine_spatial::VoxelResidencyPreparation,
+    ready: Option<engine_spatial::PreparedVoxelChunkResidency>,
+    history_policy: NativeVoxelResidencyHistoryPolicy,
+}
+
+impl RuntimeSpatialBridge {
+    fn start_preparation(
+        &mut self,
+        request: &NativeVoxelResidencyTransaction,
+    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        if session.voxel_preparation.is_some() {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_PREPARATION_BUSY",
+                "one preparation is already owned by this session",
+            ));
+        }
+        let operations = translate_residency(request, session.scene.chunk_size())?;
+        if request.history_policy == NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty
+            && !session.voxel_history.is_empty()
+        {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_HISTORY",
+                "history must be empty or explicitly reset",
+            ));
+        }
+        let id = session.next_voxel_preparation;
+        let next = id.checked_add(1).ok_or_else(|| {
+            voxel_error("CSHARP_VOXEL_PREPARATION", "preparation identity exhausted")
+        })?;
+        let worker = engine_spatial::VoxelResidencyPreparation::start(
+            Arc::clone(&session.scene),
+            session.voxel_leases.clone(),
+            engine_spatial::VoxelSourceRevision::new(request.expected_revision),
+            operations,
+        )
+        .map_err(|e| voxel_error("CSHARP_VOXEL_PREPARATION", e.to_string()))?;
+        session.next_voxel_preparation = next;
+        session.voxel_preparation = Some(PendingVoxelPreparation {
+            id,
+            worker,
+            ready: None,
+            history_policy: request.history_policy,
+        });
+        Ok(NativeVoxelPreparationReceipt {
+            preparation: id,
+            ..Default::default()
+        })
+    }
+
+    fn poll_preparation(
+        &mut self,
+        request: NativeVoxelPreparationRequest,
+    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let pending = session
+            .voxel_preparation
+            .as_mut()
+            .filter(|p| p.id == request.preparation)
+            .ok_or_else(|| voxel_error("CSHARP_VOXEL_PREPARATION", "unknown preparation"))?;
+        if pending.ready.is_none() {
+            match pending.worker.poll() {
+                engine_spatial::VoxelPreparationPoll::Pending => {}
+                engine_spatial::VoxelPreparationPoll::Ready(result) => {
+                    pending.ready = Some(
+                        (*result)
+                            .map_err(|e| voxel_error("CSHARP_VOXEL_PREPARATION", e.to_string()))?,
+                    )
+                }
+                engine_spatial::VoxelPreparationPoll::WorkerFailed => {
+                    return Err(voxel_error(
+                        "CSHARP_VOXEL_PREPARATION",
+                        "worker exited without a result",
+                    ))
+                }
+            }
+        }
+        Ok(NativeVoxelPreparationReceipt {
+            preparation: pending.id,
+            status: if pending.ready.is_some() {
+                NativeVoxelPreparationStatus::Ready
+            } else {
+                NativeVoxelPreparationStatus::Pending
+            },
+            residency: pending
+                .ready
+                .as_ref()
+                .map(|p| native_residency_receipt(p.receipt()))
+                .unwrap_or_default(),
+        })
+    }
+
+    fn commit_preparation(
+        &mut self,
+        request: NativeVoxelPreparationRequest,
+    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
+        let polled = self.poll_preparation(request)?;
+        if polled.status == NativeVoxelPreparationStatus::Pending {
+            return Ok(polled);
+        }
+        let session = self.session_mut(request.session)?;
+        let mut pending = session
+            .voxel_preparation
+            .take()
+            .expect("validated preparation");
+        if pending.history_policy == NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty
+            && !session.voxel_history.is_empty()
+        {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_HISTORY",
+                "history changed during preparation",
+            ));
+        }
+        let (scene, mut receipt) = VoxelChunkResidencyService::finish_prepared(
+            &session.scene,
+            &session.voxel_leases,
+            pending.ready.take().expect("ready preparation"),
+        )
+        .map_err(|e| voxel_error("CSHARP_VOXEL_PREPARATION", e.to_string()))?;
+        receipt.history_reset = Some(session.voxel_history.reset_to_scene(&scene));
+        session.last_voxel_dirty_chunks =
+            receipt.dirty_chunks.iter().map(|c| c.to_array()).collect();
+        let scene = Arc::new(scene);
+        session.scene = Arc::clone(&scene);
+        self.publish_scene(request.session, scene);
+        Ok(NativeVoxelPreparationReceipt {
+            preparation: request.preparation,
+            status: NativeVoxelPreparationStatus::Committed,
+            residency: native_residency_receipt(&receipt),
+        })
+    }
+
+    fn cancel_preparation(
+        &mut self,
+        request: NativeVoxelPreparationRequest,
+    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        if !session
+            .voxel_preparation
+            .as_ref()
+            .is_some_and(|p| p.id == request.preparation)
+        {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_PREPARATION",
+                "unknown preparation",
+            ));
+        }
+        // Explicit cancellation/teardown joins the bounded worker; polling does not.
+        session.voxel_preparation = None;
+        Ok(NativeVoxelPreparationReceipt {
+            preparation: request.preparation,
+            status: NativeVoxelPreparationStatus::Cancelled,
+            ..Default::default()
+        })
+    }
+}
+
+unsafe extern "C" fn start_residency_preparation(
+    context: *mut c_void,
+    request: *const NativeVoxelResidencyTransaction,
+    output: *mut NativeVoxelPreparationReceipt,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() || error.is_null() {
+        return 0;
+    }
+    unsafe { *error = std::mem::zeroed() };
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.start_preparation(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(e) => {
+            retain_voxel_operation_error(bridge, &e, error, b"StartResidencyPreparation");
+            0
+        }
+    }
+}
+
+macro_rules! preparation_callback {
+    ($name:ident,$method:ident,$operation:literal) => {
+        unsafe extern "C" fn $name(
+            context: *mut c_void,
+            request: NativeVoxelPreparationRequest,
+            output: *mut NativeVoxelPreparationReceipt,
+            error: *mut NativeOperationErrorReceipt,
+        ) -> i32 {
+            if context.is_null() || output.is_null() || error.is_null() {
+                return 0;
+            }
+            unsafe { *error = std::mem::zeroed() };
+            let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+            match bridge.$method(request) {
+                Ok(value) => {
+                    unsafe { *output = value };
+                    ABI_OK
+                }
+                Err(e) => {
+                    retain_voxel_operation_error(bridge, &e, error, $operation);
+                    0
+                }
+            }
+        }
+    };
+}
+preparation_callback!(
+    poll_residency_preparation,
+    poll_preparation,
+    b"PollResidencyPreparation"
+);
+preparation_callback!(
+    commit_residency_preparation,
+    commit_preparation,
+    b"CommitResidencyPreparation"
+);
+preparation_callback!(
+    cancel_residency_preparation,
+    cancel_preparation,
+    b"CancelResidencyPreparation"
+);

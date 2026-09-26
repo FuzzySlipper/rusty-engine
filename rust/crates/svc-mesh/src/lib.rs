@@ -80,6 +80,7 @@ pub struct SurfaceMeshOptions {
 /// `THREE.BufferGeometry` group (`addGroup(start, count, materialIndex)`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeshGroup {
+    pub state: u16,
     pub material_slot: u16,
     /// Canonical cube face for greedy output. Reconstructed surfaces have no
     /// face identity and therefore retain `None`.
@@ -156,6 +157,7 @@ pub struct MeshVoxelCell {
 /// A meshing failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshError {
+    StateRequiresGreedyCubes,
     /// The chunk would emit more vertices than a `u32` index can address.
     TooManyVertices {
         vertices: u64,
@@ -203,6 +205,9 @@ pub enum MeshError {
 impl core::fmt::Display for MeshError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            MeshError::StateRequiresGreedyCubes => {
+                write!(f, "cell orientation and variant require GreedyCubes")
+            }
             MeshError::TooManyVertices { vertices } => {
                 write!(
                     f,
@@ -273,6 +278,7 @@ fn in_plane_axes(dir: Direction6) -> (usize, usize) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Face {
+    state: u16,
     slot: u16,
     coordinate: [i64; 3],
     dir: Direction6,
@@ -280,6 +286,7 @@ struct Face {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Quad {
+    state: u16,
     slot: u16,
     coordinate: [i64; 3],
     dir: Direction6,
@@ -294,18 +301,19 @@ struct Quad {
 /// Removing each accepted rectangle makes disconnected regions and holes
 /// deterministic without ever bridging absent cells.
 fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
-    let mut planes: BTreeMap<(u16, Direction6, i64), BTreeSet<(i64, i64)>> = BTreeMap::new();
+    type FacePlane = (u16, u16, Direction6, i64);
+    let mut planes: BTreeMap<FacePlane, BTreeSet<(i64, i64)>> = BTreeMap::new();
     for face in faces {
         let axis = face.dir.axis().index();
         let (u_axis, v_axis) = in_plane_axes(face.dir);
         planes
-            .entry((face.slot, face.dir, face.coordinate[axis]))
+            .entry((face.slot, face.state, face.dir, face.coordinate[axis]))
             .or_default()
             .insert((face.coordinate[v_axis], face.coordinate[u_axis]));
     }
 
     let mut quads = Vec::new();
-    for ((slot, dir, plane), mut cells) in planes {
+    for ((slot, state, dir, plane), mut cells) in planes {
         let axis = dir.axis().index();
         let (u_axis, v_axis) = in_plane_axes(dir);
         while let Some(&(v_start, u_start)) = cells.first() {
@@ -358,6 +366,7 @@ fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
             coordinate[u_axis] = u_start;
             coordinate[v_axis] = v_start;
             quads.push(Quad {
+                state,
                 slot,
                 coordinate,
                 dir,
@@ -529,6 +538,7 @@ pub fn mesh_cells_standalone_with_options(
                     });
                 }
                 faces.push(Face {
+                    state: 0,
                     slot,
                     coordinate,
                     dir,
@@ -585,6 +595,12 @@ pub fn mesh_chunk_in_world_with_options(
         return mesh_chunk_in_world(world, coord);
     }
     world.get(coord)?;
+    if world
+        .resident_chunks()
+        .any(|(_, chunk)| chunk.iter().any(|(_, value)| value.state().raw() != 0))
+    {
+        return Some(Err(MeshError::StateRequiresGreedyCubes));
+    }
     let spec = world.grid();
     let origin = spec.chunk_origin_voxel(coord).to_array();
     let dimensions = spec.chunk_dims().to_array().map(i64::from);
@@ -644,6 +660,7 @@ fn mesh_core(
                 faces_culled += 1;
             } else {
                 faces.push(Face {
+                    state: value.state().raw(),
                     slot: material.raw(),
                     coordinate: [i64::from(local.x), i64::from(local.y), i64::from(local.z)],
                     dir,
@@ -663,6 +680,46 @@ fn mesh_core(
         faces_culled,
         SurfaceMeshLimits::default(),
     )
+}
+
+// Transform world faces and texture coordinates back into the authored local
+// orientation. Cube occupancy and geometric normals remain unchanged.
+fn state_direction(mut dir: Direction6, state: u16) -> Direction6 {
+    for _ in 0..(state & 3) {
+        dir = match dir {
+            Direction6::PosX => Direction6::PosZ,
+            Direction6::PosZ => Direction6::NegX,
+            Direction6::NegX => Direction6::NegZ,
+            Direction6::NegZ => Direction6::PosX,
+            other => other,
+        };
+    }
+    dir
+}
+fn state_tile_point(
+    dir: Direction6,
+    mut point: [i64; 3],
+    mut origin: [i64; 3],
+    state: u16,
+) -> Result<[f32; 2], MeshError> {
+    for _ in 0..(state & 3) {
+        point = [
+            point[2]
+                .checked_neg()
+                .ok_or(MeshError::PositionOutOfRange)?,
+            point[1],
+            point[0],
+        ];
+        origin = [
+            origin[2]
+                .checked_neg()
+                .ok_or(MeshError::PositionOutOfRange)?,
+            origin[1],
+            origin[0],
+        ];
+    }
+    project_voxel_surface_tile_point(state_direction(dir, state), point, origin)
+        .map_err(MeshError::TextureMapping)
 }
 
 fn emit_quads(
@@ -707,13 +764,14 @@ fn emit_quads(
     let mut bmin = [f32::INFINITY; 3];
     let mut bmax = [f32::NEG_INFINITY; 3];
 
-    let mut cur_group: Option<(u16, Direction6)> = None;
+    let mut cur_group: Option<(u16, u16, Direction6)> = None;
     let mut group_start: u32 = 0;
     for quad in quads {
-        let group = (quad.slot, quad.dir);
+        let group = (quad.slot, quad.state, state_direction(quad.dir, quad.state));
         if cur_group != Some(group) {
-            if let Some((slot, direction)) = cur_group {
+            if let Some((slot, state, direction)) = cur_group {
                 groups.push(MeshGroup {
+                    state,
                     material_slot: slot,
                     direction: Some(direction),
                     start: group_start,
@@ -743,16 +801,19 @@ fn emit_quads(
             }
             positions.extend_from_slice(&p);
             normals.extend_from_slice(&[nx, ny, nz]);
-            tile_coordinates.extend_from_slice(
-                &project_voxel_surface_tile_point(quad.dir, point, texture_coordinate_origin)
-                    .map_err(MeshError::TextureMapping)?,
-            );
+            tile_coordinates.extend_from_slice(&state_tile_point(
+                quad.dir,
+                point,
+                texture_coordinate_origin,
+                quad.state,
+            )?);
         }
         // Two CCW triangles of the quad: (0,1,2) (0,2,3).
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
-    if let Some((slot, direction)) = cur_group {
+    if let Some((slot, state, direction)) = cur_group {
         groups.push(MeshGroup {
+            state,
             material_slot: slot,
             direction: Some(direction),
             start: group_start,
@@ -1653,6 +1714,7 @@ mod tests {
     fn wound_greedy_corners_have_nonmirrored_tile_space_on_all_six_faces() {
         for dir in Direction6::ALL {
             let quad = Quad {
+                state: 0,
                 slot: 1,
                 coordinate: [-7, -5, -3],
                 dir,
@@ -1916,6 +1978,7 @@ mod tests {
                 ];
                 if !occupied.contains_key(&neighbour) {
                     faces.insert(Face {
+                        state: 0,
                         slot,
                         coordinate,
                         dir,
@@ -1936,6 +1999,7 @@ mod tests {
                     coordinate[u_axis] += i64::from(u_offset);
                     coordinate[v_axis] += i64::from(v_offset);
                     faces.insert(Face {
+                        state: 0,
                         slot: quad.slot,
                         coordinate,
                         dir: quad.dir,

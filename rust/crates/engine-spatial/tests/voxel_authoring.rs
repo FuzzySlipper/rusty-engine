@@ -552,10 +552,12 @@ fn scene() -> VoxelCollisionScene {
         8,
         [
             MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             },
             MaterialVoxel {
+                state: 0,
                 address: [2, 0, 0],
                 material_slot: 1,
             },

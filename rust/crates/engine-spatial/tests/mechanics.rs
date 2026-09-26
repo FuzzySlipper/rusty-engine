@@ -57,6 +57,7 @@ fn collision_required_integration_fails_closed_without_query_and_resolves_with_s
         1.0,
         8,
         [MaterialVoxel {
+            state: 0,
             address: [1, 0, 0],
             material_slot: 1,
         }],
@@ -124,6 +125,7 @@ fn generated_tunnel_cells_feed_existing_collision_navigation_and_mesh_authority(
         tunnel
             .spatial_cells()
             .map(|(address, material_slot)| MaterialVoxel {
+                state: 0,
                 address,
                 material_slot,
             }),

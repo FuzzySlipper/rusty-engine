@@ -86,6 +86,7 @@ fn every_material_authority_constructor_enforces_edit_vocabulary_bounds() {
         1.0,
         4,
         [MaterialVoxel {
+            state: 0,
             address: [MAX_VOXEL_COORDINATE_ABS + 1, 0, 0],
             material_slot: 1,
         }],
@@ -103,6 +104,7 @@ fn every_material_authority_constructor_enforces_edit_vocabulary_bounds() {
             1.0,
             4,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot,
             }],
@@ -417,6 +419,7 @@ fn rejected_edit_leaves_authority_and_every_projection_unchanged() {
 #[test]
 fn accepted_edit_order_does_not_change_authority_receipt_or_projections() {
     let initial = [MaterialVoxel {
+        state: 0,
         address: [0, 0, 0],
         material_slot: 1,
     }];

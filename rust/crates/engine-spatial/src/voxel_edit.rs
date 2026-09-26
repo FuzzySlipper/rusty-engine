@@ -32,6 +32,9 @@ pub enum VoxelAuthorityValidationError {
         axis: usize,
         limit: i64,
     },
+    InvalidState {
+        state: u16,
+    },
     InvalidMaterialSlot {
         material_slot: u16,
         maximum: u16,
@@ -75,7 +78,11 @@ pub fn validate_voxel_material_slot(
 
 pub fn validate_material_voxel(voxel: MaterialVoxel) -> Result<(), VoxelAuthorityValidationError> {
     validate_voxel_address(voxel.address)?;
-    validate_voxel_material_slot(voxel.material_slot)
+    validate_voxel_material_slot(voxel.material_slot)?;
+    if core_voxel::VoxelState::from_raw(voxel.state).is_none() {
+        return Err(VoxelAuthorityValidationError::InvalidState { state: voxel.state });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -105,6 +112,11 @@ impl VoxelSourceRevision {
     rename_all_fields = "camelCase"
 )]
 pub enum VoxelEdit {
+    SetState {
+        address: [i64; 3],
+        material_slot: u16,
+        state: u16,
+    },
     Set {
         address: [i64; 3],
         material_slot: u16,
@@ -117,7 +129,9 @@ pub enum VoxelEdit {
 impl VoxelEdit {
     pub const fn address(self) -> [i64; 3] {
         match self {
-            Self::Set { address, .. } | Self::Clear { address } => address,
+            Self::Set { address, .. }
+            | Self::SetState { address, .. }
+            | Self::Clear { address } => address,
         }
     }
 }
@@ -154,6 +168,10 @@ impl ValidatedVoxelEditTransaction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelEditRejection {
+    InvalidState {
+        edit_index: usize,
+        state: u16,
+    },
     StaleRevision {
         expected: VoxelSourceRevision,
         actual: VoxelSourceRevision,
@@ -210,6 +228,10 @@ pub enum VoxelEditApplyError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VoxelEditDelta {
+    #[serde(default)]
+    pub before_state: u16,
+    #[serde(default)]
+    pub after_state: u16,
     pub address: [i64; 3],
     pub before_material: Option<u16>,
     pub after_material: Option<u16>,
@@ -374,7 +396,9 @@ impl VoxelEditService {
                     limit,
                 });
             }
-            if let VoxelEdit::Set { material_slot, .. } = edit {
+            if let VoxelEdit::Set { material_slot, .. }
+            | VoxelEdit::SetState { material_slot, .. } = edit
+            {
                 if let Err(VoxelAuthorityValidationError::InvalidMaterialSlot { maximum, .. }) =
                     validate_voxel_material_slot(material_slot)
                 {
@@ -383,6 +407,11 @@ impl VoxelEditService {
                         material_slot,
                         maximum,
                     });
+                }
+            }
+            if let VoxelEdit::SetState { state, .. } = edit {
+                if core_voxel::VoxelState::from_raw(state).is_none() {
+                    return Err(VoxelEditRejection::InvalidState { edit_index, state });
                 }
             }
             if let Some((first_index, _)) = by_address.insert(address, (edit_index, edit)) {
@@ -409,34 +438,51 @@ impl VoxelEditService {
     ) -> Result<PreparedVoxelEdit, VoxelEditApplyError> {
         let accepted = Self::validate_transaction(scene.source_revision, transaction)
             .map_err(VoxelEditApplyError::Rejected)?;
-        let mut materials: BTreeMap<[i64; 3], u16> = scene
+        let mut materials: BTreeMap<[i64; 3], (u16, u16)> = scene
             .material_voxels
             .iter()
-            .map(|voxel| (voxel.address, voxel.material_slot))
+            .map(|voxel| (voxel.address, (voxel.material_slot, voxel.state)))
             .collect();
         let mut deltas = Vec::new();
         for edit in accepted.canonical_edits.iter().copied() {
-            match edit {
+            let edit = match edit {
                 VoxelEdit::Set {
                     address,
                     material_slot,
+                } => VoxelEdit::SetState {
+                    address,
+                    material_slot,
+                    state: 0,
+                },
+                other => other,
+            };
+            match edit {
+                VoxelEdit::SetState {
+                    address,
+                    material_slot,
+                    state,
                 } => {
                     let before_material = materials.get(&address).copied();
-                    if before_material != Some(material_slot) {
-                        materials.insert(address, material_slot);
+                    if before_material != Some((material_slot, state)) {
+                        materials.insert(address, (material_slot, state));
                         deltas.push(VoxelEditDelta {
                             address,
-                            before_material,
+                            before_material: before_material.map(|v| v.0),
+                            before_state: before_material.map_or(0, |v| v.1),
                             after_material: Some(material_slot),
+                            after_state: state,
                         });
                     }
                 }
+                VoxelEdit::Set { .. } => unreachable!("normalized set"),
                 VoxelEdit::Clear { address } => {
                     if let Some(before_material) = materials.remove(&address) {
                         deltas.push(VoxelEditDelta {
                             address,
-                            before_material: Some(before_material),
+                            before_material: Some(before_material.0),
+                            before_state: before_material.1,
                             after_material: None,
+                            after_state: 0,
                         });
                     }
                 }
@@ -465,7 +511,8 @@ impl VoxelEditService {
         );
         let material_voxels = materials
             .into_iter()
-            .map(|(address, material_slot)| MaterialVoxel {
+            .map(|(address, (material_slot, state))| MaterialVoxel {
+                state,
                 address,
                 material_slot,
             });

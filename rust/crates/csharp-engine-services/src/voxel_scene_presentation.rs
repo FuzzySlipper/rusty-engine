@@ -33,12 +33,12 @@ use crate::{
 struct RetainedVoxelScenePresentation {
     session: NativeSpatialSessionHandle,
     base_materials: BTreeMap<u16, RenderMaterialDescriptor>,
-    face_materials: BTreeMap<(u16, Direction6), RenderMaterialDescriptor>,
+    face_materials: BTreeMap<(u16, u16, Direction6), RenderMaterialDescriptor>,
     textures: BTreeMap<String, TextureDescriptor>,
     base_renderer_slots: BTreeMap<u16, u16>,
-    face_renderer_slots: BTreeMap<(u16, Direction6), u16>,
+    face_renderer_slots: BTreeMap<(u16, u16, Direction6), u16>,
     base_material_provenance: BTreeMap<u16, u64>,
-    face_material_provenance: BTreeMap<(u16, Direction6), u64>,
+    face_material_provenance: BTreeMap<(u16, u16, Direction6), u64>,
     base_material_count: u32,
 }
 
@@ -245,7 +245,7 @@ impl RuntimeVoxelScenePresentationBridge {
             resolved
                 .face_materials
                 .keys()
-                .map(|(slot, direction)| ((*slot, *direction), *slot)),
+                .map(|(slot, variant, direction)| ((*slot, *variant, *direction), *slot)),
             staged
                 .state
                 .presentations
@@ -402,7 +402,7 @@ impl RuntimeVoxelScenePresentationBridge {
             .chain(new_base_slots.values().copied())
             .chain(retained_face_slots.values().copied());
         let new_face_slots = allocate_renderer_slots(
-            missing_face_slots.map(|(slot, direction)| ((slot, direction), slot)),
+            missing_face_slots.map(|(slot, variant, direction)| ((slot, variant, direction), slot)),
             occupied_faces,
         )?;
         let presentation = staged
@@ -461,18 +461,31 @@ impl RuntimeVoxelScenePresentationBridge {
                 )
             })?;
         let scene = spatial.scene(presentation.session)?;
-        let rows = presentation
-            .base_materials
-            .keys()
-            .flat_map(|source_slot| {
-                Direction6::ALL
-                    .into_iter()
-                    .map(move |direction| (*source_slot, direction))
-            })
-            .map(|(source_slot, direction)| {
-                let key = (source_slot, direction);
+        let mut keys = BTreeSet::new();
+        for source_slot in presentation.base_materials.keys() {
+            for direction in Direction6::ALL {
+                keys.insert((*source_slot, 0, direction));
+            }
+        }
+        keys.extend(presentation.face_materials.keys().copied());
+        for group in scene.mesh_chunks().iter().flat_map(|chunk| &chunk.groups) {
+            if let Some(direction) = group.direction {
+                keys.insert((group.material_slot, group.state >> 2, direction));
+            }
+        }
+        let rows = keys
+            .into_iter()
+            .map(|(source_slot, variant, direction)| {
+                let exact_key = (source_slot, variant, direction);
+                let fallback_key = (source_slot, 0, direction);
+                let key = if presentation.face_materials.contains_key(&exact_key) {
+                    exact_key
+                } else {
+                    fallback_key
+                };
                 let overridden = presentation.face_materials.contains_key(&key);
                 Ok(NativeVoxelSceneMaterialMappingRow {
+                    variant: u32::from(variant),
                     source_slot: u32::from(source_slot),
                     face: native_face(direction),
                     material_value: *(if overridden {
@@ -629,7 +642,22 @@ impl RuntimeVoxelScenePresentationBridge {
                 ));
             }
             if overrides
-                .insert((slot, direction), binding.material)
+                .insert(
+                    (
+                        slot,
+                        u16::try_from(binding.variant)
+                            .ok()
+                            .filter(|v| *v <= 8191)
+                            .ok_or_else(|| {
+                                CsharpEngineServicesError::new(
+                                    "CSHARP_VOXEL_STATE",
+                                    "variant must fit thirteen bits",
+                                )
+                            })?,
+                        direction,
+                    ),
+                    binding.material,
+                )
                 .is_some()
             {
                 return Err(CsharpEngineServicesError::new(
@@ -694,10 +722,10 @@ impl RuntimeVoxelScenePresentationBridge {
 
 struct ResolvedSceneMaterials {
     base_materials: BTreeMap<u16, RenderMaterialDescriptor>,
-    face_materials: BTreeMap<(u16, Direction6), RenderMaterialDescriptor>,
+    face_materials: BTreeMap<(u16, u16, Direction6), RenderMaterialDescriptor>,
     textures: BTreeMap<String, TextureDescriptor>,
     base_material_provenance: BTreeMap<u16, u64>,
-    face_material_provenance: BTreeMap<(u16, Direction6), u64>,
+    face_material_provenance: BTreeMap<(u16, u16, Direction6), u64>,
     base_material_count: u32,
 }
 
@@ -1139,6 +1167,7 @@ mod tests {
         );
         let voxel_api = crate::voxel::api(spatial);
         let edits = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
             material_slot: 1,
@@ -1353,6 +1382,7 @@ mod tests {
         // following RefreshScene is deliberately left staged, as it would be
         // when later C# work in the same callback fails.
         let clear = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Clear,
             address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
             material_slot: 0,
@@ -1472,6 +1502,7 @@ mod tests {
             material: side,
         }];
         let overrides = [NativeVoxelSceneFaceMaterialBinding {
+            variant: 0,
             material_slot: 1,
             face: NativeSpatialFace::PosY,
             material: top,
@@ -1549,9 +1580,10 @@ mod tests {
             .get_mut(&presentation.value)
             .unwrap()
             .face_renderer_slots
-            .insert((1, Direction6::PosY), 2);
+            .insert((1, 0, Direction6::PosY), 2);
         let voxel_api = crate::voxel::api(&mut spatial);
         let add_slot = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
             material_slot: 2,
@@ -1666,6 +1698,7 @@ mod tests {
             0
         );
         let none = [NativeVoxelSceneFaceMaterialBinding {
+            variant: 0,
             material_slot: 1,
             face: NativeSpatialFace::None,
             material: top,
@@ -1687,6 +1720,7 @@ mod tests {
             0
         );
         let unknown = [NativeVoxelSceneFaceMaterialBinding {
+            variant: 0,
             material_slot: 3,
             face: NativeSpatialFace::PosY,
             material: top,
@@ -1807,6 +1841,7 @@ mod tests {
         );
 
         let face = [NativeVoxelSceneFaceMaterialBinding {
+            variant: 0,
             material_slot: 1,
             face: NativeSpatialFace::PosY,
             material: first_material,
@@ -2023,6 +2058,7 @@ mod tests {
         let mut presentation = NativeVoxelScenePresentationHandle::default();
         let mut second_presentation = NativeVoxelScenePresentationHandle::default();
         let top_override = [NativeVoxelSceneFaceMaterialBinding {
+            variant: 0,
             material_slot: 1,
             face: NativeSpatialFace::PosY,
             material: second_material,

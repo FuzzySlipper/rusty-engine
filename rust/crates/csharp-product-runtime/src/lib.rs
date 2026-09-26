@@ -6115,6 +6115,7 @@ mod tests {
             let refresh: NativeRefreshVoxelScenePresentation =
                 unsafe { std::mem::transmute(VOXEL_FAILURE_REFRESH_SCENE.load(Ordering::SeqCst)) };
             let clear = [NativeVoxelEdit {
+                state: 0,
                 kind: NativeVoxelEditKind::Clear,
                 address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
                 material_slot: 0,
@@ -6462,6 +6463,7 @@ mod tests {
             ABI_OK
         );
         let set = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
             material_slot: 1,
@@ -6653,6 +6655,7 @@ mod tests {
         runtime.services.begin_call(ui_binding(&runtime.lifecycle));
         let api = runtime.services.api();
         let edit = NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 1, y: 0, z: 0 },
             material_slot: 1,

@@ -26,7 +26,7 @@ pub struct VoxelProjectionInstance<'a> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VoxelMaterialSlotMapping {
     pub base: BTreeMap<u16, u16>,
-    pub directional: BTreeMap<(u16, Direction6), u16>,
+    pub directional: BTreeMap<(u16, u16, Direction6), u16>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -406,9 +406,15 @@ fn validate_and_snapshot(
         let slots = material_slots
             .get(&instance.instance_id)
             .unwrap_or(&empty_mapping);
-        let map_slot = |slot, direction: Option<Direction6>| {
+        let map_slot = |slot, state: u16, direction: Option<Direction6>| {
             direction
-                .and_then(|direction| slots.directional.get(&(slot, direction)).copied())
+                .and_then(|direction| {
+                    slots
+                        .directional
+                        .get(&(slot, state >> 2, direction))
+                        .or_else(|| slots.directional.get(&(slot, 0, direction)))
+                        .copied()
+                })
                 .or_else(|| slots.base.get(&slot).copied())
                 .unwrap_or(slot)
         };
@@ -427,7 +433,7 @@ fn validate_and_snapshot(
                 chunk
                     .groups
                     .iter()
-                    .map(|group| map_slot(group.material_slot, group.direction)),
+                    .map(|group| map_slot(group.material_slot, group.state, group.direction)),
             );
             chunks.insert(
                 chunk.chunk,
@@ -448,7 +454,7 @@ fn validate_and_snapshot(
                 return None;
             }
             chunk.groups.iter().find_map(|group| {
-                let effective_slot = map_slot(group.material_slot, group.direction);
+                let effective_slot = map_slot(group.material_slot, group.state, group.direction);
                 materials
                     .get(&effective_slot)
                     .filter(|material| {
@@ -588,7 +594,12 @@ fn voxel_mesh_payload_with_material_slots(
                     .and_then(|direction| {
                         material_slots
                             .directional
-                            .get(&(group.material_slot, direction))
+                            .get(&(group.material_slot, group.state >> 2, direction))
+                            .or_else(|| {
+                                material_slots
+                                    .directional
+                                    .get(&(group.material_slot, 0, direction))
+                            })
                             .copied()
                     })
                     .or_else(|| material_slots.base.get(&group.material_slot).copied())
@@ -697,6 +708,44 @@ mod tests {
     use entity_state::EntityState;
     use render_model::MaterialUvStrategy;
 
+    #[test]
+    fn state_variant_and_rotation_resolve_face_materials_with_default_fallback() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            8,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot: 1,
+                state: (7 << 2) | 1,
+            }],
+        )
+        .unwrap();
+        let mapping = VoxelMaterialSlotMapping {
+            base: BTreeMap::from([(1, 10)]),
+            directional: BTreeMap::from([
+                ((1, 0, Direction6::PosY), 11),
+                ((1, 7, Direction6::PosZ), 12),
+            ]),
+        };
+        let chunk = &scene.mesh_chunks()[0];
+        let payload = voxel_mesh_payload_with_material_slots(chunk, &mapping);
+        for (source, rendered) in chunk.groups.iter().zip(&payload.groups) {
+            let expected = match source.direction.unwrap() {
+                Direction6::PosZ => 12,
+                Direction6::PosY => 11,
+                _ => 10,
+            };
+            assert_eq!(rendered.material_slot, expected);
+        }
+        let rotated = chunk
+            .groups
+            .iter()
+            .position(|g| g.direction == Some(Direction6::PosZ))
+            .unwrap();
+        let vertex = chunk.indices[chunk.groups[rotated].start as usize] as usize;
+        assert_eq!(&chunk.normals[vertex * 3..vertex * 3 + 3], &[1.0, 0.0, 0.0]);
+    }
+
     fn material(slot: u16) -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
             schema_version: 2,
@@ -720,6 +769,7 @@ mod tests {
             1.0,
             16,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             }],
@@ -772,6 +822,7 @@ mod tests {
             1.0,
             16,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             }],
@@ -810,6 +861,7 @@ mod tests {
             1.0,
             16,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             }],
@@ -855,6 +907,7 @@ mod tests {
             1.0,
             16,
             [MaterialVoxel {
+                state: 0,
                 address: [100_000, 0, 0],
                 material_slot: 1,
             }],
@@ -913,6 +966,7 @@ mod tests {
             1.0,
             16,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 7,
             }],
@@ -938,6 +992,7 @@ mod tests {
             1.0,
             16,
             [MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             }],
@@ -977,14 +1032,17 @@ mod tests {
             4,
             [
                 MaterialVoxel {
+                    state: 0,
                     address: [-1, 0, 0],
                     material_slot: 1,
                 },
                 MaterialVoxel {
+                    state: 0,
                     address: [0, 0, 0],
                     material_slot: 1,
                 },
                 MaterialVoxel {
+                    state: 0,
                     address: [8, 0, 0],
                     material_slot: 1,
                 },

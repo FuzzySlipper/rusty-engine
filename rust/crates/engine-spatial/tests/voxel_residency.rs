@@ -491,6 +491,7 @@ fn whole_chunk_dirty_halos_match_every_surface_mode() {
                 for x in -1_i64..=1 {
                     if [x, y, z] != [0, 0, 0] {
                         surrounding.push(MaterialVoxel {
+                            state: 0,
                             address: [x * 2, y * 2, z * 2],
                             material_slot: 1,
                         });
@@ -637,6 +638,7 @@ fn mixed_retained_operations_are_reported_but_all_retained_is_no_change() {
         1.0,
         2,
         [MaterialVoxel {
+            state: 0,
             address: [0, 0, 0],
             material_slot: 1,
         }],
@@ -691,10 +693,12 @@ fn residency_history_policy_rejects_or_resets_without_resurrection() {
         2,
         [
             MaterialVoxel {
+                state: 0,
                 address: [0, 0, 0],
                 material_slot: 1,
             },
             MaterialVoxel {
+                state: 0,
                 address: [1, 0, 0],
                 material_slot: 1,
             },

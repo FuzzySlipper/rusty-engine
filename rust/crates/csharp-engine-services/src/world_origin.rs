@@ -593,6 +593,7 @@ mod tests {
             ABI_OK
         );
         let edits = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 1, y: 0, z: 0 },
             material_slot: 1,

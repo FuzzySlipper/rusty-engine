@@ -9,6 +9,8 @@
 #![forbid(unsafe_code)]
 
 mod active_collision;
+mod character_modes;
+pub use character_modes::{CharacterMovementFact, CharacterMovementMode, CharacterMovementRequest};
 mod character_controller;
 mod character_tether;
 pub use character_tether::{CharacterTetherFact, CharacterTetherRequest};
@@ -24,7 +26,9 @@ mod voxel_edit;
 mod voxel_history;
 mod voxel_history_codec;
 mod voxel_picking;
+mod voxel_preparation;
 mod voxel_primitive;
+pub use voxel_preparation::{VoxelPreparationPoll, VoxelResidencyPreparation};
 mod voxel_residency;
 mod voxel_template;
 mod world_origin;
@@ -175,12 +179,15 @@ pub const MAX_SOLID_VOXELS: usize = 1_000_000;
 )]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MaterialVoxel {
+    #[serde(default)]
+    pub state: u16,
     pub address: [i64; 3],
     pub material_slot: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoxelMeshGroup {
+    pub state: u16,
     pub material_slot: u16,
     pub direction: Option<core_space::Direction6>,
     pub start: u32,
@@ -299,6 +306,11 @@ pub enum CollisionSceneError {
         voxel: [i64; 3],
         source: VolumeError,
     },
+    ConflictingVoxelState {
+        voxel: [i64; 3],
+        first: u16,
+        second: u16,
+    },
     ConflictingVoxelMaterial {
         voxel: [i64; 3],
         first: u16,
@@ -364,6 +376,7 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             solids.into_iter().map(|address| MaterialVoxel {
+                state: 0,
                 address,
                 material_slot: 1,
             }),
@@ -381,6 +394,7 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             solids.into_iter().map(|address| MaterialVoxel {
+                state: 0,
                 address,
                 material_slot: 1,
             }),
@@ -502,12 +516,21 @@ impl VoxelCollisionScene {
         let mut unique_voxels = BTreeMap::new();
         for voxel in voxels {
             validate_material_voxel(voxel).map_err(CollisionSceneError::InvalidMaterialVoxel)?;
-            if let Some(first) = unique_voxels.insert(voxel.address, voxel.material_slot) {
-                if first != voxel.material_slot {
+            if let Some(first) =
+                unique_voxels.insert(voxel.address, (voxel.material_slot, voxel.state))
+            {
+                if first.0 != voxel.material_slot {
                     return Err(CollisionSceneError::ConflictingVoxelMaterial {
                         voxel: voxel.address,
-                        first,
+                        first: first.0,
                         second: voxel.material_slot,
+                    });
+                }
+                if first.1 != voxel.state {
+                    return Err(CollisionSceneError::ConflictingVoxelState {
+                        voxel: voxel.address,
+                        first: first.1,
+                        second: voxel.state,
                     });
                 }
             }
@@ -519,7 +542,8 @@ impl VoxelCollisionScene {
         }
         let material_voxels: Vec<_> = unique_voxels
             .into_iter()
-            .map(|(address, material_slot)| MaterialVoxel {
+            .map(|(address, (material_slot, state))| MaterialVoxel {
+                state,
                 address,
                 material_slot,
             })
@@ -536,7 +560,11 @@ impl VoxelCollisionScene {
             chunk
                 .set(
                     local,
-                    VoxelValue::solid(VoxelMaterialId::new(material_voxel.material_slot)),
+                    VoxelValue::solid(VoxelMaterialId::new(material_voxel.material_slot))
+                        .with_state(
+                            core_voxel::VoxelState::from_raw(material_voxel.state)
+                                .expect("validated state"),
+                        ),
                 )
                 .map_err(|source| CollisionSceneError::Volume {
                     voxel: address,
@@ -576,6 +604,7 @@ impl VoxelCollisionScene {
                     continue;
                 };
                 let voxel = MaterialVoxel {
+                    state: value.state().raw(),
                     address: grid.chunk_local_to_voxel(coordinate, local).to_array(),
                     material_slot: material.raw(),
                 };
@@ -1147,6 +1176,7 @@ fn voxel_mesh_chunk(
             .groups
             .into_iter()
             .map(|group| VoxelMeshGroup {
+                state: group.state,
                 material_slot: group.material_slot,
                 direction: group.direction,
                 start: group.start,
@@ -1186,6 +1216,7 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
     }
     for group in &mesh.groups {
         feed(&group.material_slot.to_le_bytes());
+        feed(&group.state.to_le_bytes());
         feed(&group.start.to_le_bytes());
         feed(&group.count.to_le_bytes());
     }
@@ -1203,6 +1234,7 @@ fn hash_material_voxels(voxels: &[MaterialVoxel]) -> u64 {
             feed_hash(&mut hash, &coordinate.to_le_bytes());
         }
         feed_hash(&mut hash, &voxel.material_slot.to_le_bytes());
+        feed_hash(&mut hash, &voxel.state.to_le_bytes());
     }
     hash
 }

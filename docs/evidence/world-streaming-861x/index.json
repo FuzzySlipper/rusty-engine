@@ -1,0 +1,68 @@
+{
+  "scope": "local packaged SDK/runtime proof before immutable release",
+  "sdk": "0.1.0-redo861x-local1",
+  "runtime": "/tmp/861x-local-runtime",
+  "crewSession": "fee6b229-1f8a-4eb6-84a5-ce2a721f3458",
+  "profile": "engine-world-streaming-861x",
+  "captures": [
+    {
+      "scenario": "swim",
+      "file": "swim.png",
+      "position": [
+        -2,
+        1,
+        0
+      ],
+      "mode": "Swimming",
+      "headSubmerged": true
+    },
+    {
+      "scenario": "climb",
+      "file": "climb.png",
+      "position": [
+        -2,
+        3.9999971,
+        0
+      ],
+      "mode": "Climbing",
+      "attached": true
+    },
+    {
+      "scenario": "fly",
+      "file": "fly.png",
+      "position": [
+        -2,
+        4.8166633,
+        0
+      ],
+      "mode": "Flying",
+      "visualDisplacement": "uncertain; runtime receipts passed"
+    }
+  ],
+  "commonFacts": {
+    "streaming": "committed",
+    "modeProof": true,
+    "stateProof": true,
+    "steps": 120
+  },
+  "browser": "no page errors; default cyan voxel and green variant face visible",
+  "assistance": "debug commands explicitly reset/select scenarios; not normal-input gameplay proof",
+  "warnings": "complete browser/Engine capture, no lag/drops; known ReadPixels GPU-stall warnings; no baseline and no clean-delta claim",
+  "nativeAot": {
+    "streaming": "committed",
+    "modeProof": true,
+    "stateProof": true,
+    "pendingObservations": 0,
+    "scenario": "swim",
+    "steps": 120,
+    "position": [
+      -2,
+      1,
+      0
+    ],
+    "mode": "Swimming",
+    "headSubmerged": true,
+    "climbAttached": false,
+    "note": "Same local packaged SDK/runtime; NativeAOT product published and loaded, browser attachment established, then inspect verified committed state and movement proof. First debug before attachment had no output baseline and was retried after normal attachment."
+  }
+}

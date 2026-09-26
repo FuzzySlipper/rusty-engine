@@ -25,7 +25,7 @@ public readonly partial record struct CharacterStepReceipt
 {
     /// <summary>Creates the ordinary untethered value.</summary>
     public CharacterStepReceipt(ulong Generation, ulong RevisionBefore, ulong RevisionAfter, ulong Entity, ulong CommandSequence, Transform TransformBefore, Transform Transform, CharacterMotion Motion, Vector3 WishVelocity, Vector3 Displacement, CharacterContact Contact, CharacterGround Ground, CharacterFloorProbe FloorProbe, CharacterStanceFact Stance, CharacterStep Step, CharacterPlatform Platform, CharacterBlockFlags BlockFlags, uint ContactCount, uint DynamicImpulseCount, uint CastCount, uint RecoveryPasses, float RecoveryDistance)
-        : this(default, Generation, RevisionBefore, RevisionAfter, Entity, CommandSequence, TransformBefore, Transform, Motion, WishVelocity, Displacement, Contact, Ground, FloorProbe, Stance, Step, Platform, BlockFlags, ContactCount, DynamicImpulseCount, CastCount, RecoveryPasses, RecoveryDistance)
+        : this(default, default, Generation, RevisionBefore, RevisionAfter, Entity, CommandSequence, TransformBefore, Transform, Motion, WishVelocity, Displacement, Contact, Ground, FloorProbe, Stance, Step, Platform, BlockFlags, ContactCount, DynamicImpulseCount, CastCount, RecoveryPasses, RecoveryDistance)
     {
     }
 }

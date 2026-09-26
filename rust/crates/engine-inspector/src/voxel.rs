@@ -246,6 +246,7 @@ pub fn inspect_voxel_state(scene: &VoxelCollisionScene) -> VoxelStateInspection 
 
 pub fn describe_voxel_edit_rejection(rejection: &VoxelEditRejection) -> String {
     match rejection {
+        VoxelEditRejection::InvalidState { edit_index, state } => format!("edit rejected: edit {edit_index} state {state} exceeds fifteen bits"),
         VoxelEditRejection::StaleRevision { expected, actual } => format!(
             "edit rejected: expected voxel revision {}, actual {}",
             expected.raw(),
@@ -383,6 +384,7 @@ fn collision_scene_from_asset(asset: &VoxelAsset) -> Result<VoxelCollisionScene,
         .map_err(|error| error.to_string())?
         .into_iter()
         .map(|cell| MaterialVoxel {
+            state: 0,
             address: cell.coordinate,
             material_slot: cell.material_slot,
         });

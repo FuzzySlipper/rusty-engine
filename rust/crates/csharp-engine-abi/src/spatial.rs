@@ -1137,9 +1137,46 @@ pub struct NativeCharacterControllerConfig {
     pub solver: NativeCharacterSolverConfig,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeCharacterMovementMode {
+    #[default]
+    Walking = 0,
+    Swimming = 1,
+    Climbing = 2,
+    Flying = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterMovementRequest {
+    pub mode: NativeCharacterMovementMode,
+    pub vertical_intent: f32,
+    pub speed: f32,
+    pub acceleration: f32,
+    pub drag: f32,
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+    pub gravity_scale: f32,
+    pub buoyancy: f32,
+    pub climb_reach: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterMovementFact {
+    pub mode: NativeCharacterMovementMode,
+    pub immersion: f32,
+    pub head_submerged: bool,
+    pub climb_attached: bool,
+    pub climb_at_bottom: bool,
+    pub climb_at_top: bool,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterControllerCommand {
+    pub movement: NativeCharacterMovementRequest,
     pub planar_intent: NativeVec2,
     pub heading_yaw_radians: f32,
     pub jump_pressed: bool,
@@ -1389,6 +1426,7 @@ pub struct NativeCharacterControllerReadout {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCharacterStepReceipt {
+    pub movement: NativeCharacterMovementFact,
     pub tether: NativeCharacterTetherFact,
     pub generation: u64,
     pub revision_before: u64,

@@ -63,6 +63,7 @@ pub struct NativeVoxelReadRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelReadout {
+    pub state: u32,
     pub present: bool,
     pub address: NativeVoxelAddress,
     pub material_slot: u32,
@@ -78,6 +79,7 @@ pub struct NativeVoxelAtRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelAtReceipt {
+    pub state: u32,
     pub present: bool,
     pub address: NativeVoxelAddress,
     pub material_slot: u32,
@@ -145,6 +147,7 @@ pub enum NativeVoxelEditStatus {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelEdit {
+    pub state: u32,
     pub kind: NativeVoxelEditKind,
     pub address: NativeVoxelAddress,
     pub material_slot: u32,
@@ -212,6 +215,8 @@ pub enum NativeVoxelResidencyHistoryPolicy {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelResidencyTransaction {
+    pub states: *const u32,
+    pub states_len: usize,
     pub session: NativeSpatialSessionHandle,
     pub expected_revision: u64,
     pub history_policy: NativeVoxelResidencyHistoryPolicy,
@@ -323,6 +328,8 @@ pub struct NativeVoxelHistoryDeltaAtRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelHistoryDeltaReadout {
+    pub before_state: u32,
+    pub after_state: u32,
     pub present: bool,
     pub address: NativeVoxelAddress,
     pub before_material_present: bool,
@@ -417,6 +424,52 @@ pub type NativeReadVoxelDirtyChunkAt = unsafe extern "C" fn(
     NativeVoxelDirtyChunkAtRequest,
     *mut NativeVoxelDirtyChunkAtReceipt,
 ) -> i32;
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelPreparationStatus {
+    #[default]
+    Pending = 0,
+    Ready = 1,
+    Committed = 2,
+    Cancelled = 3,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVoxelPreparationRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub preparation: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVoxelPreparationReceipt {
+    pub preparation: u64,
+    pub status: NativeVoxelPreparationStatus,
+    pub residency: NativeVoxelResidencyReceipt,
+}
+pub type NativeStartVoxelResidencyPreparation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelResidencyTransaction,
+    *mut NativeVoxelPreparationReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativePollVoxelResidencyPreparation = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelPreparationRequest,
+    *mut NativeVoxelPreparationReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCommitVoxelResidencyPreparation = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelPreparationRequest,
+    *mut NativeVoxelPreparationReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCancelVoxelResidencyPreparation = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelPreparationRequest,
+    *mut NativeVoxelPreparationReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeApplyVoxelResidency = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelResidencyTransaction,
@@ -488,6 +541,10 @@ pub struct NativeVoxelApi {
     pub apply_edits: NativeApplyVoxelEdits,
     pub read_dirty_chunk_at: NativeReadVoxelDirtyChunkAt,
     pub apply_residency: NativeApplyVoxelResidency,
+    pub start_residency_preparation: NativeStartVoxelResidencyPreparation,
+    pub poll_residency_preparation: NativePollVoxelResidencyPreparation,
+    pub commit_residency_preparation: NativeCommitVoxelResidencyPreparation,
+    pub cancel_residency_preparation: NativeCancelVoxelResidencyPreparation,
     pub acquire_chunk_lease: NativeAcquireVoxelChunkLease,
     pub destroy_chunk_lease: NativeDestroyVoxelChunkLease,
     pub read_chunk_lease: NativeReadVoxelChunkLease,

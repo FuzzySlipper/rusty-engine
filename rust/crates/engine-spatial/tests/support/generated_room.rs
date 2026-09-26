@@ -153,6 +153,7 @@ fn generate_room(
                     continue;
                 };
                 voxels.push(MaterialVoxel {
+                    state: 0,
                     address: [i64::from(x), i64::from(y), i64::from(z)],
                     material_slot,
                 });

@@ -13,7 +13,7 @@
 //! materials (dirt/stone/tree); materials are opaque [`VoxelMaterialId`]s validated
 //! against a [`MaterialCatalog`]. The model assumes **large, mostly-static
 //! volumes** rather than frequent per-cell edits, so the representation is small
-//! and `Copy` and carries no per-cell metadata or churn machinery.
+//! and `Copy` and carries compact orientation/variant state.
 //!
 //! # Settled decisions (voxel-capability-02 §"Decisions to make")
 //!
@@ -22,8 +22,7 @@
 //! 2. **Transparency is deferred**: every `Solid` is opaque today ([`VoxelValue::is_opaque`]),
 //!    with room for a `VoxelOpacity` axis later without changing storage.
 //! 3. **Non-cubic shapes deferred**: values classify occupancy, not geometry.
-//! 4. **Voxels hold no metadata**: metadata-bearing things are separate entities,
-//!    keeping the per-cell value tiny for big volumes.
+//! 4. Cells carry fifteen state bits. Rich object behavior remains product-owned.
 //! 5. Materials are **Rust-validated** via [`MaterialCatalog`]; a TS catalog may
 //!    later author the set, but acceptance stays Rust-side.
 //! 6. Unknown materials are a **validation rejection** ([`MaterialError`]), not a
@@ -50,6 +49,31 @@ impl VoxelMaterialId {
     }
 }
 
+/// Compact authored state: two low bits are clockwise quarter turns about +Y;
+/// the remaining thirteen bits select a product-defined variant/stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct VoxelState(u16);
+impl VoxelState {
+    pub const DEFAULT: Self = Self(0);
+    pub const MAX_RAW: u16 = 0x7fff;
+    pub const fn from_raw(raw: u16) -> Option<Self> {
+        if raw <= Self::MAX_RAW {
+            Some(Self(raw))
+        } else {
+            None
+        }
+    }
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+    pub const fn quarter_turns(self) -> u8 {
+        (self.0 & 3) as u8
+    }
+    pub const fn variant(self) -> u16 {
+        self.0 >> 2
+    }
+}
+
 /// The value of a single voxel cell: either empty space or a solid of some
 /// material. Small, `Copy`, with stable equality/ordering/hash and a stable
 /// encoding for replay/snapshot artifacts.
@@ -59,7 +83,10 @@ pub enum VoxelValue {
     #[default]
     Empty,
     /// A filled cell of the given material.
-    Solid { material: VoxelMaterialId },
+    Solid {
+        material: VoxelMaterialId,
+        state: VoxelState,
+    },
 }
 
 impl VoxelValue {
@@ -68,13 +95,30 @@ impl VoxelValue {
 
     /// A solid voxel of `material`.
     pub const fn solid(material: VoxelMaterialId) -> Self {
-        VoxelValue::Solid { material }
+        VoxelValue::Solid {
+            material,
+            state: VoxelState::DEFAULT,
+        }
     }
 
     /// A solid voxel from a raw material id.
     pub const fn solid_raw(material: u16) -> Self {
         VoxelValue::Solid {
             material: VoxelMaterialId::new(material),
+            state: VoxelState::DEFAULT,
+        }
+    }
+
+    pub const fn with_state(self, state: VoxelState) -> Self {
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Solid { material, .. } => Self::Solid { material, state },
+        }
+    }
+    pub const fn state(self) -> VoxelState {
+        match self {
+            Self::Empty => VoxelState::DEFAULT,
+            Self::Solid { state, .. } => state,
         }
     }
 
@@ -90,7 +134,7 @@ impl VoxelValue {
     pub const fn material(self) -> Option<VoxelMaterialId> {
         match self {
             VoxelValue::Empty => None,
-            VoxelValue::Solid { material } => Some(material),
+            VoxelValue::Solid { material, .. } => Some(material),
         }
     }
 
@@ -113,7 +157,8 @@ impl VoxelValue {
 
     // ── Stable encoding (for replay/snapshot/chunk hashing) ────────────────────
     //
-    // Layout: bit 16 is the "solid" tag; the low 16 bits carry the material id.
+    // Layout: bit 16 is the solid tag; low 16 bits carry the material id;
+    // bits 17..31 carry compact cell state. Default state preserves old encodings.
     //   Empty        -> 0x0000_0000
     //   Solid(m)     -> 0x0001_0000 | m
     // `Empty == 0` makes a zeroed buffer read as all-empty (the common big-volume
@@ -125,7 +170,9 @@ impl VoxelValue {
     pub const fn to_encoded(self) -> u32 {
         match self {
             VoxelValue::Empty => 0,
-            VoxelValue::Solid { material } => Self::SOLID_TAG | material.raw() as u32,
+            VoxelValue::Solid { material, state } => {
+                Self::SOLID_TAG | material.raw() as u32 | ((state.raw() as u32) << 17)
+            }
         }
     }
 
@@ -134,9 +181,10 @@ impl VoxelValue {
     pub const fn from_encoded(bits: u32) -> Option<Self> {
         if bits == 0 {
             Some(VoxelValue::Empty)
-        } else if bits & Self::SOLID_TAG != 0 && bits & !(Self::SOLID_TAG | 0xFFFF) == 0 {
+        } else if bits & Self::SOLID_TAG != 0 {
             Some(VoxelValue::Solid {
                 material: VoxelMaterialId::new((bits & 0xFFFF) as u16),
+                state: VoxelState((bits >> 17) as u16),
             })
         } else {
             None
@@ -275,7 +323,10 @@ mod tests {
         // Garbage high bits are rejected rather than silently misread.
         assert_eq!(VoxelValue::from_encoded(0x0000_0001), None);
         assert_eq!(VoxelValue::from_encoded(0x0002_0000), None);
-        assert_eq!(VoxelValue::from_encoded(0xFFFF_FFFF), None);
+        assert_eq!(
+            VoxelValue::from_encoded(0xFFFF_FFFF),
+            Some(VoxelValue::solid_raw(0xffff).with_state(VoxelState::from_raw(0x7fff).unwrap()))
+        );
     }
 
     #[test]

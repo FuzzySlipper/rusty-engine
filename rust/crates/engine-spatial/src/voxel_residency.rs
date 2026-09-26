@@ -93,6 +93,8 @@ impl VoxelChunkContentHash {
 pub struct VoxelChunkPayload {
     pub dimensions: [u32; 3],
     pub material_slots: Vec<u16>,
+    /// Empty means default state for every cell; otherwise exactly one entry per slot.
+    pub states: Vec<u16>,
 }
 
 impl VoxelChunkPayload {
@@ -100,6 +102,7 @@ impl VoxelChunkPayload {
         Self {
             dimensions,
             material_slots,
+            states: Vec::new(),
         }
     }
 
@@ -293,6 +296,9 @@ impl VoxelChunkLeaseRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelChunkResidencyRejection {
+    InvalidCellStates {
+        operation_index: usize,
+    },
     StaleSceneSourceRevision {
         expected: VoxelSourceRevision,
         actual: VoxelSourceRevision,
@@ -395,6 +401,10 @@ pub enum VoxelChunkResidencyApplyError {
         expected_residency_hash: u64,
         actual_residency_hash: u64,
     },
+    PreparedOriginChanged {
+        expected_revision: u64,
+        actual_revision: u64,
+    },
     PreparedStaticCollisionChanged {
         expected_revision: u64,
         actual_revision: u64,
@@ -417,6 +427,10 @@ impl std::fmt::Display for VoxelChunkResidencyApplyError {
                     "voxel residency changed after candidate preparation"
                 )
             }
+            Self::PreparedOriginChanged { .. } => write!(
+                formatter,
+                "world origin changed after candidate preparation"
+            ),
             Self::PreparedStaticCollisionChanged { .. } => {
                 write!(
                     formatter,
@@ -467,6 +481,8 @@ pub enum VoxelResidencyHistoryPolicy {
 pub struct PreparedVoxelChunkResidency {
     expected_scene_source_revision: VoxelSourceRevision,
     expected_residency_hash: u64,
+    expected_rebase_revision: u64,
+    expected_world_origin: core_space::WorldOrigin,
     expected_static_collision_revision: u64,
     expected_lease_registry_generation: u64,
     candidate: VoxelCollisionScene,
@@ -792,6 +808,8 @@ impl VoxelChunkResidencyService {
         Ok(PreparedVoxelChunkResidency {
             expected_scene_source_revision: scene.source_revision,
             expected_residency_hash: residency_hash(scene),
+            expected_rebase_revision: scene.rebase_revision,
+            expected_world_origin: scene.world_origin,
             expected_static_collision_revision: scene.static_mesh_collision_revision(),
             expected_lease_registry_generation: leases.generation,
             candidate,
@@ -805,6 +823,19 @@ impl VoxelChunkResidencyService {
         leases: &VoxelChunkLeaseRegistry,
         prepared: PreparedVoxelChunkResidency,
     ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
+        let (candidate, receipt) = Self::finish_prepared(scene, leases, prepared)?;
+        *scene = candidate;
+        Ok(receipt)
+    }
+
+    /// Validate publication guards and transfer the prepared scene without
+    /// cloning the old scene on the publication thread.
+    pub fn finish_prepared(
+        scene: &VoxelCollisionScene,
+        leases: &VoxelChunkLeaseRegistry,
+        prepared: PreparedVoxelChunkResidency,
+    ) -> Result<(VoxelCollisionScene, VoxelChunkResidencyReceipt), VoxelChunkResidencyApplyError>
+    {
         let actual_residency_hash = residency_hash(scene);
         if scene.source_revision != prepared.expected_scene_source_revision
             || actual_residency_hash != prepared.expected_residency_hash
@@ -814,6 +845,14 @@ impl VoxelChunkResidencyService {
                 actual_revision: scene.source_revision,
                 expected_residency_hash: prepared.expected_residency_hash,
                 actual_residency_hash,
+            });
+        }
+        if scene.rebase_revision != prepared.expected_rebase_revision
+            || scene.world_origin != prepared.expected_world_origin
+        {
+            return Err(VoxelChunkResidencyApplyError::PreparedOriginChanged {
+                expected_revision: prepared.expected_rebase_revision,
+                actual_revision: scene.rebase_revision,
             });
         }
         let actual_static_collision_revision = scene.static_mesh_collision_revision();
@@ -833,9 +872,7 @@ impl VoxelChunkResidencyService {
                 },
             );
         }
-        let receipt = prepared.receipt.clone();
-        *scene = prepared.candidate;
-        Ok(receipt)
+        Ok((prepared.candidate, prepared.receipt))
     }
 
     /// Prepare and guarded-commit one complete transaction.
@@ -934,6 +971,20 @@ fn validate_payload(
             },
         ));
     }
+    if (!payload.states.is_empty() && payload.states.len() != expected_slot_count)
+        || payload
+            .states
+            .iter()
+            .zip(&payload.material_slots)
+            .any(|(state, material)| {
+                core_voxel::VoxelState::from_raw(*state).is_none()
+                    || (*material == 0 && *state != 0)
+            })
+    {
+        return Err(VoxelChunkResidencyApplyError::Rejected(
+            VoxelChunkResidencyRejection::InvalidCellStates { operation_index },
+        ));
+    }
     let values: Vec<_> = payload
         .material_slots
         .iter()
@@ -953,7 +1004,12 @@ fn validate_payload(
             } else if material_slot == 0 {
                 Ok(VoxelValue::EMPTY)
             } else {
-                Ok(VoxelValue::solid_raw(material_slot))
+                Ok(VoxelValue::solid_raw(material_slot).with_state(
+                    core_voxel::VoxelState::from_raw(
+                        payload.states.get(slot_index).copied().unwrap_or(0),
+                    )
+                    .expect("validated state"),
+                ))
             }
         })
         .collect::<Result<_, _>>()?;

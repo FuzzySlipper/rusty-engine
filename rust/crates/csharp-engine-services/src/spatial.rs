@@ -177,6 +177,8 @@ pub(crate) struct SpatialSession {
     pub(crate) voxel_history: engine_spatial::VoxelEditHistory,
     pub(crate) voxel_leases: engine_spatial::VoxelChunkLeaseRegistry,
     pub(crate) last_voxel_dirty_chunks: Vec<[i64; 3]>,
+    pub(crate) voxel_preparation: Option<crate::voxel::PendingVoxelPreparation>,
+    pub(crate) next_voxel_preparation: u64,
     navigation: Option<NavigationState>,
     navigation_revision: u64,
     content_artifact: Option<SpatialContentIdentity>,
@@ -605,6 +607,8 @@ impl RuntimeSpatialBridge {
                 voxel_history: engine_spatial::VoxelEditHistory::new(&scene),
                 voxel_leases: engine_spatial::VoxelChunkLeaseRegistry::default(),
                 last_voxel_dirty_chunks: Vec::new(),
+                voxel_preparation: None,
+                next_voxel_preparation: 1,
                 scene: Arc::clone(&scene),
                 world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,
@@ -679,6 +683,7 @@ impl RuntimeSpatialBridge {
             asset.grid.cell_size,
             asset.grid.chunk_size,
             cells.into_iter().map(|cell| MaterialVoxel {
+                state: 0,
                 address: cell.coordinate,
                 material_slot: cell.material_slot,
             }),
@@ -3554,6 +3559,31 @@ fn native_character_config(value: CharacterControllerConfig) -> NativeCharacterC
 
 fn character_command(value: NativeCharacterControllerCommand) -> CharacterControllerCommand {
     CharacterControllerCommand {
+        movement: engine_spatial::CharacterMovementRequest {
+            mode: match value.movement.mode {
+                NativeCharacterMovementMode::Walking => {
+                    engine_spatial::CharacterMovementMode::Walking
+                }
+                NativeCharacterMovementMode::Swimming => {
+                    engine_spatial::CharacterMovementMode::Swimming
+                }
+                NativeCharacterMovementMode::Climbing => {
+                    engine_spatial::CharacterMovementMode::Climbing
+                }
+                NativeCharacterMovementMode::Flying => {
+                    engine_spatial::CharacterMovementMode::Flying
+                }
+            },
+            vertical_intent: value.movement.vertical_intent,
+            speed: value.movement.speed,
+            acceleration: value.movement.acceleration,
+            drag: value.movement.drag,
+            minimum: native_vec3_value(value.movement.minimum),
+            maximum: native_vec3_value(value.movement.maximum),
+            gravity_scale: value.movement.gravity_scale,
+            buoyancy: value.movement.buoyancy,
+            climb_reach: value.movement.climb_reach,
+        },
         tether: None,
         planar_intent: Vec2::new(value.planar_intent.x, value.planar_intent.y),
         heading_yaw_radians: value.heading_yaw_radians,
@@ -3837,6 +3867,27 @@ fn native_character_receipt(
         }
     });
     NativeCharacterStepReceipt {
+        movement: NativeCharacterMovementFact {
+            mode: match receipt.movement.mode {
+                engine_spatial::CharacterMovementMode::Walking => {
+                    NativeCharacterMovementMode::Walking
+                }
+                engine_spatial::CharacterMovementMode::Swimming => {
+                    NativeCharacterMovementMode::Swimming
+                }
+                engine_spatial::CharacterMovementMode::Climbing => {
+                    NativeCharacterMovementMode::Climbing
+                }
+                engine_spatial::CharacterMovementMode::Flying => {
+                    NativeCharacterMovementMode::Flying
+                }
+            },
+            immersion: receipt.movement.immersion,
+            head_submerged: receipt.movement.head_submerged,
+            climb_attached: receipt.movement.climb_attached,
+            climb_at_bottom: receipt.movement.climb_at_bottom,
+            climb_at_top: receipt.movement.climb_at_top,
+        },
         tether: native_character_tether_fact(receipt.tether),
         generation: receipt.generation,
         revision_before: receipt.revision_before,
@@ -7010,6 +7061,7 @@ mod tests {
             ABI_OK
         );
         let command = NativeCharacterControllerCommand {
+            movement: Default::default(),
             planar_intent: NativeVec2::default(),
             heading_yaw_radians: 0.0,
             jump_pressed: false,
@@ -7213,6 +7265,7 @@ mod tests {
             .expect("selected surface mode creates a canonical scene");
         let voxel_api = crate::voxel::api(&mut bridge);
         let edits = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
             material_slot: 1,
@@ -7249,6 +7302,7 @@ mod tests {
         let voxel_api = crate::voxel::api(&mut bridge);
         let address = NativeVoxelAddress { x: 8, y: 3, z: 7 };
         let admitted = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address,
             material_slot: 1,
@@ -7365,6 +7419,7 @@ mod tests {
         assert_eq!(before_clear.address, address);
 
         let clear = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Clear,
             address: before_clear.address,
             material_slot: 0,
@@ -7448,6 +7503,7 @@ mod tests {
                 mesh_instances_len: 0,
                 config: bridge.default_character_controller_config(),
                 command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
                     planar_intent: NativeVec2::default(),
                     heading_yaw_radians: 0.0,
                     jump_pressed: false,
@@ -7497,6 +7553,7 @@ mod tests {
                 mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
                     planar_intent: NativeVec2::default(),
                     heading_yaw_radians: 0.0,
                     jump_pressed: false,
@@ -7626,6 +7683,7 @@ mod tests {
             mesh_instances_len: meshes.len(),
             config,
             command: NativeCharacterControllerCommand {
+                movement: Default::default(),
                 planar_intent: NativeVec2::default(),
                 heading_yaw_radians: 0.0,
                 jump_pressed: false,
@@ -7828,6 +7886,7 @@ mod tests {
                 mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
                     planar_intent: NativeVec2::default(),
                     heading_yaw_radians: 0.0,
                     jump_pressed: false,
@@ -7865,6 +7924,7 @@ mod tests {
                 mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
                     planar_intent: NativeVec2::default(),
                     heading_yaw_radians: 0.0,
                     jump_pressed: false,
@@ -7914,6 +7974,7 @@ mod tests {
             mesh_instances_len: 0,
             config,
             command: NativeCharacterControllerCommand {
+                movement: Default::default(),
                 planar_intent: NativeVec2::default(),
                 heading_yaw_radians: 0.0,
                 jump_pressed: false,
@@ -8018,6 +8079,7 @@ mod tests {
             .expect("content-mismatch session creates");
         let voxel_api = crate::voxel::api(&mut bridge);
         let edits = [NativeVoxelEdit {
+            state: 0,
             kind: NativeVoxelEditKind::Set,
             address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
             material_slot: 1,
@@ -8160,6 +8222,7 @@ mod tests {
                 mesh_instances_len: 0,
                 config,
                 command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
                     planar_intent: NativeVec2::default(),
                     heading_yaw_radians: 0.0,
                     jump_pressed: false,
@@ -8203,6 +8266,7 @@ mod tests {
             mesh_instances_len: 0,
             config,
             command: NativeCharacterControllerCommand {
+                movement: Default::default(),
                 planar_intent: NativeVec2::default(),
                 heading_yaw_radians: 0.0,
                 jump_pressed: false,

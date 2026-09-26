@@ -57,6 +57,7 @@ fn fixture() -> (WorldOriginState, EntityState, VoxelCollisionScene) {
     .unwrap();
 
     let floor = (-2..=6).map(|offset| MaterialVoxel {
+        state: 0,
         address: [FAR_X + offset, 0, 0],
         material_slot: 1,
     });

@@ -805,6 +805,7 @@ fn dual_contouring(
         let start = indices.len() as u32;
         indices.extend(lane);
         groups.push(MeshGroup {
+            state: 0,
             material_slot: slot,
             direction: None,
             start,
@@ -1005,6 +1006,7 @@ fn finalize_lanes(
         normals.extend(lane.normals);
         indices.extend(lane.indices.into_iter().map(|index| index + vertex_base));
         groups.push(MeshGroup {
+            state: 0,
             material_slot: slot,
             direction: None,
             start: group_start,
