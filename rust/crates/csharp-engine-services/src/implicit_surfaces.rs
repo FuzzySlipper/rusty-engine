@@ -525,9 +525,11 @@ fn call<T>(
             0
         }
         Err(_) => {
-            bridge.callback_error = Some(error(
-                "implicit backend panicked during generation or evaluation",
-            ));
+            bridge.retain_callback_error(
+                b"",
+                error("implicit backend panicked during generation or evaluation"),
+                operation_error,
+            );
             0
         }
     }
@@ -555,7 +557,7 @@ fn call_operation<T>(
             ABI_OK
         }
         Ok(Err(error)) if error.code() == "CSHARP_SPATIAL_POINTER" => {
-            bridge.callback_error = Some(error);
+            bridge.retain_callback_error(operation, error, receipt);
             0
         }
         Ok(Err(error)) => {
@@ -563,7 +565,11 @@ fn call_operation<T>(
             0
         }
         Err(_) => {
-            bridge.callback_error = Some(error("implicit backend panicked during operation"));
+            bridge.retain_callback_error(
+                operation,
+                error("implicit backend panicked during operation"),
+                receipt,
+            );
             0
         }
     }
@@ -861,7 +867,7 @@ unsafe extern "C" fn generate(
         Ok(Err(error)) if error.code() == "CSHARP_SPATIAL_POINTER" => {
             // Pointer/length incoherence is an ABI failure, not an authoring
             // request the product may catch and continue past.
-            bridge.callback_error = Some(error);
+            bridge.retain_callback_error(b"Generate", error, receipt);
             0
         }
         Ok(Err(error)) => {
@@ -869,7 +875,11 @@ unsafe extern "C" fn generate(
             0
         }
         Err(_) => {
-            bridge.callback_error = Some(error("implicit backend panicked during generation"));
+            bridge.retain_callback_error(
+                b"Generate",
+                error("implicit backend panicked during generation"),
+                receipt,
+            );
             0
         }
     }
@@ -889,6 +899,22 @@ fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
 }
 
 impl RuntimeImplicitBridge {
+    fn retain_callback_error(
+        &mut self,
+        operation: &'static [u8],
+        error: CsharpEngineServicesError,
+        receipt: *mut NativeOperationErrorReceipt,
+    ) {
+        if !receipt.is_null() {
+            self.retain_operation_error(
+                operation,
+                CsharpEngineServicesError::new(error.code(), error.detail()),
+                receipt,
+            );
+        }
+        self.callback_error = Some(error);
+    }
+
     fn retain_operation_error(
         &mut self,
         operation: &'static [u8],

@@ -774,7 +774,36 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         0
     );
-    assert_eq!(malformed_error.diagnostics.handle.value, 0);
+    assert_ne!(malformed_error.diagnostics.handle.value, 0);
+    assert_eq!(malformed_error.diagnostics.diagnostics_len, 1);
+    let diagnostic = unsafe { *malformed_error.diagnostics.diagnostics };
+    let code = unsafe {
+        std::str::from_utf8(std::slice::from_raw_parts(
+            diagnostic.code.bytes,
+            diagnostic.code.len,
+        ))
+    }
+    .unwrap();
+    assert_eq!(code, "CSHARP_SPATIAL_POINTER");
+    assert!(diagnostic.message.len > 0);
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(
+                api.context,
+                malformed_error.diagnostics.handle,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(
+                api.context,
+                malformed_error.diagnostics.handle,
+            )
+        },
+        0
+    );
     let failure = implicit
         .take_call()
         .err()
@@ -1031,4 +1060,58 @@ fn native_implicit_frustum_samples_taper_with_start_to_end_orientation() {
         }) > 0.0,
         "a point beyond the end radius is outside"
     );
+}
+
+#[test]
+fn implicit_backend_panics_return_diagnostics_and_still_taint_the_callback() {
+    for operation_receipt in [false, true] {
+        let mut bridge = RuntimeImplicitBridge::new();
+        bridge.begin_call();
+        let context = std::ptr::from_mut(&mut bridge).cast();
+        let mut result = 0_u32;
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        let status = if operation_receipt {
+            super::call_operation(context, &mut result, &mut receipt, b"Probe", |_| {
+                panic!("controlled implicit backend failure")
+            })
+        } else {
+            super::call(context, &mut result, &mut receipt, |_| {
+                panic!("controlled implicit backend failure")
+            })
+        };
+        assert_eq!(status, 0);
+        assert_ne!(receipt.diagnostics.handle.value, 0);
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        let code = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(
+                diagnostic.code.bytes,
+                diagnostic.code.len,
+            ))
+        }
+        .unwrap();
+        assert_eq!(code, "CSHARP_IMPLICIT_SURFACE");
+        let message = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(
+                diagnostic.message.bytes,
+                diagnostic.message.len,
+            ))
+        }
+        .unwrap();
+        assert!(message.contains("panicked"));
+        assert_eq!(
+            unsafe {
+                super::destroy_operation_diagnostic_lease(context, receipt.diagnostics.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            bridge
+                .take_call()
+                .err()
+                .expect("panic taints callback")
+                .code(),
+            "CSHARP_IMPLICIT_SURFACE"
+        );
+    }
 }
