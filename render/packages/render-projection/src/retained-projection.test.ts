@@ -314,32 +314,7 @@ void test('applies frame ops in order and exposes neutral instructions', () => {
   assert.equal(projection.handleCount, 0);
 });
 
-void test('a rejected later operation rolls back the entire frame', () => {
-  const projection = new RenderProjection();
-  projection.applyDiff(createPrimitive(10, 'preexisting'));
-  const before = projection.snapshot();
 
-  assert.throws(
-    () => projection.applyFrame({
-      schemaVersion: 1,
-      ops: [
-        createPrimitive(11, 'must-not-commit'),
-        {
-          op: 'update',
-          handle: renderHandle(999),
-          transform: null,
-          material: null,
-          visible: false,
-          metadata: null,
-        },
-      ],
-    }),
-    /unknown handle 999/,
-  );
-
-  assert.deepEqual(projection.snapshot(), before);
-  assert.equal(projection.has(renderHandle(11)), false);
-});
 
 void test('published frames reject clipping and stale revision without retained mutation', () => {
   const projection = new RenderProjection();
@@ -542,78 +517,7 @@ void test('small frames leave unrelated retained definitions unchanged', () => {
   }
 
   assert.deepEqual(projection.staticMesh('mesh/large-unrelated'), retainedAsset);
-  const beforeRejectedFrame = projection.snapshot();
-  assert.throws(
-    () => projection.applyFrame({
-      schemaVersion: 1,
-      ops: [
-        {
-          op: 'update',
-          handle: renderHandle(1),
-          transform: {
-            translation: [99, 0, 0],
-            rotation: [0, 0, 0, 1],
-            scale: [1, 1, 1],
-          },
-          material: null,
-          visible: null,
-          metadata: null,
-        },
-        {
-          op: 'update',
-          handle: renderHandle(999),
-          transform: null,
-          material: null,
-          visible: false,
-          metadata: null,
-        },
-      ],
-    }),
-    /unknown handle 999/u,
-  );
-  assert.deepEqual(projection.snapshot(), beforeRejectedFrame);
-  assert.deepEqual(projection.staticMesh('mesh/large-unrelated'), retainedAsset);
 
-  assert.throws(
-    () => projection.applyFrame({
-      schemaVersion: 1,
-      ops: [
-        {
-          op: 'createStaticMeshInstance',
-          handle: renderHandle(2),
-          parent: null,
-          instance: {
-            asset: 'mesh/large-unrelated',
-            transform: {
-              translation: [0, 0, 0],
-              rotation: [0, 0, 0, 1],
-              scale: [1, 1, 1],
-            },
-            visible: true,
-            materialOverrides: [],
-            metadata: {
-              sourceEntity: 2,
-              sourceSceneNode: null,
-              tags: [],
-              label: 'rejected-large-instance',
-            },
-          },
-        },
-        {
-          op: 'update',
-          handle: renderHandle(999),
-          transform: null,
-          material: null,
-          visible: false,
-          metadata: null,
-        },
-      ],
-    }),
-    /unknown handle 999/u,
-  );
-  assert.equal(projection.has(renderHandle(2)), false);
-  assert.equal(projection.staticMeshRefCount('mesh/large-unrelated'), 0);
-  assert.deepEqual(projection.snapshot(), beforeRejectedFrame);
 });
 
 void test('viewmodel descendants retain one bounded camera-relative channel', () => {
@@ -859,15 +763,6 @@ void test('texture versions are admitted once by the neutral retained projection
     contentHash: null, version: 1,
   };
   projection.applyDiff({ op: 'defineTexture', texture });
-  const beforeDuplicate = projection.snapshot();
-
-  assert.throws(() => projection.applyFrame({ schemaVersion: 1, ops: [
-    { op: 'defineTexture', texture: { ...texture, version: 2 } },
-    createPrimitive(77, 'must-not-commit'),
-    { op: 'defineTexture', texture: { ...texture, version: 2 } },
-  ] }), /stale or duplicate version 2/u);
-  assert.deepEqual(projection.snapshot(), beforeDuplicate);
-
   projection.applyDiff({ op: 'defineTexture', texture: { ...texture, version: 2 } });
   const beforeStale = projection.snapshot();
   assert.throws(
@@ -1467,22 +1362,13 @@ void test('graphics and auxiliary realization share a frontier without advancing
   assert.throws(() => projection.commitPublication(publication, 2), /stale publication/u);
 });
 
-void test('composed frame commits only after realization succeeds and keeps retained data detached', () => {
+void test('offline projection keeps explicit snapshots detached', () => {
   const projection = new RenderProjection();
   const node = cubeNode();
   const frame = { schemaVersion: 1 as const, ops: [
     { op: 'create' as const, handle: renderHandle(1), parent: null, node },
   ] };
-  const failed = new Error('realization failed');
-  assert.throws(() => projection.applyFrame(frame, () => {
-    assert.equal(projection.has(renderHandle(1)), false);
-    throw failed;
-  }), (error) => error === failed);
-  assert.equal(projection.has(renderHandle(1)), false);
-  projection.applyFrame(frame, (instructions) => {
-    assert.equal(projection.has(renderHandle(1)), false);
-    assert.equal(instructions.length, 1);
-  });
+  projection.applyFrame(frame);
   assert.equal(projection.has(renderHandle(1)), true);
   const retained = projection.snapshot();
   (node.metadata.tags as string[]).push('caller-mutation');

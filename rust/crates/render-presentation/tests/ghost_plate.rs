@@ -112,7 +112,7 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
     let mut world = PresentationWorld::default();
     let source = RenderHandle::new(7);
     world
-        .apply(&RenderFrameDiff {
+        .apply(RenderFrameDiff {
             ops: vec![RenderDiff::Create {
                 handle: source,
                 parent: None,
@@ -129,7 +129,7 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
         },
     }])
     .unwrap();
-    let first = world.apply_presentation(&create).unwrap();
+    let first = world.apply_presentation(create.clone()).unwrap();
     world.retain_effects(vec![create.clone()]);
     let capture = match &first.ops[0] {
         PresentationOp::GhostPlate {
@@ -139,7 +139,7 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
         _ => unreachable!(),
     };
     world
-        .apply(&RenderFrameDiff {
+        .apply(RenderFrameDiff {
             ops: vec![RenderDiff::Update {
                 handle: source,
                 transform: Some(Transform {
@@ -160,7 +160,7 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
     );
     let recapture = world
         .apply_presentation(
-            &PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+            PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
                 meta: PresentationOpMeta::new(0),
                 op: GhostPlateProjectionOp::Recapture {
                     handle: GhostPlateHandle::new(3),

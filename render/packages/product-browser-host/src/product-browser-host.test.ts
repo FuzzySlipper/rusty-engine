@@ -467,7 +467,8 @@ for (const terminalFirst of [false, true]) {
   });
 }
 
-test('host swaps a recovered output projection before applying current-epoch trailing output', async () => {
+for (const graphicsFailure of ['rejected_atomic', 'terminal'] as const) {
+test(`host rebuilds after ${graphicsFailure} before applying current-epoch trailing output`, async () => {
   const previousHTMLElement = globalThis.HTMLElement;
   class FakeElement {
     readonly childNodes: unknown[] = [];
@@ -551,7 +552,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
           }
           if (publication !== undefined) {
             return {
-              outcome: 'rejected_atomic' as const,
+              outcome: graphicsFailure,
               diagnostics: [{ code: 'publication_gap', message: 'active voxel frontier was rejected' }],
             };
           }
@@ -596,12 +597,6 @@ test('host swaps a recovered output projection before applying current-epoch tra
       autoStart: false,
     }, async () => fakeApplication as never);
     const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
-    publish([{ kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'unversioned-rejected' }] } }], {
-      epoch: 1, baseline: false, recovery: 'none',
-    });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(freshOutputRecoveries, 0, 'unversioned rejected_atomic output keeps its existing posture');
-    assert.equal(host.readout().state, 'ready');
     publish([{
       kind: 'frame',
       frame: {
@@ -642,7 +637,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
     assert.deepEqual((replacedFrames[0] as { readonly ops: readonly unknown[] }).ops, []);
     assert.deepEqual(replacementFrontiers, [[{ stream: 'voxel:active', revision: 2 }]]);
     assert.deepEqual(boundRuntimes, [], 'trailing binding stays gated until the replacement applies');
-    assert.equal(appliedFrames.length, 2, 'only pre-recovery frames reached the old renderer');
+    assert.equal(appliedFrames.length, 1, 'only pre-recovery frames reached the old renderer');
     (resolveReplacement as unknown as (value: { readonly applied: true; readonly outcome: 'applied'; readonly diagnostics: readonly [] }) => void)({
       applied: true,
       outcome: 'applied',
@@ -664,7 +659,6 @@ test('host swaps a recovered output projection before applying current-epoch tra
       { runtime, context: 'gameplay.default', nextSequence: '2' },
     ]);
     assert.deepEqual(appliedFrames, [
-      { schemaVersion: 1, ops: [{ op: 'unversioned-rejected' }] },
       {
         schemaVersion: 1,
         publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
@@ -714,6 +708,8 @@ test('host swaps a recovered output projection before applying current-epoch tra
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
   }
 });
+
+}
 
 test('a fresh projection baseline received during mount is applied before readiness', async () => {
   const previousHTMLElement = globalThis.HTMLElement;

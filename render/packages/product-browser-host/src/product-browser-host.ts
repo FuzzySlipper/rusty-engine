@@ -1994,7 +1994,7 @@ export async function mountProductBrowserHostWithApplication(
           enqueueRendererOutput(() => {
             return admitOutputResources(host, output).then(() => {
             const receipt = host.renderer.applyFrame(output.frame);
-            if (receipt.outcome === 'rejected_atomic' && output.frame['publication'] !== undefined) {
+            if (receipt.outcome !== 'applied') {
               const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
                 || 'renderer rejected a published frame';
               requestPublishedProjectionRecovery(outputEpoch, diagnostic);

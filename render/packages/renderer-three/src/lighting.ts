@@ -1,7 +1,6 @@
 // Renderer-neutral light descriptors adapted to retained Three.js lights.
 
 import * as THREE from 'three';
-import { MAX_RENDER_LIGHT_INTENSITY } from '@rusty-engine/render-contracts';
 import type { LightDescriptor, RenderHandle } from '@rusty-engine/render-contracts';
 
 export type RendererLightShadowStatus = 'disabled' | 'active' | 'requested_unsupported';
@@ -115,61 +114,6 @@ export function projectionParentHandle(
 export function disposeLight(object: THREE.Object3D): void {
   object.clear();
   object.removeFromParent();
-}
-
-export function validateLightDescriptor(
-  descriptor: LightDescriptor,
-  ctx: string,
-  createError: (message: string) => Error,
-): void {
-  descriptor.color.forEach((value, index) => {
-    if (!Number.isFinite(value) || value < 0 || value > 1) {
-      throw createError(`${ctx}.color[${index}] must be finite and in 0..=1`);
-    }
-  });
-  if (!Number.isFinite(descriptor.intensity)
-    || descriptor.intensity < 0
-    || descriptor.intensity > MAX_RENDER_LIGHT_INTENSITY) {
-    throw createError(
-      `${ctx}.intensity must be finite and in 0..=${String(MAX_RENDER_LIGHT_INTENSITY)}`,
-    );
-  }
-  if (descriptor.kind === 'directional' || descriptor.kind === 'spot') {
-    descriptor.direction.forEach((value, index) => {
-      if (!Number.isFinite(value)) {
-        throw createError(`${ctx}.direction[${index}] must be finite`);
-      }
-    });
-    if (descriptor.direction.reduce((sum, value) => sum + value * value, 0) <= Number.EPSILON) {
-      throw createError(`${ctx}.direction must be non-zero`);
-    }
-  }
-  if (descriptor.kind === 'point' || descriptor.kind === 'spot') {
-    descriptor.position.forEach((value, index) => {
-      if (!Number.isFinite(value)) {
-        throw createError(`${ctx}.position[${index}] must be finite`);
-      }
-    });
-    if (descriptor.range !== null
-      && (!Number.isFinite(descriptor.range) || descriptor.range <= 0)) {
-      throw createError(`${ctx}.range must be null or finite and positive`);
-    }
-    if (!Number.isFinite(descriptor.decay) || descriptor.decay < 0) {
-      throw createError(`${ctx}.decay must be finite and non-negative`);
-    }
-  }
-  if (descriptor.kind === 'spot') {
-    if (!Number.isFinite(descriptor.outerAngleRadians)
-      || descriptor.outerAngleRadians <= 0
-      || descriptor.outerAngleRadians > Math.PI / 2) {
-      throw createError(`${ctx}.outerAngleRadians must be in (0, pi/2]`);
-    }
-    if (!Number.isFinite(descriptor.penumbra)
-      || descriptor.penumbra < 0
-      || descriptor.penumbra > 1) {
-      throw createError(`${ctx}.penumbra must be in 0..=1`);
-    }
-  }
 }
 
 function applyShadowIntent(

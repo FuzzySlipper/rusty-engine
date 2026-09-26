@@ -106,6 +106,14 @@ impl RuntimeAppearanceProjector {
         self.catalog.appearances.remove(identity)
     }
 
+    pub fn appearance(&self, identity: &str) -> Option<&Appearance> {
+        self.catalog.appearances.get(identity)
+    }
+
+    pub fn resources(&self) -> &AppearanceResources {
+        &self.catalog.resources
+    }
+
     /// Mutates an already admitted appearance definition. The next complete
     /// snapshot remains the only path that changes retained renderer objects.
     pub fn appearance_mut(&mut self, identity: &str) -> Option<&mut Appearance> {

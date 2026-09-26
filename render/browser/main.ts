@@ -455,7 +455,16 @@ async function main(): Promise<void> {
     () => staticDemandSurface.submission().renderSequence > staticDemandMountSequence,
   );
   const staticDemandIdleSequence = staticDemandSurface.submission().renderSequence;
-  const staticDemandRejected = staticDemandSurface.applyFrame({
+  // A bad trusted publication invalidates its surface. Exercise it separately
+  // from the following ordinary cadence proof; no rollback/reuse is promised.
+  const failedCanvas = replacementCanvas;
+  failedCanvas.width = 64;
+  failedCanvas.height = 64;
+  const failedSurface = mountRendererSurface(failedCanvas, {
+    autoStart: false, frame: replacementFrame(), pixelRatio: 1,
+  });
+  const failedSequence = failedSurface.submission().renderSequence;
+  const staticDemandRejected = failedSurface.applyFrame({
     schemaVersion: 1,
     ops: [{
       op: 'update',
@@ -467,7 +476,12 @@ async function main(): Promise<void> {
     }],
   });
   await waitAnimationFrames(3);
-  const staticDemandRejectedSequence = staticDemandSurface.submission().renderSequence;
+  const staticDemandRejectedRenderCount = failedSurface.submission().renderSequence - failedSequence;
+  if (staticDemandRejected.outcome !== 'terminal'
+    || failedSurface.applyFrame({ schemaVersion: 1, ops: [] }).outcome !== 'terminal') {
+    throw new Error('failed graphics surface remained usable');
+  }
+  failedSurface.dispose();
   const staticDemandApplied = staticDemandSurface.applyFrame({
     schemaVersion: 1,
     ops: [{
@@ -976,9 +990,9 @@ async function main(): Promise<void> {
   });
   const projected = surface.projectWorldPoint([0, 0, -5]);
   const snapshot = surface.snapshot();
-  const projection = surface.projectionSnapshot();
+  const projection = surface.nodeReadout();
   const visibilityReadout = surface.visibilityReadout();
-  const voxelNode = surface.projectionSnapshot().nodes.find((node) => node.handle === renderHandle(108));
+  const voxelNode = surface.nodeReadout().find((node) => node.handle === renderHandle(108));
   const particlePerformance = await measureParticlePerformance(surface, overlays, spriteUrl);
   const proof: BrowserProof = {
     animatedCapture: {
@@ -1074,11 +1088,10 @@ async function main(): Promise<void> {
     staticDemandDirtyRenderCount: staticDemandDirtySequence - staticDemandIdleSequence,
     staticDemandIdleRenderCount: staticDemandIdleSequence - staticDemandMountSequence,
     staticDemandRejectedApplied: staticDemandRejected.applied,
-    staticDemandRejectedRenderCount:
-      staticDemandRejectedSequence - staticDemandIdleSequence,
+    staticDemandRejectedRenderCount,
     telemetryText: overlays.querySelector('[data-rusty-telemetry-handle]')?.textContent ?? null,
     viewmodelAnimationClip: surface.animatedMeshPlayback(renderHandle(111)).selectedClip,
-    viewmodelNodeCount: projection.nodes.filter((node) => node.layer === 'viewmodel').length,
+    viewmodelNodeCount: projection.filter((node) => node.layer === 'viewmodel').length,
     viewmodelPickExcluded: viewmodelPick.hint === null,
     voxelFrame: voxelNode?.kind === 'voxelObject' ? voxelNode.frame : null,
     voxelFrameSwapApplied: voxelFrameSwap.applied,
@@ -1110,7 +1123,7 @@ async function main(): Promise<void> {
     surface.renderOnce(100);
   };
   window.__rustyRenderTick = (timeMs) => surface.renderOnce(timeMs);
-  window.__rustyRenderViewmodelState = () => surface.projectionSnapshot().nodes
+  window.__rustyRenderViewmodelState = () => surface.nodeReadout()
     .filter((node) => node.layer === 'viewmodel')
     .map((node) => `${String(node.handle)}:${JSON.stringify(node.transform)}`);
   window.__rustyRenderStartAudio = async () => {

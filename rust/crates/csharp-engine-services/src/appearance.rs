@@ -1521,8 +1521,28 @@ impl std::ops::Index<usize> for RenderResourceSlots {
     }
 }
 
+/// Call candidates share graphics state until their first mutation.
 #[derive(Clone)]
-pub(crate) struct RuntimeAppearanceState {
+pub(crate) struct RuntimeAppearanceState(Arc<RuntimeAppearanceData>);
+impl From<RuntimeAppearanceData> for RuntimeAppearanceState {
+    fn from(value: RuntimeAppearanceData) -> Self {
+        Self(Arc::new(value))
+    }
+}
+impl std::ops::Deref for RuntimeAppearanceState {
+    type Target = RuntimeAppearanceData;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for RuntimeAppearanceState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RuntimeAppearanceData {
     projector: RuntimeAppearanceProjector,
     appearances: BTreeMap<u64, String>,
     next_appearance: u64,
@@ -1806,7 +1826,7 @@ impl RuntimeAppearanceBridge {
         content_resources: BTreeMap<String, Arc<[u8]>>,
     ) -> Self {
         Self {
-            state: RuntimeAppearanceState {
+            state: RuntimeAppearanceState::from(RuntimeAppearanceData {
                 projector: RuntimeAppearanceProjector::new(catalog),
                 appearances: BTreeMap::new(),
                 next_appearance: 1,
@@ -1862,7 +1882,7 @@ impl RuntimeAppearanceBridge {
                 ghost_plate_projector: GhostPlateProjector::default(),
                 ghost_plates: BTreeMap::new(),
                 next_ghost_plate: 1,
-            },
+            }),
             content_resources,
             imported_static: BTreeMap::new(),
             imported_mesh: BTreeMap::new(),
@@ -2782,13 +2802,14 @@ impl RuntimeAppearanceBridge {
     ) -> Result<(RenderMaterialDescriptor, Option<TextureDescriptor>), CsharpEngineServicesError>
     {
         let staged = self.staged_mut()?;
-        let id = staged.state.materials.get(&material.value).ok_or_else(|| {
+        let state = &*staged.state;
+        let id = state.materials.get(&material.value).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_VOXEL_PRESENTATION_MATERIAL",
                 "voxel-object material handle is not live",
             )
         })?;
-        let resources = staged.state.projector.resources_mut();
+        let resources = state.projector.resources();
         let material = resources
             .materials
             .iter()
@@ -4496,13 +4517,12 @@ impl RuntimeAppearanceBridge {
         let invalid =
             |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
         let staged = self.staged_mut()?;
-        let source = staged
-            .state
+        let state = &mut *staged.state;
+        let source = state
             .mesh_resources
             .get(&request.source.value)
             .ok_or_else(|| invalid("partition source mesh is not live"))?;
-        let definition = staged
-            .state
+        let definition = state
             .projector
             .resources_mut()
             .static_meshes
@@ -4533,11 +4553,11 @@ impl RuntimeAppearanceBridge {
             })
             .collect();
         let material_handles = source.material_handles.clone();
-        let handle = staged.state.next_mesh_partition;
-        staged.state.next_mesh_partition = handle
+        let handle = state.next_mesh_partition;
+        state.next_mesh_partition = handle
             .checked_add(1)
             .ok_or_else(|| invalid("mesh partition handle overflow"))?;
-        staged.state.mesh_partitions.insert(
+        state.mesh_partitions.insert(
             handle,
             RuntimeMeshPartition {
                 parts,
@@ -4574,8 +4594,8 @@ impl RuntimeAppearanceBridge {
         let invalid =
             |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
         let staged = self.staged_mut()?;
-        let prepared = staged
-            .state
+        let state = &mut *staged.state;
+        let prepared = state
             .mesh_partitions
             .get_mut(&request.partition.value)
             .ok_or_else(|| invalid("mesh partition is not live"))?;
@@ -4583,7 +4603,7 @@ impl RuntimeAppearanceBridge {
             .parts
             .get_mut(request.index as usize)
             .ok_or_else(|| invalid("mesh partition index is out of range"))?;
-        let handle = staged.state.next_mesh_resource;
+        let handle = state.next_mesh_resource;
         let next = handle
             .checked_add(1)
             .ok_or_else(|| invalid("mesh resource handle overflow"))?;
@@ -4593,20 +4613,19 @@ impl RuntimeAppearanceBridge {
         let material_handles = prepared.material_handles.clone();
         let asset = format!("mesh/runtime-{handle}");
         definition.asset = asset.clone();
-        staged
-            .state
+        state
             .projector
             .resources_mut()
             .static_meshes
             .push(definition);
-        staged.state.mesh_resources.insert(
+        state.mesh_resources.insert(
             handle,
             RuntimeMeshResource {
                 asset,
                 material_handles,
             },
         );
-        staged.state.next_mesh_resource = next;
+        state.next_mesh_resource = next;
         Ok(NativeMeshResourceHandle { value: handle })
     }
 
@@ -4691,20 +4710,16 @@ impl RuntimeAppearanceBridge {
                 "collision mesh references require a current staged Graphics call",
             )
         })?;
-        let mesh = staged
-            .state
-            .mesh_resources
-            .get(&resource.value)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_COLLISION_MESH_STALE",
-                    "collision mesh reference does not name a live Graphics mesh",
-                )
-            })?;
-        let asset = staged
-            .state
+        let state = &*staged.state;
+        let mesh = state.mesh_resources.get(&resource.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_STALE",
+                "collision mesh reference does not name a live Graphics mesh",
+            )
+        })?;
+        let asset = state
             .projector
-            .resources_mut()
+            .resources()
             .static_meshes
             .iter()
             .find(|candidate| candidate.asset == mesh.asset)
@@ -5381,8 +5396,8 @@ impl RuntimeAppearanceBridge {
         appearance: NativeAppearanceHandle,
     ) -> Result<NativeSpriteReadout, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        let atlas_handle = *staged
-            .state
+        let state = &*staged.state;
+        let atlas_handle = *state
             .sprite_appearance_atlases
             .get(&appearance.value)
             .ok_or_else(|| {
@@ -5391,24 +5406,13 @@ impl RuntimeAppearanceBridge {
                     "appearance is not an atlas-backed sprite",
                 )
             })?;
-        let atlas = staged
-            .state
-            .sprite_atlases
-            .get(&atlas_handle)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_SPRITE_ATLAS_HANDLE",
-                    "sprite atlas is not live",
-                )
-            })?;
-        let identity = staged
-            .state
-            .appearances
-            .get(&appearance.value)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
-            })?;
-        let frame_id = match staged.state.projector.appearance_mut(identity) {
+        let atlas = state.sprite_atlases.get(&atlas_handle).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_HANDLE", "sprite atlas is not live")
+        })?;
+        let identity = state.appearances.get(&appearance.value).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+        })?;
+        let frame_id = match state.projector.appearance(identity) {
             Some(Appearance::Sprite { sprite }) => sprite.frame,
             _ => {
                 return Err(CsharpEngineServicesError::new(
@@ -5545,13 +5549,14 @@ impl RuntimeAppearanceBridge {
             frame_id: first_frame,
         })?;
         let staged = self.staged_mut()?;
-        staged.state.next_sprite_playback = handle.checked_add(1).ok_or_else(|| {
+        let state = &mut *staged.state;
+        state.next_sprite_playback = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_PLAYBACK_HANDLE",
                 "sprite playback handle overflow",
             )
         })?;
-        staged.state.sprite_playbacks.insert(
+        state.sprite_playbacks.insert(
             handle,
             RuntimeSpritePlayback {
                 appearance: request.appearance.value,
@@ -5569,14 +5574,12 @@ impl RuntimeAppearanceBridge {
                 last_update: None,
             },
         );
-        staged
-            .state
+        state
             .sprite_playbacks_by_atlas
             .entry(request.atlas.value)
             .or_default()
             .insert(handle);
-        staged
-            .state
+        state
             .sprite_playbacks_by_appearance
             .entry(request.appearance.value)
             .or_default()
@@ -6318,8 +6321,8 @@ impl RuntimeAppearanceBridge {
         request: NativeAnimationInstanceRequest,
     ) -> Result<NativeAnimationInstanceHandle, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        let resource = staged
-            .state
+        let state = &mut *staged.state;
+        let resource = state
             .animated_appearances
             .get(&request.appearance.value)
             .copied()
@@ -6329,8 +6332,7 @@ impl RuntimeAppearanceBridge {
                     "animation instances require a live animated-mesh appearance",
                 )
             })?;
-        if staged
-            .state
+        if state
             .animation_instances
             .values()
             .any(|instance| instance.object_id == request.object_id)
@@ -6340,8 +6342,7 @@ impl RuntimeAppearanceBridge {
                 "a product object may have only one retained animation instance",
             ));
         }
-        let mesh = staged
-            .state
+        let mesh = state
             .render_resources
             .get(usize::try_from(resource.saturating_sub(1)).map_err(|_| {
                 CsharpEngineServicesError::new(
@@ -6356,14 +6357,14 @@ impl RuntimeAppearanceBridge {
                     "animated appearance resource is unavailable",
                 )
             })?;
-        let handle = staged.state.next_animation_instance;
-        staged.state.next_animation_instance = handle.checked_add(1).ok_or_else(|| {
+        let handle = state.next_animation_instance;
+        state.next_animation_instance = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_INSTANCE",
                 "animation instance handles exhausted",
             )
         })?;
-        staged.state.animation_instances.insert(
+        state.animation_instances.insert(
             handle,
             AnimationInstance {
                 appearance: request.appearance.value,
@@ -7237,8 +7238,8 @@ impl RuntimeAppearanceBridge {
             )
         })?;
         let staged = self.staged_mut()?;
-        let instance = staged
-            .state
+        let state = &mut *staged.state;
+        let instance = state
             .animation_instances
             .get_mut(&request.instance.value)
             .ok_or_else(|| {
@@ -7257,7 +7258,7 @@ impl RuntimeAppearanceBridge {
             command,
             AnimatedMeshPlaybackCommand::Play { .. } | AnimatedMeshPlaybackCommand::Sample { .. }
         ) && !animation_asset_has_clip(
-            &staged.state.render_resources,
+            &state.render_resources,
             &instance.asset,
             command_clip(&command).unwrap_or_default(),
         ) {
@@ -11036,7 +11037,7 @@ pub(super) mod tests {
         let mut world = render_presentation::PresentationWorld::default();
         for output in call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(&frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         assert!(world.snapshot().frame.ops.iter().any(|op| matches!(op, RenderDiff::SetParentJoint { joint: Some(joint), .. } if joint == "RightHand")));
@@ -11304,7 +11305,7 @@ pub(super) mod tests {
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         bridge.commit(Some(call));
@@ -11484,7 +11485,7 @@ pub(super) mod tests {
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         let baseline = world.snapshot();
@@ -11529,7 +11530,7 @@ pub(super) mod tests {
                     .iter()
                     .filter(|op| matches!(op, RenderDiff::ReleaseStaticMesh { .. }))
                     .count();
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         assert_eq!(releases, 1);
@@ -12388,7 +12389,7 @@ pub(super) mod tests {
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         let encoded = serde_json::to_string(&world.snapshot().frame).unwrap();
@@ -12405,7 +12406,7 @@ pub(super) mod tests {
         let call = bridge.take_staged_call().unwrap().unwrap();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         assert!(
@@ -12516,7 +12517,7 @@ pub(super) mod tests {
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         assert!(world
@@ -12540,7 +12541,7 @@ pub(super) mod tests {
         let call = bridge.take_staged_call().unwrap().unwrap();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                world.apply(frame).unwrap();
+                world.apply(frame.clone()).unwrap();
             }
         }
         assert!(
@@ -12778,7 +12779,7 @@ pub(super) mod tests {
             );
             for output in &call.outputs {
                 if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                    world.apply(frame).unwrap();
+                    world.apply(frame.clone()).unwrap();
                 }
             }
             bridge.commit(Some(call));
@@ -12790,7 +12791,7 @@ pub(super) mod tests {
             assert!(call.outputs.iter().any(|output| matches!(output, RuntimeAppearanceCallOutput::Frame(frame) if frame.ops.iter().any(|op| matches!(op, RenderDiff::ReleaseAnimatedMesh { .. })))));
             for output in &call.outputs {
                 if let RuntimeAppearanceCallOutput::Frame(frame) = output {
-                    world.apply(frame).unwrap();
+                    world.apply(frame.clone()).unwrap();
                 }
             }
             assert!(
@@ -14414,6 +14415,40 @@ pub(super) mod tests {
                 .volumes
                 .as_slice(),
             [ParticleCollisionVolume::Aabb { .. }]
+        ));
+    }
+}
+
+#[cfg(test)]
+mod graphics_candidate_tests {
+    use super::*;
+    #[test]
+    fn idle_call_shares_graphics_collections_and_mutation_detaches_once() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        assert!(Arc::ptr_eq(
+            &bridge.state.0,
+            &bridge.staged.as_ref().unwrap().state.0
+        ));
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&bridge.state.0, &call.state.0));
+        bridge.commit(Some(call));
+        bridge.begin_call();
+        bridge.staged.as_mut().unwrap().state.next_appearance += 1;
+        assert!(!Arc::ptr_eq(
+            &bridge.state.0,
+            &bridge.staged.as_ref().unwrap().state.0
+        ));
+        assert_eq!(
+            bridge.state.next_appearance + 1,
+            bridge.staged.as_ref().unwrap().state.next_appearance
+        );
+        bridge.discard_call();
+        bridge.begin_call();
+        assert!(Arc::ptr_eq(
+            &bridge.state.0,
+            &bridge.staged.as_ref().unwrap().state.0
         ));
     }
 }

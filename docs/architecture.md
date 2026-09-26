@@ -161,12 +161,25 @@ choose an explicit per-batch byte budget. Immutable host bundles and C# content
 have no default file/count/aggregate byte quotas. Resource-format and browser
 loader restrictions remain separate.
 
-The TS `render-projection` model has no Three or DOM dependency. A mounted
-`renderer-host` surface and its `renderer-three` backend share one neutral
-projection, installing a baseline or advancing a delta only after successful
-realization. `product-browser-host` owns connection and attachment epochs;
-uncertain derived state uses a fresh baseline. This does not undo spatial
-mutations or make an uncertain C# callback safe to replay.
+The TS `render-projection` model has no Three or DOM dependency and remains an
+explicit tool/snapshot consumer. Mounted surfaces realize admitted operations
+directly in Three and retain only publication frontiers alongside the backend;
+there is no neutral scene mirror or whole-frame rollback staging. A partial
+realization failure stops and disposes the surface. `product-browser-host` uses
+its existing attachment epochs and fresh committed baseline recovery, without
+replaying the product callback. On-demand inspection reads actual backend nodes.
+
+Resource inventories reconcile on inventory or resource-owner changes, not on
+transform-only frames. Local static-instance edits update affected membership
+and batch groups; camera culling and picking retain their existing behavior.
+Packed mesh decoding retains byte-range, encoding, and copy-out lifetime checks,
+without rescanning Engine-admitted indices, UVs, colors, or light semantics.
+
+The canonical Rust call candidate shares retained graphics and Appearance maps
+until its first write. Owned frame operations mutate that candidate directly,
+without another world clone per frame. Failure discards the call candidate;
+explicit scene captures remain independent snapshots. This boundary does not
+undo spatial mutations or make an uncertain C# callback safe to replay.
 
 `PresentationWorld` also commits the retained audio/effect baseline and stamps
 auxiliary presentation deltas with the same revision as graphics. Named Rust

@@ -400,6 +400,10 @@ export class AnimatedMeshRegistry {
     this.#onCaptureReleased = onCaptureReleased;
   }
 
+  get definitionCount(): number {
+    return this.#assets.size;
+  }
+
   get instanceCount(): number {
     return this.#instances.size;
   }

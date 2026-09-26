@@ -13,6 +13,7 @@ import type {
 } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
+  RenderPublicationTracker,
   type RenderProjectionInstruction,
   type RenderProjectionSnapshot,
 } from '@rusty-engine/render-projection';
@@ -623,7 +624,6 @@ export interface RendererSurface {
   readonly pick: (request: RendererSurfacePickRequest) => RendererSurfacePickReceipt;
   readonly pointerLocked: () => boolean;
   readonly projectWorldPoint: (position: RendererSurfaceVec3) => RendererSurfaceWorldProjection;
-  readonly projectionSnapshot: () => RenderProjectionSnapshot;
   /** Release pointer capture and clear transient physical input without disposing the surface. */
   readonly releaseInput: () => void;
   /** Acknowledge submitted audio facts while preserving facts that arrived in flight. */
@@ -650,6 +650,7 @@ export interface RendererSurface {
   ) => void;
   /** Attach after mount when an animation host needs this surface's projection port. */
   readonly setPresentationHosts: (hosts: RendererPresentationHostSet | null) => void;
+  readonly nodeReadout: RendererBrowserSurface['renderer']['nodeReadout'];
   readonly snapshot: () => string;
   readonly start: () => void;
   readonly stop: () => void;
@@ -799,7 +800,7 @@ function mountPreparedRendererSurface(
   const animatedMeshSource = resources.animatedMeshSource ?? options.animatedMeshSource;
   const meshResourceSource = resources.meshResourceSource ?? options.meshResourceSource;
   const textureResourceSource = resources.textureResourceSource ?? options.textureResourceSource;
-  const projection = new RenderProjection();
+  const projection = new RenderPublicationTracker();
   const controls = createRendererSurfaceFirstPersonControls(canvas, options.controls);
   let backendSurface: RendererBrowserSurface;
   try {
@@ -812,7 +813,7 @@ function mountPreparedRendererSurface(
         ? {} : { meshResourceSource }),
       ...(textureResourceSource === undefined
         ? {} : { textureResourceSource }),
-      projection,
+      publications: projection,
       ...(options.publicationFrontiers === undefined
         ? {} : { publicationFrontiers: options.publicationFrontiers }),
       camera: {
@@ -1126,7 +1127,7 @@ function mountPreparedRendererSurface(
   const terminalizeBackend = (cause: unknown): void => {
     rememberCadenceFailure('backendRender', cause);
     cadenceState = 'terminal';
-    stop();
+    disposeOwners();
   };
   const disposeOwners = (): unknown | null => {
     const failures: unknown[] = [];
@@ -1265,7 +1266,7 @@ function mountPreparedRendererSurface(
       hostAdmission: automaticSubmissionAdmission.sample(),
     }),
     diagnosticsReadout: () => {
-      const resourceCounts = projection.resourceCounts();
+      const resourceCounts = backendSurface.renderer.retainedResourceCounts();
       const submission = latestSubmission;
       if (submission === null) {
         throw new Error('renderer surface has no completed submission');
@@ -1343,7 +1344,6 @@ function mountPreparedRendererSurface(
     },
     pointerLocked: controls.pointerLocked,
     projectWorldPoint: backendSurface.projectWorldPoint,
-    projectionSnapshot: () => projection.snapshot(),
     releaseInput: controls.releaseInput,
     acknowledgeAudioRealizedFacts: (throughFactId) =>
       presentationHosts?.acknowledgeAudioRealizedFacts(throughFactId) ?? false,
@@ -1379,6 +1379,7 @@ function mountPreparedRendererSurface(
       if (hosts !== null) syncListener(controls.cameraSnapshot());
       requestAutomaticSubmission();
     },
+    nodeReadout: () => backendSurface.renderer.nodeReadout(),
     snapshot: backendSurface.snapshot,
     start,
     stop,

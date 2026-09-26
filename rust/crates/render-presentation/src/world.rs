@@ -45,6 +45,13 @@ pub struct PresentationSnapshot {
 pub struct PresentationWorld {
     revision: u64,
     elapsed_seconds: f64,
+    effects: Arc<Vec<PresentationFrameDiff>>,
+    retained: SharedGraphics,
+}
+
+/// Shared graphics collections; cloned only when a call first mutates them.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct RetainedGraphics {
     ghost_captures: BTreeMap<crate::GhostPlateHandle, Arc<RenderFrameDiff>>,
     ghost_sources: BTreeMap<crate::GhostPlateHandle, RenderHandle>,
     nodes: BTreeMap<RenderHandle, Arc<PresentationNode>>,
@@ -56,8 +63,21 @@ pub struct PresentationWorld {
     voxel_objects: BTreeMap<String, Arc<VoxelObjectRenderAsset>>,
     sky: Option<SkyBackgroundDescriptor>,
     background_color: Option<[f32; 4]>,
-    effects: Vec<PresentationFrameDiff>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SharedGraphics(Arc<RetainedGraphics>);
+impl std::ops::Deref for SharedGraphics {
+    type Target = RetainedGraphics;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for SharedGraphics {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,14 +114,13 @@ impl PresentationWorld {
         self.revision
     }
 
-    /// Admit a complete named graphics change atomically. Upstream projector
-    /// frontiers are internal: all consumers continue this world's revision.
-    /// Call owners may stage a clone and install it with their other state.
+    /// Apply admitted graphics in order to the caller-owned candidate.
+    /// Failure invalidates the candidate; only the call owner commits it.
+    /// Upstream projector frontiers are internal to this world.
     pub fn apply(
         &mut self,
-        frame: &RenderFrameDiff,
+        frame: RenderFrameDiff,
     ) -> Result<RenderFrameDiff, PresentationWorldError> {
-        frame.validate().map_err(PresentationWorldError::Frame)?;
         if frame.ops.is_empty() {
             return Ok(RenderFrameDiff::new());
         }
@@ -110,22 +129,21 @@ impl PresentationWorld {
             .checked_add(1)
             .filter(|revision| *revision <= JSON_SAFE_U64_MAX)
             .ok_or(PresentationWorldError::RevisionExhausted)?;
-        let mut candidate = self.clone();
         let mut operations = Vec::with_capacity(frame.ops.len());
-        for op in &frame.ops {
+        for op in frame.ops {
             // Named services may select the same immutable texture repeatedly
             // (for example, the active sky). Retain that fact once rather than
             // publishing a stale texture-version update to the realization.
-            if matches!(op, RenderDiff::SetParentJoint { handle, joint } if candidate.nodes.get(handle).is_some_and(|node| &node.parent_joint == joint))
-                || matches!(op, RenderDiff::DefineTexture { texture }
-                if candidate.textures.get(&texture.id).is_some_and(|current| current.as_ref() == texture))
-                || matches!(op, RenderDiff::SetSkyBackground { background } if &candidate.sky == background && candidate.background_color.is_none())
-                || matches!(op, RenderDiff::SetBackgroundColor { color } if candidate.background_color == Some(*color) && candidate.sky.is_none())
+            if matches!(&op, RenderDiff::SetParentJoint { handle, joint } if self.retained.nodes.get(handle).is_some_and(|node| &node.parent_joint == joint))
+                || matches!(&op, RenderDiff::DefineTexture { texture }
+                if self.retained.textures.get(&texture.id).is_some_and(|current| current.as_ref() == texture))
+                || matches!(&op, RenderDiff::SetSkyBackground { background } if &self.retained.sky == background && self.retained.background_color.is_none())
+                || matches!(&op, RenderDiff::SetBackgroundColor { color } if self.retained.background_color == Some(*color) && self.retained.sky.is_none())
             {
                 continue;
             }
-            candidate.apply_operation(op)?;
-            operations.push(op.clone());
+            self.apply_operation(&op)?;
+            operations.push(op);
         }
         if operations.is_empty() {
             return Ok(RenderFrameDiff::new());
@@ -148,8 +166,7 @@ impl PresentationWorld {
             }),
             ops: operations,
         };
-        candidate.revision = revision;
-        *self = candidate;
+        self.revision = revision;
         Ok(delta)
     }
 
@@ -163,56 +180,45 @@ impl PresentationWorld {
                     ..
                 } = op
                 {
-                    descriptor.captured_scene = self.ghost_captures.get(handle).cloned();
+                    descriptor.captured_scene = self.retained.ghost_captures.get(handle).cloned();
                 }
             }
         }
-        self.effects = frames;
+        self.effects = Arc::new(frames);
     }
 
     pub fn effects_snapshot(&self) -> Vec<PresentationFrameDiff> {
-        self.effects.clone()
+        self.effects.as_ref().clone()
     }
 
     pub fn apply_presentation(
         &mut self,
-        frame: &PresentationFrameDiff,
+        frame: PresentationFrameDiff,
     ) -> Result<PresentationFrameDiff, PresentationWorldError> {
-        let mut candidate = self.clone();
-        let output = candidate.apply_presentation_inner(frame)?;
-        *self = candidate;
-        Ok(output)
-    }
-
-    fn apply_presentation_inner(
-        &mut self,
-        frame: &PresentationFrameDiff,
-    ) -> Result<PresentationFrameDiff, PresentationWorldError> {
-        frame
-            .validate()
-            .map_err(PresentationWorldError::Presentation)?;
         if frame.ops.is_empty() {
-            return Ok(frame.clone());
+            return Ok(frame);
         }
         let revision = self
             .revision
             .checked_add(1)
             .filter(|revision| *revision <= JSON_SAFE_U64_MAX)
             .ok_or(PresentationWorldError::RevisionExhausted)?;
-        let mut output = frame.clone();
+        let mut output = frame;
         for operation in &mut output.ops {
             if let crate::PresentationOp::Animation { op, .. } = operation {
                 match op {
                     crate::AnimationProjectionOp::Create { handle, descriptor } => {
-                        self.controllers.insert(*handle, descriptor.clone());
+                        self.retained
+                            .controllers
+                            .insert(*handle, descriptor.clone());
                     }
                     crate::AnimationProjectionOp::Update { handle, controller } => {
-                        if let Some(descriptor) = self.controllers.get_mut(handle) {
+                        if let Some(descriptor) = self.retained.controllers.get_mut(handle) {
                             descriptor.controller = controller.clone();
                         }
                     }
                     crate::AnimationProjectionOp::Destroy { handle } => {
-                        self.controllers.remove(handle);
+                        self.retained.controllers.remove(handle);
                     }
                 }
             }
@@ -221,8 +227,10 @@ impl PresentationWorld {
                     crate::GhostPlateProjectionOp::Create { handle, descriptor } => {
                         let capture = Arc::new(self.capture_scene(descriptor.source)?);
                         descriptor.captured_scene = Some(capture.clone());
-                        self.ghost_sources.insert(*handle, descriptor.source);
-                        self.ghost_captures.insert(*handle, capture);
+                        self.retained
+                            .ghost_sources
+                            .insert(*handle, descriptor.source);
+                        self.retained.ghost_captures.insert(*handle, capture);
                     }
                     crate::GhostPlateProjectionOp::Recapture {
                         handle,
@@ -230,16 +238,17 @@ impl PresentationWorld {
                         ..
                     } => {
                         let source = *self
+                            .retained
                             .ghost_sources
                             .get(handle)
                             .ok_or(PresentationWorldError::InvalidPlayback)?;
                         let capture = Arc::new(self.capture_scene(source)?);
                         *captured_scene = Some(capture.clone());
-                        self.ghost_captures.insert(*handle, capture);
+                        self.retained.ghost_captures.insert(*handle, capture);
                     }
                     crate::GhostPlateProjectionOp::Destroy { handle } => {
-                        self.ghost_captures.remove(handle);
-                        self.ghost_sources.remove(handle);
+                        self.retained.ghost_captures.remove(handle);
+                        self.retained.ghost_sources.remove(handle);
                     }
                     crate::GhostPlateProjectionOp::Update { .. } => {}
                 }
@@ -249,7 +258,7 @@ impl PresentationWorld {
             stream: PRESENTATION_WORLD_STREAM.to_owned(),
             base_revision: self.revision,
             revision,
-            operation_count: frame
+            operation_count: output
                 .ops
                 .len()
                 .try_into()
@@ -273,14 +282,14 @@ impl PresentationWorld {
         source: RenderHandle,
         retain_background: bool,
     ) -> Result<RenderFrameDiff, PresentationWorldError> {
-        if !self.nodes.contains_key(&source) {
+        if !self.retained.nodes.contains_key(&source) {
             return Err(PresentationWorldError::UnknownNode(source));
         }
         let mut selected = BTreeSet::new();
         selected.insert(source);
         loop {
             let before = selected.len();
-            for (handle, node) in &self.nodes {
+            for (handle, node) in &self.retained.nodes {
                 if node.parent.is_some_and(|parent| selected.contains(&parent)) {
                     selected.insert(*handle);
                 }
@@ -291,25 +300,28 @@ impl PresentationWorld {
         }
         let mut renderable = selected.clone();
         // Ancestors preserve the capture's original world-space transform.
-        let mut parent = self.nodes[&source].parent;
+        let mut parent = self.retained.nodes[&source].parent;
         while let Some(handle) = parent {
             selected.insert(handle);
-            parent = self.nodes[&handle].parent;
+            parent = self.retained.nodes[&handle].parent;
         }
-        for (handle, node) in &self.nodes {
+        for (handle, node) in &self.retained.nodes {
             if matches!(node.kind, NodeKind::Light(_)) {
                 renderable.insert(*handle);
                 selected.insert(*handle);
                 let mut parent = node.parent;
                 while let Some(handle) = parent {
                     selected.insert(handle);
-                    parent = self.nodes[&handle].parent;
+                    parent = self.retained.nodes[&handle].parent;
                 }
             }
         }
         let mut captured = self.clone();
-        captured.nodes.retain(|handle, _| selected.contains(handle));
-        for (handle, node) in &mut captured.nodes {
+        captured
+            .retained
+            .nodes
+            .retain(|handle, _| selected.contains(handle));
+        for (handle, node) in &mut captured.retained.nodes {
             if renderable.contains(handle) {
                 continue;
             }
@@ -341,8 +353,8 @@ impl PresentationWorld {
         }
 
         if !retain_background {
-            captured.sky = None;
-            captured.background_color = None;
+            captured.retained.sky = None;
+            captured.retained.background_color = None;
         }
         // Capture dependencies are a subset of the live world. In particular,
         // one small plate must not copy or realize every unrelated mesh.
@@ -352,7 +364,7 @@ impl PresentationWorld {
         let mut atlases = BTreeSet::new();
         let mut materials = BTreeSet::new();
         let mut textures = BTreeSet::new();
-        for node in captured.nodes.values() {
+        for node in captured.retained.nodes.values() {
             match &node.kind {
                 NodeKind::StaticMesh(instance) => {
                     meshes.insert(instance.asset.clone());
@@ -389,13 +401,23 @@ impl PresentationWorld {
                 _ => {}
             }
         }
-        captured.static_meshes.retain(|id, _| meshes.contains(id));
         captured
+            .retained
+            .static_meshes
+            .retain(|id, _| meshes.contains(id));
+        captured
+            .retained
             .animated_meshes
             .retain(|id, _| animated.contains(id));
-        captured.voxel_objects.retain(|id, _| voxels.contains(id));
-        captured.atlases.retain(|id, _| atlases.contains(id));
-        for asset in captured.static_meshes.values() {
+        captured
+            .retained
+            .voxel_objects
+            .retain(|id, _| voxels.contains(id));
+        captured
+            .retained
+            .atlases
+            .retain(|id, _| atlases.contains(id));
+        for asset in captured.retained.static_meshes.values() {
             materials.extend(
                 asset
                     .material_slots
@@ -403,7 +425,7 @@ impl PresentationWorld {
                     .map(|slot| slot.material.clone()),
             );
         }
-        for asset in captured.animated_meshes.values() {
+        for asset in captured.retained.animated_meshes.values() {
             materials.extend(
                 asset
                     .material_slots
@@ -411,7 +433,7 @@ impl PresentationWorld {
                     .map(|slot| slot.material.clone()),
             );
         }
-        for asset in captured.voxel_objects.values() {
+        for asset in captured.retained.voxel_objects.values() {
             materials.extend(
                 asset
                     .material_slots
@@ -419,8 +441,11 @@ impl PresentationWorld {
                     .map(|slot| slot.material.clone()),
             );
         }
-        captured.materials.retain(|id, _| materials.contains(id));
-        for material in captured.materials.values() {
+        captured
+            .retained
+            .materials
+            .retain(|id, _| materials.contains(id));
+        for material in captured.retained.materials.values() {
             textures.extend(material.texture.iter().cloned());
             if let Some(surface) = &material.voxel_surface {
                 match &surface.mapping {
@@ -431,18 +456,22 @@ impl PresentationWorld {
                 }
             }
         }
-        for atlas in captured.atlases.values() {
+        for atlas in captured.retained.atlases.values() {
             textures.insert(atlas.texture.clone());
         }
-        if let Some(sky) = &captured.sky {
+        if let Some(sky) = &captured.retained.sky {
             textures.insert(sky.texture.clone());
             if let Some(blend) = &sky.blend {
                 textures.insert(blend.texture.clone());
             }
         }
-        captured.textures.retain(|id, _| textures.contains(id));
+        captured
+            .retained
+            .textures
+            .retain(|id, _| textures.contains(id));
         let mut frame = captured.snapshot().frame;
         for controller in self
+            .retained
             .controllers
             .values()
             .filter(|controller| renderable.contains(&controller.target))
@@ -459,52 +488,58 @@ impl PresentationWorld {
     pub fn snapshot(&self) -> PresentationSnapshot {
         let mut ops = Vec::new();
         ops.extend(
-            self.textures
+            self.retained
+                .textures
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|texture| RenderDiff::DefineTexture { texture }),
         );
         ops.extend(
-            self.materials
+            self.retained
+                .materials
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|material| RenderDiff::DefineMaterial { material }),
         );
         ops.extend(
-            self.atlases
+            self.retained
+                .atlases
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|atlas| RenderDiff::DefineSpriteAtlas { atlas }),
         );
         ops.extend(
-            self.static_meshes
+            self.retained
+                .static_meshes
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|asset| RenderDiff::DefineStaticMesh { asset }),
         );
         ops.extend(
-            self.animated_meshes
+            self.retained
+                .animated_meshes
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|asset| RenderDiff::DefineAnimatedMesh { asset }),
         );
         ops.extend(
-            self.voxel_objects
+            self.retained
+                .voxel_objects
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|asset| RenderDiff::DefineVoxelObject { asset }),
         );
-        if let Some(color) = self.background_color {
+        if let Some(color) = self.retained.background_color {
             ops.push(RenderDiff::SetBackgroundColor { color });
         } else {
             ops.push(RenderDiff::SetSkyBackground {
-                background: self.sky.clone(),
+                background: self.retained.sky.clone(),
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
         // so this traversal is acyclic by construction.
         let mut emitted = BTreeSet::new();
-        for handle in self.nodes.keys() {
+        for handle in self.retained.nodes.keys() {
             self.snapshot_node(*handle, &mut emitted, &mut ops);
         }
         PresentationSnapshot {
@@ -525,7 +560,7 @@ impl PresentationWorld {
         if emitted.contains(&handle) {
             return;
         }
-        let node = &self.nodes[&handle];
+        let node = &self.retained.nodes[&handle];
         if let Some(parent) = node.parent {
             self.snapshot_node(parent, emitted, ops);
         }
@@ -606,11 +641,11 @@ impl PresentationWorld {
         parent: Option<RenderHandle>,
         kind: NodeKind,
     ) -> Result<(), PresentationWorldError> {
-        if self.nodes.contains_key(&handle) {
+        if self.retained.nodes.contains_key(&handle) {
             return Err(PresentationWorldError::DuplicateNode(handle));
         }
         if let Some(parent) = parent {
-            if !self.nodes.contains_key(&parent) {
+            if !self.retained.nodes.contains_key(&parent) {
                 return Err(PresentationWorldError::UnknownNode(parent));
             }
         }
@@ -622,7 +657,7 @@ impl PresentationWorld {
                     .map_err(|_| PresentationWorldError::InvalidPlayback)?;
             }
         }
-        self.nodes.insert(
+        self.retained.nodes.insert(
             handle,
             Arc::new(PresentationNode {
                 parent_joint: None,
@@ -641,7 +676,8 @@ impl PresentationWorld {
         &mut self,
         handle: RenderHandle,
     ) -> Result<&mut PresentationNode, PresentationWorldError> {
-        self.nodes
+        self.retained
+            .nodes
             .get_mut(&handle)
             .map(Arc::make_mut)
             .ok_or(PresentationWorldError::UnknownNode(handle))
@@ -652,12 +688,16 @@ impl PresentationWorld {
             RenderDiff::SetParentJoint { handle, joint } => {
                 if let Some(joint) = joint {
                     let node = self
+                        .retained
                         .nodes
                         .get(handle)
                         .ok_or(PresentationWorldError::UnknownNode(*handle))?;
-                    let parent = node.parent.and_then(|parent| self.nodes.get(&parent));
+                    let parent = node
+                        .parent
+                        .and_then(|parent| self.retained.nodes.get(&parent));
                     let valid = match parent.map(|parent| &parent.kind) {
                         Some(NodeKind::AnimatedMesh(instance)) => self
+                            .retained
                             .animated_meshes
                             .get(&instance.asset)
                             .and_then(|asset| asset.rig.as_ref())
@@ -710,13 +750,13 @@ impl PresentationWorld {
                 light,
             } => self.insert(*handle, *parent, NodeKind::Light(light.clone()))?,
             RenderDiff::Destroy { handle } => {
-                if !self.nodes.contains_key(handle) {
+                if !self.retained.nodes.contains_key(handle) {
                     return Err(PresentationWorldError::UnknownNode(*handle));
                 }
                 let mut removed = BTreeSet::from([*handle]);
                 loop {
                     let before = removed.len();
-                    for (handle, node) in &self.nodes {
+                    for (handle, node) in &self.retained.nodes {
                         if node.parent.is_some_and(|parent| removed.contains(&parent)) {
                             removed.insert(*handle);
                         }
@@ -725,7 +765,9 @@ impl PresentationWorld {
                         break;
                     }
                 }
-                self.nodes.retain(|handle, _| !removed.contains(handle));
+                self.retained
+                    .nodes
+                    .retain(|handle, _| !removed.contains(handle));
             }
             RenderDiff::Update {
                 handle,
@@ -846,107 +888,113 @@ impl PresentationWorld {
                 _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
             },
             RenderDiff::ReleaseMaterial { id } => {
-                if !self.materials.contains_key(id) {
+                if !self.retained.materials.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                let bound = self.static_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
-                    || self.animated_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
-                    || self.voxel_objects.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
-                    || self.nodes.values().any(|node| match &node.kind {
+                let bound = self.retained.static_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
+                    || self.retained.animated_meshes.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
+                    || self.retained.voxel_objects.values().any(|asset| asset.material_slots.iter().any(|slot| &slot.material == id))
+                    || self.retained.nodes.values().any(|node| match &node.kind {
                         NodeKind::StaticMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
                         NodeKind::AnimatedMesh(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
                         NodeKind::VoxelObject(instance) => instance.material_overrides.iter().any(|slot| &slot.material == id),
                         _ => false,
                     })
-                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineMaterial { material } if &material.id == id)));
+                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineMaterial { material } if &material.id == id)));
                 if bound {
                     return Err(PresentationWorldError::ReferencedResource(id.clone()));
                 }
-                self.materials.remove(id);
+                self.retained.materials.remove(id);
             }
             RenderDiff::ReleaseTexture { id } => {
-                if !self.textures.contains_key(id) {
+                if !self.retained.textures.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                let bound = self.materials.values().any(|material| material.texture.as_ref() == Some(id)
+                let bound = self.retained.materials.values().any(|material| material.texture.as_ref() == Some(id)
                     || material.voxel_surface.as_ref().is_some_and(|surface| match &surface.mapping {
                         VoxelSurfaceMappingDescriptor::Repeat { texture, .. } | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture == id,
                     }))
-                    || self.atlases.values().any(|atlas| &atlas.texture == id)
-                    || self.sky.as_ref().is_some_and(|sky| &sky.texture == id || sky.blend.as_ref().is_some_and(|blend| &blend.texture == id))
-                    || self.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
-                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineTexture { texture } if &texture.id == id)));
+                    || self.retained.atlases.values().any(|atlas| &atlas.texture == id)
+                    || self.retained.sky.as_ref().is_some_and(|sky| &sky.texture == id || sky.blend.as_ref().is_some_and(|blend| &blend.texture == id))
+                    || self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if sprite.material.normal_texture.as_ref() == Some(id) || sprite.material.depth_texture.as_ref() == Some(id)))
+                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineTexture { texture } if &texture.id == id)));
                 if bound {
                     return Err(PresentationWorldError::ReferencedResource(id.clone()));
                 }
-                self.textures.remove(id);
+                self.retained.textures.remove(id);
             }
             RenderDiff::ReleaseSpriteAtlas { id } => {
-                if !self.atlases.contains_key(id) {
+                if !self.retained.atlases.contains_key(id) {
                     return Err(PresentationWorldError::UndefinedResource(id.clone()));
                 }
-                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if &sprite.asset == id))
-                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineSpriteAtlas { atlas } if &atlas.id == id))) {
+                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::Sprite(sprite) if &sprite.asset == id))
+                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineSpriteAtlas { atlas } if &atlas.id == id))) {
                     return Err(PresentationWorldError::ReferencedResource(id.clone()));
                 }
-                self.atlases.remove(id);
+                self.retained.atlases.remove(id);
             }
             RenderDiff::ReleaseAnimatedMesh { asset } => {
-                if !self.animated_meshes.contains_key(asset) {
+                if !self.retained.animated_meshes.contains_key(asset) {
                     return Err(PresentationWorldError::UndefinedResource(asset.clone()));
                 }
-                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::AnimatedMesh(instance) if &instance.asset == asset))
-                    || self.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineAnimatedMesh { asset: definition } if &definition.asset == asset))) {
+                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::AnimatedMesh(instance) if &instance.asset == asset))
+                    || self.retained.ghost_captures.values().any(|frame| frame.ops.iter().any(|op| matches!(op, RenderDiff::DefineAnimatedMesh { asset: definition } if &definition.asset == asset))) {
                     return Err(PresentationWorldError::ReferencedResource(asset.clone()));
                 }
-                self.animated_meshes.remove(asset);
+                self.retained.animated_meshes.remove(asset);
             }
             RenderDiff::DefineTexture { texture } => {
-                self.textures
+                self.retained
+                    .textures
                     .insert(texture.id.clone(), Arc::new(texture.clone()));
             }
             RenderDiff::DefineMaterial { material } => {
-                self.materials
+                self.retained
+                    .materials
                     .insert(material.id.clone(), Arc::new(material.clone()));
             }
             RenderDiff::DefineSpriteAtlas { atlas } => {
-                self.atlases
+                self.retained
+                    .atlases
                     .insert(atlas.id.clone(), Arc::new(atlas.clone()));
             }
             RenderDiff::DefineStaticMesh { asset } => {
-                self.static_meshes
+                self.retained
+                    .static_meshes
                     .insert(asset.asset.clone(), Arc::new(asset.clone()));
             }
             RenderDiff::ReleaseStaticMesh { asset } => {
-                if !self.static_meshes.contains_key(asset) {
+                if !self.retained.static_meshes.contains_key(asset) {
                     return Err(PresentationWorldError::UndefinedStaticMesh(asset.clone()));
                 }
-                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::StaticMesh(instance) if &instance.asset == asset)) {
+                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::StaticMesh(instance) if &instance.asset == asset)) {
                     return Err(PresentationWorldError::ReferencedResource(asset.clone()));
                 }
-                self.static_meshes.remove(asset);
+                self.retained.static_meshes.remove(asset);
             }
             RenderDiff::DefineAnimatedMesh { asset } => {
-                self.animated_meshes
+                self.retained
+                    .animated_meshes
                     .insert(asset.asset.clone(), Arc::new(asset.clone()));
             }
             RenderDiff::DefineVoxelObject { asset } => {
-                self.voxel_objects
+                self.retained
+                    .voxel_objects
                     .insert(asset.asset.clone(), Arc::new(asset.clone()));
             }
             RenderDiff::ReleaseVoxelObject { asset } => {
-                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::VoxelObject(instance) if &instance.asset == asset)) {
+                if self.retained.nodes.values().any(|node| matches!(&node.kind, NodeKind::VoxelObject(instance) if &instance.asset == asset)) {
                     return Err(PresentationWorldError::ReferencedResource(asset.clone()));
                 }
-                self.voxel_objects.remove(asset);
+                self.retained.voxel_objects.remove(asset);
             }
             RenderDiff::SetSkyBackground { background } => {
-                self.sky = background.clone();
-                self.background_color = None;
+                self.retained.sky = background.clone();
+                self.retained.background_color = None;
             }
             RenderDiff::SetBackgroundColor { color } => {
-                self.sky = None;
-                self.background_color = Some(*color);
+                self.retained.sky = None;
+                self.retained.background_color = Some(*color);
             }
         }
         Ok(())
@@ -1012,7 +1060,7 @@ mod tests {
     fn group_capture_includes_every_part_without_unrelated_geometry() {
         let mut world = PresentationWorld::default();
         world
-            .apply(&frame(vec![
+            .apply(frame(vec![
                 RenderDiff::Create {
                     handle: RenderHandle::new(1),
                     parent: None,
@@ -1049,7 +1097,7 @@ mod tests {
         assert_eq!(handles, vec![1, 2, 3]);
         assert!(captured.ops.iter().any(|op| matches!(op, RenderDiff::Create { handle, node, .. } if handle.raw() == 1 && node.geometry == Geometry::Group)));
         world
-            .apply(&frame(vec![RenderDiff::Destroy {
+            .apply(frame(vec![RenderDiff::Destroy {
                 handle: RenderHandle::new(3),
             }]))
             .unwrap();
@@ -1065,7 +1113,7 @@ mod tests {
         let mut parent = RenderNode::new(Geometry::Cube);
         parent.transform.translation = [3.0, 0.0, 0.0];
         world
-            .apply(&frame(vec![
+            .apply(frame(vec![
                 RenderDiff::Create {
                     handle: RenderHandle::new(1),
                     parent: None,
@@ -1087,25 +1135,26 @@ mod tests {
     }
 
     #[test]
-    fn mesh_delta_is_valid_and_invalid_mutated_input_is_atomic() {
-        let mut world = PresentationWorld::default();
-        let mut input = frame(vec![RenderDiff::DefineStaticMesh {
-            asset: static_mesh("mesh/admission"),
-        }]);
-        let delta = world.apply(&input).unwrap();
-        delta.validate().unwrap();
-        assert_eq!(delta.ops, input.ops);
-        assert_eq!(delta.publication.as_ref().unwrap().operation_count, 1);
-        let before = world.snapshot();
-        let RenderDiff::DefineStaticMesh { asset } = &mut input.ops[0] else {
-            unreachable!()
-        };
-        let MeshPayloadSource::Inline { indices, .. } = &mut asset.payload.source else {
-            unreachable!()
-        };
-        indices[0] = 99;
-        assert!(world.apply(&input).is_err());
-        assert_eq!(world.snapshot(), before);
+    fn candidate_copies_collections_only_on_first_mutation() {
+        let committed = PresentationWorld::default();
+        let mut candidate = committed.clone();
+        candidate.advance_elapsed(0.1);
+        candidate.retain_effects(Vec::new());
+        assert!(Arc::ptr_eq(&committed.retained.0, &candidate.retained.0));
+        candidate
+            .apply(frame(vec![RenderDiff::DefineStaticMesh {
+                asset: static_mesh("mesh/one"),
+            }]))
+            .unwrap();
+        assert!(!Arc::ptr_eq(&committed.retained.0, &candidate.retained.0));
+        let retained = Arc::as_ptr(&candidate.retained.0);
+        candidate
+            .apply(frame(vec![RenderDiff::DefineStaticMesh {
+                asset: static_mesh("mesh/two"),
+            }]))
+            .unwrap();
+        assert_eq!(retained, Arc::as_ptr(&candidate.retained.0));
+        assert!(!committed.retained.static_meshes.contains_key("mesh/one"));
     }
 
     #[test]
@@ -1114,7 +1163,7 @@ mod tests {
         let asset = static_mesh("mesh/frozen-capture");
         let handle = RenderHandle::new(41);
         world
-            .apply(&frame(vec![
+            .apply(frame(vec![
                 RenderDiff::DefineStaticMesh {
                     asset: asset.clone(),
                 },
@@ -1138,16 +1187,16 @@ mod tests {
             .any(|operation| matches!(operation, RenderDiff::DefineStaticMesh { asset } if asset.asset == "mesh/frozen-capture")));
 
         assert!(matches!(
-            world.apply(&frame(vec![RenderDiff::ReleaseStaticMesh {
+            world.apply(frame(vec![RenderDiff::ReleaseStaticMesh {
                 asset: asset.asset.clone(),
             }])),
             Err(PresentationWorldError::ReferencedResource(_))
         ));
         world
-            .apply(&frame(vec![RenderDiff::Destroy { handle }]))
+            .apply(frame(vec![RenderDiff::Destroy { handle }]))
             .unwrap();
         world
-            .apply(&frame(vec![RenderDiff::ReleaseStaticMesh {
+            .apply(frame(vec![RenderDiff::ReleaseStaticMesh {
                 asset: asset.asset.clone(),
             }]))
             .unwrap();
@@ -1160,7 +1209,7 @@ mod tests {
             .iter()
             .any(|operation| matches!(operation, RenderDiff::DefineStaticMesh { asset } if asset.asset == "mesh/frozen-capture")));
         assert!(matches!(
-            world.apply(&frame(vec![RenderDiff::ReleaseStaticMesh {
+            world.apply(frame(vec![RenderDiff::ReleaseStaticMesh {
                 asset: asset.asset.clone(),
             }])),
             Err(PresentationWorldError::UndefinedStaticMesh(_))
@@ -1173,7 +1222,7 @@ mod tests {
         let parent = RenderHandle::new(90);
         let child = RenderHandle::new(4);
         world
-            .apply(&frame(vec![
+            .apply(frame(vec![
                 RenderDiff::Create {
                     handle: parent,
                     parent: None,
@@ -1191,7 +1240,7 @@ mod tests {
             ..Transform::IDENTITY
         };
         world
-            .apply(&frame(vec![RenderDiff::Update {
+            .apply(frame(vec![RenderDiff::Update {
                 handle: child,
                 transform: Some(transform),
                 visible: Some(false),
@@ -1212,19 +1261,19 @@ mod tests {
             if *handle == child && *p == parent && node.transform == transform && !node.visible)
         );
         let mut reconstructed = PresentationWorld::default();
-        reconstructed.apply(&snapshot.frame).unwrap();
+        reconstructed.apply(snapshot.frame.clone()).unwrap();
         assert_eq!(reconstructed.snapshot().frame, snapshot.frame);
 
         let delta = world
-            .apply(&frame(vec![RenderDiff::Destroy { handle: parent }]))
+            .apply(frame(vec![RenderDiff::Destroy { handle: parent }]))
             .unwrap();
         assert_eq!(delta.publication.unwrap().base_revision, snapshot.revision);
         reconstructed
-            .apply(&frame(vec![RenderDiff::Destroy { handle: parent }]))
+            .apply(frame(vec![RenderDiff::Destroy { handle: parent }]))
             .unwrap();
         assert_eq!(reconstructed.snapshot().frame, world.snapshot().frame);
         assert!(
-            world.nodes.is_empty(),
+            world.retained.nodes.is_empty(),
             "parent destruction removes retained descendants"
         );
     }
@@ -1236,7 +1285,7 @@ mod tests {
         };
         let mut world = PresentationWorld::default();
         let graphics = world
-            .apply(&frame(vec![RenderDiff::Create {
+            .apply(frame(vec![RenderDiff::Create {
                 handle: RenderHandle::new(1),
                 parent: None,
                 node: RenderNode::new(Geometry::Cube),
@@ -1250,7 +1299,7 @@ mod tests {
             },
         }])
         .unwrap();
-        let effect_delta = world.apply_presentation(&retained).unwrap();
+        let effect_delta = world.apply_presentation(retained.clone()).unwrap();
         assert_eq!(
             effect_delta.publication.as_ref().unwrap().base_revision,
             graphics.publication.unwrap().revision
@@ -1259,7 +1308,7 @@ mod tests {
         assert_eq!(world.effects_snapshot(), vec![retained]);
         assert_eq!(world.snapshot().revision, 2);
         let next = world
-            .apply(&frame(vec![RenderDiff::Destroy {
+            .apply(frame(vec![RenderDiff::Destroy {
                 handle: RenderHandle::new(1),
             }]))
             .unwrap();
@@ -1268,9 +1317,10 @@ mod tests {
 
     #[test]
     fn failed_change_preserves_world_and_revision() {
-        let mut world = PresentationWorld::default();
+        let world = PresentationWorld::default();
+        let mut candidate = world.clone();
         let before = world.snapshot();
-        let result = world.apply(&frame(vec![
+        let result = candidate.apply(frame(vec![
             RenderDiff::Create {
                 handle: RenderHandle::new(1),
                 parent: None,
@@ -1291,7 +1341,7 @@ mod tests {
     fn background_color_and_sky_clear_replace_one_retained_background() {
         let mut world = PresentationWorld::default();
         world
-            .apply(&frame(vec![RenderDiff::SetBackgroundColor {
+            .apply(frame(vec![RenderDiff::SetBackgroundColor {
                 color: [0.0, 0.0, 0.0, 1.0],
             }]))
             .unwrap();
@@ -1300,7 +1350,7 @@ mod tests {
             [RenderDiff::SetBackgroundColor { color }] if *color == [0.0, 0.0, 0.0, 1.0]
         ));
         world
-            .apply(&frame(vec![RenderDiff::SetSkyBackground {
+            .apply(frame(vec![RenderDiff::SetSkyBackground {
                 background: None,
             }]))
             .unwrap();
@@ -1374,32 +1424,32 @@ mod joint_attachment_tests {
             },
         ])
         .unwrap();
-        world.apply(&initial).unwrap();
+        world.apply(initial.clone()).unwrap();
         let baseline = world.snapshot();
         assert!(baseline.frame.ops.iter().any(|op| matches!(op, RenderDiff::SetParentJoint { handle, joint: Some(joint) } if *handle == child && joint == "Hand")));
         let mut restored = PresentationWorld::default();
-        restored.apply(&baseline.frame).unwrap();
+        restored.apply(baseline.frame.clone()).unwrap();
         let revision = world.revision();
         let repeated = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetParentJoint {
             handle: child,
             joint: Some("Hand".into()),
         }])
         .unwrap();
-        assert!(world.apply(&repeated).unwrap().ops.is_empty());
+        assert!(world.apply(repeated.clone()).unwrap().ops.is_empty());
         let bad = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetParentJoint {
             handle: child,
             joint: Some("MissingHand".into()),
         }])
         .unwrap();
         assert!(world
-            .apply(&bad)
+            .apply(bad.clone())
             .unwrap_err()
             .to_string()
             .contains("MissingHand"));
         assert_eq!(world.revision(), revision);
         world
             .apply(
-                &RenderFrameDiff::try_from_ops(vec![
+                RenderFrameDiff::try_from_ops(vec![
                     RenderDiff::Destroy { handle: body },
                     RenderDiff::ReleaseAnimatedMesh { asset: asset.asset },
                 ])

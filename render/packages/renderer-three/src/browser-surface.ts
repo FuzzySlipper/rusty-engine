@@ -4,7 +4,7 @@ import { createCamera as createOutputCamera, updateCameraAspect as updateOutputC
 // Browser/canvas surface built on the retained ThreeRenderer.
 
 import * as THREE from 'three';
-import { RenderProjection } from '@rusty-engine/render-projection';
+import { RenderProjection, RenderPublicationTracker } from '@rusty-engine/render-projection';
 import {
   renderHandle,
   type CameraBasis,
@@ -75,10 +75,10 @@ export interface RendererBrowserSurfaceOptions {
   /** Active stream continuation points supplied with one complete replacement. */
   readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
   /**
-   * Shared neutral retained state for a mounted renderer-host surface. Its
-   * initial `frame` is installed as one atomic baseline after realization.
+   * Shared publication frontiers for a mounted renderer-host surface. Its
+   * initial `frame` is realized once before installing the continuation points.
    */
-  readonly projection?: RenderProjection;
+  readonly publications?: RenderPublicationTracker;
   readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
   readonly lighting?: RendererBrowserSurfaceLightingOptions;
@@ -350,9 +350,9 @@ export function mountRendererBrowserSurface(
         ? {} : { meshResourceSource: options.meshResourceSource }),
       ...(options.textureResourceSource === undefined
         ? {} : { textureResourceSource: options.textureResourceSource }),
-      ...(options.projection === undefined && options.publicationFrontiers !== undefined
+      ...(options.publications === undefined && options.publicationFrontiers !== undefined
         ? { publicationFrontiers: options.publicationFrontiers } : {}),
-      ...(options.projection === undefined ? {} : { projection: options.projection }),
+      ...(options.publications === undefined ? {} : { publications: options.publications }),
       isolatedCaptureLighting: Object.freeze({
         createWorldLights: () => lighting.defaultLights.world === 'neutral'
           ? createNeutralLights([5, 8, 6]) : [],
@@ -387,7 +387,7 @@ export function mountRendererBrowserSurface(
   if (viewmodelNeutralLights.length > 0) renderer.viewmodelScene.add(...viewmodelNeutralLights);
   const frame = options.frame ?? createRendererBrowserSurfaceFrame();
   try {
-    if (options.projection === undefined) {
+    if (options.publications === undefined) {
       renderer.applyFrame(frame);
     } else {
       renderer.establishBaseline(frame, options.publicationFrontiers ?? []);

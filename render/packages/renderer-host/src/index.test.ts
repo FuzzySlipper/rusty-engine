@@ -539,7 +539,7 @@ void test('animated resources trust declared identity while retaining typed deco
     assert.equal(unavailable.diagnostics[0]?.code, 'animated_mesh_handle_unavailable');
     const rejected = projection.applyFrame(animationIntentFrame('missing'));
     assert.equal(rejected.applied, false);
-    assert.equal(rejected.diagnostics[0]?.code, 'animated_mesh_frame_rejected');
+    assert.equal(rejected.outcome, 'terminal');
   } finally {
     restore();
   }

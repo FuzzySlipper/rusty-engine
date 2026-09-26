@@ -252,22 +252,12 @@ export class RenderProjection {
   #voxelObjects = new Map<string, VoxelObjectRecord>();
   #publishedRevisions = new Map<string, number>();
 
-  /**
-   * Apply a frame in authored order and return renderer-neutral instructions.
-   * The frame is fail-atomic: a rejected later operation cannot retain any
-   * state from earlier operations in the same frame. An optional synchronous
-   * realization callback runs before commit and must not mutate this projection.
-   * Throwing leaves the prior projection intact.
-   */
-  applyFrame(
-    frame: RenderFrameDiff,
-    realize?: (instructions: readonly RenderProjectionInstruction[]) => void,
-  ): readonly RenderProjectionInstruction[] {
-    const { staged, instructions } = this.#stageFrame(frame);
-    // Realize synchronously against the prior committed projection. A failure
-    // leaves it untouched; success publishes this exact staged transition.
-    realize?.(instructions);
-    this.#replaceWith(staged);
+  /** Offline/editor reduction in authored order. Discard this candidate on error. */
+  applyFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
+    this.validatePublication(frame.publication, frame.ops.length);
+    const instructions: RenderProjectionInstruction[] = [];
+    for (const diff of frame.ops) instructions.push(...this.applyDiff(diff));
+    this.commitPublication(frame.publication, frame.ops.length);
     return instructions;
   }
 
@@ -291,8 +281,8 @@ export class RenderProjection {
     }
     const baseline = new RenderProjection();
     baseline.replacePublicationFrontiers(frontiers);
-    const { staged, instructions } = baseline.#stageFrame(frame);
-    this.#replaceWith(staged);
+    const instructions = baseline.applyFrame(frame);
+    this.#replaceWith(baseline);
     return instructions;
   }
 
@@ -1331,13 +1321,13 @@ export class RenderProjection {
   }
 
   #mutableNode(handle: RenderHandle, ctx: string): NodeRecord {
-    const record = copyNodeRecord(this.#require(handle, ctx));
+    const record = this.#require(handle, ctx);
     this.#nodes.set(handle, record);
     return record;
   }
 
   #mutableLight(handle: RenderHandle, ctx: string): MutableLight {
-    const record = { ...this.#requireLight(handle, ctx) };
+    const record = this.#requireLight(handle, ctx);
     this.#lights.set(handle, record);
     return record;
   }
@@ -1345,7 +1335,7 @@ export class RenderProjection {
   #mutableStaticMesh(asset: string): StaticMeshRecord | undefined {
     const current = this.#staticMeshes.get(asset);
     if (current === undefined) return undefined;
-    const record = { ...current };
+    const record = current;
     this.#staticMeshes.set(asset, record);
     return record;
   }
@@ -1353,7 +1343,7 @@ export class RenderProjection {
   #mutableAnimatedMesh(asset: string): AnimatedMeshRecord | undefined {
     const current = this.#animatedMeshes.get(asset);
     if (current === undefined) return undefined;
-    const record = { ...current };
+    const record = current;
     this.#animatedMeshes.set(asset, record);
     return record;
   }
@@ -1361,25 +1351,9 @@ export class RenderProjection {
   #mutableVoxelObject(asset: string): VoxelObjectRecord | undefined {
     const current = this.#voxelObjects.get(asset);
     if (current === undefined) return undefined;
-    const record = { ...current };
+    const record = current;
     this.#voxelObjects.set(asset, record);
     return record;
-  }
-
-  #fork(): RenderProjection {
-    const projection = new RenderProjection();
-    projection.#nodes = new Map(this.#nodes);
-    projection.#lights = new Map(this.#lights);
-    projection.#materials = new Map(this.#materials);
-    projection.#textures = new Map(this.#textures);
-    projection.#skyBackground = clone(this.#skyBackground) ?? null;
-    projection.#backgroundColor = clone(this.#backgroundColor) ?? null;
-    projection.#spriteAtlases = new Map(this.#spriteAtlases);
-    projection.#staticMeshes = new Map(this.#staticMeshes);
-    projection.#animatedMeshes = new Map(this.#animatedMeshes);
-    projection.#voxelObjects = new Map(this.#voxelObjects);
-    projection.#publishedRevisions = new Map(this.#publishedRevisions);
-    return projection;
   }
 
   #replaceWith(projection: RenderProjection): void {
@@ -1396,18 +1370,7 @@ export class RenderProjection {
     this.#publishedRevisions = projection.#publishedRevisions;
   }
 
-  #stageFrame(frame: RenderFrameDiff): {
-    readonly staged: RenderProjection;
-    readonly instructions: readonly RenderProjectionInstruction[];
-  } {
-    const staged = this.#fork();
-    staged.commitPublication(frame.publication, frame.ops.length);
-    const instructions: RenderProjectionInstruction[] = [];
-    for (const diff of frame.ops) {
-      instructions.push(...staged.applyDiff(diff));
-    }
-    return { staged, instructions };
-  }
+
 }
 
 // These contracts are plain data with numeric streams. Copy their known fields
@@ -1434,18 +1397,6 @@ function copyStaticMeshAsset(asset: StaticMeshAsset): StaticMeshAsset {
       } : { ...source },
     },
   };
-}
-
-function copyNodeRecord(record: NodeRecord): NodeRecord {
-  const children = new Set(record.children);
-  if (record.kind === 'staticMesh') {
-    return {
-      ...record,
-      children,
-      materialParameters: new Map(record.materialParameters),
-    };
-  }
-  return { ...record, children };
 }
 
 function validateViewmodelTransform(transform: Transform, ctx: string): void {

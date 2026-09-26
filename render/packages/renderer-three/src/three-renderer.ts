@@ -5,8 +5,8 @@ import { SkyBlend } from './sky-blend.js';
 import { UploadedMaterialPool, releaseUploadedMaterial, consolidateUploadedGroups } from './uploaded-mesh-batching.js';
 import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
-  RenderProjection,
-  RenderProjectionError,
+  RenderPublicationTracker,
+  RenderPublicationError,
 } from '@rusty-engine/render-projection';
 import type {
   AnimatedMeshAsset,
@@ -52,7 +52,6 @@ import {
   disposeLight,
   lightShadowStatus,
   projectionParentHandle,
-  validateLightDescriptor,
   type RendererLightReadout,
 } from './lighting.js';
 export type {
@@ -391,19 +390,14 @@ export class ThreeRenderer {
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
   readonly #maximumTextureDimension: number | undefined;
-  /**
-   * The renderer realizes this neutral retained model. Mounted surfaces inject
-   * their projection so the host and backend cannot advance independent
-   * semantic histories; standalone renderers retain a private one.
-   */
-  readonly #projection: RenderProjection;
+  readonly #publications: RenderPublicationTracker;
   readonly #geometryResources = new Set<THREE.BufferGeometry>();
   readonly #materialResources = new Set<THREE.Material>();
   readonly #textureResourceReferences = new Map<THREE.Texture, number>();
   readonly #textureResourceObjects = new Set<THREE.Texture>();
   readonly #textureResources = new Map<string, RetainedTextureResource>();
   /** Latest host inventory; absent until the host explicitly begins pruning. */
-  #retainedResourceIdentities: ReadonlySet<string> | null = null;
+  #retainedResourceIdentities: Set<string> | null = null;
   #skyBackgroundTextureId: string | null = null;
   #skyBlendSelection: { readonly texture: string; readonly amount: number } | null = null;
   #skyBlend: SkyBlend | null = null;
@@ -416,7 +410,11 @@ export class ThreeRenderer {
    */
   readonly #staticInstanceBatches = new Map<string, StaticInstanceBatch>();
   readonly #staticInstanceBatchByObject = new Map<THREE.InstancedMesh, StaticInstanceBatch>();
-  readonly #staticInstanceCandidateObjects = new WeakSet<THREE.Object3D>();
+  readonly #staticInstanceCandidateObjects = new WeakMap<THREE.Object3D, RenderHandle>();
+  readonly #dirtyStaticInstances = new Map<RenderHandle, boolean>();
+  readonly #staticGroupByHandle = new Map<RenderHandle, string>();
+  readonly #staticGroups = new Map<string, Map<RenderHandle, THREE.Mesh>>();
+  readonly #staticBatchKeys = new Map<string, Set<string>>();
   /** CSS viewport dimensions supplied by the mounted browser surface. */
   #viewportWidth = 1;
   #viewportHeight = 1;
@@ -435,8 +433,8 @@ export class ThreeRenderer {
     maximumTextureDimension?: number;
     /** Complete-replacement stream continuation points installed before the recovered frame. */
     publicationFrontiers?: readonly RenderPublicationFrontier[];
-    /** Shared renderer-neutral retained state for one mounted surface. */
-    projection?: RenderProjection;
+    /** Publication continuity for one mounted surface; contains no scene state. */
+    publications?: RenderPublicationTracker;
   } = {}) {
     this.#maximumTextureDimension = options.maximumTextureDimension;
     if (this.#maximumTextureDimension !== undefined
@@ -453,13 +451,9 @@ export class ThreeRenderer {
       () => this.#pruneRetiredResources(),
     );
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
-    this.#projection = options.projection ?? new RenderProjection();
-    if (options.projection === undefined) {
-      this.#projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
-    } else if (options.publicationFrontiers !== undefined) {
-      throw new RangeError(
-        'a shared projection establishes publication frontiers with its baseline',
-      );
+    this.#publications = options.publications ?? new RenderPublicationTracker();
+    if (options.publicationFrontiers !== undefined) {
+      this.#publications.replacePublicationFrontiers(options.publicationFrontiers);
     }
     this.#sceneGroup.name = 'scene';
     this.#debugGroup.name = 'debug';
@@ -562,58 +556,44 @@ export class ThreeRenderer {
       throw this.#terminalError;
     }
     try {
-      this.#projection.applyFrame(frame, () => {
-        this.#applyValidatedFrame(frame);
-      });
+      this.#publications.validatePublication(frame.publication, frame.ops.length);
     } catch (cause) {
-      if (cause instanceof RenderProjectionError) {
-        throw new RenderApplyError(cause.message);
-      }
+      if (cause instanceof RenderPublicationError) throw new RenderApplyError(cause.message);
       throw cause;
+    }
+    try {
+      this.#realizeFrame(frame);
+      this.#publications.commitPublication(frame.publication, frame.ops.length);
+    } catch (cause) {
+      throw cause instanceof RendererTerminalError ? cause : this.#enterTerminal('frame_mutation', cause);
     }
   }
 
-  /**
-   * Realize a complete baseline on a fresh Three renderer without publishing
-   * its frontiers until realization succeeds. A failed realization leaves the
-   * caller-owned projection at its prior revision so the surface can be
-   * discarded and recovered from a fresh renderer and baseline.
-   */
-  establishBaseline(
-    frame: RenderFrameDiff,
-    frontiers: readonly RenderPublicationFrontier[],
-  ): void {
-    if (this.#disposed) {
-      throw new RendererDisposedError();
-    }
-    if (this.#terminalError !== null) {
-      throw this.#terminalError;
-    }
-    if (
-      this.#handles.size !== 0
-      || this.#staticMeshes.size !== 0
-      || this.#voxelObjects.size !== 0
-      || this.#materials.size !== 0
-      || this.#textures.size !== 0
-      || this.#atlases.size !== 0
-    ) {
+  /** Realize a complete baseline once on a fresh disposable backend. */
+  establishBaseline(frame: RenderFrameDiff, frontiers: readonly RenderPublicationFrontier[]): void {
+    if (this.#disposed) throw new RendererDisposedError();
+    if (this.#terminalError !== null) throw this.#terminalError;
+    if (this.#handles.size !== 0 || this.#materials.size !== 0 || this.#textures.size !== 0) {
       throw new RenderApplyError('baseline realization requires a fresh ThreeRenderer');
     }
-    const baseline = new RenderProjection();
     try {
-      baseline.establishBaseline(frame, frontiers);
+      this.#realizeFrame(frame);
+      this.#publications.replacePublicationFrontiers(frontiers);
     } catch (cause) {
-      if (cause instanceof RenderProjectionError) {
-        throw new RenderApplyError(cause.message);
-      }
-      throw cause;
+      throw cause instanceof RendererTerminalError ? cause : this.#enterTerminal('frame_mutation', cause);
     }
-    this.#applyValidatedFrame(frame);
-    this.#projection.establishBaseline(frame, frontiers);
   }
 
-  #applyValidatedFrame(frame: RenderFrameDiff): void {
-    const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
+  retainedResourceCounts() {
+    return {
+      textures: this.#textures.size, spriteAtlases: this.#atlases.size,
+      materials: this.#materials.size, staticMeshes: this.#staticMeshes.size,
+      animatedMeshes: this.#animatedMeshes.definitionCount, voxelObjects: this.#voxelObjects.size,
+    };
+  }
+
+  #realizeFrame(frame: RenderFrameDiff): void {
+
     const recursivelyDestroyed = new Set<RenderHandle>();
     const changedMaterialIds = new Set<string>();
     const changedTextureIds = new Set<string>();
@@ -621,6 +601,7 @@ export class ThreeRenderer {
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
         const op = frame.ops[index]!;
+        this.#markStaticInstances(op);
         if (op.op === 'destroy') {
           if (!this.#handles.has(op.handle) && recursivelyDestroyed.has(op.handle)) {
             continue;
@@ -646,6 +627,11 @@ export class ThreeRenderer {
         this.#replaceLiveMaterial(materialId);
       }
       this.#replaceLiveSpriteMaterials(changedTextureIds, changedSpriteAtlasIds);
+      if (changedTextureIds.size > 0 || changedMaterialIds.size > 0) {
+        for (const handle of this.#handles.keys()) {
+          if (!this.#dirtyStaticInstances.has(handle)) this.#dirtyStaticInstances.set(handle, false);
+        }
+      }
       if (
         frame.ops.some((operation) => operation.op === 'setSkyBackground' || operation.op === 'setBackgroundColor')
         || (this.#skyBackgroundTextureId !== null
@@ -658,7 +644,7 @@ export class ThreeRenderer {
       // From here on the frame may already have changed live Three owners.
       throw this.#enterTerminal('frame_mutation', cause);
     }
-    if (staticInstanceBatchesChanged) {
+    if (this.#dirtyStaticInstances.size > 0) {
       try {
         this.#syncStaticInstanceBatches();
       } catch (cause) {
@@ -669,7 +655,13 @@ export class ThreeRenderer {
     // the frame's authoritative inventory. Remember only definitions introduced
     // here so pruning cannot discard them under the prior inventory in between.
     this.#rememberFrameResources(frame);
-    this.#pruneRetiredResources();
+    if (frame.ops.some((op) => op.op === 'destroy' || op.op.startsWith('release')
+      || op.op.startsWith('define') || op.op === 'setSkyBackground' || op.op === 'setBackgroundColor'
+      || (op.op === 'update' && op.material != null) || op.op === 'updateSprite'
+      || op.op === 'replaceMeshPayload' || op.op === 'setMaterialInstanceParameters'
+      || op.op === 'setVoxelObjectFrame')) {
+      this.#pruneRetiredResources();
+    }
   }
 
   #enterTerminal(
@@ -894,7 +886,7 @@ export class ThreeRenderer {
   #rememberFrameResources(frame: RenderFrameDiff): void {
     const retained = this.#retainedResourceIdentities;
     if (retained === null) return;
-    const next = new Set(retained);
+    const next = retained;
     for (const op of frame.ops) {
       if (op.op === 'defineTexture' && op.texture.payload?.source.kind === 'resource') {
         next.add(op.texture.payload.source.resource);
@@ -1004,6 +996,10 @@ export class ThreeRenderer {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposeStaticInstanceBatches();
+    this.#staticGroups.clear();
+    this.#staticGroupByHandle.clear();
+    this.#staticBatchKeys.clear();
+    this.#dirtyStaticInstances.clear();
     const handlesByDepth = [...this.#handles.entries()]
       .sort((left, right) => objectDepth(right[1].object) - objectDepth(left[1].object))
       .map(([handle]) => handle);
@@ -1429,6 +1425,16 @@ export class ThreeRenderer {
    * non-deterministic across drivers and headless GL is a heavy native
    * dependency, whereas this is exact, reviewable, and needs no GL context.
    */
+  /** On-demand backend observations, never an eagerly maintained logical mirror. */
+  nodeReadout() {
+    return [...this.#handles].map(([handle, entry]) => ({
+      handle, kind: entry.kind, layer: this.#layerForObject(entry.object),
+      frame: entry.voxelFrame ?? null,
+      transform: { translation: entry.object.position.toArray(),
+        rotation: entry.object.quaternion.toArray(), scale: entry.object.scale.toArray() },
+    }));
+  }
+
   snapshot(): string {
     const entries = [...this.#handles.entries()].sort((a, b) => a[0] - b[0]);
     if (entries.length === 0) {
@@ -1651,7 +1657,7 @@ export class ThreeRenderer {
       ownedMaterialIndices.add(idx);
     }
     const mesh = new THREE.Mesh(def.geometry, materials.length === 1 ? materials[0]! : materials);
-    this.#staticInstanceCandidateObjects.add(mesh);
+    this.#staticInstanceCandidateObjects.set(mesh, diff.handle);
     applyTransform(mesh, diff.instance.transform);
     applyMetadata(mesh, diff.instance.metadata);
     mesh.visible = diff.instance.visible;
@@ -1866,7 +1872,7 @@ export class ThreeRenderer {
         ? instanceMaterials.materials[0]!
         : instanceMaterials.materials,
     );
-    this.#staticInstanceCandidateObjects.add(mesh);
+    this.#staticInstanceCandidateObjects.set(mesh, diff.handle);
     applyTransform(mesh, diff.instance.transform);
     applyMetadata(mesh, diff.instance.metadata);
     mesh.visible = diff.instance.visible;
@@ -1973,62 +1979,39 @@ export class ThreeRenderer {
    * instanced submission.
    */
   #syncStaticInstanceBatches(): void {
-    type Candidate = {
-      readonly handle: RenderHandle;
-      readonly mesh: THREE.Mesh;
-    };
-    const candidates = new Map<string, Candidate[]>();
-
-    // A previous batch may no longer be compatible after visibility, material,
-    // frame, or hierarchy changes. Restore every logical mesh to the ordinary
-    // camera/raycast layer before selecting the next exact groups.
-    for (const entry of this.#handles.values()) {
-      if (
-        (entry.kind === 'staticMesh' || entry.kind === 'voxelObject')
-        && entry.object instanceof THREE.Mesh
-      ) {
-        entry.object.layers.set(0);
+    const changedGroups = new Set<string>();
+    for (const [handle, transformChanged] of this.#dirtyStaticInstances) {
+      const previous = this.#staticGroupByHandle.get(handle);
+      const entry = this.#handles.get(handle);
+      let key: string | undefined;
+      if (entry !== undefined) {
+        entry.object.updateWorldMatrix(true, false);
+        key = this.#staticInstanceKey(entry);
+      }
+      if (key !== previous) {
+        if (previous !== undefined) {
+          this.#staticGroups.get(previous)?.delete(handle);
+          changedGroups.add(previous);
+          this.#staticGroupByHandle.delete(handle);
+        }
+        if (entry?.object instanceof THREE.Mesh) entry.object.layers.set(0);
+        if (key !== undefined && entry?.object instanceof THREE.Mesh) {
+          let group = this.#staticGroups.get(key);
+          if (group === undefined) { group = new Map(); this.#staticGroups.set(key, group); }
+          group.set(handle, entry.object);
+          this.#staticGroupByHandle.set(handle, key);
+          changedGroups.add(key);
+        }
+      } else if (key !== undefined && entry?.object instanceof THREE.Mesh) {
+        this.#staticGroups.get(key)!.set(handle, entry.object);
+        if (transformChanged) changedGroups.add(key);
       }
     }
-
-    this.scene.updateMatrixWorld(true);
-    const orderedEntries = [...this.#handles.entries()].sort(([left], [right]) => left - right);
-    for (const [handle, entry] of orderedEntries) {
-      if (
-        (entry.kind !== 'staticMesh' && entry.kind !== 'voxelObject')
-        || !(entry.object instanceof THREE.Mesh)
-        || entry.object instanceof THREE.InstancedMesh
-        || this.#layerForObject(entry.object) !== 'scene'
-        || !isEffectivelyVisible(entry.object, this.#sceneGroup)
-        || entry.object.matrixWorld.determinant() <= 0
-        || !matrixIsFinite(entry.object.matrixWorld)
-        || entry.object.customDepthMaterial !== undefined
-        || entry.object.customDistanceMaterial !== undefined
-        || (this.#shadowsEnabled && entry.object.castShadow)
-      ) {
-        continue;
-      }
-      const materials = Array.isArray(entry.object.material)
-        ? entry.object.material
-        : [entry.object.material];
-      // Transparent objects require per-object depth sorting. One shared
-      // InstancedMesh cannot preserve that ordering, so they remain ordinary
-      // retained submissions even when their resource identities match.
-      if (
-        materials.length === 0
-        || materials.some((material) => material.transparent || material.opacity < 1)
-      ) {
-        continue;
-      }
-      const key = staticInstanceCompatibilityKey(entry.object, materials);
-      const group = candidates.get(key) ?? [];
-      group.push({ handle, mesh: entry.object });
-      candidates.set(key, group);
-    }
-
-    const retainedBatchKeys = new Set<string>();
-    for (const [compatibilityKey, group] of candidates.entries()) {
-      if (group.length < MIN_STATIC_INSTANCE_BATCH_SIZE) continue;
+    this.#dirtyStaticInstances.clear();
+    for (const compatibilityKey of changedGroups) {
+      const group = [...(this.#staticGroups.get(compatibilityKey) ?? [])].map(([handle, mesh]) => ({ handle, mesh }));
+      for (const { mesh } of group) mesh.layers.set(0);
+      const retainedBatchKeys = new Set<string>();
       for (
         let offset = 0;
         offset < group.length;
@@ -2071,13 +2054,30 @@ export class ThreeRenderer {
         batch.candidateHandles = members.map(({ handle }) => handle);
         this.#writeStaticInstanceBatch(batch, batch.candidateHandles);
       }
-    }
-
-    for (const [batchKey, batch] of [...this.#staticInstanceBatches.entries()]) {
-      if (!retainedBatchKeys.has(batchKey)) {
-        this.#disposeStaticInstanceBatch(batchKey, batch);
+      for (const batchKey of this.#staticBatchKeys.get(compatibilityKey) ?? []) {
+        if (!retainedBatchKeys.has(batchKey)) {
+          const batch = this.#staticInstanceBatches.get(batchKey);
+          if (batch !== undefined) this.#disposeStaticInstanceBatch(batchKey, batch);
+        }
       }
+      if (group.length === 0) {
+        this.#staticGroups.delete(compatibilityKey);
+        this.#staticBatchKeys.delete(compatibilityKey);
+      } else this.#staticBatchKeys.set(compatibilityKey, retainedBatchKeys);
     }
+  }
+
+  #staticInstanceKey(entry: NodeEntry): string | undefined {
+    if ((entry.kind !== 'staticMesh' && entry.kind !== 'voxelObject')
+      || !(entry.object instanceof THREE.Mesh) || entry.object instanceof THREE.InstancedMesh
+      || this.#layerForObject(entry.object) !== 'scene'
+      || !isEffectivelyVisible(entry.object, this.#sceneGroup)
+      || entry.object.matrixWorld.determinant() <= 0 || !matrixIsFinite(entry.object.matrixWorld)
+      || entry.object.customDepthMaterial !== undefined || entry.object.customDistanceMaterial !== undefined
+      || (this.#shadowsEnabled && entry.object.castShadow)) return undefined;
+    const materials = Array.isArray(entry.object.material) ? entry.object.material : [entry.object.material];
+    if (materials.length === 0 || materials.some((material) => material.transparent || material.opacity < 1)) return undefined;
+    return staticInstanceCompatibilityKey(entry.object, materials);
   }
 
   #writeStaticInstanceBatch(
@@ -2123,48 +2123,23 @@ export class ThreeRenderer {
     batch.mesh.computeBoundingSphere();
   }
 
-  #frameChangesStaticInstanceBatches(frame: RenderFrameDiff): boolean {
-    return frame.ops.some((operation) => {
-      switch (operation.op) {
-        case 'defineMaterial':
-        case 'defineStaticMesh':
-        case 'releaseStaticMesh':
-        case 'defineVoxelObject':
-        case 'releaseVoxelObject':
-        case 'createStaticMeshInstance':
-        case 'createVoxelObjectInstance':
-        case 'setVoxelObjectFrame':
-        case 'setParentJoint':
-        case 'setMaterialInstanceParameters':
-          return true;
-        case 'destroy':
-        case 'replaceMeshPayload': {
-          const entry = this.#handles.get(operation.handle);
-          return entry !== undefined && this.#objectTreeContainsStaticInstance(entry.object);
-        }
-        case 'update': {
-          if (
-            operation.transform === null
-            && operation.material === null
-            && operation.visible === null
-          ) {
-            return false;
-          }
-          const entry = this.#handles.get(operation.handle);
-          return entry !== undefined && this.#objectTreeContainsStaticInstance(entry.object);
-        }
-        default:
-          return false;
+  #markStaticInstances(operation: RenderDiff): void {
+    if (operation.op === 'defineMaterial' || operation.op === 'defineStaticMesh'
+      || operation.op === 'defineVoxelObject' || operation.op === 'releaseStaticMesh'
+      || operation.op === 'releaseVoxelObject') {
+      for (const handle of this.#handles.keys()) {
+        if (!this.#dirtyStaticInstances.has(handle)) this.#dirtyStaticInstances.set(handle, false);
       }
+      return;
+    }
+    if (!('handle' in operation)) return;
+    if (operation.op === 'update' && operation.transform === null
+      && operation.material === null && operation.visible === null) return;
+    this.#dirtyStaticInstances.set(operation.handle, true);
+    this.#handles.get(operation.handle)?.object.traverse((object) => {
+      const handle = this.#staticInstanceCandidateObjects.get(object);
+      if (handle !== undefined) this.#dirtyStaticInstances.set(handle, true);
     });
-  }
-
-  #objectTreeContainsStaticInstance(root: THREE.Object3D): boolean {
-    let found = false;
-    root.traverse((object) => {
-      found ||= this.#staticInstanceCandidateObjects.has(object);
-    });
-    return found;
   }
 
   #disposeStaticInstanceBatch(batchKey: string, batch: StaticInstanceBatch): void {
@@ -2991,7 +2966,6 @@ export class ThreeRenderer {
     if (this.#handles.has(diff.handle)) {
       throw new RenderApplyError(`createLight: handle ${diff.handle} already exists`);
     }
-    validateLightDescriptor(diff.light, 'createLight.light', (message) => new RenderApplyError(message));
     const object = buildLight(diff.light, this.#shadowsEnabled);
     const parent = diff.parent === null
       ? this.#sceneGroup
@@ -3011,7 +2985,6 @@ export class ThreeRenderer {
     if (entry.kind !== 'light' || entry.light === undefined) {
       throw new RenderApplyError(`updateLight: handle ${diff.handle} is not a light`);
     }
-    validateLightDescriptor(diff.light, 'updateLight.light', (message) => new RenderApplyError(message));
     if (entry.light.kind !== diff.light.kind) {
       throw new RenderApplyError(
         `updateLight: handle ${diff.handle} cannot change kind from ${entry.light.kind} to ${diff.light.kind}`,
@@ -3654,7 +3627,6 @@ function copyResourceStreams(
       source.resource,
       ctx,
     );
-  validateTileCoordinateStream(payload, uvs, source.resource, ctx);
   const colors = source.colorsByteOffset === undefined
     ? undefined
     : sliceFloat32(
@@ -3665,7 +3637,6 @@ function copyResourceStreams(
       source.resource,
       ctx,
     );
-  validateColorStream(colors, source.resource, ctx);
   const indices = sliceUint32(
     view,
     source.indicesByteOffset,
@@ -3673,13 +3644,6 @@ function copyResourceStreams(
     source.resource,
     ctx,
   );
-  for (const index of indices) {
-    if (index >= vertexCount) {
-      throw new RenderApplyError(
-        `${ctx}: index ${index} out of range for ${vertexCount} vertices (resource ${source.resource})`,
-      );
-    }
-  }
   return { positions, normals, uvs, colors, indices };
 }
 
@@ -3700,7 +3664,7 @@ function classifyResourceError(
   );
 }
 
-/** Copy + validate the three streams out of a borrowed view (no borrow retained). */
+/** Copy typed streams out of a borrowed view; only byte-range/lifetime checks belong here. */
 function copySharedBufferStreams(
   view: MeshBufferView,
   payload: MeshPayloadDescriptor,
@@ -3737,7 +3701,6 @@ function copySharedBufferStreams(
       source.buffer,
       ctx,
     );
-  validateTileCoordinateStream(payload, uvs, `buffer ${source.buffer}`, ctx);
   const colors = source.colorsByteOffset === undefined
     ? undefined
     : sliceFloat32(
@@ -3748,47 +3711,9 @@ function copySharedBufferStreams(
       source.buffer,
       ctx,
     );
-  validateColorStream(colors, `buffer ${source.buffer}`, ctx);
   const indices = sliceUint32(view, source.indicesByteOffset, indexCount, source.buffer, ctx);
 
-  for (let i = 0; i < indices.length; i++) {
-    if ((indices[i] as number) >= vertexCount) {
-      throw new RenderApplyError(
-        `${ctx}: index ${indices[i]} out of range for ${vertexCount} vertices (buffer ${source.buffer})`,
-      );
-    }
-  }
   return { positions, normals, uvs, colors, indices };
-}
-
-function validateColorStream(
-  colors: Float32Array | undefined,
-  source: string | number,
-  ctx: string,
-): void {
-  if (colors?.some((component) => !Number.isFinite(component) || component < 0 || component > 1)) {
-    throw new RenderApplyError(`${ctx}: color stream outside normalized 0..1 range (${String(source)})`);
-  }
-}
-
-function validateTileCoordinateStream(
-  payload: MeshPayloadDescriptor,
-  uvs: Float32Array | undefined,
-  source: string,
-  ctx: string,
-): void {
-  if (uvs === undefined) return;
-  const voxelCoordinates = payload.provenance === 'voxelChunk'
-    || payload.provenance === 'voxelObject';
-  for (let index = 0; index < uvs.length; index++) {
-    const coordinate = uvs[index] as number;
-    if (!Number.isFinite(coordinate)
-      || (voxelCoordinates && Math.abs(coordinate) > 16_777_216)) {
-      throw new RenderApplyError(
-        `${ctx}: invalid voxel tile coordinate ${coordinate} at uvs[${index}] (${source})`,
-      );
-    }
-  }
 }
 
 /** Map a provider error to a renderer-boundary `RenderApplyError`. */

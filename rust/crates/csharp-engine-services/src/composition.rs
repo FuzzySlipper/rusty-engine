@@ -687,13 +687,13 @@ impl EngineServiceSet {
                 CsharpAppearanceCallOutput::Frame(frame) => {
                     *frame = call
                         .presentation_world
-                        .apply(frame)
+                        .apply(std::mem::take(frame))
                         .map_err(presentation_world_error)?;
                 }
                 CsharpAppearanceCallOutput::Presentation(frame) => {
                     *frame = call
                         .presentation_world
-                        .apply_presentation(frame)
+                        .apply_presentation(std::mem::take(frame))
                         .map_err(presentation_world_error)?;
                 }
                 CsharpAppearanceCallOutput::AnimationCueDefinitions(_) => {}
@@ -702,13 +702,13 @@ impl EngineServiceSet {
         for frame in &mut output.frames {
             *frame = call
                 .presentation_world
-                .apply(frame)
+                .apply(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
         for frame in &mut output.presentation {
             *frame = call
                 .presentation_world
-                .apply_presentation(frame)
+                .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
         let mut effects = match &call.appearance {
@@ -915,7 +915,7 @@ impl EngineServiceSet {
             .voxel_scene_presentation
             .recover_from_canonical()?
             .iter()
-            .map(|frame| world.apply(frame).map_err(presentation_world_error))
+            .map(|frame| world.apply(frame.clone()).map_err(presentation_world_error))
             .collect::<Result<Vec<_>, _>>()?;
         // The spatial edit is already canonical. Repair presentation intent
         // without adopting any failed product-call staging or replaying input.
