@@ -31,7 +31,7 @@ not proof of a published new immutable pair.
   path still exits 0 and emits disposal once.
 - `candidate-native-smoke.json`: NativeAOT listener startup and SIGINT exit 0.
   This is a lifecycle smoke check, not new NativeAOT gameplay proof.
-- `candidate-craft-proof.log` and result: direct CraftSurvive without debugger
+- `candidate-craft-proof.txt` and result: direct CraftSurvive without debugger
   completes all fourteen water/stone transactions, reaches update 200 and
   swimming immersion 0.876, then exits 0 on SIGINT.
 - `candidate-browser-observation.json` and three original PNGs: an independent
