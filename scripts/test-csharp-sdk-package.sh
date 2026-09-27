@@ -158,6 +158,7 @@ cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitA
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
 cp "$repo_root/fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs" "$consumer_dir/SpatialArtifactChecks.cs"
+cp "$repo_root/fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs" "$consumer_dir/NavigationMappingChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -175,6 +176,7 @@ public sealed class Product : IEngineProduct
 
     public Product(ProductCreateContext context)
     {
+        NavigationMappingChecks.Run(context.Engine);
         SpatialArtifactChecks.Run(context.Engine);
         ImplicitRecipeChecks.Run();
         ImplicitAuditChecks.Run(context.Engine);

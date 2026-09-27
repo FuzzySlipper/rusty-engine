@@ -53,3 +53,21 @@ owns byte identity, and `Content.ResolveReference` can select an expected
 digest. See `docs/csharp-sdk.md#generated-level-artifact-admission` and
 `fixtures/csharp-spatial-artifact/valid.json` in the Engine repository for the format
 and a complete call example.
+
+## Collision navigation coordinates
+
+`Spatial.ReplaceCollisionNavigation` samples a region on a world-aligned grid
+whose origin is `(0, 0, 0)` in the current session frame. `WorldMin`/`WorldMax`
+select the sampled region; never subtract them when constructing path cells.
+For cell size `s`, cell coordinates are `floor(worldX / s)`,
+`floor(supportHeight / s)`, `floor(worldZ / s)`, using mathematical floor for
+negative coordinates too. The Y level uses the standing surface, not the solid
+voxel below it or the character center. `ChunkSize` does not shift this grid.
+
+For live foot positions, `Spatial.EvaluateNavigationStep` resolves the nearest
+retained support in each endpoint's X/Z column within `min(s * 0.25, 0.1) + 0.001`
+world units and returns a world-space `NextWaypoint`. This avoids guessing
+levels or scanning cells. A reported walkable count includes every retained
+support level; it does not imply that every point inside the publication box
+is walkable. See `docs/csharp-sdk.md#collision-navigation-coordinates` and the
+packaged `fixtures/csharp-navigation-mapping` example in the Engine repository.

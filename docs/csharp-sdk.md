@@ -823,6 +823,65 @@ the authority for physical movement. Product door and hazard state belongs in
 the existing planar traversal overlay; read-only evaluation honors that overlay
 without replacing the retained path diagnostic.
 
+### Collision navigation coordinates
+
+`ReplaceCollisionNavigation` uses a **world-aligned grid with origin (0, 0, 0)**
+in the session's current coordinate frame. `WorldMin` and `WorldMax` select
+where collision is sampled; they do not translate the grid. `ChunkSize` groups
+cells and `GridId` identifies the grid; neither changes its origin.
+`RequestNavigationPath`, `RequestWeightedNavigationPath`, traversal cells and
+returned path cells use these same signed coordinates.
+
+For cell size `s`, a retained support at world position `(x, supportY, z)` has:
+
+```text
+cell.X = floor(x / s)
+cell.Y = floor(supportY / s)
+cell.Z = floor(z / s)
+```
+
+Use mathematical floor, including for negative values. The level is the
+**collision surface's support height**, not the occupied floor voxel's index,
+agent center, height above `WorldMin`, or a layer ordinal. For example, with
+`s = 0.5`, support `(-10.25, -2.0, 17.75)` maps to `(-21, -4, 35)` regardless
+of the publication box minimum. A solid voxel at `(-21, -5, 35)` supplies that
+top surface. `WalkableCellCount` counts retained supported cells over all sampled
+levels. Being inside the box alone does not establish walkability: support,
+headroom, slope and capsule clearance still have to pass.
+
+When a caller already knows the sampled support height, it can derive a cell:
+
+```csharp
+static PlanarNavCell CellAtSupport(Vector3 support, double cellSize) => new(
+    (long)Math.Floor((double)support.X / cellSize),
+    (long)Math.Floor((double)support.Y / cellSize),
+    (long)Math.Floor((double)support.Z / cellSize));
+```
+
+For creature movement from live foot positions, prefer the existing
+`Spatial.EvaluateNavigationStep(new NavigationStepRequest(session, fromFeet,
+targetFeet, maximumStepDistance, maximumVisitedCells))`. It resolves each
+position to the nearest retained support in its world-aligned X/Z column within
+`min(s * 0.25, 0.1) + 0.001` world units. This handles the controller's small
+standing clearance without searching grid levels. A position with no support
+within that tolerance returns `StartNotWalkable` or `GoalNotWalkable`; it does
+not snap to a distant floor or a different column. Supply both endpoints in the
+same current session frame as the collision publication.
+
+The receipt's `NextPathCell` remains a grid identity; `NextWaypoint` is a
+world-space movement proposal bounded by `maximumStepDistance`. Use that
+proposal with ordinary character collision. For an intermediate path cell, its
+X/Z center is `((X + 0.5) * s, (Z + 0.5) * s)`, but its level only identifies a
+height interval: the retained support can be sloped or fractional. The Engine
+uses that support height when constructing its proposal. Evaluate is read-only;
+`ProposeNavigationStep` also retains the resulting path for indexed inspection.
+
+The [packaged mapping fixture](../fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs)
+checks positive and negative coordinates, non-unit cells, unaligned publication
+bounds, every reported walkable cell, a multi-cell route, and world-position
+steering. It also reproduces `StartNotWalkable` from subtracting the box minimum.
+Run it with `scripts/test-csharp-sdk-package.sh --coreclr-smoke`.
+
 Spatial trigger definitions remain registered for the session while their
 active state can change. `SetTriggerActive` is revision-guarded: deactivation
 removes current overlaps and publishes bounded exit facts, while reactivation
