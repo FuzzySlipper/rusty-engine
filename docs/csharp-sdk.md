@@ -1866,7 +1866,9 @@ Faulted worker replacement retains its separate force-stop behavior.
 
 Ordinary packaged `rusty-product-host --product <Product> --loader coreclr`
 launches use the same signal-owning shell and managed worker. They do not
-interpret stdin EOF as a supervisor command. SIGINT/SIGTERM stops the worker,
+interpret stdin EOF as a supervisor command. On Unix, the worker has its own
+process group, so terminal Ctrl+C and foreground-group signals reach the shell
+without abruptly terminating CoreCLR. SIGINT/SIGTERM stops the worker,
 relays final product-disposal diagnostics, drains the host relay, and flushes
 before exit. A worker crash or callback timeout stops the standalone host with
 a named diagnostic and a nonzero exit; it does not silently retry gameplay.

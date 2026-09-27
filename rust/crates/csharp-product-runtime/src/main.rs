@@ -955,8 +955,17 @@ impl WorkerRuntime {
         let executable = env::current_exe().map_err(|error| {
             format!("DEV_HOST_WORKER_START: cannot resolve host executable: {error}")
         })?;
-        let mut child = Command::new(executable)
-            .args(worker_arguments(args, address)?)
+        let mut command = Command::new(executable);
+        command.args(worker_arguments(args, address)?);
+        // Terminal signals target the foreground process group. Only the
+        // shell should receive them: it stops the worker through the protocol
+        // so CoreCLR can finish product shutdown and disposal first.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command
             // Worker protocol uses its dedicated loopback channel.  Product
             // Console output remains ordinary human stdout/stderr and cannot
             // corrupt a framed response.

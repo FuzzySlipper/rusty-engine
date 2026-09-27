@@ -1,0 +1,29 @@
+[
+  {
+    "case": "int",
+    "exit_code": 1,
+    "elapsed": 0.06372284889221191,
+    "disposed": 0,
+    "codes": [
+      "DEV_HOST_WORKER_EOF"
+    ]
+  },
+  {
+    "case": "term",
+    "exit_code": 1,
+    "elapsed": 0.06367921829223633,
+    "disposed": 0,
+    "codes": [
+      "DEV_HOST_WORKER_EOF"
+    ]
+  },
+  {
+    "case": "supervised-int",
+    "exit_code": 1,
+    "elapsed": 0.06613898277282715,
+    "disposed": 0,
+    "codes": [
+      "DEV_HOST_WORKER_READ"
+    ]
+  }
+]

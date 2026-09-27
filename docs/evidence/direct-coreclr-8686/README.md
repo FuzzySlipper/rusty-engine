@@ -45,3 +45,22 @@ Validation: 42 runtime-library, 39 host and 64 product-dev-host tests passed;
 focused clippy with warnings denied and documentation verification passed.
 Exact immutable pair publication, repeated packaged proof and review follow
 this source commit and are recorded in the Den task handoff/review packet.
+
+## Review finding R8686-1: foreground process-group signals
+
+The original PID-only signal tests missed terminal-style delivery. On the
+published `4087584f5dab14b52fedbd0e9ce241a5d99414a9` pair, launching the fixture
+in a fresh session and signalling the shell's whole process group reproduced
+exit 1 with zero disposal events (direct SIGINT/SIGTERM and supervised SIGINT).
+See `group-signal-baseline.json`; the earlier PID-targeted proof does not
+establish Ctrl+C behavior.
+
+The worker now starts in its own Unix process group. The foreground shell
+receives terminal/group signals and stops the worker through its existing
+protocol, preserving disposal. `group-signal-proof.py` is the runnable Linux
+packaged-fixture regression: it launches fresh sessions, confirms distinct
+shell/worker groups, calls `killpg`, checks exit 0 and exactly one `DISPOSED`,
+and confirms the worker was reaped. Both direct and supervised SIGINT/SIGTERM
+pass with the candidate host (`group-signal-candidate.json`). Host tests
+(39) and clippy with warnings denied pass. This candidate evidence precedes the
+corrected immutable pair; exact-pair repetition is recorded in Den.
