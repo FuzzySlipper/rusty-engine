@@ -157,6 +157,7 @@ cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/Implicit
 cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitAuditChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
+cp "$repo_root/fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs" "$consumer_dir/SpatialArtifactChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -174,6 +175,7 @@ public sealed class Product : IEngineProduct
 
     public Product(ProductCreateContext context)
     {
+        SpatialArtifactChecks.Run(context.Engine);
         ImplicitRecipeChecks.Run();
         ImplicitAuditChecks.Run(context.Engine);
         ProductContentBundleChecks.Run(context);
@@ -232,6 +234,8 @@ public sealed class Product : IEngineProduct
 }
 EOF
 mkdir -p "$consumer_dir/product-ui/assets" "$consumer_dir/content/rules/nested" "$consumer_dir/content/mixed"
+mkdir -p "$consumer_dir/content/spatial-artifact"
+cp "$repo_root/fixtures/csharp-spatial-artifact/"*.json "$consumer_dir/content/spatial-artifact/"
 cat > "$consumer_dir/product-ui/main.js" <<'EOF'
 // package-only staged product UI
 EOF

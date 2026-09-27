@@ -4009,18 +4009,44 @@ unsafe extern "C" fn apply_collision_residency(
 unsafe extern "C" fn replace_spatial_content_artifact(
     context: *mut c_void,
     request: *const NativeSpatialContentArtifactReplaceRequest,
-    receipt: *mut NativeSpatialContentArtifactReplaceReceipt,
+    output: *mut NativeSpatialContentArtifactReplaceReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || receipt.is_null() {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller supplies a writable receipt for this direct call.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     match bridge.replace_content_artifact(unsafe { &*request }) {
         Ok(value) => {
-            unsafe { *receipt = value };
+            unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            let diagnostic = SpatialTriggerDiagnosticValue {
+                code: error.code().to_owned(),
+                message: bounded_trigger_diagnostic_text(error.detail()),
+                source: String::new(),
+            };
+            if let Some(diagnostics) = bridge.retain_spatial_operation_diagnostic(vec![diagnostic])
+            {
+                // SAFETY: the receipt owns this lease until the generated caller
+                // copies the diagnostics and releases it through Spatial.
+                unsafe {
+                    *receipt = NativeOperationErrorReceipt {
+                        service: native_utf8(SPATIAL_SERVICE),
+                        operation: native_utf8(b"ReplaceContentArtifact"),
+                        status: 0,
+                        diagnostics,
+                    };
+                }
+            }
+            0
+        }
     }
 }
 

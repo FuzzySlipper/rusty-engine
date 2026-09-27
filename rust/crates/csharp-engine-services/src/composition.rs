@@ -1566,9 +1566,15 @@ mod tests {
             navigation_max_step_cells: 1,
         };
         let mut receipt = NativeSpatialContentArtifactReplaceReceipt::default();
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
-                (api.spatial.replace_content_artifact)(api.spatial.context, &request, &mut receipt)
+                (api.spatial.replace_content_artifact)(
+                    api.spatial.context,
+                    &request,
+                    &mut receipt,
+                    &mut error,
+                )
             },
             ABI_OK
         );
@@ -1645,6 +1651,7 @@ mod tests {
             },
             ABI_OK
         );
+        let scene_before = Arc::clone(&services.spatial.sessions[&session.value].scene);
         let invalid_request = NativeSpatialContentArtifactReplaceRequest {
             content: invalid_reference,
             ..request
@@ -1656,9 +1663,15 @@ mod tests {
                     api.spatial.context,
                     &invalid_request,
                     &mut rejected,
+                    &mut error,
                 )
             },
             0
+        );
+        assert_spatial_admission_diagnostic(
+            &api.spatial,
+            error,
+            "CSHARP_SPATIAL_CONTENT_COLLISION",
         );
         let mut after_rejection = NativeSpatialContentArtifactReadout::default();
         assert_eq!(
@@ -1672,6 +1685,13 @@ mod tests {
             ABI_OK
         );
         assert_eq!(after_rejection, readout);
+        assert!(
+            Arc::ptr_eq(
+                &scene_before,
+                &services.spatial.sessions[&session.value].scene
+            ),
+            "refusal must preserve the exact scene, including collision and residency"
+        );
 
         assert_eq!(
             unsafe { (api.content.destroy_reference)(api.content.context, valid_reference) },
@@ -1679,11 +1699,49 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                (api.spatial.replace_content_artifact)(api.spatial.context, &request, &mut rejected)
+                (api.spatial.replace_content_artifact)(
+                    api.spatial.context,
+                    &request,
+                    &mut rejected,
+                    &mut error,
+                )
             },
             0,
             "a stale Content reference was accepted"
         );
+        assert_spatial_admission_diagnostic(
+            &api.spatial,
+            error,
+            "CSHARP_SPATIAL_CONTENT_REFERENCE",
+        );
         services.discard_call();
+    }
+    fn assert_spatial_admission_diagnostic(
+        api: &NativeSpatialApi,
+        error: NativeOperationErrorReceipt,
+        expected: &str,
+    ) {
+        assert_eq!(error.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *error.diagnostics.diagnostics };
+        let text = |value: NativeUtf8Slice| unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(value.bytes, value.len)).unwrap()
+        };
+        assert_eq!(text(error.service), "Spatial");
+        assert_eq!(text(error.operation), "ReplaceContentArtifact");
+        assert_eq!(text(diagnostic.code), expected);
+        assert!(!text(diagnostic.message).is_empty());
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
+            },
+            0,
+            "diagnostic lease must be released exactly once"
+        );
     }
 }

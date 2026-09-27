@@ -836,14 +836,61 @@ changes, duplicate restore IDs, and stale revisions reject without changing
 the session. Disposing the Spatial session destroys the definitions, active
 set, overlaps, and fact history together.
 
-Use `Spatial.ReplaceContentArtifact` when offline conversion has already
-published the canonical collision/navigation JSON through Engine Content. The
-Engine resolves the retained `ContentReference`, validates and copies its
-bounded geometry and signed multilevel navigation facts, and replaces both
-projections as one operation. The returned digest, revisions, counts, and
-projection hashes—and `ReadContentArtifact`—identify the admitted source.
-Products still choose the content and navigation grid policy; they do not read
-the bytes, rebuild raw array requests, or infer collision from a visual mesh.
+### Generated level artifact admission
+
+Use `Spatial.ReplaceContentArtifact` when an offline generator or importer has
+emitted the Engine collision/navigation format through Content. The
+[complete example artifact](../fixtures/csharp-spatial-artifact/valid.json) contains
+world-space triangle geometry, bounds, and signed multilevel navigation cells.
+
+```csharp
+using ContentReference artifact = engine.Content.OpenReference(
+    new ContentOpenRequest("spatial-artifact/valid.json"));
+try
+{
+    SpatialContentArtifactReplaceReceipt admitted = engine.Spatial.ReplaceContentArtifact(
+        new SpatialContentArtifactReplaceRequest(session, artifact,
+            7, 8, 1));
+}
+catch (EngineCallException error)
+{
+    // Diagnostics carries the named refusal. The previous world remains usable.
+}
+```
+
+The Engine resolves the immutable reference, validates schema, finite bounds,
+triangle indices and navigation coordinates, then prepares collision and
+navigation before publishing either. Success replaces all retained static-mesh
+assets/instances and planar navigation, clears the previous navigation path and
+traversal overlay, and preserves voxel content, residency and leases. The
+returned digest, revisions, counts and projection hashes—and
+`ReadContentArtifact`—identify the admitted source. Disposing the borrowed
+Content reference afterward does not remove the copied spatial state.
+
+Refusal leaves collision, navigation, artifact identity and residency unchanged.
+`EngineCallException` reports service `Spatial`, operation
+`ReplaceContentArtifact`, and a named diagnostic such as
+`CSHARP_SPATIAL_CONTENT_BOUNDS`, `CSHARP_SPATIAL_CONTENT_COLLISION`,
+`CSHARP_SPATIAL_CONTENT_NAVIGATION` or `CSHARP_SPATIAL_CONTENT_SCHEMA`.
+A stale reference reports `CSHARP_SPATIAL_CONTENT_REFERENCE`. This guarantee
+covers this operation; it does not roll back unrelated calls in a callback.
+The diagnostic ABI requires a matching SDK/runtime pair.
+
+Products own generation recipes and artifact semantics: required connected
+regions, portal/socket pairing, keys, gates and provenance policy. The Procgen
+floor document is a product/generator format and must be converted to this
+Engine format before admission. Spatial accepts precomputed navigation facts;
+it does not rederive support or enforce that every region connects. For
+navigation derived from live collision, use `ReplaceCollisionNavigation`.
+Content supplies the artifact byte digest; `Content.ResolveReference` can select
+an expected path/digest before spatial admission. Spatial does not interpret a
+Procgen payload hash or repeatedly hash retained bytes. These semantic checks
+belong in the generator/importer or product admission policy before this call.
+
+The [packaged C# fixture](../fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs) verifies
+collision ray hits, navigation, named extent rejection, unchanged residency and
+successful admission after a refusal via `scripts/test-csharp-sdk-package.sh
+--coreclr-smoke`.
 
 `CharacterStepRequest.Obstacles` is a borrowed, call-local list of active
 product-authored colliders. Give each obstacle its stable entity identity,

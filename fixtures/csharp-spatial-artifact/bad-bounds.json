@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "staticMeshArtifactId": "mesh/generated-floor",
+  "bounds": {
+    "min": [
+      0,
+      0,
+      0
+    ],
+    "max": [
+      10000001,
+      1,
+      1
+    ]
+  },
+  "collision": {
+    "positions": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        3,
+        0,
+        0
+      ],
+      [
+        3,
+        0,
+        1
+      ]
+    ],
+    "triangles": [
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        2,
+        1,
+        3
+      ]
+    ]
+  },
+  "navigation": {
+    "id": "navigation/generated-floor",
+    "config": {
+      "schemaVersion": 1,
+      "cellSize": 1,
+      "levelQuantum": 0.25,
+      "maximumSlopeDegrees": 45,
+      "requiredHeadroom": 1,
+      "supportProbeDrop": 0.1
+    },
+    "cells": [
+      {
+        "column": 0,
+        "row": 0,
+        "level": 0,
+        "supportHeight": 0,
+        "walkable": true
+      },
+      {
+        "column": 1,
+        "row": 0,
+        "level": 0,
+        "supportHeight": 0,
+        "walkable": true
+      },
+      {
+        "column": 2,
+        "row": 0,
+        "level": 0,
+        "supportHeight": 0,
+        "walkable": true
+      }
+    ]
+  }
+}

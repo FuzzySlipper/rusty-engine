@@ -146,6 +146,7 @@ pub type NativeReplaceSpatialContentArtifact = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialContentArtifactReplaceRequest,
     *mut NativeSpatialContentArtifactReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadSpatialContentArtifact = unsafe extern "C" fn(
     *mut c_void,

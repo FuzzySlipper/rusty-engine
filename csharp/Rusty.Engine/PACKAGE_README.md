@@ -34,3 +34,22 @@ repeatedly guessing screen coordinates; target-ID use preserves visibility,
 reach and product rules. Verify the resulting UI separately.
 
 The source guide is `docs/controller-interaction.md` in the Engine repository.
+
+## Generated level artifacts
+
+`Spatial.ReplaceContentArtifact` admits an Engine-format collision/navigation
+artifact from a `ContentReference` into an existing `SpatialSession`. Engine
+validation and preparation finish before static-mesh collision and planar
+navigation are replaced together. Voxel content and residency remain intact.
+A refused operation leaves the previous spatial state intact and throws
+`EngineCallException` with service `Spatial`, operation `ReplaceContentArtifact`
+and a named diagnostic (for example `CSHARP_SPATIAL_CONTENT_BOUNDS`).
+
+Generation recipes, required connectivity, portal/socket pairing, gameplay
+meaning and Procgen provenance checks belong to the generator/importer or
+product. Convert the Procgen floor schema to the Engine spatial format before
+calling this API; the Engine consumes precomputed navigation facts. Content
+owns byte identity, and `Content.ResolveReference` can select an expected
+digest. See `docs/csharp-sdk.md#generated-level-artifact-admission` and
+`fixtures/csharp-spatial-artifact/valid.json` in the Engine repository for the format
+and a complete call example.
