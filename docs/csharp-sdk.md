@@ -1089,6 +1089,9 @@ For unattended batches, launch the packaged `rusty dev --headless` or
 selects its executable. This uses the Engine browser backend in a managed
 headless process, including software WebGL support; it is not a GPU-free
 renderer or a product-owned DOM screenshot path.
+The host creates and removes a disposable browser profile. Its basic password
+store avoids desktop keyring prompts that can stall the first page request in
+an unattended Linux session; it does not use your interactive browser profile.
 
 ## Values, leases, and native lifetime
 

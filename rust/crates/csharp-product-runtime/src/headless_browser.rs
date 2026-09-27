@@ -34,6 +34,9 @@ impl HeadlessBrowser {
             .arg("--ignore-gpu-blocklist")
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
+            // This disposable unattended profile must not wait for a desktop
+            // keyring unlock before its first HTTP request can load cookies.
+            .arg("--password-store=basic")
             .arg("--disable-background-networking")
             .arg("--disable-extensions")
             .arg("--disable-sync")
