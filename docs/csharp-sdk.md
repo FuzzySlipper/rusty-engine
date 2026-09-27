@@ -1863,3 +1863,16 @@ runs product disposal, and flushes diagnostics before a successful exit.
 A worker that cannot finish disposal within ten seconds is terminated with
 `DEV_HOST_WORKER_SHUTDOWN_TIMEOUT`; the supervisor also bounds host shutdown.
 Faulted worker replacement retains its separate force-stop behavior.
+
+Ordinary packaged `rusty-product-host --product <Product> --loader coreclr`
+launches use the same signal-owning shell and managed worker. They do not
+interpret stdin EOF as a supervisor command. SIGINT/SIGTERM stops the worker,
+relays final product-disposal diagnostics, drains the host relay, and flushes
+before exit. A worker crash or callback timeout stops the standalone host with
+a named diagnostic and a nonzero exit; it does not silently retry gameplay.
+`--debugger` is available for managed breakpoints and disables ordinary callback
+deadlines, while shutdown remains bounded.
+
+NativeAOT hosting stays in process. Explicit finite `--exercise` and
+`--performance-probe` runs, and contributor-only legacy raw-artifact launches,
+retain their in-process path; they are not the ordinary packaged server lane.

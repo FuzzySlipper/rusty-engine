@@ -1,0 +1,30 @@
+[
+  {
+    "case": "int",
+    "exit_code": 0,
+    "elapsed": 0.11407327651977539,
+    "disposed": 1,
+    "codes": [
+      "DISPOSED"
+    ]
+  },
+  {
+    "case": "term",
+    "exit_code": 0,
+    "elapsed": 0.11361098289489746,
+    "disposed": 1,
+    "codes": [
+      "DISPOSED"
+    ]
+  },
+  {
+    "case": "worker-crash",
+    "exit_code": 1,
+    "elapsed": 0.1139383316040039,
+    "disposed": 0,
+    "codes": [
+      "DEV_HOST_WORKER_EOF",
+      "DEV_HOST_WORKER_EXIT"
+    ]
+  }
+]

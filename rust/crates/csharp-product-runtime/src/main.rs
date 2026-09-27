@@ -75,7 +75,7 @@ fn main() -> Result<(), String> {
         return run_worker(args);
     }
     validate_headless_host(&args)?;
-    if args.supervised || args.headless {
+    if args.uses_worker_shell() {
         let mut args = args;
         prepare_shell_runtime_instance_id(&mut args);
         if args.debugger {
@@ -245,7 +245,7 @@ impl WorkerInputMailbox {
     }
 }
 
-/// Foreground `rusty dev` or headless product shell. It owns the browser
+/// Foreground CoreCLR, `rusty dev`, or headless product shell. It owns the browser
 /// listener and retained projection; the product runtime lives in its worker.
 fn run_supervised_shell(args: Arguments) -> Result<(), String> {
     let termination = install_termination_signal_hook();
@@ -295,11 +295,7 @@ fn run_supervised_shell(args: Arguments) -> Result<(), String> {
             termination,
         )
     } else {
-        // `--headless` uses this shell only to keep CoreCLR away from the
-        // signal-owning process. Preserve ordinary host semantics: stdin EOF
-        // does not stop the host unless `--supervised` was explicitly set.
-        wait_for_process_termination(false, &host, termination);
-        Ok(())
+        wait_for_standalone_worker(&runtime, &host, &diagnostics, worker_failures, termination)
     };
     let browser_shutdown = headless_browser
         .map(headless_browser::HeadlessBrowser::shutdown)
@@ -316,10 +312,41 @@ fn run_supervised_shell(args: Arguments) -> Result<(), String> {
 }
 
 fn prepare_shell_runtime_instance_id(args: &mut Arguments) {
-    if args.headless && args.runtime_instance_id.is_none() {
-        // Headless products run in a worker so this foreground process
-        // remains the signal owner and can reap Chromium on shutdown.
+    if args.uses_worker_shell() && args.runtime_instance_id.is_none() {
+        // Direct launches own an incarnation too; rusty dev can supply one.
         args.runtime_instance_id = Some(next_direct_runtime_instance_id());
+    }
+}
+
+fn wait_for_standalone_worker(
+    runtime: &WorkerRuntime,
+    host: &RunningProductDevHost,
+    diagnostics: &ProductDevLog,
+    failures: mpsc::Receiver<u64>,
+    termination: Arc<AtomicBool>,
+) -> Result<(), String> {
+    loop {
+        if termination.load(Ordering::Relaxed) {
+            println!("RUSTY_HOST shutdown={{\"reason\":\"termination-signal\"}}");
+            return Ok(());
+        }
+        let failure = failures
+            .try_iter()
+            .any(|generation| generation == runtime.active_generation());
+        let expired = runtime.expired_scheduler_generation() == Some(runtime.active_generation());
+        if failure || expired || host.termination_requested() {
+            let code = if expired {
+                "DEV_HOST_WORKER_SCHEDULER_TIMEOUT"
+            } else {
+                "DEV_HOST_WORKER_EXIT"
+            };
+            let detail = "standalone product worker failed; stopping the host";
+            publish_shell_diagnostic(diagnostics, code, detail);
+            return Err(format!("{code}: {detail}"));
+        }
+        // A standalone host has no source-restaging supervisor. Stdin EOF is
+        // not a stop request, and failed callbacks must not be silently retried.
+        thread::park_timeout(Duration::from_millis(50));
     }
 }
 
@@ -2161,7 +2188,26 @@ fn run_worker(args: Arguments) -> Result<(), String> {
     }
     // Closing supervision is the ordinary exit path. Drop the sole runtime
     // owner before flushing so Product.Dispose diagnostics reach the log too.
+    finish_worker_disposal(owner, &diagnostics, &diagnostic_cursor, &mut channel)
+}
+
+fn finish_worker_disposal<T, W: Write>(
+    owner: T,
+    diagnostics: &ProductDevLog,
+    cursor: &Mutex<Option<u64>>,
+    writer: &mut W,
+) -> Result<(), String> {
     drop(owner);
+    let final_events = drain_worker_diagnostics_shared(diagnostics, cursor);
+    if !final_events.is_empty() {
+        write_worker_frame(
+            writer,
+            &ProductDevWorkerEvent::Diagnostics {
+                diagnostics: final_events,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    }
     diagnostics.flush();
     Ok(())
 }
@@ -3149,6 +3195,16 @@ impl RuntimeMode {
 }
 
 impl Arguments {
+    fn uses_worker_shell(&self) -> bool {
+        !self.worker
+            && (self.supervised
+                || self.headless
+                || (matches!(self.loader, ProductLoader::CoreClr)
+                    && self.product_path.is_some()
+                    && !self.exercise
+                    && self.performance_probe.is_none()))
+    }
+
     fn worker_operation_timeout(&self) -> Option<Duration> {
         (!self.debugger).then_some(WORKER_OPERATION_TIMEOUT)
     }
@@ -3389,7 +3445,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-sdk.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables worker startup/callback deadlines for supervised CoreCLR debugging; normal sessions retain their deadlines. `--headless` starts Chromium after the listener is ready and closes it with the host; set `RUSTY_CHROMIUM_PATH` to select its executable. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-sdk.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables worker startup/callback deadlines for CoreCLR worker debugging; normal sessions retain their deadlines. `--headless` starts Chromium after the listener is ready and closes it with the host; set `RUSTY_CHROMIUM_PATH` to select its executable. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -3456,9 +3512,9 @@ impl Arguments {
         };
         if arguments.debugger
             && (!matches!(arguments.loader, ProductLoader::CoreClr)
-                || !(arguments.supervised || arguments.worker))
+                || !(arguments.uses_worker_shell() || arguments.worker))
         {
-            return Err("--debugger requires supervised CoreCLR (rusty dev --debugger)".to_owned());
+            return Err("--debugger requires a CoreCLR worker host".to_owned());
         }
         if arguments.worker != arguments.worker_channel.is_some() {
             return Err("--worker and --worker-channel must be supplied together".to_owned());
@@ -3874,6 +3930,49 @@ fn content_type(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_relays_diagnostics_emitted_by_final_owner_drop_once() {
+        struct ProductDrop(ProductDevLog);
+        impl Drop for ProductDrop {
+            fn drop(&mut self) {
+                self.0
+                    .publish(
+                        product_dev_host::ProductDevLogEvent::new(
+                            product_dev_host::ProductDevLogSeverity::Info,
+                            product_dev_host::ProductDevLogDisposition::Accepted,
+                            "product",
+                            "DISPOSED",
+                            "product disposed",
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+        }
+        let diagnostics =
+            ProductDevLog::new(product_dev_host::ProductDevLogConfig::default().without_file())
+                .unwrap();
+        let cursor = Mutex::new(None);
+        let mut bytes = Vec::new();
+        finish_worker_disposal(
+            ProductDrop(diagnostics.clone()),
+            &diagnostics,
+            &cursor,
+            &mut bytes,
+        )
+        .unwrap();
+        let mut reader = std::io::Cursor::new(bytes);
+        let event: ProductDevWorkerEvent = read_worker_frame(&mut reader).unwrap();
+        match event {
+            ProductDevWorkerEvent::Diagnostics { diagnostics } => {
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(diagnostics[0].code, "DISPOSED");
+            }
+            _ => panic!("expected final disposal diagnostics"),
+        }
+        assert!(drain_worker_diagnostics_shared(&diagnostics, &cursor).is_empty());
+    }
 
     #[test]
     fn worker_deadlines_do_not_accumulate_callback_and_output_cost() {
@@ -4766,15 +4865,15 @@ mod tests {
             Some(Duration::from_secs(5))
         );
         assert!(parse_test_error(&["--debugger", "--supervised"])
-            .contains("requires supervised CoreCLR"));
+            .contains("requires a CoreCLR worker host"));
         assert!(parse_test_error(&[
             "--debugger",
             "--loader",
             "coreclr",
             "--runtimeconfig",
-            "product.runtimeconfig.json"
+            "product.runtimeconfig.json",
         ])
-        .contains("requires supervised CoreCLR"));
+        .contains("requires a CoreCLR worker host"));
         let mut debugging = parse_test_args(&[
             "--debugger",
             "--supervised",
@@ -5107,6 +5206,44 @@ mod tests {
         assert_eq!(
             explicit.runtime_instance_id,
             Some(RuntimeInstanceId::new(41))
+        );
+    }
+
+    #[test]
+    fn packaged_coreclr_uses_signal_owning_shell_but_finite_probes_do_not() {
+        let mut args = parse_test_args(&[
+            "--loader",
+            "coreclr",
+            "--runtimeconfig",
+            "product.runtimeconfig.json",
+        ])
+        .unwrap();
+        assert!(
+            !args.uses_worker_shell(),
+            "legacy raw artifacts stay in process"
+        );
+        args.product_path = Some(PathBuf::from("/product"));
+        assert!(args.uses_worker_shell());
+        assert!(
+            !args.supervised,
+            "direct hosts must not adopt stdin supervision"
+        );
+        prepare_shell_runtime_instance_id(&mut args);
+        assert!(args.runtime_instance_id.is_some());
+        args.worker = true;
+        assert!(
+            !args.uses_worker_shell(),
+            "workers must not recursively launch shells"
+        );
+        args.worker = false;
+        args.exercise = true;
+        assert!(!args.uses_worker_shell());
+        args.exercise = false;
+        args.performance_probe = Some(1);
+        assert!(!args.uses_worker_shell());
+        assert!(
+            !parse_test_args(&[]).unwrap().uses_worker_shell(),
+            "NativeAOT stays in process"
         );
     }
 
