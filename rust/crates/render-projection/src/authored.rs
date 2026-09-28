@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
@@ -101,10 +104,12 @@ pub struct AppearanceResources {
     pub textures: Vec<TextureDescriptor>,
     #[serde(default)]
     pub sprite_atlases: Vec<SpriteAtlasDescriptor>,
+    /// Admitted mesh bodies are immutable and shared; cloning a catalog
+    /// copies pointers, not vertex data.
     #[serde(default)]
-    pub static_meshes: Vec<StaticMeshAsset>,
+    pub static_meshes: Vec<Arc<StaticMeshAsset>>,
     #[serde(default)]
-    pub animated_meshes: Vec<AnimatedMeshAsset>,
+    pub animated_meshes: Vec<Arc<AnimatedMeshAsset>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -142,8 +147,8 @@ struct ResourceSnapshot {
     materials: BTreeMap<String, RenderMaterialDescriptor>,
     textures: BTreeMap<String, TextureDescriptor>,
     atlases: BTreeMap<String, SpriteAtlasDescriptor>,
-    static_meshes: BTreeMap<String, StaticMeshAsset>,
-    animated_meshes: BTreeMap<String, AnimatedMeshAsset>,
+    static_meshes: BTreeMap<String, Arc<StaticMeshAsset>>,
+    animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,15 +180,15 @@ impl SceneAppearanceProjector {
         scene: &AppearanceScene,
         mode: ProjectionMode,
     ) -> Result<SceneProjectionResult, SceneProjectionError> {
-        let validated = validate_scene(scene, mode)?;
+        let validated = validate_scene(scene, mode, &self.last_resources)?;
         let mut registry = self.registry.clone();
         let mut operations = Vec::new();
 
-        let changed_static_meshes = changed_resource_ids(
+        let changed_static_meshes = changed_shared_ids(
             &self.last_resources.static_meshes,
             &validated.resources.static_meshes,
         );
-        let changed_animated_meshes = changed_resource_ids(
+        let changed_animated_meshes = changed_shared_ids(
             &self.last_resources.animated_meshes,
             &validated.resources.animated_meshes,
         );
@@ -354,8 +359,9 @@ struct ValidatedScene {
 fn validate_scene(
     scene: &AppearanceScene,
     mode: ProjectionMode,
+    previous: &ResourceSnapshot,
 ) -> Result<ValidatedScene, SceneProjectionError> {
-    let resources = validate_resources(&scene.resources)?;
+    let resources = validate_resources(&scene.resources, previous)?;
     let mut nodes = BTreeMap::new();
     for node in scene
         .nodes
@@ -450,8 +456,11 @@ fn validate_scene(
     })
 }
 
+/// Meshes are validated when first projected; a body already retained by the
+/// previous projection (the same shared allocation) is not scanned again.
 fn validate_resources(
     input: &AppearanceResources,
+    previous: &ResourceSnapshot,
 ) -> Result<ResourceSnapshot, SceneProjectionError> {
     let mut resources = ResourceSnapshot::default();
     for material in &input.materials {
@@ -492,28 +501,32 @@ fn validate_resources(
         insert_unique(&mut resources.atlases, &atlas.id, atlas.clone(), "atlas")?;
     }
     for mesh in &input.static_meshes {
-        mesh.validate()
-            .map_err(|source| SceneProjectionError::InvalidStaticMesh {
-                id: mesh.asset.clone(),
-                source,
-            })?;
+        if !retained(&previous.static_meshes, &mesh.asset, mesh) {
+            mesh.validate()
+                .map_err(|source| SceneProjectionError::InvalidStaticMesh {
+                    id: mesh.asset.clone(),
+                    source,
+                })?;
+        }
         insert_unique(
             &mut resources.static_meshes,
             &mesh.asset,
-            mesh.clone(),
+            Arc::clone(mesh),
             "static mesh",
         )?;
     }
     for mesh in &input.animated_meshes {
-        mesh.validate()
-            .map_err(|source| SceneProjectionError::InvalidAnimatedMesh {
-                id: mesh.asset.clone(),
-                source,
-            })?;
+        if !retained(&previous.animated_meshes, &mesh.asset, mesh) {
+            mesh.validate()
+                .map_err(|source| SceneProjectionError::InvalidAnimatedMesh {
+                    id: mesh.asset.clone(),
+                    source,
+                })?;
+        }
         insert_unique(
             &mut resources.animated_meshes,
             &mesh.asset,
-            mesh.clone(),
+            Arc::clone(mesh),
             "animated mesh",
         )?;
     }
@@ -708,16 +721,16 @@ fn resource_diffs(previous: &ResourceSnapshot, next: &ResourceSnapshot) -> Vec<R
         }
     }
     for (id, value) in &next.static_meshes {
-        if previous.static_meshes.get(id) != Some(value) {
+        if !unchanged(previous.static_meshes.get(id), value) {
             operations.push(RenderDiff::DefineStaticMesh {
-                asset: value.clone(),
+                asset: StaticMeshAsset::clone(value),
             });
         }
     }
     for (id, value) in &next.animated_meshes {
-        if previous.animated_meshes.get(id) != Some(value) {
+        if !unchanged(previous.animated_meshes.get(id), value) {
             operations.push(RenderDiff::DefineAnimatedMesh {
-                asset: value.clone(),
+                asset: AnimatedMeshAsset::clone(value),
             });
         }
     }
@@ -751,14 +764,26 @@ fn resource_diffs(previous: &ResourceSnapshot, next: &ResourceSnapshot) -> Vec<R
     operations
 }
 
-fn changed_resource_ids<T: PartialEq>(
-    previous: &BTreeMap<String, T>,
-    next: &BTreeMap<String, T>,
+/// Ids of shared resources whose definition changed. The same allocation is
+/// unchanged without comparing its body.
+fn changed_shared_ids<T: PartialEq>(
+    previous: &BTreeMap<String, Arc<T>>,
+    next: &BTreeMap<String, Arc<T>>,
 ) -> BTreeSet<String> {
     next.iter()
-        .filter(|(id, value)| previous.get(*id).is_some_and(|previous| previous != *value))
+        .filter(|(id, value)| previous.contains_key(*id) && !unchanged(previous.get(*id), value))
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+fn unchanged<T: PartialEq>(previous: Option<&Arc<T>>, next: &Arc<T>) -> bool {
+    previous.is_some_and(|previous| Arc::ptr_eq(previous, next) || **previous == **next)
+}
+
+fn retained<T>(previous: &BTreeMap<String, Arc<T>>, id: &str, next: &Arc<T>) -> bool {
+    previous
+        .get(id)
+        .is_some_and(|previous| Arc::ptr_eq(previous, next))
 }
 
 fn requires_recreate(previous: &ProjectedNode, next: &ProjectedNode) -> bool {
@@ -1240,7 +1265,7 @@ mod tests {
         let scene = AppearanceScene {
             resources: AppearanceResources {
                 materials: vec![material()],
-                static_meshes: vec![mesh()],
+                static_meshes: vec![Arc::new(mesh())],
                 ..AppearanceResources::default()
             },
             nodes: vec![
@@ -1315,7 +1340,7 @@ mod tests {
         let mut scene = AppearanceScene {
             resources: AppearanceResources {
                 materials: vec![material()],
-                static_meshes: vec![mesh()],
+                static_meshes: vec![Arc::new(mesh())],
                 ..AppearanceResources::default()
             },
             nodes: vec![
@@ -1376,7 +1401,10 @@ mod tests {
             .project(&scene, ProjectionMode::AuthoredPreview)
             .unwrap();
 
-        scene.resources.static_meshes[0].payload.bounds.max[0] = 2.0;
+        Arc::make_mut(&mut scene.resources.static_meshes[0])
+            .payload
+            .bounds
+            .max[0] = 2.0;
         let edited = projector
             .project(&scene, ProjectionMode::AuthoredPreview)
             .unwrap();
@@ -1412,7 +1440,7 @@ mod tests {
         let mut scene = AppearanceScene {
             resources: AppearanceResources {
                 materials: vec![material()],
-                animated_meshes: vec![animated_mesh()],
+                animated_meshes: vec![Arc::new(animated_mesh())],
                 ..AppearanceResources::default()
             },
             nodes: vec![AppearanceNode {
@@ -1451,7 +1479,8 @@ mod tests {
             matches!(inspected.frame.ops.as_slice(), [RenderDiff::SetAnimatedMeshInspection { inspection, .. }] if inspection.wireframe && inspection.bounds_request == 7)
         );
 
-        scene.resources.animated_meshes[0].content_hash = Some("second".to_string());
+        Arc::make_mut(&mut scene.resources.animated_meshes[0]).content_hash =
+            Some("second".to_string());
         let edited = projector
             .project(&scene, ProjectionMode::AuthoredPreview)
             .unwrap();

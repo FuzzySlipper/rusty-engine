@@ -992,7 +992,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         .take_staged_call()
         .expect("updated call")
         .expect("updated appearance call");
-    assert!(updated_call.frame.as_ref().is_some_and(|frame| {
+    assert!(updated_call.render_frames().iter().any(|frame| {
         frame.ops.iter().any(|operation| {
             matches!(
                 operation,
@@ -1616,7 +1616,7 @@ pub(crate) struct RuntimeAppearanceData {
 
 #[derive(Clone)]
 struct RuntimeMeshPartition {
-    parts: Vec<Option<StaticMeshAsset>>,
+    parts: Vec<Option<Arc<StaticMeshAsset>>>,
     material_handles: BTreeSet<u64>,
 }
 
@@ -1686,9 +1686,10 @@ pub(crate) struct RuntimeAppearanceCall {
     /// output transport and only represents this service family's existing
     /// renderer and presentation outputs.
     pub(crate) outputs: Vec<RuntimeAppearanceCallOutput>,
-    pub(crate) frame: Option<render_model::RenderFrameDiff>,
-    pub(crate) extra_frames: Vec<render_model::RenderFrameDiff>,
-    pub(crate) presentation: Vec<PresentationFrameDiff>,
+    /// A retained snapshot or light projection frame was emitted in this call.
+    projected_frame: bool,
+    /// Presentation frames emitted in this call; their sequence numbers.
+    presentation_frames: u32,
     /// Payloads released in this callback remain available through delivery of
     /// its already-staged renderer operations, then may be dropped.
     pub(crate) retired_resources: Vec<CsharpRenderResource>,
@@ -1744,6 +1745,39 @@ struct AnimationController {
     projected: bool,
     last_target: Option<RenderHandle>,
     last_revision: Option<u64>,
+}
+
+#[cfg(test)]
+impl RuntimeAppearanceCall {
+    /// Render frames emitted in this call, in order.
+    pub(crate) fn render_frames(&self) -> Vec<&render_model::RenderFrameDiff> {
+        self.outputs
+            .iter()
+            .filter_map(|output| match output {
+                RuntimeAppearanceCallOutput::Frame(frame) => Some(frame),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every render operation emitted in this call, in order.
+    pub(crate) fn render_ops(&self) -> Vec<RenderDiff> {
+        self.render_frames()
+            .into_iter()
+            .flat_map(|frame| frame.ops.iter().cloned())
+            .collect()
+    }
+
+    /// Presentation frames emitted in this call, in order.
+    pub(crate) fn presentation(&self) -> Vec<&PresentationFrameDiff> {
+        self.outputs
+            .iter()
+            .filter_map(|output| match output {
+                RuntimeAppearanceCallOutput::Presentation(frame) => Some(frame),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl RuntimeAppearanceCall {
@@ -2006,9 +2040,8 @@ impl RuntimeAppearanceBridge {
             rebase_ghost_plates: false,
             resource_releases_pending: false,
             outputs: Vec::new(),
-            frame: None,
-            extra_frames: Vec::new(),
-            presentation: Vec::new(),
+            projected_frame: false,
+            presentation_frames: 0,
             retired_resources: Vec::new(),
         });
         self.operation_error = None;
@@ -4532,7 +4565,7 @@ impl RuntimeAppearanceBridge {
             .projector
             .resources_mut()
             .static_meshes
-            .push(definition);
+            .push(Arc::new(definition));
         staged.state.mesh_resources.insert(
             handle,
             RuntimeMeshResource {
@@ -4573,7 +4606,7 @@ impl RuntimeAppearanceBridge {
             .into_iter()
             .map(|payload| {
                 let used: BTreeSet<_> = payload.groups.iter().map(|g| g.material_slot).collect();
-                Some(StaticMeshAsset {
+                Some(Arc::new(StaticMeshAsset {
                     asset: String::new(),
                     payload,
                     material_slots: definition
@@ -4583,7 +4616,7 @@ impl RuntimeAppearanceBridge {
                         .cloned()
                         .collect(),
                     collision: MeshCollisionPolicy::VisualOnly,
-                })
+                }))
             })
             .collect();
         let material_handles = source.material_handles.clone();
@@ -4646,7 +4679,7 @@ impl RuntimeAppearanceBridge {
             .ok_or_else(|| invalid("mesh partition part was already taken"))?;
         let material_handles = prepared.material_handles.clone();
         let asset = format!("mesh/runtime-{handle}");
-        definition.asset = asset.clone();
+        Arc::make_mut(&mut definition).asset = asset.clone();
         state
             .projector
             .resources_mut()
@@ -4918,7 +4951,7 @@ impl RuntimeAppearanceBridge {
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
             resources.materials.extend(materials);
-            resources.static_meshes.push(asset);
+            resources.static_meshes.push(Arc::new(asset));
         }
         let appearance = self.allocate_appearance(Appearance::StaticMesh {
             asset: mesh_id,
@@ -5010,12 +5043,12 @@ impl RuntimeAppearanceBridge {
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
             resources.materials.extend(materials);
-            resources.static_meshes.push(StaticMeshAsset {
+            resources.static_meshes.push(Arc::new(StaticMeshAsset {
                 asset: mesh_id.clone(),
                 payload,
                 material_slots,
                 collision: MeshCollisionPolicy::VisualOnly,
-            });
+            }));
         }
         self.allocate_appearance(Appearance::StaticMesh {
             asset: mesh_id,
@@ -6321,7 +6354,7 @@ impl RuntimeAppearanceBridge {
                     .projector
                     .resources_mut()
                     .animated_meshes
-                    .push(asset.clone());
+                    .push(Arc::new(asset.clone()));
             }
         }
         let appearance = self.allocate_appearance(Appearance::AnimatedMesh {
@@ -7043,7 +7076,7 @@ impl RuntimeAppearanceBridge {
         handle: NativeAnimationControllerHandle,
     ) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        if staged.frame.is_some() {
+        if staged.projected_frame {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_SNAPSHOT_ORDER",
                 "dispose the animation controller before publishing its removal snapshot",
@@ -7056,12 +7089,7 @@ impl RuntimeAppearanceBridge {
         // Build the renderer removal before releasing the controller so a
         // refusal leaves the controller and its instance binding intact.
         let frame = if controller.projected {
-            let sequence = u32::try_from(staged.presentation.len()).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_PRESENTATION",
-                    "too many animation presentation frames in one product call",
-                )
-            })?;
+            let sequence = staged.presentation_frames;
             let object_id = staged
                 .state
                 .animation_instances
@@ -7424,12 +7452,7 @@ impl RuntimeAppearanceBridge {
                     )
                 })?;
             let assets = animation_assets(&staged.state.render_resources);
-            let sequence = u32::try_from(staged.presentation.len()).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_PRESENTATION",
-                    "too many animation presentation frames in one product call",
-                )
-            })?;
+            let sequence = staged.presentation_frames;
             (instance, assets, sequence)
         };
         let Some(target) = staged.state.projector.object_handle(instance.object_id) else {
@@ -7710,7 +7733,7 @@ impl RuntimeAppearanceBridge {
         } else {
             unsafe { std::slice::from_raw_parts(facts, fact_count) }
         };
-        let appearances = self.staged_mut()?.state.appearances.clone();
+        let appearances = &self.staged_ref()?.state.appearances;
         let mut owned = Vec::with_capacity(facts.len());
         let mut retained_appearances = BTreeMap::new();
         for fact in facts {
@@ -8285,19 +8308,7 @@ fn append_projection_frame(
     staged: &mut RuntimeAppearanceCall,
     next: render_model::RenderFrameDiff,
 ) -> Result<(), CsharpEngineServicesError> {
-    staged.frame = Some(match staged.frame.take() {
-        Some(previous) => {
-            let mut operations = previous.ops;
-            operations.extend(next.ops.iter().cloned());
-            render_model::RenderFrameDiff::try_from_ops(operations).map_err(|error| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_APPEARANCE_FRAME",
-                    format!("combined retained appearance/light frame is invalid: {error:?}"),
-                )
-            })?
-        }
-        None => next.clone(),
-    });
+    staged.projected_frame = true;
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Frame(next));
@@ -8305,14 +8316,13 @@ fn append_projection_frame(
 }
 
 fn push_extra_frame(staged: &mut RuntimeAppearanceCall, frame: render_model::RenderFrameDiff) {
-    staged.extra_frames.push(frame.clone());
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Frame(frame));
 }
 
 fn push_presentation_frame(staged: &mut RuntimeAppearanceCall, frame: PresentationFrameDiff) {
-    staged.presentation.push(frame.clone());
+    staged.presentation_frames = staged.presentation_frames.saturating_add(1);
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Presentation(frame));
@@ -11812,7 +11822,7 @@ pub(super) mod tests {
         assert!(bridge.destroy_appearance(line).is_err());
         let staged = bridge.take_staged_call().unwrap().unwrap();
         assert!(matches!(
-            staged.frame.unwrap().ops.as_slice(),
+            staged.render_ops().as_slice(),
             [render_model::RenderDiff::Create {
                 node: render_model::RenderNode {
                     geometry: Geometry::Line {
@@ -11852,12 +11862,7 @@ pub(super) mod tests {
             .expect("staged hierarchy")
             .expect("appearance call");
         assert!(matches!(
-            staged
-                .frame
-                .as_ref()
-                .expect("retained frame")
-                .ops
-                .as_slice(),
+            staged.render_ops().as_slice(),
             [
                 render_model::RenderDiff::Create {
                     parent: None,
@@ -12096,7 +12101,7 @@ pub(super) mod tests {
             ordinary_output_index < ghost_output_index,
             "ordinary appearance baseline must precede retained ghost baseline"
         );
-        assert!(attached.frame.as_ref().is_some_and(|frame| {
+        assert!(attached.render_frames().iter().any(|frame| {
             frame
                 .ops
                 .iter()
@@ -12105,8 +12110,8 @@ pub(super) mod tests {
 
         let fresh_source = attached.state.projector.object_handle(source.object_id);
         let ghost_creates: Vec<_> = attached
-            .presentation
-            .iter()
+            .presentation()
+            .into_iter()
             .flat_map(|frame| frame.ops.iter())
             .filter_map(|op| match op {
                 render_presentation::PresentationOp::GhostPlate {
@@ -12158,8 +12163,8 @@ pub(super) mod tests {
             .take_staged_call()
             .expect("next call")
             .expect("next appearance call");
-        assert!(next.presentation.is_empty());
-        assert!(next.frame.as_ref().is_some_and(|frame| {
+        assert!(next.presentation().is_empty());
+        assert!(next.render_frames().iter().any(|frame| {
             frame
                 .ops
                 .iter()
@@ -12275,7 +12280,7 @@ pub(super) mod tests {
         assert_eq!(staged.state.retained_object_count, 1);
         assert_eq!(staged.state.retained_light_count, 1);
         assert!(matches!(
-            staged.frame.as_ref().unwrap().ops.as_slice(),
+            staged.render_ops().as_slice(),
             [
                 render_model::RenderDiff::Create { .. },
                 render_model::RenderDiff::CreateLight { .. }
@@ -12291,7 +12296,7 @@ pub(super) mod tests {
             .unwrap();
         let staged = bridge.take_staged_call().unwrap().unwrap();
         assert!(matches!(
-            staged.frame.as_ref().unwrap().ops.as_slice(),
+            staged.render_ops().as_slice(),
             [render_model::RenderDiff::UpdateLight { .. }]
         ));
         bridge.commit(Some(staged));
@@ -12342,14 +12347,19 @@ pub(super) mod tests {
         bridge.destroy_light(light).unwrap();
         let staged = bridge.take_staged_call().unwrap().unwrap();
         assert!(matches!(
-            staged.frame.as_ref().unwrap().ops.as_slice(),
+            staged.render_ops().as_slice(),
             [render_model::RenderDiff::Destroy { .. }]
         ));
         bridge.commit(Some(staged));
 
         bridge.begin_call();
         bridge.destroy_light(light).unwrap();
-        assert!(bridge.take_staged_call().unwrap().unwrap().frame.is_none());
+        assert!(bridge
+            .take_staged_call()
+            .unwrap()
+            .unwrap()
+            .render_frames()
+            .is_empty());
     }
 
     #[test]
@@ -12865,7 +12875,7 @@ pub(super) mod tests {
             .expect("last static appearance release");
         let staged = bridge.staged.as_mut().unwrap();
         assert!(staged.state.render_resources.is_empty());
-        assert!(staged.extra_frames.iter().any(|frame| frame.ops.iter().any(|op| {
+        assert!(staged.render_frames().iter().any(|frame| frame.ops.iter().any(|op| {
             matches!(op, render_model::RenderDiff::ReleaseStaticMesh { asset } if asset == &format!("mesh/native-{}", first.value))
         })), "disposing the published appearance releases its GPU mesh definition");
         assert_eq!(
@@ -13001,40 +13011,29 @@ pub(super) mod tests {
                 normalized_time: 0.0,
             })
             .expect("one-shot stop command");
-        let fact = appearance_fact(appearance);
-        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("appearance snapshot");
-        assert_eq!(
+        let playback_ops = |bridge: &RuntimeAppearanceBridge| {
             bridge
                 .staged
                 .as_ref()
-                .expect("staged frame")
-                .extra_frames
-                .len(),
-            1
-        );
+                .expect("staged call")
+                .render_ops()
+                .iter()
+                .filter(|op| matches!(op, RenderDiff::SetAnimatedMeshPlayback { .. }))
+                .count()
+        };
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("appearance snapshot");
+        assert_eq!(playback_ops(&bridge), 1);
         let first_call = bridge.take_staged_call().expect("first animation call");
         bridge.commit(first_call);
 
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(&fact, 1) }.expect("unchanged appearance snapshot");
-        assert!(bridge
-            .staged
-            .as_ref()
-            .expect("second staged frame")
-            .extra_frames
-            .is_empty());
+        assert_eq!(playback_ops(&bridge), 0);
         bridge
             .destroy_animation_instance(instance)
             .expect("teardown after an unchanged snapshot keeps output order");
-        assert_eq!(
-            bridge
-                .staged
-                .as_ref()
-                .expect("teardown call")
-                .extra_frames
-                .len(),
-            1
-        );
+        assert_eq!(playback_ops(&bridge), 1);
         let completed = bridge.take_staged_call().unwrap();
         bridge.commit(completed);
         bridge.begin_call();
@@ -13046,12 +13045,12 @@ pub(super) mod tests {
             .unwrap();
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
-        let frames_before = bridge.staged.as_ref().unwrap().extra_frames.len();
+        let frames_before = bridge.staged.as_ref().unwrap().render_frames().len();
         bridge
             .destroy_animation_instance(replacement)
             .expect("teardown after removal snapshot");
         assert_eq!(
-            bridge.staged.as_ref().unwrap().extra_frames.len(),
+            bridge.staged.as_ref().unwrap().render_frames().len(),
             frames_before,
             "do not send Stop to a renderer target already removed by the snapshot"
         );
@@ -13813,7 +13812,7 @@ pub(super) mod tests {
                 .staged
                 .as_ref()
                 .expect("controller setup")
-                .presentation
+                .presentation()
                 .len(),
             1
         );
@@ -13845,7 +13844,7 @@ pub(super) mod tests {
                 .staged
                 .as_ref()
                 .expect("controller teardown call")
-                .presentation
+                .presentation()
                 .len(),
             1
         );
@@ -14021,10 +14020,10 @@ pub(super) mod tests {
             .take_staged_call()
             .expect("staged presentation call")
             .expect("appearance call");
-        assert_eq!(call.presentation.len(), 4);
+        assert_eq!(call.presentation().len(), 4);
         assert!(call
-            .presentation
-            .iter()
+            .presentation()
+            .into_iter()
             .all(|frame| frame.validate().is_ok()));
         bridge.commit(Some(call));
 
@@ -14231,7 +14230,7 @@ pub(super) mod tests {
             .expect("font call")
             .expect("appearance call");
         assert!(matches!(
-            &call.presentation[0].ops[0],
+            &call.presentation()[0].ops[0],
             render_presentation::PresentationOp::Billboard { op: BillboardProjectionOp::Create { descriptor: BillboardDescriptor { font: BillboardFontRef::Asset { family: resolved_family, .. }, .. }, .. }, .. }
                 if resolved_family == "Ui Font"
         ));
@@ -14537,7 +14536,7 @@ pub(super) mod tests {
             .expect("collision emit call")
             .expect("appearance call");
         assert!(matches!(
-            &emit.presentation[0].ops[0],
+            &emit.presentation()[0].ops[0],
             render_presentation::PresentationOp::Particle {
                 op: ParticleProjectionOp::Emit { descriptor, .. },
                 ..

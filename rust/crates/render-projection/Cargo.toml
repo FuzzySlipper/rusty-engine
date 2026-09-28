@@ -14,7 +14,7 @@ core-space.workspace = true
 engine-spatial = { path = "../engine-spatial" }
 entity-state = { path = "../entity-state" }
 render-model.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 svc-mesh.workspace = true
 voxel-object-runtime.workspace = true
 

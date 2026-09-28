@@ -340,7 +340,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         .expect("initial appearance call")
         .expect("initial appearance state");
     assert!(
-        initial_appearance.frame.is_some(),
+        !initial_appearance.render_frames().is_empty(),
         "facts emit a retained frame"
     );
     let initial_implicit = implicit.take_call().expect("initial implicit call");
