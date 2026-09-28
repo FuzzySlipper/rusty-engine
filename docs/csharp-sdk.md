@@ -669,6 +669,9 @@ Target revisions and GPU lifetime belong to Rust and the renderer; C# must not
 use a target as an arbitrary mesh texture. `SetActiveCamera` remains the
 single-primary-view convenience over this same retained composition. Use
 `CameraViewports` for ordinary full, split, and inset normalized rectangles.
+A composition with any primary view owns the primary surface: the renderer
+draws no separate default-camera pass, and area outside every primary view is
+left cleared.
 `SetBackgroundColor(new(new Color(r, g, b, 1)))` selects an opaque retained
 viewport clear color and replaces any selected sky. `SetSkyBackground` replaces
 that color with a retained panorama; `ClearSkyBackground` returns to the Engine

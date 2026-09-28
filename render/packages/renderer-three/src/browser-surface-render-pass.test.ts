@@ -40,6 +40,27 @@ void test('browser surface composes world then camera-relative presentation afte
   ]);
 });
 
+void test('a composition that owns the primary output skips the fallback world pass', () => {
+  const events: string[] = [];
+  const driver: BrowserSurfaceRenderDriver = {
+    clear: (color, depth, stencil) => events.push(`clear:${color}:${depth}:${stencil}`),
+    clearDepth: () => events.push('clearDepth'),
+    render: (scene, camera) => events.push(`render:${scene.name}:${camera.name}`),
+  };
+
+  renderBrowserSurfaceFrame(driver, namedCamera('world-camera'), namedCamera('viewmodel-camera'), {
+    scene: namedScene('world'),
+    viewmodelScene: namedScene('viewmodel'),
+    advanceAnimation: (deltaSeconds) => events.push(`advance:${deltaSeconds}`),
+    prepareSpritesForCamera: (camera, scene) =>
+      events.push(`sprites:${scene.name}:${camera.name}`),
+    prepareStaticInstanceBatches: (camera) => events.push(`prepare:${camera.name}`),
+  }, 0.025, true);
+
+  // Animation still advances exactly once; primary views draw themselves.
+  assert.deepEqual(events, ['clear:true:true:true', 'advance:0.025']);
+});
+
 void test('browser surface keeps bounded viewmodel transforms camera-relative across world poses', () => {
   const worldCamera = namedCamera('world-camera');
   const viewmodelCamera = namedCamera('viewmodel-camera');

@@ -547,6 +547,7 @@ export function mountRendererBrowserSurface(
         viewmodelCamera,
         renderer,
         deltaSeconds,
+        viewComposition.ownsPrimaryOutput(),
       );
       submissionSequence += 1;
       viewComposition.render(submissionSequence, canvas.width, canvas.height, timeMs);

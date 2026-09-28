@@ -21785,6 +21785,9 @@ var Ry = 64, zy = class {
 		let t = [...this.#c.values()].find((e) => e instanceof El);
 		this.#h = t?.clone() ?? new El(75, 1, .01, 1e4), Iy(this.#h, e);
 	}
+	ownsPrimaryOutput() {
+		return !this.#u && this.#l.views.some((e) => e.target.kind === "primary");
+	}
 	render(e, t, n, r = this.#o()) {
 		if (this.#u || this.#l.views.length === 0) return;
 		for (let [e, t] of this.#a) {
@@ -22010,8 +22013,8 @@ function ib(e) {
 }
 //#endregion
 //#region packages/renderer-three/dist/browser-surface-render-pass.js
-function ab(e, t, n, r, i) {
-	my(t, n, "aspect" in t && typeof t.aspect == "number" ? t.aspect : n.aspect), e.clear(!0, !0, !0), r.advanceAnimation(i), r.prepareSpritesForCamera(t, r.scene), r.prepareStaticInstanceBatches(t), e.render(r.scene, t), e.clearDepth(), r.prepareSpritesForCamera(n, r.viewmodelScene), e.render(r.viewmodelScene, n);
+function ab(e, t, n, r, i, a = !1) {
+	e.clear(!0, !0, !0), r.advanceAnimation(i), !a && (my(t, n, "aspect" in t && typeof t.aspect == "number" ? t.aspect : n.aspect), r.prepareSpritesForCamera(t, r.scene), r.prepareStaticInstanceBatches(t), e.render(r.scene, t), e.clearDepth(), r.prepareSpritesForCamera(n, r.viewmodelScene), e.render(r.viewmodelScene, n));
 }
 //#endregion
 //#region packages/renderer-three/dist/gpu-submission-fence.js
@@ -23497,7 +23500,7 @@ function zx(e, t = {}) {
 			let o = n ?? (O === null ? 0 : Math.min(.05, Math.max(0, (t - O) / 1e3)));
 			O = t, i.info.reset(), M(y), h.begin(r ?? void 0);
 			try {
-				ab(i, y, b, a, o), A += 1, N.render(A, e.width, e.height, t);
+				ab(i, y, b, a, o, N.ownsPrimaryOutput()), A += 1, N.render(A, e.width, e.height, t);
 			} catch (e) {
 				throw h.aborted(), e;
 			}

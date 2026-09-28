@@ -253,6 +253,11 @@ export class RendererViewCompositionBackend {
     applyRendererThreeCameraPose(this.#observer, pose);
   }
 
+  /** Primary views draw the whole primary canvas; the fallback world pass is skipped. */
+  ownsPrimaryOutput(): boolean {
+    return !this.#disposed && this.#composition.views.some((view) => view.target.kind === 'primary');
+  }
+
   render(submission: number, primaryWidth: number, primaryHeight: number, timeMs = this.#now()): void {
     if (this.#disposed || this.#composition.views.length === 0) return;
 
