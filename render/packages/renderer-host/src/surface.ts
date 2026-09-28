@@ -163,8 +163,7 @@ export type RendererSurfaceAutomaticSubmissionPacingState =
   | 'disposed'
   | 'idle'
   | 'measuring'
-  | 'ready'
-  | 'waiting';
+  | 'ready';
 
 export type RendererSurfaceAutomaticSubmissionClass =
   | 'accelerated'
@@ -179,9 +178,7 @@ export interface RendererSurfaceAutomaticSubmissionPacingSample {
   readonly rendererClass: RendererSurfaceAutomaticSubmissionClass;
   readonly timerDurationMs: number | null;
   readonly completionAgeMs: number | null;
-  readonly completionAllowanceMs: number;
   readonly effectiveDurationMs: number | null;
-  readonly targetDutyFraction: number | null;
   readonly admittedAtMs: number | null;
   readonly admissionObservedAtMs: number | null;
   readonly observedAtMs: number | null;
@@ -1048,10 +1045,9 @@ function mountPreparedRendererSurface(
         continuousDemand(),
       );
       const demandObservedAtMs = surfaceTimingNow();
-      // Completion observation must continue while the scene is idle. If we
-      // wait for new demand, software/fallback pacing mistakes the entire idle
-      // interval for GPU work and delays the next visible change by seconds.
-      const ready = backendSurface.automaticSubmissionReady(timeMs);
+      // Completion observation continues while the scene is idle so the
+      // fence and GPU timing measurements stay current.
+      const ready = backendSurface.automaticSubmissionReady();
       const backendReadinessObservedAtMs = surfaceTimingNow();
       const backendPacing = backendSurface.automaticSubmissionPacing();
       if (!demand.shouldSubmit) {

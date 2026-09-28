@@ -66,7 +66,8 @@ void test('host admission observation separates demand backend blocks and admiss
   });
   observation.record(32, 'backendBlocked', DEMAND, {
     ...BACKEND,
-    state: 'waiting',
+    state: 'measuring',
+    pendingSubmissionCount: 8,
   }, {
     ...CALLBACK,
     controlsUpdatedAtMs: null,
@@ -109,7 +110,7 @@ void test('host admission observation separates demand backend blocks and admiss
     ]),
     [
       [1, 16, 'noDemand', 'ready'],
-      [2, 32, 'backendBlocked', 'waiting'],
+      [2, 32, 'backendBlocked', 'measuring'],
       [3, 48, 'admitted', 'ready'],
     ],
   );

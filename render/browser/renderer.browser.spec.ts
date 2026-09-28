@@ -145,10 +145,7 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(['accelerated', 'software', 'unknown'])
     .toContain(proof.automaticSubmissionPacing.rendererClass);
   expect(proof.automaticSubmissionPacing.completionAgeMs).toBeGreaterThanOrEqual(0);
-  expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBeGreaterThanOrEqual(0);
   expect(proof.automaticSubmissionPacing.effectiveDurationMs).toBeGreaterThanOrEqual(0);
-  expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeGreaterThanOrEqual(0.2);
-  expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeLessThanOrEqual(0.5);
   expect(proof.automaticSubmissionPacing.admittedAtMs).toBeGreaterThanOrEqual(0);
   expect(proof.automaticSubmissionPacing.observedAtMs).toBeGreaterThanOrEqual(0);
   expect(proof.automaticSubmissionPacing.automaticSubmissionCapacity)
@@ -210,14 +207,9 @@ test('shared host realizes retained, presentation, and inspection families in a 
     expect(proof.automaticSubmissionSourceTimesMs[index]).toBeGreaterThanOrEqual(0);
   }
   if (proof.automaticSubmissionPacing.rendererClass === 'software') {
-    expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBe(0);
     expect(proof.rendererBufferPixelRatio[0]).toBeCloseTo(0.25);
     expect(proof.rendererBufferPixelRatio[1]).toBeCloseTo(0.25);
-    for (const interval of proof.automaticSubmissionIntervalsMs.slice(1)) {
-      expect(interval).toBeGreaterThanOrEqual(50);
-    }
   } else {
-    expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBe(17);
     expect(proof.rendererBufferPixelRatio[0]).toBeCloseTo(1);
     expect(proof.rendererBufferPixelRatio[1]).toBeCloseTo(1);
   }

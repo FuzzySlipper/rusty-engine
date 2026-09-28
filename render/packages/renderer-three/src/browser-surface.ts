@@ -287,11 +287,10 @@ export interface RendererBrowserSurface {
   readonly pick: (request: RendererBrowserSurfacePickRequest) => RendererBrowserSurfacePickReceipt;
   readonly snapshot: () => string;
   /**
-   * Internal automatic-loop readiness. A supplied RAF source time is consumed
-   * by the immediately following renderOnce; explicit rendering remains
-   * unconditional.
+   * Internal automatic-loop readiness: false only while the completion fence
+   * is full. Explicit rendering remains unconditional.
    */
-  readonly automaticSubmissionReady: (sourceTimeMs?: number) => boolean;
+  readonly automaticSubmissionReady: () => boolean;
   /** Immutable backend pacing state and latest completed admission decision. */
   readonly automaticSubmissionPacing:
     () => RendererBrowserSurfaceAutomaticSubmissionPacingSample;
@@ -461,7 +460,6 @@ export function mountRendererBrowserSurface(
   let currentCameraBasis = options.camera?.initialBasis ?? null;
 
   let animationFrame: number | null = null;
-  let automaticSubmissionSourceTimeMs: number | null = null;
   let lastRenderTimeMs: number | null = null;
   let logicalViewport = { width: 0, height: 0 };
   let submissionSequence = 0;
@@ -529,8 +527,6 @@ export function mountRendererBrowserSurface(
     elapsedSeconds?: number,
   ): RendererBrowserSurfaceSubmissionStatistics => {
     if (disposed) throw new Error('renderer browser surface is disposed');
-    const submissionSourceTimeMs = automaticSubmissionSourceTimeMs;
-    automaticSubmissionSourceTimeMs = null;
     resize();
     const deltaSeconds = elapsedSeconds ?? (
       lastRenderTimeMs === null
@@ -539,7 +535,7 @@ export function mountRendererBrowserSurface(
     lastRenderTimeMs = timeMs;
     webgl.info.reset();
     prepareGhostPlates(camera);
-    gpuSubmissionDuty.begin(submissionSourceTimeMs ?? undefined);
+    gpuSubmissionDuty.begin();
     try {
       renderBrowserSurfaceFrame(
         webgl,
@@ -565,27 +561,17 @@ export function mountRendererBrowserSurface(
     });
   };
 
-  const automaticSubmissionReady = (sourceTimeMs?: number): boolean => {
-    automaticSubmissionSourceTimeMs = null;
-    // Poll both completion owners independently. Accelerated WebGL2 may keep a
-    // small exact timer-query ring so delayed browser observability cannot
-    // become a frame-rate cap; a sync-fence ring adds another bound where
-    // available. Timer failure immediately restores a strict single-slot
-    // limit; software and unknown renderers never enter the ring.
-    const dutyReady = gpuSubmissionDuty.ready(sourceTimeMs);
-    const fenceReady = gpuSubmissionFence.ready(
+  const automaticSubmissionReady = (): boolean => {
+    // GPU timing is measured for diagnostics only; it never paces submission.
+    // The completion fence bounds queued work to real GPU completion: a small
+    // ring where timer queries make completion observable on accelerated
+    // WebGL2, otherwise one submission in flight.
+    gpuSubmissionDuty.observe();
+    return gpuSubmissionFence.ready(
       gpuSubmissionDuty.sample().mode === 'timerQuery'
         ? selectedAutomaticSubmissionCapacity
         : 1,
     );
-    const ready = fenceReady && dutyReady;
-    if (ready
-      && sourceTimeMs !== undefined
-      && Number.isFinite(sourceTimeMs)
-      && sourceTimeMs >= 0) {
-      automaticSubmissionSourceTimeMs = sourceTimeMs;
-    }
-    return ready;
   };
 
   const projectWorldPoint = (
@@ -604,7 +590,7 @@ export function mountRendererBrowserSurface(
     // Keep exactly one RAF queued before this callback touches WebGL so the
     // browser can schedule the successor independently of submission work.
     animationFrame = globalThis.requestAnimationFrame(tick);
-    if (automaticSubmissionReady(timeMs)) {
+    if (automaticSubmissionReady()) {
       renderOnce(timeMs);
     }
   };
@@ -618,7 +604,6 @@ export function mountRendererBrowserSurface(
   };
 
   const stop = (): void => {
-    automaticSubmissionSourceTimeMs = null;
     if (animationFrame === null) {
       return;
     }
