@@ -320,12 +320,6 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput | {
     readonly jobs: readonly RenderOutputJob[];
     readonly rendererResources?: readonly string[];
 }
-/** Fixed host evidence that one Rust-owned realtime advance was accepted. */
- | {
-    readonly kind: 'runtime-progress';
-    readonly owner: 'rust-host';
-    readonly rendererResources?: readonly string[];
-}
 /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
  | {
     readonly kind: 'runtime-input-result';
@@ -360,10 +354,9 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput | {
     readonly rendererResources?: readonly string[];
 };
 /**
- * Buffers semantic runtime outputs while the renderer is mounting. Realtime
- * progress is only a liveness pulse and has no state to replay once the host
- * becomes ready; runtime readouts are snapshots, so only the newest one is
- * useful. Retained presentation outputs preserve their original ordering.
+ * Buffers semantic runtime outputs while the renderer is mounting. Runtime
+ * readouts are snapshots, so only the newest one is useful. Retained
+ * presentation outputs preserve their original ordering.
  *
  * @internal
  */
@@ -405,6 +398,7 @@ export interface ProductBrowserAttachmentEvidence {
 export interface ProductBrowserDiagnosticsReport {
     readonly attachment?: ProductBrowserAttachmentEvidence;
     readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
+    /** Accepted browser-owned realtime advances; stays zero when the Rust host owns the clock. */
     readonly runtimeProgress: string;
     readonly transportState: 'open' | 'closed';
     readonly outputState: 'open' | 'closed';
@@ -645,15 +639,13 @@ export declare function createProductBrowserProductFrameObservation(now?: () => 
     readonly applied: (receivedAtMs: number) => void;
     readonly sample: () => ProductBrowserProductFrameObservationSample;
 };
-/** @internal One batch boundary produces no more than one host-cadence wake. */
-export declare function productBrowserOutputBatchNeedsRustHostPulse(outputs: readonly ProductBrowserRuntimeOutput[]): boolean;
 /** @internal Applies stable browser health attributes without redundant writes. */
 export declare function syncProductBrowserHealthDatasets(roots: readonly Pick<HTMLElement, 'dataset'>[], values: {
     readonly state: ProductBrowserHostReadout['state'];
     readonly mode: ProductBrowserRuntimeMode;
     readonly progress: string;
     readonly failure: string | null;
-}, writeProgress: boolean): void;
+}): void;
 /** @internal Coalesces diagnostics work from the existing renderer cadence without owning a loop. */
 export declare function createProductBrowserRendererDiagnosticsCadenceSampler(options: {
     readonly enqueueOperation: ProductBrowserOperationQueue['enqueue'];

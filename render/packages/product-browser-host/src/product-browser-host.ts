@@ -315,8 +315,6 @@ export interface ProductBrowserRuntimeBindingOutput {
 export type ProductBrowserRuntimeOutput =
   | ProductBrowserRuntimeBindingOutput
   | { readonly kind: 'render-output'; readonly jobs: readonly RenderOutputJob[]; readonly rendererResources?: readonly string[] }
-  /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
-  | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host'; readonly rendererResources?: readonly string[] }
   /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
   | {
       readonly kind: 'runtime-input-result';
@@ -344,10 +342,9 @@ export type ProductBrowserRuntimeOutput =
   | { readonly kind: 'renderer-resources'; readonly rendererResources?: readonly string[] };
 
 /**
- * Buffers semantic runtime outputs while the renderer is mounting. Realtime
- * progress is only a liveness pulse and has no state to replay once the host
- * becomes ready; runtime readouts are snapshots, so only the newest one is
- * useful. Retained presentation outputs preserve their original ordering.
+ * Buffers semantic runtime outputs while the renderer is mounting. Runtime
+ * readouts are snapshots, so only the newest one is useful. Retained
+ * presentation outputs preserve their original ordering.
  *
  * @internal
  */
@@ -356,7 +353,6 @@ export function bufferProductBrowserPreMountOutput(
   output: ProductBrowserRuntimeOutput,
   maximumPendingOutputs: number,
 ): boolean {
-  if (output.kind === 'runtime-progress') return true;
   if (output.kind === 'runtime-readout'
     || output.kind === 'view-composition'
     || output.kind === 'animation-cue-definitions') {
@@ -429,6 +425,7 @@ export interface ProductBrowserAttachmentEvidence {
 export interface ProductBrowserDiagnosticsReport {
   readonly attachment?: ProductBrowserAttachmentEvidence;
   readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
+  /** Accepted browser-owned realtime advances; stays zero when the Rust host owns the clock. */
   readonly runtimeProgress: string;
   readonly transportState: 'open' | 'closed';
   readonly outputState: 'open' | 'closed';
@@ -1234,13 +1231,6 @@ export function createProductBrowserProductFrameObservation(
   return Object.freeze({ received, applied, sample });
 }
 
-/** @internal One batch boundary produces no more than one host-cadence wake. */
-export function productBrowserOutputBatchNeedsRustHostPulse(
-  outputs: readonly ProductBrowserRuntimeOutput[],
-): boolean {
-  return outputs.some((output) => output.kind === 'runtime-progress' || output.kind === 'runtime-readout');
-}
-
 /** @internal Applies stable browser health attributes without redundant writes. */
 export function syncProductBrowserHealthDatasets(
   roots: readonly Pick<HTMLElement, 'dataset'>[],
@@ -1250,7 +1240,6 @@ export function syncProductBrowserHealthDatasets(
     readonly progress: string;
     readonly failure: string | null;
   },
-  writeProgress: boolean,
 ): void {
   for (const root of roots) {
     if (root.dataset['rustyProductHostState'] !== values.state) {
@@ -1259,7 +1248,7 @@ export function syncProductBrowserHealthDatasets(
     if (root.dataset['rustyProductRuntimeMode'] !== values.mode) {
       root.dataset['rustyProductRuntimeMode'] = values.mode;
     }
-    if (writeProgress && root.dataset['rustyProductRuntimeProgress'] !== values.progress) {
+    if (root.dataset['rustyProductRuntimeProgress'] !== values.progress) {
       root.dataset['rustyProductRuntimeProgress'] = values.progress;
     }
     if (values.failure === null) {
@@ -1426,8 +1415,6 @@ export async function mountProductBrowserHostWithApplication(
   let recoverableClockDiagnosticReported = false;
   let rendererDiagnosticsFailure: string | null = null;
   let rendererDiagnosticsFailureReported = false;
-  let lastProgressDomWriteAtMs = Number.NEGATIVE_INFINITY;
-  const progressDomWriteIntervalMs = 250;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let videoFeedbackReporter: ProductBrowserVideoFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
@@ -1506,19 +1493,15 @@ export async function mountProductBrowserHostWithApplication(
   const publishHealth = (
     reportToTransport = true,
     pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[] = [],
-    forceProgress = true,
   ): void => {
     const document = options.root.ownerDocument;
     const roots = [options.root, document.body].filter((root): root is HTMLElement => root !== null);
-    const now = Date.now();
-    const writeProgress = forceProgress || now - lastProgressDomWriteAtMs >= progressDomWriteIntervalMs;
     syncProductBrowserHealthDatasets(roots, {
       state,
       mode: options.lifecycleMode,
       progress: String(runtimeProgress),
       failure: (failure ?? recoveryFailure) === null ? null : boundedDiagnostic((failure ?? recoveryFailure)!.message),
-    }, writeProgress);
-    if (writeProgress) lastProgressDomWriteAtMs = now;
+    });
     if (!reportToTransport && pageEvents.length === 0) return;
     const terminal = failure === null
       ? undefined
@@ -1558,7 +1541,7 @@ export async function mountProductBrowserHostWithApplication(
     {
       const age = lastRendererObservationAtMs === null
         ? undefined
-        : String(Math.max(0, now - lastRendererObservationAtMs));
+        : String(Math.max(0, Date.now() - lastRendererObservationAtMs));
       const report = Object.freeze({
         hostState,
         runtimeProgress: String(runtimeProgress),
@@ -1974,21 +1957,6 @@ export async function mountProductBrowserHostWithApplication(
           host.uiProjection?.bindRuntime(output.runtime);
           enqueueRendererOutput(() => admitOutputResources(host, output));
           return;
-        case 'runtime-progress':
-          if (options.lifecycleMode !== 'realtime' || realtimeAdvanceOwner !== 'rust-host') {
-            throw new ProductBrowserHostError(
-              'output_failed',
-              'Rust-host realtime progress is unavailable for this Product Browser Host mode',
-            );
-          }
-          if (output.owner !== 'rust-host') {
-            throw new ProductBrowserHostError('output_failed', 'runtime progress owner was invalid');
-          }
-          if (started && state === 'ready') {
-            runtimeProgress += 1;
-            publishHealth(false, [], false);
-          }
-          return;
         case 'renderer-resources':
           return;
         case 'runtime-input-result':
@@ -2337,7 +2305,6 @@ export async function mountProductBrowserHostWithApplication(
     }) as RustyApplicationFrame;
     renderOutputJobs.clear();
     const retainedOutputs = outputs.filter((output) => output.kind !== 'frame'
-      && output.kind !== 'runtime-progress'
       && output.kind !== 'runtime-input-result');
 
     const replacementEpoch = rendererProjectionEpoch;
@@ -2549,9 +2516,6 @@ export async function mountProductBrowserHostWithApplication(
     if (metadata !== undefined) acceptedProjectionEpoch = Math.max(acceptedProjectionEpoch, metadata.epoch);
     for (const output of outputs) {
       applyOutput(output, metadata?.epoch ?? acceptedProjectionEpoch);
-    }
-    if (productBrowserOutputBatchNeedsRustHostPulse(outputs) && state !== 'failed' && state !== 'disposed') {
-      cadence?.pulseRustHost();
     }
     if (state !== 'failed' && state !== 'disposed' && outputs.length > 0) {
       restoreReadyAfterHealthyTransport();

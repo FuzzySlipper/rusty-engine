@@ -2654,12 +2654,6 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     case 'renderer-resources':
       requireKnownFields(record, ['kind', 'rendererResources'], 'renderer resources output');
       return { kind: 'renderer-resources', ...optionalRendererResources(record) };
-    case 'runtime-progress':
-      requireKnownFields(record, ['kind', 'owner', 'rendererResources'], 'runtime progress output');
-      if (record['owner'] !== 'rust-host') {
-        throw new TypeError('runtime progress owner is invalid');
-      }
-      return { kind: 'runtime-progress', owner: 'rust-host', ...optionalRendererResources(record) };
     case 'runtime-input-result':
       requireKnownFields(record, ['kind', 'result', 'rendererResources'], 'runtime input result output');
       return {

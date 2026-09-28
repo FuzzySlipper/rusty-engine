@@ -1414,6 +1414,25 @@ impl ProductDevRuntimeReadout {
     pub const fn mode(&self) -> ProductDevRuntimeMode {
         self.mode
     }
+
+    /// Whether a browser holding `previous` needs this readout. Identity,
+    /// mode, state, fault and inspection time always count. Step counters
+    /// count only while inspection time is not realtime, where the browser
+    /// derives held simulation time from them. Per-tick counters and clock
+    /// samples otherwise stay with live debug (`engine.time`).
+    pub fn changes_browser_view(&self, previous: &Self) -> bool {
+        let held_steps = self
+            .inspection_time
+            .as_ref()
+            .is_some_and(|(mode, _)| mode != "realtime")
+            && self.admitted_simulation_steps != previous.admitted_simulation_steps;
+        held_steps
+            || self.inspection_time != previous.inspection_time
+            || self.runtime != previous.runtime
+            || self.mode != previous.mode
+            || self.state != previous.state
+            || self.fault != previous.fault
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2464,12 +2483,6 @@ enum ProductDevRuntimeOutputWire {
     RuntimeInputResult {
         result: ProductDevInputResult,
     },
-    /// One host-owned realtime observation was admitted. This is a progress
-    /// pulse, not a simulation step count; the accompanying readout carries
-    /// authoritative counters when the runtime supplies one.
-    RuntimeProgress {
-        owner: String,
-    },
 }
 
 /// Closed renderer realization families for a sampled animation marker.
@@ -2757,11 +2770,12 @@ impl ProductDevRuntimeOutput {
             }
             ProductDevRuntimeOutputWire::RendererResources
             | ProductDevRuntimeOutputWire::RuntimeReadout { .. }
-            | ProductDevRuntimeOutputWire::RuntimeInputResult { .. }
-            | ProductDevRuntimeOutputWire::RuntimeProgress { .. } => Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_LOGICAL_VARIANT",
-                "host-only runtime observation cannot become an Engine publication",
-            )),
+            | ProductDevRuntimeOutputWire::RuntimeInputResult { .. } => {
+                Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_LOGICAL_VARIANT",
+                    "host-only runtime observation cannot become an Engine publication",
+                ))
+            }
         }
     }
 
@@ -2925,17 +2939,6 @@ impl ProductDevRuntimeOutput {
         }
     }
 
-    /// Marks one realtime observation admitted by the Rust host scheduler.
-    /// Browser hosts use this to update progress without becoming the clock.
-    pub fn runtime_progress() -> Self {
-        Self {
-            renderer_resources: None,
-            resources: Default::default(),
-            wire: ProductDevRuntimeOutputWire::RuntimeProgress {
-                owner: "rust-host".to_owned(),
-            },
-        }
-    }
     /// Marks the end of one complete current-binding projection. The host
     /// buffers its preceding binding-tagged facts and exposes them together;
     /// later facts for that binding are incremental.
@@ -3986,8 +3989,55 @@ mod tests {
     }
 
     #[test]
+    fn readouts_change_the_browser_view_only_on_lifecycle_facts_or_held_steps() {
+        let binding = ProductDevRuntimeBinding {
+            instance_id: CanonicalU64::new(7),
+            generation: CanonicalU64::new(1),
+            control_revision: CanonicalU64::new(1),
+        };
+        let running = |steps: u64| {
+            ProductDevRuntimeReadout::new(
+                binding,
+                ProductDevRuntimeMode::Realtime,
+                ProductDevRuntimeState::Running,
+            )
+            .with_counters(steps, steps, 0, 0)
+            .with_clock(Some(3), Some(steps * 16_666_667))
+            .with_inspection_time("realtime".to_owned(), 60)
+        };
+        assert!(!running(2).changes_browser_view(&running(1)));
+        let paused = ProductDevRuntimeReadout {
+            state: ProductDevRuntimeState::Paused,
+            ..running(2)
+        };
+        assert!(paused.changes_browser_view(&running(1)));
+        let rebound = ProductDevRuntimeReadout {
+            runtime: ProductDevRuntimeBinding {
+                control_revision: CanonicalU64::new(2),
+                ..binding
+            },
+            ..running(2)
+        };
+        assert!(rebound.changes_browser_view(&running(1)));
+        let held = |steps: u64| running(steps).with_inspection_time("manual".to_owned(), 60);
+        assert!(held(1).changes_browser_view(&running(1)));
+        assert!(held(2).changes_browser_view(&held(1)));
+        assert!(!held(2).changes_browser_view(&held(2)));
+    }
+
+    #[test]
     fn host_observations_do_not_enter_the_logical_publication_model() {
-        let error = ProductDevRuntimeOutput::runtime_progress()
+        let binding = ProductDevRuntimeBinding {
+            instance_id: CanonicalU64::new(7),
+            generation: CanonicalU64::new(1),
+            control_revision: CanonicalU64::new(1),
+        };
+        let readout = ProductDevRuntimeReadout::new(
+            binding,
+            ProductDevRuntimeMode::Realtime,
+            ProductDevRuntimeState::Running,
+        );
+        let error = ProductDevRuntimeOutput::runtime_readout(readout)
             .into_publication()
             .expect_err("host progress is not an Engine publication");
         assert_eq!(error.code(), "DEV_HOST_OUTPUT_LOGICAL_VARIANT");
@@ -4055,7 +4105,7 @@ mod tests {
                 ProductDevRuntimeOutput::binding(binding, CanonicalU64::new(0)),
                 large,
                 ProductDevRuntimeOutput::complete_baseline(binding),
-                ProductDevRuntimeOutput::runtime_progress(),
+                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
             ])
             .expect("a bounded recovery baseline may share publication with following ticks"),
             None,

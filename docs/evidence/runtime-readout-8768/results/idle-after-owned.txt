@@ -1,0 +1,10 @@
+== after-owned SSE bytes by batch kind, 10 s idle, one subscriber
+  594 events    207702 bytes  runtime-output-batch:frame,ui-projection
+    1 events     15974 bytes  runtime-output-batch:presentation,presentation,presentation,presentation,presentation,presentation,frame,frame,frame,ui-projection,presentation
+    1 events     11905 bytes  runtime-output-batch:presentation,frame,frame,ui-projection,presentation
+    1 events      4589 bytes  runtime-output-batch:binding,frame,animation-cue-definitions,view-composition,ui-projection,presentation,render-output
+    1 events      2558 bytes  runtime-output-batch:frame,frame,presentation,frame,frame,ui-projection,presentation,renderer-resources
+    2 events       900 bytes  runtime-output-batch:runtime-readout
+    1 events       609 bytes  rusty-output-baseline
+== after-owned CPU
+{"processes":2,"cpuPercentOfOneCore":1.4}

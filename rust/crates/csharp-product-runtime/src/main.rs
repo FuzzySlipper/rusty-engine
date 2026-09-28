@@ -2452,7 +2452,6 @@ fn worker_scheduler(
                         outputs.extend(publications);
                     }
                     outputs.extend(update_outputs);
-                    outputs.push(ProductDevRuntimeOutput::runtime_progress());
                     worker_output_values(outputs)
                 };
                 let outputs = match encoded_outputs {
@@ -4460,13 +4459,13 @@ mod tests {
                 "runtime": runtime,
                 "nextInputSequence": "0",
             }),
-            frame,
+            frame.clone(),
             serde_json::json!({
                 "kind": "complete-baseline",
                 "runtime": runtime,
                 "publicationFrontiers": [],
             }),
-            serde_json::json!({ "kind": "runtime-progress", "owner": "rust-host" }),
+            frame,
         ])
         .expect("worker admits a bounded baseline followed by ordinary tick output");
     }
@@ -4632,7 +4631,7 @@ mod tests {
             )
         });
         let output = ProductDevWorkerEvent::Outputs {
-            outputs: vec![serde_json::json!({ "kind": "runtime-progress", "owner": "rust-host" })],
+            outputs: Vec::new(),
         };
         write_worker_frame(&mut child, &output).unwrap();
         write_worker_frame(

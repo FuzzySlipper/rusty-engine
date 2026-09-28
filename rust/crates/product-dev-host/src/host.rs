@@ -225,6 +225,7 @@ impl ProductDevHost {
             projection_epoch: Arc::clone(&projection_epoch),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
+            published_readout: Mutex::new(None),
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let worker_outputs = config.worker_outputs;
@@ -607,6 +608,9 @@ struct HostState<R> {
     projection_epoch: Arc<AtomicU64>,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
+    /// The last readout put on the output stream. Readouts are published
+    /// only when they change what a browser shows, not every tick.
+    published_readout: Mutex<Option<crate::ProductDevRuntimeReadout>>,
 }
 
 fn elapsed_microseconds(started: Instant) -> u64 {
@@ -1237,6 +1241,27 @@ fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
     }
 }
 
+/// Returns a readout output when `readout` changes what a browser shows
+/// relative to the last published one, and records it as published.
+fn changed_readout<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    readout: Option<&crate::ProductDevRuntimeReadout>,
+) -> Option<ProductDevRuntimeOutput> {
+    let readout = readout?;
+    let mut published = state
+        .published_readout
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if published
+        .as_ref()
+        .is_some_and(|previous| !readout.changes_browser_view(previous))
+    {
+        return None;
+    }
+    *published = Some(readout.clone());
+    Some(ProductDevRuntimeOutput::runtime_readout(readout.clone()))
+}
+
 fn publish_scheduled_receipt<R: ProductDevRuntime>(
     state: &HostState<R>,
     receipt: crate::ProductDevRuntimeReceipt<ProductDevOperationResult>,
@@ -1261,13 +1286,15 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
             return;
         }
     };
-    if let Some(readout) = result.readout().cloned() {
-        outputs.push(ProductDevRuntimeOutput::runtime_readout(readout));
+    if let Some(readout) = changed_readout(state, result.readout()) {
+        outputs.push(readout);
     }
-    outputs.push(ProductDevRuntimeOutput::runtime_progress());
+    if outputs.is_empty() {
+        return;
+    }
     // Before a browser has attached there is no active output binding to
     // publish against. A later fresh SSE connection receives its own complete
-    // baseline, so dropping these pre-attachment progress pulses is safe.
+    // baseline and current readout, so dropping these outputs is safe.
     let active = state
         .outputs
         .lock()
@@ -1837,10 +1864,8 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                         ));
                     }
                 };
-                if let Some(readout) = result.readout() {
-                    outputs.push(crate::ProductDevRuntimeOutput::runtime_readout(
-                        readout.clone(),
-                    ));
+                if let Some(readout) = changed_readout(state, result.readout()) {
+                    outputs.push(readout);
                 }
                 let output_through = match push_host_outputs(state, outputs) {
                     Ok(output_through) => output_through,
@@ -2695,7 +2720,7 @@ fn handle_sse<R: ProductDevRuntime>(
                     let result = runtime.connect();
                     let receipt = state.runtime.finish_call(runtime, result)?;
                     let connection_output_cursor = receipt.connection_output_cursor();
-                    let (result, outputs) = match receipt.into_wire_parts() {
+                    let (result, mut outputs) = match receipt.into_wire_parts() {
                         Ok(parts) => parts,
                         Err(error) => {
                             return Ok(Err(HttpResponse::error(
@@ -2705,6 +2730,11 @@ fn handle_sse<R: ProductDevRuntime>(
                             )));
                         }
                     };
+                    // Readouts are published on change, so a fresh
+                    // subscriber starts from the current one.
+                    if let Some(readout) = result.readout() {
+                        outputs.push(ProductDevRuntimeOutput::runtime_readout(readout.clone()));
+                    }
                     // A connection baseline is subscriber-private. Keep its
                     // complete bounded resource set even when its fragment
                     // count exceeds the reconnect ring; public history may
@@ -3918,6 +3948,7 @@ mod tests {
             projection_epoch: Arc::new(AtomicU64::new(0)),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
+            published_readout: Mutex::new(None),
         });
         let (held, held_ready) = std::sync::mpsc::channel();
         let (release, release_owner) = std::sync::mpsc::channel();
@@ -3973,8 +4004,8 @@ mod tests {
         .unwrap();
         let identity = resource.identity().to_owned();
         let weak = Arc::downgrade(&resource.shared_bytes());
-        let output =
-            ProductDevRuntimeOutput::runtime_progress().with_resources(vec![resource].into());
+        let output = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({}))
+            .with_resources(vec![resource].into());
         let encoded_worker = output.to_worker_value().unwrap();
         assert!(encoded_worker.get("__retiredResources").is_some());
         let decoded_worker = ProductDevRuntimeOutput::from_worker_value(encoded_worker).unwrap();
@@ -4001,7 +4032,9 @@ mod tests {
         append_output_events(
             &mut bus,
             binding(),
-            vec![ProductDevRuntimeOutput::runtime_progress()],
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({}),
+            )],
         )
         .unwrap();
         assert!(bus
@@ -4019,7 +4052,9 @@ mod tests {
         append_output_events(
             &mut bus,
             binding(),
-            vec![ProductDevRuntimeOutput::runtime_progress()],
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({}),
+            )],
         )
         .unwrap();
         let snapshot = bus.after(0);
@@ -4028,7 +4063,9 @@ mod tests {
         append_output_events(
             &mut bus,
             binding(),
-            vec![ProductDevRuntimeOutput::runtime_progress()],
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({}),
+            )],
         )
         .unwrap();
         assert_eq!(bus.floor_cursor, 1);
@@ -4127,7 +4164,7 @@ mod tests {
             &mut bus,
             vec![
                 crate::model::ProductDevRuntimeOutput::binding(paused, CanonicalU64::new(5)),
-                crate::model::ProductDevRuntimeOutput::runtime_progress(),
+                crate::model::ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
                 crate::model::ProductDevRuntimeOutput::complete_baseline(paused),
             ],
         )
@@ -4138,7 +4175,7 @@ mod tests {
         assert_eq!(value["kind"], "runtime-output-batch");
         assert_eq!(value["outputs"][0]["kind"], "binding");
         assert_eq!(value["outputs"][0]["runtime"]["controlRevision"], "3");
-        assert_eq!(value["outputs"][1]["kind"], "runtime-progress");
+        assert_eq!(value["outputs"][1]["kind"], "frame");
         assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
     }
 
@@ -4158,7 +4195,7 @@ mod tests {
                         crate::model::ProductDevRuntimeState::Running,
                     ),
                 ),
-                crate::model::ProductDevRuntimeOutput::runtime_progress(),
+                crate::model::ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
             ],
         )
         .expect("receipt batch publishes");
@@ -4167,7 +4204,7 @@ mod tests {
         assert_eq!(value["kind"], "runtime-output-batch");
         assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
         assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
-        assert_eq!(value["outputs"][1]["kind"], "runtime-progress");
+        assert_eq!(value["outputs"][1]["kind"], "frame");
     }
 
     #[test]
@@ -4244,20 +4281,18 @@ mod tests {
                 .with_counters(tick + 1, 0, 0, 0)
                 .with_clock(None, Some(tick + 1)),
             ),
-            ProductDevRuntimeOutput::runtime_progress(),
         ]
     }
 
     #[test]
     fn sixty_hertz_receipts_retain_one_sse_event_and_json_parse_per_receipt() {
         const RECEIPTS: usize = 60;
-        const OUTPUTS_PER_RECEIPT: usize = 5;
+        const OUTPUTS_PER_RECEIPT: usize = 4;
         let expected_kinds = [
             "frame",
             "view-composition",
             "ui-projection",
             "runtime-readout",
-            "runtime-progress",
         ];
         let mut bus = OutputBus {
             active_binding: Some(binding()),
@@ -4303,8 +4338,8 @@ mod tests {
         );
         assert_eq!(
             RECEIPTS * OUTPUTS_PER_RECEIPT,
-            300,
-            "the old one-callback-per-output stream would deliver about 300 outputs",
+            240,
+            "the old one-callback-per-output stream would deliver about 240 outputs",
         );
         assert!(
             sse_delivery_callbacks < RECEIPTS * OUTPUTS_PER_RECEIPT,
@@ -4476,7 +4511,7 @@ mod tests {
         let error = push_outputs(
             &bus,
             vec![
-                ProductDevRuntimeOutput::runtime_progress(),
+                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
                 ProductDevRuntimeOutput::binding(replacement_runtime, CanonicalU64::new(0)),
                 ProductDevRuntimeOutput::binding(replacement_runtime, CanonicalU64::new(0)),
             ],
@@ -4522,7 +4557,9 @@ mod tests {
         append_output_events(
             &mut bus,
             binding(),
-            vec![ProductDevRuntimeOutput::runtime_progress()],
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({}),
+            )],
         )
         .unwrap();
         assert_eq!(bus.floor_cursor, 0);
@@ -4533,7 +4570,9 @@ mod tests {
             append_output_events(
                 &mut bus,
                 binding(),
-                vec![ProductDevRuntimeOutput::runtime_progress()],
+                vec![ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({}),
+                )],
             )
             .unwrap();
         }

@@ -302,12 +302,6 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
   malformed.id = 'product-unbounded-terminal-failure';
   malformed.textContent = 'Simulate invalid terminal failure';
   malformed.addEventListener('click', emitUnboundedTerminalFailure);
-  const fakeProgress = document.createElement('button');
-  fakeProgress.id = 'product-fake-rust-progress';
-  fakeProgress.textContent = 'Simulate fake Rust progress';
-  fakeProgress.addEventListener('click', () => {
-    emit({ kind: 'runtime-progress', owner: 'rust-host' });
-  });
   const scheduledInputResult = document.createElement('button');
   scheduledInputResult.id = 'product-runtime-input-result';
   scheduledInputResult.textContent = 'Emit scheduled input result';
@@ -378,7 +372,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
       root.append(disposedState);
     });
   });
-  ui.append(button, projection, state, lag, malformed, fakeProgress, scheduledInputResult, dispose);
+  ui.append(button, projection, state, lag, malformed, scheduledInputResult, dispose);
   uiRoot.append(ui);
 };
 void mountProductBrowserHost({

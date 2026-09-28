@@ -592,22 +592,6 @@ for (const cursor of ['', '5', '50000']) {
 
 }
 
-test('local transport decodes Rust-host realtime progress output', () => {
-  FakeEventSource.instances.length = 0;
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-  });
-  const outputs: unknown[] = [];
-  const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
-  const stream = FakeEventSource.instances[0]!;
-  completeConnectionBaseline(stream);
-  stream.emit({ kind: 'runtime-progress', owner: 'rust-host' }, '1');
-  assert.deepEqual(outputs.at(-1), { kind: 'runtime-progress', owner: 'rust-host' });
-  unsubscribe();
-  adapter.dispose();
-});
-
 test('one runtime output batch is decoded and delivered through one batch callback', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -622,13 +606,13 @@ test('one runtime output batch is decoded and delivered through one batch callba
     kind: 'runtime-output-batch',
     outputs: [
       { kind: 'runtime-readout', readout: READOUT },
-      { kind: 'runtime-progress', owner: 'rust-host' },
+      { kind: 'renderer-resources' },
     ],
   }, '1');
   assert.equal(received.length, 2);
   assert.deepEqual(received[1]?.map((output) => (output as { kind: string }).kind), [
     'runtime-readout',
-    'runtime-progress',
+    'renderer-resources',
   ]);
   unsubscribe?.();
   adapter.dispose();
@@ -709,15 +693,14 @@ test('runtime output UI snapshots retain empty strings and large deep data as de
   adapter.dispose();
 });
 
-test('sixty hertz receipt stream parses once and preserves five-output order per receipt', () => {
+test('sixty hertz receipt stream parses once and preserves four-output order per receipt', () => {
   const TICKS = 60;
-  const OUTPUTS_PER_RECEIPT = 5;
+  const OUTPUTS_PER_RECEIPT = 4;
   const expectedKinds = [
     'frame',
     'view-composition',
     'ui-projection',
     'runtime-readout',
-    'runtime-progress',
   ];
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -781,7 +764,6 @@ test('sixty hertz receipt stream parses once and preserves five-output order per
               lastObservedTimeNs: String(tick + 1),
             },
           },
-          { kind: 'runtime-progress', owner: 'rust-host' },
         ],
       });
     }
@@ -800,8 +782,8 @@ test('sixty hertz receipt stream parses once and preserves five-output order per
   );
   assert.equal(
     TICKS * OUTPUTS_PER_RECEIPT,
-    300,
-    'the old one-callback-per-output stream would deliver about 300 typed outputs',
+    240,
+    'the old one-callback-per-output stream would deliver about 240 typed outputs',
   );
   unsubscribeBatches?.();
   unsubscribeOutputs();
@@ -1152,7 +1134,7 @@ test('ordinary output fragments above 16 MiB publish once after complete ordered
     kind: 'runtime-output-batch',
     outputs: [
       { kind: 'frame', frame: { payload: 'x'.repeat(16 * 1024 * 1024 + 1) } },
-      { kind: 'runtime-progress', owner: 'rust-host' },
+      { kind: 'renderer-resources' },
     ],
   });
   const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
@@ -1166,7 +1148,7 @@ test('ordinary output fragments above 16 MiB publish once after complete ordered
     data,
   }));
   assert.equal(batches.length, 2);
-  assert.deepEqual(batches[1]?.map((output) => (output as { kind: string }).kind), ['frame', 'runtime-progress']);
+  assert.deepEqual(batches[1]?.map((output) => (output as { kind: string }).kind), ['frame', 'renderer-resources']);
   assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 16 * 1024 * 1024 + 1);
   adapter.dispose();
 });
@@ -1208,7 +1190,7 @@ test('private connection baseline admits a bounded resource set beyond the stead
     outputs: [
       { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
       { kind: 'frame', frame: { payload: 'x'.repeat(96 * 1024 * 257) } },
-      ...Array.from({ length: 255 }, () => ({ kind: 'runtime-progress', owner: 'rust-host' })),
+      ...Array.from({ length: 255 }, () => ({ kind: 'renderer-resources' })),
     ],
   });
   const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;

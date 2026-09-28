@@ -32,8 +32,6 @@ export interface ProductBrowserCadence {
    * modes only deliver the input because their scheduling authority remains external.
    */
   readonly pulseInput: (timeMs: number) => void;
-  /** Drains input from one Rust-host runtime output without browser advancement. */
-  readonly pulseRustHost: () => void;
   /** Waits for the current cadence operation and any coalesced follow-up. */
   readonly settle: () => Promise<void>;
   readonly dispose: () => void;
@@ -159,9 +157,6 @@ export function createProductBrowserCadence(
   return Object.freeze({
     enqueue: (timeMs: number): void => enqueue(timeMs),
     pulseInput,
-    pulseRustHost: (): void => {
-      if (dependencies.realtimeAdvanceOwner === 'rust-host') enqueue(0);
-    },
     settle: async (): Promise<void> => {
       while (cadenceInFlight || pendingCadenceTimeMs !== null || pendingInputWakeTimeMs !== null) {
         await lastOperation;

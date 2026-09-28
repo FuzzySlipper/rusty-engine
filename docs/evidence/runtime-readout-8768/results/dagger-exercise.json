@@ -1,0 +1,276 @@
+{
+  "checkpoints": [
+    {
+      "label": "attached",
+      "hostState": "ready",
+      "readout": {
+        "state": "running",
+        "inspectionTime": [
+          "realtime",
+          60
+        ],
+        "steps": "16532",
+        "controlRevision": "1"
+      },
+      "sse": {
+        "messages": 353,
+        "kinds": {
+          "runtime-readout": 1,
+          "frame": 352,
+          "ui-projection": 352
+        }
+      },
+      "inputPosts": 0,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "videos": 1,
+      "mode": "Title",
+      "step": 16892
+    },
+    {
+      "label": "begin-clicked",
+      "hostState": "ready",
+      "readout": {
+        "state": "running",
+        "inspectionTime": [
+          "realtime",
+          60
+        ],
+        "steps": "16532",
+        "controlRevision": "1"
+      },
+      "sse": {
+        "messages": 840,
+        "kinds": {
+          "runtime-readout": 1,
+          "frame": 839,
+          "ui-projection": 839,
+          "runtime-input-result": 2
+        }
+      },
+      "inputPosts": 3,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "videos": 1,
+      "mode": "Title",
+      "step": 17399,
+      "beginInputPosts": 2
+    },
+    {
+      "label": "manual-advanced",
+      "hostState": "ready",
+      "readout": {
+        "state": "running",
+        "inspectionTime": [
+          "manual",
+          60
+        ],
+        "steps": "17451",
+        "controlRevision": "1"
+      },
+      "sse": {
+        "messages": 863,
+        "kinds": {
+          "runtime-readout": 3,
+          "frame": 860,
+          "ui-projection": 860,
+          "runtime-input-result": 2
+        }
+      },
+      "inputPosts": 3,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "videos": 1,
+      "mode": "Title",
+      "step": 17451
+    },
+    {
+      "label": "realtime-again",
+      "hostState": "ready",
+      "readout": {
+        "state": "running",
+        "inspectionTime": [
+          "realtime",
+          60
+        ],
+        "steps": "17451",
+        "controlRevision": "1"
+      },
+      "sse": {
+        "messages": 950,
+        "kinds": {
+          "runtime-readout": 4,
+          "frame": 946,
+          "ui-projection": 946,
+          "runtime-input-result": 2
+        }
+      },
+      "inputPosts": 3,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "videos": 1,
+      "mode": "Title",
+      "step": 17544
+    },
+    {
+      "label": "rebound-k",
+      "hostState": "ready",
+      "readout": {
+        "state": "running",
+        "inspectionTime": [
+          "realtime",
+          60
+        ],
+        "steps": "17451",
+        "controlRevision": "1"
+      },
+      "sse": {
+        "messages": 1250,
+        "kinds": {
+          "runtime-readout": 4,
+          "frame": 1246,
+          "ui-projection": 1245,
+          "runtime-input-result": 14,
+          "binding": 1
+        }
+      },
+      "inputPosts": 15,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "videos": 1,
+      "mode": "Title",
+      "step": 17860
+    },
+    {
+      "label": "restored-w",
+      "hostState": "ready",
+      "readout": {
+        "state": "running",
+        "inspectionTime": [
+          "realtime",
+          60
+        ],
+        "steps": "17860",
+        "controlRevision": "2"
+      },
+      "sse": {
+        "messages": 1543,
+        "kinds": {
+          "runtime-readout": 5,
+          "frame": 1538,
+          "ui-projection": 1536,
+          "runtime-input-result": 26,
+          "binding": 2
+        }
+      },
+      "inputPosts": 27,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "videos": 1,
+      "mode": "Title",
+      "step": 18162
+    }
+  ],
+  "idleFiveSeconds": {
+    "messages": 290,
+    "readouts": 0,
+    "progress": 0
+  },
+  "inspection": {
+    "manual": {
+      "advancedMs": 0,
+      "fixedStepHz": 60,
+      "mode": "manual",
+      "simulationStep": "17421",
+      "worldHeld": true
+    },
+    "manualReadout": {
+      "state": "running",
+      "inspectionTime": [
+        "manual",
+        60
+      ],
+      "steps": "17421",
+      "controlRevision": "1"
+    },
+    "heldStepsOver1500ms": 0,
+    "advance": {
+      "advancedMs": 500,
+      "fixedStepHz": 60,
+      "mode": "manual",
+      "simulationStep": "17451",
+      "worldHeld": true
+    },
+    "advancedReadout": {
+      "state": "running",
+      "inspectionTime": [
+        "manual",
+        60
+      ],
+      "steps": "17451",
+      "controlRevision": "1"
+    },
+    "realtime": {
+      "advancedMs": 0,
+      "fixedStepHz": 60,
+      "mode": "realtime",
+      "simulationStep": "17451",
+      "worldHeld": false
+    },
+    "realtimeReadout": {
+      "state": "running",
+      "inspectionTime": [
+        "realtime",
+        60
+      ],
+      "steps": "17451",
+      "controlRevision": "1"
+    }
+  },
+  "rebind": {
+    "forwardBefore": [
+      "KeyW"
+    ],
+    "forwardAfterK": [
+      "KeyK"
+    ],
+    "forwardRestored": [
+      "KeyW"
+    ],
+    "inputPosts": 24
+  },
+  "liveDebug": {
+    "engineTime": {
+      "advancedMs": 0,
+      "fixedStepHz": 60,
+      "mode": "realtime",
+      "simulationStep": "18178",
+      "worldHeld": false
+    },
+    "runtimeProgressRateMillihertz": "55004",
+    "runtimeProgressAgeMs": "17",
+    "telemetryKeys": [
+      "inFlightOperation",
+      "inFlightAgeMs",
+      "lastProductAdmissionLatencyMs",
+      "lastInputAdmissionLatencyMs",
+      "queuedInputBatches",
+      "queuedInputEvents",
+      "inputBatchCapacity",
+      "oldestInputAgeMs",
+      "inputOverflowPending",
+      "runtimeProgressRateMillihertz",
+      "runtimeProgressAgeMs",
+      "runtimeProgressUnavailableReason",
+      "workerUpdate",
+      "connections",
+      "subscribers",
+      "outputQueueItems",
+      "outputQueueCapacity",
+      "outputQueueFloor",
+      "outputBindingActive",
+      "updateAttribution"
+    ]
+  },
+  "errors": []
+}

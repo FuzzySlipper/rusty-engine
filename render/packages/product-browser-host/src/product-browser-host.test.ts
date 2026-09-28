@@ -12,7 +12,6 @@ import {
   createProductBrowserRendererDiagnosticsCadenceSampler,
   createProductBrowserRendererDiagnosticsReporter,
   createProductBrowserProductFrameObservation,
-  productBrowserOutputBatchNeedsRustHostPulse,
   syncProductBrowserHealthDatasets,
   isDroppedClockRegression,
   productBrowserAtomicReceiptMayContinue,
@@ -47,12 +46,6 @@ test('pre-mount buffering drops liveness pulses and keeps the latest runtime rea
 
   assert.equal(bufferProductBrowserPreMountOutput(
     pending,
-    { kind: 'runtime-progress', owner: 'rust-host' },
-    1,
-  ), true);
-  assert.equal(pending.length, 0);
-  assert.equal(bufferProductBrowserPreMountOutput(
-    pending,
     { kind: 'runtime-readout', readout },
     1,
   ), true);
@@ -72,11 +65,6 @@ test('pre-mount buffering drops liveness pulses and keeps the latest runtime rea
       : null,
     '2',
   );
-  assert.equal(bufferProductBrowserPreMountOutput(
-    pending,
-    { kind: 'runtime-progress', owner: 'rust-host' },
-    1,
-  ), true);
   assert.equal(bufferProductBrowserPreMountOutput(
     pending,
     { kind: 'frame', frame: { sequence: 1, ops: [] } },
@@ -122,30 +110,7 @@ test('rejected atomic frame receipt continues without recording an application',
   assert.deepEqual(observation.sample().recentApplyLatencyMs, []);
 });
 
-test('adjacent readout and progress request one batch-level host wake', () => {
-  assert.equal(productBrowserOutputBatchNeedsRustHostPulse([
-    {
-      kind: 'runtime-readout',
-      readout: {
-        artifact: 'rusty.product.runtime-readout',
-        runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
-        mode: 'realtime',
-        state: 'running',
-        admittedSimulationSteps: '1',
-        admittedPresentations: '1',
-        droppedRealtimeSteps: '0',
-        clockRegressions: '0',
-        scaledRemainder: 0,
-        lastObservedTimeNs: '1',
-        fault: null,
-      },
-    },
-    { kind: 'runtime-progress', owner: 'rust-host' },
-  ]), true);
-  assert.equal(productBrowserOutputBatchNeedsRustHostPulse([]), false);
-});
-
-test('browser health datasets skip stable attributes and passive progress', () => {
+test('browser health datasets skip stable attributes', () => {
   const values: Record<string, string> = {};
   let writes = 0;
   const dataset = new Proxy(values, {
@@ -160,13 +125,11 @@ test('browser health datasets skip stable attributes and passive progress', () =
   }) as DOMStringMap;
   const roots = [{ dataset }];
   const health = { state: 'ready' as const, mode: 'realtime' as const, progress: '1', failure: null };
-  syncProductBrowserHealthDatasets(roots, health, true);
+  syncProductBrowserHealthDatasets(roots, health);
   assert.equal(writes, 3);
-  syncProductBrowserHealthDatasets(roots, health, true);
+  syncProductBrowserHealthDatasets(roots, health);
   assert.equal(writes, 3);
-  syncProductBrowserHealthDatasets(roots, { ...health, progress: '2' }, false);
-  assert.equal(writes, 3);
-  syncProductBrowserHealthDatasets(roots, { ...health, progress: '2' }, true);
+  syncProductBrowserHealthDatasets(roots, { ...health, progress: '2' });
   assert.equal(writes, 4);
 });
 import type {
@@ -1510,14 +1473,13 @@ test('preload mounting preserves deltas after a coalesced complete baseline enve
       }),
       connect: async () => {
         const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
-        // Five raw outputs become three pending outputs: progress is dropped
-        // and the later view snapshot replaces the earlier one.
+        // Four raw outputs become three pending outputs: the later view
+        // snapshot replaces the earlier one.
         publish([
           {
             kind: 'binding', runtime, nextInputSequence: '1',
             publicationFrontiers: [{ stream: 'presentation-world', revision: 7 }],
           },
-          { kind: 'runtime-progress', owner: 'rust-host' },
           { kind: 'view-composition', composition: { revision: 1 } },
           { kind: 'view-composition', composition: { revision: 2 } },
           {
@@ -2411,33 +2373,6 @@ test('realtime owner controls advancement without dropping typed cadence input',
   assert.deepEqual(rustHost.inputBatches, [[input]]);
   assert.deepEqual(rustHost.observedTimes, []);
   assert.deepEqual(rustHost.failures, []);
-});
-
-test('Rust-host output pulse drains typed input without browser advancement', async () => {
-  const input: RustyApplicationRuntimeInputEnvelope = {
-    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
-    sequence: '1',
-    context: 'gameplay.default',
-    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
-  };
-  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
-  const advances: string[] = [];
-  const cadence = createProductBrowserCadence({
-    lifecycleMode: 'realtime',
-    realtimeAdvanceOwner: 'rust-host',
-    isReady: () => true,
-    enqueueOperation: (operation) => operation(),
-    sampleInput: () => [input],
-    sendInput: async (batch) => { batches.push(batch); },
-    advanceRealtime: async (time) => { advances.push(time); },
-    admitDemandStep: async () => undefined,
-    onFailure: (cause) => { assert.fail(String(cause)); },
-  });
-  cadence.pulseRustHost();
-  await cadence.settle();
-  cadence.dispose();
-  assert.deepEqual(batches, [[input]]);
-  assert.deepEqual(advances, []);
 });
 
 test('input availability wakes static realtime and demand admission without a second loop', async () => {

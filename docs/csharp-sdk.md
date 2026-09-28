@@ -1604,7 +1604,7 @@ survival or self-intersection-free output. The patch and its source/license ship
 in the runtime pack's `share/third-party/fidget-mesh` directory.
 Large retained replacements remain ordinary deltas. The host encodes the actual
 batch and fragments it for delivery. Reconnect history ages out whole publications,
-so later progress pulses cannot remove a large transfer's prefix. Worker timing
+so later publications cannot remove a large transfer's prefix. Worker timing
 samples wait behind earlier output when delivery backs up. Complete committed snapshots still serve fresh connections and recovery;
 size alone does not replay/reconstruct the scene or re-enter product callbacks.
 

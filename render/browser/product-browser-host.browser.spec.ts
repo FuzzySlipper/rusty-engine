@@ -246,18 +246,6 @@ test('unbounded terminal diagnostics fail closed without exposing the payload', 
   );
 });
 
-test('browser-owned products reject injected Rust-host progress evidence', async ({ page }) => {
-  await page.goto('/browser/product-browser-host.html');
-  await expect(page.locator('#product-state')).toHaveText('state: ready');
-  await page.locator('#product-fake-rust-progress').click();
-  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'failed');
-  await expect(page.locator('body')).toHaveAttribute(
-    'data-rusty-product-runtime-failure',
-    'Rust-host realtime progress is unavailable for this Product Browser Host mode',
-  );
-});
-
-
 test('a real WebGL context loss replaces the projection while runtime progress continues', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html?contextLossRecovery');
   const selector = 'canvas[data-rusty-application-renderer="engine-owned"]';
