@@ -41,10 +41,10 @@ pub use character_controller::{
     CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterMeshInstance,
     CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig, CharacterShapeConfig,
     CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders, CharacterStepFact,
-    CharacterSurfaceConfig, CharacterVerticalConfig, DynamicImpulseProposal,
-    FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookDiagnostic, FirstPersonLookError,
-    FirstPersonLookReceipt, FirstPersonLookService, FirstPersonLookState,
-    PreparedCharacterControllerStep,
+    CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig, CharacterVerticalConfig,
+    DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
+    FirstPersonLookDiagnostic, FirstPersonLookError, FirstPersonLookReceipt,
+    FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
 };
 pub use core_space::{GlobalPosition, WorldOrigin};
 pub use entity_motion::{
@@ -54,9 +54,9 @@ pub use entity_motion::{
     FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose, MotionSpatialEntity,
 };
 pub use occlusion::{
-    SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionHitboxOverride,
-    SpatialOcclusionQuery, SpatialOcclusionService, MAX_OCCLUSION_HITBOX_OVERRIDES,
-    MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
+    SpatialOcclusionCollider, SpatialOcclusionError, SpatialOcclusionHit,
+    SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
+    MAX_OCCLUSION_HITBOX_OVERRIDES, MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
 };
 pub use perception::{
     SpatialPerceptionAggregate, SpatialPerceptionError, SpatialPerceptionObserver,
@@ -1344,6 +1344,27 @@ pub struct MotionPhaseReceipt {
     pub entity_facts: Vec<EntityFact>,
 }
 
+/// One kinematic body whose translation or velocity changed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedKinematicBody {
+    pub entity: EntityId,
+    pub translation_before: Vec3,
+    pub translation_after: Vec3,
+    pub velocity_before: Vec3,
+    pub velocity_after: Vec3,
+}
+
+/// Motion resolved for a body set without publishing it anywhere.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KinematicMotionResolution {
+    pub bodies_considered: usize,
+    pub moved_bodies: usize,
+    pub blocked_axes: usize,
+    /// Changed bodies in input order.
+    pub changed: Vec<ResolvedKinematicBody>,
+    pub facts: Vec<MotionFact>,
+}
+
 #[derive(Debug)]
 pub enum MotionPhaseError {
     InvalidDeltaSeconds { actual: f32 },
@@ -1410,6 +1431,56 @@ impl KinematicMotionSystem {
         mut include: impl FnMut(EntityId) -> bool,
         dynamic_blockers: &[KinematicBodyView],
     ) -> Result<MotionPhaseReceipt, MotionPhaseError> {
+        let bodies: Vec<_> = entities
+            .kinematic_bodies()
+            .filter(|body| include(body.entity))
+            .collect();
+        let resolution = Self::resolve(scene, delta_seconds, &bodies, dynamic_blockers)?;
+        let revision_before = entities.revision();
+        let mut commands = Vec::new();
+        for body in &resolution.changed {
+            if body.translation_after != body.translation_before {
+                commands.push(EntityCommand::SetTranslation {
+                    entity: body.entity,
+                    translation: body.translation_after,
+                });
+            }
+            if body.velocity_after != body.velocity_before {
+                commands.push(EntityCommand::SetKinematicVelocity {
+                    entity: body.entity,
+                    velocity: body.velocity_after,
+                });
+            }
+        }
+        let (revision_after, entity_facts) = if commands.is_empty() {
+            (revision_before, Vec::new())
+        } else {
+            let receipt = entities
+                .apply_batch(EntityCommandBatch::new(commands))
+                .map_err(MotionPhaseError::EntityBatch)?;
+            (receipt.revision_after, receipt.facts)
+        };
+
+        Ok(MotionPhaseReceipt {
+            bodies_considered: resolution.bodies_considered,
+            moved_bodies: resolution.moved_bodies,
+            blocked_axes: resolution.blocked_axes,
+            revision_before,
+            revision_after,
+            facts: resolution.facts,
+            entity_facts,
+        })
+    }
+
+    /// Resolve `bodies` against static collision and `dynamic_blockers`
+    /// without an entity store. Hosts that own body state apply the changed
+    /// translations and velocities themselves.
+    pub fn resolve(
+        scene: &VoxelCollisionScene,
+        delta_seconds: f32,
+        bodies: &[KinematicBodyView],
+        dynamic_blockers: &[KinematicBodyView],
+    ) -> Result<KinematicMotionResolution, MotionPhaseError> {
         if !delta_seconds.is_finite() || !(0.0..=MAX_MOTION_DELTA_SECONDS).contains(&delta_seconds)
         {
             return Err(MotionPhaseError::InvalidDeltaSeconds {
@@ -1417,17 +1488,12 @@ impl KinematicMotionSystem {
             });
         }
 
-        let bodies: Vec<_> = entities
-            .kinematic_bodies()
-            .filter(|body| include(body.entity))
-            .collect();
-        let revision_before = entities.revision();
-        let mut commands = Vec::new();
+        let mut changed = Vec::new();
         let mut facts = Vec::new();
         let mut moved_bodies = 0usize;
         let mut blocked_axes = 0usize;
 
-        for body in &bodies {
+        for body in bodies {
             let before = body.translation;
             let mut position = body.translation.to_array();
             let before_velocity = body.velocity;
@@ -1478,41 +1544,29 @@ impl KinematicMotionSystem {
             let after_velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
             if after != before {
                 moved_bodies += 1;
-                commands.push(EntityCommand::SetTranslation {
-                    entity: body.entity,
-                    translation: after,
-                });
                 facts.push(MotionFact::Moved {
                     entity: body.entity,
                     before,
                     after,
                 });
             }
-            if after_velocity != before_velocity {
-                commands.push(EntityCommand::SetKinematicVelocity {
+            if after != before || after_velocity != before_velocity {
+                changed.push(ResolvedKinematicBody {
                     entity: body.entity,
-                    velocity: after_velocity,
+                    translation_before: before,
+                    translation_after: after,
+                    velocity_before: before_velocity,
+                    velocity_after: after_velocity,
                 });
             }
         }
 
-        let (revision_after, entity_facts) = if commands.is_empty() {
-            (revision_before, Vec::new())
-        } else {
-            let receipt = entities
-                .apply_batch(EntityCommandBatch::new(commands))
-                .map_err(MotionPhaseError::EntityBatch)?;
-            (receipt.revision_after, receipt.facts)
-        };
-
-        Ok(MotionPhaseReceipt {
+        Ok(KinematicMotionResolution {
             bodies_considered: bodies.len(),
             moved_bodies,
             blocked_axes,
-            revision_before,
-            revision_after,
+            changed,
             facts,
-            entity_facts,
         })
     }
 }

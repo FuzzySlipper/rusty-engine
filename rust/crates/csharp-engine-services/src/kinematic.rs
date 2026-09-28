@@ -4,10 +4,7 @@
 //! Spatial session. This module deliberately exposes neither a collision query
 //! callback nor a backend representation.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ffi::c_void,
-};
+use std::{collections::BTreeSet, ffi::c_void};
 
 use core_ids::EntityId;
 use core_time::TickDelta;
@@ -17,7 +14,7 @@ use engine_spatial::{
     KinematicBody, KinematicMotionSystem, KinematicShape, MotionAxis, MotionFact, MotionPhaseError,
     PhysicsError, PhysicsStep, PhysicsWorld,
 };
-use entity_state::{EntityDefinition, EntityState, EntityTransform};
+use entity_state::{EntityTransform, KinematicBodyView};
 
 use crate::{
     composition::{
@@ -148,65 +145,77 @@ fn native_transform(value: EntityTransform) -> NativeTransform {
     }
 }
 
-fn native_motion_entity(row: &NativeKinematicMotionEntityRow) -> EntityDefinition {
-    EntityDefinition::new(
-        EntityId::new(row.entity_id),
-        format!("product-{}", row.entity_id),
-    )
-    .with_full_transform(native_transform_value(row.transform))
-    .with_collision(row.collision_enabled, row.collision_static)
-    .with_kinematic(
-        native_vec3_value(row.half_extents),
-        native_vec3_value(row.velocity),
-    )
+fn native_motion_body(row: &NativeKinematicMotionEntityRow) -> KinematicBodyView {
+    KinematicBodyView {
+        entity: EntityId::new(row.entity_id),
+        translation: native_vec3_value(row.transform.translation),
+        half_extents: native_vec3_value(row.half_extents),
+        velocity: native_vec3_value(row.velocity),
+    }
 }
 
+/// Resolve product-owned rows directly. Candidates keep each row's rotation
+/// and scale; the call-local revision pair reports 0 -> 1 when any row changed.
 fn build_motion_lease(
     bridge: &mut RuntimeSpatialBridge,
-    mut entities: EntityState,
+    rows: &[NativeKinematicMotionEntityRow],
     scene: &engine_spatial::VoxelCollisionScene,
     request: &NativeKinematicMotionRequest,
     selected: &BTreeSet<EntityId>,
 ) -> Result<NativeKinematicMotionLease, i32> {
-    let before: BTreeMap<_, _> = entities
-        .kinematic_bodies()
-        .map(|body| {
-            (
-                body.entity,
-                (
-                    entities
-                        .transform(body.entity)
-                        .expect("kinematic body retains a transform")
-                        .transform(),
-                    body.velocity,
-                ),
-            )
-        })
-        .collect();
-    let receipt = if request.selection_present {
-        KinematicMotionSystem::run_selected(&mut entities, scene, request.delta_seconds, selected)
-    } else {
-        KinematicMotionSystem::run(&mut entities, scene, request.delta_seconds)
+    let mut rows = rows.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|row| row.entity_id);
+    if rows
+        .windows(2)
+        .any(|pair| pair[0].entity_id == pair[1].entity_id)
+    {
+        return Err(NativeKinematicErrorStatus::InvalidMotionRows as i32);
     }
-    .map_err(motion_status)?;
-    let candidates = before
-        .into_iter()
-        .filter_map(|(entity, (before_transform, before_velocity))| {
-            let after_transform = entities.transform(entity)?.transform();
-            let after_velocity = entities.kinematic(entity)?.velocity;
-            (after_transform != before_transform || after_velocity != before_velocity).then_some(
-                NativeKinematicMotionCandidate {
-                    entity_id: entity.raw(),
-                    before_transform: native_transform(before_transform),
-                    after_transform: native_transform(after_transform),
-                    before_velocity: native_vec3(before_velocity),
-                    after_velocity: native_vec3(after_velocity),
-                },
-            )
+    let included = |row: &NativeKinematicMotionEntityRow| {
+        !request.selection_present || selected.contains(&EntityId::new(row.entity_id))
+    };
+    let bodies = rows
+        .iter()
+        .copied()
+        .filter(|row| included(row))
+        .map(native_motion_body)
+        .collect::<Vec<_>>();
+    let blockers = if request.selection_present {
+        rows.iter()
+            .copied()
+            .filter(|row| !included(row) && row.collision_enabled)
+            .map(native_motion_body)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let resolution =
+        KinematicMotionSystem::resolve(scene, request.delta_seconds, &bodies, &blockers)
+            .map_err(motion_status)?;
+    let candidates = resolution
+        .changed
+        .iter()
+        .filter_map(|body| {
+            let row = rows
+                .binary_search_by_key(&body.entity.raw(), |row| row.entity_id)
+                .ok()
+                .map(|index| rows[index])?;
+            let before_transform = native_transform_value(row.transform);
+            let after_transform = EntityTransform {
+                translation: body.translation_after,
+                ..before_transform
+            };
+            Some(NativeKinematicMotionCandidate {
+                entity_id: body.entity.raw(),
+                before_transform: native_transform(before_transform),
+                after_transform: native_transform(after_transform),
+                before_velocity: native_vec3(body.velocity_before),
+                after_velocity: native_vec3(body.velocity_after),
+            })
         })
         .collect::<Vec<_>>()
         .into_boxed_slice();
-    let facts = receipt
+    let facts = resolution
         .facts
         .into_iter()
         .map(native_motion_fact)
@@ -222,11 +231,11 @@ fn build_motion_lease(
         candidates_len: candidates.len(),
         facts: facts.as_ptr(),
         facts_len: facts.len(),
-        bodies_considered: u64::try_from(receipt.bodies_considered).map_err(|_| 0)?,
-        moved_bodies: u64::try_from(receipt.moved_bodies).map_err(|_| 0)?,
-        blocked_axes: u64::try_from(receipt.blocked_axes).map_err(|_| 0)?,
-        revision_before: receipt.revision_before,
-        revision_after: receipt.revision_after,
+        bodies_considered: u64::try_from(resolution.bodies_considered).map_err(|_| 0)?,
+        moved_bodies: u64::try_from(resolution.moved_bodies).map_err(|_| 0)?,
+        blocked_axes: u64::try_from(resolution.blocked_axes).map_err(|_| 0)?,
+        revision_before: 0,
+        revision_after: u64::from(!candidates.is_empty()),
     };
     bridge.kinematic_motion_leases.insert(
         handle_value,
@@ -327,17 +336,13 @@ unsafe extern "C" fn run_motion(
         return 0;
     }
     let selected = selected_ids.iter().copied().map(EntityId::new).collect();
-    let entities = match EntityState::from_definitions(rows.iter().map(native_motion_entity)) {
-        Ok(entities) => entities,
-        Err(_) => return NativeKinematicErrorStatus::InvalidMotionRows as i32,
-    };
     // SAFETY: this exact context is supplied by `api` for the product lifetime.
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     let scene = match bridge.collision_source().scene(request.session) {
         Ok(scene) => scene,
         Err(_) => return 0,
     };
-    match build_motion_lease(bridge, entities, scene.as_ref(), request, &selected) {
+    match build_motion_lease(bridge, rows, scene.as_ref(), request, &selected) {
         Ok(value) => {
             // SAFETY: result is an out pointer borrowed for this ABI call.
             unsafe { *result = value };

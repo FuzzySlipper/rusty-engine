@@ -19,16 +19,16 @@ use engine_spatial::{
     CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
     CharacterControllerReceipt, CharacterControllerService, CharacterGroundFact,
     CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
-    CharacterStepColliders, MaterialVoxel, SpatialOcclusionHitboxOverride, SpatialOcclusionQuery,
-    SpatialOcclusionService, StaticMeshAssetId, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshOptions,
-    SurfaceMode, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
-    TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem, VoxelCollisionScene,
-    VoxelPickHint, VoxelPickService,
+    CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel,
+    SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
+    SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource, TriggerOverlapFact,
+    TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem,
+    VoxelCollisionScene, VoxelPickHint, VoxelPickService,
 };
 use entity_state::{
-    CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
-    EntityState, EntityTransform, Quat,
+    CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform,
+    Quat, TransformComponent,
 };
 use runtime_diagnostics::RuntimeUpdateAttribution;
 use serde::Deserialize;
@@ -143,7 +143,7 @@ struct SpatialContentIdentity {
 }
 
 /// Engine-owned collision/navigation mechanisms. Player and game state never
-/// live here: a character proposal builds its EntityState only for the call.
+/// live here: character and ray queries read the call's typed facts directly.
 pub(crate) struct RuntimeSpatialBridge {
     pub(crate) sessions: BTreeMap<u64, SpatialSession>,
     pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
@@ -2003,54 +2003,33 @@ impl RuntimeSpatialBridge {
         let session = self.session_mut(request.session)?;
         let position = native_vec3_value(request.position);
         let motion = character_motion(request.motion)?;
-        let player = EntityDefinition::new(EntityId::new(1), "spatial-proposal")
-            .with_full_transform(EntityTransform::at(position))
-            .with_character_motion(motion);
-        let (mesh_definitions, mesh_instances) =
-            character_mesh_instance_definitions(&session.scene, mesh_values, obstacle_values)?;
+        let subject = CharacterStepSubject {
+            entity: CHARACTER_PROPOSAL_ENTITY,
+            transform: TransformComponent::from_transform(EntityTransform::at(position)),
+            motion,
+        };
+        let (mesh_poses, mesh_instances) =
+            character_mesh_instances(&session.scene, mesh_values, obstacle_values)?;
         let mesh_entities = mesh_values
             .iter()
             .map(|value| (value.instance, value.entity))
             .collect::<BTreeMap<_, _>>();
-        let mesh_support_entity = request.motion.support_entity_present
-            && mesh_definitions
-                .iter()
-                .any(|definition| definition.id.raw() == request.motion.support_entity);
-        let support =
-            character_support_definition(request.motion, request.support, &mesh_definitions)?;
-        let mut definitions = vec![player];
-        let (obstacle_definitions, obstacle_overrides) =
-            character_obstacle_definitions(obstacle_values)?;
-        definitions.extend(obstacle_definitions);
-        definitions.extend(mesh_definitions);
-        if let Some(definition) = support.as_ref() {
-            if !definitions
-                .iter()
-                .any(|candidate| candidate.id == definition.id)
-            {
-                definitions.push(definition.clone());
-            }
-        }
-        let mut entities = EntityState::from_definitions(definitions).map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_CHARACTER_STATE", error.to_string())
-        })?;
-        if let Some(support) = support {
-            if !mesh_support_entity || request.support.present {
-                apply_support_lifecycle(&mut entities, support.id, request.support.lifecycle)?;
-            }
-        }
+        let (mut poses, obstacles) = character_obstacles(obstacle_values)?;
+        poses.extend(mesh_poses);
+        apply_character_support(&mut poses, &mesh_instances, request.motion, request.support)?;
+        let world = CharacterCallWorld { poses };
         let receipt = session
             .controller
-            .step_with_obstacles_and_mesh_instances(
-                &mut entities,
+            .step_subject(
+                &world,
                 &session.scene,
-                EntityId::new(1),
+                subject,
                 &character_config(request.config)?,
                 CharacterControllerCommand {
                     tether: character_tether(request.tether),
                     ..character_command(request.command)
                 },
-                CharacterStepColliders::new(&obstacle_overrides, &mesh_instances),
+                CharacterStepColliders::new(&obstacles, &mesh_instances),
             )
             .map_err(|error| CsharpEngineServicesError::new(error.code(), error.to_string()))?;
         session.last_character_receipt = Some(receipt.clone());
@@ -3124,67 +3103,96 @@ fn character_motion(
     })
 }
 
-fn character_support_definition(
+/// The call-local identity of the proposed character. Product obstacle,
+/// mesh, and support identities must not reuse it.
+const CHARACTER_PROPOSAL_ENTITY: EntityId = EntityId::new(1);
+
+/// Entity poses one character proposal supplies. Box obstacles reach the
+/// controller as [`CharacterStepColliders`], so only poses are looked up here.
+struct CharacterCallWorld {
+    poses: EntityPoses,
+}
+
+type EntityPoses = Vec<(EntityId, EntityTransform)>;
+
+impl CharacterStepWorld for CharacterCallWorld {
+    fn obstacles(&self, _controlled: EntityId) -> Vec<CharacterObstacle> {
+        Vec::new()
+    }
+
+    fn world_transform(&self, entity: EntityId) -> Option<EntityTransform> {
+        self.poses
+            .iter()
+            .find(|(candidate, _)| *candidate == entity)
+            .map(|(_, transform)| *transform)
+    }
+
+    fn rigid_body_linear_velocity(&self, _entity: EntityId) -> Option<Vec3> {
+        None
+    }
+}
+
+/// Add the continuation support pose, or remove it when the product reports
+/// the support destroyed. A retained mesh admission is the support pose
+/// authority: the product may pass an empty support value on continuation,
+/// and using its transform would reintroduce the stale duplicate pose that
+/// mesh admission removes.
+fn apply_character_support(
+    poses: &mut EntityPoses,
+    mesh_instances: &[SpatialCharacterMeshInstance],
     motion: NativeCharacterMotion,
     support: NativeCharacterSupport,
-    mesh_definitions: &[EntityDefinition],
-) -> Result<Option<EntityDefinition>, CsharpEngineServicesError> {
-    if !motion.support_entity_present {
-        return Ok(None);
+) -> Result<(), CsharpEngineServicesError> {
+    // Without admitted support facts the controller observes support loss and
+    // departs cleanly; no stale support pose is synthesized.
+    if !motion.support_entity_present || !support.present {
+        return Ok(());
     }
-    if let Some(definition) = mesh_definitions
-        .iter()
-        .find(|candidate| candidate.id.raw() == motion.support_entity)
-    {
-        // A retained mesh admission is the support pose authority. The
-        // product intentionally may pass an empty CharacterSupport value on
-        // continuation; using its transform here would reintroduce the
-        // stale duplicate pose that mesh admission removes.
-        return Ok(Some(definition.clone()));
-    }
-    if !support.present {
-        // The product has not admitted the previous mesh support for this
-        // call. Let the controller observe support loss and depart cleanly;
-        // do not synthesize a stale support entity from absent facts.
-        return Ok(None);
-    }
-    if !support.present || support.entity != motion.support_entity {
+    let entity = EntityId::new(motion.support_entity);
+    let mesh_support = mesh_instances.iter().any(|mesh| mesh.entity == entity);
+    if !mesh_support && support.entity != motion.support_entity {
         return Err(CsharpEngineServicesError::new(
             "CSHARP_CHARACTER_SUPPORT",
             "C# support context did not match character continuation",
         ));
     }
-    if support.entity == 1 {
+    if entity == CHARACTER_PROPOSAL_ENTITY {
         return Err(CsharpEngineServicesError::new(
             "CSHARP_CHARACTER_SUPPORT",
             "C# support entity conflicted with the call-local character",
         ));
     }
     match support.lifecycle {
-        NativeCharacterSupportLifecycle::Active
-        | NativeCharacterSupportLifecycle::Disabled
-        | NativeCharacterSupportLifecycle::Destroyed => Ok(Some(
-            EntityDefinition::new(EntityId::new(support.entity), "spatial-support")
-                .with_full_transform(native_entity_transform(support.transform)),
-        )),
+        NativeCharacterSupportLifecycle::Destroyed => {
+            poses.retain(|(candidate, _)| *candidate != entity);
+        }
+        NativeCharacterSupportLifecycle::Active | NativeCharacterSupportLifecycle::Disabled => {
+            if !poses.iter().any(|(candidate, _)| *candidate == entity) {
+                poses.push((entity, native_entity_transform(support.transform)));
+            }
+        }
     }
+    Ok(())
 }
 
-fn character_mesh_instance_definitions(
+fn character_mesh_instances(
     scene: &VoxelCollisionScene,
     values: &[NativeCharacterMeshInstance],
     obstacles: &[NativeCharacterObstacle],
-) -> Result<(Vec<EntityDefinition>, Vec<SpatialCharacterMeshInstance>), CsharpEngineServicesError> {
+) -> Result<(EntityPoses, Vec<SpatialCharacterMeshInstance>), CsharpEngineServicesError> {
     let obstacle_entities = obstacles
         .iter()
         .map(|value| value.entity)
         .collect::<BTreeSet<_>>();
     let mut instances = BTreeSet::new();
     let mut entities = BTreeSet::new();
-    let mut definitions = Vec::with_capacity(values.len());
+    let mut poses = Vec::with_capacity(values.len());
     let mut admitted = Vec::with_capacity(values.len());
     for value in values {
-        if value.instance == 0 || value.entity == 0 || value.entity == 1 {
+        if value.instance == 0
+            || value.entity == 0
+            || value.entity == CHARACTER_PROPOSAL_ENTITY.raw()
+        {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CHARACTER_MESH_INSTANCE",
                 "C# mesh admission used an invalid instance or entity identity",
@@ -3225,13 +3233,7 @@ fn character_mesh_instance_definitions(
             ));
         };
         let transform = retained_mesh_entity_transform(retained_transform, value.instance)?;
-        definitions.push(
-            EntityDefinition::new(
-                EntityId::new(value.entity),
-                format!("spatial-character-mesh-instance-{}", value.instance),
-            )
-            .with_full_transform(transform),
-        );
+        poses.push((EntityId::new(value.entity), transform));
         admitted.push(SpatialCharacterMeshInstance {
             instance: StaticMeshInstanceId(value.instance),
             entity: EntityId::new(value.entity),
@@ -3247,24 +3249,23 @@ fn character_mesh_instance_definitions(
             ),
         });
     }
-    Ok((definitions, admitted))
+    Ok((poses, admitted))
 }
 
-fn character_obstacle_definitions(
+/// Poses for every product obstacle plus the collision-enabled boxes, in
+/// entity order. Box values are validated where collision consumes them.
+fn character_obstacles(
     values: &[NativeCharacterObstacle],
-) -> Result<(Vec<EntityDefinition>, Vec<CharacterObstacle>), CsharpEngineServicesError> {
-    let mut definitions = Vec::with_capacity(values.len());
-    let mut overrides = Vec::with_capacity(values.len());
+) -> Result<(EntityPoses, Vec<CharacterObstacle>), CsharpEngineServicesError> {
+    let mut poses = Vec::with_capacity(values.len());
+    let mut obstacles = Vec::with_capacity(values.len());
     for value in values {
-        if value.entity == 1 {
+        if value.entity == CHARACTER_PROPOSAL_ENTITY.raw() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CHARACTER_OBSTACLE",
                 "C# obstacle entity conflicted with the call-local character",
             ));
         }
-        let min = native_vec3_value(value.bounds_min);
-        let max = native_vec3_value(value.bounds_max);
-        validate_aabb(min, max)?;
         let transform = native_entity_transform(value.transform);
         if transform.scale != Vec3::ONE {
             return Err(CsharpEngineServicesError::new(
@@ -3272,72 +3273,42 @@ fn character_obstacle_definitions(
                 "C# obstacle transforms require unit scale",
             ));
         }
-        definitions.push(
-            EntityDefinition::new(
-                EntityId::new(value.entity),
-                format!("spatial-character-obstacle-{}", value.entity),
-            )
-            .with_full_transform(transform)
-            .with_bounds(min, max)
-            .with_collision(value.collision_enabled, false),
-        );
-        if value.collision_enabled {
-            let linear_velocity = native_vec3_value(value.linear_velocity);
-            let angular_velocity = native_vec3_value(value.angular_velocity);
-            if !finite_vec3(linear_velocity) || !finite_vec3(angular_velocity) {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_CHARACTER_OBSTACLE",
-                    "C# obstacle motion was not finite",
-                ));
-            }
-            let center = transform.translation + (min + max) * 0.5;
-            let half_extents = (max - min) * 0.5;
-            overrides.push(CharacterObstacle {
-                id: value.entity,
-                center: core_space::WorldPos::new(
-                    f64::from(center.x),
-                    f64::from(center.y),
-                    f64::from(center.z),
-                ),
-                half_extents: core_space::WorldVec::new(
-                    f64::from(half_extents.x),
-                    f64::from(half_extents.y),
-                    f64::from(half_extents.z),
-                ),
-                linear_velocity: core_space::WorldVec::new(
-                    f64::from(linear_velocity.x),
-                    f64::from(linear_velocity.y),
-                    f64::from(linear_velocity.z),
-                ),
-                angular_velocity: core_space::WorldVec::new(
-                    f64::from(angular_velocity.x),
-                    f64::from(angular_velocity.y),
-                    f64::from(angular_velocity.z),
-                ),
-            });
+        poses.push((EntityId::new(value.entity), transform));
+        if !value.collision_enabled {
+            continue;
         }
+        let min = native_vec3_value(value.bounds_min);
+        let max = native_vec3_value(value.bounds_max);
+        let center = transform.translation + (min + max) * 0.5;
+        let half_extents = (max - min) * 0.5;
+        let linear_velocity = native_vec3_value(value.linear_velocity);
+        let angular_velocity = native_vec3_value(value.angular_velocity);
+        obstacles.push(CharacterObstacle {
+            id: value.entity,
+            center: core_space::WorldPos::new(
+                f64::from(center.x),
+                f64::from(center.y),
+                f64::from(center.z),
+            ),
+            half_extents: core_space::WorldVec::new(
+                f64::from(half_extents.x),
+                f64::from(half_extents.y),
+                f64::from(half_extents.z),
+            ),
+            linear_velocity: core_space::WorldVec::new(
+                f64::from(linear_velocity.x),
+                f64::from(linear_velocity.y),
+                f64::from(linear_velocity.z),
+            ),
+            angular_velocity: core_space::WorldVec::new(
+                f64::from(angular_velocity.x),
+                f64::from(angular_velocity.y),
+                f64::from(angular_velocity.z),
+            ),
+        });
     }
-    Ok((definitions, overrides))
-}
-
-fn apply_support_lifecycle(
-    entities: &mut EntityState,
-    entity: EntityId,
-    lifecycle: NativeCharacterSupportLifecycle,
-) -> Result<(), CsharpEngineServicesError> {
-    let authoring = EntityAuthoringService;
-    let transition = match lifecycle {
-        NativeCharacterSupportLifecycle::Active => return Ok(()),
-        NativeCharacterSupportLifecycle::Disabled => {
-            authoring.disable(entities, entities.revision(), entity)
-        }
-        NativeCharacterSupportLifecycle::Destroyed => {
-            authoring.destroy(entities, entities.revision(), entity)
-        }
-    };
-    transition.map(|_| ()).map_err(|error| {
-        CsharpEngineServicesError::new("CSHARP_CHARACTER_SUPPORT", error.to_string())
-    })
+    obstacles.sort_by_key(|obstacle| obstacle.id);
+    Ok((poses, obstacles))
 }
 
 fn character_config(
@@ -5651,39 +5622,32 @@ fn cast_ray_parts(
     }
     let ignored = ignored_set(ignored_values)?;
     let entities = filtered_entities(entity_values, filter, &ignored)?;
-    let state = entity_state(&entities)?;
-    let overrides = override_values
-        .iter()
-        .copied()
-        .map(|value| {
-            validate_entity_collider(value)?;
-            Ok(SpatialOcclusionHitboxOverride {
-                entity: EntityId::new(value.entity),
-                min: native_array(value.min),
-                max: native_array(value.max),
-            })
-        })
-        .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
-    let entity_hit = SpatialOcclusionService::cast_ray_with_overrides(
+    for value in override_values {
+        validate_entity_collider(*value)?;
+    }
+    let colliders = entities.iter().filter(|value| value.enabled).map(|value| {
+        let bounds = override_values
+            .iter()
+            .find(|candidate| candidate.entity == value.entity)
+            .unwrap_or(value);
+        SpatialOcclusionCollider {
+            entity: EntityId::new(value.entity),
+            min: native_array(bounds.min),
+            max: native_array(bounds.max),
+        }
+    });
+    let hit = SpatialOcclusionService::cast_ray_against_colliders(
         scene,
-        &state,
         SpatialOcclusionQuery {
             origin,
             direction,
             max_distance,
             ignored_entities: &ignored,
         },
-        &overrides,
+        colliders,
     )
     .map_err(|error| spatial_error("CSHARP_SPATIAL_RAY", error.to_string()))?;
-    let mut best = entity_hit.map(native_occlusion_hit);
-    if let Some(world_hit) = scene.raycast_world(origin, direction, max_distance) {
-        let candidate = native_world_hit(world_hit);
-        if best.is_none_or(|current| spatial_hit_precedes(candidate, current)) {
-            best = Some(candidate);
-        }
-    }
-    Ok(best.unwrap_or_default())
+    Ok(hit.map(native_occlusion_hit).unwrap_or_default())
 }
 
 fn native_occlusion_hit(value: engine_spatial::SpatialOcclusionHit) -> NativeSpatialHit {
@@ -5722,51 +5686,6 @@ fn native_occlusion_hit(value: engine_spatial::SpatialOcclusionHit) -> NativeSpa
             distance: hit.distance,
             ..Default::default()
         },
-    }
-}
-
-fn native_world_hit(value: engine_spatial::SpatialCollisionHit) -> NativeSpatialHit {
-    match value {
-        engine_spatial::SpatialCollisionHit::Voxel(hit) => NativeSpatialHit {
-            present: true,
-            kind: NativeSpatialHitKind::Voxel,
-            voxel_x: hit.voxel[0],
-            voxel_y: hit.voxel[1],
-            voxel_z: hit.voxel[2],
-            face: native_face_value(hit.face),
-            point: native_f64_vec3(hit.point),
-            distance: hit.distance,
-            ..Default::default()
-        },
-        engine_spatial::SpatialCollisionHit::StaticMesh(hit) => NativeSpatialHit {
-            present: true,
-            kind: NativeSpatialHitKind::StaticMesh,
-            instance: hit.instance.0,
-            asset: hit.asset.0,
-            geometry_hash: hit.geometry_hash,
-            point: native_f64_vec3([hit.point.x, hit.point.y, hit.point.z]),
-            normal: native_f64_vec3([hit.normal.x, hit.normal.y, hit.normal.z]),
-            distance: hit.distance,
-            ..Default::default()
-        },
-    }
-}
-
-fn spatial_hit_precedes(candidate: NativeSpatialHit, current: NativeSpatialHit) -> bool {
-    use std::cmp::Ordering;
-    match candidate.distance.total_cmp(&current.distance) {
-        Ordering::Less => true,
-        Ordering::Greater => false,
-        Ordering::Equal => spatial_hit_tie_key(candidate) < spatial_hit_tie_key(current),
-    }
-}
-
-fn spatial_hit_tie_key(value: NativeSpatialHit) -> (u8, u64, u64) {
-    match value.kind {
-        NativeSpatialHitKind::Entity => (0, value.entity, 0),
-        NativeSpatialHitKind::Voxel => (1, 0, 0),
-        NativeSpatialHitKind::StaticMesh => (2, value.instance, value.asset),
-        NativeSpatialHitKind::None => (3, 0, 0),
     }
 }
 
@@ -5995,6 +5914,78 @@ fn native_character_tether_fact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ray_reads_borrowed_colliders_with_filter_ignore_and_hitbox_override() {
+        let collider = |entity, min_x, max_x| NativeSpatialEntityCollider {
+            entity,
+            min: NativeVec3 {
+                x: min_x,
+                y: -1.0,
+                z: -1.0,
+            },
+            max: NativeVec3 {
+                x: max_x,
+                y: 2.0,
+                z: 2.0,
+            },
+            enabled: true,
+            ..Default::default()
+        };
+        let entities = [
+            collider(10, 4.0, 5.0),
+            collider(11, 6.0, 7.0),
+            NativeSpatialEntityCollider {
+                enabled: false,
+                ..collider(12, 1.0, 1.5)
+            },
+            NativeSpatialEntityCollider {
+                collision_group: 0b10,
+                ..collider(13, 1.0, 1.5)
+            },
+        ];
+        let filter = NativeSpatialQueryFilter {
+            collision_group: 0b1,
+            collision_mask: 0b1,
+        };
+        let origin = NativeVec3 {
+            x: 0.0,
+            y: 0.5,
+            z: 0.5,
+        };
+        let direction = NativeVec3 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let empty = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+        let cast = |scene: &VoxelCollisionScene, ignored: &[u64], overrides: &[_]| {
+            cast_ray_parts(
+                scene, origin, direction, 20.0, filter, &entities, ignored, overrides,
+            )
+            .unwrap()
+        };
+
+        // Disabled and filtered-out records never occlude.
+        let hit = cast(&empty, &[], &[]);
+        assert_eq!(
+            (hit.kind, hit.entity, hit.distance),
+            (NativeSpatialHitKind::Entity, 10, 4.0)
+        );
+        let hit = cast(&empty, &[10], &[]);
+        assert_eq!((hit.entity, hit.distance), (11, 6.0));
+        // An override replaces only the named active collider's box.
+        let hit = cast(
+            &empty,
+            &[],
+            &[collider(10, 8.0, 9.0), collider(12, 0.5, 0.6)],
+        );
+        assert_eq!((hit.entity, hit.distance), (11, 6.0));
+        // World geometry takes part in the same nearest ordering.
+        let wall = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[2, 0, 0]]).unwrap();
+        let hit = cast(&wall, &[], &[]);
+        assert_eq!((hit.kind, hit.distance), (NativeSpatialHitKind::Voxel, 2.0));
+    }
 
     #[test]
     fn capsule_queries_ignore_disabled_and_trigger_colliders() {
@@ -8115,6 +8106,44 @@ mod tests {
         assert!(!second.platform.departed);
         assert!((second.platform.carried_displacement.x - 0.2).abs() < 1.0e-4);
         assert!(second.displacement.x > 0.19);
+
+        // A destroyed support leaves no pose to carry from: the character
+        // departs with the support's point velocity instead of failing.
+        let departed = bridge
+            .propose_character(NativeCharacterStepRequest {
+                tether: NativeCharacterTetherRequest::default(),
+                session,
+                position: first.transform.translation,
+                motion: first.motion,
+                support: NativeCharacterSupport {
+                    present: true,
+                    lifecycle: NativeCharacterSupportLifecycle::Destroyed,
+                    entity: 2,
+                    transform: second_obstacles[0].transform,
+                },
+                obstacles: std::ptr::null(),
+                obstacles_len: 0,
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
+                config,
+                command: NativeCharacterControllerCommand {
+                    movement: Default::default(),
+                    planar_intent: NativeVec2::default(),
+                    heading_yaw_radians: 0.0,
+                    jump_pressed: false,
+                    jump_held: false,
+                    crouch_requested: false,
+                    external_velocity: NativeVec3::default(),
+                    external_impulse: NativeVec3::default(),
+                    step_seconds: 1.0 / 60.0,
+                    sequence: 2,
+                },
+            })
+            .expect("a destroyed support departs");
+        assert!(departed.platform.present);
+        assert_eq!(departed.platform.entity, 2);
+        assert!(departed.platform.departed);
+        assert!(!departed.motion.support_entity_present);
     }
 
     #[test]

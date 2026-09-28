@@ -26,6 +26,15 @@ pub struct SpatialOcclusionHitboxOverride {
     pub max: [f64; 3],
 }
 
+/// One caller-supplied world-space entity box for
+/// [`SpatialOcclusionService::cast_ray_against_colliders`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpatialOcclusionCollider {
+    pub entity: EntityId,
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
+
 /// One bounded ray against canonical world geometry and current active entity
 /// colliders. World geometry includes the voxel and retained static-mesh
 /// projections. Callers normally ignore the source and intended target identities.
@@ -158,41 +167,69 @@ impl SpatialOcclusionService {
                 });
             }
         }
-        let mut nearest = scene
-            .raycast_world(query.origin, direction, query.max_distance)
-            .map(|hit| match hit {
-                SpatialCollisionHit::Voxel(hit) => SpatialOcclusionHit::Voxel(hit),
-                SpatialCollisionHit::StaticMesh(hit) => SpatialOcclusionHit::StaticMesh(hit),
-            });
-        for collider in active_entity_colliders(entities) {
-            if query.ignored_entities.contains(&collider.entity) {
-                continue;
-            }
-            let bounds = overrides
+        let colliders = active_entity_colliders(entities).map(|collider| {
+            let (min, max) = overrides
                 .iter()
                 .find(|value| value.entity == collider.entity)
                 .map(|value| (value.min, value.max))
                 .unwrap_or_else(|| bounds_as_f64(collider.bounds));
-            let Some(distance) = ray_aabb_distance(
-                query.origin,
-                direction,
-                query.max_distance,
-                bounds.0,
-                bounds.1,
-            ) else {
-                continue;
-            };
-            let candidate = SpatialOcclusionHit::Entity {
+            SpatialOcclusionCollider {
                 entity: collider.entity,
-                point: point_at(query.origin, direction, distance),
-                distance,
-            };
-            if nearest.is_none_or(|current| hit_precedes(candidate, current)) {
-                nearest = Some(candidate);
+                min,
+                max,
             }
-        }
-        Ok(nearest)
+        });
+        Ok(nearest_hit(scene, query, direction, colliders))
     }
+
+    /// Nearest hit against world geometry and caller-supplied entity boxes,
+    /// with the same ordering as [`Self::cast_ray`]. Hosts that already hold
+    /// typed collider facts use this instead of building an [`EntityState`].
+    pub fn cast_ray_against_colliders(
+        scene: &VoxelCollisionScene,
+        query: SpatialOcclusionQuery<'_>,
+        colliders: impl IntoIterator<Item = SpatialOcclusionCollider>,
+    ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
+        let direction = validate_and_normalize(query)?;
+        Ok(nearest_hit(scene, query, direction, colliders))
+    }
+}
+
+fn nearest_hit(
+    scene: &VoxelCollisionScene,
+    query: SpatialOcclusionQuery<'_>,
+    direction: [f64; 3],
+    colliders: impl IntoIterator<Item = SpatialOcclusionCollider>,
+) -> Option<SpatialOcclusionHit> {
+    let mut nearest = scene
+        .raycast_world(query.origin, direction, query.max_distance)
+        .map(|hit| match hit {
+            SpatialCollisionHit::Voxel(hit) => SpatialOcclusionHit::Voxel(hit),
+            SpatialCollisionHit::StaticMesh(hit) => SpatialOcclusionHit::StaticMesh(hit),
+        });
+    for collider in colliders {
+        if query.ignored_entities.contains(&collider.entity) {
+            continue;
+        }
+        let Some(distance) = ray_aabb_distance(
+            query.origin,
+            direction,
+            query.max_distance,
+            collider.min,
+            collider.max,
+        ) else {
+            continue;
+        };
+        let candidate = SpatialOcclusionHit::Entity {
+            entity: collider.entity,
+            point: point_at(query.origin, direction, distance),
+            distance,
+        };
+        if nearest.is_none_or(|current| hit_precedes(candidate, current)) {
+            nearest = Some(candidate);
+        }
+    }
+    nearest
 }
 
 fn validate_and_normalize(
