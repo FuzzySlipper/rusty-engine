@@ -810,6 +810,16 @@ impl EngineServiceSet {
             .collect()
     }
 
+    /// Latest projection of every UI stream, bound to `binding`. A browser
+    /// clears UI projections when its runtime binding changes, so a control
+    /// fence republishes these without rebuilding the rest of the world.
+    pub fn snapshot_ui_projections(
+        &self,
+        binding: RuntimeUiRuntimeBinding,
+    ) -> Vec<runtime_ui::RuntimeUiProjectionEnvelope> {
+        self.ui.snapshot_projections(binding)
+    }
+
     /// Complete committed state for a fresh renderer. No product callback,
     /// projector reset, resource admission, or active publication occurs.
     pub fn snapshot_outputs(

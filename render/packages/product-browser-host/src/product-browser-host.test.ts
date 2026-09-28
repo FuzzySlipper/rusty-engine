@@ -221,6 +221,116 @@ test('fixed runtime transport preserves only named operations', async () => {
   assert.equal('call' in transport, false);
 });
 
+test('a same-incarnation rebind (pause, resume, mapping) keeps the mounted renderer', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const running = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+    const paused = { instanceId: '7', generation: '1', controlRevision: '3' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let replacements = 0;
+    let recoveries = 0;
+    const appliedFrames: unknown[] = [];
+    const boundRuntimes: unknown[] = [];
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof running }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof running }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof running }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      recoverOutputProjection: async () => { recoveries += 1; },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        admitResources: async () => undefined,
+        replaceFrame: async () => {
+          replacements += 1;
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+        applyFrame: (frame: unknown) => {
+          appliedFrames.push(frame);
+          return { outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      input: {
+        sampleController: () => 0,
+        drain: () => [],
+        bindRuntime: (binding: unknown) => { boundRuntimes.push(binding); },
+      },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([{ kind: 'binding', runtime: running, nextInputSequence: '4' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    // Rust's in-place rebind: the new binding (carrying the current
+    // frontiers) followed only by the callback's own deltas.
+    const delta = { schemaVersion: 1, ops: [{ op: 'pause-menu-delta' }] };
+    publish([
+      {
+        kind: 'binding',
+        runtime: paused,
+        nextInputSequence: '5',
+        publicationFrontiers: [{ stream: 'presentation-world', revision: 9 }],
+      },
+      { kind: 'frame', frame: delta },
+    ] as never, { epoch: 1, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(replacements, 0, 'the renderer content is not replaced');
+    assert.equal(recoveries, 0, 'no fresh projection is requested');
+    assert.deepEqual(appliedFrames, [delta], 'the callback delta applies incrementally');
+    assert.deepEqual(boundRuntimes.at(-1), {
+      runtime: paused, context: 'gameplay.default', nextSequence: '5',
+    });
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
 test('host recovers an unknown input batch from a fresh binding after a lost control response', async () => {
   const previousHTMLElement = globalThis.HTMLElement;
   class FakeElement {

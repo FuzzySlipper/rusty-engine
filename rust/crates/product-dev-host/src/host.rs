@@ -4096,6 +4096,37 @@ mod tests {
     }
 
     #[test]
+    fn in_place_rebind_group_publishes_as_one_incremental_batch() {
+        let mut bus = OutputBus {
+            active_binding: Some(binding()),
+            ..OutputBus::default()
+        };
+        let paused = crate::ProductDevRuntimeBinding {
+            control_revision: CanonicalU64::new(3),
+            ..binding()
+        };
+        // A same-incarnation fence: binding, the callback's own outputs, and
+        // completion, without any world snapshot between them.
+        push_outputs_staged(
+            &mut bus,
+            vec![
+                crate::model::ProductDevRuntimeOutput::binding(paused, CanonicalU64::new(5)),
+                crate::model::ProductDevRuntimeOutput::runtime_progress(),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(paused),
+            ],
+        )
+        .expect("in-place rebind publishes");
+        assert_eq!(bus.active_binding, Some(paused));
+        assert_eq!(bus.events.len(), 1);
+        let value: serde_json::Value = serde_json::from_str(&bus.events[0].json).unwrap();
+        assert_eq!(value["kind"], "runtime-output-batch");
+        assert_eq!(value["outputs"][0]["kind"], "binding");
+        assert_eq!(value["outputs"][0]["runtime"]["controlRevision"], "3");
+        assert_eq!(value["outputs"][1]["kind"], "runtime-progress");
+        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
     fn one_receipt_encodes_as_one_ordered_output_batch() {
         let mut bus = OutputBus {
             active_binding: Some(binding()),

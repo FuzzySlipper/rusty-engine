@@ -2077,7 +2077,7 @@ impl CsharpProductRuntime {
             outputs.push(self.complete_baseline_output(binding)?);
         } else if let Some(replacement) = input_mapping_replacement {
             self.settle_input_mapping_replacement(replacement)?;
-            outputs = self.rebind_outputs(outputs)?;
+            outputs = self.rebind_outputs_in_place(outputs)?;
         }
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         if let Some(attribution) = &mut self.pending_update_attribution {
@@ -2210,7 +2210,7 @@ impl CsharpProductRuntime {
         self.pending_recovery_outputs.clear();
         self.receipt(
             ProductDevOperationKind::ReplaceControl,
-            self.tag_complete_baseline(Vec::new())?,
+            self.rebind_in_place(Vec::new())?,
         )
     }
 
@@ -2611,6 +2611,46 @@ impl CsharpProductRuntime {
         Ok(tagged)
     }
 
+    /// Publishes a same-incarnation control fence (pause, resume, control
+    /// replace/release, mapping replacement, input-overflow recovery) without
+    /// rebuilding the world. The browser keeps its renderer and rebinds input,
+    /// UI and feedback owners from the binding. The call's deltas follow the
+    /// binding in causal order, and each UI stream's latest projection is
+    /// republished under the new binding because the browser clears UI on a
+    /// binding change.
+    fn rebind_in_place(
+        &self,
+        outputs: Vec<RuntimePublication>,
+    ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+        self.rebind_outputs_in_place(outputs)
+            .map_err(|error| self.runtime_error(error))
+    }
+
+    fn rebind_outputs_in_place(
+        &self,
+        outputs: Vec<RuntimePublication>,
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
+        let binding = self.binding();
+        let mut tagged = Vec::with_capacity(outputs.len() + 2);
+        tagged.push(RuntimePublication::binding(
+            input_binding(&self.lifecycle),
+            self.next_input_sequence().get(),
+        ));
+        tagged.extend(
+            outputs
+                .into_iter()
+                .filter(|output| !matches!(output, RuntimePublication::UiProjection(_))),
+        );
+        tagged.extend(
+            self.services
+                .snapshot_ui_projections(ui_binding(&self.lifecycle))
+                .into_iter()
+                .map(RuntimePublication::UiProjection),
+        );
+        tagged.push(self.complete_baseline_output(binding)?);
+        Ok(tagged)
+    }
+
     fn complete_baseline_output(
         &self,
         _binding: ProductDevRuntimeBinding,
@@ -2858,7 +2898,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Pause,
-                    self.tag_complete_baseline(outputs)?,
+                    self.rebind_in_place(outputs)?,
                 )
             }
             ProductDevLifecycleOperation::Resume => {
@@ -2873,7 +2913,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Resume,
-                    self.tag_complete_baseline(outputs)?,
+                    self.rebind_in_place(outputs)?,
                 )
             }
             ProductDevLifecycleOperation::Restart => {
@@ -2952,7 +2992,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         self.receipt(
             operation.operation_kind(),
-            self.tag_complete_baseline(Vec::new())?,
+            self.rebind_in_place(Vec::new())?,
         )
     }
 
@@ -7593,6 +7633,12 @@ mod tests {
         assert_ne!(fresh_binding, old_binding);
         assert!(outputs.iter().any(|output| matches!(output, RuntimePublication::Binding { runtime, .. } if *runtime == fresh_binding)));
         assert!(outputs.iter().any(|output| matches!(output, RuntimePublication::CompleteBaseline { runtime, .. } if *runtime == fresh_binding)));
+        assert!(
+            !outputs
+                .iter()
+                .any(|output| matches!(output, RuntimePublication::Frame(_))),
+            "a mapping replacement rebinds in place without a world snapshot"
+        );
         assert_eq!(
             runtime.pending_inputs.len(),
             1,
@@ -8112,16 +8158,32 @@ mod tests {
             realtime.realtime_schedule_state(),
             ProductDevRuntimeScheduleState::Running
         );
-        realtime
+        // Pause and resume rebind in place: a new binding and completion, but
+        // no world snapshot for the browser to replace its renderer with.
+        let in_place = |outputs: &[RuntimePublication]| {
+            matches!(outputs.first(), Some(RuntimePublication::Binding { .. }))
+                && matches!(
+                    outputs.last(),
+                    Some(RuntimePublication::CompleteBaseline { .. })
+                )
+                && !outputs
+                    .iter()
+                    .any(|output| matches!(output, RuntimePublication::Frame(_)))
+        };
+        let (_, paused) = realtime
             .lifecycle(ProductDevLifecycleOperation::Pause)
-            .expect("pause realtime fixture");
+            .expect("pause realtime fixture")
+            .into_parts();
+        assert!(in_place(&paused), "pause rebinds in place");
         assert_eq!(
             realtime.realtime_schedule_state(),
             ProductDevRuntimeScheduleState::Paused
         );
-        realtime
+        let (_, resumed) = realtime
             .lifecycle(ProductDevLifecycleOperation::Resume)
-            .expect("resume realtime fixture");
+            .expect("resume realtime fixture")
+            .into_parts();
+        assert!(in_place(&resumed), "resume rebinds in place");
         assert_eq!(
             realtime.realtime_schedule_state(),
             ProductDevRuntimeScheduleState::Running
@@ -8232,7 +8294,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_input_overflow_rebinds_and_publishes_recovery_baseline() {
+    fn pending_input_overflow_rebinds_in_place_without_a_world_snapshot() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
         let (mut runtime, root) = drop_fixture_runtime("pending-input-recovery");
         runtime
@@ -8264,7 +8326,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(recovery.first().unwrap()["kind"], "binding");
         assert_eq!(recovery.last().unwrap()["kind"], "complete-baseline");
-        assert!(recovery.iter().any(|output| output["kind"] == "frame"));
+        // A same-incarnation input fence rebinds in place: no world snapshot.
+        assert!(!recovery.iter().any(|output| output["kind"] == "frame"));
 
         let (_, outputs) = runtime
             .admit_demand_step()

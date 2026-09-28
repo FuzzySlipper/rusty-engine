@@ -108,6 +108,9 @@ existing input lane. During creation it instead selects the initial map before
 the lane admits input. Old bindings stop firing, and queued events from the previous binding cannot trigger stale actions.
 Products receive the normal clear fact and must release their derived held
 state. Focus and text-entry suppression continue through the same lane.
+A mapping replacement, pause, resume, or control replace/release keeps the
+browser renderer and its retained world: only the input, UI and feedback
+binding moves, and each UI stream's latest projection is republished under it.
 `ProductCreateContext.Input` remains the initial composition snapshot; products
 own their chosen settings, UI and persistence.
 
