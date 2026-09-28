@@ -3,6 +3,27 @@
 Rusty Engine hosts an ordinary C# product. The product decides game
 meaning; the Engine guarantees reusable mechanisms and integration.
 
+## Campaign #8723: authority and reading this document
+
+The September architecture reset authorizes removal of the validation, replay,
+transaction, and recovery framework within its child tasks. The owner's current
+direction and task scope take precedence over preservation language in this
+document and linked guides. See [AGENTS.md](../AGENTS.md#architecture-reset--campaign-8723)
+and Den document `rusty-engine/architecture-reset-2026-09`.
+
+Descriptions below identify current source owners and behavior. Callback
+candidates and discard, exact-revision preconditions, taint, replay restrictions,
+history/cursors/receipts, and fresh-baseline recovery are all subject to removal.
+They are not acceptance requirements for their replacements. The same applies
+to existing validators, caps, leases, copies, and generation tools.
+
+Start with a runnable removal experiment where the task is exploratory. Add
+back only the smallest mechanism justified by an observed failure or concrete
+required behavior. Old tests and contracts alone do not justify preservation;
+change them with the behavior. Product/Engine ownership and actual ABI/layout/
+lifetime correctness still apply. Keep this document truthful about what has
+landed, and distinguish experimental results from production behavior.
+
 ## Ownership flow
 
 ```text
@@ -31,9 +52,9 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | --- | --- | --- |
 | ABI declarations | Rust | [`csharp-engine-abi`](../rust/crates/csharp-engine-abi) defines the C ABI and named function tables. |
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
-| Rigid-body ropes | Rust | `svc-collision` solves maximum-distance links in the existing derived Rapier world; `engine-spatial::RigidBodyService` publishes exact-revision body and rope facts. The Dynamics bridge owns atomic chain creation/removal and generated C# access. No product bead simulation or second clock. |
+| Rigid-body ropes | Rust | `svc-collision` currently solves maximum-distance links in a derived Rapier world; `engine-spatial::RigidBodyService` publishes body and rope facts. The Dynamics bridge owns chain creation/removal and generated C# access. Persistent solver state and simpler mutation APIs are campaign experiments. |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
-| Session serialization and recovery facts | Rust | `runtime-session` owns the serialized runtime guard, logical receipt, prepared replacement boundary, and recovery vocabulary; `product-dev-host` adapts these to its development transport. |
+| Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
 | Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser/worker DTOs and applies delivery byte limits. Progress and input acknowledgements remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
@@ -60,10 +81,13 @@ is not the objective.
 
 Apply the same distinction to failures. Expected rejection, exhausted work
 budgets, and uncertain renderer realization should have outcomes appropriate
-to their scope: product handling, backpressure, or a fresh projection baseline.
-They should not accidentally become an uncertain product callback or a dead
-session. Preserve actual ABI/lifetime invariants and canonical-state
-uncertainty, including the prohibition on replaying possibly committed work.
+to their scope. A handled operation failure should not accidentally kill the
+session. Choose the smallest failure behavior supported by the task's concrete
+exercise. The existing prohibition on replaying possibly committed work does
+not require retaining taint, commit-certainty tracking, receipts, or any recovery
+framework. Campaign experiments may remove that policy and its machinery;
+report actual repeated effects or inconsistent state if the experiment produces
+them, then address the demonstrated problem locally.
 
 ## Trusted runtime resource delivery
 
@@ -109,6 +133,10 @@ loaders. They are not downstream product architecture or launch templates.
 
 ## Reconstructible presentation
 
+This section describes the current implementation. Its candidates, transport
+ordering, revision checks, and recovery paths are starting points for campaign
+experiments, not requirements to reproduce in a simpler design.
+
 C# selects presentation facts through named services. Rust commits the resulting
 graphics intent into `PresentationWorld`; TypeScript realizes that intent in
 browser/GPU objects. Fresh browser attachment reads committed Rust snapshots
@@ -129,11 +157,12 @@ scheduler; neutral session scopes retain the single runtime lock.
 
 The renderer realizes admitted changes once, without constructing disposable
 resources or sampling phantom animated instances as a frame preflight. Backend
-realization failure makes that surface terminal; recovery rebuilds from committed
-intent instead of promising rollback of GPU mutations. Retained texture
-descriptors are immutable shared values. Shadows initialize on new world objects,
-without a scene-wide frame sweep or an Engine shadow-light quota; products choose
-their lighting workload. Generated C# bridges convert borrowed spans directly to
+realization failure currently makes that surface terminal; recovery rebuilds
+from committed intent. Campaign #8723 includes exploring in-place recovery and
+resource reuse. Retained texture descriptors are immutable shared values.
+Shadows initialize on new world objects without a scene-wide frame sweep or an
+Engine shadow-light quota; products choose their lighting workload.
+Generated C# bridges convert borrowed spans directly to
 native arrays while retaining the required pin and release lifetimes.
 
 Auxiliary publication frontier checks read only the stream revision; they do
@@ -154,8 +183,9 @@ The host serializes actual delivery bytes, not a discarded size preflight. The
 publications. Later progress events cannot truncate a large transfer; it ages out
 only once a full newer history exists. Private baselines preserve every fragment
 until completion. Worker timing observations share ordered output backpressure
-instead of being dropped when that queue fills. Lost/interrupted transfers discard staging and use a
-fresh complete baseline. Size alone does not reconstruct a delta as a baseline.
+instead of being dropped when that queue fills. Lost/interrupted transfers
+currently discard staging and use a fresh complete baseline. Size alone does
+not reconstruct a delta as a baseline in this implementation.
 The worker frame retains its u32 byte-length representation; browser callers may
 choose an explicit per-batch byte budget. Immutable host bundles and C# content
 have no default file/count/aggregate byte quotas. Resource-format and browser
@@ -165,9 +195,10 @@ The TS `render-projection` model has no Three or DOM dependency and remains an
 explicit tool/snapshot consumer. Mounted surfaces realize admitted operations
 directly in Three and retain only publication frontiers alongside the backend;
 there is no neutral scene mirror or whole-frame rollback staging. A partial
-realization failure stops and disposes the surface. `product-browser-host` uses
-its existing attachment epochs and fresh committed baseline recovery, without
-replaying the product callback. On-demand inspection reads actual backend nodes.
+realization failure currently stops and disposes the surface.
+`product-browser-host` uses its existing attachment epochs and fresh committed
+baseline recovery, without replaying the product callback. On-demand inspection
+reads actual backend nodes.
 
 Resource inventories reconcile on inventory or resource-owner changes, not on
 transform-only frames. Local static-instance edits update affected membership
@@ -175,21 +206,23 @@ and batch groups; camera culling and picking retain their existing behavior.
 Packed mesh decoding retains byte-range, encoding, and copy-out lifetime checks,
 without rescanning Engine-admitted indices, UVs, colors, or light semantics.
 
-The canonical Rust call candidate shares retained graphics and Appearance maps
+The current Rust call candidate shares retained graphics and Appearance maps
 until its first write. Idle settlement reuses retained Appearance effect frames;
 audio/video cursors update separately. Render-output resource catalogs are copied
 only for a successful requested capture. Owned frame operations mutate the candidate directly,
-without another world clone per frame. Failure discards the call candidate;
-explicit scene captures remain independent snapshots. This boundary does not
-undo spatial mutations or make an uncertain C# callback safe to replay.
+without another world clone per frame. The current failure path discards the
+candidate; explicit scene captures remain independent snapshots. Discard does
+not undo spatial mutations or managed product state. Task #8736 explores
+deleting this callback transaction and changing exception handling; discard and
+taint are not requirements for that replacement.
 
 `PresentationWorld` also commits the retained audio/effect baseline and stamps
 auxiliary presentation deltas with the same revision as graphics. Named Rust
 mechanisms admit their state; the ABI adapter supplies their copied snapshots.
 The shared TS continuation advances when configured hosts apply their operations.
 Explicitly absent optional hosts do not strand unrelated graphics. A configured
-host's partial or rejected published delta requires a fresh baseline; its
-diagnostics remain visible.
+host's partial or rejected published delta currently triggers a fresh baseline;
+its diagnostics remain visible.
 
 Playback cursors advance from admitted Engine update facts. Audio baselines
 resume loops and preserve paused or completed voices; direct sounds and emitter
@@ -244,8 +277,10 @@ collision-swept correction and canonical motion continuation. Dynamics resolves
 body-local anchor observations and effective impulse response, including mass,
 inertia and locked axes. The character returns bounded equal-and-opposite
 reaction proposals; the product explicitly applies them through
-`Dynamics.StepWithReactions` at its chosen update order. This is one ordinary
-Dynamics step, with exact-revision validation before mutation. Attachment
-selection, reel controls, consequences and presentation remain product policy.
+`Dynamics.StepWithReactions` at its chosen update order. The current API checks
+exact revisions before the Dynamics step. Task #8741 may remove those checks
+and redesign observe/apply composition; exercise stale observations to discover
+the smallest behavior actually needed. Attachment selection, reel controls,
+consequences and presentation remain product policy.
 See [character tether use](csharp-sdk.md#character-tethers) and the
 [bounded rope contract](rope-physics.md#kinematic-character-coupling).

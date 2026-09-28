@@ -25,6 +25,33 @@ proving product is `/home/dev/rusty-dagger`.
 Read [the architecture overview](docs/architecture.md) and
 [the C# SDK guide](docs/csharp-sdk.md) before changing this boundary.
 
+## Architecture reset — campaign #8723
+
+For campaign #8723 and its children, the owner's removal-first direction and
+the current task take precedence over preservation language in this file,
+architecture/SDK guides, historical task contracts, comments, and tests. Read
+Den document `rusty-engine/architecture-reset-2026-09` for the campaign charter.
+
+- Start by removing the mechanism under investigation. The owner explicitly
+  accepts over-removal in bounded experiments, followed by the smallest
+  additions that observed failures require.
+- Callback candidates/discard, taint and respawn, exact-revision guards,
+  replay prohibitions and receipts, fresh-baseline recovery, validation layers,
+  policy caps, leases, and the current generation pipeline are eligible for
+  replacement or deletion within the owning task. They are current mechanisms,
+  not architectural requirements to preserve.
+- A retained or restored mechanism needs a concrete failure or required
+  behavior, its smallest remedy, and a reason for its cost at that frequency.
+  Existing code, documentation, or tests alone do not supply that reason.
+  Remove or rewrite tests whose purpose disappears with the mechanism.
+- Keep product/Engine ownership and actual ABI layout, pointer lifetime, and
+  resource ownership correct. These do not require a particular transaction,
+  copying, lease, validation, or recovery design.
+- Implementation children deliver their named changes. Exploration children
+  deliver runnable removal experiments and supported decisions, including
+  honest failed experiments. Update descriptions of the implementation as
+  changes land; do not claim a proposed replacement already exists.
+
 ## Den and missing capabilities
 
 - Engine project: `rusty-engine`. Resolve current Den guidance before
@@ -56,8 +83,8 @@ Read [the architecture overview](docs/architecture.md) and
   `rust/crates/csharp-engine-services` implements named Engine bridges, and
   `rust/crates/csharp-product-runtime` owns loaded-product binding, lifecycle,
   and host integration.
-- `scripts/generate-csharp-native-bindings.sh` runs pinned cbindgen and
-  ClangSharp, generating the header plus raw and safe C# inputs under ignored
+- The current `scripts/generate-csharp-native-bindings.sh` runs pinned cbindgen
+  and ClangSharp, generating the header plus raw and safe C# inputs under ignored
   `obj/Generated` paths. Generated files are never edited or checked in.
 - `csharp/Rusty.Engine` is the public safe service/value surface;
   `csharp/Rusty.Engine.ProductGenerator` generates the internal CoreCLR and
@@ -74,8 +101,10 @@ Read [the architecture overview](docs/architecture.md) and
   generator path. Do not create method-name dispatch, reflection, plugin
   registries, or a task-specific callback list.
 - The boundary handles actual ABI/lifetime concerns only: layout,
-  pointer/length coherence, copied retained data, no unwind across ABI, and
-  exact release. Underlying Engine services retain their normal invariants.
+  pointer/length coherence, valid ownership of retained data, no unwind across
+  ABI, and exact release of owned resources. Copy only when the chosen lifetime
+  requires it. Service checks need a concrete behavior or representation reason
+  under the campaign's removal-first direction.
 
 ## Rendering and TypeScript
 
