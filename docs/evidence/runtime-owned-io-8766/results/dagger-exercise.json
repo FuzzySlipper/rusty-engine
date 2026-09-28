@@ -1,0 +1,137 @@
+{
+  "checkpoints": [
+    {
+      "label": "attached",
+      "at": 1790611065549,
+      "hostState": "ready",
+      "binding": "2920405/1/1",
+      "bindings": 1,
+      "contextAlive": true,
+      "mode": "Title",
+      "forward": [
+        "KeyW"
+      ],
+      "step": 434,
+      "network": {
+        "fresh": 1,
+        "resumed": 0,
+        "inputPosts": 0,
+        "status503": 0
+      }
+    },
+    {
+      "label": "rebound-k",
+      "at": 1790611070635,
+      "hostState": "ready",
+      "binding": "2920405/1/2",
+      "bindings": 2,
+      "contextAlive": true,
+      "mode": "Title",
+      "forward": [
+        "KeyK"
+      ],
+      "step": 740,
+      "network": {
+        "fresh": 1,
+        "resumed": 0,
+        "inputPosts": 12,
+        "status503": 0
+      }
+    },
+    {
+      "label": "reloaded",
+      "at": 1790611077157,
+      "hostState": "ready",
+      "binding": "2920405/1/2",
+      "bindings": 1,
+      "contextAlive": true,
+      "mode": "Title",
+      "forward": [
+        "KeyK"
+      ],
+      "step": 1130,
+      "network": {
+        "fresh": 2,
+        "resumed": 0,
+        "inputPosts": 12,
+        "status503": 0
+      }
+    },
+    {
+      "label": "replaced",
+      "at": 1790611103330,
+      "hostState": "ready",
+      "binding": "2920406/1/1",
+      "bindings": 2,
+      "contextAlive": true,
+      "mode": "Title",
+      "forward": [
+        "KeyK"
+      ],
+      "step": 505,
+      "network": {
+        "fresh": 8,
+        "resumed": 0,
+        "inputPosts": 16,
+        "status503": 6
+      }
+    },
+    {
+      "label": "restored-w",
+      "at": 1790611108219,
+      "hostState": "ready",
+      "binding": "2920406/1/2",
+      "bindings": 3,
+      "contextAlive": true,
+      "mode": "Title",
+      "forward": [
+        "KeyW"
+      ],
+      "step": 799,
+      "network": {
+        "fresh": 8,
+        "resumed": 0,
+        "inputPosts": 28,
+        "status503": 6
+      }
+    }
+  ],
+  "rebindBefore": [
+    "KeyK"
+  ],
+  "replacement": {
+    "beforeBinding": "2920405/1/2",
+    "afterBinding": "2920406/1/1",
+    "secondsFromEdit": 22.718,
+    "freshResponsesAfterEdit": [
+      [
+        12.65,
+        503
+      ],
+      [
+        12.901,
+        503
+      ],
+      [
+        13.402,
+        503
+      ],
+      [
+        14.404,
+        503
+      ],
+      [
+        16.407,
+        503
+      ],
+      [
+        18.426,
+        200
+      ]
+    ]
+  },
+  "rebindAfter": [
+    "KeyW"
+  ],
+  "errors": []
+}

@@ -55,7 +55,7 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | Rigid-body ropes | Rust | `svc-collision` currently solves maximum-distance links in a derived Rapier world; `engine-spatial::RigidBodyService` publishes body and rope facts. The Dynamics bridge owns chain creation/removal and generated C# access. Persistent solver state and simpler mutation APIs are campaign experiments. |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
 | Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
-| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser/worker DTOs and applies delivery byte limits. Progress and input acknowledgements remain host observations. |
+| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser DTOs and applies delivery byte limits. Input acknowledgements and the runtime readout remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
 | Safe C# contracts | Generated C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles generated contracts and values from ignored `obj/Generated` output. |
@@ -143,16 +143,13 @@ browser/GPU objects. Fresh browser attachment reads committed Rust snapshots
 without calling the product's `Attach` callback. Graphics snapshots preserve
 active handles and resource dependencies, with a `presentation-world`
 continuation revision. The runtime session guard covers snapshot capture and
-the output cursor handover, so subsequent deltas follow that snapshot. A worker
-also serializes snapshot responses with output publication; the shell captures
-their ordered queue boundary before later ticks can advance the cursor. The
-presentation revision and transport cursor remain separate facts. Replacement preparation
-quiesces the old publisher before projection write ownership is acquired; a
-prepared replacement value carries that ordering into the host install call.
+the output cursor handover, so subsequent deltas follow that snapshot. The
+presentation revision and transport cursor remain separate facts.
 The runtime moves owned typed publications through operation settlement into
 ProductDev wire DTOs. Publication and host adapters do not clone and readmit
 already admitted graphics, presentation, UI, or view payloads. The serving
-adapter adds progress/input receipt observations. Mailbox draining and publication callbacks belong to that host
+adapter adds input receipt observations and publishes the runtime readout
+only when it changes. Mailbox draining and publication callbacks belong to that host
 scheduler; neutral session scopes retain the single runtime lock.
 
 The renderer realizes admitted changes once, without constructing disposable
@@ -172,22 +169,17 @@ baselines transfer accumulated ownership between pushes. Product artifact
 resolution checks paths/metadata without reading bodies that it would discard;
 actual loaders and UI staging consume those bodies when needed.
 
-Worker replacement starts with empty retained output history, preserving delivery
-counters without cloning retired events. Ready publication shares immutable
-bundle bodies until IPC serialization; the receiving process owns its decoded
-bodies. Catalog admission canonicalizes owned data once before encoding it.
+Catalog admission canonicalizes owned data once before encoding it.
 
 Output batches use ordered fragments without a default aggregate byte/count cap.
 The host serializes actual delivery bytes, not a discarded size preflight. The
 256-event reconnect history is a retention target rounded outward to whole
-publications. Later progress events cannot truncate a large transfer; it ages out
+publications. Later publications cannot truncate a large transfer; it ages out
 only once a full newer history exists. Private baselines preserve every fragment
-until completion. Worker timing observations share ordered output backpressure
-instead of being dropped when that queue fills. Lost/interrupted transfers
+until completion. Lost/interrupted transfers
 currently discard staging and use a fresh complete baseline. Size alone does
 not reconstruct a delta as a baseline in this implementation.
-The worker frame retains its u32 byte-length representation; browser callers may
-choose an explicit per-batch byte budget. Immutable host bundles and C# content
+Browser callers may choose an explicit per-batch byte budget. Immutable host bundles and C# content
 have no default file/count/aggregate byte quotas. Resource-format and browser
 loader restrictions remain separate.
 
@@ -250,6 +242,28 @@ package and a runtime pack containing `rusty`, `rusty-product-host`, and the
 Engine-owned browser shell. The package generates composition below `obj` and
 stages a loose Product directory. `rusty dev` asks the package to stage that
 directory, launches CoreCLR, and watches only the declared Product inputs.
+
+Packaged CoreCLR launches (`rusty dev`, `--headless`, and a direct
+`rusty-product-host --product … --loader coreclr`) run two processes:
+
+- A small **supervisor** binds the product listener and keeps terminal
+  signals. It owns `rusty dev` replacement, one automatic restart after a
+  runtime crash, the failure pause, and headless browser launch. It never
+  relays product traffic.
+- One **runtime** process (CoreCLR, the Engine, the product, HTTP and SSE)
+  runs in its own process group and serves that listener directly. Closing
+  its stdin is the clean stop: the product is disposed before exit.
+
+Replacement stops the old runtime first, so persistence is never shared
+between two incarnations, then starts the next one. While no runtime is
+serving, the supervisor answers requests with 503: JSON for runtime routes,
+and a page that refreshes itself for navigations. A browser treats the new
+runtime as a new incarnation: its output stream reconnects fresh, retrying
+through 503s, and receives a complete baseline.
+
+A direct launch stops with a named nonzero exit if its runtime crashes. Under
+`rusty dev`, a second crash pauses until the next source restage. NativeAOT,
+`--exercise` and `--performance-probe` run in one process.
 
 Neither artifact contains product meaning. A Product repository does not carry
 Engine JavaScript, generated bindings, a checked native bootstrap, or an Engine

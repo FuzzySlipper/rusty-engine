@@ -1,34 +1,34 @@
 # CoreCLR profiling and managed debugging
 
 The packaged Rust host loads ordinary CoreCLR. Standard .NET diagnostics attach
-to its **product worker**, whose executable is named `rusty-product-host`, not
-`dotnet`. The `rusty dev` process and its browser-facing supervisor do not run
-product C#. A browser on another LAN machine does not change this: run the
+to its **runtime process**, whose executable is named `rusty-product-host`, not
+`dotnet`. The `rusty dev` process and the supervisor that starts the runtime do
+not run product C#. A browser on another LAN machine does not change this: run the
 managed tools on the Linux runtime machine, as the user running the product.
 
-## Find the current worker
+## Find the current runtime process
 
 Engine contributors can resolve a selected product without guessing among
 native-named processes:
 
 ```bash
-python3 /path/to/rusty-engine/scripts/find-coreclr-worker.py \
-  --project /path/to/Game.csproj > /tmp/game-worker.json
-managed_pid=$(jq -r .pid /tmp/game-worker.json)
-cat /tmp/game-worker.json
+python3 /path/to/rusty-engine/scripts/find-coreclr-runtime.py \
+  --project /path/to/Game.csproj > /tmp/game-runtime.json
+managed_pid=$(jq -r .pid /tmp/game-runtime.json)
+cat /tmp/game-runtime.json
 ```
 
-The Linux helper checks the live worker arguments, loaded CoreCLR, and default
+The Linux helper checks the live runtime arguments, loaded CoreCLR, and default
 Unix diagnostic socket. It returns `pid`, `parentPid`, `productDirectory`, and
 `diagnosticPort`. Use `--product /exact/staged/Product` for custom staging, or
 add `--pid N` to select among multiple matching sessions. No match or ambiguity
 is an error. It reads live processes, not persisted den-serve records.
 
-Rediscover after every source restage, worker recovery, `rusty dev` restart,
+Rediscover after every source restage, runtime restart, `rusty dev` restart,
 or den-serve restart. Both PID and socket can change. The helper is optional
 contributor tooling, not a Python dependency of the SDK/runtime pack.
 `dotnet-trace ps` is also useful, but may fail while enumerating unrelated
-processes; explicit worker selection avoids that enumeration path.
+processes; explicit runtime selection avoids that enumeration path.
 
 CoreCLR's [diagnostic port](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/diagnostic-port)
 is normally `${TMPDIR:-/tmp}/dotnet-diagnostic-PID-STARTTIME-socket` on Linux.
@@ -77,20 +77,12 @@ Start an explicitly debuggable session:
   --runtime /path/to/runtime-pack --debugger
 ```
 
-`--debugger` removes supervised worker startup and callback deadlines for this
-CoreCLR session. Normal sessions retain their five-second execution deadlines
-and recovery. Synchronous requests report owner settlement before the Engine
-encodes their retained publications; that encoding and delivery no longer count
-as a stalled product callback. Settlement is not a successful response or a
-publication acknowledgment: the caller still waits for the ordered output
-boundary, and worker death remains an uncertain failure that must not be replayed.
-Post-settlement Engine serialization has no callback deadline; the existing
-socket-write deadline and EOF handling remain. Actual synchronous product work,
-including implicit extraction inside the callback, still uses the normal deadline.
-Channel failures and shell protocol validation remain active. A paused or hung
-callback can wait indefinitely in this mode; continue, detach, or stop the session
-when finished. Source restaging still replaces workers, so avoid editing while
-inspecting a paused callback and rediscover before attaching again. `--live-debug`
+`--debugger` removes the runtime's 30-second startup deadline for this
+CoreCLR session; the development host has no callback deadline in any mode. A
+paused or hung callback holds its runtime until you continue, detach or stop
+the session. Source restaging still replaces the runtime (a runtime that does
+not stop within ten seconds is killed), so avoid editing while inspecting a
+paused callback, and rediscover before attaching again. `--live-debug`
 controls the Engine browser diagnostic console; it does not enable managed
 breakpoints.
 
@@ -121,8 +113,8 @@ point. Prefer unoptimized code; a Release local may have been eliminated.
 For an SSH workflow, open the product folder on the runtime machine using a
 remote editor and run its managed debugger adapter there. A C# extension's
 [CoreCLR attach configuration](https://code.visualstudio.com/docs/csharp/debugging)
-uses `"type": "coreclr"`, `"request": "attach"`, and the discovered worker PID
-as `"processId"`. Select the native-named worker explicitly. Source paths must
+uses `"type": "coreclr"`, `"request": "attach"`, and the discovered runtime PID
+as `"processId"`. Select the native-named runtime process explicitly. Source paths must
 match its PDB, or be mapped by the debugger. The editor UI can be on Windows;
 there is no need to expose a debugger port through the LAN browser host. The
 Engine proof used netcoredbg's DAP adapter over local stdio, not a VS Code UI
@@ -142,15 +134,15 @@ DOTNET_DefaultDiagnosticPortSuspend=1 /path/to/runtime-pack/bin/rusty-product-ho
   --runtime-instance-id 1 --debugger
 ```
 
-Keep that terminal's stdin open. In another SSH terminal, discover the worker
+Keep that terminal's stdin open. In another SSH terminal, discover the runtime
 and start `dotnet-trace collect --process-id "$managed_pid" ...`; its normal
-resume behavior releases diagnostic startup suspension. The browser listener
-becomes available after managed startup finishes. Diagnostic startup suspension
+resume behavior releases diagnostic startup suspension. Until managed startup
+finishes, the listener answers 503. Diagnostic startup suspension
 is distinct from a source debugger breakpoint.
 
 ## Dumps, native frames, and NativeAOT
 
-A bounded managed stack capture uses the same worker PID:
+A bounded managed stack capture uses the same runtime PID:
 
 ```bash
 dotnet-dump collect --process-id "$managed_pid" --type Mini --output /tmp/game.dmp
@@ -158,13 +150,12 @@ dotnet-dump analyze /tmp/game.dmp -c 'clrstack -all' -c exit
 ```
 
 A mini dump is useful for stacks, not complete heap analysis. Collection briefly
-suspends the runtime; use `--debugger` if investigation may exceed normal callback
-deadlines. See the [managed dump guide](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-linux-dumps).
+suspends the runtime. See the [managed dump guide](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-linux-dumps).
 For Rust stacks and native/mixed investigation, see [runtime profiling](runtime-profiling.md)
 for the optimized symbol pack and user-mode Linux CPU capture. Use GDB/LLDB for
 native debugger inspection. `dotnet-dump` is not a native debugger.
 
-NativeAOT is a separate fidelity/release lane. It has no CoreCLR worker socket or
+NativeAOT is a separate fidelity/release lane. It has no CoreCLR diagnostic socket or
 ordinary managed-debugger attach parity. Use the published native debug symbols
 and native tools; Microsoft's [NativeAOT diagnostics guide](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/diagnostics)
 describes its different support. No profiler runs continuously by default.

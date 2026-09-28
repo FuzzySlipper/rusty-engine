@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Locate one live supervised CoreCLR worker through Linux procfs."""
+"""Locate one live supervised CoreCLR runtime process through Linux procfs."""
 
 import argparse
 import json
@@ -15,12 +15,12 @@ MAX_MAPS_BYTES = 4 * 1024 * 1024
 
 
 def fail(message: str) -> "None":
-    raise SystemExit(f"find-coreclr-worker: {message}")
+    raise SystemExit(f"find-coreclr-runtime: {message}")
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Locate one live supervised CoreCLR worker through /proc.",
+        description="Locate one live supervised CoreCLR runtime process through /proc.",
     )
     parser.add_argument(
         "--project",
@@ -96,15 +96,12 @@ def option_value(arguments: list[str], option: str) -> Optional[str]:
     return values[0] if len(values) == 1 else None
 
 
-def is_coreclr_worker(pid: int, arguments: list[str]) -> Optional[Path]:
+def is_coreclr_runtime(pid: int, arguments: list[str]) -> Optional[Path]:
     product = option_value(arguments, "--product")
-    worker_channel = option_value(arguments, "--worker-channel")
     if (
         product is None
-        or worker_channel is None
-        or "--loader" not in arguments
+        or option_value(arguments, "--serve-listener-fd") is None
         or option_value(arguments, "--loader") != "coreclr"
-        or "--worker" not in arguments
     ):
         return None
     path = Path(product)
@@ -176,7 +173,7 @@ def under_directory(path: Path, directory: Path) -> bool:
     return True
 
 
-def worker_record(
+def runtime_record(
     pid: int,
     expected_product: Optional[Path],
     expected_project: Optional[Path],
@@ -184,7 +181,7 @@ def worker_record(
     arguments = command_line(pid)
     if arguments is None:
         return None
-    product = is_coreclr_worker(pid, arguments)
+    product = is_coreclr_runtime(pid, arguments)
     if product is None:
         return None
     if expected_product is not None and product != expected_product:
@@ -220,14 +217,14 @@ def main() -> None:
     matches = [
         record
         for pid in proc_pids(options.pid)
-        if (record := worker_record(pid, expected_product, expected_project)) is not None
+        if (record := runtime_record(pid, expected_product, expected_project)) is not None
     ]
     if not matches:
         if options.pid is not None:
-            fail(f"pid {options.pid} is not a live matching CoreCLR worker with a diagnostic socket")
-        fail("no live matching CoreCLR worker with a diagnostic socket")
+            fail(f"pid {options.pid} is not a live matching CoreCLR runtime with a diagnostic socket")
+        fail("no live matching CoreCLR runtime with a diagnostic socket")
     if len(matches) != 1:
-        fail(f"multiple matching CoreCLR workers found: {', '.join(str(record['pid']) for record in matches)}; pass --pid")
+        fail(f"multiple matching CoreCLR runtimes found: {', '.join(str(record['pid']) for record in matches)}; pass --pid")
     print(json.dumps(matches[0], separators=(",", ":")))
 
 

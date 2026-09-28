@@ -8,7 +8,6 @@ import {
   historyCommand,
   runtimeIncarnationLabel,
   updateAttributionLabel,
-  workerUpdateLabel,
 } from './live-debug-panel-model.js';
 
 void test('transcript retains the most recent bounded command responses', () => {
@@ -41,19 +40,8 @@ void test('catalog labels retain parameter names and types for command help', ()
   }), 'debug.entity entityId: u64');
 });
 
-void test('worker and update labels retain the exact incarnation and separate phase meanings', () => {
+void test('update labels retain the exact incarnation', () => {
   assert.equal(runtimeIncarnationLabel({ instanceId: '42', generation: '7', controlRevision: '9' }), 'runtime 42/7/9');
-  assert.equal(workerUpdateLabel({
-    workerPid: '4321',
-    readout: {
-      artifact: 'rusty.product.runtime-readout',
-      runtime: { instanceId: '42', generation: '7', controlRevision: '9' },
-      mode: 'realtime', state: 'running', admittedSimulationSteps: '12', admittedPresentations: '13',
-      droppedRealtimeSteps: '0', clockRegressions: '0', scaledRemainder: null, lastObservedTimeNs: null, fault: null,
-    },
-    phases: { operationDurationUs: '180', outputConversionDurationUs: '25', outputEncodeWriteDurationUs: '35', inputQueueAgeUs: '8' },
-    shellDeliveryIntervalUs: '240', shellOutputDecodeDurationUs: '7', shellOutputQueueDurationUs: '4', shellPublicationDurationUs: '6', ageMs: '3',
-  }), 'Worker 4321 · runtime 42/7/9 · realtime/running · simulation 12 · age 3 ms');
   assert.equal(updateAttributionLabel({
     runtime: { instanceId: '42', generation: '7', controlRevision: '9' }, simulationStep: '12', admittedStepCount: '13', postCallbackDurationUs: '15', callbackDurationUs: '90',
     characterStepCalls: '0', characterStepDurationUs: '0', characterStepCastCount: '0', characterStepCandidateCount: '0', characterStepNarrowPhaseCount: '0',

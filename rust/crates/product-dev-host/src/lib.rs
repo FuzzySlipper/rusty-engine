@@ -16,23 +16,17 @@
 #![forbid(unsafe_code)]
 
 mod bundle;
-mod diagnostic_relay;
 mod error;
 mod host;
 mod log;
 mod model;
 mod scheduler;
 mod session;
-mod worker;
 
 pub use bundle::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry,
     ProductDevRendererResource, ProductDevRendererResourceKind, PRODUCT_DEV_INDEX_PATH,
     PRODUCT_DEV_RENDERER_PRELOAD_PATH,
-};
-pub use diagnostic_relay::{
-    worker_diagnostic_relay, ProductDevWorkerDiagnosticRelayReceiver,
-    ProductDevWorkerDiagnosticRelaySender, WORKER_DIAGNOSTIC_RELAY_CAPACITY,
 };
 pub use error::{
     ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,
@@ -66,7 +60,7 @@ pub use model::{
     ProductDevRuntimeState, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
     ProductDevUpdateAttributionSnapshot, ProductDevVideoFeedback, ProductDevVideoFeedbackFact,
-    ProductDevWorkerUpdateSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
+    PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use runtime_publication::{
     RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
@@ -74,14 +68,6 @@ pub use runtime_publication::{
 };
 pub use scheduler::advance_realtime_with_input_and_publish;
 pub use session::ProductDevOperationOwner;
-pub use worker::{
-    read_worker_frame, write_worker_frame, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
-    ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic, ProductDevWorkerDiagnosticField,
-    ProductDevWorkerEvent, ProductDevWorkerFault, ProductDevWorkerFeedbackOperation,
-    ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerPublication,
-    ProductDevWorkerRequest, ProductDevWorkerResponse, ProductDevWorkerUpdateOperation,
-    ProductDevWorkerUpdateTelemetry,
-};
 
 /// Upper bound for one HTTP request header block, including its terminator.
 pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;

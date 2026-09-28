@@ -1,7 +1,7 @@
 # Runtime timing and native profiles
 
 Use [CoreCLR diagnostics](coreclr-diagnostics.md) for managed attachment,
-EventPipe, counters, and dumps. This guide adds worker-boundary timing and
+EventPipe, counters, and dumps. This guide adds callback timing and
 optimized Rust CPU sampling. These observations support investigation; they do
 not change product scheduling or enable continuous stack collection.
 
@@ -22,18 +22,14 @@ runtime instance/generation/control revision, simulation step, and admitted
 step count. Realtime catch-up is one callback carrying several admitted steps;
 callback frequency is not the fixed simulation frequency.
 
-Worker-hosted callbacks and direct demand/external calls retain their attribution.
-The worker scheduler additionally publishes `workerUpdate`: worker PID, runtime
-readout/counters, phase durations, and the shell-local age of that observation.
-`inFlightOperation` also observes worker scheduler activity without acquiring the
-product lock. Source replacement clears old samples and worker timings; a new
-worker's first callback is the start of a new distribution. Intentional worker
-retirement does not create an unexpected-EOF error. An unexpected exit still does.
+Realtime callbacks and direct demand/external calls retain their attribution.
+`inFlightOperation` and its age observe a running callback without acquiring
+the product lock. A new runtime incarnation starts a new distribution.
 
-Runtime progress measures completed observations in the receiving host, not a
+Runtime progress measures completed updates in the runtime process, not a
 browser clock or simulation-step count. No samples, only one sample, or no recent
 progress produces an explicit reason instead of a fabricated rate. A paused or
-busy worker leaves an aging last sample; diagnostics reads remain independent
+busy runtime leaves an aging last sample; diagnostics reads remain independent
 of the callback lock.
 
 | Fact | Meaning |
@@ -41,30 +37,19 @@ of the callback lock.
 | `callbackDurationUs` | Elapsed C# callback, **including** native Engine services it calls. |
 | Character/residency/scene service totals | Nested within the callback; do not add them to it. |
 | `postCallbackDurationUs` | Rust staging, presentation reduction/output conversion, commit and completion after callback return. |
-| Worker `operationDurationUs` | The whole scheduled operation, including input/lifecycle handling, callback and post-callback work. |
-| Worker `outputConversionDurationUs` | Converting/validating output values for the worker envelope. |
-| Worker `outputEncodeWriteDurationUs` | Encoding that output envelope and writing its channel frame. |
-| Worker `inputQueueAgeUs` | Oldest drained input's wait in the worker mailbox; null when no input was drained. Shell input admission/queue observations remain separate. |
-| `shellDeliveryIntervalUs` | Shell-local interval from receiving scheduler activity to receiving its completion telemetry. Overlaps worker work, encoding and delivery; **not network latency** or an additive phase. |
-| Shell output decode / queue / publication | Local output conversion, wait in the bounded publication queue, and retained publication time. |
 
-These are elapsed durations, not CPU profiles. None subtracts absolute timestamps
-from different processes. Keep the runtime identity and readout with a capture;
-never correlate an old worker's trace with a replacement's callback statistics.
-Timing observations follow their outputs through the same ordered publication
-queue. Queue pressure delays delivery instead of dropping samples; local reader
-backpressure is excluded from worker execution deadlines. The last displayed
-sample continues aging while delivery waits. Retirement may discard old-worker
-observations, and replacement clears that worker's timing state.
+These are elapsed durations, not CPU profiles. Keep the runtime identity with a
+capture; never correlate an old runtime's trace with a replacement's callback
+statistics.
 
 ## Simulation and display cadence
 
-The CoreCLR worker schedules realtime observations against absolute deadlines.
+The runtime host schedules realtime observations against absolute deadlines.
 Callback, output conversion and delivery time consume the tick budget instead
-of adding another full interval after each operation. A missed deadline skips
-host wakeups to the next future boundary; lifecycle admission still owns the
-fixed-step catch-up cap and dropped-step accounting. Pausing resets the host
-schedule phase. Observation intervals round up to avoid waking before an exact
+of adding another full interval after each operation. After a missed deadline
+the next observation is one interval after the late one finishes; lifecycle
+admission still owns the fixed-step catch-up cap and dropped-step accounting.
+Pausing resets the host schedule phase. Observation intervals round up to avoid waking before an exact
 fixed-step boundary.
 
 Browser RAF and GPU submission run independently. Configured product cameras
@@ -77,7 +62,7 @@ uses worker threads internally. Work that should finish later needs an explicit
 asynchronous job/result boundary; waiting for it inside a fixed update keeps it
 on the critical path. Fast GPU timing does not establish smooth camera delivery.
 Compare fresh `engine.renderer.detail` product-frame receipt/applied intervals
-with worker progress and callback cost. Do not infer a fixed simulation rate
+with runtime progress and callback cost. Do not infer a fixed simulation rate
 from either the RAF rate or the number of batched C# callbacks.
 
 ## Optimized Linux native capture
@@ -103,10 +88,10 @@ Use a standard Linux `perf` installation. On the tested host,
 DOTNET_PerfMapEnabled=3 /path/to/runtime-pack/bin/rusty dev \
   --project /path/to/Game.csproj --runtime /path/to/runtime-pack --live-debug
 
-# In another terminal, rediscover the current managed/native product worker.
-python3 /path/to/rusty-engine/scripts/find-coreclr-worker.py \
-  --project /path/to/Game.csproj > /tmp/worker.json
-managed_pid=$(jq -r .pid /tmp/worker.json)
+# In another terminal, rediscover the current managed/native runtime process.
+python3 /path/to/rusty-engine/scripts/find-coreclr-runtime.py \
+  --project /path/to/Game.csproj > /tmp/runtime.json
+managed_pid=$(jq -r .pid /tmp/runtime.json)
 
 # Capture outside watched product sources. CPU samples exclude sleeping time.
 mkdir -p /tmp/runtime-profile
@@ -136,14 +121,13 @@ unresolved JIT samples to Rust. `perf inject --jit` was also tried with JIT dump
 export enabled and did not improve this attach capture, so it is not required
 by this recipe. Complete automatic mixed-stack symbolization is not claimed.
 
-Record diagnostics immediately before and after sampling. `worker.json` includes
-`runtimeInstanceId`; compare it to `workerUpdate.readout.runtime.instanceId` and
-the callback sample binding. Also retain the matching pack's `runtime-manifest.json`,
+Record diagnostics immediately before and after sampling. `runtime.json` includes
+`runtimeInstanceId`; compare it to the callback sample binding. Also retain the matching pack's `runtime-manifest.json`,
 `symbols/build-info.txt`, product DLL/PDBs, tool versions, and exact commands.
 Rediscover after any restart, as described in the managed guide.
 
 CPU samples distinguish scheduled native/managed work from waits. Pair them with
-`System.Runtime` CPU-time counters and the elapsed callback/worker phases to
+`System.Runtime` CPU-time counters and the elapsed callback durations to
 identify time that needs further investigation. Ordinary EventPipe sampled
 thread time includes waits and does not provide Rust CPU stacks. This user-mode
 recipe does not claim kernel stacks or off-CPU wait-stack attribution.

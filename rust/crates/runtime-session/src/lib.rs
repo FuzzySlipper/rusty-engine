@@ -190,23 +190,6 @@ impl<T, O> RuntimeReceipt<T, O> {
     }
 }
 
-/// A replacement whose producer has been quiesced before projection install.
-/// Preparation must stop/join the previous publisher under its own session
-/// serialization. Only after that completes may a host acquire projection
-/// write ownership; an old reader may still need a projection read to finish
-/// acknowledging a snapshot boundary during preparation.
-pub struct PreparedRuntimeReplacement<T>(T);
-
-impl<T> PreparedRuntimeReplacement<T> {
-    pub fn prepare<E>(prepare: impl FnOnce() -> Result<T, E>) -> Result<Self, E> {
-        prepare().map(Self)
-    }
-
-    pub fn into_inner(self) -> T {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{

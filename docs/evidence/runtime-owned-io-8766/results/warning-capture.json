@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "captureProtocol": "rusty-engine.playtest-warning-delta/v1",
+  "compatibility": {
+    "exerciseId": "8766-attach",
+    "pageOrigin": "http://127.0.0.1:41890",
+    "engineOrigin": "http://127.0.0.1:41890"
+  },
+  "run": {
+    "startedAt": "2026-09-28T15:58:28.600Z",
+    "completedAt": "2026-09-28T15:58:29.172Z",
+    "url": "http://127.0.0.1:41890/",
+    "exerciseId": "8766-attach",
+    "nodeVersion": "v22.22.1",
+    "gitRevision": "338b6ff9a6655369eaee60fb93bdfc0f1eddf314",
+    "gitDirty": true,
+    "browserVersion": "149.0.7827.55"
+  },
+  "capture": {
+    "browser": {
+      "status": "complete"
+    },
+    "engine": {
+      "status": "complete",
+      "origin": "http://127.0.0.1:41890",
+      "checkpointCursor": "3",
+      "finalCursor": "3",
+      "reads": 2,
+      "lagged": false,
+      "droppedCount": "0",
+      "checkpoint": {
+        "status": "complete",
+        "initialCursor": "3",
+        "checkpointCursor": "3",
+        "reads": 1
+      },
+      "events": []
+    }
+  },
+  "findings": [
+    {
+      "source": "playwright",
+      "kind": "console",
+      "severity": "warning",
+      "message": "inventory frame art is not published by this session: inventory.skin.grid-slot-slate.v1, inventory.skin.panel-slate.v1, inventory.skin.titlebar-slate.v1",
+      "url": "http://127.0.0.1:41890/product-ui/art.js",
+      "fingerprint": "1edc0749d11603caf8c696a46754ef767cec6b2071a9d4771e1c54c968f8c627",
+      "occurrenceCount": 1
+    },
+    {
+      "source": "playwright",
+      "kind": "console",
+      "severity": "warning",
+      "message": "[.WebGL-<hex>]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "url": "http://127.0.0.1:41890/",
+      "fingerprint": "495be6609150328999ac48bdc40b9debadc51c46f3682cf4202b93668389b0c4",
+      "occurrenceCount": 2
+    }
+  ],
+  "comparison": {
+    "status": "unavailable",
+    "reason": "no baseline was supplied"
+  },
+  "cleanClaimEligible": false,
+  "blockers": [
+    "baseline comparison is unavailable"
+  ]
+}

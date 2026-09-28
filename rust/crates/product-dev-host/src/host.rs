@@ -3,8 +3,8 @@ use std::{
     io::{self, Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc, Arc, Condvar, Mutex, RwLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Condvar, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -22,11 +22,9 @@ use crate::{
     ProductDevLogSeverity, ProductDevNextAction, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
-    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot,
-    ProductDevWorkerDiagnosticRelayReceiver, ProductDevWorkerPublication,
-    ProductDevWorkerUpdateSnapshot, MAX_CONNECTIONS, MAX_OUTPUT_EVENT_BYTES,
-    MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES,
-    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS,
+    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -44,8 +42,6 @@ pub const MAX_HOST_INPUT_BATCHES: usize = 256;
 /// A deliberately narrow test seam for one listener accept decision. It is
 /// not a transport abstraction: production always invokes `TcpListener`.
 type AcceptDecisionHook = Arc<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>;
-type WorkerOutputReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerPublication>>>;
-type WorkerDiagnosticReceiver = Arc<Mutex<ProductDevWorkerDiagnosticRelayReceiver>>;
 
 /// Configuration for the fixed development host.
 #[derive(Clone)]
@@ -57,15 +53,6 @@ pub struct ProductDevHostConfig {
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
     accept_decision_hook: Option<AcceptDecisionHook>,
-    worker_outputs: Option<WorkerOutputReceiver>,
-    worker_generation: Option<Arc<AtomicUsize>>,
-    initial_worker_outputs: Vec<ProductDevRuntimeOutput>,
-    initial_worker_generation: u64,
-    worker_failures: Option<mpsc::SyncSender<u64>>,
-    worker_diagnostics: Option<WorkerDiagnosticReceiver>,
-    worker_owns_scheduler: bool,
-    worker_activity: Option<runtime_diagnostics::RuntimeOperationActivity>,
-    disposable_worker_runtime: bool,
     listener: Option<Arc<TcpListener>>,
 }
 
@@ -78,15 +65,6 @@ impl ProductDevHostConfig {
             live_debug_enabled: false,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
             accept_decision_hook: None,
-            worker_outputs: None,
-            worker_generation: None,
-            initial_worker_outputs: Vec::new(),
-            initial_worker_generation: 0,
-            worker_failures: None,
-            worker_diagnostics: None,
-            worker_owns_scheduler: false,
-            worker_activity: None,
-            disposable_worker_runtime: false,
             listener: None,
         }
     }
@@ -116,47 +94,6 @@ impl ProductDevHostConfig {
 
     pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
         self.diagnostics = diagnostics;
-        self
-    }
-
-    /// Supplies retained output from one disposable local worker. The reader
-    /// is intentionally one-way: requests remain on the typed runtime owner.
-    pub fn with_worker_outputs(
-        mut self,
-        receiver: mpsc::Receiver<ProductDevWorkerPublication>,
-        generation: Arc<AtomicUsize>,
-        failures: mpsc::SyncSender<u64>,
-        initial_outputs: Vec<ProductDevRuntimeOutput>,
-        initial_generation: u64,
-    ) -> Self {
-        self.worker_outputs = Some(Arc::new(Mutex::new(receiver)));
-        self.worker_generation = Some(generation);
-        self.initial_worker_outputs = initial_outputs;
-        self.initial_worker_generation = initial_generation;
-        self.worker_failures = Some(failures);
-        self
-    }
-
-    /// Supplies bounded diagnostic facts from one disposable local worker.
-    /// The stable shell owns their retained/log-file projection just as it
-    /// owns HTTP and SSE; worker stderr remains human output only.
-    pub fn with_worker_diagnostics(
-        mut self,
-        receiver: ProductDevWorkerDiagnosticRelayReceiver,
-    ) -> Self {
-        self.worker_diagnostics = Some(Arc::new(Mutex::new(receiver)));
-        self
-    }
-
-    /// Marks the runtime scheduler as worker-owned. The stable HTTP shell
-    /// then does not create even an idle local scheduler thread.
-    pub fn with_worker_scheduler(
-        mut self,
-        activity: runtime_diagnostics::RuntimeOperationActivity,
-    ) -> Self {
-        self.worker_activity = Some(activity);
-        self.worker_owns_scheduler = true;
-        self.disposable_worker_runtime = true;
         self
     }
 
@@ -200,19 +137,13 @@ impl ProductDevHost {
         let scheduler_wake = Arc::new(SchedulerWake::default());
         let output_wake = Arc::new(OutputWake::default());
         let bundle = Arc::new(RwLock::new(config.bundle));
-        let mut initial_output_bus = OutputBus::default();
-        push_outputs_staged(&mut initial_output_bus, config.initial_worker_outputs)?;
-        let outputs = Arc::new(Mutex::new(initial_output_bus));
-        let projection_gate = Arc::new(RwLock::new(()));
-        let projection_epoch = Arc::new(AtomicU64::new(0));
+        let outputs = Arc::new(Mutex::new(OutputBus::default()));
         let state = Arc::new(HostState {
             bundle: Arc::clone(&bundle),
             runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
             realtime_scheduler_enabled,
-            disposable_worker_runtime: config.disposable_worker_runtime,
-            worker_activity: config.worker_activity,
             outputs: Arc::clone(&outputs),
             output_wake: Arc::clone(&output_wake),
             shutdown: Arc::clone(&shutdown),
@@ -221,21 +152,11 @@ impl ProductDevHost {
             expected_port: address.port(),
             live_debug_enabled: config.live_debug_enabled,
             diagnostics: config.diagnostics.clone(),
-            projection_gate: Arc::clone(&projection_gate),
-            projection_epoch: Arc::clone(&projection_epoch),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
-        let worker_outputs = config.worker_outputs;
-        let worker_generation = config.worker_generation;
-        if let Some(generation) = &worker_generation {
-            generation.store(config.initial_worker_generation as usize, Ordering::Release);
-        }
-        let worker_output_generation = worker_generation.clone();
-        let worker_failures = config.worker_failures;
-        let worker_diagnostics = config.worker_diagnostics;
         let listener_state = Arc::clone(&state);
         let listener_threads = Arc::clone(&handler_threads);
         let accept_decision_hook = config.accept_decision_hook;
@@ -252,173 +173,37 @@ impl ProductDevHost {
             .map_err(|error| ProductDevHostError::io("DEV_HOST_THREAD", error))?;
         let scheduler_state = Arc::clone(&state);
         let scheduler_wake_thread = Arc::clone(&scheduler_wake);
-        let scheduler_thread = if config.worker_owns_scheduler {
-            None
-        } else {
-            match thread::Builder::new()
-                .name("rusty-product-realtime-scheduler".to_owned())
-                .spawn(move || scheduler_loop(scheduler_state, scheduler_wake_thread))
-            {
-                Ok(thread) => Some(thread),
-                Err(error) => {
-                    // The listener already owns a live socket at this point. If
-                    // scheduler creation fails, close that ownership explicitly
-                    // before returning so a half-started host cannot survive.
-                    shutdown.store(true, Ordering::SeqCst);
-                    scheduler_wake.notify();
-                    output_wake.notify();
-                    let _ = TcpStream::connect_timeout(&address, SOCKET_TIMEOUT);
-                    let _ = listener_thread.join();
-                    if let Ok(mut handlers) = handler_threads.lock() {
-                        for handler in std::mem::take(&mut *handlers) {
-                            let _ = handler.join();
-                        }
+        let scheduler_thread = match thread::Builder::new()
+            .name("rusty-product-realtime-scheduler".to_owned())
+            .spawn(move || scheduler_loop(scheduler_state, scheduler_wake_thread))
+        {
+            Ok(thread) => thread,
+            Err(error) => {
+                // The listener already owns a live socket at this point. If
+                // scheduler creation fails, close that ownership explicitly
+                // before returning so a half-started host cannot survive.
+                shutdown.store(true, Ordering::SeqCst);
+                scheduler_wake.notify();
+                output_wake.notify();
+                let _ = TcpStream::connect_timeout(&address, SOCKET_TIMEOUT);
+                let _ = listener_thread.join();
+                if let Ok(mut handlers) = handler_threads.lock() {
+                    for handler in std::mem::take(&mut *handlers) {
+                        let _ = handler.join();
                     }
-                    return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
                 }
+                return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
             }
         };
-        let worker_output_thread = worker_outputs.map(|receiver| {
-            let telemetry = Arc::clone(&state.telemetry);
-            let outputs = Arc::clone(&outputs);
-            let wake = Arc::clone(&output_wake);
-            let shutdown = Arc::clone(&shutdown);
-            let projection_gate = Arc::clone(&projection_gate);
-            let generation =
-                worker_output_generation.expect("worker output generation accompanies receiver");
-            let failures = worker_failures.expect("worker output failures accompany receiver");
-            let diagnostics = config.diagnostics.clone();
-            thread::Builder::new()
-                .name("rusty-product-worker-output".to_owned())
-                .spawn(move || {
-                    while !shutdown.load(Ordering::Acquire) {
-                        let batch = match receiver.lock() {
-                            Ok(receiver) => receiver.recv_timeout(Duration::from_millis(50)),
-                            Err(_) => return,
-                        };
-                        match batch {
-                            Ok(ProductDevWorkerPublication::Outputs(outputs_from_worker)) => {
-                                let _projection = match projection_gate.read() {
-                                    Ok(gate) => gate,
-                                    Err(_) => return,
-                                };
-                                if outputs_from_worker.generation
-                                    != generation.load(Ordering::Acquire) as u64
-                                {
-                                    continue;
-                                }
-                                let worker_generation = outputs_from_worker.generation;
-                                let publication_started = Instant::now();
-                                let queue_duration_us =
-                                    elapsed_microseconds(outputs_from_worker.received_at)
-                                        .saturating_sub(outputs_from_worker.decode_duration_us);
-                                match push_outputs(&outputs, outputs_from_worker.outputs) {
-                                    Ok(_) => {
-                                        if let Ok(mut telemetry) = telemetry.lock() {
-                                            telemetry.last_output_phases = (
-                                                outputs_from_worker.decode_duration_us,
-                                                queue_duration_us,
-                                                elapsed_microseconds(publication_started),
-                                            );
-                                        }
-                                        wake.notify();
-                                    }
-                                    Err(error) => {
-                                        generation.store(0, Ordering::Release);
-                                        publish_host_diagnostic(
-                                            &diagnostics,
-                                            ProductDevLogSeverity::Error,
-                                            ProductDevLogDisposition::Degraded,
-                                            error.code(),
-                                            error.detail(),
-                                            [("worker-generation", worker_generation.to_string())],
-                                        );
-                                        let _ = failures.try_send(worker_generation);
-                                    }
-                                }
-                            }
-                            Ok(ProductDevWorkerPublication::UpdateTelemetry {
-                                generation: update_generation,
-                                telemetry: update,
-                                delivery_interval_us,
-                            }) => {
-                                let Ok(_projection) = projection_gate.read() else {
-                                    return;
-                                };
-                                if update_generation != generation.load(Ordering::Acquire) as u64 {
-                                    continue;
-                                }
-                                if let (Some(now_ns), Ok(mut telemetry)) =
-                                    (diagnostics.now_monotonic_nanoseconds(), telemetry.lock())
-                                {
-                                    telemetry.record_worker_update(
-                                        now_ns,
-                                        *update,
-                                        delivery_interval_us,
-                                    );
-                                }
-                            }
-                            Ok(ProductDevWorkerPublication::ConnectionBoundary {
-                                generation: boundary_generation,
-                                acknowledged,
-                            }) => {
-                                let cursor = worker_connection_boundary_cursor(
-                                    &outputs,
-                                    &projection_gate,
-                                    &generation,
-                                    boundary_generation,
-                                );
-                                let _ = acknowledged.send(cursor);
-                            }
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                        }
-                    }
-                })
-                .expect("worker output thread creation")
-        });
-        let worker_diagnostic_thread = worker_diagnostics.clone().map(|receiver| {
-            let diagnostics = config.diagnostics.clone();
-            let shutdown = Arc::clone(&shutdown);
-            thread::Builder::new()
-                .name("rusty-product-worker-diagnostic".to_owned())
-                .spawn(move || {
-                    while !shutdown.load(Ordering::Acquire) {
-                        let error = match receiver.lock() {
-                            Ok(receiver) => receiver.recv_timeout(Duration::from_millis(50)),
-                            Err(_) => return,
-                        };
-                        match error {
-                            Ok(diagnostic) => {
-                                if let Ok(event) = diagnostic.into_log_event() {
-                                    let _ = diagnostics.publish(event);
-                                }
-                            }
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                        }
-                    }
-                })
-                .expect("worker diagnostic thread creation")
-        });
         Ok(RunningProductDevHost {
             address,
             shutdown,
             scheduler_wake,
             output_wake,
-            scheduler_thread,
+            scheduler_thread: Some(scheduler_thread),
             listener_thread: Some(listener_thread),
             handler_threads,
             diagnostics: config.diagnostics,
-            bundle,
-            outputs,
-            projection_gate,
-            projection_epoch,
-            worker_generation,
-            worker_output_thread,
-            worker_diagnostic_thread,
-            worker_diagnostics,
-            telemetry: Arc::clone(&state.telemetry),
         })
     }
 }
@@ -434,15 +219,6 @@ pub struct RunningProductDevHost {
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
     diagnostics: ProductDevLog,
-    bundle: Arc<RwLock<ProductDevBundle>>,
-    outputs: Arc<Mutex<OutputBus>>,
-    projection_gate: Arc<RwLock<()>>,
-    projection_epoch: Arc<AtomicU64>,
-    worker_generation: Option<Arc<AtomicUsize>>,
-    worker_output_thread: Option<JoinHandle<()>>,
-    worker_diagnostic_thread: Option<JoinHandle<()>>,
-    worker_diagnostics: Option<WorkerDiagnosticReceiver>,
-    telemetry: Arc<Mutex<HostTelemetry>>,
 }
 
 impl RunningProductDevHost {
@@ -465,69 +241,6 @@ impl RunningProductDevHost {
         self.stop()
     }
 
-    /// Atomically makes a freshly loaded worker visible to the stable browser
-    /// shell. A changed binding fences old retained output before the new
-    /// complete baseline is committed, so neither live SSE clients nor an old
-    /// Last-Event-ID reconnect can consume facts from the retired incarnation.
-    pub fn replace_worker_projection<P, F>(
-        &self,
-        prepared: runtime_session::PreparedRuntimeReplacement<(
-            P,
-            ProductDevBundle,
-            Vec<ProductDevRuntimeOutput>,
-            u64,
-        )>,
-        activate: F,
-    ) -> Result<u64, ProductDevHostError>
-    where
-        F: FnOnce(P) -> Result<(), ProductDevRuntimeError>,
-    {
-        let (pending, bundle, outputs, worker_generation) = prepared.into_inner();
-        let _gate = self.projection_gate.write().map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_WORKER_REPLACE",
-                "projection replacement lock is poisoned",
-            )
-        })?;
-        let mut bus = self.outputs.lock().map_err(|_| {
-            ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
-        })?;
-        // Every worker replacement publishes a complete baseline. Retired
-        // history has no place in that baseline, even if its binding is reused.
-        let mut staged = OutputBus {
-            next_id: bus.next_id,
-            next_transfer_id: bus.next_transfer_id,
-            floor_cursor: bus.next_id,
-            retained_event_limit: bus.retained_event_limit,
-            ..OutputBus::default()
-        };
-        let through = push_outputs_staged(&mut staged, outputs)?;
-        let mut current = self.bundle.write().map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_BUNDLE_REPLACE",
-                "bundle replacement lock is poisoned",
-            )
-        })?;
-        activate(pending).map_err(|error| {
-            ProductDevHostError::worker_activation(format!(
-                "{}: {}",
-                error.code(),
-                error.diagnostic()
-            ))
-        })?;
-        *bus = staged;
-        *current = bundle;
-        if let Ok(mut telemetry) = self.telemetry.lock() {
-            *telemetry = HostTelemetry::default();
-        }
-        if let Some(generation) = &self.worker_generation {
-            generation.store(worker_generation as usize, Ordering::Release);
-        }
-        self.projection_epoch.fetch_add(1, Ordering::AcqRel);
-        self.output_wake.notify();
-        Ok(through)
-    }
-
     fn stop(&mut self) -> Result<(), ProductDevHostError> {
         let was_shutdown = self.shutdown.swap(true, Ordering::SeqCst);
         // Stop the host-owned realtime loop first. It may be in a product
@@ -539,25 +252,6 @@ impl RunningProductDevHost {
             thread.join().map_err(|_| {
                 ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "scheduler thread panicked")
             })?;
-        }
-        if let Some(thread) = self.worker_output_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.worker_diagnostic_thread.take() {
-            let _ = thread.join();
-        }
-        // The worker is stopped and its socket reader joined before host
-        // shutdown. The consumer may already have observed the shutdown flag;
-        // persist all final relayed events before flushing the host file.
-        if let Some(receiver) = self.worker_diagnostics.take() {
-            let receiver = receiver.lock().map_err(|_| {
-                ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "diagnostic relay lock poisoned")
-            })?;
-            while let Ok(diagnostic) = receiver.recv_timeout(Duration::ZERO) {
-                if let Ok(event) = diagnostic.into_log_event() {
-                    let _ = self.diagnostics.publish(event);
-                }
-            }
         }
         // Wake a nonblocking accept loop promptly. The connection is accepted
         // and observes the same shutdown flag before it parses a request.
@@ -594,8 +288,6 @@ struct HostState<R> {
     input_mailbox: Arc<HostInputMailbox>,
     telemetry: Arc<Mutex<HostTelemetry>>,
     realtime_scheduler_enabled: bool,
-    disposable_worker_runtime: bool,
-    worker_activity: Option<runtime_diagnostics::RuntimeOperationActivity>,
     outputs: Arc<Mutex<OutputBus>>,
     output_wake: Arc<OutputWake>,
     shutdown: Arc<AtomicBool>,
@@ -604,17 +296,11 @@ struct HostState<R> {
     expected_port: u16,
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
-    projection_gate: Arc<RwLock<()>>,
-    projection_epoch: Arc<AtomicU64>,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
     /// The last readout put on the output stream. Readouts are published
     /// only when they change what a browser shows, not every tick.
     published_readout: Mutex<Option<crate::ProductDevRuntimeReadout>>,
-}
-
-fn elapsed_microseconds(started: Instant) -> u64 {
-    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 /// Small process-local observation state. It intentionally has no runtime
@@ -629,8 +315,6 @@ struct HostTelemetry {
     progress_samples_ns: VecDeque<u64>,
     update_attribution_samples: VecDeque<(u64, ProductDevUpdateAttribution)>,
     slowest_update_attribution: Option<(u64, ProductDevUpdateAttribution)>,
-    last_output_phases: (u64, u64, u64),
-    worker_update: Option<(u64, ProductDevWorkerUpdateSnapshot)>,
 }
 
 impl HostTelemetry {
@@ -705,31 +389,6 @@ impl HostTelemetry {
         }) {
             self.slowest_update_attribution = Some((completed_ns, sample));
         }
-    }
-
-    fn record_worker_update(
-        &mut self,
-        now_ns: u64,
-        update: crate::ProductDevWorkerUpdateTelemetry,
-        delivery_interval_us: Option<u64>,
-    ) {
-        if let Some(attribution) = update.attribution {
-            self.record_update_attribution(now_ns, attribution);
-            self.record_progress(now_ns);
-        }
-        self.worker_update = Some((
-            now_ns,
-            ProductDevWorkerUpdateSnapshot {
-                worker_pid: update.worker_pid,
-                readout: update.readout,
-                phases: update.phases,
-                shell_delivery_interval_us: delivery_interval_us.map(CanonicalU64::new),
-                shell_output_decode_duration_us: CanonicalU64::new(self.last_output_phases.0),
-                shell_output_queue_duration_us: CanonicalU64::new(self.last_output_phases.1),
-                shell_publication_duration_us: CanonicalU64::new(self.last_output_phases.2),
-                age_ms: CanonicalU64::new(0),
-            },
-        ));
     }
 
     fn update_attribution_snapshot(
@@ -827,11 +486,6 @@ impl HostTelemetry {
                     _ => "Waiting for a second completed update to measure progress",
                 }
                 .to_owned()
-            }),
-            worker_update: self.worker_update.as_ref().map(|(at, update)| {
-                let mut update = update.clone();
-                update.age_ms = CanonicalU64::new(now_ns.saturating_sub(*at) / 1_000_000);
-                update
             }),
             connections: transport.connections,
             subscribers: transport.subscribers,
@@ -1161,9 +815,6 @@ fn request_incarnation_replacement<R: ProductDevRuntime>(
     error: &ProductDevRuntimeError,
 ) {
     if error.recovery().next_action() != ProductDevNextAction::ReplaceIncarnation {
-        return;
-    }
-    if state.disposable_worker_runtime {
         return;
     }
     if state.shutdown.swap(true, Ordering::SeqCst) {
@@ -1540,7 +1191,6 @@ fn dispatch_request<R: ProductDevRuntime>(
     state: &HostState<R>,
     request: HttpRequest,
 ) -> HttpResponse {
-    let _projection = state.projection_gate.read().ok();
     if request.method == "GET" {
         if let Some((identity, generation)) = renderer_resource_query(&request.path) {
             if !request.body.is_empty() {
@@ -2263,24 +1913,11 @@ fn telemetry_snapshot<R: ProductDevRuntime>(
             subscribers: state.subscribers.load(Ordering::Acquire),
             ..TransportTelemetry::default()
         });
-    let mut snapshot = state
+    state
         .telemetry
         .lock()
         .map(|telemetry| telemetry.snapshot(now_ns, input, transport))
-        .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport));
-    if snapshot.in_flight_operation.is_none() {
-        if let Some(activity) = &state.worker_activity {
-            if let Ok(activity) = activity.lock() {
-                if let Some((_, started)) = *activity {
-                    snapshot.in_flight_operation = Some(ProductDevOperationKind::AdvanceRealtime);
-                    snapshot.in_flight_age_ms = Some(CanonicalU64::new(
-                        started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-                    ));
-                }
-            }
-        }
-    }
-    snapshot
+        .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport))
 }
 
 fn invoke_browser_diagnostics<R: ProductDevRuntime>(
@@ -2690,11 +2327,6 @@ fn handle_sse<R: ProductDevRuntime>(
     let fresh_connection = fresh && !request.headers.contains_key("last-event-id");
     let mut private_events = Vec::new();
     let mut connection_result = None;
-    let connection_projection = match state.projection_gate.read() {
-        Ok(projection) => projection,
-        Err(_) => return,
-    };
-    let connection_projection_epoch = state.projection_epoch.load(Ordering::Acquire);
     let mut cursor = match request.headers.get("last-event-id") {
         Some(value) => match parse_last_event_id(value) {
             Some(value) => value,
@@ -2715,98 +2347,79 @@ fn handle_sse<R: ProductDevRuntime>(
                 .runtime
                 .session()
                 .with_locked_timed(
-                || begin_telemetry(&state, ProductDevOperationKind::Connect),
-                |runtime| {
-                    let result = runtime.connect();
-                    let receipt = state.runtime.finish_call(runtime, result)?;
-                    let connection_output_cursor = receipt.connection_output_cursor();
-                    let (result, mut outputs) = match receipt.into_wire_parts() {
-                        Ok(parts) => parts,
-                        Err(error) => {
-                            return Ok(Err(HttpResponse::error(
-                                503,
-                                error.code(),
-                                error.detail(),
-                            )));
-                        }
-                    };
-                    // Readouts are published on change, so a fresh
-                    // subscriber starts from the current one.
-                    if let Some(readout) = result.readout() {
-                        outputs.push(ProductDevRuntimeOutput::runtime_readout(readout.clone()));
-                    }
-                    // A connection baseline is subscriber-private. Keep its
-                    // complete bounded resource set even when its fragment
-                    // count exceeds the reconnect ring; public history may
-                    // retain only a tail and asks lagged clients to reconnect.
-                    let isolated = Mutex::new(OutputBus::private_baseline());
-                    if let Err(error) = push_outputs(&isolated, outputs) {
-                        return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
-                    }
-                    let isolated = match isolated.into_inner() {
-                        Ok(bus) => bus,
-                        Err(_) => {
-                            return Ok(Err(HttpResponse::error(
-                                500,
-                                "DEV_HOST_OUTPUT_POISONED",
-                                "isolated output queue lock is poisoned",
-                            )));
-                        }
-                    };
-                    let Some(connection_binding) = isolated.active_binding else {
-                        return Ok(Err(HttpResponse::error(
-                            503,
-                            "DEV_HOST_OUTPUT_BASELINE",
-                            "runtime connection did not publish a complete binding baseline",
-                        )));
-                    };
-                    let result_json = match serde_json::to_string(&result) {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return Ok(Err(HttpResponse::error(
-                                500,
-                                "DEV_HOST_RESPONSE_ENCODE",
-                                "runtime connection result could not be encoded",
-                            )));
-                        }
-                    };
-                    let mut outputs = match state.outputs.lock() {
-                        Ok(outputs) => outputs,
-                        Err(_) => {
-                            return Ok(Err(HttpResponse::error(
-                                500,
-                                "DEV_HOST_OUTPUT_POISONED",
-                                "output queue lock is poisoned",
-                            )));
-                        }
-                    };
-                    // The disposable worker supplies the cursor captured by
-                    // its ordered output boundary. Never replace it with the
-                    // current bus cursor: later worker deltas may already be
-                    // retained while this connection baseline is decoded.
-                    outputs.active_binding = Some(connection_binding);
-                    private_events = isolated.events.into_iter().collect();
-                    connection_result = Some(result_json);
-                    let cursor = if state.disposable_worker_runtime {
-                        match connection_output_cursor {
-                            Some(cursor) => cursor,
-                            None => {
+                    || begin_telemetry(&state, ProductDevOperationKind::Connect),
+                    |runtime| {
+                        let result = runtime.connect();
+                        let receipt = state.runtime.finish_call(runtime, result)?;
+                        let (result, mut outputs) = match receipt.into_wire_parts() {
+                            Ok(parts) => parts,
+                            Err(error) => {
                                 return Ok(Err(HttpResponse::error(
                                     503,
-                                    "DEV_HOST_WORKER_CONNECTION_CURSOR",
-                                    "worker connection response did not establish an output boundary",
+                                    error.code(),
+                                    error.detail(),
                                 )));
                             }
+                        };
+                        // Readouts are published on change, so a fresh
+                        // subscriber starts from the current one.
+                        if let Some(readout) = result.readout() {
+                            outputs.push(ProductDevRuntimeOutput::runtime_readout(readout.clone()));
                         }
-                    } else {
-                        outputs.next_id
-                    };
-                    Ok(Ok(cursor))
-                },
-                || finish_telemetry(&state, ProductDevOperationKind::Connect),
-            )
-            .map_err(|_| crate::session::runtime_poisoned())
-            .and_then(|response| response);
+                        // A connection baseline is subscriber-private. Keep its
+                        // complete bounded resource set even when its fragment
+                        // count exceeds the reconnect ring; public history may
+                        // retain only a tail and asks lagged clients to reconnect.
+                        let isolated = Mutex::new(OutputBus::private_baseline());
+                        if let Err(error) = push_outputs(&isolated, outputs) {
+                            return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
+                        }
+                        let isolated = match isolated.into_inner() {
+                            Ok(bus) => bus,
+                            Err(_) => {
+                                return Ok(Err(HttpResponse::error(
+                                    500,
+                                    "DEV_HOST_OUTPUT_POISONED",
+                                    "isolated output queue lock is poisoned",
+                                )));
+                            }
+                        };
+                        let Some(connection_binding) = isolated.active_binding else {
+                            return Ok(Err(HttpResponse::error(
+                                503,
+                                "DEV_HOST_OUTPUT_BASELINE",
+                                "runtime connection did not publish a complete binding baseline",
+                            )));
+                        };
+                        let result_json = match serde_json::to_string(&result) {
+                            Ok(result) => result,
+                            Err(_) => {
+                                return Ok(Err(HttpResponse::error(
+                                    500,
+                                    "DEV_HOST_RESPONSE_ENCODE",
+                                    "runtime connection result could not be encoded",
+                                )));
+                            }
+                        };
+                        let mut outputs = match state.outputs.lock() {
+                            Ok(outputs) => outputs,
+                            Err(_) => {
+                                return Ok(Err(HttpResponse::error(
+                                    500,
+                                    "DEV_HOST_OUTPUT_POISONED",
+                                    "output queue lock is poisoned",
+                                )));
+                            }
+                        };
+                        outputs.active_binding = Some(connection_binding);
+                        private_events = isolated.events.into_iter().collect();
+                        connection_result = Some(result_json);
+                        Ok(Ok(outputs.next_id))
+                    },
+                    || finish_telemetry(&state, ProductDevOperationKind::Connect),
+                )
+                .map_err(|_| crate::session::runtime_poisoned())
+                .and_then(|response| response);
             match connection {
                 Ok(Ok(cursor)) => {
                     state.scheduler_wake.notify();
@@ -2828,30 +2441,15 @@ fn handle_sse<R: ProductDevRuntime>(
         }
         None => 0,
     };
-    drop(connection_projection);
     if write_sse_headers(&mut stream).is_err() {
         return;
     }
     for event in private_events {
-        let _projection = match state.projection_gate.read() {
-            Ok(projection) => projection,
-            Err(_) => return,
-        };
-        if state.projection_epoch.load(Ordering::Acquire) != connection_projection_epoch {
-            return;
-        }
         if write_sse_private_event(&mut stream, &event).is_err() {
             return;
         }
     }
     if let Some(result) = connection_result {
-        let _projection = match state.projection_gate.read() {
-            Ok(projection) => projection,
-            Err(_) => return,
-        };
-        if state.projection_epoch.load(Ordering::Acquire) != connection_projection_epoch {
-            return;
-        }
         // Subscriber-private baselines deliberately carry no SSE cursor. An
         // id parsed before this record's terminating blank line could survive
         // a disconnect even though JavaScript never received the completion.
@@ -2865,33 +2463,18 @@ fn handle_sse<R: ProductDevRuntime>(
         }
     }
     let mut last_write = Instant::now();
-    'stream: loop {
+    loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
         }
-        let (observed_generation, observed_projection_epoch, snapshot) = {
-            let _projection = match state.projection_gate.read() {
-                Ok(projection) => projection,
-                Err(_) => return,
-            };
-            let observed_generation = state.output_wake.generation();
-            let observed_projection_epoch = state.projection_epoch.load(Ordering::Acquire);
-            let snapshot = match state.outputs.lock() {
-                Ok(outputs) => outputs.after(cursor),
-                Err(_) => break,
-            };
-            (observed_generation, observed_projection_epoch, snapshot)
+        let observed_generation = state.output_wake.generation();
+        let snapshot = match state.outputs.lock() {
+            Ok(outputs) => outputs.after(cursor),
+            Err(_) => break,
         };
         // A cursor this process never issued (a browser reconnecting to a
         // replacement process) is as unusable as one below the history floor.
         if cursor < snapshot.floor_cursor || cursor > snapshot.next_id {
-            let _projection = match state.projection_gate.read() {
-                Ok(projection) => projection,
-                Err(_) => return,
-            };
-            if state.projection_epoch.load(Ordering::Acquire) != observed_projection_epoch {
-                continue 'stream;
-            }
             let payload = format!(
                 "id: {}\nevent: rusty-output-lag\ndata: {{\"code\":\"DEV_HOST_OUTPUT_LAG\"}}\n\n",
                 snapshot.floor_cursor
@@ -2902,13 +2485,6 @@ fn handle_sse<R: ProductDevRuntime>(
         }
         let had_events = !snapshot.events.is_empty();
         for event in snapshot.events {
-            let _projection = match state.projection_gate.read() {
-                Ok(projection) => projection,
-                Err(_) => return,
-            };
-            if state.projection_epoch.load(Ordering::Acquire) != observed_projection_epoch {
-                continue 'stream;
-            }
             if write_sse_event(&mut stream, &event).is_err() {
                 return;
             }
@@ -3073,24 +2649,6 @@ fn push_host_outputs<R: ProductDevRuntime>(
         state.output_wake.notify();
     }
     Ok(output_through)
-}
-
-/// Captures the retained cursor immediately after every worker publication
-/// ordered before a fresh connection response. The projection gate keeps a
-/// replacement from changing the active generation while the cursor is read.
-/// A stale worker or poisoned owner deliberately produces no cursor, forcing
-/// the fresh attachment to recover instead of skipping uncertain deltas.
-fn worker_connection_boundary_cursor(
-    outputs: &Mutex<OutputBus>,
-    projection_gate: &RwLock<()>,
-    active_generation: &AtomicUsize,
-    boundary_generation: u64,
-) -> Option<u64> {
-    let _projection = projection_gate.read().ok()?;
-    if active_generation.load(Ordering::Acquire) as u64 != boundary_generation {
-        return None;
-    }
-    outputs.lock().ok().map(|outputs| outputs.next_id)
 }
 
 fn push_outputs_staged(
@@ -3400,61 +2958,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shutdown_persists_final_diagnostics_when_consumer_is_held_back() {
-        let path = std::env::temp_dir().join(format!(
-            "rusty-final-diagnostics-{}.ndjson",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let diagnostics =
-            ProductDevLog::new(crate::ProductDevLogConfig::default().with_path(&path)).unwrap();
-        let bundle = ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
-            "index.html",
-            "text/html; charset=utf-8",
-            b"test".to_vec(),
-        )
-        .unwrap()])
-        .unwrap();
-        let (sender, receiver) = crate::worker_diagnostic_relay();
-        let config = ProductDevHostConfig::new(0, bundle)
-            .with_diagnostics(diagnostics)
-            .with_worker_diagnostics(receiver);
-        let held_receiver = config.worker_diagnostics.as_ref().unwrap().clone();
-        let guard = held_receiver.lock().unwrap();
-        let host = ProductDevHost::start(BlockingRealtimeRuntime, config).unwrap();
-        host.shutdown.store(true, Ordering::Release);
-        // No consumer can take these events until both the stop flag and the
-        // final worker event exist. A consumer already inside recv can take at
-        // most the first event before it observes the flag and exits.
-        for code in ["shutdown.started", "cue.retired"] {
-            assert!(sender.try_send(crate::ProductDevWorkerDiagnostic {
-                severity: crate::ProductDevLogSeverity::Info,
-                disposition: crate::ProductDevLogDisposition::Accepted,
-                source: "product".to_owned(),
-                code: code.to_owned(),
-                message: code.to_owned(),
-                runtime: None,
-                correlation: None,
-                fields: Vec::new(),
-            }));
-        }
-        drop(guard);
-        host.shutdown().unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        let events: Vec<serde_json::Value> = text
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        for code in ["shutdown.started", "cue.retired"] {
-            assert_eq!(
-                events.iter().filter(|event| event["code"] == code).count(),
-                1
-            );
-        }
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
     fn response_delivery_certainty_distinguishes_receipts_mailbox_and_observations() {
         let settled =
             HttpResponse::bytes(200, "application/json", Vec::new()).with_output_through(7);
@@ -3618,82 +3121,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_replacement_preserves_old_projection_until_activation_then_drops_history() {
-        let bundle = |body: &[u8]| {
-            ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
-                "index.html",
-                "text/html; charset=utf-8",
-                body.to_vec(),
-            )
-            .unwrap()])
-            .unwrap()
-        };
-        let baseline = |runtime| {
-            vec![
-                ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
-                ProductDevRuntimeOutput::complete_baseline(runtime),
-            ]
-        };
-        let (_publisher, receiver) = mpsc::channel();
-        let (failures, _failure_rx) = mpsc::sync_channel(1);
-        let generation = Arc::new(AtomicUsize::new(1));
-        let host = ProductDevHost::start(
-            BlockingRealtimeRuntime,
-            ProductDevHostConfig::new(0, bundle(b"old")).with_worker_outputs(
-                receiver,
-                generation.clone(),
-                failures,
-                baseline(binding()),
-                1,
-            ),
-        )
-        .unwrap();
-        let old_cursor = host.outputs.lock().unwrap().next_id;
-        let mut next = binding();
-        next.instance_id = CanonicalU64::new(8);
-        let prepared = || {
-            runtime_session::PreparedRuntimeReplacement::prepare(|| {
-                Ok::<_, ()>(((), bundle(b"new"), baseline(next), 2))
-            })
-            .unwrap()
-        };
-        assert!(host
-            .replace_worker_projection(prepared(), |_| Err(blocking_runtime_error()))
-            .is_err());
-        assert_eq!(host.outputs.lock().unwrap().next_id, old_cursor);
-        assert_eq!(
-            host.bundle
-                .read()
-                .unwrap()
-                .entries()
-                .next()
-                .unwrap()
-                .bytes(),
-            b"old"
-        );
-        host.replace_worker_projection(prepared(), |_| Ok(()))
-            .unwrap();
-        {
-            let bus = host.outputs.lock().unwrap();
-            assert_eq!(bus.floor_cursor, old_cursor);
-            assert_eq!(bus.active_binding, Some(next));
-            assert!(bus.events.iter().all(|event| event.id > old_cursor));
-        }
-        assert_eq!(
-            host.bundle
-                .read()
-                .unwrap()
-                .entries()
-                .next()
-                .unwrap()
-                .bytes(),
-            b"new"
-        );
-        assert_eq!(generation.load(Ordering::Acquire), 2);
-        host.shutdown().unwrap();
-    }
-
-    #[test]
     fn input_mailbox_overflow_clears_prefix_and_marks_resync() {
         let mailbox = HostInputMailbox::default();
         for _ in 0..MAX_HOST_INPUT_BATCHES {
@@ -3792,78 +3219,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_progress_uses_shell_time_and_resets_callback_history_per_incarnation() {
-        let mut telemetry = HostTelemetry {
-            last_output_phases: (11, 22, 33),
-            ..HostTelemetry::default()
-        };
-        let update = |instance, duration| crate::ProductDevWorkerUpdateTelemetry {
-            worker_pid: CanonicalU64::new(123),
-            readout: None,
-            attribution: Some(ProductDevUpdateAttribution {
-                runtime: Some(crate::ProductDevRuntimeBinding {
-                    instance_id: CanonicalU64::new(instance),
-                    generation: CanonicalU64::new(1),
-                    control_revision: CanonicalU64::new(1),
-                }),
-                simulation_step: CanonicalU64::new(9),
-                callback_duration_us: CanonicalU64::new(duration),
-                post_callback_duration_us: CanonicalU64::new(70),
-                ..ProductDevUpdateAttribution::default()
-            }),
-            phases: runtime_diagnostics::RuntimeWorkerPhases {
-                operation_duration_us: CanonicalU64::new(duration + 100),
-                output_conversion_duration_us: CanonicalU64::new(10),
-                output_encode_write_duration_us: CanonicalU64::new(20),
-                input_queue_age_us: None,
-            },
-        };
-        telemetry.record_worker_update(1_000_000_000, update(1, 9_000), Some(10_000));
-        telemetry.record_worker_update(2_000_000_000, update(1, 100), Some(200));
-        let snapshot = telemetry.snapshot(
-            2_500_000_000,
-            InputTelemetry::default(),
-            TransportTelemetry::default(),
-        );
-        assert_eq!(
-            snapshot.runtime_progress_rate_millihertz,
-            Some(CanonicalU64::new(1_000))
-        );
-        let worker = snapshot.worker_update.unwrap();
-        assert_eq!(worker.age_ms, CanonicalU64::new(500));
-        assert_eq!(worker.shell_output_queue_duration_us, CanonicalU64::new(22));
-        assert_eq!(worker.phases.operation_duration_us, CanonicalU64::new(200));
-        assert_eq!(
-            snapshot
-                .update_attribution
-                .unwrap()
-                .latest
-                .callback_duration_us,
-            CanonicalU64::new(100)
-        );
-        let idle = telemetry.snapshot(
-            8_000_000_000,
-            InputTelemetry::default(),
-            TransportTelemetry::default(),
-        );
-        assert!(idle.runtime_progress_rate_millihertz.is_none());
-        assert!(idle
-            .runtime_progress_unavailable_reason
-            .unwrap()
-            .contains("five seconds"));
-        telemetry.record_worker_update(9_000_000_000, update(2, 5), Some(80));
-        let replacement = telemetry.snapshot(
-            9_000_000_000,
-            InputTelemetry::default(),
-            TransportTelemetry::default(),
-        );
-        let callbacks = replacement.update_attribution.unwrap();
-        assert_eq!(callbacks.sample_count, CanonicalU64::new(1));
-        assert_eq!(callbacks.slowest.callback_duration_us, CanonicalU64::new(5));
-        assert!(replacement.runtime_progress_rate_millihertz.is_none());
-    }
-
-    #[test]
     fn scheduled_input_result_preserves_cursor_and_recovery_disposition() {
         let accepted = ProductDevInputResult::with_progress(
             2,
@@ -3934,8 +3289,6 @@ mod tests {
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
             realtime_scheduler_enabled: true,
-            disposable_worker_runtime: false,
-            worker_activity: None,
             outputs: Arc::new(Mutex::new(OutputBus::default())),
             output_wake: Arc::new(OutputWake::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -3944,8 +3297,6 @@ mod tests {
             expected_port: 0,
             live_debug_enabled: false,
             diagnostics: ProductDevLog::new(Default::default()).unwrap(),
-            projection_gate: Arc::new(RwLock::new(())),
-            projection_epoch: Arc::new(AtomicU64::new(0)),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
@@ -4006,11 +3357,6 @@ mod tests {
         let weak = Arc::downgrade(&resource.shared_bytes());
         let output = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({}))
             .with_resources(vec![resource].into());
-        let encoded_worker = output.to_worker_value().unwrap();
-        assert!(encoded_worker.get("__retiredResources").is_some());
-        let decoded_worker = ProductDevRuntimeOutput::from_worker_value(encoded_worker).unwrap();
-        assert_eq!(decoded_worker.resources()[0].bytes(), b"wOF2fixture");
-        drop(decoded_worker);
         let mut bus = OutputBus {
             active_binding: Some(binding()),
             retained_event_limit: 1,
@@ -4205,43 +3551,6 @@ mod tests {
         assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
         assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
         assert_eq!(value["outputs"][1]["kind"], "frame");
-    }
-
-    #[test]
-    fn worker_connection_boundary_keeps_later_output_after_its_cursor() {
-        let runtime = binding();
-        let outputs = Mutex::new(OutputBus {
-            active_binding: Some(runtime),
-            ..OutputBus::default()
-        });
-        append_output_events(
-            &mut outputs.lock().expect("output bus lock"),
-            runtime,
-            vec![crate::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"revision": "67"}),
-            )],
-        )
-        .expect("snapshot prefix publishes");
-        let gate = RwLock::new(());
-        let generation = AtomicUsize::new(7);
-        let cursor = worker_connection_boundary_cursor(&outputs, &gate, &generation, 7)
-            .expect("current worker boundary has a cursor");
-
-        append_output_events(
-            &mut outputs.lock().expect("output bus lock"),
-            runtime,
-            vec![crate::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"revision": "68"}),
-            )],
-        )
-        .expect("following delta publishes");
-        let following = outputs.lock().expect("output bus lock").after(cursor);
-        assert_eq!(following.events.len(), 1);
-        assert!(following.events[0].json.contains("68"));
-        assert!(
-            worker_connection_boundary_cursor(&outputs, &gate, &generation, 8).is_none(),
-            "a retired worker cannot establish a cursor for the active projection"
-        );
     }
 
     fn representative_realtime_receipt(tick: u64) -> Vec<ProductDevRuntimeOutput> {

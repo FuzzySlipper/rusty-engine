@@ -16,6 +16,8 @@ export interface ProductBrowserLocalEventSource {
         readonly lastEventId: string;
     }) => void) | null;
     onerror: ((event: unknown) => void) | null;
+    /** `2` (CLOSED) once the browser has stopped reconnecting this stream. */
+    readonly readyState?: number;
     readonly addEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: {
         readonly data: string;
         readonly lastEventId: string;

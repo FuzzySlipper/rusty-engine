@@ -485,7 +485,7 @@ fn required_value(values: &mut impl Iterator<Item = String>, flag: &str) -> Resu
 }
 
 fn usage() -> String {
-    "usage: rusty dev --project <ordinary-product.csproj> [--runtime <runtime-pack>] [--engine-source <rusty-engine-source>] [--bind-host <IPv4>] [--port <u16>] [--live-debug] [--debugger] [--headless]\n\nCoreCLR is the only normal loader. --debugger disables supervised worker startup/callback deadlines for managed breakpoints; source changes still replace workers. --headless starts the installed Chromium browser against the host; set RUSTY_CHROMIUM_PATH to select its executable. The SDK stages Product truth; this command never invokes Cargo or auto-discovers an adjacent Engine checkout. Use an explicit override only for Engine contributor runtime packs.".to_owned()
+    "usage: rusty dev --project <ordinary-product.csproj> [--runtime <runtime-pack>] [--engine-source <rusty-engine-source>] [--bind-host <IPv4>] [--port <u16>] [--live-debug] [--debugger] [--headless]\n\nCoreCLR is the only normal loader. --debugger disables the runtime startup deadline for managed breakpoints; source changes still replace the runtime. --headless starts the installed Chromium browser against the host; set RUSTY_CHROMIUM_PATH to select its executable. The SDK stages Product truth; this command never invokes Cargo or auto-discovers an adjacent Engine checkout. Use an explicit override only for Engine contributor runtime packs.".to_owned()
 }
 
 #[derive(Debug)]
@@ -797,7 +797,7 @@ impl SupervisedHost {
 
     fn shutdown(&mut self) -> Result<(), String> {
         // Closing the existing supervision pipe asks the host to drain its
-        // worker and product disposal. Keep inherited output open until reaped.
+        // runtime and product disposal. Keep inherited output open until reaped.
         self.stdin.take();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {

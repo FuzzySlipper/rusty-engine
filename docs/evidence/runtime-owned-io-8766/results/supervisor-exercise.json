@@ -1,0 +1,73 @@
+{
+  "initial": {
+    "binding": {
+      "instanceId": "100",
+      "generation": "1",
+      "controlRevision": "1"
+    },
+    "runtime": [
+      2918993
+    ]
+  },
+  "replace": {
+    "binding": {
+      "instanceId": "101",
+      "generation": "1",
+      "controlRevision": "1"
+    },
+    "seconds": 0.751,
+    "oldRuntimeGone": true,
+    "runtime": [
+      2919048
+    ],
+    "window": {
+      "requests": 35,
+      "answered503": 33,
+      "other": []
+    }
+  },
+  "crashRestart": {
+    "binding": {
+      "instanceId": "102",
+      "generation": "1",
+      "controlRevision": "1"
+    },
+    "seconds": 0.749,
+    "window": {
+      "requests": 33,
+      "answered503": 33,
+      "other": []
+    }
+  },
+  "paused": {
+    "runtime": [],
+    "api": [
+      503,
+      "{\"accepted\":false,\"error\":{\"code\":\"DEV_HOST_RUNTIME_UNAVAILABLE\",\"diagnostic\":\"the runtime exhausted its one automatic restart; waiting for source restage\"}}"
+    ],
+    "page": [
+      503,
+      "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"1\"><title>Runtime unavailable</title><p>the runtime exhausted its one automatic restart; waiting for source restage</p>"
+    ]
+  },
+  "recover": {
+    "binding": {
+      "instanceId": "103",
+      "generation": "1",
+      "controlRevision": "1"
+    },
+    "seconds": 0.734
+  },
+  "stdinClose": {
+    "exitCode": 0,
+    "seconds": 0.064,
+    "runtimeReaped": true
+  },
+  "standaloneCrash": {
+    "exitCode": 1,
+    "log": [
+      "RUSTY_HOST DEV_HOST_RUNTIME_EXIT: runtime exited unexpectedly (signal: 9 (SIGKILL))",
+      "Error: \"DEV_HOST_RUNTIME_EXIT: runtime exited unexpectedly (signal: 9 (SIGKILL)); stopping the host\""
+    ]
+  }
+}

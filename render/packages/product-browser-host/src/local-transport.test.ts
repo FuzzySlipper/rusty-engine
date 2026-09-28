@@ -41,6 +41,7 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
   onmessage: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   closed = false;
+  readyState = 0;
   nextEventId = 1;
   messageDeliveryCallbacks = 0;
 
@@ -125,6 +126,33 @@ function assertNestedArrayDepth(value: unknown, expectedDepth: number): void {
   }
   assert.equal(nested, null);
 }
+
+test('a fresh stream refused before its baseline is reopened until a runtime answers', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
+  const refused = FakeEventSource.instances[0]!;
+  // A 503 while the supervisor replaces the runtime closes EventSource for good.
+  refused.readyState = 2;
+  refused.onerror?.({});
+  assert.equal(FakeEventSource.instances.length, 1);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(refused.closed, true);
+  assert.equal(FakeEventSource.instances.length, 2);
+  const reopened = FakeEventSource.instances[1]!;
+  assert.match(reopened.url, /\/outputs\/fresh$/u);
+  completeConnectionBaseline(reopened);
+  assert.deepEqual(outputs.at(-1), { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+  // The refused stream's late events are ignored.
+  refused.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '9' }, '');
+  assert.deepEqual(outputs.at(-1), { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+  unsubscribe();
+  adapter.dispose();
+});
 
 test('same-origin local transport uses fixed typed operation routes and SSE outputs', async () => {
   FakeEventSource.instances.length = 0;

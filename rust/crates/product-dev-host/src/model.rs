@@ -1159,7 +1159,6 @@ pub struct ProductDevTelemetrySnapshot {
     pub runtime_progress_rate_millihertz: Option<CanonicalU64>,
     pub runtime_progress_age_ms: Option<CanonicalU64>,
     pub runtime_progress_unavailable_reason: Option<String>,
-    pub worker_update: Option<ProductDevWorkerUpdateSnapshot>,
     pub connections: usize,
     pub subscribers: usize,
     pub output_queue_items: usize,
@@ -1169,22 +1168,6 @@ pub struct ProductDevTelemetrySnapshot {
     /// Bounded attribution for completed C# update callbacks. Service totals
     /// are nested within the callback duration, not additional frame time.
     pub update_attribution: Option<ProductDevUpdateAttributionSnapshot>,
-}
-
-/// One completed worker publication, correlated with its runtime readout.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevWorkerUpdateSnapshot {
-    pub worker_pid: CanonicalU64,
-    pub readout: Option<ProductDevRuntimeReadout>,
-    pub phases: runtime_diagnostics::RuntimeWorkerPhases,
-    /// Shell-local interval from scheduler activity to received completion.
-    /// Includes worker work and delivery; never subtract unrelated clocks.
-    pub shell_delivery_interval_us: Option<CanonicalU64>,
-    pub shell_output_decode_duration_us: CanonicalU64,
-    pub shell_output_queue_duration_us: CanonicalU64,
-    pub shell_publication_duration_us: CanonicalU64,
-    pub age_ms: CanonicalU64,
 }
 
 /// One complete C# update callback observation. Durations are integer
@@ -2566,63 +2549,13 @@ impl ProductDevRuntimeOutput {
         self
     }
 
-    /// Worker-only sidecar. Normal Serialize remains the byte-free browser wire schema.
-    pub fn to_worker_value(&self) -> Result<serde_json::Value, ProductDevHostError> {
-        let mut value = serde_json::to_value(self).map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_RESOURCE_ENCODE",
-                "worker output could not be encoded",
-            )
-        })?;
-        if !self.resources.is_empty() {
-            value
-                .as_object_mut()
-                .expect("output wire is an object")
-                .insert(
-                    "__retiredResources".to_owned(),
-                    serde_json::Value::Array(
-                        self.resources
-                            .iter()
-                            .map(crate::ProductDevRendererResource::to_worker_value)
-                            .collect(),
-                    ),
-                );
-        }
-        Ok(value)
-    }
-
-    pub fn from_worker_value(mut value: serde_json::Value) -> Result<Self, ProductDevHostError> {
-        let resources = value
-            .as_object_mut()
-            .and_then(|value| value.remove("__retiredResources"));
-        let mut output: Self = serde_json::from_value(value).map_err(|_| {
-            ProductDevHostError::new("DEV_HOST_WORKER_OUTPUT_DECODE", "invalid worker output")
-        })?;
-        if let Some(resources) = resources {
-            let resources = resources.as_array().ok_or_else(|| {
-                ProductDevHostError::new(
-                    "DEV_HOST_RESOURCE_DECODE",
-                    "resource leases must be an array",
-                )
-            })?;
-            output.resources = resources
-                .iter()
-                .cloned()
-                .map(crate::ProductDevRendererResource::from_worker_value)
-                .collect::<Result<Vec<_>, _>>()?
-                .into();
-        }
-        Ok(output)
-    }
-
-    /// Decodes one worker-retained output through the same bounded JSON
-    /// representation used by the browser projection. Delivery owns framing;
-    /// typed decoding does not impose an unrelated aggregate byte budget.
+    /// Decodes one output through the same JSON representation used by the
+    /// browser projection.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
         serde_json::from_slice(bytes).map_err(|_| {
             ProductDevHostError::new(
-                "DEV_HOST_WORKER_OUTPUT_DECODE",
-                "worker output is not a valid runtime output",
+                "DEV_HOST_OUTPUT_DECODE",
+                "output is not a valid runtime output",
             )
         })
     }
@@ -3147,7 +3080,6 @@ pub struct ProductDevRuntimeReceipt<T> {
     renderer_resources: Option<Vec<String>>,
     resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
     receipt: runtime_publication::RuntimeReceipt<T>,
-    connection_output_cursor: Option<u64>,
 }
 
 fn decode_strict_json<T>(
@@ -3206,36 +3138,11 @@ impl<T> ProductDevRuntimeReceipt<T> {
             renderer_resources: None,
             resources: Default::default(),
             receipt: runtime_session::RuntimeReceipt::new(result, outputs),
-            connection_output_cursor: None,
         })
     }
 
     pub(crate) fn resource_baseline(&self) -> bool {
         self.resource_baseline
-    }
-
-    /// Reconstitute a worker receipt without losing its private resource leases
-    /// or browser inventory while converting the typed publications.
-    pub fn from_wire_outputs(
-        result: T,
-        outputs: Vec<ProductDevRuntimeOutput>,
-    ) -> Result<Self, ProductDevHostError> {
-        let mut publications = Vec::new();
-        let mut resources = std::collections::BTreeMap::new();
-        let mut inventory = None;
-        for mut output in outputs {
-            for resource in output.resources.iter() {
-                resources.insert(resource.identity().to_owned(), resource.clone());
-            }
-            if output.renderer_resources.is_some() {
-                inventory = output.renderer_resources.take();
-            }
-            if !matches!(output.wire, ProductDevRuntimeOutputWire::RendererResources) {
-                publications.push(output.into_publication()?);
-            }
-        }
-        Ok(Self::new(result, publications)?
-            .with_resources(resources.into_values().collect(), inventory))
     }
 
     pub fn with_resources(
@@ -3277,25 +3184,11 @@ impl<T> ProductDevRuntimeReceipt<T> {
         self.receipt.result()
     }
 
-    /// Attaches the shell-retained output cursor captured at a fresh worker
-    /// connection boundary. This is local delivery metadata, not a product
-    /// output or a worker-wire field.
-    pub fn with_connection_output_cursor(mut self, cursor: u64) -> Self {
-        self.connection_output_cursor = Some(cursor);
-        self
-    }
-
-    /// Returns the shell-retained output cursor captured with a fresh worker
-    /// connection response, when this receipt originated from that path.
-    pub const fn connection_output_cursor(&self) -> Option<u64> {
-        self.connection_output_cursor
-    }
-
     pub fn into_parts(self) -> (T, Vec<RuntimePublication>) {
         self.receipt.into_parts()
     }
 
-    /// Encode only at the serving/worker edge. Runtime receipts retain typed
+    /// Encode only at the serving edge. Runtime receipts retain typed
     /// Engine facts; byte budgets and JSON conversion belong to this adapter.
     pub fn into_wire_parts(self) -> Result<(T, Vec<ProductDevRuntimeOutput>), ProductDevHostError> {
         let inventory = self.renderer_resources.clone();
@@ -3591,88 +3484,6 @@ mod tests {
         let fact: ProductDevAnimationFeedbackFact =
             serde_json::from_value(completion.clone()).unwrap();
         assert_eq!(serde_json::to_value(fact).unwrap(), completion);
-    }
-
-    #[test]
-    fn worker_receipt_conversion_preserves_resource_inventory_and_retired_leases() {
-        let resource = crate::ProductDevRendererResource::admit_font(
-            "content/font.woff2",
-            b"wOF2fixture".to_vec(),
-        )
-        .unwrap();
-        let identity = resource.identity().to_owned();
-        let receipt = ProductDevRuntimeReceipt::new((), Vec::new())
-            .unwrap()
-            .with_resources(vec![resource], Some(vec![identity.clone()]));
-        let (_, outputs) = receipt.into_wire_parts().unwrap();
-        let decoded = outputs
-            .into_iter()
-            .map(|output| {
-                ProductDevRuntimeOutput::from_worker_value(output.to_worker_value().unwrap())
-                    .unwrap()
-            })
-            .collect();
-        let receipt = ProductDevRuntimeReceipt::from_wire_outputs((), decoded)
-            .unwrap()
-            // The outer operation owner has no local resource store: it must
-            // preserve the sidecars already supplied by its worker receipt.
-            .with_resources(Vec::new(), None);
-        let (_, outputs) = receipt.into_wire_parts().unwrap();
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2fixture");
-        let browser = serde_json::to_value(&outputs[0]).unwrap();
-        assert_eq!(browser["rendererResources"], serde_json::json!([identity]));
-        assert!(browser.get("__retiredResources").is_none());
-    }
-
-    #[test]
-    fn worker_roundtrip_keeps_transient_bodies_until_all_publications_then_prunes() {
-        let resource = crate::ProductDevRendererResource::admit_font(
-            "content/font.woff2",
-            b"wOF2fixture".to_vec(),
-        )
-        .unwrap();
-        let identity = resource.identity().to_owned();
-        let frame =
-            render_model::RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Destroy {
-                handle: render_model::RenderHandle::new(17),
-            }])
-            .unwrap();
-        let receipt = ProductDevRuntimeReceipt::new(
-            (),
-            vec![
-                RuntimePublication::Frame(frame.clone()),
-                RuntimePublication::Frame(frame.clone()),
-            ],
-        )
-        .unwrap()
-        .with_resources(vec![resource], Some(vec![]));
-        let (_, outputs) = receipt.into_wire_parts().unwrap();
-        let decoded = outputs
-            .into_iter()
-            .map(|output| {
-                ProductDevRuntimeOutput::from_worker_value(output.to_worker_value().unwrap())
-                    .unwrap()
-            })
-            .collect();
-        let (_, outputs) = ProductDevRuntimeReceipt::from_wire_outputs((), decoded)
-            .unwrap()
-            .with_resources(vec![], None)
-            .into_wire_parts()
-            .unwrap();
-        assert_eq!(outputs.len(), 3);
-        assert_eq!(
-            serde_json::to_value(&outputs[0]).unwrap()["rendererResources"],
-            serde_json::json!([identity])
-        );
-        assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2fixture");
-        assert!(matches!(
-            outputs[1].wire,
-            ProductDevRuntimeOutputWire::Frame { .. }
-        ));
-        let prune = serde_json::to_value(&outputs[2]).unwrap();
-        assert_eq!(prune["kind"], "renderer-resources");
-        assert_eq!(prune["rendererResources"], serde_json::json!([]));
     }
 
     #[test]

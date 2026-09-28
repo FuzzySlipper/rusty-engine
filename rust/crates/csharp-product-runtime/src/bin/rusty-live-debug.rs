@@ -396,7 +396,6 @@ struct DiagnosticsTelemetryWire {
     runtime_progress_rate_millihertz: Option<String>,
     runtime_progress_age_ms: Option<String>,
     runtime_progress_unavailable_reason: Option<String>,
-    worker_update: Option<product_dev_host::ProductDevWorkerUpdateSnapshot>,
     connections: usize,
     subscribers: usize,
     output_queue_items: usize,

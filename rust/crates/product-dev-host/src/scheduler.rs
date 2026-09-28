@@ -341,14 +341,5 @@ mod tests {
             public_wire["rendererResources"],
             serde_json::json!([identity])
         );
-        let worker_wire = outputs[0].to_worker_value().expect("worker output wire");
-        assert_eq!(
-            worker_wire["rendererResources"],
-            serde_json::json!([identity])
-        );
-        assert_eq!(
-            worker_wire["__retiredResources"][0]["bodyBase64"],
-            "d09GMnNjaGVkdWxlZC1mb250"
-        );
     }
 }

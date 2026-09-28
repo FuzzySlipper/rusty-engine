@@ -46,20 +46,6 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
         oldestInputAgeMs: '9', inputOverflowPending: false,
         runtimeProgressRateMillihertz: '60000', runtimeProgressAgeMs: '1',
         runtimeProgressUnavailableReason: null,
-        workerUpdate: {
-          workerPid: '4321',
-          readout: {
-            artifact: 'rusty.product.runtime-readout',
-            runtime: { instanceId: '42', generation: '7', controlRevision: '9' },
-            mode: 'realtime', state: 'running', admittedSimulationSteps: '12', admittedPresentations: '13',
-            droppedRealtimeSteps: '0', clockRegressions: '0', scaledRemainder: null,
-            lastObservedTimeNs: '1234', fault: null,
-          },
-          phases: {
-            operationDurationUs: '180', outputConversionDurationUs: '25', outputEncodeWriteDurationUs: '35', inputQueueAgeUs: '8',
-          },
-          shellDeliveryIntervalUs: '240', shellOutputDecodeDurationUs: '7', shellOutputQueueDurationUs: '4', shellPublicationDurationUs: '6', ageMs: '3',
-        },
         connections: 1, subscribers: 1, outputQueueItems: 2, outputQueueCapacity: 256,
         outputQueueFloor: '7', outputBindingActive: true,
         updateAttribution: {
@@ -79,10 +65,6 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
   assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepCastCount, '8');
   assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepNarrowPhaseCount, '32');
   assert.equal(batch.telemetry?.updateAttribution?.rollingSlowestAgeMs, '20');
-  assert.deepEqual(batch.telemetry?.workerUpdate?.readout?.runtime, {
-    instanceId: '42', generation: '7', controlRevision: '9',
-  });
-  assert.equal(batch.telemetry?.workerUpdate?.phases.outputEncodeWriteDurationUs, '35');
   assert.equal(batch.telemetry?.updateAttribution?.latest.postCallbackDurationUs, '15');
 });
 
@@ -98,7 +80,7 @@ test('diagnostics reject a malformed optional telemetry snapshot', async () => {
         queuedInputBatches: 'not-a-count', queuedInputEvents: 0, inputBatchCapacity: 256,
         oldestInputAgeMs: null, inputOverflowPending: false,
         runtimeProgressRateMillihertz: null, runtimeProgressAgeMs: null,
-        runtimeProgressUnavailableReason: 'worker replacement has not completed a runtime update', workerUpdate: null,
+        runtimeProgressUnavailableReason: 'No completed update observed in this incarnation',
         connections: 0, subscribers: 0, outputQueueItems: 0, outputQueueCapacity: 256,
         outputQueueFloor: '0', outputBindingActive: false,
         updateAttribution: null,

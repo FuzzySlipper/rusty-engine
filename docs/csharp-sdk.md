@@ -339,8 +339,8 @@ when declared C#, UI, or content inputs change. Staging copies only changed UI
 and content, removes deleted files, and writes `product.json` last. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
 session. Use `--debugger` for managed breakpoint sessions; see
-[CoreCLR diagnostics](coreclr-diagnostics.md) for worker discovery, profiling,
-and the opt-in deadline behavior.
+[CoreCLR diagnostics](coreclr-diagnostics.md) for runtime process discovery,
+profiling, and the debugger's startup deadline.
 
 For explicit staging without launching, run
 `dotnet msbuild /path/to/Example.Game.csproj -t:StageRustyEngineCoreClrProduct -p:Configuration=Release`.
@@ -627,8 +627,7 @@ dimensions are checked against the active browser GPU before retained PNG
 decoding, with no fixed 4,096-pixel or texel-count policy in the model/catalog.
 Generated presentation output has no default aggregate
 byte/count cap: the host fragments large deltas without rebuilding the scene.
-Worker messages retain their actual `u32` byte-length representation constraint;
-allocation and browser/backend capacity still apply. Browser embedders may
+Allocation and browser/backend capacity still apply. Browser embedders may
 select a per-output-batch `maximumOutputBytes` budget.
 
 Create one or more appearances with `Graphics.CreateMeshAppearance(mesh)` and
@@ -1604,8 +1603,7 @@ survival or self-intersection-free output. The patch and its source/license ship
 in the runtime pack's `share/third-party/fidget-mesh` directory.
 Large retained replacements remain ordinary deltas. The host encodes the actual
 batch and fragments it for delivery. Reconnect history ages out whole publications,
-so later publications cannot remove a large transfer's prefix. Worker timing
-samples wait behind earlier output when delivery backs up. Complete committed snapshots still serve fresh connections and recovery;
+so later publications cannot remove a large transfer's prefix. Complete committed snapshots still serve fresh connections and recovery;
 size alone does not replay/reconstruct the scene or re-enter product callbacks.
 
 Implicit generation readouts also report boundary, non-manifold, and inconsistent
@@ -1785,13 +1783,11 @@ A leak path's reported width is the grid spacing, not measured clearance.
 Enclosure diagnostics use zero piece IDs for collection-wide connectivity;
 the declared region and returned path identify their scope.
 
-These are synchronous authoring operations. For full-scene capture and analysis
-that exceeds development worker deadlines, launch the packaged product with
-`rusty dev --project <product.csproj> --debugger` before requesting the audit.
-That supported lane disables worker startup/callback deadlines for the session;
-it does not make analysis asynchronous or increase geometric coverage. Keep
-analysis behind an explicit authoring switch or debug command, and stop the
-owned host after the report is collected.
+These are synchronous authoring operations. The development host does not
+interrupt a long callback, so full-scene capture and analysis simply hold the
+runtime until they finish; this does not make analysis asynchronous or increase
+geometric coverage. Keep analysis behind an explicit authoring switch or debug
+command, and stop the owned host after the report is collected.
 
 ### Entity stats collections
 
@@ -2037,23 +2033,25 @@ See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/mod
 
 ### Stopping the development supervisor
 
-On Unix, SIGINT or SIGTERM sent to `rusty dev` closes its supervision pipe and
-waits for the host and managed worker to shut down. The worker stops updating,
-runs product disposal, and flushes diagnostics before a successful exit.
-A worker that cannot finish disposal within ten seconds is terminated with
-`DEV_HOST_WORKER_SHUTDOWN_TIMEOUT`; the supervisor also bounds host shutdown.
-Faulted worker replacement retains its separate force-stop behavior.
+Packaged CoreCLR launches run a supervisor process and one runtime process;
+see [packaging and development](architecture.md#packaging-and-development).
+The runtime has its own Unix process group, so terminal Ctrl+C and
+foreground-group signals reach only the supervisor. On SIGINT or SIGTERM, to
+`rusty dev` or to a direct `rusty-product-host --product <Product> --loader
+coreclr`, the supervisor closes the runtime's stdin. The runtime stops
+updating, runs product disposal, flushes diagnostics and exits successfully.
+A runtime that cannot dispose within ten seconds is killed with
+`DEV_HOST_RUNTIME_SHUTDOWN_TIMEOUT`.
 
-Ordinary packaged `rusty-product-host --product <Product> --loader coreclr`
-launches use the same signal-owning shell and managed worker. They do not
-interpret stdin EOF as a supervisor command. On Unix, the worker has its own
-process group, so terminal Ctrl+C and foreground-group signals reach the shell
-without abruptly terminating CoreCLR. SIGINT/SIGTERM stops the worker,
-relays final product-disposal diagnostics, drains the host relay, and flushes
-before exit. A worker crash or callback timeout stops the standalone host with
-a named diagnostic and a nonzero exit; it does not silently retry gameplay.
-`--debugger` is available for managed breakpoints and disables ordinary callback
-deadlines, while shutdown remains bounded.
+A direct launch does not treat its own stdin EOF as a stop request. If its
+runtime crashes, the host stops with a named diagnostic and a nonzero exit; it
+does not silently retry gameplay. Under `rusty dev`, the first crash restarts
+the runtime once, and a second pauses until the next source restage; neither
+replays a request. The development host has no callback deadline. A product
+stuck in a callback shows `inFlightOperation` and its age in live-debug
+telemetry, and the next source restage replaces it. `--debugger` disables the
+30-second runtime startup deadline for managed breakpoints; shutdown remains
+bounded.
 
 NativeAOT hosting stays in process. Explicit finite `--exercise` and
 `--performance-probe` runs, and contributor-only legacy raw-artifact launches,
