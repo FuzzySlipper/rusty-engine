@@ -365,38 +365,25 @@ pub struct BillboardProjector {
 }
 
 impl BillboardProjector {
+    /// Apply one operation to the retained billboards. Each operation
+    /// validates before it mutates, so a refusal leaves every entry as it was.
     pub fn project(
         &mut self,
         assets: &impl PresentationAssetLookup,
         meta: PresentationOpMeta,
         op: BillboardProjectionOp,
     ) -> Result<PresentationOp, BillboardProjectionDiagnostic> {
-        let mut projected = self.project_batch(assets, vec![(meta, op)])?;
-        Ok(projected.pop().expect("one input produces one operation"))
-    }
-
-    pub fn project_batch(
-        &mut self,
-        assets: &impl PresentationAssetLookup,
-        ops: Vec<(PresentationOpMeta, BillboardProjectionOp)>,
-    ) -> Result<Vec<PresentationOp>, BillboardProjectionDiagnostic> {
-        let mut staged = self.clone();
-        let mut projected = Vec::with_capacity(ops.len());
-        for (meta, op) in ops {
-            if let Err(code) = staged.validate_and_apply(assets, &op) {
-                let diagnostic = BillboardProjectionDiagnostic {
-                    code,
-                    sequence: meta.sequence,
-                    handle: operation_handle(&op),
-                    message: diagnostic_message(code).to_string(),
-                };
-                self.retain_diagnostic(diagnostic.clone());
-                return Err(diagnostic);
-            }
-            projected.push(PresentationOp::Billboard { meta, op });
+        if let Err(code) = self.validate_and_apply(assets, &op) {
+            let diagnostic = BillboardProjectionDiagnostic {
+                code,
+                sequence: meta.sequence,
+                handle: operation_handle(&op),
+                message: diagnostic_message(code).to_string(),
+            };
+            self.retain_diagnostic(diagnostic.clone());
+            return Err(diagnostic);
         }
-        *self = staged;
-        Ok(projected)
+        Ok(PresentationOp::Billboard { meta, op })
     }
 
     pub fn descriptor(&self, handle: BillboardHandle) -> Option<&BillboardDescriptor> {

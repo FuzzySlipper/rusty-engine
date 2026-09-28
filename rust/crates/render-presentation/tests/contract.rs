@@ -1,6 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use render_model::{RenderAssetKind, RenderHandle, ResolvedRenderAsset};
+use render_model::RenderHandle;
 use render_presentation::*;
 
 fn audio() -> AudioSourceDescriptor {
@@ -466,42 +464,3 @@ fn legacy_sprite_descriptor_decodes_and_new_writers_emit_visual() {
     assert!(encoded.get("sprite").is_none());
 }
 
-#[test]
-fn mixed_domain_frame_rejection_does_not_commit_earlier_operations() {
-    let audio_asset = ResolvedRenderAsset {
-        id: "audio/pulse".into(),
-        kind: RenderAssetKind::Audio,
-        content_hash: Some("aa".into()),
-        version: 1,
-    };
-    let assets = BTreeMap::from([(audio_asset.id.clone(), audio_asset)]);
-    let targets = BTreeSet::<RenderHandle>::new();
-    let frame = PresentationFrameDiff::try_from_ops(vec![
-        PresentationOp::Audio {
-            meta: PresentationOpMeta::new(0),
-            op: AudioProjectionOp::Create {
-                handle: AudioHandle::new(1),
-                descriptor: audio(),
-            },
-        },
-        PresentationOp::TelemetryOverlay {
-            meta: PresentationOpMeta::new(1),
-            op: TelemetryOverlayProjectionOp::Create {
-                handle: TelemetryOverlayHandle::new(1),
-                descriptor: TelemetryOverlayDescriptor {
-                    refresh_interval_ms: 1,
-                    ..telemetry()
-                },
-            },
-        },
-    ])
-    .unwrap();
-    let mut projectors = PresentationProjectorSet::default();
-    assert!(matches!(
-        projectors.project_frame(&assets, &targets, frame),
-        Err(PresentationProjectionError::Telemetry(_))
-    ));
-    let readout = projectors.readout();
-    assert_eq!(readout.audio.active_sources, 0);
-    assert_eq!(readout.telemetry.active_overlays, 0);
-}

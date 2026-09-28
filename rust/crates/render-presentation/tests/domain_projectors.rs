@@ -554,28 +554,37 @@ fn particle_curves_repeated_labels_and_reservation_budget() {
     );
 
     let handle = ParticleEmitterHandle::new(1);
-    let error = projector
-        .project_batch(
+    projector
+        .project(
             &assets,
-            vec![
-                (
-                    PresentationOpMeta::new(0),
-                    ParticleProjectionOp::Create {
-                        handle,
-                        descriptor: particle_descriptor(),
-                    },
-                ),
-                (
-                    PresentationOpMeta::new(1),
-                    ParticleProjectionOp::Create {
-                        handle: ParticleEmitterHandle::new(2),
-                        descriptor: particle_descriptor(),
-                    },
-                ),
-            ],
+            PresentationOpMeta::new(0),
+            ParticleProjectionOp::Create {
+                handle,
+                descriptor: particle_descriptor(),
+            },
+        )
+        .unwrap();
+    let error = projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(1),
+            ParticleProjectionOp::Create {
+                handle: ParticleEmitterHandle::new(2),
+                descriptor: particle_descriptor(),
+            },
         )
         .unwrap_err();
     assert_eq!(error.code, ParticleProjectionDiagnosticCode::BudgetExceeded);
+    // The refused create changes nothing; the admitted emitter is intact.
+    assert_eq!(projector.readout().active_emitters, 1);
+    assert_eq!(projector.descriptor(handle), Some(&particle_descriptor()));
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(2),
+            ParticleProjectionOp::Destroy { handle },
+        )
+        .unwrap();
     assert_eq!(projector.readout().active_emitters, 0);
 
     projector

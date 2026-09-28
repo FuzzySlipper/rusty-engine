@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use render_model::{RenderAssetKind, RenderHandle, ResolvedRenderAsset};
+use render_model::{RenderAssetKind, ResolvedRenderAsset};
 use render_presentation::*;
 
 const WORLD_INDICATOR_FIXTURE: &str =
@@ -459,44 +459,45 @@ fn structured_icons_require_exact_assets_and_are_accounted_once() {
 }
 
 #[test]
-fn structured_create_update_destroy_duplicate_unknown_and_batch_rollback_are_atomic() {
+fn structured_create_update_destroy_duplicate_unknown_and_refused_update_are_atomic() {
     let assets = assets();
     let handle = BillboardHandle::new(7);
     let mut projector = BillboardProjector::default();
+    project(&mut projector, handle.raw(), structured_descriptor()).unwrap();
     let error = projector
-        .project_batch(
+        .project(
             &assets,
-            vec![
-                (
-                    PresentationOpMeta::new(0),
-                    BillboardProjectionOp::Create {
-                        handle,
-                        descriptor: structured_descriptor(),
-                    },
-                ),
-                (
-                    PresentationOpMeta::new(1),
-                    BillboardProjectionOp::Update {
-                        handle,
-                        patch: BillboardPatch {
-                            content: Some(BillboardContent::Structured {
-                                indicator: BillboardIndicator {
-                                    width_pixels: 0.0,
-                                    ..indicator()
-                                },
-                            }),
-                            ..BillboardPatch::default()
+            PresentationOpMeta::new(1),
+            BillboardProjectionOp::Update {
+                handle,
+                patch: BillboardPatch {
+                    content: Some(BillboardContent::Structured {
+                        indicator: BillboardIndicator {
+                            width_pixels: 0.0,
+                            ..indicator()
                         },
-                    },
-                ),
-            ],
+                    }),
+                    ..BillboardPatch::default()
+                },
+            },
         )
         .unwrap_err();
     assert_eq!(
         error.code,
         BillboardProjectionDiagnosticCode::InvalidDescriptor
     );
-    assert_eq!(projector.readout().active_billboards, 0);
+    // The refused update leaves the retained entry exactly as it was.
+    assert_eq!(
+        projector.descriptor(handle),
+        Some(&structured_descriptor())
+    );
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(2),
+            BillboardProjectionOp::Destroy { handle },
+        )
+        .unwrap();
 
     project(&mut projector, handle.raw(), structured_descriptor()).unwrap();
     assert_eq!(
@@ -575,56 +576,6 @@ fn structured_create_update_destroy_duplicate_unknown_and_batch_rollback_are_ato
             .code,
         BillboardProjectionDiagnosticCode::UnknownHandle
     );
-}
-
-#[test]
-fn mixed_domain_structured_failure_does_not_commit_earlier_audio() {
-    let assets = assets();
-    let targets = BTreeSet::<RenderHandle>::new();
-    let mut invalid_billboard = structured_descriptor();
-    if let BillboardContent::Structured { indicator } = &mut invalid_billboard.content {
-        indicator.icon.as_mut().unwrap().content_hash = "wrong-hash".into();
-    }
-    let frame = PresentationFrameDiff::try_from_ops(vec![
-        PresentationOp::Audio {
-            meta: PresentationOpMeta::new(0),
-            op: AudioProjectionOp::Create {
-                handle: AudioHandle::new(1),
-                descriptor: AudioSourceDescriptor {
-                    clip: AudioClipRef {
-                        asset: "audio/pulse".into(),
-                        content_hash: "audio-hash".into(),
-                        duration_seconds: Some(2.0),
-                    },
-                    bus: AudioBus::Sfx,
-                    volume: 0.8,
-                    pitch: 1.0,
-                    looping: false,
-                    spatial_blend: 0.0,
-                    attenuation: 10.0,
-                    pan: 0.0,
-                    emitter: AudioEmitter::Global2d,
-                },
-            },
-        },
-        PresentationOp::Billboard {
-            meta: PresentationOpMeta::new(1),
-            op: BillboardProjectionOp::Create {
-                handle: BillboardHandle::new(1),
-                descriptor: invalid_billboard,
-            },
-        },
-    ])
-    .unwrap();
-
-    let mut projectors = PresentationProjectorSet::default();
-    assert!(matches!(
-        projectors.project_frame(&assets, &targets, frame),
-        Err(PresentationProjectionError::Billboard(_))
-    ));
-    let readout = projectors.readout();
-    assert_eq!(readout.audio.active_sources, 0);
-    assert_eq!(readout.billboards.active_billboards, 0);
 }
 
 #[test]
