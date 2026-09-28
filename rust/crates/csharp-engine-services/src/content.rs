@@ -1,6 +1,10 @@
 //! One Engine-owned immutable catalog of already-admitted product content.
 
-use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ffi::c_void,
+    sync::{Arc, OnceLock},
+};
 
 use csharp_engine_abi::*;
 use sha2::{Digest, Sha256};
@@ -11,23 +15,53 @@ mod bundles;
 mod portable;
 pub use bundles::ProductContentBundles;
 
+/// A body's SHA-256, computed when first requested and shared by every clone
+/// of the admitted content, so unused files are never hashed and used files
+/// are hashed once.
+#[derive(Clone, Default)]
+pub(crate) struct ContentIdentity(Arc<OnceLock<NativeContentSha256>>);
+
+impl ContentIdentity {
+    /// An identity the owner already verified, such as a bundle manifest hash.
+    fn known(value: NativeContentSha256) -> Self {
+        Self(Arc::new(OnceLock::from(value)))
+    }
+
+    /// `bytes` must be the body this identity was admitted with.
+    pub(crate) fn of(&self, bytes: &[u8]) -> NativeContentSha256 {
+        *self.0.get_or_init(|| sha256(bytes))
+    }
+}
+
 #[derive(Clone)]
 struct AdmittedContent {
     path: String,
-    sha256: NativeContentSha256,
+    identity: ContentIdentity,
     bytes: Arc<[u8]>,
     transient: bool,
     files: Arc<BTreeMap<String, Arc<[u8]>>>,
 }
 
+impl AdmittedContent {
+    fn sha256(&self) -> NativeContentSha256 {
+        self.identity.of(&self.bytes)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RetainedContent {
     pub(crate) path: String,
-    pub(crate) sha256: NativeContentSha256,
+    pub(crate) identity: ContentIdentity,
     pub(crate) bytes: Arc<[u8]>,
     pub(crate) transient: bool,
     /// Immutable dependency context of this source, never other open bundles.
     pub(crate) files: Arc<BTreeMap<String, Arc<[u8]>>>,
+}
+
+impl RetainedContent {
+    pub(crate) fn sha256(&self) -> NativeContentSha256 {
+        self.identity.of(&self.bytes)
+    }
 }
 
 struct ContentReferenceInfoLease {
@@ -54,12 +88,11 @@ impl RuntimeContentBridge {
         let catalog = content_resources
             .into_iter()
             .map(|(path, bytes)| {
-                let sha256 = sha256(&bytes);
                 (
                     path.clone(),
                     AdmittedContent {
                         path,
-                        sha256,
+                        identity: ContentIdentity::default(),
                         bytes,
                         transient: false,
                         files: Arc::clone(&files),
@@ -107,7 +140,7 @@ impl RuntimeContentBridge {
             .get(&reference.value)
             .map(|content| RetainedContent {
                 path: content.path.clone(),
-                sha256: content.sha256,
+                identity: content.identity.clone(),
                 bytes: Arc::clone(&content.bytes),
                 transient: content.transient,
                 files: Arc::clone(&content.files),
@@ -122,7 +155,7 @@ impl RuntimeContentBridge {
             .get(path.strip_prefix("content/").unwrap_or(path))?;
         Some(RetainedContent {
             path: content.path.clone(),
-            sha256: content.sha256,
+            identity: content.identity.clone(),
             bytes: Arc::clone(&content.bytes),
             transient: content.transient,
             files: Arc::clone(&content.files),
@@ -135,8 +168,8 @@ impl RuntimeContentBridge {
     ) -> Option<NativeContentReferenceInfoLease> {
         let content = self.references.get(&reference.value)?.clone();
         self.retain_info(vec![(
-            content.path,
-            content.sha256,
+            content.path.clone(),
+            content.sha256(),
             content.bytes.len() as u64,
         )])
     }
@@ -275,7 +308,7 @@ pub(crate) unsafe extern "C" fn admit_reference(
     }
     let content = AdmittedContent {
         path,
-        sha256: sha256(&bytes),
+        identity: ContentIdentity::default(),
         bytes,
         transient: true,
         files: Arc::new(files),
@@ -331,7 +364,7 @@ unsafe extern "C" fn resolve_reference(
     let Some(content) = bridge
         .catalog
         .get(path)
-        .filter(|content| content.sha256 == request.sha256)
+        .filter(|content| content.sha256() == request.sha256)
         .cloned()
         .or_else(|| bridge.bundles.resolve(path, request.sha256))
     else {
@@ -419,6 +452,8 @@ unsafe extern "C" fn destroy_byte_lease(context: *mut c_void, lease: NativeByteL
 }
 
 fn sha256(bytes: &[u8]) -> NativeContentSha256 {
+    #[cfg(test)]
+    tests::BODY_HASHES.with(|count| count.set(count.get() + 1));
     sha256_words(&Sha256::digest(bytes))
 }
 
@@ -436,6 +471,55 @@ fn sha256_words(digest: &[u8]) -> NativeContentSha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        pub(super) static BODY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn body_hashes() -> usize {
+        BODY_HASHES.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn loose_content_is_hashed_once_on_first_identity_request() {
+        let files = (0..200)
+            .map(|index| {
+                (
+                    format!("unused/{index}.bin"),
+                    Arc::from(vec![index as u8; 64 * 1024]),
+                )
+            })
+            .chain([("used.bin".to_owned(), Arc::from(&b"first body"[..]))])
+            .collect::<BTreeMap<String, Arc<[u8]>>>();
+        let before = body_hashes();
+        let mut bridge = RuntimeContentBridge::new(files);
+        assert_eq!(body_hashes(), before, "startup hashes no bodies");
+
+        let first = bridge.retain(bridge.catalog["used.bin"].clone()).unwrap();
+        let second = bridge.retain(bridge.catalog["used.bin"].clone()).unwrap();
+        assert_eq!(body_hashes(), before, "opening a reference hashes nothing");
+        let identity = bridge.retained_content(first).unwrap().sha256();
+        assert_eq!(identity, sha256_words(&Sha256::digest(b"first body")));
+        assert_eq!(body_hashes(), before + 1, "first request hashes once");
+        assert_eq!(bridge.retained_content(second).unwrap().sha256(), identity);
+        assert_eq!(
+            bridge.retained_path("content/used.bin").unwrap().sha256(),
+            identity
+        );
+        assert_eq!(bridge.catalog["used.bin"].sha256(), identity);
+        assert_eq!(
+            body_hashes(),
+            before + 1,
+            "repeat reads share the memoized identity"
+        );
+
+        // A changed admitted body is a new catalog with its own identity.
+        let changed = RuntimeContentBridge::new(BTreeMap::from([(
+            "used.bin".to_owned(),
+            Arc::from(&b"second body"[..]),
+        )]));
+        assert_ne!(changed.catalog["used.bin"].sha256(), identity);
+    }
 
     #[test]
     fn live_admission_copies_private_dependencies_and_releases_ownership() {

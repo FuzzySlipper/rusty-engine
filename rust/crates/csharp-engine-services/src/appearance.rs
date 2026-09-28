@@ -1997,7 +1997,7 @@ impl RuntimeAppearanceBridge {
         })?;
         Ok(crate::content::RetainedContent {
             path: path.to_owned(),
-            sha256: NativeContentSha256::default(),
+            identity: Default::default(),
             bytes,
             transient: false,
             files: Arc::new(self.content_resources.clone()),
@@ -3431,7 +3431,7 @@ impl RuntimeAppearanceBridge {
                     Some(resource) if Arc::ptr_eq(&resource.bytes, &bytes) => resource.clone(),
                     _ => {
                         let hash = if self.content.is_some() {
-                            let digest = content.sha256;
+                            let digest = content.identity.of(&bytes);
                             format!(
                                 "sha256:{:016x}{:016x}{:016x}{:016x}",
                                 digest.word0, digest.word1, digest.word2, digest.word3

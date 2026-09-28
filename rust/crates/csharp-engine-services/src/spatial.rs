@@ -984,7 +984,7 @@ impl RuntimeSpatialBridge {
             support_snap_tolerance: None,
         };
 
-        let asset_id = spatial_content_asset_id(content.sha256);
+        let asset_id = spatial_content_asset_id(content.sha256());
         let (assets, instances) = if artifact.collision.positions.is_empty() {
             (Vec::new(), Vec::new())
         } else {
@@ -1042,7 +1042,7 @@ impl RuntimeSpatialBridge {
             };
             let identity = SpatialContentIdentity {
                 content_reference: request.content,
-                content_sha256: content.sha256,
+                content_sha256: content.sha256(),
                 collision_revision: collision.revision_after,
                 navigation_revision,
                 collision_vertex_count,

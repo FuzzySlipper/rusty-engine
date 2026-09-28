@@ -113,7 +113,7 @@ fn build(source: AdmittedContent, selected: String) -> Result<Asset, String> {
                 asset.id.clone(),
                 AdmittedContent {
                     path: full,
-                    sha256: sha256(bytes),
+                    identity: ContentIdentity::default(),
                     bytes: bytes.clone(),
                     transient: source.transient,
                     files: source.files.clone(),
@@ -466,7 +466,7 @@ mod tests {
         ]));
         AdmittedContent {
             path,
-            sha256: sha256(&body),
+            identity: ContentIdentity::default(),
             bytes: body,
             transient: false,
             files,

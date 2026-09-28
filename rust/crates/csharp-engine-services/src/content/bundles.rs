@@ -133,7 +133,7 @@ impl ProductContentBundles {
                         file.path.clone(),
                         AdmittedContent {
                             path,
-                            sha256: hashes[file.path.as_str()],
+                            identity: super::ContentIdentity::known(hashes[file.path.as_str()]),
                             bytes,
                             transient: false,
                             files: Arc::clone(&bodies),
@@ -163,7 +163,7 @@ impl BundleState {
         self.open
             .values()
             .flat_map(|files| files.values())
-            .find(|file| file.path == path && file.sha256 == hash)
+            .find(|file| file.path == path && file.sha256() == hash)
             .cloned()
     }
 
@@ -288,7 +288,7 @@ pub(super) unsafe extern "C" fn read_bundle_files(
     };
     let entries = files
         .iter()
-        .map(|(path, file)| (path.clone(), file.sha256, file.bytes.len() as u64))
+        .map(|(path, file)| (path.clone(), file.sha256(), file.bytes.len() as u64))
         .collect();
     let Some(lease) = bridge.retain_info(entries) else {
         return 0;
