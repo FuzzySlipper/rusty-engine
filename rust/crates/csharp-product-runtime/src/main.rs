@@ -75,6 +75,10 @@ fn main() -> Result<(), String> {
     if args.worker {
         return run_worker(args);
     }
+    #[cfg(unix)]
+    if args.worker_owned_io {
+        return run_worker_owned_io_supervisor(&args);
+    }
     validate_headless_host(&args)?;
     if args.uses_worker_shell() {
         let mut args = args;
@@ -125,14 +129,18 @@ fn main() -> Result<(), String> {
                 .map_err(|error| error.to_string())
         })
         .transpose()?;
-    let host = ProductDevHost::start(
-        runtime,
-        ProductDevHostConfig::new(args.port(), bundle.clone())
-            .with_bind_host(args.bind_host())
-            .with_live_debug(args.live_debug())
-            .with_diagnostics(diagnostics),
-    )
-    .map_err(|error| error.to_string())?;
+    let mut config = ProductDevHostConfig::new(args.port(), bundle.clone())
+        .with_bind_host(args.bind_host())
+        .with_live_debug(args.live_debug())
+        .with_diagnostics(diagnostics);
+    #[cfg(unix)]
+    if let Some(fd) = args.serve_listener_fd {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the supervisor bound this listener, cleared close-on-exec
+        // for it, and hands this process sole use of the descriptor number.
+        config = config.with_listener(unsafe { TcpListener::from_raw_fd(fd) });
+    }
+    let host = ProductDevHost::start(runtime, config).map_err(|error| error.to_string())?;
     if args.exercise {
         let mut stream = TcpStream::connect(host.address()).map_err(|error| error.to_string())?;
         let request = format!(
@@ -193,9 +201,101 @@ fn main() -> Result<(), String> {
             host.origin()
         );
         println!("Press Ctrl+C to stop.");
-        wait_for_process_termination(args.supervised, &host, termination);
+        wait_for_process_termination(
+            args.supervised || args.serve_listener_fd.is_some(),
+            &host,
+            termination,
+        );
     }
     Ok(())
+}
+
+/// #8740 experiment: the runtime process owns browser I/O. This process
+/// binds the listener once, keeps terminal signals away from CoreCLR by
+/// running the runtime in its own process group, and stops or replaces it by
+/// closing its stdin. A replacement starts serving the same listener before
+/// the old runtime exits; browsers reconnect and receive a fresh baseline.
+#[cfg(unix)]
+fn run_worker_owned_io_supervisor(args: &Arguments) -> Result<(), String> {
+    use std::io::BufRead;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    let listener = TcpListener::bind(SocketAddr::from((args.bind_host(), args.port())))
+        .map_err(|error| format!("DEV_HOST_BIND: {error}"))?;
+    let address = listener.local_addr().map_err(|error| error.to_string())?;
+    let fd = listener.as_raw_fd();
+    let child_args = env::args()
+        .skip(1)
+        .filter(|arg| arg != "--worker-owned-io")
+        .collect::<Vec<_>>();
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    let spawn = || -> Result<(Child, mpsc::Receiver<()>), String> {
+        let mut command = Command::new(&executable);
+        command
+            .args(&child_args)
+            .arg("--serve-listener-fd")
+            .arg(fd.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .process_group(0);
+        // SAFETY: only async-signal-safe fcntl runs between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let stdout = child.stdout.take().expect("piped runtime stdout");
+        let (ready, ready_rx) = mpsc::channel();
+        thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if line.contains("product host listening at") {
+                    let _ = ready.send(());
+                }
+                println!("{line}");
+            }
+        });
+        Ok((child, ready_rx))
+    };
+    let termination = install_termination_signal_hook();
+    let replace_file = env::var_os("RUSTY_EXPERIMENT_REPLACE_FILE").map(PathBuf::from);
+    let (mut child, ready) = spawn()?;
+    let _ = ready.recv_timeout(WORKER_STARTUP_TIMEOUT);
+    println!("RUSTY_HOST worker-owned-io supervisor serving http://{address}");
+    loop {
+        if termination.load(Ordering::Relaxed) {
+            drop(child.stdin.take());
+            let status = child.wait().map_err(|error| error.to_string())?;
+            println!("RUSTY_HOST worker-owned-io runtime exited: {status}");
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!("worker-owned-io runtime exited: {status}"));
+        }
+        if replace_file
+            .as_ref()
+            .is_some_and(|path| fs::remove_file(path).is_ok())
+        {
+            let started = Instant::now();
+            let (next, next_ready) = spawn()?;
+            let _ = next_ready.recv_timeout(WORKER_STARTUP_TIMEOUT);
+            let mut previous = std::mem::replace(&mut child, next);
+            drop(previous.stdin.take());
+            let _ = previous.wait();
+            println!(
+                "RUSTY_HOST worker-owned-io replaced runtime in {}ms",
+                started.elapsed().as_millis()
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 const WORKER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -617,6 +717,8 @@ fn replacement_arguments(
         runtime_instance_id: Some(RuntimeInstanceId::new(runtime_instance_id)),
         worker: false,
         worker_channel: None,
+        worker_owned_io: false,
+        serve_listener_fd: None,
     })
 }
 
@@ -3125,6 +3227,9 @@ struct Arguments {
     runtime_instance_id: Option<RuntimeInstanceId>,
     worker: bool,
     worker_channel: Option<SocketAddr>,
+    /// #8740 experiment: the runtime process owns browser I/O.
+    worker_owned_io: bool,
+    serve_listener_fd: Option<i32>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -3217,6 +3322,8 @@ impl RuntimeMode {
 impl Arguments {
     fn uses_worker_shell(&self) -> bool {
         !self.worker
+            && !self.worker_owned_io
+            && self.serve_listener_fd.is_none()
             && (self.supervised
                 || self.headless
                 || (matches!(self.loader, ProductLoader::CoreClr)
@@ -3356,6 +3463,8 @@ impl Arguments {
         let mut runtime_instance_id = None;
         let mut worker = false;
         let mut worker_channel = None;
+        let mut worker_owned_io = false;
+        let mut serve_listener_fd = None;
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
             match arg.as_str() {
@@ -3443,6 +3552,16 @@ impl Arguments {
                 "--debugger" => debugger = true,
                 "--headless" => headless = true,
                 "--worker" => worker = true,
+                "--worker-owned-io" => worker_owned_io = true,
+                "--serve-listener-fd" => {
+                    serve_listener_fd = Some(
+                        values
+                            .next()
+                            .ok_or("--serve-listener-fd requires a file descriptor")?
+                            .parse::<i32>()
+                            .map_err(|_| "--serve-listener-fd must be a file descriptor")?,
+                    )
+                }
                 "--worker-channel" => {
                     worker_channel = Some(
                         values
@@ -3529,6 +3648,8 @@ impl Arguments {
             runtime_instance_id,
             worker,
             worker_channel,
+            worker_owned_io,
+            serve_listener_fd,
         };
         if arguments.debugger
             && (!matches!(arguments.loader, ProductLoader::CoreClr)

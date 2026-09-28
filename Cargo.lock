@@ -764,6 +764,7 @@ version = "0.1.0"
 dependencies = [
  "csharp-engine-abi",
  "csharp-engine-services",
+ "libc",
  "libloading",
  "netcorehost",
  "product-dev-host",

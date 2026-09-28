@@ -66,6 +66,7 @@ pub struct ProductDevHostConfig {
     worker_owns_scheduler: bool,
     worker_activity: Option<runtime_diagnostics::RuntimeOperationActivity>,
     disposable_worker_runtime: bool,
+    listener: Option<Arc<TcpListener>>,
 }
 
 impl ProductDevHostConfig {
@@ -86,7 +87,15 @@ impl ProductDevHostConfig {
             worker_owns_scheduler: false,
             worker_activity: None,
             disposable_worker_runtime: false,
+            listener: None,
         }
+    }
+
+    /// Serves on an already bound listener, such as one a supervising
+    /// process bound and handed to this runtime process.
+    pub fn with_listener(mut self, listener: TcpListener) -> Self {
+        self.listener = Some(Arc::new(listener));
+        self
     }
 
     /// Selects an explicit trusted development-network listener. Loopback is
@@ -171,8 +180,11 @@ impl ProductDevHost {
         runtime: R,
         config: ProductDevHostConfig,
     ) -> Result<RunningProductDevHost, ProductDevHostError> {
-        let listener = TcpListener::bind(SocketAddr::from((config.bind_host, config.port)))
-            .map_err(|error| ProductDevHostError::io("DEV_HOST_BIND", error))?;
+        let listener = match &config.listener {
+            Some(listener) => listener.try_clone(),
+            None => TcpListener::bind(SocketAddr::from((config.bind_host, config.port))),
+        }
+        .map_err(|error| ProductDevHostError::io("DEV_HOST_BIND", error))?;
         let address = listener
             .local_addr()
             .map_err(|error| ProductDevHostError::io("DEV_HOST_ADDRESS", error))?;
@@ -2840,7 +2852,9 @@ fn handle_sse<R: ProductDevRuntime>(
             };
             (observed_generation, observed_projection_epoch, snapshot)
         };
-        if cursor < snapshot.floor_cursor {
+        // A cursor this process never issued (a browser reconnecting to a
+        // replacement process) is as unusable as one below the history floor.
+        if cursor < snapshot.floor_cursor || cursor > snapshot.next_id {
             let _projection = match state.projection_gate.read() {
                 Ok(projection) => projection,
                 Err(_) => return,
@@ -2950,6 +2964,7 @@ struct OutputEvent {
 
 struct OutputSnapshot {
     floor_cursor: u64,
+    next_id: u64,
     events: Vec<OutputEvent>,
 }
 
@@ -2981,6 +2996,7 @@ impl OutputBus {
     fn after(&self, cursor: u64) -> OutputSnapshot {
         OutputSnapshot {
             floor_cursor: self.floor_cursor,
+            next_id: self.next_id,
             events: if cursor < self.floor_cursor {
                 Vec::new()
             } else {
