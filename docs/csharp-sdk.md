@@ -2032,7 +2032,8 @@ See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/mod
 
 ### Stopping the development supervisor
 
-Packaged CoreCLR launches run a supervisor process and one runtime process;
+Packaged CoreCLR launches, and supervised or headless NativeAOT launches, run
+a supervisor process and one runtime process with the selected loader;
 see [packaging and development](architecture.md#packaging-and-development).
 The runtime has its own Unix process group, so terminal Ctrl+C and
 foreground-group signals reach only the supervisor. On SIGINT or SIGTERM, to

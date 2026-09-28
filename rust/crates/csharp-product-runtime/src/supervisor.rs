@@ -1,7 +1,7 @@
-//! Signal-owning supervisor for packaged CoreCLR launches.
+//! Signal-owning supervisor for packaged product launches.
 //!
 //! This process binds the product listener and keeps terminal signals. The
-//! runtime (CoreCLR, Engine, product and browser I/O) is one child process in
+//! runtime (the selected loader, Engine, product and browser I/O) is one child process in
 //! its own process group that serves that listener directly; nothing is
 //! relayed. The supervisor owns the `rusty dev` replacement contract, the one
 //! automatic restart, the failure pause and headless browser launch.
@@ -23,7 +23,9 @@ use std::{
 
 use product_dev_host::ProductDevLog;
 
-use crate::{browser_url, headless_browser, install_termination_signal_hook, Arguments};
+use crate::{
+    browser_url, headless_browser, install_termination_signal_hook, Arguments, ProductLoader,
+};
 
 /// Cold managed products can spend longer loading content than one callback.
 const RUNTIME_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -68,6 +70,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
             .product_path
             .clone()
             .ok_or("DEV_HOST_SUPERVISOR: a packaged --product directory is required")?,
+        loader: args.loader,
         next_runtime_instance_id: args
             .runtime_instance_id
             .ok_or("DEV_HOST_SUPERVISOR: the runtime incarnation was not allocated")?
@@ -248,6 +251,7 @@ struct RuntimeLaunch {
     executable: PathBuf,
     listener_fd: i32,
     product_directory: PathBuf,
+    loader: ProductLoader,
     next_runtime_instance_id: u64,
     persistence_root: Option<PathBuf>,
     content_store_root: Option<PathBuf>,
@@ -262,6 +266,15 @@ impl RuntimeLaunch {
         unavailable.answer("the runtime is starting");
         let runtime_instance_id = self.next_runtime_instance_id;
         self.next_runtime_instance_id = runtime_instance_id.saturating_add(1).max(1);
+        let arguments = self.runtime_arguments(runtime_instance_id)?;
+        let mut runtime = RuntimeProcess::spawn(&self.executable, &arguments, self.listener_fd)?;
+        runtime.wait_ready(self.startup_timeout)?;
+        unavailable.suspend();
+        runtime.serve()?;
+        Ok(runtime)
+    }
+
+    fn runtime_arguments(&self, runtime_instance_id: u64) -> Result<Vec<String>, String> {
         let product = self
             .product_directory
             .to_str()
@@ -270,7 +283,7 @@ impl RuntimeLaunch {
             "--product".to_owned(),
             product.to_owned(),
             "--loader".to_owned(),
-            "coreclr".to_owned(),
+            self.loader.identifier().to_owned(),
             "--runtime-instance-id".to_owned(),
             runtime_instance_id.to_string(),
             "--serve-listener-fd".to_owned(),
@@ -285,11 +298,7 @@ impl RuntimeLaunch {
                 arguments.push(path_argument(root)?);
             }
         }
-        let mut runtime = RuntimeProcess::spawn(&self.executable, &arguments, self.listener_fd)?;
-        runtime.wait_ready(self.startup_timeout)?;
-        unavailable.suspend();
-        runtime.serve()?;
-        Ok(runtime)
+        Ok(arguments)
     }
 }
 
@@ -590,6 +599,28 @@ mod tests {
             read_supervisor_frame(&mut input).unwrap_err(),
             SUPERVISOR_EOF
         );
+    }
+
+    #[test]
+    fn runtime_launch_forwards_the_selected_loader() {
+        for loader in [ProductLoader::NativeAot, ProductLoader::CoreClr] {
+            let launch = RuntimeLaunch {
+                executable: PathBuf::from("/runtime/rusty-product-host"),
+                listener_fd: 3,
+                product_directory: PathBuf::from("/tmp/product"),
+                loader,
+                next_runtime_instance_id: 7,
+                persistence_root: None,
+                content_store_root: None,
+                startup_timeout: None,
+            };
+            let arguments = launch.runtime_arguments(7).unwrap();
+            let selected = arguments
+                .iter()
+                .position(|argument| argument == "--loader")
+                .map(|index| arguments[index + 1].as_str());
+            assert_eq!(selected, Some(loader.identifier()));
+        }
     }
 
     #[test]

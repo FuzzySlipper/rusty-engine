@@ -252,14 +252,17 @@ Engine-owned browser shell. The package generates composition below `obj` and
 stages a loose Product directory. `rusty dev` asks the package to stage that
 directory, launches CoreCLR, and watches only the declared Product inputs.
 
-Packaged CoreCLR launches (`rusty dev`, `--headless`, and a direct
-`rusty-product-host --product … --loader coreclr`) run two processes:
+Packaged CoreCLR launches (`rusty dev` and a direct `rusty-product-host
+--product … --loader coreclr`) and any `--supervised` or `--headless` launch run
+two processes. The runtime uses the loader the launch selected, so a
+supervised or headless NativeAOT launch runs its native module:
 
 - A small **supervisor** binds the product listener and keeps terminal
   signals. It owns `rusty dev` replacement, one automatic restart after a
   runtime crash, the failure pause, and headless browser launch. It never
   relays product traffic.
-- One **runtime** process (CoreCLR, the Engine, the product, HTTP and SSE)
+- One **runtime** process (the selected loader, the Engine, the product, HTTP
+  and SSE)
   runs in its own process group and serves that listener directly. Closing
   its stdin is the clean stop: the product is disposed before exit.
 

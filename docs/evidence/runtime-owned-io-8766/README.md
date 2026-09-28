@@ -144,6 +144,30 @@ This is the encode cost only.
   above.
 - Doc links pass.
 
+## Review fix: the supervisor keeps the selected loader
+
+The first version passed `--loader coreclr` to every runtime it started. A
+`--supervised` or `--headless` NativeAOT launch also goes through the
+supervisor, so a NativeAOT-only Product failed at startup, and a Product with
+both artifacts silently ran CoreCLR. The supervisor now forwards the loader the
+launch selected, as the worker launch did.
+
+`scripts/loader_check.py`, `results/loader-check.json`: the packaged SDK
+consumer staged with `--aot`, and a copy with the CoreCLR artifact removed.
+The loaded library is read from the runtime process's `/proc/<pid>/maps`.
+
+| Launch | Runtime `--loader` | Loaded | HTTP | Stop |
+|---|---|---|---|---|
+| NativeAOT-only, `--supervised` | nativeaot | native module, no CoreCLR | 200 | exit 0 |
+| both artifacts, `--loader nativeaot --supervised` | nativeaot | native module, no CoreCLR | 200 | exit 0 |
+| both artifacts, `--loader coreclr --supervised` (control) | coreclr | CoreCLR, no native module | 200 | exit 0 |
+| NativeAOT-only, `--headless` | nativeaot | native module, no CoreCLR | 200 | exit 0 |
+| NativeAOT-only, direct (in process) | — | — | 200 | exit 0 |
+
+Before the fix, the first launch exited 1 with `product.json:coreclr:
+assembly and runtimeconfig are required when --loader coreclr is selected`.
+A unit test covers the forwarded argument for both loaders.
+
 ## Limits
 
 - **Replacement adds startup time as a 503 gap.** Unlike the relay, the page
@@ -152,5 +176,9 @@ This is the encode cost only.
 - **Hung callbacks are no longer detected** automatically (see above).
 - **The Unix supervisor is the only one.** On other platforms a packaged
   CoreCLR launch runs in process; the runtime pack targets linux-x64.
+- **Startup cannot be interrupted.** While a runtime loads, the supervisor
+  does not observe a termination signal, stdin EOF or a restage; with
+  `--debugger` it can wait indefinitely. The worker startup loop behaved the
+  same (#8772).
 - **The replay machinery is untouched:** history ring, `Last-Event-ID`,
   fragments. It is #8767.

@@ -583,8 +583,9 @@ impl RuntimeMode {
 }
 
 impl Arguments {
-    /// Packaged CoreCLR launches run the runtime as a child of a
-    /// signal-owning supervisor; finite probes stay in process.
+    /// Packaged CoreCLR launches, and any `--supervised` or `--headless`
+    /// launch, run the runtime as a child of a signal-owning supervisor with
+    /// the selected loader; finite probes stay in process.
     fn uses_supervisor(&self) -> bool {
         self.serve_listener_fd.is_none()
             && (self.supervised
