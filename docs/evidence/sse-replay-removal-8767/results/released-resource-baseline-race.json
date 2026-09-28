@@ -1,0 +1,24 @@
+{
+  "label": "baseline-race",
+  "holdUpdates": 30,
+  "fetchDelayMs": 700,
+  "reloads": 6,
+  "finalState": "ready",
+  "finalFailure": "renderer resource texture-resource/eefa4384764d0dc59e8200d22e7ab4a0ba8c27fdaf2bc756577057160c3179d2 is no longer served (HTTP 404)",
+  "stateSamples": {
+    "ready": 156,
+    "degraded": 42,
+    "failed": 0,
+    "other": 0
+  },
+  "network": {
+    "resource200": 42,
+    "resource404": 21,
+    "resourceOther": 0,
+    "fresh": 29
+  },
+  "freshStreamsAfterFirstReady": 28,
+  "churnCreated": 25,
+  "churnReleased": 24,
+  "pageErrors": []
+}

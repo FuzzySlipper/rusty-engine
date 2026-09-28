@@ -21,7 +21,11 @@ import {
 } from '@rusty-engine/application-host';
 import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
-import { ProductBrowserDynamicRendererResources, type ProductBrowserDynamicRendererResourceFetcher } from './dynamic-renderer-resources.js';
+import {
+  ProductBrowserDynamicRendererResources,
+  ProductBrowserRendererResourceUnavailableError,
+  type ProductBrowserDynamicRendererResourceFetcher,
+} from './dynamic-renderer-resources.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
@@ -1863,6 +1867,12 @@ export async function mountProductBrowserHostWithApplication(
       try {
         await apply();
       } catch (cause) {
+        if (cause instanceof ProductBrowserRendererResourceUnavailableError) {
+          // The runtime released a body after publishing output that used
+          // it. A fresh baseline references only what it still retains.
+          requestPublishedProjectionRecovery(acceptedProjectionEpoch, cause.message);
+          return;
+        }
         failAndClose(cause, 'output_failed');
       }
     });

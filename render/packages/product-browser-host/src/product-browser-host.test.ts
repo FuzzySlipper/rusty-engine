@@ -1774,6 +1774,176 @@ test('a normal fresh attachment installs its complete frontier baseline before t
   }
 });
 
+async function mountWithReleasableResources(released: Set<string>) {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  const document = {} as FakeElement['ownerDocument'];
+  const root = new FakeElement(document);
+  Object.assign(document, {
+    body: root,
+    defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+  });
+  const bodies = new Map<string, Uint8Array<ArrayBuffer>>();
+  const identity = (seed: number): string => {
+    const bytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, seed]);
+    const id = `video-resource/${createHash('sha256').update(bytes).digest('hex')}`;
+    bodies.set(id, bytes);
+    return id;
+  };
+  let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+  const observed = { recoveries: 0, applied: [] as unknown[], replacements: [] as unknown[], fetches: [] as string[] };
+  const transport = {
+    lifecycle: async (operation: { readonly kind: string }) => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind }),
+    input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+    reportAudioFeedback: async (feedback: { readonly runtime: unknown }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+    reportAnimationFeedback: async (feedback: { readonly runtime: unknown }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+    reportGhostPlateFeedback: async (feedback: { readonly runtime: unknown }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+    advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+    admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+    recoverOutputProjection: async () => { observed.recoveries += 1; },
+    subscribeOutputs: () => () => undefined,
+    subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+      emit = listener;
+      return () => { emit = null; };
+    },
+    dispose: () => undefined,
+  };
+  const fakeApplication = {
+    renderer: {
+      resetAudioRealizationOwner: () => true,
+      resetCameraMotion: () => undefined,
+      resetAnimationRealizationOwner: () => true,
+      audioRealizedFacts: () => null,
+      animationRealizedFacts: () => null,
+      ghostPlateReadout: () => null,
+      acknowledgeAudioRealizedFacts: () => true,
+      acknowledgeAnimationRealizedFacts: () => true,
+      admitResources: async () => undefined,
+      retainResources: () => undefined,
+      replaceFrame: async (frame: unknown) => {
+        observed.replacements.push(frame);
+        return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+      },
+      applyFrame: (frame: unknown) => {
+        observed.applied.push(frame);
+        return { outcome: 'applied' as const, diagnostics: [] };
+      },
+    },
+    input: { sampleController: () => 0, drain: () => [], bindRuntime: () => undefined },
+    readout: () => ({ state: 'ready' }),
+    dispose: async () => undefined,
+  };
+  const host = await mountProductBrowserHostWithApplication({
+    root: root as unknown as HTMLElement,
+    transport: transport as never,
+    lifecycleMode: 'demand',
+    mountUi: async () => undefined,
+    autoStart: false,
+    dynamicRendererResourceFetcher: async (input) => {
+      const requested = new URL(String(input), 'http://host').searchParams.get('identity') ?? '';
+      observed.fetches.push(requested);
+      // The host answers 404 once the runtime no longer retains a body.
+      return released.has(requested) ? new Response('released', { status: 404 }) : new Response(bodies.get(requested));
+    },
+  }, async () => fakeApplication as never);
+  const runtime = { instanceId: 'released', generation: '1', controlRevision: '1' } as const;
+  const baseline = (epoch: number, resources: readonly string[]): void => {
+    (emit as unknown as ProductBrowserRuntimeOutputBatchListener)([
+      { kind: 'binding', runtime, nextInputSequence: '1', rendererResources: [...resources] },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'create', handle: 1 }] } },
+    ], { epoch, baseline: true, recovery: 'none' });
+  };
+  const live = (epoch: number, outputs: readonly ProductBrowserRuntimeOutput[]): void => {
+    (emit as unknown as ProductBrowserRuntimeOutputBatchListener)(outputs, { epoch, baseline: false, recovery: 'none' });
+  };
+  const settle = async (ms = 0): Promise<void> => {
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+  const restore = (): void => {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  };
+  return { host, identity, observed, baseline, live, settle, restore };
+}
+
+test('a resource released after its live output was published recovers with a fresh baseline instead of failing', async () => {
+  const released = new Set<string>();
+  const page = await mountWithReleasableResources(released);
+  try {
+    const kept = page.identity(1);
+    const transient = page.identity(2);
+    page.baseline(1, [kept]);
+    await page.settle();
+    assert.equal(page.host.readout().state, 'ready');
+    assert.equal(page.observed.replacements.length, 1);
+
+    // Callback A published a frame using `transient`; callback B released it
+    // before this browser fetched it, and its destroy is queued behind.
+    released.add(transient);
+    page.live(1, [
+      { kind: 'frame', rendererResources: [kept, transient], frame: { schemaVersion: 1, ops: [{ op: 'create', handle: 2 }] } },
+      { kind: 'frame', rendererResources: [kept], frame: { schemaVersion: 1, ops: [{ op: 'destroy', handle: 2 }] } },
+    ]);
+    await page.settle();
+    assert.notEqual(page.host.readout().state, 'failed');
+    assert.equal(page.host.readout().state, 'degraded');
+    assert.equal(page.observed.recoveries, 1, 'one fresh output projection was requested');
+    assert.equal(page.observed.applied.length, 0, 'queued output from the discarded projection is not applied');
+
+    // The fresh baseline references only what the runtime still retains.
+    page.baseline(2, [kept]);
+    await page.settle();
+    assert.equal(page.host.readout().state, 'ready');
+    assert.equal(page.observed.replacements.length, 2);
+    page.live(2, [{ kind: 'frame', rendererResources: [kept], frame: { schemaVersion: 1, ops: [{ op: 'update', handle: 1 }] } }]);
+    await page.settle();
+    assert.equal(page.observed.applied.length, 1, 'live output resumes after the recovered baseline');
+    await page.host.dispose();
+  } finally {
+    page.restore();
+  }
+});
+
+test('a fresh baseline whose resource is released before its fetch retries with another baseline', async () => {
+  const released = new Set<string>();
+  const page = await mountWithReleasableResources(released);
+  try {
+    const kept = page.identity(1);
+    const racing = page.identity(3);
+    // The initial attachment's baseline captured `racing`, released before the fetch.
+    released.add(racing);
+    page.baseline(1, [kept, racing]);
+    await page.settle(80);
+    assert.notEqual(page.host.readout().state, 'failed');
+    assert.equal(page.observed.recoveries, 1);
+
+    // A recovery baseline can race a release the same way; it retries.
+    const racingAgain = page.identity(4);
+    released.add(racingAgain);
+    page.baseline(2, [kept, racingAgain]);
+    // The same recovery episode backs off (50 ms, then 250 ms).
+    await page.settle(300);
+    assert.notEqual(page.host.readout().state, 'failed');
+    assert.equal(page.observed.recoveries, 2, 'the failed recovery baseline scheduled another fresh baseline');
+
+    page.baseline(3, [kept]);
+    await page.settle();
+    assert.equal(page.host.readout().state, 'ready');
+    await page.host.dispose();
+  } finally {
+    page.restore();
+  }
+});
+
 test('audio feedback claims the initial owner, retries without loss, and acknowledges only the submitted range', async () => {
   const reports: Array<Record<string, unknown>> = [];
   const acknowledgements: number[] = [];

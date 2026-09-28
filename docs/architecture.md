@@ -185,9 +185,11 @@ not replayed. SSE ids remain only as an output sequence, so a caller can wait
 until an operation's outputs have been observed.
 
 Renderer resources are served from the runtime's current retained set only;
-content-addressed responses are immutable and cached by the browser. A body
-released within the same callback that published an operation using it is not
-retained for that operation.
+content-addressed responses are immutable and cached by the browser. A body the
+runtime releases before the browser fetches it, whether in the same callback
+or a later one, answers 404. The browser treats that 404 (or a 503 while no
+runtime serves) as a stale projection, not a failure: it discards the queued
+output and requests a fresh baseline, which references only retained bodies.
 Browser callers may choose an explicit per-batch byte budget. Immutable host bundles and C# content
 have no default file/count/aggregate byte quotas. Resource-format and browser
 loader restrictions remain separate.

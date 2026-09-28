@@ -8,6 +8,15 @@ export function isRendererResourceIdentity(identity: string): boolean {
   return RESOURCE_IDENTITY.test(identity) || FONT_IDENTITY.test(identity);
 }
 
+/**
+ * The host no longer serves a body that published output referenced. The
+ * runtime released it after publishing (404), or no runtime is serving during
+ * a replacement (503). A fresh baseline references only retained bodies.
+ */
+export class ProductBrowserRendererResourceUnavailableError extends Error {
+  override readonly name = 'ProductBrowserRendererResourceUnavailableError';
+}
+
 export interface ProductBrowserDynamicRendererResourceFetcher {
   (input: string | URL, init?: RequestInit): Promise<Response>;
 }
@@ -107,6 +116,11 @@ async function loadResource(
   const query = new URLSearchParams({ identity, generation });
   // Identities embed the body's SHA-256; the host marks them immutable.
   const response = await fetcher(`${route}?${query.toString()}`);
+  if (response.status === 404 || response.status === 503) {
+    throw new ProductBrowserRendererResourceUnavailableError(
+      `renderer resource ${identity} is no longer served (HTTP ${String(response.status)})`,
+    );
+  }
   if (!response.ok) throw new Error(`renderer resource ${identity} is unavailable`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   const expectedHash = `sha256:${descriptor.hash}`;

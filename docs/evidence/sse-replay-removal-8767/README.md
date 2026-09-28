@@ -119,13 +119,67 @@ incarnations.
   - the artifact rebundle;
   - `test-csharp-sdk-package.sh --coreclr-smoke`.
 
+## Review fix: a released resource no longer fails the page
+
+The review found a terminal failure. Retained-resource history used to keep
+bodies alive for already-published output; without it, the runtime can
+release a body (in a later callback, or between a baseline's capture and its
+fetch) before the browser fetches it. The host answers 404, and the browser
+failed with `output_failed`, even on a healthy connection.
+
+**Remedy (browser only):** `dynamic-renderer-resources.ts` reports a 404, or a
+503 while no runtime serves, as `ProductBrowserRendererResourceUnavailableError`.
+The output queue treats it as a stale projection: it discards the queued output
+and requests a fresh baseline (`requestPublishedProjectionRecovery`, the path a
+rejected renderer frame already uses). A baseline whose fetch 404s takes the
+existing recovery retry (50, 250, 1,000 ms). No history, acknowledgement or
+server-side retention is restored.
+
+**Unit tests** (`product-browser-host.test.ts`):
+- a live frame using a body released before its fetch leaves the page
+  `degraded`, not `failed`; the queued destroy is not applied; a fresh
+  baseline returns it to `ready`, and live output resumes;
+- the initial baseline and a recovery baseline that race a release each
+  schedule another baseline, then reach `ready`.
+
+**Real host exercise** (`scripts/released-resource.mjs`,
+`results/released-resource-*.json`). The packaged SDK consumer plus
+`scripts/churn-fixture/`:
+- about once a second, the churn fixture creates a texture from new PNG bytes
+  (an identity never fetched before) and a sprite using it, publishes it, and
+  releases both a set number of updates later;
+- the copy skips the consumer's UI projection and self-checks and mounts an
+  empty UI, because its page has no UI contract.
+
+It runs on `rusty-product-host --product … --loader coreclr` from the runtime
+pack. Playwright delays the page's `/runtime/resource` requests so they reach
+the host after the release, giving real 404s. The page's state is sampled
+every 100 ms.
+
+| Run | Held for | Fetch delay | Reloads | Resource 200 / 404 | Fresh streams after ready | States sampled | End |
+|---|---|---|---|---|---|---|---|
+| control | 1 update | 0 | 3 | 41 / 0 | 3 (reloads) | ready 154 | ready |
+| **before the fix** (old shell) | 1 update | 300 ms | 0 | 6 / 1 | 0 | ready 12, **failed 97** | **failed** at the first 404 |
+| live release | 1 update | 300 ms | 0 | 6 / 11 | 10 | ready 103, degraded 6 | ready |
+| baseline race | 30 updates | 700 ms | 6 | 42 / 21 | 28 | ready 156, degraded 42 | ready |
+
+Every created resource in these runs was released by the product (the churn
+log's counts). In the baseline-race run, reloads land while a sprite is live,
+so fresh baselines capture it and their fetches 404; each retried to `ready`.
+The page's health failure field keeps the first recovery diagnostic, as for
+every other recovery; the state itself returns to `ready`.
+
 ## Limits
 
-- **Same-callback releases are no longer served.** A resource released in the
-  same callback that published an operation using it is not retained. Audio
-  reports that as a non-fatal realization diagnostic. The dagger exercises hit
-  no case of it (zero 404s). A mesh or texture used and released in one
-  callback is untested.
+- **A released body costs a fresh baseline.** Output that references a body
+  released before the browser fetched it (same callback or later) is recovered
+  by a full baseline, not served. That is correct but not free; a product that
+  often releases bodies within one fetch round trip will rebaseline often. The
+  dagger exercises hit none (zero 404s). Same-callback mesh/texture use is
+  #8771.
+- **Recovery retries are bounded.** Three baselines in a row whose fetches all
+  race a release leave the page `degraded` (the existing recovery budget) until
+  the next invalidation.
 - **A reconnect is a full baseline.** A dropped connection re-sends the whole
   baseline rather than resuming, so reconnect cost scales with the world, not
   the gap. One-shot transients during a disconnect are not replayed.

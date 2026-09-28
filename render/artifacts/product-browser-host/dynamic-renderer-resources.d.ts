@@ -1,5 +1,13 @@
 import type { RustyApplicationResource } from '@rusty-engine/application-host';
 export declare function isRendererResourceIdentity(identity: string): boolean;
+/**
+ * The host no longer serves a body that published output referenced. The
+ * runtime released it after publishing (404), or no runtime is serving during
+ * a replacement (503). A fresh baseline references only retained bodies.
+ */
+export declare class ProductBrowserRendererResourceUnavailableError extends Error {
+    readonly name = "ProductBrowserRendererResourceUnavailableError";
+}
 export interface ProductBrowserDynamicRendererResourceFetcher {
     (input: string | URL, init?: RequestInit): Promise<Response>;
 }
