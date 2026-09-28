@@ -2,7 +2,9 @@
 
 The existing native lifecycle owns simulation steps. Inspection mode gates its
 realtime scheduler; manual admission keeps the product's fixed-step cadence and
-uses the ordinary C# update/input path. Switching back to realtime clears the
+uses the ordinary C# update/input path. Admitted updates retain `Realtime` mode
+and the configured nonzero fixed delta; manual clock control is not a demand
+product update. Switching back to realtime clears the
 wall-time baseline. Holding does not stop input admission or renderer inspection.
 
 Native live-debug commands (require the ordinary live-debug opt-in):

@@ -8019,6 +8019,54 @@ mod tests {
         }
     }
 
+    static MANUAL_UPDATE_FACTS: Mutex<Vec<NativeProductUpdateFacts>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn manual_time_fixture_update(
+        _handle: *mut c_void,
+        args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        // SAFETY: the runtime supplies live update arguments and a writable result for this callback.
+        unsafe {
+            MANUAL_UPDATE_FACTS.lock().unwrap().push((*args).facts);
+            *result = NativeProductUpdateResult::None;
+        }
+        ABI_OK
+    }
+
+    #[test]
+    fn inspection_advance_delivers_realtime_fixed_steps_to_the_product() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("fixture gate");
+        let (mut runtime, root) = realtime_drop_fixture_runtime("manual-realtime-facts");
+        runtime.api.update = manual_time_fixture_update;
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        for mode in ["manual", "action-driven"] {
+            MANUAL_UPDATE_FACTS.lock().unwrap().clear();
+            runtime
+                .execute_time_debug(&format!("engine.time.mode {mode}"))
+                .unwrap();
+            runtime
+                .execute_time_debug("engine.time.advance 100")
+                .unwrap();
+            let facts = MANUAL_UPDATE_FACTS.lock().unwrap();
+            assert_eq!(facts.len(), 3);
+            for fact in facts.iter() {
+                assert_eq!(fact.mode, NativeProductUpdateMode::Realtime);
+                assert_eq!(fact.lifecycle_state, NativeProductLifecycleState::Running);
+                assert_eq!(fact.fixed_step_hz, 30);
+                assert_eq!(fact.fixed_delta_seconds, 1.0 / 30.0);
+                assert_eq!(fact.admitted_step_count, 1);
+            }
+            assert!(facts
+                .windows(2)
+                .all(|pair| pair[1].simulation_step > pair[0].simulation_step));
+        }
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn realtime_schedule_state_tracks_lifecycle_and_uses_admitted_hz() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");

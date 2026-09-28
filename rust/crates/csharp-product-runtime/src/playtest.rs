@@ -57,7 +57,9 @@ impl CsharpProductRuntime {
                         .admit_manual_step()
                         .map_err(|error| self.lifecycle_runtime_error(error))?;
                     outputs.extend(
-                        self.update_admitted(DEMAND_UPDATE_MODE, None, admission, 0)
+                        // Manual admission changes who advances the clock, not the
+                        // realtime product contract or its animation step semantics.
+                        self.update_admitted(REALTIME_UPDATE_MODE, None, admission, 0)
                             .map_err(|error| self.runtime_error(error))?,
                     );
                     advanced += 1;
