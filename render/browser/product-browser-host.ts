@@ -389,7 +389,7 @@ void mountProductBrowserHost({
   initialInteractionMode: 'gameplay',
   gameplayCursorMode: unlockedCursor ? 'unlocked' : 'pointer-lock',
   inputContext: 'gameplay.default',
-  runtimeInput: { maximumPointerDelta: 32, maximumWheelDelta: 64 },
+  runtimeInput: { maximumWheelDelta: 64 },
   uiProjection: { expectedStream: 'product.ui', expectedContract: 'product.ui.v1' },
 }).then((host) => {
   productHost = host;

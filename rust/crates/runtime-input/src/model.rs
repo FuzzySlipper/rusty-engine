@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::CompiledInputIntent;
 
 pub const MAX_PENDING_INGRESS: usize = 1_024;
-pub const MAX_AXIS_MAGNITUDE: f32 = 8_192.0;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_BUTTON_VALUE: f32 = 1.0;
@@ -226,15 +225,15 @@ impl InputContext {
     }
 }
 
-/// A bounded, finite value supplied by normalized physical facts or direct UI
-/// intent claims. Axis policy (deadzone, sensitivity, aggregation) stays with
-/// the host or downstream product rather than this lane.
+/// A finite value supplied by normalized physical facts or direct UI intent
+/// claims. Axis policy (deadzone, sensitivity, aggregation) stays with the
+/// host or downstream product rather than this lane.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AxisValue(f32);
 
 impl AxisValue {
     pub fn new(value: f32) -> Result<Self, RuntimeInputError> {
-        if !value.is_finite() || value.abs() > MAX_AXIS_MAGNITUDE {
+        if !value.is_finite() {
             return Err(RuntimeInputError::InvalidAxisValue);
         }
         // Make the single representable neutral fact deterministic across

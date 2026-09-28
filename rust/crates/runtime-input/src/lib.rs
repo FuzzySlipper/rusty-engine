@@ -22,9 +22,9 @@ pub use model::{
     IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
     RuntimeInputBatchReceipt, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
     RuntimeInputFact, RuntimeInputIngress, RuntimeIntentEnvelope, RuntimeIntentValue,
-    RuntimeProductPayload, MAX_AXIS_MAGNITUDE, MAX_CONTROLLER_AXIS_MAGNITUDE,
-    MAX_CONTROLLER_BUTTON_VALUE, MAX_DIRECT_INTENT_AXIS_MAGNITUDE,
-    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER, MAX_PENDING_INGRESS,
+    RuntimeProductPayload, MAX_CONTROLLER_AXIS_MAGNITUDE, MAX_CONTROLLER_BUTTON_VALUE,
+    MAX_DIRECT_INTENT_AXIS_MAGNITUDE, MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER,
+    MAX_PENDING_INGRESS,
 };
 pub use wire::{
     decode_runtime_input_wire_event_json, decode_runtime_input_wire_events_json,

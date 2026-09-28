@@ -52,7 +52,6 @@ void mountProductBrowserHost({
   initialInteractionMode: 'gameplay',
   gameplayCursorMode: cursorMode,
   runtimeInput: {
-    maximumPointerDelta: 32,
     maximumWheelDelta: 64,
     selectedController: { index: 0 },
   },

@@ -28322,11 +28322,11 @@ function CE(e, t) {
 		t.allowsGameplayInput(e), g("interaction-mode-loss");
 	}, S = (e) => {
 		if (!v(e, !1) || t.usesPointerLock?.() === !1 || !p()) return;
-		let r = $E(e.movementX, n.maximumPointerDelta), i = $E(e.movementY, n.maximumPointerDelta);
-		r === 0 && i === 0 || _(Object.freeze({
+		let n = Number.isFinite(e.movementX) ? e.movementX : 0, r = Number.isFinite(e.movementY) ? e.movementY : 0;
+		n === 0 && r === 0 || _(Object.freeze({
 			kind: "pointer-delta",
-			x: r,
-			y: i
+			x: n,
+			y: r
 		}));
 	}, C = (e) => {
 		if (!v(e, !0)) return;
@@ -28622,7 +28622,6 @@ function DE(e, t, n, r) {
 function OE(e) {
 	return Object.freeze({
 		initialBinding: e.binding === void 0 ? null : AE(e.binding),
-		maximumPointerDelta: eD(e.maximumPointerDelta ?? 256, "maximumPointerDelta", 4096),
 		maximumQueue: eD(e.maximumQueue ?? 1024, "maximumQueue", SE),
 		maximumWheelDelta: eD(e.maximumWheelDelta ?? 256, "maximumWheelDelta", 4096),
 		onAvailable: e.onAvailable === void 0 ? null : kE(e.onAvailable),
@@ -31339,7 +31338,7 @@ function GO(e) {
 				`    realtimeAdvanceOwner: ${JSON.stringify(e.realtimeAdvanceOwner ?? (e.lifecycleMode === "realtime" ? "rust-host" : "browser"))},`,
 				`    gameplayCursorMode: ${JSON.stringify(e.gameplayCursorMode ?? "pointer-lock")},`,
 				...e.uiProjection === void 0 || e.uiProjection === null ? ["    uiProjection: undefined,"] : [`    uiProjection: ${JSON.stringify(e.uiProjection)},`],
-				"    runtimeInput: { maximumPointerDelta: 32, maximumWheelDelta: 64, selectedController: { index: 0 } },",
+				"    runtimeInput: { maximumWheelDelta: 64, selectedController: { index: 0 } },",
 				"  };",
 				"}",
 				""

@@ -5,7 +5,6 @@
  */
 
 export const RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM = 1_024;
-export const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18_446_744_073_709_551_615n;
@@ -153,8 +152,6 @@ export interface RustyApplicationRuntimeInputOptions {
   readonly binding?: RustyApplicationRuntimeInputBinding;
   /** Maximum queued physical facts and direct UI claims, inclusive of the fail-closed clear. */
   readonly maximumQueue?: number;
-  /** Absolute pointer movement cap per DOM event. */
-  readonly maximumPointerDelta?: number;
   /** Absolute wheel cap per DOM event. */
   readonly maximumWheelDelta?: number;
   /** Opt-in selected-controller observation; sampling remains caller-driven. */
@@ -227,7 +224,6 @@ export interface RustyApplicationManagedInputIngress extends RustyApplicationInp
 
 interface NormalizedInputOptions {
   readonly initialBinding: RustyApplicationRuntimeInputBinding | null;
-  readonly maximumPointerDelta: number;
   readonly maximumQueue: number;
   readonly maximumWheelDelta: number;
   readonly onAvailable: (() => void) | null;
@@ -316,8 +312,9 @@ export function createRustyApplicationInputIngress(
   const onPointerMove = (event: PointerEvent): void => {
     if (!admit(event, false)) return;
     if (environment.usesPointerLock?.() === false || !pointerLocked()) return;
-    const x = boundedNumber(event.movementX, normalized.maximumPointerDelta);
-    const y = boundedNumber(event.movementY, normalized.maximumPointerDelta);
+    // Pointer-lock movement is forwarded whole; sensitivity is product policy.
+    const x = Number.isFinite(event.movementX) ? event.movementX : 0;
+    const y = Number.isFinite(event.movementY) ? event.movementY : 0;
     if (x === 0 && y === 0) return;
     // The canonical convention is intentionally raw here: rightward pointer movement is +X/yaw.
     enqueueFact(Object.freeze({ kind: 'pointer-delta', x, y }));
@@ -798,11 +795,6 @@ function freezeClaim(
 function normalizeOptions(options: RustyApplicationRuntimeInputOptions): NormalizedInputOptions {
   return Object.freeze({
     initialBinding: options.binding === undefined ? null : validateBinding(options.binding),
-    maximumPointerDelta: boundedPositiveInteger(
-      options.maximumPointerDelta ?? RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM,
-      'maximumPointerDelta',
-      4_096,
-    ),
     maximumQueue: boundedPositiveInteger(
       options.maximumQueue ?? RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM,
       'maximumQueue',

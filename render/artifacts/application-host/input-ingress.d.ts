@@ -4,7 +4,6 @@
  * do not cross the application-host boundary.
  */
 export declare const RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM = 1024;
-export declare const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export declare const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18446744073709551615n;
@@ -114,8 +113,6 @@ export interface RustyApplicationRuntimeInputOptions {
     readonly binding?: RustyApplicationRuntimeInputBinding;
     /** Maximum queued physical facts and direct UI claims, inclusive of the fail-closed clear. */
     readonly maximumQueue?: number;
-    /** Absolute pointer movement cap per DOM event. */
-    readonly maximumPointerDelta?: number;
     /** Absolute wheel cap per DOM event. */
     readonly maximumWheelDelta?: number;
     /** Opt-in selected-controller observation; sampling remains caller-driven. */

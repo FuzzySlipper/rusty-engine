@@ -115,7 +115,6 @@ window.__rustyApplicationMount = (presentationAspectBounds, includeRuntimeInput 
           runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
           context: 'gameplay.default',
         },
-        maximumPointerDelta: 32,
         maximumWheelDelta: 64,
         selectedController: { index: 0 },
       },

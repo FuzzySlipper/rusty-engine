@@ -58,6 +58,36 @@ void test('unlocked gameplay ignores pointer deltas even if another caller holds
   ingress.dispose();
 });
 
+void test('locked pointer movement reaches the Engine without per-event clipping', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = {} as HTMLCanvasElement;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    pointerLockElement: canvas,
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+    usesPointerLock: () => true,
+  });
+
+  documentTarget.emit('pointermove', { movementX: 480, movementY: -300 } as PointerEvent);
+  documentTarget.emit('pointermove', { movementX: Number.NaN, movementY: Infinity } as PointerEvent);
+  assert.deepEqual(ingress.drain().map((entry) => ('fact' in entry ? entry.fact : undefined)), [
+    { kind: 'pointer-delta', x: 480, y: -300 },
+  ]);
+  ingress.dispose();
+});
+
 void test('input ingress preserves physical and direct UI observation order with lossless sequences', () => {
   const queue = createRustyApplicationInputQueue(8);
   assert.equal(queue.bindRuntime(INITIAL), true);

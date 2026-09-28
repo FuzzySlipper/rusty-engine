@@ -396,6 +396,27 @@ fn held_axes_and_clear_keep_state_owned_by_the_neutral_lane() {
 }
 
 #[test]
+fn fast_pointer_movement_accumulates_without_a_magnitude_cap() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    for sequence in 0..3 {
+        lane.ingest(physical(
+            binding,
+            sequence,
+            RuntimeInputFact::PointerDelta {
+                x: axis(6_000.0),
+                y: axis(-4_000.0),
+            },
+        ))
+        .expect("a large finite delta is admitted");
+    }
+    let (frame, _) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(frame.pointer().0.value(), 18_000.0);
+    assert_eq!(frame.pointer().1.value(), -12_000.0);
+    assert!(AxisValue::new(f32::NAN).is_err());
+}
+
+#[test]
 fn same_context_interface_clear_releases_physical_input_and_delivers_one_direct_payload() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());

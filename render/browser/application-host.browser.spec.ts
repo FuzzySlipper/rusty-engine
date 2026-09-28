@@ -849,11 +849,20 @@ test('queued complete content replacements publish in call order', async ({ page
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
 });
 
-test('Engine application-host input ingress observes bounded physical facts and ordered UI claims', async ({ page }) => {
+test('Engine application-host input ingress observes physical facts and ordered UI claims', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   await page.locator('canvas[data-rusty-application-renderer="engine-owned"]')
     .click({ position: { x: 40, y: 40 } });
   await expect.poll(() => page.evaluate(() => document.pointerLockElement instanceof HTMLCanvasElement)).toBe(true);
+  await page.evaluate(() => {
+    const observed: { x: number; y: number }[] = [];
+    (window as unknown as { __observedPointerMovement: typeof observed }).__observedPointerMovement = observed;
+    document.addEventListener('pointermove', (event) => {
+      if (event.movementX !== 0 || event.movementY !== 0) {
+        observed.push({ x: event.movementX, y: event.movementY });
+      }
+    });
+  });
   await page.mouse.move(120, 120);
   await page.mouse.move(156, 108);
   await page.keyboard.down('w');
@@ -866,7 +875,14 @@ test('Engine application-host input ingress observes bounded physical facts and 
   expect(facts).toContainEqual({ kind: 'key', code: 'key-w', edge: 'pressed' });
   expect(facts).toContainEqual({ kind: 'key', code: 'key-w', edge: 'released' });
   expect(facts).toContainEqual({ kind: 'wheel', x: 0, y: 64 });
-  expect(facts).toContainEqual({ kind: 'pointer-delta', x: 32, y: 32 });
+  // Pointer-lock movement reaches ingress exactly as the browser reported it.
+  const observed = await page.evaluate(() =>
+    (window as unknown as { __observedPointerMovement: { x: number; y: number }[] }).__observedPointerMovement);
+  expect(observed.some((movement) => Math.abs(movement.x) > 32 || Math.abs(movement.y) > 32)).toBe(true);
+  const pointerFacts = facts.filter((fact) => fact?.kind === 'pointer-delta');
+  expect(observed.length).toBeGreaterThan(0);
+  expect(pointerFacts.slice(-observed.length))
+    .toEqual(observed.map((movement) => ({ kind: 'pointer-delta', ...movement })));
   expect(physical?.every((entry, index) => entry.sequence === String(index))).toBe(true);
   expect(physical?.every((entry) => entry.runtime.instanceId === '7'
     && entry.runtime.generation === '3' && entry.runtime.controlRevision === '11')).toBe(true);
