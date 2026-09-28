@@ -711,23 +711,6 @@ impl EngineServiceSet {
                 .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
-        if let Some(appearance) = &call.appearance {
-            if !appearance.state.shares_state(&self.appearance.state) {
-                call.presentation_world.retain_effects(
-                    RuntimeAppearanceBridge::snapshot_call_presentation(appearance)?,
-                );
-            }
-        }
-        let mut effects = Vec::new();
-        let audio = RuntimeAudioBridge::snapshot_call_frame(&call.audio)?;
-        if !audio.ops.is_empty() {
-            effects.push(audio);
-        }
-        let video = RuntimeVideoBridge::snapshot_call_frame(&call.video);
-        if !video.ops.is_empty() {
-            effects.push(video);
-        }
-        call.presentation_world.retain_media_effects(effects);
         crate::render_output::RuntimeRenderOutputBridge::settle(
             &mut call.render_output,
             &call.presentation_world,
@@ -834,7 +817,19 @@ impl EngineServiceSet {
         binding: RuntimeUiRuntimeBinding,
     ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
         let snapshot = self.presentation_world.snapshot();
-        let presentation = self.presentation_world.effects_snapshot();
+        // Retained effect and media baselines are built from committed state
+        // only here, for the fresh renderer that needs them.
+        let mut presentation = self
+            .presentation_world
+            .with_retained_captures(self.appearance.snapshot_presentation()?);
+        let audio = self.audio.snapshot_frame()?;
+        if !audio.ops.is_empty() {
+            presentation.push(audio);
+        }
+        let video = self.video.snapshot_frame();
+        if !video.ops.is_empty() {
+            presentation.push(video);
+        }
         Ok(CsharpEngineCallOutput {
             render_output: Some(self.render_output.snapshot()),
             appearance: vec![
@@ -995,8 +990,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn idle_settlement_does_not_snapshot_retained_graphics_or_resources() {
-        use crate::appearance::{GRAPHICS_SNAPSHOT_READS, RESOURCE_INVENTORY_READS};
+    fn settlement_builds_no_effect_or_media_baseline_until_a_snapshot_reads_it() {
+        use crate::appearance::{
+            GRAPHICS_SNAPSHOT_READS, MEDIA_SNAPSHOT_READS, RESOURCE_INVENTORY_READS,
+        };
+        let billboards = |services: &EngineServiceSet| {
+            services
+                .snapshot_outputs(binding())
+                .unwrap()
+                .presentation
+                .iter()
+                .flat_map(|frame| &frame.ops)
+                .filter(|op| matches!(op, render_presentation::PresentationOp::Billboard { .. }))
+                .count()
+        };
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).unwrap(),
             BTreeMap::from([(
@@ -1008,6 +1015,8 @@ mod tests {
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .unwrap();
+        GRAPHICS_SNAPSHOT_READS.with(|c| c.set(0));
+        MEDIA_SNAPSHOT_READS.with(|c| c.set(0));
         services.begin_call(binding());
         let api = services.api();
         let mut texture = NativeRenderResourceInfo::default();
@@ -1070,8 +1079,10 @@ mod tests {
             .expect("text billboard");
         let call = services.take_call().unwrap();
         services.commit_call(call);
-        assert!(!services.presentation_world.effects_snapshot().is_empty());
-        GRAPHICS_SNAPSHOT_READS.with(|c| c.set(0));
+        // Creating a retained billboard changes appearance state, but
+        // settlement no longer rebuilds the effect or media baselines.
+        GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
+        MEDIA_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
         RESOURCE_INVENTORY_READS.with(|c| c.set(0));
         for _ in 0..3 {
             services.begin_update_call(
@@ -1093,8 +1104,12 @@ mod tests {
             services.commit_call(call);
         }
         GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
+        MEDIA_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
         RESOURCE_INVENTORY_READS.with(|c| assert_eq!(c.get(), 0));
-        assert!(!services.presentation_world.effects_snapshot().is_empty());
+        // A fresh attachment builds them once, from committed state.
+        assert_eq!(billboards(&services), 1);
+        GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 1));
+        MEDIA_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 2));
         services.begin_call(binding());
         services
             .appearance
@@ -1102,13 +1117,8 @@ mod tests {
             .unwrap();
         let call = services.take_call().unwrap();
         services.commit_call(call);
-        assert!(!services
-            .presentation_world
-            .effects_snapshot()
-            .iter()
-            .flat_map(|f| &f.ops)
-            .any(|op| matches!(op, render_presentation::PresentationOp::Billboard { .. })));
         GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 1));
+        assert_eq!(billboards(&services), 0);
     }
 
     #[test]

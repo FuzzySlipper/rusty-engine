@@ -437,10 +437,6 @@ impl CsharpRenderResource {
 }
 
 impl RuntimeAppearanceState {
-    pub(crate) fn shares_state(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
     pub(crate) fn output_object_handle(
         &self,
         id: u64,
@@ -1486,6 +1482,7 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
 #[cfg(test)]
 thread_local! {
     pub(crate) static GRAPHICS_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static MEDIA_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static RESOURCE_INVENTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -2150,10 +2147,10 @@ impl RuntimeAppearanceBridge {
     /// The result contains only retained creates. Direct particle emissions
     /// and animation realization/cue events are historical signals and are
     /// deliberately excluded.
-    pub(crate) fn snapshot_call_presentation(
-        call: &RuntimeAppearanceCall,
+    pub(crate) fn snapshot_presentation(
+        &self,
     ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
-        Self::snapshot_presentation_state(&call.state)
+        Self::snapshot_presentation_state(&self.state)
     }
 
     fn snapshot_presentation_state(

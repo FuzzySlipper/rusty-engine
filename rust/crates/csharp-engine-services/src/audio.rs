@@ -334,24 +334,17 @@ impl RuntimeAudioBridge {
     ///
     /// A baseline uses the Engine cursor and desired state. Historical
     /// one-shots and browser realization feedback remain outside it.
-    #[cfg(test)]
     pub(crate) fn snapshot_frame(
         &self,
     ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
         Self::snapshot_frame_for_state(&self.state)
     }
 
-    /// Snapshot a staged call before commit when its enclosing presentation
-    /// publication needs the same transaction boundary.
-    pub(crate) fn snapshot_call_frame(
-        call: &RuntimeAudioCall,
-    ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
-        Self::snapshot_frame_for_state(&call.state)
-    }
-
     fn snapshot_frame_for_state(
         state: &AudioState,
     ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
+        #[cfg(test)]
+        crate::appearance::MEDIA_SNAPSHOT_READS.with(|count| count.set(count.get() + 1));
         let mut ops = Vec::new();
         for voice in state.projector.active_voices() {
             ops.push(PresentationOp::Audio {
@@ -2334,25 +2327,25 @@ mod tests {
 
         bridge.begin_update_call(0.75);
         let staged = bridge.take_staged_call().expect("staged elapsed state");
-        let baseline = RuntimeAudioBridge::snapshot_call_frame(&staged).expect("baseline");
+        bridge.commit(staged);
+        let baseline = bridge.snapshot_frame().expect("baseline");
         assert!(matches!(
             &baseline.ops[0],
             PresentationOp::Audio { op: AudioProjectionOp::Restore {
                 handle, desired_state: AudioVoiceDesiredState::Playing, cursor_seconds, ..
             }, .. } if *handle == AudioHandle::new(voice.value) && (*cursor_seconds - 0.75).abs() < f64::EPSILON
         ));
-        bridge.commit(staged);
 
         bridge.begin_update_call(0.5);
         let staged = bridge.take_staged_call().expect("completed elapsed state");
-        let baseline = RuntimeAudioBridge::snapshot_call_frame(&staged).expect("baseline");
+        bridge.commit(staged);
+        let baseline = bridge.snapshot_frame().expect("baseline");
         assert!(matches!(
             &baseline.ops[0],
             PresentationOp::Audio { op: AudioProjectionOp::Restore {
                 desired_state: AudioVoiceDesiredState::Paused, cursor_seconds, ..
             }, .. } if (*cursor_seconds - 1.0).abs() < f64::EPSILON
         ));
-        bridge.commit(staged);
     }
 
     #[test]

@@ -130,7 +130,6 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
     }])
     .unwrap();
     let first = world.apply_presentation(create.clone()).unwrap();
-    world.retain_effects(vec![create.clone()]);
     let capture = match &first.ops[0] {
         PresentationOp::GhostPlate {
             op: GhostPlateProjectionOp::Create { descriptor, .. },
@@ -153,8 +152,7 @@ fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it(
             ..RenderFrameDiff::new()
         })
         .unwrap();
-    world.retain_effects(vec![create.clone()]);
-    let baseline = world.effects_snapshot();
+    let baseline = world.with_retained_captures(vec![create.clone()]);
     assert!(
         matches!(&baseline[0].ops[0], PresentationOp::GhostPlate { op: GhostPlateProjectionOp::Create { descriptor, .. }, .. } if descriptor.captured_scene.as_ref() == Some(&capture))
     );

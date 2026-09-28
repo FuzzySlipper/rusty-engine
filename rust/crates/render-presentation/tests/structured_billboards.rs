@@ -487,10 +487,7 @@ fn structured_create_update_destroy_duplicate_unknown_and_refused_update_are_ato
         BillboardProjectionDiagnosticCode::InvalidDescriptor
     );
     // The refused update leaves the retained entry exactly as it was.
-    assert_eq!(
-        projector.descriptor(handle),
-        Some(&structured_descriptor())
-    );
+    assert_eq!(projector.descriptor(handle), Some(&structured_descriptor()));
     projector
         .project(
             &assets,

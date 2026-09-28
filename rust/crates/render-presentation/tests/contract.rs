@@ -463,4 +463,3 @@ fn legacy_sprite_descriptor_decodes_and_new_writers_emit_visual() {
     assert!(encoded.get("visual").is_some());
     assert!(encoded.get("sprite").is_none());
 }
-

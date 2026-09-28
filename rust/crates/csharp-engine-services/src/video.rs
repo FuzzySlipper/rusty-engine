@@ -115,10 +115,11 @@ impl RuntimeVideoBridge {
     pub(crate) fn render_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.state.active.iter().map(|(_, resource)| resource)
     }
-    pub(crate) fn snapshot_call_frame(
-        call: &RuntimeVideoCall,
-    ) -> render_presentation::PresentationFrameDiff {
-        video_frame(call.state.projector.snapshot())
+    /// Current playback baseline for a fresh attachment.
+    pub(crate) fn snapshot_frame(&self) -> render_presentation::PresentationFrameDiff {
+        #[cfg(test)]
+        crate::appearance::MEDIA_SNAPSHOT_READS.with(|count| count.set(count.get() + 1));
+        video_frame(self.state.projector.snapshot())
     }
     pub(crate) fn ingest_realized_feedback(
         &mut self,

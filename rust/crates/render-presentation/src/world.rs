@@ -45,8 +45,6 @@ pub struct PresentationSnapshot {
 pub struct PresentationWorld {
     revision: u64,
     elapsed_seconds: f64,
-    effects: Arc<Vec<PresentationFrameDiff>>,
-    media_effects: Arc<Vec<PresentationFrameDiff>>,
     retained: SharedGraphics,
 }
 
@@ -171,9 +169,14 @@ impl PresentationWorld {
         Ok(delta)
     }
 
-    /// Named mechanisms supply their complete retained state, never historical signals.
-    /// The common world commits this alongside graphics and owns its publication frontier.
-    pub fn retain_effects(&mut self, mut frames: Vec<PresentationFrameDiff>) {
+    /// Complete a baseline that named mechanisms built from their current
+    /// retained state (never historical signals) with the scene each retained
+    /// ghost plate captured. Baselines are assembled only when a fresh
+    /// attachment needs them, not at every settlement.
+    pub fn with_retained_captures(
+        &self,
+        mut frames: Vec<PresentationFrameDiff>,
+    ) -> Vec<PresentationFrameDiff> {
         for frame in &mut frames {
             for op in &mut frame.ops {
                 if let crate::PresentationOp::GhostPlate {
@@ -185,20 +188,7 @@ impl PresentationWorld {
                 }
             }
         }
-        self.effects = Arc::new(frames);
-    }
-
-    /// Audio/video own their cursors independently of retained graphics effects.
-    pub fn retain_media_effects(&mut self, frames: Vec<PresentationFrameDiff>) {
-        self.media_effects = Arc::new(frames);
-    }
-
-    pub fn effects_snapshot(&self) -> Vec<PresentationFrameDiff> {
-        self.effects
-            .iter()
-            .chain(self.media_effects.iter())
-            .cloned()
-            .collect()
+        frames
     }
 
     pub fn apply_presentation(
@@ -1149,7 +1139,6 @@ mod tests {
         let committed = PresentationWorld::default();
         let mut candidate = committed.clone();
         candidate.advance_elapsed(0.1);
-        candidate.retain_effects(Vec::new());
         assert!(Arc::ptr_eq(&committed.retained.0, &candidate.retained.0));
         candidate
             .apply(frame(vec![RenderDiff::DefineStaticMesh {
@@ -1314,8 +1303,10 @@ mod tests {
             effect_delta.publication.as_ref().unwrap().base_revision,
             graphics.publication.unwrap().revision
         );
-        world.retain_effects(vec![retained.clone()]);
-        assert_eq!(world.effects_snapshot(), vec![retained]);
+        assert_eq!(
+            world.with_retained_captures(vec![retained.clone()]),
+            vec![retained]
+        );
         assert_eq!(world.snapshot().revision, 2);
         let next = world
             .apply(frame(vec![RenderDiff::Destroy {
