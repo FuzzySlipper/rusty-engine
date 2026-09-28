@@ -470,14 +470,15 @@ are not replayed. Continuous emitters restart their cosmetic simulation.
 ### Particle bursts
 
 `Presentation.EmitParticles` does not need signal registration, an appearance,
-or a retained emitter. Each one-shot needs a unique `SignalId`; `LogicalId` is
-for retained emitters and is ignored by the one-shot call. A minimal valid cube
-burst inside an admitted product callback is:
+or a retained emitter. `SignalId` is a non-empty product label and may repeat;
+each call is its own burst. `LogicalId` is for retained emitters and is ignored
+by the one-shot call. A minimal valid cube burst inside an admitted product
+callback is:
 
 ```csharp
 engine.Presentation.EmitParticles(new PresentationParticleDescriptor
 {
-    SignalId = $"blast.{sequence}", // product-owned emission sequence
+    SignalId = "blast", // product label; repeated labels are distinct bursts
     Anchor = new() { Kind = PresentationAnchorKind.World, Position = centre },
     Visual = PresentationParticleVisual.Cube,
     Visible = true,
@@ -508,7 +509,7 @@ enables the explicit collision material and spawn-relative plane/AABB volumes;
 set `Collision.LimitBehavior` and each volume's `Kind`. Collision is cosmetic
 and does not mutate Spatial or Dynamics.
 
-An invalid descriptor or repeated signal raises a named `EngineCallException`.
+An invalid descriptor raises a named `EngineCallException`.
 Catching an emission refusal permits the callback to continue and publish its
 other staged output. Letting an exception escape still faults the callback.
 Valid bursts return `Admitted`, `Clamped` or `Dropped` under capacity pressure.

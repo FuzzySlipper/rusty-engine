@@ -27,11 +27,8 @@ impl AudioHandle {
     }
 }
 
-/// Engine-issued correlation for one realized one-shot audio signal.
-///
-/// This is intentionally separate from the string idempotency key: renderer
-/// feedback names a concrete realization, while replay/admission can continue
-/// to deduplicate by `signal_id`.
+/// Engine-issued correlation for one realized one-shot audio signal. The
+/// product's `signal_id` is only a label; repeated labels are distinct emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AudioSignalHandle(u64);
@@ -233,7 +230,6 @@ pub struct AudioProjectionReadout {
 pub struct AudioProjector {
     active: BTreeMap<AudioHandle, RetainedAudioVoice>,
     buses: BTreeMap<AudioBus, AudioBusState>,
-    seen_signals: BTreeSet<String>,
     referenced_clips: BTreeSet<String>,
     emitted_signals: u64,
     diagnostics: Vec<AudioProjectionDiagnostic>,
@@ -422,9 +418,6 @@ impl AudioProjector {
                     return Err(AudioProjectionDiagnosticCode::InvalidDescriptor);
                 }
                 validate_descriptor(assets, descriptor)?;
-                if !self.seen_signals.insert(signal_id.clone()) {
-                    return Err(AudioProjectionDiagnosticCode::DuplicateSignal);
-                }
                 self.referenced_clips.insert(descriptor.clip.asset.clone());
                 self.emitted_signals = self.emitted_signals.saturating_add(1);
             }

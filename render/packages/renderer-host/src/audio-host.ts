@@ -201,7 +201,6 @@ export class RendererAudioHost {
   #retainedResourceHashes: ReadonlySet<string> | null = null;
   readonly #retained = new Map<number, RendererRetainedVoice>();
   readonly #oneShots = new Set<RendererAudioSourceGraph>();
-  readonly #seenSignals = new Set<string>();
   readonly #diagnostics: AudioProjectionDiagnostic[] = [];
   readonly #realizedFacts: RendererAudioRealizedFact[] = [];
   readonly #maxRetainedFacts: number;
@@ -377,7 +376,6 @@ export class RendererAudioHost {
     this.#oneShots.clear();
     this.#cache.clear();
     this.#retainedResourceHashes = null;
-    this.#seenSignals.clear();
     this.#emittedSignals = 0;
     this.#diagnostics.length = 0;
     this.#evictedDiagnosticCount = 0;
@@ -433,12 +431,8 @@ export class RendererAudioHost {
     const { meta, op } = operation;
     try {
       if (op.op === 'emit') {
-        if (this.#seenSignals.has(op.signalId)) {
-          return null;
-        }
         const graph = await this.#createGraph(op.descriptor, meta.sequence, epoch);
         this.#assertCurrentEpoch(epoch);
-        this.#seenSignals.add(op.signalId);
         this.#oneShots.add(graph);
         this.#startOneShotGraph(graph, op.signalHandle);
         this.#emittedSignals += 1;

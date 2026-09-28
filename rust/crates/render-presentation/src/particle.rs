@@ -333,7 +333,6 @@ impl Default for ParticleProjectionLimits {
 pub struct ParticleProjector {
     limits: ParticleProjectionLimits,
     active: BTreeMap<ParticleEmitterHandle, ParticleEmitterDescriptor>,
-    seen_signals: BTreeSet<String>,
     referenced_sprites: BTreeSet<String>,
     emitted_bursts: u64,
     diagnostics: Vec<ParticleProjectionDiagnostic>,
@@ -350,7 +349,6 @@ impl ParticleProjector {
         Self {
             limits,
             active: BTreeMap::new(),
-            seen_signals: BTreeSet::new(),
             referenced_sprites: BTreeSet::new(),
             emitted_bursts: 0,
             diagnostics: Vec::new(),
@@ -392,12 +390,6 @@ impl ParticleProjector {
                 meta.sequence,
             ));
         }
-        if staged.seen_signals.contains(&signal_id) {
-            return Err(self.retain_optional_emit_diagnostic(
-                ParticleProjectionDiagnosticCode::DuplicateSignal,
-                meta.sequence,
-            ));
-        }
         if let Err(code) = staged.validate_descriptor(assets, &descriptor) {
             return Err(self.retain_optional_emit_diagnostic(code, meta.sequence));
         }
@@ -428,7 +420,6 @@ impl ParticleProjector {
             return Ok((admission, None));
         }
 
-        staged.seen_signals.insert(signal_id.clone());
         staged.track_visual(&admitted_descriptor.visual);
         staged.emitted_bursts = staged.emitted_bursts.saturating_add(1);
         let op = ParticleProjectionOp::Emit {
@@ -536,9 +527,6 @@ impl ParticleProjector {
                     return Err(ParticleProjectionDiagnosticCode::InvalidDescriptor);
                 }
                 self.validate_descriptor(assets, descriptor)?;
-                if !self.seen_signals.insert(signal_id.clone()) {
-                    return Err(ParticleProjectionDiagnosticCode::DuplicateSignal);
-                }
                 self.track_visual(&descriptor.visual);
                 self.emitted_bursts = self.emitted_bursts.saturating_add(1);
             }

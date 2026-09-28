@@ -275,19 +275,20 @@ void test('Web Audio host emits catalog-hash-bound 3D cues and caches decoded cl
   assert.equal(context.panners[0]?.panningModel, 'equalpower');
   assert.deepEqual(receipt.diagnostics, []);
 
+  // A repeated product label is a distinct one-shot with its own Engine handle.
   const repeated = await audio.applyPresentation(
     frame([
       operation(0, {
         op: 'emit',
-        signalHandle: audioSignalHandle(11),
+        signalHandle: audioSignalHandle(13),
         signalId: 'shot:44',
         descriptor: descriptor(),
       }),
     ]),
   );
   assert.equal(repeated.applied, 1);
-  assert.equal(repeated.readout.emittedSignals, 2);
-  assert.equal(context.sources.length, 2, 're-reading a frame does not replay a one-shot signal');
+  assert.equal(repeated.readout.emittedSignals, 3);
+  assert.equal(context.sources.length, 3);
 });
 
 void test('audio realization facts use numeric correlations and reject stale completion callbacks', async () => {
@@ -298,7 +299,7 @@ void test('audio realization facts use numeric correlations and reject stale com
     operation(0, {
       op: 'emit',
       signalHandle: audioSignalHandle(101),
-      signalId: 'idempotency-only',
+      signalId: 'label-only',
       descriptor: descriptor(),
     }),
     operation(1, { op: 'create', handle: voice, descriptor: descriptor() }),

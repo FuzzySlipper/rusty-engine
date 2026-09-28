@@ -84,7 +84,7 @@ export type AudioBusControl =
 export type AudioProjectionOp =
   | {
     readonly op: 'emit';
-    /** Stable Engine-issued completion correlation; signalId remains idempotency-only. */
+    /** Stable Engine-issued completion correlation; signalId is a product label. */
     readonly signalHandle: AudioSignalHandle;
     readonly signalId: string;
     readonly descriptor: AudioSourceDescriptor;

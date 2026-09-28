@@ -26,14 +26,14 @@ internal static class ParticleEmissionChecks
             SizeCurve = new PresentationParticleScalarKey[] { new(0, 0.2f), new(1, 0.1f) },
             ColorCurve = new PresentationParticleColorKey[] { new(0, new Color(1, 1, 1, 1)), new(1, new Color(1, 1, 1, 0)) },
         };
-        // An invalid descriptor must not consume its signal identity.
         Require(engine.Presentation.EmitParticles(valid).Outcome == PresentationParticleEmissionOutcome.Admitted,
             "valid cube burst was not admitted after refusal");
         ExpectRefusal(engine, valid with { Anchor = default });
         ExpectRefusal(engine, valid with { Visual = (PresentationParticleVisual)999 });
         ExpectRefusal(engine, valid with { HasCollision = true });
         ExpectRefusal(engine, valid with { SignalId = "fixture.particle.bad-seed", Seed = ulong.MaxValue });
-        ExpectRefusal(engine, valid); // Duplicate signal has an ordinary named refusal.
+        Require(engine.Presentation.EmitParticles(valid).Outcome == PresentationParticleEmissionOutcome.Admitted,
+            "a repeated signal label was not admitted as a distinct burst");
         ExpectRefusal(engine, valid with { SignalId = "fixture.particle.no-color", ColorCurve = default });
         RenderResourceInfo texture = engine.Graphics.OpenResource(new RenderResourceRequest("spatial-particle.png"));
         PresentationParticleDescriptor billboard = valid with

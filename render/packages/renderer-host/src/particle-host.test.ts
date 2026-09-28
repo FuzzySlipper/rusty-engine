@@ -115,6 +115,23 @@ function host(sink: FakeParticleSink, maxParticles = 64): RendererParticleHost {
   });
 }
 
+void test('a repeated signal label realizes a distinct burst', async () => {
+  const sink = new FakeParticleSink();
+  const particles = host(sink);
+  const emit = (sequence: number) => operation(sequence, {
+    op: 'emit',
+    signalId: 'impact:repeated',
+    descriptor: descriptor(),
+  });
+  const receipt = await particles.applyPresentation(frame([emit(0), emit(1)]));
+  assert.equal(receipt.applied, 2);
+  assert.equal(receipt.readout.emittedBursts, 2);
+  assert.equal(sink.created.length, 6);
+  particles.advance(0.5);
+  assert.equal(particles.readout().activeParticles, 0);
+  assert.equal(sink.destroyed.length, 6);
+});
+
 void test('particle host realizes deterministic bursts and expires disposable billboards', async () => {
   const sink = new FakeParticleSink();
   const particles = host(sink);
@@ -137,11 +154,6 @@ void test('particle host realizes deterministic bursts and expires disposable bi
     [1, 2, 3],
   ]);
 
-  const repeated = await particles.applyPresentation(presentation);
-  assert.equal(repeated.applied, 1);
-  assert.equal(repeated.readout.emittedBursts, 1);
-  assert.equal(sink.created.length, 3, 'stable signal ids prevent duplicate realization');
-
   particles.advance(0.1);
   assert.equal(sink.updated.length, 3);
   assert.notDeepEqual(sink.updated[0]?.position, [1, 2, 3]);
@@ -150,7 +162,7 @@ void test('particle host realizes deterministic bursts and expires disposable bi
   assert.equal(sink.destroyed.length, 3);
 });
 
-void test('a missing entity anchor diagnoses without consuming the burst signal', async () => {
+void test('a missing entity anchor diagnoses without realizing the burst', async () => {
   const sink = new FakeParticleSink();
   let entityPosition: readonly [number, number, number] | null = null;
   const particles = new RendererParticleHost({
@@ -183,10 +195,6 @@ void test('a missing entity anchor diagnoses without consuming the burst signal'
   assert.equal(retried.readout.emittedBursts, 1);
   assert.equal(retried.readout.activeParticles, 3);
   assert.deepEqual(sink.created[0]?.position, [4, 6, 6]);
-
-  const repeated = await particles.applyPresentation(presentation);
-  assert.equal(repeated.readout.emittedBursts, 1);
-  assert.equal(repeated.readout.activeParticles, 3);
 });
 
 void test('missing particle resources fail locally without consuming the burst', async () => {

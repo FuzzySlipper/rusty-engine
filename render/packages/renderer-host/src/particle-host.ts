@@ -145,12 +145,12 @@ export class RendererParticleHost {
   readonly #emitters = new Map<number, ActiveEmitter>();
   readonly #burstEmitters = new Map<string, ActiveEmitter>();
   readonly #particles = new Map<number, ActiveParticle>();
-  readonly #seenSignals = new Set<string>();
   readonly #spriteResources = new Map<string, ParticleResourceEntry>();
   readonly #diagnostics: ParticleProjectionDiagnostic[] = [];
   #retainedResourceHashes: ReadonlySet<string> | null = null;
   #generation = 0;
   #nextParticleId = 1;
+  #nextBurstId = 1;
   #emittedBursts = 0;
   #droppedParticles = 0;
   #collisionTests = 0;
@@ -261,7 +261,6 @@ export class RendererParticleHost {
     for (const emitter of this.#burstEmitters.values()) emitter.visualResource?.release();
     this.#emitters.clear();
     this.#burstEmitters.clear();
-    this.#seenSignals.clear();
     this.#retainedResourceHashes = null;
     this.#dropAllResources();
     if (failures.length > 0) {
@@ -328,9 +327,6 @@ export class RendererParticleHost {
     meta: ParticlePresentationOp['meta'],
     op: Extract<ParticleProjectionOp, { readonly op: 'emit' }>,
   ): Promise<ParticleProjectionDiagnostic | null> {
-    if (this.#seenSignals.has(op.signalId)) {
-      return null;
-    }
     const generation = this.#generation;
     const prepared = await this.#prepareVisual(op.descriptor);
     if (generation !== this.#generation) {
@@ -339,8 +335,9 @@ export class RendererParticleHost {
         'hostFailure', meta, null, 'particle host lifecycle changed while resources were loading',
       );
     }
+    // The signal id is a product label; each emit is its own burst.
     const emitter = createEmitter(
-      `signal:${op.signalId}`,
+      `burst:${this.#nextBurstId++}`,
       null,
       op.descriptor,
       prepared.visual,
@@ -356,7 +353,6 @@ export class RendererParticleHost {
         emitter.visualResource?.release();
         return diagnostic;
       }
-      this.#seenSignals.add(op.signalId);
       this.#burstEmitters.set(emitter.key, emitter);
       this.#emittedBursts += 1;
       return diagnostic;

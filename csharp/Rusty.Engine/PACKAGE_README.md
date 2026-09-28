@@ -75,9 +75,10 @@ packaged `fixtures/csharp-navigation-mapping` example in the Engine repository.
 ## Particle bursts
 
 `Presentation.EmitParticles` needs no prior signal or appearance registration.
-Use a new `SignalId` for each burst, explicitly set `Anchor.Kind` and `Visual`,
-and supply `MaxParticles`, positive ordered lifetimes, and both size/color
-curves (2–8 keys, ages strictly increasing from 0 to 1). `BurstCount` must not
+Give each burst a non-empty `SignalId` label (repeats are distinct bursts),
+explicitly set `Anchor.Kind` and `Visual`, and supply `MaxParticles`, positive
+ordered lifetimes, and both size/color curves (2–8 keys, ages strictly
+increasing from 0 to 1). `BurstCount` must not
 exceed `MaxParticles` (at most 1024); `Seed` must fit 53 bits. For a billboard,
 open an image with `Graphics.OpenResource`, pass its handle as `Sprite`, and set
 `SpriteFrameCount = 1` for a static sprite. Animated sprites need a positive

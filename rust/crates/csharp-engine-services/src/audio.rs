@@ -2084,16 +2084,23 @@ mod tests {
             .expect("admitted WAV clip");
         let request = NativeAudioEmitRequest {
             signal_id: NativeUtf8Slice {
-                bytes: b"duplicate-signal".as_ptr(),
-                len: b"duplicate-signal".len(),
+                bytes: b"repeated-diagnostic".as_ptr(),
+                len: b"repeated-diagnostic".len(),
             },
             descriptor: descriptor(clip, NativeAudioBus::Ui),
         };
         bridge.emit(request).expect("initial one-shot");
+        let invalid = NativeAudioEmitRequest {
+            descriptor: NativeAudioSourceDescriptor {
+                volume: 2.0,
+                ..request.descriptor
+            },
+            ..request
+        };
         for _ in 0..MAX_AUDIO_DIAGNOSTICS + 2 {
             assert!(
-                bridge.emit(request).is_err(),
-                "duplicate signal is diagnostic"
+                bridge.emit(invalid).is_err(),
+                "invalid descriptor is diagnostic"
             );
         }
 

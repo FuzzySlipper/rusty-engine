@@ -26412,20 +26412,19 @@ var ww = 64, Tw = class {
 	#c = null;
 	#l = /* @__PURE__ */ new Map();
 	#u = /* @__PURE__ */ new Set();
-	#d = /* @__PURE__ */ new Set();
+	#d = [];
 	#f = [];
-	#p = [];
+	#p;
 	#m;
-	#h;
+	#h = 0;
 	#g = 0;
 	#_ = 0;
-	#v = 0;
+	#v = 1;
 	#y = 1;
-	#b = 1;
-	#x = !1;
+	#b = !1;
 	constructor(e) {
-		if (this.#m = e.maxRetainedFacts ?? 128, !Number.isSafeInteger(this.#m) || this.#m < 1) throw RangeError("maxRetainedFacts must be a positive safe integer");
-		if (this.#h = e.maxRetainedDiagnostics ?? 128, !Number.isSafeInteger(this.#h) || this.#h < 1) throw RangeError("maxRetainedDiagnostics must be a positive safe integer");
+		if (this.#p = e.maxRetainedFacts ?? 128, !Number.isSafeInteger(this.#p) || this.#p < 1) throw RangeError("maxRetainedFacts must be a positive safe integer");
+		if (this.#m = e.maxRetainedDiagnostics ?? 128, !Number.isSafeInteger(this.#m) || this.#m < 1) throw RangeError("maxRetainedDiagnostics must be a positive safe integer");
 		this.#e = e.createContext?.() ?? Aw(), this.#r = e.resolveResource, this.#t = e.createMediaElement ?? (() => new Audio()), this.#n = e.resolveEntityPosition ?? (() => null);
 		let t = this.#e.createGain(), n = this.#e.createGain(), r = this.#e.createGain();
 		t.connect(this.#e.destination), n.connect(this.#e.destination), r.connect(this.#e.destination), this.#i = {
@@ -26437,47 +26436,47 @@ var ww = 64, Tw = class {
 			"sfx",
 			"ambient",
 			"ui"
-		]) this.#D(e);
+		]) this.#E(e);
 	}
 	async resume() {
 		try {
-			return await this.#e.resume(), this.#e.state === "running" ? [] : this.#M("audioContextBlocked", "audio context remained " + this.#e.state);
+			return await this.#e.resume(), this.#e.state === "running" ? [] : this.#j("audioContextBlocked", "audio context remained " + this.#e.state);
 		} catch (e) {
-			return this.#M("audioContextBlocked", Kw(e, "audio context resume failed"));
+			return this.#j("audioContextBlocked", Kw(e, "audio context resume failed"));
 		}
 	}
 	updateListener(e) {
-		if (this.#x) return this.#M("hostFailure", "audio host is disposed");
+		if (this.#b) return this.#j("hostFailure", "audio host is disposed");
 		if (![
 			...e.position,
 			...e.forward,
 			...e.up
-		].every(Number.isFinite)) return this.#M("invalidDescriptor", "audio listener pose must be finite");
+		].every(Number.isFinite)) return this.#j("invalidDescriptor", "audio listener pose must be finite");
 		let t = this.#e.currentTime, n = this.#e.listener;
 		return "positionX" in n ? (Nw(n, "position", e.position, t), Nw(n, "forward", e.forward, t), Nw(n, "up", e.up, t)) : (n.setPosition(...e.position), n.setOrientation(...e.forward, ...e.up)), [];
 	}
 	async applyPresentation(e) {
-		if (this.#x) return this.#R(0, this.#M("hostFailure", "audio host is disposed"));
-		let t = this.#b, n = [], r = 0;
+		if (this.#b) return this.#L(0, this.#j("hostFailure", "audio host is disposed"));
+		let t = this.#y, n = [], r = 0;
 		for (let i of e.ops) {
 			if (i.domain !== "audio") continue;
-			if (!this.#k(t)) return this.#R(0, []);
+			if (!this.#O(t)) return this.#L(0, []);
 			let e;
 			try {
-				e = await this.#C(i, t);
+				e = await this.#S(i, t);
 			} catch (e) {
-				if (e instanceof Ow) return this.#R(0, []);
+				if (e instanceof Ow) return this.#L(0, []);
 				throw e;
 			}
-			if (!this.#k(t)) return this.#R(0, []);
-			e === null ? r += 1 : (n.push(e), this.#P(e));
+			if (!this.#O(t)) return this.#L(0, []);
+			e === null ? r += 1 : (n.push(e), this.#N(e));
 		}
-		return this.#R(r, n);
+		return this.#L(r, n);
 	}
 	retainResources(e) {
-		this.#c = new Set(e), this.#S();
+		this.#c = new Set(e), this.#x();
 	}
-	#S() {
+	#x() {
 		if (this.#c === null) return;
 		let e = /* @__PURE__ */ new Set([...[...this.#l.values()].map((e) => e.descriptor.clip.contentHash), ...[...this.#u].map((e) => e.descriptor.clip.contentHash)]);
 		for (let t of this.#o.keys()) !this.#c.has(t) && !e.has(t) && this.#o.delete(t);
@@ -26486,34 +26485,34 @@ var ww = 64, Tw = class {
 		return {
 			activeSources: this.#l.size,
 			cachedClips: this.#o.size,
-			emittedSignals: this.#g,
-			retainedDiagnosticCount: this.#f.length,
-			evictedDiagnosticCount: this.#_,
-			diagnostics: [...this.#f]
+			emittedSignals: this.#h,
+			retainedDiagnosticCount: this.#d.length,
+			evictedDiagnosticCount: this.#g,
+			diagnostics: [...this.#d]
 		};
 	}
 	realizedFacts() {
 		return {
-			retainedFactCount: this.#p.length,
-			evictedFactCount: this.#v,
-			facts: [...this.#p]
+			retainedFactCount: this.#f.length,
+			evictedFactCount: this.#_,
+			facts: [...this.#f]
 		};
 	}
 	acknowledgeRealizedFacts(e) {
 		if (!Number.isSafeInteger(e) || e < 0) throw RangeError("throughFactId must be a non-negative safe integer");
-		let t = this.#p.findIndex((t) => t.factId > e);
-		t < 0 ? this.#p.length = 0 : t > 0 && this.#p.splice(0, t);
+		let t = this.#f.findIndex((t) => t.factId > e);
+		t < 0 ? this.#f.length = 0 : t > 0 && this.#f.splice(0, t);
 	}
 	reset() {
-		if (this.#x) return;
-		this.#b += 1;
+		if (this.#b) return;
+		this.#y += 1;
 		for (let e of this.#s) e.stop(), e.disconnect();
 		let e = [...this.#l.values()].flatMap((e) => e.graph === null ? [] : [e.graph]);
 		for (let t of [...e, ...this.#u]) Bw(t);
-		this.#l.clear(), this.#u.clear(), this.#o.clear(), this.#c = null, this.#d.clear(), this.#g = 0, this.#f.length = 0, this.#_ = 0, this.#p.length = 0, this.#v = 0;
+		this.#l.clear(), this.#u.clear(), this.#o.clear(), this.#c = null, this.#h = 0, this.#d.length = 0, this.#g = 0, this.#f.length = 0, this.#_ = 0;
 	}
 	refreshLayout() {
-		if (this.#x) return this.#M("hostFailure", "audio host is disposed");
+		if (this.#b) return this.#j("hostFailure", "audio host is disposed");
 		let e = [];
 		for (let [t, n] of this.#l) {
 			let r = n.graph;
@@ -26530,22 +26529,21 @@ var ww = 64, Tw = class {
 			}
 			Mw(r.panner, i, this.#e.currentTime);
 		}
-		return this.#N(e), e;
+		return this.#M(e), e;
 	}
 	async dispose() {
-		if (!this.#x) {
-			this.reset(), this.#x = !0;
+		if (!this.#b) {
+			this.reset(), this.#b = !0;
 			for (let e of Object.values(this.#i)) e.disconnect();
 			await this.#e.close();
 		}
 	}
-	async #C(e, t) {
+	async #S(e, t) {
 		let { meta: n, op: r } = e;
 		try {
 			if (r.op === "emit") {
-				if (this.#d.has(r.signalId)) return null;
-				let e = await this.#O(r.descriptor, n.sequence, t);
-				return this.#A(t), this.#d.add(r.signalId), this.#u.add(e), this.#I(e, r.signalHandle), this.#g += 1, null;
+				let e = await this.#D(r.descriptor, n.sequence, t);
+				return this.#k(t), this.#u.add(e), this.#F(e, r.signalHandle), this.#h += 1, null;
 			}
 			if (r.op === "create") {
 				if (this.#l.has(r.handle)) return Uw("duplicateHandle", n, r.handle, void 0, "audio handle is active");
@@ -26555,8 +26553,8 @@ var ww = 64, Tw = class {
 					state: "playing",
 					cursor: 0,
 					graph: null
-				}, i = await this.#O(e.descriptor, e.sequence, t);
-				return this.#A(t), e.graph = i, this.#l.set(r.handle, e), this.#L(r.handle, e, i, 0), null;
+				}, i = await this.#D(e.descriptor, e.sequence, t);
+				return this.#k(t), e.graph = i, this.#l.set(r.handle, e), this.#I(r.handle, e, i, 0), null;
 			}
 			if (r.op === "restore") {
 				if (this.#l.has(r.handle)) return Uw("duplicateHandle", n, r.handle, void 0, "audio handle is active");
@@ -26568,62 +26566,62 @@ var ww = 64, Tw = class {
 					graph: null
 				};
 				if (e.state === "playing") {
-					let n = await this.#O(e.descriptor, e.sequence, t);
-					this.#A(t), e.graph = n, this.#L(r.handle, e, n, e.cursor);
+					let n = await this.#D(e.descriptor, e.sequence, t);
+					this.#k(t), e.graph = n, this.#I(r.handle, e, n, e.cursor);
 				}
 				return this.#l.set(r.handle, e), null;
 			}
 			if (r.op === "destroy") {
 				let e = this.#l.get(r.handle);
-				return e === void 0 ? Uw("unknownHandle", n, r.handle, void 0, "audio handle is unknown") : (this.#l.delete(r.handle), Bw(e.graph), this.#S(), null);
+				return e === void 0 ? Uw("unknownHandle", n, r.handle, void 0, "audio handle is unknown") : (this.#l.delete(r.handle), Bw(e.graph), this.#x(), null);
 			}
-			return r.op === "voiceControl" ? await this.#T(n, r.handle, r.control, t) : r.op === "busControl" ? (this.#E(r.bus, r.control), null) : await this.#w(n, r.handle, r.patch, t);
+			return r.op === "voiceControl" ? await this.#w(n, r.handle, r.control, t) : r.op === "busControl" ? (this.#T(r.bus, r.control), null) : await this.#C(n, r.handle, r.patch, t);
 		} catch (e) {
 			if (e instanceof Ow) throw e;
 			return Uw(Gw(e), n, Vw(r), Hw(r), Kw(e, "audio host operation failed"));
 		}
 	}
-	async #w(e, t, n, r) {
+	async #C(e, t, n, r) {
 		let i = this.#l.get(t);
 		if (i === void 0) return Uw("unknownHandle", e, t, void 0, "audio handle is unknown");
 		let a = Fw(i.descriptor, n), o = i.graph;
 		if (o === null) return i.descriptor = a, i.sequence = e.sequence, null;
 		let s = Lw(o, this.#e.currentTime);
 		if (n.emitter !== null) {
-			let n = await this.#O(a, e.sequence, r);
-			return this.#A(r), Bw(o), this.#S(), i.graph = n, i.descriptor = a, i.sequence = e.sequence, this.#L(t, i, n, s), null;
+			let n = await this.#D(a, e.sequence, r);
+			return this.#k(r), Bw(o), this.#x(), i.graph = n, i.descriptor = a, i.sequence = e.sequence, this.#I(t, i, n, s), null;
 		}
 		return o.descriptor = a, o.sequence = e.sequence, o.startedAt = this.#e.currentTime, o.startedOffset = Rw(s, o.duration, a.looping), jw(this.#e, o, a, this.#n), null;
 	}
-	async #T(e, t, n, r) {
+	async #w(e, t, n, r) {
 		let i = this.#l.get(t);
 		if (i === void 0) return Uw("unknownHandle", e, t, void 0, "audio handle is unknown");
 		if (i.sequence = e.sequence, n === "pause") return i.state === "paused" ? null : (i.graph !== null && (i.cursor = Lw(i.graph, this.#e.currentTime), Bw(i.graph), i.graph = null), i.state = "paused", null);
 		if (n === "resume") {
 			if (i.state === "playing") return null;
-			let e = await this.#O(i.descriptor, i.sequence, r);
-			return this.#A(r), i.graph = e, i.state = "playing", this.#L(t, i, e, i.cursor), null;
+			let e = await this.#D(i.descriptor, i.sequence, r);
+			return this.#k(r), i.graph = e, i.state = "playing", this.#I(t, i, e, i.cursor), null;
 		}
-		let a = await this.#O(i.descriptor, i.sequence, r);
-		return this.#A(r), Bw(i.graph), i.cursor = 0, i.graph = a, i.state = "playing", this.#L(t, i, a, 0), null;
+		let a = await this.#D(i.descriptor, i.sequence, r);
+		return this.#k(r), Bw(i.graph), i.cursor = 0, i.graph = a, i.state = "playing", this.#I(t, i, a, 0), null;
 	}
-	#E(e, t) {
+	#T(e, t) {
 		let n = this.#a[e];
 		if (t.kind === "setVolume") {
 			if (!Number.isFinite(t.volume) || t.volume < 0 || t.volume > 1) throw Error("audio bus volume must be finite and between 0 and 1");
 			n.volume = t.volume;
 		} else n.muted = t.muted;
-		this.#D(e);
+		this.#E(e);
 	}
-	#D(e) {
+	#E(e) {
 		let t = this.#a[e];
 		this.#i[e].gain.setValueAtTime(t.muted ? 0 : t.volume, this.#e.currentTime);
 	}
-	async #O(e, t, n) {
-		let r = await this.#j(e.clip);
-		if (this.#A(n), r instanceof Ew && this.#s.size >= ww) throw new kw("decodeFailed", "compressed audio streaming voice budget (64) exhausted");
+	async #D(e, t, n) {
+		let r = await this.#A(e.clip);
+		if (this.#k(n), r instanceof Ew && this.#s.size >= ww) throw new kw("decodeFailed", "compressed audio streaming voice budget (64) exhausted");
 		let i = r instanceof Ew ? new Dw(this.#e, this.#t(), r, (e) => {
-			this.#k(n) && this.#P({
+			this.#O(n) && this.#N({
 				code: "decodeFailed",
 				sequence: t,
 				handle: null,
@@ -26650,13 +26648,13 @@ var ww = 64, Tw = class {
 		};
 		return i.connect(a.stereoPanner), a.stereoPanner.connect(a.dryGain), a.dryGain.connect(this.#i[e.bus]), a.panner !== null && (i.connect(a.panner), a.panner.connect(a.wetGain), a.wetGain.connect(this.#i[e.bus])), jw(this.#e, a, e, this.#n), a;
 	}
+	#O(e) {
+		return !this.#b && this.#y === e;
+	}
 	#k(e) {
-		return !this.#x && this.#b === e;
+		if (!this.#O(e)) throw new Ow();
 	}
-	#A(e) {
-		if (!this.#k(e)) throw new Ow();
-	}
-	async #j(e) {
+	async #A(e) {
 		let t = this.#o.get(e.contentHash);
 		if (t !== void 0) return t;
 		let n = this.#r(e).then(async (e) => {
@@ -26681,48 +26679,48 @@ var ww = 64, Tw = class {
 			throw this.#o.delete(e.contentHash), t;
 		}
 	}
-	#M(e, t) {
+	#j(e, t) {
 		let n = Ww(e, t);
-		return this.#P(n), [n];
+		return this.#N(n), [n];
+	}
+	#M(e) {
+		for (let t of e) this.#N(t);
 	}
 	#N(e) {
-		for (let t of e) this.#P(t);
-	}
-	#P(e) {
-		let t = this.#f.findIndex((t) => t.code === e.code && t.handle === e.handle && t.signalHandle === e.signalHandle && t.message === e.message);
+		let t = this.#d.findIndex((t) => t.code === e.code && t.handle === e.handle && t.signalHandle === e.signalHandle && t.message === e.message);
 		if (t >= 0) {
-			this.#f[t] = e;
+			this.#d[t] = e;
 			return;
 		}
-		this.#f.length === this.#h && (this.#f.shift(), this.#_ += 1), this.#f.push(e), this.#F({
+		this.#d.length === this.#m && (this.#d.shift(), this.#g += 1), this.#d.push(e), this.#P({
 			kind: "diagnostic",
 			diagnostic: e
 		});
 	}
-	#F(e) {
-		this.#p.length === this.#m && (this.#p.shift(), this.#v += 1), this.#p.push({
+	#P(e) {
+		this.#f.length === this.#p && (this.#f.shift(), this.#_ += 1), this.#f.push({
 			...e,
-			factId: this.#y++
+			factId: this.#v++
 		});
 	}
-	#I(e, t) {
+	#F(e, t) {
 		e.source.onended = () => {
-			e.disposed || e.epoch !== this.#b || !this.#u.delete(e) || (e.descriptor.looping || this.#F({
+			e.disposed || e.epoch !== this.#y || !this.#u.delete(e) || (e.descriptor.looping || this.#P({
 				kind: "naturalCompletion",
 				source: "oneShot",
 				sequence: e.sequence,
 				signalHandle: t
-			}), Bw(e), this.#S());
+			}), Bw(e), this.#x());
 		}, Iw(e, 0, this.#e.currentTime);
 	}
-	#L(e, t, n, r) {
+	#I(e, t, n, r) {
 		let i = Rw(r, n.duration, n.descriptor.looping);
 		if (!n.descriptor.looping && n.duration !== null && i >= n.duration) {
 			t.graph = null, t.state = "completed", t.cursor = n.duration, Bw(n);
 			return;
 		}
 		n.source.onended = () => {
-			n.disposed || n.epoch !== this.#b || this.#l.get(e)?.graph === n && (n.descriptor.looping || (t.graph = null, t.state = "completed", t.cursor = n.duration ?? Lw(n, this.#e.currentTime), this.#F({
+			n.disposed || n.epoch !== this.#y || this.#l.get(e)?.graph === n && (n.descriptor.looping || (t.graph = null, t.state = "completed", t.cursor = n.duration ?? Lw(n, this.#e.currentTime), this.#P({
 				kind: "naturalCompletion",
 				source: "retainedVoice",
 				sequence: n.sequence,
@@ -26730,7 +26728,7 @@ var ww = 64, Tw = class {
 			})), Bw(n));
 		}, Iw(n, i, this.#e.currentTime);
 	}
-	#R(e, t) {
+	#L(e, t) {
 		return {
 			applied: e,
 			diagnostics: t,
@@ -27547,11 +27545,11 @@ var FT = class {
 	#a = /* @__PURE__ */ new Map();
 	#o = /* @__PURE__ */ new Map();
 	#s = /* @__PURE__ */ new Map();
-	#c = /* @__PURE__ */ new Set();
-	#l = /* @__PURE__ */ new Map();
-	#u = [];
-	#d = null;
-	#f = 0;
+	#c = /* @__PURE__ */ new Map();
+	#l = [];
+	#u = null;
+	#d = 0;
+	#f = 1;
 	#p = 1;
 	#m = 0;
 	#h = 0;
@@ -27566,7 +27564,7 @@ var FT = class {
 		for (let r of e.ops) {
 			if (r.domain !== "particle") continue;
 			let e = await this.#b(r);
-			e === null ? n += 1 : (t.push(e), LT(this.#u, e));
+			e === null ? n += 1 : (t.push(e), LT(this.#l, e));
 		}
 		return {
 			applied: n,
@@ -27577,7 +27575,7 @@ var FT = class {
 	advance(e) {
 		if (!Number.isFinite(e) || e < 0 || e > 1) {
 			let e = cE("invalidDescriptor", "particle frame delta must be finite and between zero and one second");
-			return LT(this.#u, e), {
+			return LT(this.#l, e), {
 				applied: 0,
 				diagnostics: [e],
 				readout: this.readout()
@@ -27604,7 +27602,7 @@ var FT = class {
 			this.#i.update(HT(t));
 		}
 		this.#O();
-		for (let e of t) LT(this.#u, e);
+		for (let e of t) LT(this.#l, e);
 		return {
 			applied: this.#s.size,
 			diagnostics: t,
@@ -27619,7 +27617,7 @@ var FT = class {
 		return {
 			activeEmitters: this.#a.size,
 			activeParticles: this.#s.size,
-			loadedSprites: this.#l.size,
+			loadedSprites: this.#c.size,
 			emittedBursts: this.#m,
 			droppedParticles: this.#h,
 			collisionTests: this.#g,
@@ -27627,11 +27625,11 @@ var FT = class {
 			highWaterMark: this.#v,
 			activeBatches: e?.activeBatches ?? 0,
 			allocatedSlots: e?.allocatedSlots ?? 0,
-			diagnostics: [...this.#u]
+			diagnostics: [...this.#l]
 		};
 	}
 	cleanup() {
-		this.#f += 1;
+		this.#d += 1;
 		let e = [];
 		for (let t of [...this.#s.values()]) try {
 			this.#D(t);
@@ -27640,13 +27638,13 @@ var FT = class {
 		}
 		for (let e of this.#a.values()) e.visualResource?.release();
 		for (let e of this.#o.values()) e.visualResource?.release();
-		if (this.#a.clear(), this.#o.clear(), this.#c.clear(), this.#d = null, this.#N(), e.length > 0) throw AggregateError(e, "renderer particle cleanup failed");
+		if (this.#a.clear(), this.#o.clear(), this.#u = null, this.#N(), e.length > 0) throw AggregateError(e, "renderer particle cleanup failed");
 	}
 	dispose() {
-		this.cleanup(), this.#u.length = 0;
+		this.cleanup(), this.#l.length = 0;
 	}
 	retainResources(e) {
-		this.#d = new Set(e), this.#M();
+		this.#u = new Set(e), this.#M();
 	}
 	#y(e, t) {
 		let n = e.descriptor.acceleration;
@@ -27671,13 +27669,12 @@ var FT = class {
 		}
 	}
 	async #x(e, t) {
-		if (this.#c.has(t.signalId)) return null;
-		let n = this.#f, r = await this.#P(t.descriptor);
-		if (n !== this.#f) return r.resource?.release(), sE("hostFailure", e, null, "particle host lifecycle changed while resources were loading");
-		let i = RT(`signal:${t.signalId}`, null, t.descriptor, r.visual, r.resource);
+		let n = this.#d, r = await this.#P(t.descriptor);
+		if (n !== this.#d) return r.resource?.release(), sE("hostFailure", e, null, "particle host lifecycle changed while resources were loading");
+		let i = RT(`burst:${this.#p++}`, null, t.descriptor, r.visual, r.resource);
 		try {
 			let n = this.#T(i, t.descriptor.burstCount, e.sequence);
-			return n?.code === "anchorMissing" ? (i.visualResource?.release(), n) : (this.#c.add(t.signalId), this.#o.set(i.key, i), this.#m += 1, n);
+			return n?.code === "anchorMissing" ? (i.visualResource?.release(), n) : (this.#o.set(i.key, i), this.#m += 1, n);
 		} catch (e) {
 			throw i.visualResource?.release(), e;
 		}
@@ -27686,8 +27683,8 @@ var FT = class {
 		let n = t.handle;
 		if (this.#a.has(n)) return sE("duplicateHandle", e, t.handle, "particle emitter handle is already active");
 		if (this.#a.size >= this.#e) return sE("budgetExceeded", e, t.handle, "particle emitter budget is exhausted");
-		let r = this.#f, i = await this.#P(t.descriptor);
-		if (r !== this.#f) return i.resource?.release(), sE("hostFailure", e, t.handle, "particle host lifecycle changed while resources were loading");
+		let r = this.#d, i = await this.#P(t.descriptor);
+		if (r !== this.#d) return i.resource?.release(), sE("hostFailure", e, t.handle, "particle host lifecycle changed while resources were loading");
 		let a = RT(`handle:${n}`, t.handle, t.descriptor, i.visual, i.resource);
 		this.#a.set(n, a);
 		try {
@@ -27699,8 +27696,8 @@ var FT = class {
 	async #C(e, t) {
 		let n = this.#a.get(t.handle);
 		if (n === void 0) return sE("unknownHandle", e, t.handle, "particle emitter handle is not active");
-		let r = aE(n.descriptor, t.patch), i = this.#f, a = await this.#P(r);
-		if (i !== this.#f || this.#a.get(t.handle) !== n) return a.resource?.release(), sE("hostFailure", e, t.handle, "particle host lifecycle changed while resources were loading");
+		let r = aE(n.descriptor, t.patch), i = this.#d, a = await this.#P(r);
+		if (i !== this.#d || this.#a.get(t.handle) !== n) return a.resource?.release(), sE("hostFailure", e, t.handle, "particle host lifecycle changed while resources were loading");
 		let o = n.visualResource;
 		return n.preparedVisual = a.visual, n.visualResource = a.resource, n.descriptor = r, o?.release(), null;
 	}
@@ -27746,7 +27743,7 @@ var FT = class {
 			BT(e, n.velocityMin[2], n.velocityMax[2])
 		];
 		return {
-			id: this.#p++,
+			id: this.#f++,
 			emitterKey: e.key,
 			descriptor: n,
 			visual: e.preparedVisual,
@@ -27772,11 +27769,11 @@ var FT = class {
 		for (let [e, t] of this.#o) t.particleIds.size === 0 && (this.#o.delete(e), t.visualResource?.release());
 	}
 	async #k(e) {
-		let t = e.contentHash, n = this.#l.get(t);
+		let t = e.contentHash, n = this.#c.get(t);
 		if (n !== void 0) return this.#A(t, n);
 		let r = await this.#r(e);
 		if (r === null) throw new dE("spriteLoadFailed", `particle sprite ${e.asset} is unavailable`);
-		let i = this.#l.get(t);
+		let i = this.#c.get(t);
 		if (i !== void 0) return uE(r.release), this.#A(t, i);
 		let a = {
 			hash: e.contentHash,
@@ -27784,24 +27781,24 @@ var FT = class {
 			...r.release === void 0 ? {} : { releaseResource: r.release },
 			references: 0
 		};
-		return this.#l.set(t, a), this.#A(t, a);
+		return this.#c.set(t, a), this.#A(t, a);
 	}
 	#A(e, t) {
-		if (this.#l.get(e) !== t) {
+		if (this.#c.get(e) !== t) {
 			let e;
 			return e = lE(t.url, () => e, () => void 0), e;
 		}
 		return t.references += 1, lE(t.url, () => this.#A(e, t), () => this.#j(e, t));
 	}
 	#j(e, t) {
-		t.references > 0 && --t.references, !(t.references !== 0 || this.#d?.has(t.hash)) && this.#l.get(e) === t && (this.#l.delete(e), uE(t.releaseResource));
+		t.references > 0 && --t.references, !(t.references !== 0 || this.#u?.has(t.hash)) && this.#c.get(e) === t && (this.#c.delete(e), uE(t.releaseResource));
 	}
 	#M() {
-		for (let [e, t] of this.#l) t.references === 0 && !this.#d?.has(t.hash) && (this.#l.delete(e), uE(t.releaseResource));
+		for (let [e, t] of this.#c) t.references === 0 && !this.#u?.has(t.hash) && (this.#c.delete(e), uE(t.releaseResource));
 	}
 	#N() {
-		for (let e of this.#l.values()) uE(e.releaseResource);
-		this.#l.clear();
+		for (let e of this.#c.values()) uE(e.releaseResource);
+		this.#c.clear();
 	}
 	async #P(e) {
 		let t = UT(e);

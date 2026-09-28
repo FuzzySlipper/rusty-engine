@@ -176,7 +176,8 @@ fn audio_batch_is_atomic_and_reset_clears_retained_and_impulse_state() {
             },
         )
         .unwrap();
-    let duplicate = projector
+    // A repeated product label is a second, distinct one-shot.
+    projector
         .project(
             &assets,
             PresentationOpMeta::new(1),
@@ -189,11 +190,8 @@ fn audio_batch_is_atomic_and_reset_clears_retained_and_impulse_state() {
                 },
             },
         )
-        .unwrap_err();
-    assert_eq!(
-        duplicate.code,
-        AudioProjectionDiagnosticCode::DuplicateSignal
-    );
+        .unwrap();
+    assert_eq!(projector.readout().emitted_signals, 2);
     projector.reset();
     assert_eq!(projector.readout().emitted_signals, 0);
     assert!(projector.readout().diagnostics.is_empty());
@@ -530,7 +528,7 @@ fn billboard_assets_bounds_and_retained_lifecycle_are_checked() {
 }
 
 #[test]
-fn particle_curves_signal_ids_and_reservation_budget_fail_closed() {
+fn particle_curves_repeated_labels_and_reservation_budget() {
     let assets = assets();
     let limits = ParticleProjectionLimits {
         max_active_emitters: 1,
@@ -590,26 +588,24 @@ fn particle_curves_signal_ids_and_reservation_budget_fail_closed() {
             },
         )
         .unwrap();
-    assert_eq!(
-        projector
-            .project(
-                &assets,
-                PresentationOpMeta::new(1),
-                ParticleProjectionOp::Emit {
-                    signal_id: "impact:1".into(),
-                    descriptor: particle_descriptor(),
-                },
-            )
-            .unwrap_err()
-            .code,
-        ParticleProjectionDiagnosticCode::DuplicateSignal
-    );
+    // A repeated product label is a second, distinct burst.
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(1),
+            ParticleProjectionOp::Emit {
+                signal_id: "impact:1".into(),
+                descriptor: particle_descriptor(),
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.readout().emitted_bursts, 2);
     projector.reset();
     assert_eq!(projector.readout().emitted_bursts, 0);
 }
 
 #[test]
-fn optional_particle_emission_reports_budget_pressure_without_consuming_a_dropped_signal() {
+fn optional_particle_emission_reports_budget_pressure() {
     let assets = assets();
     let limits = ParticleProjectionLimits {
         max_active_emitters: 2,
@@ -661,18 +657,15 @@ fn optional_particle_emission_reports_budget_pressure_without_consuming_a_droppe
     assert_eq!(admitted.outcome, ParticleEmissionAdmissionOutcome::Admitted);
     assert_eq!(admitted.admitted_particles, 8);
     assert!(operation.is_some());
-    assert_eq!(
-        projector
-            .project_optional_emit(
-                &assets,
-                PresentationOpMeta::new(4),
-                "impact:retry".into(),
-                particle_descriptor(),
-            )
-            .expect_err("an admitted signal remains identity-strict")
-            .code,
-        ParticleProjectionDiagnosticCode::DuplicateSignal
-    );
+    let (repeated, _) = projector
+        .project_optional_emit(
+            &assets,
+            PresentationOpMeta::new(4),
+            "impact:retry".into(),
+            particle_descriptor(),
+        )
+        .expect("a repeated label is an ordinary burst");
+    assert_eq!(repeated.outcome, ParticleEmissionAdmissionOutcome::Admitted);
 
     let mut partially_reserved = ParticleProjector::new(limits);
     let mut retained = particle_descriptor();
