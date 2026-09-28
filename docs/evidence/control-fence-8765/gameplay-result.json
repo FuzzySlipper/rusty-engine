@@ -1,0 +1,187 @@
+{
+  "walkW": 0,
+  "walkOldW": 0,
+  "walkNewK": 0,
+  "pause": {
+    "accepted": true,
+    "code": "DEV_HOST_ACCEPTED",
+    "controlRevision": "8"
+  },
+  "pausedStepsAdvanced": 0,
+  "resume": {
+    "accepted": true,
+    "code": "DEV_HOST_ACCEPTED",
+    "controlRevision": "9"
+  },
+  "walkAfterResume": 0,
+  "walkRestored": 0,
+  "keyFacts": 0,
+  "clears": [
+    "7:pointer-lock-loss",
+    "7:interaction-mode-loss"
+  ],
+  "checkpoints": [
+    {
+      "label": "attached",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Playing",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 21347,
+      "controlRevision": "7",
+      "fresh": 1,
+      "resourceFetches": 169
+    },
+    {
+      "label": "walked-w",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Playing",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 21745,
+      "controlRevision": "7",
+      "fresh": 1,
+      "resourceFetches": 169
+    },
+    {
+      "label": "rebound-k",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Playing",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 22022,
+      "controlRevision": "7",
+      "fresh": 1,
+      "resourceFetches": 169
+    },
+    {
+      "label": "walked-after-rebind",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Playing",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 22327,
+      "controlRevision": "7",
+      "fresh": 1,
+      "resourceFetches": 169
+    },
+    {
+      "label": "paused",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Paused",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 22334,
+      "controlRevision": "8",
+      "fresh": 1,
+      "resourceFetches": 169
+    },
+    {
+      "label": "resumed-walked-k",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Playing",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 22549,
+      "controlRevision": "9",
+      "fresh": 1,
+      "resourceFetches": 169
+    },
+    {
+      "label": "restored-w",
+      "contexts": 3,
+      "contextsLost": 0,
+      "sourcesStarted": 1,
+      "sourcesStopped": 1,
+      "sourcesEnded": 1,
+      "sameCanvas": true,
+      "contextAlive": true,
+      "mode": "Playing",
+      "position": {
+        "x": 28.375,
+        "y": 39.301,
+        "z": -12.400001
+      },
+      "forward": [
+        "KeyW"
+      ],
+      "step": 22968,
+      "controlRevision": "9",
+      "fresh": 1,
+      "resourceFetches": 169
+    }
+  ],
+  "errors": []
+}
