@@ -219,3 +219,18 @@ void test('application content composes animated GLB, packed mesh, and texture r
     animatedBytes,
   );
 });
+
+void test('resource admission reads delta frames without cloning them', async () => {
+  // structuredClone throws on a function, so any frame copy fails this test.
+  const frame = {
+    schemaVersion: 1,
+    ops: [{ op: 'remove', handle: 7, uncloneable: () => undefined }],
+  } as unknown as RustyApplicationContent['frame'];
+  const catalog = new RustyApplicationResourceCatalog();
+  await catalog.admit([], frame);
+  const source = new Uint8Array([137, 80, 78, 71]);
+  const content = textureContent(source);
+  await catalog.admit(content.resources!, frame);
+  const identity = content.resources![0]!.identity;
+  assert.equal(catalog.resource(identity)?.bytes, source.buffer, 'resource bytes are borrowed');
+});

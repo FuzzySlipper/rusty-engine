@@ -88,7 +88,20 @@ export function prepareRustyApplicationContent(
   }
   const frame = structuredClone(content.frame);
   const publicationFrontiers = structuredClone(content.publicationFrontiers ?? []);
-  const resources = (content.resources ?? []).map((resource) => {
+  const resources = prepareRustyApplicationResources(content.resources ?? []);
+  return Object.freeze({
+    frame,
+    resources,
+    resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
+    publicationFrontiers,
+  });
+}
+
+/** Classify and borrow resource bodies without touching any frame. */
+export function prepareRustyApplicationResources(
+  resources: readonly RustyApplicationResource[],
+): readonly PreparedRustyApplicationResource[] {
+  return Object.freeze(resources.map((resource) => {
     const family = resource.identity.split('/')[0];
     const kind: RustyApplicationResourceKind = family === 'font' ? 'font'
       : family === 'clip-pack-resource' ? 'clipPack'
@@ -108,13 +121,7 @@ export function prepareRustyApplicationContent(
         ? resource.bytes.buffer : resource.bytes.slice().buffer,
       kind,
     });
-  });
-  return Object.freeze({
-    frame,
-    resources: Object.freeze(resources),
-    resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
-    publicationFrontiers,
-  });
+  }));
 }
 
 /** One mutable Engine-owned resource catalog shared by a mounted surface and
@@ -132,10 +139,7 @@ export class RustyApplicationResourceCatalog {
     frame?: RustyApplicationFrame,
   ): Promise<void> {
     const prepared = resources.length === 0 || resources[0]!.bytes instanceof Uint8Array
-      ? prepareRustyApplicationContent({
-          frame: frame ?? { schemaVersion: 1, ops: [] },
-          resources: resources as readonly RustyApplicationResource[],
-        }).resources
+      ? prepareRustyApplicationResources(resources as readonly RustyApplicationResource[])
       : resources as readonly PreparedRustyApplicationResource[];
     for (const resource of prepared) {
       const existing = this.#resources.get(resource.identity);
