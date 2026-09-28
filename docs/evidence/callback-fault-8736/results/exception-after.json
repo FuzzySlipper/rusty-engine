@@ -1,0 +1,34 @@
+{
+  "label": "after-8736",
+  "launch": "--supervised",
+  "throwAt": 240,
+  "faultedObservedInBrowser": true,
+  "secondsFromReadyToFault": 3.192,
+  "readoutStates": [
+    "running@3517236/1",
+    "faulted@3517236/1",
+    "running@3517236/1"
+  ],
+  "runtimeInstances": [
+    "3517236"
+  ],
+  "baselines": 1,
+  "pageHostStateAfterFault": "ready",
+  "pageHostStateAfterResume": "ready",
+  "exceptionLogged": {
+    "code": "CSHARP_PRODUCT_CALL",
+    "hasStackTrace": true,
+    "firstLine": "CSharpProduct.Callback returned status 99: System.InvalidOperationException: bench exception at update 240"
+  },
+  "resumeStatus": 200,
+  "resumeAccepted": true,
+  "resumeCode": "DEV_HOST_ACCEPTED",
+  "simulationStepBeforeResume": "241",
+  "simulationStepAfterResume": "420",
+  "serverErrors": [],
+  "supervisorRestarts": 0,
+  "pageErrors": [],
+  "logTail": [
+    "BENCH throwing at update 240"
+  ]
+}

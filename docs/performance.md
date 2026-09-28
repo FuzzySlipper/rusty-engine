@@ -3,13 +3,13 @@
 Rusty Engine keeps one checked performance probe that divides a frame-sized
 operation into independently attributable layers:
 
-- `rust-appearance-call-stage` measures Rust service staging with an 8 MiB
-  retained renderer resource. Resource bytes must be shared, not copied, when a
-  transactional C# call begins.
+- `rust-appearance-call-stage` measures beginning and ending a Rust graphics
+  call with an 8 MiB retained renderer resource. A call owns the state for its
+  duration and never copies it.
 - `managed-csharp-update` measures a stable allocation-free managed update
   without Rust or browser work.
 - `csharp-rust-crossover` measures generated CoreCLR and NativeAOT callbacks,
-  Engine service transaction, and output conversion.
+  the Engine service call, and output conversion.
 - `product-dev-host-http` adds the local product-host HTTP admission path.
 - `browser-renderer-submission` measures explicit submissions through the real
   renderer surface and reports draw/resource statistics, backing resolution,

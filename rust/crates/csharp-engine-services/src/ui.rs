@@ -11,12 +11,11 @@ use crate::{
 
 /// Callback state remains Engine-owned for the complete NativeAOT runtime lifetime.
 pub(crate) struct RuntimeUiBridge {
-    staged: Vec<RuntimeUiProjectionEnvelope>,
-    staged_binding: Option<RuntimeUiRuntimeBinding>,
+    /// Projections published by the current call, in order.
+    published: Vec<RuntimeUiProjectionEnvelope>,
+    binding: Option<RuntimeUiRuntimeBinding>,
     streams: BTreeMap<u64, RuntimeUiStream>,
-    staged_streams: Option<BTreeMap<u64, RuntimeUiStream>>,
     next_stream: u64,
-    staged_next_stream: Option<u64>,
     diagnostic_leases: BTreeMap<u64, RuntimeUiDiagnosticLease>,
     next_diagnostic_lease: u64,
 }
@@ -70,51 +69,24 @@ impl RuntimeUiDiagnosticLease {
 impl RuntimeUiBridge {
     pub(crate) fn new() -> Self {
         Self {
-            staged: Vec::new(),
-            staged_binding: None,
+            published: Vec::new(),
+            binding: None,
             streams: BTreeMap::new(),
-            staged_streams: None,
             next_stream: 1,
-            staged_next_stream: None,
             diagnostic_leases: BTreeMap::new(),
             next_diagnostic_lease: 1,
         }
     }
 
     pub(crate) fn begin_call(&mut self, binding: RuntimeUiRuntimeBinding) {
-        self.staged.clear();
-        self.staged_binding = Some(binding);
-        self.staged_streams = Some(self.streams.clone());
-        self.staged_next_stream = Some(self.next_stream);
+        self.published.clear();
+        self.binding = Some(binding);
     }
 
-    pub(crate) fn discard_call(&mut self) {
-        self.staged.clear();
-        self.staged_binding = None;
-        self.staged_streams = None;
-        self.staged_next_stream = None;
-    }
-
-    pub(crate) fn take_staged_call(&mut self) -> Result<RuntimeUiCall, CsharpEngineServicesError> {
-        self.staged_binding
-            .take()
-            .expect("every native call starts a UI stage with a runtime binding");
-        Ok(RuntimeUiCall {
-            projections: std::mem::take(&mut self.staged),
-            streams: self
-                .staged_streams
-                .take()
-                .expect("every native call starts a UI stage"),
-            next_stream: self
-                .staged_next_stream
-                .take()
-                .expect("every native call starts a UI stage"),
-        })
-    }
-
-    pub(crate) fn commit(&mut self, staged: RuntimeUiCall) {
-        self.streams = staged.streams;
-        self.next_stream = staged.next_stream;
+    /// Ends the call and returns the projections it published.
+    pub(crate) fn finish_call(&mut self) -> Vec<RuntimeUiProjectionEnvelope> {
+        self.binding = None;
+        std::mem::take(&mut self.published)
     }
 
     fn retain_operation_error(
@@ -175,22 +147,9 @@ impl RuntimeUiBridge {
         let contract =
             unsafe { borrowed_utf8(request.contract.bytes, request.contract.len, "contract") }?
                 .to_owned();
-        let streams = self
-            .staged_streams
-            .as_mut()
-            .expect("open stream only during a native call");
-        let next_stream = self
-            .staged_next_stream
-            .as_mut()
-            .expect("open stream only during a native call");
-        let value = *next_stream;
-        *next_stream = next_stream.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_UI_STREAM_HANDLE",
-                "C# UI stream handles exhausted",
-            )
-        })?;
-        streams.insert(
+        let value = self.next_stream;
+        self.next_stream += 1;
+        self.streams.insert(
             value,
             RuntimeUiStream {
                 stream,
@@ -213,14 +172,6 @@ impl RuntimeUiBridge {
                 "CSHARP_UI_STREAM",
                 "C# UI stream handle was zero",
             ));
-        }
-        if let Some(streams) = self.staged_streams.as_mut() {
-            return streams.remove(&handle.value).map(|_| ()).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_UI_STREAM",
-                    "C# UI stream handle was unknown or already closed",
-                )
-            });
         }
         self.streams
             .remove(&handle.value)
@@ -246,10 +197,14 @@ impl RuntimeUiBridge {
         // SAFETY: the callback is synchronous and its projection points to product memory
         // retained for the direct call. `decode_structured_value` copies it before return.
         let projection = unsafe { *projection };
+        let binding = self.binding.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_UI_CALL",
+                "C# UI projection was published outside a product call",
+            )
+        })?;
         let stream = self
-            .staged_streams
-            .as_mut()
-            .expect("publish only during a native call")
+            .streams
             .get_mut(&projection.stream.value)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
@@ -269,8 +224,7 @@ impl RuntimeUiBridge {
         // SAFETY: pointer/null and range checks occur in the decoder before every slice.
         let value = unsafe { decode_structured_value(projection.value) }?;
         let envelope = RuntimeUiProjectionEnvelope::new(
-            self.staged_binding
-                .expect("publish only during a native call with a UI binding"),
+            binding,
             projection.sequence,
             &stream.stream,
             &stream.contract,
@@ -281,7 +235,7 @@ impl RuntimeUiBridge {
         })?;
         stream.last_sequence = Some(projection.sequence);
         stream.latest = Some(envelope.clone());
-        self.staged.push(envelope);
+        self.published.push(envelope);
         Ok(())
     }
 
@@ -297,20 +251,6 @@ impl RuntimeUiBridge {
             .filter_map(|stream| stream.latest.clone())
             .map(|projection| projection.with_runtime(binding))
             .collect()
-    }
-}
-
-pub(crate) struct RuntimeUiCall {
-    pub(crate) projections: Vec<RuntimeUiProjectionEnvelope>,
-    streams: BTreeMap<u64, RuntimeUiStream>,
-    next_stream: u64,
-}
-
-impl RuntimeUiCall {
-    pub(crate) fn rebind_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
-        for projection in &mut self.projections {
-            projection.rebind_runtime(binding);
-        }
     }
 }
 
@@ -669,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_close_stages_rollback_and_committed_teardown() {
+    fn publication_carries_the_call_binding_and_close_is_final() {
         let mut bridge = RuntimeUiBridge::new();
         let api = api(&mut bridge);
         let mut stream = NativeUiStreamHandle::default();
@@ -686,8 +626,7 @@ mod tests {
             },
             ABI_OK
         );
-        let initial_call = bridge.take_staged_call().expect("initial staged stream");
-        bridge.commit(initial_call);
+        bridge.finish_call();
 
         let nodes = [NativeStructuredValueNode {
             kind: NativeStructuredValueKind::Null,
@@ -720,10 +659,9 @@ mod tests {
             ABI_OK,
             "typed structured projection is accepted before close"
         );
-        let published_call = bridge.take_staged_call().expect("published projection");
-        assert_eq!(published_call.projections.len(), 1);
-        assert_eq!(published_call.projections[0].runtime(), binding(13));
-        bridge.commit(published_call);
+        let published = bridge.finish_call();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].runtime(), binding(13));
 
         projection.sequence = 2;
         bridge.begin_call(binding(14));
@@ -732,10 +670,9 @@ mod tests {
             ABI_OK,
             "the next call accepts an advancing stream sequence"
         );
-        let replaced_binding_call = bridge.take_staged_call().expect("rebound projection");
-        assert_eq!(replaced_binding_call.projections.len(), 1);
-        assert_eq!(replaced_binding_call.projections[0].runtime(), binding(14));
-        bridge.commit(replaced_binding_call);
+        let rebound = bridge.finish_call();
+        assert_eq!(rebound.len(), 1);
+        assert_eq!(rebound[0].runtime(), binding(14));
 
         bridge.begin_call(binding(14));
         assert_eq!(
@@ -745,39 +682,22 @@ mod tests {
         assert_eq!(
             unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
             0,
-            "duplicate staged close is rejected"
+            "duplicate close is rejected"
         );
-        let call = bridge
-            .take_staged_call()
-            .expect("a refused duplicate close does not fail the call");
-        bridge.commit(call);
-        assert_eq!(
-            unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
-            0,
-            "the committed close leaves no stream to tear down"
-        );
-
-        bridge.begin_call(binding(14));
-        assert!(
-            bridge.take_staged_call().is_ok(),
-            "out-of-call close failure does not poison the next call"
-        );
+        bridge.finish_call();
 
         bridge.begin_call(binding(14));
         let mut stale_receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe { (api.publish_projection)(api.context, &projection, &mut stale_receipt) },
             0,
-            "publish after committed close is rejected"
+            "publish after close is rejected"
         );
-        assert!(
-            bridge.take_staged_call().is_ok(),
-            "a refused stale publish does not fail the call"
-        );
+        assert!(bridge.finish_call().is_empty());
     }
 
     #[test]
-    fn snapshot_retags_only_the_last_committed_projection() {
+    fn snapshot_retags_the_latest_projection() {
         let mut bridge = RuntimeUiBridge::new();
         let api = api(&mut bridge);
         let mut stream = NativeUiStreamHandle::default();
@@ -793,8 +713,7 @@ mod tests {
             },
             ABI_OK
         );
-        let staged_stream = bridge.take_staged_call().expect("committed stream");
-        bridge.commit(staged_stream);
+        bridge.finish_call();
 
         let nodes = [NativeStructuredValueNode {
             kind: NativeStructuredValueKind::Null,
@@ -826,8 +745,7 @@ mod tests {
             unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
             ABI_OK
         );
-        let staged_projection = bridge.take_staged_call().expect("committed projection");
-        bridge.commit(staged_projection);
+        bridge.finish_call();
 
         projection.sequence = 2;
         bridge.begin_call(binding(14));
@@ -836,18 +754,11 @@ mod tests {
             ABI_OK
         );
 
+        bridge.finish_call();
+
         let snapshot = bridge.snapshot_projections(binding(99));
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].runtime(), binding(99));
-        assert_eq!(snapshot[0].sequence(), 1);
-        assert_eq!(
-            bridge
-                .streams
-                .get(&stream.value)
-                .and_then(|state| state.last_sequence),
-            Some(1),
-            "the staged publication remains invisible until its call commits"
-        );
-        bridge.discard_call();
+        assert_eq!(snapshot[0].sequence(), 2);
     }
 }

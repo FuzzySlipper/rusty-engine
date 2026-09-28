@@ -11,9 +11,9 @@ direction and task scope take precedence over preservation language in this
 document and linked guides. See [AGENTS.md](../AGENTS.md#architecture-reset--campaign-8723)
 and Den document `rusty-engine/architecture-reset-2026-09`.
 
-Descriptions below identify current source owners and behavior. Callback
-candidates and discard, exact-revision preconditions, taint, replay restrictions,
-history/cursors/receipts, and fresh-baseline recovery are all subject to removal.
+Descriptions below identify current source owners and behavior.
+Exact-revision preconditions, replay restrictions, receipts, and fresh-baseline
+recovery are all subject to removal.
 They are not acceptance requirements for their replacements. The same applies
 to existing validators, caps, leases, copies, and generation tools.
 
@@ -79,15 +79,19 @@ Missing bindings and restrictive adapter policy are upstream gaps, distinct
 from genuinely new Engine mechanisms; exposing every implementation detail
 is not the objective.
 
-Apply the same distinction to failures. Expected rejection, exhausted work
-budgets, and uncertain renderer realization should have outcomes appropriate
-to their scope. A handled operation failure should not accidentally kill the
-session. Choose the smallest failure behavior supported by the task's concrete
-exercise. The existing prohibition on replaying possibly committed work does
-not require retaining taint, commit-certainty tracking, receipts, or any recovery
-framework. Campaign experiments may remove that policy and its machinery;
-report actual repeated effects or inconsistent state if the experiment produces
-them, then address the demonstrated problem locally.
+Apply the same distinction to failures. A failing Engine operation returns its
+status and diagnostic to C#, and that is its only consequence: a product that
+catches `EngineCallException` continues normally.
+
+A product call is not a transaction. Engine services change their state
+directly while the product runs, and there is no rollback. When a C# exception
+escapes a callback (or the Engine fails while finishing the call's renderer
+work), the runtime keeps everything the call did, publishes it, and logs the
+full exception with its stack trace. It then moves the lifecycle to `Faulted`:
+simulation stops, the product stays loaded for inspection, and renderers get a
+fresh baseline. `Resume` continues the same product and `Restart` resets it.
+A runtime error never ends the host process; the supervisor restarts the
+runtime only when the process itself dies (see *Packaging and development*).
 
 ## Trusted runtime resource delivery
 
@@ -209,15 +213,12 @@ and batch groups; camera culling and picking retain their existing behavior.
 Packed mesh decoding retains byte-range, encoding, and copy-out lifetime checks,
 without rescanning Engine-admitted indices, UVs, colors, or light semantics.
 
-The current Rust call candidate shares retained graphics and Appearance maps
-until its first write. Idle settlement reuses retained Appearance effect frames;
-audio/video cursors update separately. Render-output resource catalogs are copied
-only for a successful requested capture. Owned frame operations mutate the candidate directly,
-without another world clone per frame. The current failure path discards the
-candidate; explicit scene captures remain independent snapshots. Discard does
-not undo spatial mutations or managed product state. Task #8736 explores
-deleting this callback transaction and changing exception handling; discard and
-taint are not requirements for that replacement.
+A product call owns each service's state for its duration and hands it back
+when it finishes, so a call's first write never copies the graphics or
+`PresentationWorld` state. Idle settlement reuses retained Appearance effect
+frames; audio/video cursors update separately. Render-output resource catalogs
+are copied only for a requested capture. Explicit scene captures remain
+independent snapshots.
 
 `PresentationWorld` also commits the retained audio/effect baseline and stamps
 auxiliary presentation deltas with the same revision as graphics. Named Rust

@@ -111,14 +111,19 @@ impl RuntimeLifecycle {
         Ok(self.receipt(LifecycleOperation::Pause))
     }
 
-    /// Resumes simulation admission in the same runtime generation.
+    /// Resumes simulation admission in the same runtime generation, from a
+    /// pause or from a product fault the developer has inspected.
     ///
     /// Resume changes the control revision and requires a new realtime clock
     /// baseline, preventing elapsed paused wall time from becoming debt.
     pub fn resume(&mut self) -> Result<LifecycleReceipt, RuntimeLifecycleError> {
-        self.require_state(LifecycleOperation::Resume, &[RuntimeState::Paused])?;
+        self.require_state(
+            LifecycleOperation::Resume,
+            &[RuntimeState::Paused, RuntimeState::Faulted],
+        )?;
         self.advance_control_revision()?;
         self.state = RuntimeState::Running;
+        self.fault = None;
         self.clear_realtime_baseline();
         Ok(self.receipt(LifecycleOperation::Resume))
     }

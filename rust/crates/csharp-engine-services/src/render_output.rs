@@ -69,10 +69,8 @@ impl RuntimeRenderOutputBridge {
         }
     }
     pub(crate) fn begin_call(&mut self) {
-        self.staged = Some(self.state.clone());
-    }
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
+        // The call owns the state until it finishes; nothing is copied.
+        self.staged = Some(std::mem::take(&mut self.state));
     }
     pub(crate) fn take_call(
         &mut self,
@@ -80,6 +78,12 @@ impl RuntimeRenderOutputBridge {
         self.staged
             .take()
             .ok_or_else(|| error("output called outside product callback"))
+    }
+    /// Ends the open call, keeping its state.
+    #[cfg(test)]
+    pub(crate) fn end_call(&mut self) {
+        let call = self.take_call().expect("an open render output call");
+        self.commit(call);
     }
     pub(crate) fn commit(&mut self, call: RuntimeRenderOutputCall) {
         self.published = Self::job_ids(&call);
@@ -591,8 +595,7 @@ mod tests {
         );
         assert!(bridge.bytes(cancelled, false).is_err());
         bridge.destroy(handle).unwrap();
-        bridge.discard_call();
-        bridge.begin_call();
-        assert_eq!(bridge.read(handle).unwrap().byte_length, 3);
+        assert!(bridge.read(handle).is_err(), "a destroy is final");
+        bridge.end_call();
     }
 }

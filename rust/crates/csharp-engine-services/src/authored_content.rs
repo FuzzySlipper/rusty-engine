@@ -4314,10 +4314,7 @@ mod tests {
             },
             ABI_OK
         );
-        let call = appearance
-            .take_staged_call()
-            .expect("valid appearance call")
-            .expect("staged appearance call");
+        let call = appearance.take_staged_call();
         let frame = call
             .outputs
             .iter()

@@ -16,7 +16,7 @@ use crate::{
 
 const MAX_VIDEO_FACTS: usize = 128;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct VideoState {
     projector: VideoProjector,
     active: Option<(u64, CsharpRenderResource)>,
@@ -91,13 +91,11 @@ impl RuntimeVideoBridge {
         self.content = Some(content as *const RuntimeContentBridge);
     }
     pub(crate) fn begin_call(&mut self) {
+        // The call owns the state until it finishes; nothing is copied.
         self.staged = Some(RuntimeVideoCall {
-            state: self.state.clone(),
+            state: std::mem::take(&mut self.state),
             frame: None,
         });
-    }
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
     }
     pub(crate) fn take_staged_call(
         &mut self,
@@ -111,6 +109,12 @@ impl RuntimeVideoBridge {
     }
     pub(crate) fn commit(&mut self, call: RuntimeVideoCall) {
         self.state = call.state;
+    }
+    /// Ends the open call, keeping its state.
+    #[cfg(test)]
+    pub(crate) fn end_call(&mut self) {
+        let call = self.take_staged_call().expect("an open video call");
+        self.commit(call);
     }
     pub(crate) fn render_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.state.active.iter().map(|(_, resource)| resource)
@@ -489,7 +493,7 @@ mod tests {
         bridge.ingest_realized_feedback(false, 4, []).unwrap();
         bridge.begin_call();
         assert_eq!(bridge.read_realization().unwrap().evicted_fact_count, 5);
-        bridge.discard_call();
+        bridge.end_call();
         bridge.ingest_realized_feedback(false, 4, []).unwrap();
         bridge.begin_call();
         assert_eq!(bridge.read_realization().unwrap().evicted_fact_count, 5);
@@ -512,7 +516,7 @@ mod tests {
         let readout = bridge.read_realization().expect("read realization");
         assert_eq!(readout.retained_fact_count, 1);
         assert_eq!(readout.evicted_fact_count, 3);
-        bridge.discard_call();
+        bridge.end_call();
 
         bridge.reset_realized_feedback();
         bridge.begin_call();

@@ -1802,14 +1802,6 @@ pub type NativeProductUpdate = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeProductCompleteTimeline =
     unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32;
-/// Acknowledge the final Engine transaction outcome to the managed product.
-///
-/// Generated C# lease wrappers defer their local disposed state until Rust has
-/// committed the complete Engine call. `committed` is `0` for rollback and `1`
-/// for commit. `terminal` is `1` only immediately before final product
-/// destruction, when managed wrappers must become locally inert without
-/// attempting another staged native destroy.
-pub type NativeProductCompleteCall = unsafe extern "C" fn(*mut c_void, u8, u8);
 /// Copies the Rust-owned lifecycle state after a host transition has committed.
 ///
 /// This observer is optional so products generated before committed lifecycle
@@ -1896,7 +1888,6 @@ pub struct NativeProductApi {
     pub complete_timeline: Option<
         unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32,
     >,
-    pub complete_call: Option<unsafe extern "C" fn(*mut c_void, u8, u8)>,
     pub execute_debug: Option<
         unsafe extern "C" fn(
             *mut c_void,

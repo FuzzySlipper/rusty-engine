@@ -1,0 +1,19 @@
+{
+  "label": "after-8736",
+  "runs": [
+    {
+      "samples": 908,
+      "callbackUsP50": 1097,
+      "callbackUsP95": 1652,
+      "latestPostCallbackUs": 157,
+      "progress": null
+    },
+    {
+      "samples": 908,
+      "callbackUsP50": 1087,
+      "callbackUsP95": 1645,
+      "latestPostCallbackUs": 103,
+      "progress": null
+    }
+  ]
+}

@@ -120,16 +120,12 @@ pub(crate) struct RuntimeImplicitCall {
 pub(crate) struct RuntimeImplicitBridge {
     state: RuntimeImplicitCall,
     staged: Option<RuntimeImplicitCall>,
-    // Monotonic even across rollback: stale managed values cannot alias a new arena.
     next_field: u64,
     // Public node identities are not the local svc-implicit arena indices.
-    // Keep this outside staged state so discarded nodes cannot be reused.
     next_node: u64,
-    // Volume identities are independent from field/node identities and never
-    // reused after staged rollback.
+    // Volume identities are independent from field/node identities.
     next_volume: u64,
     appearance: Option<*mut RuntimeAppearanceBridge>,
-    callback_error: Option<CsharpEngineServicesError>,
     diagnostic_leases: BTreeMap<u64, Box<GenerationDiagnosticLease>>,
     next_diagnostic_lease: u64,
     density_snapshot_leases: BTreeMap<u64, DensitySnapshotLease>,
@@ -148,7 +144,6 @@ impl RuntimeImplicitBridge {
             next_node: 1,
             next_volume: 1,
             appearance: None,
-            callback_error: None,
             diagnostic_leases: BTreeMap::new(),
             next_diagnostic_lease: 1,
             density_snapshot_leases: BTreeMap::new(),
@@ -160,23 +155,22 @@ impl RuntimeImplicitBridge {
         }
     }
     pub(crate) fn begin_call(&mut self) {
-        self.staged = Some(self.state.clone());
-        self.callback_error = None;
-    }
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
-        self.callback_error = None;
+        // The call owns the state until it finishes; nothing is copied.
+        self.staged = Some(std::mem::take(&mut self.state));
     }
     pub(crate) fn take_call(&mut self) -> Result<RuntimeImplicitCall> {
-        if let Some(e) = self.callback_error.take() {
-            return Err(e);
-        }
         self.staged
             .take()
             .ok_or_else(|| error("implicit call was not staged"))
     }
     pub(crate) fn commit_call(&mut self, call: RuntimeImplicitCall) {
         self.state = call;
+    }
+    /// Ends the open call, keeping its state.
+    #[cfg(test)]
+    pub(crate) fn end_call(&mut self) {
+        let call = self.take_call().expect("an open implicit call");
+        self.commit_call(call);
     }
     fn stage(&mut self) -> Result<&mut RuntimeImplicitCall> {
         self.staged
@@ -506,9 +500,8 @@ fn call<T>(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
-    // Fidget/JIT failures must not unwind through the ABI. A refusal is only
-    // its returned diagnostic; a panic may leave staged state part-written, so
-    // it still fails the owning product call.
+    // Fidget/JIT failures must not unwind through the ABI. A panic is reported
+    // as the operation's error, like any other refusal.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(bridge))) {
         Ok(Ok(value)) => {
             unsafe { *result = value };
@@ -521,7 +514,7 @@ fn call<T>(
             0
         }
         Err(_) => {
-            bridge.retain_callback_error(
+            bridge.retain_operation_error(
                 b"",
                 error("implicit backend panicked during generation or evaluation"),
                 operation_error,
@@ -552,16 +545,12 @@ fn call_operation<T>(
             unsafe { *result = value };
             ABI_OK
         }
-        Ok(Err(error)) if error.code() == "CSHARP_SPATIAL_POINTER" => {
-            bridge.retain_callback_error(operation, error, receipt);
-            0
-        }
         Ok(Err(error)) => {
             bridge.retain_operation_error(operation, error, receipt);
             0
         }
         Err(_) => {
-            bridge.retain_callback_error(
+            bridge.retain_operation_error(
                 operation,
                 error("implicit backend panicked during operation"),
                 receipt,
@@ -860,18 +849,12 @@ unsafe extern "C" fn generate(
             }
             ABI_OK
         }
-        Ok(Err(error)) if error.code() == "CSHARP_SPATIAL_POINTER" => {
-            // Pointer/length incoherence is an ABI failure, not an authoring
-            // request the product may catch and continue past.
-            bridge.retain_callback_error(b"Generate", error, receipt);
-            0
-        }
         Ok(Err(error)) => {
             bridge.retain_operation_error(b"Generate", error, receipt);
             0
         }
         Err(_) => {
-            bridge.retain_callback_error(
+            bridge.retain_operation_error(
                 b"Generate",
                 error("implicit backend panicked during generation"),
                 receipt,
@@ -895,33 +878,17 @@ fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
 }
 
 impl RuntimeImplicitBridge {
-    fn retain_callback_error(
-        &mut self,
-        operation: &'static [u8],
-        error: CsharpEngineServicesError,
-        receipt: *mut NativeOperationErrorReceipt,
-    ) {
-        if !receipt.is_null() {
-            self.retain_operation_error(
-                operation,
-                CsharpEngineServicesError::new(error.code(), error.detail()),
-                receipt,
-            );
-        }
-        self.callback_error = Some(error);
-    }
-
     fn retain_operation_error(
         &mut self,
         operation: &'static [u8],
         failure: CsharpEngineServicesError,
         receipt: *mut NativeOperationErrorReceipt,
     ) {
-        let value = self.next_diagnostic_lease;
-        let Some(next) = value.checked_add(1) else {
-            self.callback_error = Some(error("implicit diagnostic identity exhausted"));
+        if receipt.is_null() {
             return;
-        };
+        }
+        let value = self.next_diagnostic_lease;
+        let next = value + 1;
         let code: Box<str> = failure.code().into();
         let message: Box<str> = failure.detail().into();
         // Box the lease itself so additional leases cannot move this readout

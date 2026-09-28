@@ -335,16 +335,13 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     assert_eq!(presentation.material_count, 1);
     assert_eq!(presentation.resource_count, 1);
 
-    let initial_appearance = appearance
-        .take_staged_call()
-        .expect("initial appearance call")
-        .expect("initial appearance state");
+    let initial_appearance = appearance.take_staged_call();
     assert!(
         !initial_appearance.render_frames().is_empty(),
         "facts emit a retained frame"
     );
     let initial_implicit = implicit.take_call().expect("initial implicit call");
-    appearance.commit(Some(initial_appearance));
+    appearance.commit(initial_appearance);
     implicit.commit_call(initial_implicit);
 
     // Removing the authoring field is independent from the copied, retained
@@ -356,9 +353,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         unsafe { (api.destroy_field)(api.context, field, std::ptr::null_mut()) },
         ABI_OK
     );
-    let after_field_appearance = appearance
-        .take_staged_call()
-        .expect("field destruction leaves appearance stage valid");
+    let after_field_appearance = appearance.take_staged_call();
     let after_field_implicit = implicit.take_call().expect("field destruction commits");
     appearance.commit(after_field_appearance);
     implicit.commit_call(after_field_implicit);
@@ -375,8 +370,8 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     );
     // ABI failures mark the product call as failed. Start a clean staged call
     // before ordinary teardown so the expected rejection cannot poison it.
-    appearance.discard_call();
-    implicit.discard_call();
+    appearance.end_call();
+    implicit.end_call();
 
     appearance.begin_call();
     implicit.begin_call();
@@ -410,12 +405,9 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         unsafe { appearance::destroy_material(appearance_context, material, std::ptr::null_mut()) },
         ABI_OK
     );
-    let cleanup_appearance = appearance
-        .take_staged_call()
-        .expect("cleanup appearance call")
-        .expect("cleanup appearance state");
+    let cleanup_appearance = appearance.take_staged_call();
     let cleanup_implicit = implicit.take_call().expect("cleanup implicit call");
-    appearance.commit(Some(cleanup_appearance));
+    appearance.commit(cleanup_appearance);
     implicit.commit_call(cleanup_implicit);
 }
 
@@ -619,11 +611,11 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
         .take_call()
         .expect("expected generation readout rejection leaves the call usable");
     implicit.commit_call(retained);
-    appearance.discard_call();
+    appearance.end_call();
 }
 
 #[test]
-fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
+fn native_implicit_nodes_reject_foreign_tokens() {
     let mut appearance =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
     let mut implicit = RuntimeImplicitBridge::new();
@@ -681,9 +673,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         ABI_OK
     );
-    let setup_appearance = appearance
-        .take_staged_call()
-        .expect("setup appearance call");
+    let setup_appearance = appearance.take_staged_call();
     let setup_implicit = implicit.take_call().expect("setup implicit call");
     appearance.commit(setup_appearance);
     implicit.commit_call(setup_implicit);
@@ -707,8 +697,8 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         0
     );
-    appearance.discard_call();
-    implicit.discard_call();
+    appearance.end_call();
+    implicit.end_call();
 
     appearance.begin_call();
     implicit.begin_call();
@@ -729,8 +719,8 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         0
     );
-    appearance.discard_call();
-    implicit.discard_call();
+    appearance.end_call();
+    implicit.end_call();
 
     let generate_request = |source, regions, regions_len| NativeImplicitGenerateRequest {
         field: second_field,
@@ -804,13 +794,8 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         0
     );
-    let failure = implicit
-        .take_call()
-        .err()
-        .expect("ABI pointer failure must poison callback");
-    assert_eq!(failure.code(), "CSHARP_SPATIAL_POINTER");
-    appearance.discard_call();
-    implicit.discard_call();
+    appearance.end_call();
+    implicit.end_call();
 
     appearance.begin_call();
     implicit.begin_call();
@@ -852,7 +837,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         .take_call()
         .expect("expected sampling rejection leaves the implicit call usable");
     implicit.commit_call(retained);
-    appearance.discard_call();
+    appearance.end_call();
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);
@@ -879,8 +864,8 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         ABI_OK
     );
-    appearance.discard_call();
-    implicit.discard_call();
+    appearance.end_call();
+    implicit.end_call();
 
     let regions = [NativeImplicitMaterialRegion {
         node: first_node,
@@ -911,66 +896,8 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         },
         ABI_OK
     );
-    appearance.discard_call();
-    implicit.discard_call();
-
-    appearance.begin_call();
-    implicit.begin_call();
-    let api = implicit_api(&mut implicit, &mut appearance);
-    let mut discarded_node = NativeImplicitNode { value: 0 };
-    assert_eq!(
-        unsafe {
-            (api.add_sphere)(
-                api.context,
-                NativeImplicitSphereRequest {
-                    field: second_field,
-                    center: NativeVec3::default(),
-                    radius: 0.25,
-                },
-                &mut discarded_node,
-                std::ptr::null_mut(),
-            )
-        },
-        ABI_OK
-    );
-    appearance.discard_call();
-    implicit.discard_call();
-
-    appearance.begin_call();
-    implicit.begin_call();
-    let api = implicit_api(&mut implicit, &mut appearance);
-    let mut fresh_node = NativeImplicitNode { value: 0 };
-    assert_eq!(
-        unsafe {
-            (api.add_sphere)(
-                api.context,
-                NativeImplicitSphereRequest {
-                    field: second_field,
-                    center: NativeVec3::default(),
-                    radius: 0.25,
-                },
-                &mut fresh_node,
-                std::ptr::null_mut(),
-            )
-        },
-        ABI_OK
-    );
-    assert_ne!(discarded_node.value, fresh_node.value);
-    assert_eq!(
-        unsafe {
-            (api.sample)(
-                api.context,
-                NativeImplicitSampleRequest {
-                    field: second_field,
-                    source: discarded_node,
-                    position: NativeVec3::default(),
-                },
-                &mut sample,
-                std::ptr::null_mut(),
-            )
-        },
-        0
-    );
+    appearance.end_call();
+    implicit.end_call();
 }
 
 #[test]
@@ -1063,7 +990,7 @@ fn native_implicit_frustum_samples_taper_with_start_to_end_orientation() {
 }
 
 #[test]
-fn implicit_backend_panics_return_diagnostics_and_still_taint_the_callback() {
+fn implicit_backend_panics_return_their_diagnostic() {
     for operation_receipt in [false, true] {
         let mut bridge = RuntimeImplicitBridge::new();
         bridge.begin_call();
@@ -1105,13 +1032,6 @@ fn implicit_backend_panics_return_diagnostics_and_still_taint_the_callback() {
             },
             ABI_OK
         );
-        assert_eq!(
-            bridge
-                .take_call()
-                .err()
-                .expect("panic taints callback")
-                .code(),
-            "CSHARP_IMPLICIT_SURFACE"
-        );
+        bridge.end_call();
     }
 }

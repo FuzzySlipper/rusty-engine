@@ -73,53 +73,16 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
             namespace Rusty.Engine.NativeProduct;
 
-            internal sealed class LeaseReleaseCoordinator
-            {
-                private readonly object _gate = new();
-                private readonly List<(Action Commit, Action Rollback)> _pending = new();
-                private bool _terminal;
-
-                internal bool IsTerminal()
-                {
-                    lock (_gate) return _terminal;
-                }
-
-                internal void Stage(Action commit, Action rollback)
-                {
-                    lock (_gate)
-                    {
-                        if (_terminal) { commit(); return; }
-                        _pending.Add((commit, rollback));
-                    }
-                }
-
-                internal void Complete(bool committed, bool terminal)
-                {
-                    (Action Commit, Action Rollback)[] pending;
-                    lock (_gate)
-                    {
-                        if (terminal) _terminal = true;
-                        pending = _pending.ToArray();
-                        _pending.Clear();
-                    }
-                    foreach ((Action commit, Action rollback) in pending)
-                    {
-                        if (committed || terminal) commit();
-                        else rollback();
-                    }
-                }
-            }
-
             internal sealed class EngineContext : IEngineContext
             {
-                internal EngineContext(NativeEngineApi native, LeaseReleaseCoordinator leaseReleases)
+                internal EngineContext(NativeEngineApi native)
                 {
                     Input = new InputServiceImplementation(native.input);
                     Diagnostics = new DiagnosticsServiceImplementation(native.diagnostics);
-                    Audio = new AudioServiceImplementation(native.audio, leaseReleases);
+                    Audio = new AudioServiceImplementation(native.audio);
                     Video = new VideoServiceImplementation(native.video);
-                    RenderOutput = new RenderOutputServiceImplementation(native.render_output, leaseReleases);
-                    Dynamics = new DynamicsServiceImplementation(native.dynamics, leaseReleases);
+                    RenderOutput = new RenderOutputServiceImplementation(native.render_output);
+                    Dynamics = new DynamicsServiceImplementation(native.dynamics);
                     Motion = new MotionServiceImplementation(native.motion);
                     Kinematic = new KinematicServiceImplementation(native.kinematic);
                     Spatial = new SpatialServiceImplementation(native.spatial);
@@ -131,14 +94,14 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Content = new ContentServiceImplementation(native.content);
                     AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
-                    Graphics = new GraphicsServiceImplementation(native.graphics, leaseReleases);
-                    ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics, leaseReleases);
-                    Presentation = new PresentationServiceImplementation(native.presentation, leaseReleases);
-                    Animation = new AnimationServiceImplementation(native.animation, native.graphics, leaseReleases);
-                    CameraView = new CameraViewServiceImplementation(native.camera_view, leaseReleases);
+                    Graphics = new GraphicsServiceImplementation(native.graphics);
+                    ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics);
+                    Presentation = new PresentationServiceImplementation(native.presentation);
+                    Animation = new AnimationServiceImplementation(native.animation, native.graphics);
+                    CameraView = new CameraViewServiceImplementation(native.camera_view);
                     Random = new RngServiceImplementation(native.rng);
                     Persistence = new PersistenceServiceImplementation(native.persistence);
-                    Ui = new UiServiceImplementation(native.ui, leaseReleases);
+                    Ui = new UiServiceImplementation(native.ui);
                 }
 
                 public IInputService Input { get; }
@@ -173,10 +136,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 private IEngineProduct? _product;
                 private Exception? _lastCallError;
                 private readonly IDebugCommandCatalog _debugCatalog;
-                private readonly LeaseReleaseCoordinator _leaseReleases;
-                private readonly object _debuggingGate = new();
-                private Action<ProductDebugExecutionContext>? _pendingDebugging;
-                internal ProductLifetime(IEngineProduct product, LeaseReleaseCoordinator leaseReleases, ProductDebugExecutionContext debugging) { _product = product; _debugCatalog = GeneratedDebugCommandCatalogFactory.Create(product); _leaseReleases = leaseReleases; Debugging = debugging; }
+                internal ProductLifetime(IEngineProduct product, ProductDebugExecutionContext debugging) { _product = product; _debugCatalog = GeneratedDebugCommandCatalogFactory.Create(product); Debugging = debugging; }
                 internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
                 internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
                 internal ProductDebugExecutionContext Debugging { get; }
@@ -188,35 +148,9 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     _lastCallError = null;
                     return error;
                 }
-                internal void StageDebugging(Action<ProductDebugExecutionContext> apply)
-                {
-                    lock (_debuggingGate)
-                    {
-                        if (_pendingDebugging is not null) throw new InvalidOperationException("A product callback debug transition is still awaiting completion.");
-                        _pendingDebugging = apply;
-                    }
-                }
-                internal void CompleteCall(bool committed, bool terminal)
-                {
-                    Action<ProductDebugExecutionContext>? pending;
-                    lock (_debuggingGate)
-                    {
-                        pending = _pendingDebugging;
-                        _pendingDebugging = null;
-                    }
-                    try
-                    {
-                        _leaseReleases.Complete(committed, terminal);
-                    }
-                    finally
-                    {
-                        if (committed) pending?.Invoke(Debugging);
-                    }
-                }
                 internal void Dispose()
                 {
                     _lastCallError = null;
-                    _leaseReleases.Complete(false, true);
                     System.Threading.Interlocked.Exchange(ref _product, null)?.Dispose();
                 }
             }
@@ -266,7 +200,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         shutdown = &Shutdown,
                         destroy = &Destroy,
                         complete_timeline = &CompleteTimeline,
-                        complete_call = &CompleteCall,
                         execute_debug = &ExecuteDebug,
                         describe_debug = &DescribeDebug,
                         release_debug_result = &ReleaseDebugResult,
@@ -315,12 +248,11 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         if (error is not null) *error = default;
                         if (args is null || handle is null || (args->content_len != 0 && args->content is null) || (args->input.context_len != 0 && args->input.context is null) || (args->input.direct_intents_len != 0 && args->input.direct_intents is null) || (args->input.physical_mappings_len != 0 && args->input.physical_mappings is null)) return 2;
                         ProductInputConfiguration input = CopyInputConfiguration(args->input);
-                        LeaseReleaseCoordinator leaseReleases = new();
                         ProductDebugExecutionContext debugging = new();
-                        EngineContext engine = new(args->engine, leaseReleases);
+                        EngineContext engine = new(args->engine);
                         ProductContent content = new(CopyContent(args->content, args->content_len), engine.Content);
                         IEngineProduct product = new {{type}}(new ProductCreateContext(engine, content, input, debugging));
-                        lifetime = new ProductLifetime(product, leaseReleases, debugging);
+                        lifetime = new ProductLifetime(product, debugging);
                         *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
                         return 1;
                     }
@@ -335,7 +267,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Start(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Start(); lifetime.StageDebugging(static debugging => debugging.RecordStarted()); });
+                private static int Start(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Start(); lifetime.Debugging.RecordStarted(); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Attach(void* handle) => Invoke(handle, static lifetime => lifetime.Product.Attach());
@@ -356,7 +288,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                             ProductUpdateResult.ReportFault => NativeProductUpdateResult.NativeProductUpdateResult_ReportFault,
                             _ => throw new ArgumentOutOfRangeException(nameof(productResult)),
                         };
-                        lifetime.StageDebugging(debugging => debugging.RecordUpdated(facts));
+                        lifetime.Debugging.RecordUpdated(facts);
                         return 1;
                     }
                     catch (Exception exception)
@@ -367,16 +299,16 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Pause(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Pause(); lifetime.StageDebugging(static debugging => debugging.RecordPaused()); });
+                private static int Pause(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Pause(); lifetime.Debugging.RecordPaused(); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Resume(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Resume(); lifetime.StageDebugging(static debugging => debugging.RecordResumed()); });
+                private static int Resume(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Resume(); lifetime.Debugging.RecordResumed(); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Restart(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Restart(); lifetime.StageDebugging(static debugging => debugging.RecordRestarted()); });
+                private static int Restart(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Restart(); lifetime.Debugging.RecordRestarted(); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Shutdown(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Shutdown(); lifetime.StageDebugging(static debugging => debugging.RecordShutdown()); });
+                private static int Shutdown(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Shutdown(); lifetime.Debugging.RecordShutdown(); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int CompleteTimeline(void* handle, NativeProductTimelineCompletion* completion, byte* accepted)
@@ -405,17 +337,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         RecordCallError(handle, exception);
                         return 99;
                     }
-                }
-
-                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static void CompleteCall(void* handle, byte committed, byte terminal)
-                {
-                    try
-                    {
-                        if (handle is null || committed > 1 || terminal > 1) return;
-                        Get(handle).CompleteCall(committed != 0, terminal != 0);
-                    }
-                    catch { }
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

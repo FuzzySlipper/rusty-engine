@@ -38,7 +38,7 @@ struct AudioClip {
     owners: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct AudioState {
     projector: AudioProjector,
     clips: BTreeMap<u64, AudioClip>,
@@ -267,24 +267,18 @@ impl RuntimeAudioBridge {
     }
 
     pub(crate) fn begin_call(&mut self) {
+        // The call owns the state until it finishes; nothing is copied.
         self.staged = Some(RuntimeAudioCall {
-            state: self.state.clone(),
+            state: std::mem::take(&mut self.state),
             frame: None,
         });
     }
 
-    /// Stages retained playback against the update interval that the runtime
-    /// already admitted. Advancing the clone keeps a failed callback from
-    /// mutating canonical playback intent.
-    pub(crate) fn begin_update_call(&mut self, elapsed_seconds: f64) {
-        self.begin_call();
+    /// Advances retained playback by the update interval the runtime admitted.
+    pub(crate) fn advance_elapsed(&mut self, elapsed_seconds: f64) {
         if let Some(staged) = self.staged.as_mut() {
             staged.state.projector.advance_elapsed(elapsed_seconds);
         }
-    }
-
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
     }
 
     pub(crate) fn take_staged_call(
@@ -300,6 +294,13 @@ impl RuntimeAudioBridge {
 
     pub(crate) fn commit(&mut self, call: RuntimeAudioCall) {
         self.state = call.state;
+    }
+
+    /// Ends the open call, keeping its state.
+    #[cfg(test)]
+    pub(crate) fn end_call(&mut self) {
+        let call = self.take_staged_call().expect("an open audio call");
+        self.commit(call);
     }
     pub(crate) fn seal_resource_selection(&mut self) {
         self.content_resources.clear();
@@ -2305,7 +2306,8 @@ mod tests {
         let initial = bridge.take_staged_call().expect("initial call");
         bridge.commit(initial);
 
-        bridge.begin_update_call(0.75);
+        bridge.begin_call();
+        bridge.advance_elapsed(0.75);
         let staged = bridge.take_staged_call().expect("staged elapsed state");
         bridge.commit(staged);
         let baseline = bridge.snapshot_frame().expect("baseline");
@@ -2316,7 +2318,8 @@ mod tests {
             }, .. } if *handle == AudioHandle::new(voice.value) && (*cursor_seconds - 0.75).abs() < f64::EPSILON
         ));
 
-        bridge.begin_update_call(0.5);
+        bridge.begin_call();
+        bridge.advance_elapsed(0.5);
         let staged = bridge.take_staged_call().expect("completed elapsed state");
         bridge.commit(staged);
         let baseline = bridge.snapshot_frame().expect("baseline");
@@ -2366,7 +2369,7 @@ mod tests {
                 code: NativeAudioDiagnosticCode::None,
             }
         );
-        bridge.discard_call();
+        bridge.end_call();
         // A retry is deduplicated, while a newer browser cumulative eviction
         // count remains visible independently of local store evictions.
         bridge
@@ -2388,7 +2391,7 @@ mod tests {
                 .evicted_fact_count,
             5
         );
-        bridge.discard_call();
+        bridge.end_call();
         bridge.reset_realized_feedback();
         bridge.begin_call();
         assert_eq!(
@@ -2487,7 +2490,7 @@ mod tests {
             bridge.destroy_clip(clip).is_err(),
             "pending one-shot owns final clip"
         );
-        bridge.discard_call();
+        bridge.end_call();
         bridge
             .ingest_realized_feedback(
                 false,
@@ -2620,7 +2623,7 @@ mod tests {
             .destroy_clip(clip)
             .expect_err("unknown terminal fact stays live");
         assert_eq!(error.code(), "CSHARP_AUDIO_CLIP_FEEDBACK_LOST");
-        bridge.discard_call();
+        bridge.end_call();
         bridge.reset_realized_feedback();
         bridge.begin_call();
         bridge

@@ -936,11 +936,8 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         .expect("start");
     let appearance_fact = sprite_appearance_fact(appearance);
     unsafe { bridge.stage_snapshot(&appearance_fact, 1) }.expect("initial retained snapshot");
-    let initial_call = bridge
-        .take_staged_call()
-        .expect("initial call")
-        .expect("initial appearance call");
-    bridge.commit(Some(initial_call));
+    let initial_call = bridge.take_staged_call();
+    bridge.commit(initial_call);
     bridge.begin_call();
     assert_eq!(
         bridge
@@ -949,7 +946,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
             .code(),
         "CSHARP_SPRITE_PLAYBACK_UPDATE"
     );
-    bridge.discard_call();
+    bridge.end_call();
     bridge.begin_update_call(realtime_sprite_update(1, 0.25));
     let first = bridge
         .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
@@ -966,11 +963,8 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
     assert!(!duplicate.advanced);
     assert_eq!(duplicate.crossings_len, 0);
     assert_eq!(duplicate.readout.revision, first.readout.revision);
-    let first_call = bridge
-        .take_staged_call()
-        .expect("first update call")
-        .expect("first appearance update");
-    bridge.commit(Some(first_call));
+    let first_call = bridge.take_staged_call();
+    bridge.commit(first_call);
     bridge.begin_update_call(realtime_sprite_update(2, 0.25));
     let second = bridge
         .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
@@ -984,10 +978,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         9
     );
     unsafe { bridge.stage_snapshot(&appearance_fact, 1) }.expect("updated retained snapshot");
-    let updated_call = bridge
-        .take_staged_call()
-        .expect("updated call")
-        .expect("updated appearance call");
+    let updated_call = bridge.take_staged_call();
     assert!(updated_call.render_frames().iter().any(|frame| {
         frame.ops.iter().any(|operation| {
             matches!(
@@ -996,7 +987,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
             )
         })
     }));
-    bridge.commit(Some(updated_call));
+    bridge.commit(updated_call);
     bridge.begin_update_call(realtime_sprite_update(3, 0.25));
     bridge
         .control_sprite_playback(NativeSpritePlaybackControlRequest {
@@ -1014,11 +1005,8 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
             control: NativeSpritePlaybackControl::Resume,
         })
         .expect("resume");
-    let paused_call = bridge
-        .take_staged_call()
-        .expect("paused update call")
-        .expect("paused appearance update");
-    bridge.commit(Some(paused_call));
+    let paused_call = bridge.take_staged_call();
+    bridge.commit(paused_call);
     bridge.begin_update_call(realtime_sprite_update(4, 0.25));
     let completed = bridge
         .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
@@ -1057,11 +1045,8 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
     assert!(!after_stop_start.advanced);
     assert_eq!(after_stop_start.crossings_len, 0);
     unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("remove retained sprite");
-    let removal_call = bridge
-        .take_staged_call()
-        .expect("removal call")
-        .expect("removal appearance call");
-    bridge.commit(Some(removal_call));
+    let removal_call = bridge.take_staged_call();
+    bridge.commit(removal_call);
     bridge.begin_update_call(realtime_sprite_update(3, 0.25));
     assert_eq!(
         bridge
@@ -1070,7 +1055,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
             .code(),
         "CSHARP_SPRITE_PLAYBACK_STALE_UPDATE"
     );
-    bridge.discard_call();
+    bridge.end_call();
     bridge.begin_call();
     assert_eq!(
         bridge
@@ -1178,11 +1163,8 @@ fn sprite_playback_loop_sampling_restart_and_invalid_creation_are_atomic() {
             control: NativeSpritePlaybackControl::Restart,
         })
         .expect("restart starts from zero");
-    let setup_call = bridge
-        .take_staged_call()
-        .expect("loop setup call")
-        .expect("loop setup appearance call");
-    bridge.commit(Some(setup_call));
+    let setup_call = bridge.take_staged_call();
+    bridge.commit(setup_call);
     bridge.begin_update_call(realtime_sprite_update(1, 0.5));
     let looped = bridge
         .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
@@ -1274,7 +1256,7 @@ fn sprite_playback_frame_selection_updates_cursor_and_renderer_atomically() {
             control: NativeSpritePlaybackControl::Start,
         })
         .expect("start");
-    let setup = bridge.take_staged_call().expect("setup call");
+    let setup = bridge.take_staged_call();
     bridge.commit(setup);
 
     bridge.begin_update_call(realtime_sprite_update(1, 0.5));
@@ -1323,7 +1305,7 @@ fn sprite_playback_frame_selection_updates_cursor_and_renderer_atomically() {
     assert!(!duplicate.advanced);
     assert_eq!(duplicate.crossings_len, 0);
     assert_eq!(duplicate.readout.frame_index, 1);
-    let selected_call = bridge.take_staged_call().expect("selected call");
+    let selected_call = bridge.take_staged_call();
     bridge.commit(selected_call);
 
     bridge.begin_update_call(realtime_sprite_update(2, 0.25));
@@ -1530,7 +1512,8 @@ impl std::ops::Index<usize> for RenderResourceSlots {
     }
 }
 
-/// Call candidates share graphics state until their first mutation.
+/// Graphics state. A product call owns it for the call's duration, so the
+/// first write never copies it.
 #[derive(Clone)]
 pub(crate) struct RuntimeAppearanceState(Arc<RuntimeAppearanceData>);
 impl From<RuntimeAppearanceData> for RuntimeAppearanceState {
@@ -1672,12 +1655,8 @@ struct SpritePlaybackAdvanceLeaseBacking {
 pub(crate) struct RuntimeAppearanceCall {
     pub(crate) state: RuntimeAppearanceState,
     admitted_update: Option<NativeProductUpdateFacts>,
-    /// An attachment stage needs to rebuild the renderer-owned ghost projection
-    /// after the complete ordinary appearance snapshot has assigned fresh
-    /// source handles. This flag is consumed by that first snapshot only; the
-    /// logical product-owned ghost records remain part of the staged state.
-    rebase_ghost_plates: bool,
     resource_releases_pending: bool,
+    pub(crate) release_error: Option<CsharpEngineServicesError>,
     /// Typed browser realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
     /// output transport and only represents this service family's existing
@@ -1837,6 +1816,8 @@ struct AnimationAdmissionDiagnostic {
 
 pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
+    /// Held in `state` while a product call owns the real state.
+    idle_state: RuntimeAppearanceState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
     // Reuse derived assets for the immutable admitted source lifetime. Separate
     // from staged state: importing does not mutate product-visible ownership.
@@ -1865,64 +1846,66 @@ impl RuntimeAppearanceBridge {
         catalog: RuntimeAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,
     ) -> Self {
+        let state = RuntimeAppearanceState::from(RuntimeAppearanceData {
+            projector: RuntimeAppearanceProjector::new(catalog),
+            appearances: BTreeMap::new(),
+            next_appearance: 1,
+            mesh_resources: BTreeMap::new(),
+            mesh_appearances: BTreeMap::new(),
+            next_mesh_resource: 1,
+            mesh_partitions: BTreeMap::new(),
+            next_mesh_partition: 1,
+            lights: BTreeMap::new(),
+            next_light: 1,
+            materials: BTreeMap::new(),
+            appearance_materials: BTreeMap::new(),
+            retained_appearances: BTreeMap::new(),
+            joint_attachments: BTreeMap::new(),
+            next_material: 1,
+            retained_object_count: 0,
+            retained_light_count: 0,
+            render_resources: RenderResourceSlots::default(),
+            resource_paths: BTreeMap::new(),
+            resource_identities: BTreeMap::new(),
+            resource_open_counts: BTreeMap::new(),
+            appearance_resources: BTreeMap::new(),
+            material_resources: BTreeMap::new(),
+            sprite_atlas_resources: BTreeMap::new(),
+            animation_graph_resources: BTreeMap::new(),
+            animation_clip_pack_resources: BTreeMap::new(),
+            billboard_resources: BTreeMap::new(),
+            emitter_resources: BTreeMap::new(),
+            sprite_atlases: BTreeMap::new(),
+            sprite_atlas_appearances: BTreeMap::new(),
+            sprite_appearance_atlases: BTreeMap::new(),
+            next_sprite_atlas: 1,
+            sprite_playbacks: BTreeMap::new(),
+            sprite_playbacks_by_atlas: BTreeMap::new(),
+            sprite_playbacks_by_appearance: BTreeMap::new(),
+            next_sprite_playback: 1,
+            sprite_playback_advance_leases: BTreeMap::new(),
+            next_sprite_playback_advance_lease: 1,
+            animated_appearances: BTreeMap::new(),
+            animation_instances: BTreeMap::new(),
+            animation_graphs: BTreeMap::new(),
+            animation_transitions: BTreeMap::new(),
+            animation_controllers: BTreeMap::new(),
+            animation_cue_definitions: Vec::new(),
+            next_animation_instance: 1,
+            next_animation_graph: 1,
+            next_animation_transition: 1,
+            next_animation_controller: 1,
+            billboard_projector: BillboardProjector::default(),
+            particle_projector: ParticleProjector::default(),
+            billboards: BTreeMap::new(),
+            emitters: BTreeMap::new(),
+            ghost_plate_projector: GhostPlateProjector::default(),
+            ghost_plates: BTreeMap::new(),
+            next_ghost_plate: 1,
+        });
         Self {
-            state: RuntimeAppearanceState::from(RuntimeAppearanceData {
-                projector: RuntimeAppearanceProjector::new(catalog),
-                appearances: BTreeMap::new(),
-                next_appearance: 1,
-                mesh_resources: BTreeMap::new(),
-                mesh_appearances: BTreeMap::new(),
-                next_mesh_resource: 1,
-                mesh_partitions: BTreeMap::new(),
-                next_mesh_partition: 1,
-                lights: BTreeMap::new(),
-                next_light: 1,
-                materials: BTreeMap::new(),
-                appearance_materials: BTreeMap::new(),
-                retained_appearances: BTreeMap::new(),
-                joint_attachments: BTreeMap::new(),
-                next_material: 1,
-                retained_object_count: 0,
-                retained_light_count: 0,
-                render_resources: RenderResourceSlots::default(),
-                resource_paths: BTreeMap::new(),
-                resource_identities: BTreeMap::new(),
-                resource_open_counts: BTreeMap::new(),
-                appearance_resources: BTreeMap::new(),
-                material_resources: BTreeMap::new(),
-                sprite_atlas_resources: BTreeMap::new(),
-                animation_graph_resources: BTreeMap::new(),
-                animation_clip_pack_resources: BTreeMap::new(),
-                billboard_resources: BTreeMap::new(),
-                emitter_resources: BTreeMap::new(),
-                sprite_atlases: BTreeMap::new(),
-                sprite_atlas_appearances: BTreeMap::new(),
-                sprite_appearance_atlases: BTreeMap::new(),
-                next_sprite_atlas: 1,
-                sprite_playbacks: BTreeMap::new(),
-                sprite_playbacks_by_atlas: BTreeMap::new(),
-                sprite_playbacks_by_appearance: BTreeMap::new(),
-                next_sprite_playback: 1,
-                sprite_playback_advance_leases: BTreeMap::new(),
-                next_sprite_playback_advance_lease: 1,
-                animated_appearances: BTreeMap::new(),
-                animation_instances: BTreeMap::new(),
-                animation_graphs: BTreeMap::new(),
-                animation_transitions: BTreeMap::new(),
-                animation_controllers: BTreeMap::new(),
-                animation_cue_definitions: Vec::new(),
-                next_animation_instance: 1,
-                next_animation_graph: 1,
-                next_animation_transition: 1,
-                next_animation_controller: 1,
-                billboard_projector: BillboardProjector::default(),
-                particle_projector: ParticleProjector::default(),
-                billboards: BTreeMap::new(),
-                emitters: BTreeMap::new(),
-                ghost_plate_projector: GhostPlateProjector::default(),
-                ghost_plates: BTreeMap::new(),
-                next_ghost_plate: 1,
-            }),
+            idle_state: state.clone(),
+            state,
             content_resources,
             imported_static: BTreeMap::new(),
             imported_mesh: BTreeMap::new(),
@@ -2013,26 +1996,19 @@ impl RuntimeAppearanceBridge {
         self.begin_call_with_update(None);
     }
 
-    pub(crate) fn begin_attach_call(&mut self) {
-        self.begin_call_with_update(None);
-        let staged = self
-            .staged_mut()
-            .expect("attach begins an appearance stage");
-        staged.rebase_ghost_plates = true;
-        staged.state.projector.reset_renderer_projection();
-        staged.state.ghost_plate_projector.reset();
-    }
-
     pub(crate) fn begin_update_call(&mut self, facts: NativeProductUpdateFacts) {
         self.begin_call_with_update(Some(facts));
     }
 
     fn begin_call_with_update(&mut self, admitted_update: Option<NativeProductUpdateFacts>) {
+        // Move the state into the call and leave the idle placeholder behind,
+        // so the call's first write does not copy the whole graphics state.
+        let state = std::mem::replace(&mut self.state, self.idle_state.clone());
         self.staged = Some(RuntimeAppearanceCall {
-            state: self.state.clone(),
+            state,
             admitted_update,
-            rebase_ghost_plates: false,
             resource_releases_pending: false,
+            release_error: None,
             outputs: Vec::new(),
             projected_frame: false,
             presentation_frames: 0,
@@ -2094,39 +2070,37 @@ impl RuntimeAppearanceBridge {
             .unwrap_or_default())
     }
 
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
+    /// Takes the finished call, with the renderer releases for resources it
+    /// released. A release failure is kept on the call for the caller.
+    pub(crate) fn take_staged_call(&mut self) -> RuntimeAppearanceCall {
         self.operation_error = None;
-    }
-
-    pub(crate) fn take_staged_call(
-        &mut self,
-    ) -> Result<Option<RuntimeAppearanceCall>, CsharpEngineServicesError> {
-        self.operation_error = None;
-        let mut staged = self.staged.take();
-        if let Some(call) = &mut staged {
-            if call.resource_releases_pending {
-                let projection = call
-                    .state
-                    .projector
-                    .reconcile_resources()
-                    .map_err(|error| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_RESOURCE_RELEASE",
-                            format!("{error:?}"),
-                        )
-                    })?;
-                push_extra_frame(call, projection.frame);
-                call.resource_releases_pending = false;
+        let mut call = self
+            .staged
+            .take()
+            .expect("every product call begins an appearance call");
+        if std::mem::take(&mut call.resource_releases_pending) {
+            match call.state.projector.reconcile_resources() {
+                Ok(projection) => push_extra_frame(&mut call, projection.frame),
+                Err(error) => {
+                    call.release_error = Some(CsharpEngineServicesError::new(
+                        "CSHARP_RESOURCE_RELEASE",
+                        format!("{error:?}"),
+                    ))
+                }
             }
         }
-        Ok(staged)
+        call
     }
 
-    pub(crate) fn commit(&mut self, staged: Option<RuntimeAppearanceCall>) {
-        if let Some(staged) = staged {
-            self.state = staged.state;
-        }
+    pub(crate) fn commit(&mut self, call: RuntimeAppearanceCall) {
+        self.state = call.state;
+    }
+
+    /// Ends the open call, keeping its state.
+    #[cfg(test)]
+    pub(crate) fn end_call(&mut self) {
+        let call = self.take_staged_call();
+        self.commit(call);
     }
 
     pub(crate) fn seal_resource_selection(&mut self) {
@@ -7883,85 +7857,7 @@ impl RuntimeAppearanceBridge {
         staged.state.retained_appearances = retained_appearances;
         staged.state.joint_attachments = attachments;
         append_projection_frame(staged, projection.frame)?;
-        if self.staged_ref()?.rebase_ghost_plates {
-            self.rebase_ghost_plates()?;
-            self.staged_mut()?.rebase_ghost_plates = false;
-        }
         self.flush_all_animations()?;
-        Ok(())
-    }
-
-    /// Rebuilds only the renderer-facing ghost projection for a detached
-    /// attachment. Product-owned presentation records and their stable
-    /// handles remain in staged state, while each source lookup is resolved
-    /// against the fresh ordinary appearance projection.
-    ///
-    /// The local projector clone and local output frame make the replay atomic
-    /// even if one retained ghost is no longer valid. The enclosing staged
-    /// call is discarded by the normal callback error path, so active runtime
-    /// state is untouched as well.
-    fn rebase_ghost_plates(&mut self) -> Result<(), CsharpEngineServicesError> {
-        let ghosts: Vec<(u64, RuntimeGhostPlatePresentation)> = self
-            .staged_ref()?
-            .state
-            .ghost_plates
-            .iter()
-            .map(|(handle, presentation)| (*handle, presentation.clone()))
-            .collect();
-        let mut projector = self.staged_ref()?.state.ghost_plate_projector.clone();
-        let mut projected = Vec::with_capacity(ghosts.len());
-
-        for (index, (handle, presentation)) in ghosts.iter().enumerate() {
-            let sequence = u32::try_from(index).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_GHOST_PLATE",
-                    "too many retained ghost plates in one attachment",
-                )
-            })?;
-            let source = self
-                .staged_ref()?
-                .state
-                .projector
-                .object_handle(presentation.source_object_id)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_GHOST_PLATE_SOURCE",
-                        "ghost plate source object must be present in the current Appearance snapshot",
-                    )
-                })?;
-            let op = GhostPlateProjectionOp::Create {
-                handle: GhostPlateHandle::new(*handle),
-                descriptor: ghost_plate_descriptor(presentation, source),
-            };
-            let targets = BTreeSet::from([source]);
-            let operation = projector
-                .project(&targets, PresentationOpMeta::new(sequence), op)
-                .map_err(|diagnostic| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_GHOST_PLATE",
-                        format!(
-                            "ghost plate {handle} could not be rebased: {}",
-                            diagnostic.message
-                        ),
-                    )
-                })?;
-            projected.push(operation);
-        }
-
-        if projected.is_empty() {
-            self.staged_mut()?.state.ghost_plate_projector = projector;
-            return Ok(());
-        }
-
-        let frame = PresentationFrameDiff::try_from_ops(projected).map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_GHOST_PLATE",
-                format!("rebased ghost plate presentation frame is invalid: {error:?}"),
-            )
-        })?;
-        let staged = self.staged_mut()?;
-        staged.state.ghost_plate_projector = projector;
-        push_presentation_frame(staged, frame);
         Ok(())
     }
 }
@@ -11092,7 +10988,7 @@ pub(super) mod tests {
         );
         assert!(bridge.admission_diagnostics.is_empty());
         assert!(bridge.operation_error.is_none());
-        assert!(bridge.take_staged_call().unwrap().is_some());
+        bridge.end_call();
     }
 
     #[test]
@@ -11170,7 +11066,7 @@ pub(super) mod tests {
             unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
             ABI_OK
         );
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         let mut world = render_presentation::PresentationWorld::default();
         for output in call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -11222,7 +11118,7 @@ pub(super) mod tests {
         });
         for _ in 0..100 {
             bridge.begin_call();
-            bridge.discard_call();
+            bridge.end_call();
         }
         let allocated_pointer = bridge.state.render_resources[0].bytes.as_ptr();
         let mut durations = Vec::with_capacity(ITERATIONS);
@@ -11235,7 +11131,7 @@ pub(super) mod tests {
                     .as_ptr(),
                 allocated_pointer,
             );
-            bridge.discard_call();
+            bridge.end_call();
             durations.push(started.elapsed().as_nanos());
         }
         durations.sort_unstable();
@@ -11438,14 +11334,14 @@ pub(super) mod tests {
         let appearance = bridge.create_mesh_appearance(part).unwrap();
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
                 world.apply(frame.clone()).unwrap();
             }
         }
-        bridge.commit(Some(call));
+        bridge.commit(call);
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
         bridge.destroy_appearance(appearance).unwrap();
@@ -11618,7 +11514,7 @@ pub(super) mod tests {
         assert!(bridge.destroy_material(material).is_err());
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -11650,7 +11546,7 @@ pub(super) mod tests {
             }
             _ => panic!("generated stream must be retained and reconstructible"),
         }
-        bridge.commit(Some(call));
+        bridge.commit(call);
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
         bridge.destroy_appearance(appearance).unwrap();
@@ -11658,7 +11554,7 @@ pub(super) mod tests {
         bridge.destroy_mesh_resource(resource).unwrap();
         bridge.destroy_material(material).unwrap();
         assert!(bridge.create_mesh_appearance(resource).is_err());
-        let removal = bridge.take_staged_call().unwrap().unwrap();
+        let removal = bridge.take_staged_call();
         let mut releases = 0;
         for output in &removal.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -11815,7 +11711,7 @@ pub(super) mod tests {
         let fact = appearance_fact(line);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         assert!(bridge.destroy_appearance(line).is_err());
-        let staged = bridge.take_staged_call().unwrap().unwrap();
+        let staged = bridge.take_staged_call();
         assert!(matches!(
             staged.render_ops().as_slice(),
             [render_model::RenderDiff::Create {
@@ -11852,10 +11748,7 @@ pub(super) mod tests {
         let facts = [child_fact, parent_fact];
         unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }
             .expect("hierarchical snapshot");
-        let staged = bridge
-            .take_staged_call()
-            .expect("staged hierarchy")
-            .expect("appearance call");
+        let staged = bridge.take_staged_call();
         assert!(matches!(
             staged.render_ops().as_slice(),
             [
@@ -12018,7 +11911,7 @@ pub(super) mod tests {
             "a rejected replacement leaves the live presentation intact"
         );
 
-        let call = bridge.take_staged_call().unwrap();
+        let call = bridge.take_staged_call();
         bridge.commit(call);
         bridge.begin_call();
         let error = unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap_err();
@@ -12028,144 +11921,6 @@ pub(super) mod tests {
             .expect("destroy before source removal");
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }
             .expect("source removal is ordered after ghost disposal");
-    }
-
-    #[test]
-    fn attach_rebases_retained_ghost_projection_without_committing() {
-        let mut bridge =
-            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-        bridge.begin_call();
-        let appearance = bridge.create_primitive(primitive_request()).unwrap();
-        let source = appearance_fact(appearance);
-        unsafe { bridge.stage_snapshot(&source, 1) }.expect("source snapshot");
-        let plate = bridge
-            .presentation_create_ghost_plate(ghost_plate_request(source.object_id))
-            .expect("ghost plate");
-        let initial = bridge
-            .take_staged_call()
-            .expect("initial call")
-            .expect("initial appearance call");
-        bridge.commit(Some(initial));
-
-        let live_source = bridge.state.projector.object_handle(source.object_id);
-        let live_ghost = bridge
-            .state
-            .ghost_plate_projector
-            .descriptor(GhostPlateHandle::new(plate.value))
-            .cloned();
-        let live_projection = bridge.state.ghost_plate_projector.readout();
-
-        bridge.begin_attach_call();
-        unsafe { bridge.stage_snapshot(&source, 1) }.expect("fresh attachment snapshot");
-        let attached = bridge
-            .take_staged_call()
-            .expect("attachment call")
-            .expect("attachment appearance call");
-        let ordinary_output_index = attached
-            .outputs
-            .iter()
-            .position(|output| {
-                matches!(
-                    output,
-                    RuntimeAppearanceCallOutput::Frame(frame)
-                        if frame
-                            .ops
-                            .iter()
-                            .any(|op| matches!(op, render_model::RenderDiff::Create { .. }))
-                )
-            })
-            .expect("attachment output includes the ordinary source baseline");
-        let ghost_output_index = attached
-            .outputs
-            .iter()
-            .position(|output| {
-                matches!(
-                    output,
-                    RuntimeAppearanceCallOutput::Presentation(frame)
-                        if frame.ops.iter().any(|op| matches!(
-                            op,
-                            render_presentation::PresentationOp::GhostPlate {
-                                op: GhostPlateProjectionOp::Create { .. },
-                                ..
-                            }
-                        ))
-                )
-            })
-            .expect("attachment output includes the retained ghost baseline");
-        assert!(
-            ordinary_output_index < ghost_output_index,
-            "ordinary appearance baseline must precede retained ghost baseline"
-        );
-        assert!(attached.render_frames().iter().any(|frame| {
-            frame
-                .ops
-                .iter()
-                .any(|op| matches!(op, render_model::RenderDiff::Create { .. }))
-        }));
-
-        let fresh_source = attached.state.projector.object_handle(source.object_id);
-        let ghost_creates: Vec<_> = attached
-            .presentation()
-            .into_iter()
-            .flat_map(|frame| frame.ops.iter())
-            .filter_map(|op| match op {
-                render_presentation::PresentationOp::GhostPlate {
-                    op:
-                        GhostPlateProjectionOp::Create {
-                            handle, descriptor, ..
-                        },
-                    ..
-                } => Some((*handle, descriptor.source)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(ghost_creates.len(), 1);
-        assert_eq!(ghost_creates[0].0, GhostPlateHandle::new(plate.value));
-        assert_eq!(
-            ghost_creates[0].1,
-            fresh_source.expect("fresh source handle")
-        );
-        assert_eq!(
-            attached.state.ghost_plate_projector.readout().active_plates,
-            1
-        );
-
-        // Attachment output is deliberately detached. Dropping the staged
-        // call must leave the active projector and stable product identity
-        // exactly as they were before the fresh publication.
-        bridge.discard_call();
-        assert_eq!(
-            bridge.state.projector.object_handle(source.object_id),
-            live_source
-        );
-        assert_eq!(
-            bridge
-                .state
-                .ghost_plate_projector
-                .descriptor(GhostPlateHandle::new(plate.value)),
-            live_ghost.as_ref()
-        );
-        assert_eq!(
-            bridge.state.ghost_plate_projector.readout(),
-            live_projection
-        );
-
-        bridge.begin_call();
-        let mut moved = source;
-        moved.transform.translation.x = 2.0;
-        unsafe { bridge.stage_snapshot(&moved, 1) }.expect("incremental snapshot");
-        let next = bridge
-            .take_staged_call()
-            .expect("next call")
-            .expect("next appearance call");
-        assert!(next.presentation().is_empty());
-        assert!(next.render_frames().iter().any(|frame| {
-            frame
-                .ops
-                .iter()
-                .any(|op| matches!(op, render_model::RenderDiff::Update { .. }))
-        }));
-        bridge.commit(Some(next));
     }
 
     #[test]
@@ -12223,10 +11978,7 @@ pub(super) mod tests {
                 definitions_len: definitions.len(),
             })
             .expect("replace cue definitions");
-        let staged = bridge
-            .take_staged_call()
-            .expect("staged cue definitions")
-            .expect("call");
+        let staged = bridge.take_staged_call();
         assert_eq!(staged.state.animation_cue_definitions.len(), 1);
         assert_eq!(staged.state.animation_cue_definitions[0].cue_id, "footfall");
         assert!(matches!(
@@ -12235,7 +11987,7 @@ pub(super) mod tests {
                 if values[0].marker_millis == 125
                     && values[0].signal_domain == NativeAnimationCueSignalDomain::Particle
         ));
-        bridge.commit(Some(staged));
+        bridge.commit(staged);
 
         bridge.begin_call();
         bridge
@@ -12244,10 +11996,7 @@ pub(super) mod tests {
                 definitions_len: 0,
             })
             .expect("clear cue definitions");
-        let staged = bridge
-            .take_staged_call()
-            .expect("staged clear")
-            .expect("call");
+        let staged = bridge.take_staged_call();
         assert!(staged.state.animation_cue_definitions.is_empty());
         assert!(matches!(
             staged.outputs.as_slice(),
@@ -12271,7 +12020,7 @@ pub(super) mod tests {
         assert!(readout.has_parent_object);
         assert_eq!(readout.parent_object_id, 7);
         assert_eq!(readout.descriptor.kind, NativeLightKind::Point);
-        let staged = bridge.take_staged_call().unwrap().unwrap();
+        let staged = bridge.take_staged_call();
         assert_eq!(staged.state.retained_object_count, 1);
         assert_eq!(staged.state.retained_light_count, 1);
         assert!(matches!(
@@ -12281,7 +12030,7 @@ pub(super) mod tests {
                 render_model::RenderDiff::CreateLight { .. }
             ]
         ));
-        bridge.commit(Some(staged));
+        bridge.commit(staged);
 
         bridge.begin_call();
         let mut replacement = point_light_request(91, Some(7));
@@ -12289,12 +12038,12 @@ pub(super) mod tests {
         bridge
             .update_light(NativeLightUpdateRequest { light, replacement })
             .unwrap();
-        let staged = bridge.take_staged_call().unwrap().unwrap();
+        let staged = bridge.take_staged_call();
         assert!(matches!(
             staged.render_ops().as_slice(),
             [render_model::RenderDiff::UpdateLight { .. }]
         ));
-        bridge.commit(Some(staged));
+        bridge.commit(staged);
     }
 
     #[test]
@@ -12309,7 +12058,7 @@ pub(super) mod tests {
         let light = bridge
             .create_light(point_light_request(92, None))
             .expect("a later light is unaffected by the refusal");
-        let staged = bridge.take_staged_call().unwrap().unwrap();
+        let staged = bridge.take_staged_call();
         assert_eq!(staged.state.lights.len(), 1);
         assert!(staged.state.lights.contains_key(&light.value));
         assert_eq!(staged.state.retained_light_count, 1);
@@ -12369,7 +12118,7 @@ pub(super) mod tests {
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
         bridge.begin_call();
         let light = bridge.create_light(point_light_request(91, None)).unwrap();
-        let staged = bridge.take_staged_call().unwrap();
+        let staged = bridge.take_staged_call();
         bridge.commit(staged);
 
         bridge.begin_call();
@@ -12388,21 +12137,16 @@ pub(super) mod tests {
         assert_eq!(retained.logical_id, 91);
         assert_eq!(retained.descriptor.kind, NativeLightKind::Point);
         bridge.destroy_light(light).unwrap();
-        let staged = bridge.take_staged_call().unwrap().unwrap();
+        let staged = bridge.take_staged_call();
         assert!(matches!(
             staged.render_ops().as_slice(),
             [render_model::RenderDiff::Destroy { .. }]
         ));
-        bridge.commit(Some(staged));
+        bridge.commit(staged);
 
         bridge.begin_call();
         bridge.destroy_light(light).unwrap();
-        assert!(bridge
-            .take_staged_call()
-            .unwrap()
-            .unwrap()
-            .render_frames()
-            .is_empty());
+        assert!(bridge.take_staged_call().render_frames().is_empty());
     }
 
     #[test]
@@ -12586,7 +12330,7 @@ pub(super) mod tests {
         );
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -12597,14 +12341,14 @@ pub(super) mod tests {
         assert!(encoded.contains("sprite/atlas-1"));
         assert!(encoded.contains("authoredNormal"));
         assert!(encoded.contains("castAndReceive"));
-        bridge.commit(Some(call));
+        bridge.commit(call);
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
         bridge.destroy_appearance(appearance).unwrap();
         bridge.destroy_sprite_atlas(atlas).unwrap();
         bridge.destroy_resource(sprite_texture.handle).unwrap();
         bridge.destroy_resource(normal_texture.handle).unwrap();
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
                 world.apply(frame.clone()).unwrap();
@@ -12622,7 +12366,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn selected_resources_are_transactional_deduplicated_and_create_time_only() {
+    fn selected_resources_are_deduplicated_and_create_time_only() {
         let mut content_resources = BTreeMap::new();
         content_resources.insert("selected.png".to_owned(), Arc::from(RGBA_PNG));
         content_resources.insert(
@@ -12631,17 +12375,6 @@ pub(super) mod tests {
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
-
-        bridge.begin_call();
-        bridge
-            .open_resource(&resource_request("selected.png"))
-            .expect("selected RGBA texture");
-        assert_eq!(
-            bridge.staged.as_ref().unwrap().state.render_resources.len(),
-            1
-        );
-        bridge.discard_call();
-        assert!(bridge.state.render_resources.is_empty());
 
         bridge.begin_call();
         let selected = bridge
@@ -12655,14 +12388,14 @@ pub(super) mod tests {
             bridge.staged.as_ref().unwrap().state.render_resources.len(),
             1
         );
-        let staged = bridge.take_staged_call().expect("staged call");
+        let staged = bridge.take_staged_call();
         bridge.commit(staged);
 
         bridge.begin_call();
         assert!(bridge
             .open_resource(&resource_request("unselected.png"))
             .is_err());
-        bridge.discard_call();
+        bridge.end_call();
         assert_eq!(bridge.state.render_resources.len(), 1);
     }
 
@@ -12714,7 +12447,7 @@ pub(super) mod tests {
             "CSHARP_RENDER_RESOURCE_IN_USE"
         );
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         let mut world = render_presentation::PresentationWorld::default();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -12727,14 +12460,14 @@ pub(super) mod tests {
             .ops
             .iter()
             .any(|op| matches!(op, RenderDiff::DefineTexture { .. })));
-        bridge.commit(Some(call));
+        bridge.commit(call);
         bridge.begin_call();
         bridge
             .destroy_material(NativeMaterialHandle { value: 1 })
             .unwrap();
         bridge.destroy_resource(first.handle).unwrap();
         assert!(bridge.resource(first.handle.value).is_err());
-        let call = bridge.take_staged_call().unwrap().unwrap();
+        let call = bridge.take_staged_call();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
                 world.apply(frame.clone()).unwrap();
@@ -12747,7 +12480,7 @@ pub(super) mod tests {
             )),
             "fresh unloaded baseline has no stale texture or material definition"
         );
-        bridge.commit(Some(call));
+        bridge.commit(call);
 
         bridge.begin_call();
         let reopened = bridge
@@ -12769,8 +12502,8 @@ pub(super) mod tests {
 
         bridge.begin_call();
         let sky = bridge.open_resource(&resource_request("sky.png")).unwrap();
-        let call = bridge.take_staged_call().unwrap().unwrap();
-        bridge.commit(Some(call));
+        let call = bridge.take_staged_call();
+        bridge.commit(call);
 
         camera.begin_call();
         assert_eq!(
@@ -12791,7 +12524,7 @@ pub(super) mod tests {
             bridge.destroy_resource(sky.handle).unwrap_err().code(),
             "CSHARP_RENDER_RESOURCE_IN_USE"
         );
-        bridge.discard_call();
+        bridge.end_call();
 
         camera.begin_call();
         let clear = NativeClearSkyBackgroundRequest::default();
@@ -12891,7 +12624,7 @@ pub(super) mod tests {
         ));
         let fact = appearance_fact(first);
         unsafe { bridge.stage_snapshot(&fact, 1) }.expect("publish the first mesh");
-        let staged = bridge.take_staged_call().expect("staged static meshes");
+        let staged = bridge.take_staged_call();
         bridge.commit(staged);
 
         assert_eq!(bridge.state.render_resources.len(), 1);
@@ -12946,7 +12679,7 @@ pub(super) mod tests {
                 .unwrap();
             let fact = appearance_fact(appearance);
             unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
-            let call = bridge.take_staged_call().unwrap().unwrap();
+            let call = bridge.take_staged_call();
             let ops: Vec<_> = call
                 .outputs
                 .iter()
@@ -12973,12 +12706,12 @@ pub(super) mod tests {
                     world.apply(frame.clone()).unwrap();
                 }
             }
-            bridge.commit(Some(call));
+            bridge.commit(call);
             bridge.begin_call();
             unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
             bridge.destroy_appearance(appearance).unwrap();
             bridge.destroy_resource(resource).unwrap();
-            let call = bridge.take_staged_call().unwrap().unwrap();
+            let call = bridge.take_staged_call();
             assert!(call.outputs.iter().any(|output| matches!(output, RuntimeAppearanceCallOutput::Frame(frame) if frame.ops.iter().any(|op| matches!(op, RenderDiff::ReleaseAnimatedMesh { .. })))));
             for output in &call.outputs {
                 if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -12994,7 +12727,7 @@ pub(super) mod tests {
                 "fresh unloaded baseline cannot require the retired GLB body"
             );
             assert!(call.state.render_resources.is_empty());
-            bridge.commit(Some(call));
+            bridge.commit(call);
         }
     }
 
@@ -13057,7 +12790,7 @@ pub(super) mod tests {
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.expect("appearance snapshot");
         assert_eq!(playback_ops(&bridge), 1);
-        let first_call = bridge.take_staged_call().expect("first animation call");
+        let first_call = bridge.take_staged_call();
         bridge.commit(first_call);
 
         bridge.begin_call();
@@ -13067,7 +12800,7 @@ pub(super) mod tests {
             .destroy_animation_instance(instance)
             .expect("teardown after an unchanged snapshot keeps output order");
         assert_eq!(playback_ops(&bridge), 1);
-        let completed = bridge.take_staged_call().unwrap();
+        let completed = bridge.take_staged_call();
         bridge.commit(completed);
         bridge.begin_call();
         let replacement = bridge
@@ -13336,7 +13069,7 @@ pub(super) mod tests {
         bridge.destroy_appearance(appearance).unwrap();
         bridge.destroy_resource(resource).unwrap();
         assert!(bridge.resource(resource.value).is_err());
-        assert!(bridge.take_staged_call().unwrap().is_some());
+        bridge.end_call();
     }
 
     #[test]
@@ -13849,7 +13582,7 @@ pub(super) mod tests {
                 .len(),
             1
         );
-        let setup = bridge.take_staged_call().expect("controller setup call");
+        let setup = bridge.take_staged_call();
         bridge.commit(setup);
 
         bridge.begin_call();
@@ -13861,7 +13594,7 @@ pub(super) mod tests {
                 .code(),
             "CSHARP_ANIMATION_SNAPSHOT_ORDER"
         );
-        bridge.discard_call();
+        bridge.end_call();
 
         bridge.begin_call();
         bridge
@@ -14049,16 +13782,13 @@ pub(super) mod tests {
         assert_eq!(bridge.presentation_readout().active_billboards, 1);
         assert_eq!(bridge.presentation_readout().active_emitters, 1);
         assert_eq!(bridge.presentation_readout().emitted_bursts, 1);
-        let call = bridge
-            .take_staged_call()
-            .expect("staged presentation call")
-            .expect("appearance call");
+        let call = bridge.take_staged_call();
         assert_eq!(call.presentation().len(), 4);
         assert!(call
             .presentation()
             .into_iter()
             .all(|frame| frame.validate().is_ok()));
-        bridge.commit(Some(call));
+        bridge.commit(call);
 
         let before = bridge.presentation_readout();
         let baseline = RuntimeAppearanceBridge::snapshot_presentation_state(&bridge.state)
@@ -14155,7 +13885,7 @@ pub(super) mod tests {
         bridge
             .presentation_create_billboard(&descriptor)
             .expect("initial billboard");
-        let initial_call = bridge.take_staged_call().expect("initial call");
+        let initial_call = bridge.take_staged_call();
         bridge.commit(initial_call);
         bridge.begin_call();
         let error = bridge
@@ -14172,9 +13902,7 @@ pub(super) mod tests {
                 .logical_id,
             7
         );
-        let call = bridge
-            .take_staged_call()
-            .expect("a refusal does not fail the call");
+        let call = bridge.take_staged_call();
         bridge.commit(call);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
     }
@@ -14258,10 +13986,7 @@ pub(super) mod tests {
                 visible: true,
             })
             .expect("asset-font billboard");
-        let call = bridge
-            .take_staged_call()
-            .expect("font call")
-            .expect("appearance call");
+        let call = bridge.take_staged_call();
         assert!(matches!(
             &call.presentation()[0].ops[0],
             render_presentation::PresentationOp::Billboard { op: BillboardProjectionOp::Create { descriptor: BillboardDescriptor { font: BillboardFontRef::Asset { family: resolved_family, .. }, .. }, .. }, .. }
@@ -14369,7 +14094,7 @@ pub(super) mod tests {
         let owner = bridge
             .presentation_create_structured_billboard(&descriptor())
             .expect("structured create");
-        let create = bridge.take_staged_call().expect("create call");
+        let create = bridge.take_staged_call();
         bridge.commit(create);
         assert_eq!(
             bridge
@@ -14396,9 +14121,7 @@ pub(super) mod tests {
             .expect_err("invalid meter update");
         bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
-        let call = bridge
-            .take_staged_call()
-            .expect("a refusal does not fail the call");
+        let call = bridge.take_staged_call();
         bridge.commit(call);
         let retained = bridge
             .state
@@ -14497,7 +14220,7 @@ pub(super) mod tests {
         let owner = bridge
             .presentation_create_emitter(&descriptor(&plane))
             .expect("collision emitter create");
-        let create = bridge.take_staged_call().expect("collision create call");
+        let create = bridge.take_staged_call();
         bridge.commit(create);
         let retained = bridge
             .state
@@ -14535,7 +14258,7 @@ pub(super) mod tests {
         bridge
             .presentation_update_emitter(owner, &update)
             .expect("collision emitter update");
-        let update_call = bridge.take_staged_call().expect("collision update call");
+        let update_call = bridge.take_staged_call();
         bridge.commit(update_call);
         let retained = bridge
             .state
@@ -14564,10 +14287,7 @@ pub(super) mod tests {
         bridge
             .presentation_emit_particles(slice(signal), &update)
             .expect("collision particle emit");
-        let emit = bridge
-            .take_staged_call()
-            .expect("collision emit call")
-            .expect("appearance call");
+        let emit = bridge.take_staged_call();
         assert!(matches!(
             &emit.presentation()[0].ops[0],
             render_presentation::PresentationOp::Particle {
@@ -14575,6 +14295,7 @@ pub(super) mod tests {
                 ..
             } if matches!(descriptor.collision.as_ref().map(|collision| collision.volumes.as_slice()), Some([ParticleCollisionVolume::Aabb { .. }]))
         ));
+        bridge.commit(emit);
 
         let invalid = [NativePresentationParticleCollisionVolume {
             normal: NativeVec3::default(),
@@ -14586,9 +14307,7 @@ pub(super) mod tests {
             .expect_err("invalid collision update");
         bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().particle_diagnostic_count, 1);
-        let call = bridge
-            .take_staged_call()
-            .expect("a refusal does not fail the call");
+        let call = bridge.take_staged_call();
         bridge.commit(call);
         let retained = bridge
             .state
@@ -14608,35 +14327,24 @@ pub(super) mod tests {
 }
 
 #[cfg(test)]
-mod graphics_candidate_tests {
+mod graphics_call_tests {
     use super::*;
     #[test]
-    fn idle_call_shares_graphics_collections_and_mutation_detaches_once() {
+    fn a_call_owns_the_graphics_state_so_writes_never_copy_it() {
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-        bridge.begin_call();
-        assert!(Arc::ptr_eq(
-            &bridge.state.0,
-            &bridge.staged.as_ref().unwrap().state.0
-        ));
-        let call = bridge.take_staged_call().unwrap().unwrap();
-        assert!(Arc::ptr_eq(&bridge.state.0, &call.state.0));
-        bridge.commit(Some(call));
+        // The first call detaches the state from the idle placeholder once.
         bridge.begin_call();
         bridge.staged.as_mut().unwrap().state.next_appearance += 1;
-        assert!(!Arc::ptr_eq(
-            &bridge.state.0,
-            &bridge.staged.as_ref().unwrap().state.0
-        ));
-        assert_eq!(
-            bridge.state.next_appearance + 1,
-            bridge.staged.as_ref().unwrap().state.next_appearance
-        );
-        bridge.discard_call();
-        bridge.begin_call();
-        assert!(Arc::ptr_eq(
-            &bridge.state.0,
-            &bridge.staged.as_ref().unwrap().state.0
-        ));
+        bridge.end_call();
+        let state = Arc::as_ptr(&bridge.state.0);
+        for _ in 0..3 {
+            bridge.begin_call();
+            bridge.staged.as_mut().unwrap().state.next_appearance += 1;
+            assert_eq!(Arc::as_ptr(&bridge.staged.as_ref().unwrap().state.0), state);
+            bridge.end_call();
+        }
+        assert_eq!(Arc::as_ptr(&bridge.state.0), state);
+        assert_eq!(bridge.state.next_appearance, 5);
     }
 }

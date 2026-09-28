@@ -19,12 +19,11 @@ use crate::{
     ProductDevBrowserDiagnosticsResult, ProductDevBrowserHostState, ProductDevBundle,
     ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
-    ProductDevLogSeverity, ProductDevNextAction, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
-    ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
-    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS,
-    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
-    MAX_SUBSCRIBER_QUEUE_EVENTS,
+    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevRuntimeReceipt,
+    ProductDevTelemetrySnapshot, ProductDevTimelineCompletion, ProductDevUpdateAttribution,
+    ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS, MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS, MAX_SUBSCRIBER_QUEUE_EVENTS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -230,9 +229,7 @@ impl RunningProductDevHost {
         format!("http://{}", self.address)
     }
 
-    /// A terminal runtime recovery asks the foreground product-host process to
-    /// leave this incarnation. The outer `rusty dev` supervisor remains the
-    /// owner of replacement and observes the resulting child exit.
+    /// Whether the host has stopped serving.
     pub fn termination_requested(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
     }
@@ -785,7 +782,6 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
                         error.diagnostic(),
                         [],
                     );
-                    request_incarnation_replacement(&state, &error);
                 }
             }
             Err(error) => {
@@ -797,7 +793,6 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
                     error.diagnostic(),
                     [],
                 );
-                request_incarnation_replacement(&state, &error);
             }
         }
         let after = Instant::now();
@@ -806,28 +801,6 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             .filter(|deadline| *deadline > after)
             .unwrap_or_else(|| after + fixed_interval);
     }
-}
-
-fn request_incarnation_replacement<R: ProductDevRuntime>(
-    state: &HostState<R>,
-    error: &ProductDevRuntimeError,
-) {
-    if error.recovery().next_action() != ProductDevNextAction::ReplaceIncarnation {
-        return;
-    }
-    if state.shutdown.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    publish_host_diagnostic(
-        &state.diagnostics,
-        ProductDevLogSeverity::Error,
-        ProductDevLogDisposition::Terminal,
-        "DEV_HOST_REPLACE_INCARNATION",
-        "runtime recovery requires a fresh product-host process incarnation",
-        [("cause", error.code().to_owned())],
-    );
-    state.scheduler_wake.notify();
-    state.output_wake.notify();
 }
 
 fn disposition_for_runtime_error(error: &ProductDevRuntimeError) -> ProductDevLogDisposition {
@@ -1483,7 +1456,6 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                 let receipt = match state.runtime.finish_call(runtime, result) {
                     Ok(receipt) => receipt,
                     Err(error) => {
-                        request_incarnation_replacement(state, &error);
                         return Ok(debug_text_error(
                             500,
                             &format!("{}: {}", error.code(), error.diagnostic()),
@@ -2183,7 +2155,6 @@ where
                     )
                     .expect("runtime diagnostics are bounded"),
                 );
-                request_incarnation_replacement(state, &error);
                 let mutation = error.recovery().mutation();
                 return Ok((match error_result(error) {
                     Ok(result) => json_response(200, &result).with_runtime_mutation(mutation),
@@ -2374,7 +2345,6 @@ fn handle_sse<R: ProductDevRuntime>(
             return;
         }
         Err(error) => {
-            request_incarnation_replacement(&state, &error);
             let _ = write_response(
                 &mut stream,
                 HttpResponse::error(500, error.code(), error.diagnostic()),

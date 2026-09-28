@@ -526,9 +526,8 @@ internal static class Emit
             string owner = SafeType(handle).Replace("Handle", "", StringComparison.Ordinal);
             output.AppendLine($"public sealed class {owner} : IDisposable").AppendLine("{");
             string handleType = SafeType(handle);
-            output.AppendLine($"    public {owner}({handleType} handle, Action dispose) : this(handle, dispose, static () => false, static (commit, _) => commit()) {{ }}");
-            output.AppendLine($"    public {owner}({handleType} handle, Action dispose, Func<bool> isTerminal, Action<Action, Action> stageRelease) {{ Handle = handle; _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose)); _isTerminal = isTerminal ?? throw new ArgumentNullException(nameof(isTerminal)); _stageRelease = stageRelease ?? throw new ArgumentNullException(nameof(stageRelease)); }}");
-            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private readonly object _disposeGate = new();").AppendLine("    private readonly Func<bool> _isTerminal;").AppendLine("    private readonly Action<Action, Action> _stageRelease;").AppendLine("    private Action? _dispose;").AppendLine("    private bool _pending;").AppendLine("    public void Dispose() { lock (_disposeGate) { Action? dispose = _dispose; if (dispose is null || _pending) return; if (_isTerminal()) { _dispose = null; return; } dispose(); _pending = true; _stageRelease(CommitRelease, RollbackRelease); } }").AppendLine("    private void CommitRelease() { lock (_disposeGate) { _dispose = null; _pending = false; } }").AppendLine("    private void RollbackRelease() { lock (_disposeGate) { _pending = false; } }").AppendLine("}").AppendLine();
+            output.AppendLine($"    public {owner}({handleType} handle, Action dispose) {{ Handle = handle; _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose)); }}");
+            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private readonly object _disposeGate = new();").AppendLine("    private Action? _dispose;").AppendLine("    public void Dispose() { lock (_disposeGate) { if (_dispose is null) return; _dispose(); _dispose = null; } }").AppendLine("}").AppendLine();
         }
         output.AppendLine("public sealed class UiValue").AppendLine("{");
         output.AppendLine("    public UiValue(ReadOnlyMemory<StructuredValueNode> nodes, ReadOnlyMemory<uint> edges, uint root, ReadOnlyMemory<byte> utf8) { Nodes = nodes; Edges = edges; Root = root; Utf8 = utf8; }");
@@ -583,17 +582,13 @@ internal static class Emit
         foreach (Service service in model.Services)
         {
             Service[] foreignTables = ForeignNativeTableOwners(model, service).ToArray();
-            bool usesCommitAwareRelease = RequiresCommitAwareRelease(model, service);
             output.AppendLine($"internal unsafe sealed class {service.Name}ServiceImplementation : I{SafeServiceName(service.Name)}Service").AppendLine("{");
             output.AppendLine($"    private readonly Native{service.Name}Api _native;");
             foreach (Service owner in foreignTables) output.AppendLine($"    private readonly Native{owner.Name}Api {NativeTableField(service, owner)};");
-            if (usesCommitAwareRelease) output.AppendLine("    private readonly LeaseReleaseCoordinator _leaseReleases;");
             string parameters = string.Join(", ", new[] { $"Native{service.Name}Api native" }
-                .Concat(foreignTables.Select(owner => $"Native{owner.Name}Api {NativeTableParameter(owner)}"))
-                .Concat(usesCommitAwareRelease ? ["LeaseReleaseCoordinator leaseReleases"] : []));
+                .Concat(foreignTables.Select(owner => $"Native{owner.Name}Api {NativeTableParameter(owner)}")));
             string assignments = string.Join(" ", new[] { "_native = native;" }
-                .Concat(foreignTables.Select(owner => $"{NativeTableField(service, owner)} = {NativeTableParameter(owner)};"))
-                .Concat(usesCommitAwareRelease ? ["_leaseReleases = leaseReleases;"] : []));
+                .Concat(foreignTables.Select(owner => $"{NativeTableField(service, owner)} = {NativeTableParameter(owner)};")));
             output.AppendLine($"    internal {service.Name}ServiceImplementation({parameters}) {{ {assignments} }}");
             foreach ((string name, string callbackName) in service.Operations)
             {
@@ -770,9 +765,7 @@ internal static class Emit
             output.AppendLine($"            raw{Pascal(field.Name)} => new {owner}(NativeConversions.FromNative(raw{Pascal(field.Name)}), () =>");
             output.AppendLine("            {");
             EmitDestroy(output, model, service, destroy, $"raw{Pascal(field.Name)}", "                ");
-            output.AppendLine(UsesCommitAwareRelease(destroy.Owner)
-                ? $"            }}, _leaseReleases.IsTerminal, _leaseReleases.Stage){(index + 1 == fields.Length ? ");" : ",")}"
-                : $"            }}){(index + 1 == fields.Length ? ");" : ",")}");
+            output.AppendLine($"            }}){(index + 1 == fields.Length ? ");" : ",")}");
         }
     }
 
@@ -818,7 +811,7 @@ internal static class Emit
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
             output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () =>").AppendLine("        {");
             EmitDestroy(output, model, service, destroy, "ownedResult", "            ");
-            output.AppendLine(UsesCommitAwareRelease(destroy.Owner) ? "        }, _leaseReleases.IsTerminal, _leaseReleases.Stage);" : "        });");
+            output.AppendLine("        });");
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         output.AppendLine("    }").AppendLine();
@@ -901,20 +894,6 @@ internal static class Emit
         output.AppendLine("        }").AppendLine("    }").AppendLine();
         return output.ToString();
     }
-
-    // Only these families stage retained-destroy effects with EngineServiceSet
-    // today. Other generated owners retain the established immediate local
-    // disposal path so a later product-call rollback never revives a native
-    // handle that was already destroyed.
-    private static bool UsesCommitAwareRelease(Service service) => service.Name is "RenderOutput" or "Audio" or "Graphics" or "CameraView" or "Ui" or "Dynamics" or "Presentation" or "ImplicitSurfaces";
-
-    private static bool RequiresCommitAwareRelease(BindingModel model, Service service) =>
-        UsesCommitAwareRelease(service)
-        || service.Operations.Select(operation => model.Callbacks[operation.Callback])
-            .Select(ResultParameter)
-            .Where(result => result is not null && !BindingModel.IsLeaseResult(result, model.Structs))
-            .SelectMany(result => OwnedResultDestroyOperations(model, service, result!))
-            .Any(destroy => UsesCommitAwareRelease(destroy.Owner));
 
     private static string EmitBorrowedRequestMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature, string requestName, string result, string[] leading)
     {
@@ -1035,7 +1014,7 @@ internal static class Emit
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
             output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () =>").AppendLine("        {");
             EmitDestroy(output, model, service, destroy, "ownedResult", "            ");
-            output.AppendLine(UsesCommitAwareRelease(destroy.Owner) ? "        }, _leaseReleases.IsTerminal, _leaseReleases.Stage);" : "        });");
+            output.AppendLine("        });");
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         for (int index = closers.Count - 1; index >= 0; index--) output.AppendLine(closers[index]);

@@ -117,47 +117,11 @@ impl RuntimeVoxelScenePresentationBridge {
     }
 
     pub(crate) fn begin_call(&mut self) {
+        // The call owns the state until it finishes; nothing is copied.
         self.staged = Some(RuntimeVoxelScenePresentationCall {
-            state: self.state.clone(),
+            state: std::mem::take(&mut self.state),
             frames: Vec::new(),
         });
-    }
-
-    pub(crate) fn begin_attach_call(&mut self) {
-        self.begin_call();
-        let staged = self
-            .staged
-            .as_mut()
-            .expect("attach begins a voxel scene presentation stage");
-        // A fresh renderer has no publication revision, handles, materials,
-        // or mesh payloads. Reset only the detached clone so RefreshScene
-        // emits a complete baseline without changing the active runtime's
-        // retained projector history.
-        staged.state.projector = VoxelRenderProjector::new();
-    }
-
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
-    }
-
-    /// Reprojects the retained active presentation state from Spatial without
-    /// adopting any state staged by the failed product call. This is the one
-    /// narrow recovery path for an immediate voxel mutation that outlived a
-    /// later callback failure.
-    ///
-    /// The clone intentionally retains the active projector's publication
-    /// history so the frame can repair an already attached renderer. It is
-    /// never committed: recovery must not advance retained projector history
-    /// or make a later ordinary call observe a failed callback's staging.
-    pub(crate) fn recover_from_canonical(
-        &self,
-    ) -> Result<Vec<RenderFrameDiff>, CsharpEngineServicesError> {
-        let mut recovery = self.state.clone();
-        let frame = project_all_presentations(&mut recovery, &self.spatial)?;
-        Ok((!frame.ops.is_empty())
-            .then_some(frame)
-            .into_iter()
-            .collect())
     }
 
     pub(crate) fn take_staged_call(
@@ -1516,7 +1480,7 @@ mod tests {
             "base-only projection retains one material definition"
         );
         bridge.commit_call(staged);
-        let staged_appearance = appearance.take_staged_call().expect("staged material");
+        let staged_appearance = appearance.take_staged_call();
         appearance.commit(staged_appearance);
 
         appearance.begin_call();
@@ -1541,9 +1505,7 @@ mod tests {
             .expect("staged incremental refresh");
         assert!(staged.frames.iter().all(|frame| frame.ops.is_empty()));
         bridge.commit_call(staged);
-        let staged_appearance = appearance
-            .take_staged_call()
-            .expect("staged appearance refresh");
+        let staged_appearance = appearance.take_staged_call();
         appearance.commit(staged_appearance);
 
         appearance.begin_call();
@@ -1560,154 +1522,6 @@ mod tests {
                 .iter()
                 .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
         }));
-    }
-
-    #[test]
-    fn canonical_recovery_repairs_a_discarded_voxel_refresh_without_advancing_active_history() {
-        let mut spatial = RuntimeSpatialBridge::new();
-        let session = session_with_voxel(&mut spatial);
-        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
-        let mut appearance =
-            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-
-        appearance.begin_call();
-        bridge.begin_call();
-        let material = material(&mut appearance);
-        let api = super::api(&mut bridge, &mut appearance);
-        let bindings = [NativeVoxelSceneMaterialBinding {
-            material_slot: 1,
-            material,
-        }];
-        let mut presentation = NativeVoxelScenePresentationHandle::default();
-        assert_eq!(
-            unsafe {
-                (api.project_scene)(
-                    api.context,
-                    &NativeProjectVoxelSceneRequest {
-                        session,
-                        materials: bindings.as_ptr(),
-                        materials_len: bindings.len(),
-                    },
-                    &mut presentation,
-                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                )
-            },
-            ABI_OK
-        );
-        let initial = bridge.take_staged_call().expect("initial projection");
-        bridge.commit_call(initial);
-        let initial_appearance = appearance.take_staged_call().expect("initial material");
-        appearance.commit(initial_appearance);
-        assert!(
-            bridge
-                .recover_from_canonical()
-                .expect("matching canonical scene")
-                .is_empty(),
-            "a recovery with no retained/canonical drift must not emit a frame"
-        );
-
-        // The accepted mutation changes canonical Spatial immediately. The
-        // following RefreshScene is deliberately left staged, as it would be
-        // when later C# work in the same callback fails.
-        let clear = [NativeVoxelEdit {
-            state: 0,
-            kind: NativeVoxelEditKind::Clear,
-            address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
-            material_slot: 0,
-        }];
-        let mut receipt = NativeVoxelEditReceipt::default();
-        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-        let voxel_api = crate::voxel::api(&mut spatial);
-        assert_eq!(
-            unsafe {
-                (voxel_api.apply_edits)(
-                    voxel_api.context,
-                    &NativeVoxelEditTransaction {
-                        session,
-                        expected_revision: 1,
-                        edits: clear.as_ptr(),
-                        edits_len: clear.len(),
-                    },
-                    &mut receipt,
-                    &mut error,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(receipt.accepted_revision, 2);
-        assert_eq!(receipt.solid_voxel_count, 0);
-        let before_refresh_failure = bridge
-            .recover_from_canonical()
-            .expect("canonical recovery before RefreshScene");
-        assert!(before_refresh_failure[0]
-            .ops
-            .iter()
-            .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
-
-        appearance.begin_call();
-        bridge.begin_call();
-        let api = super::api(&mut bridge, &mut appearance);
-        let mut readout = NativeVoxelScenePresentationReadout::default();
-        assert_eq!(
-            unsafe {
-                (api.refresh_scene)(
-                    api.context,
-                    presentation,
-                    &mut readout,
-                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(readout.source_revision, receipt.accepted_revision);
-        let failed_stage = bridge.take_staged_call().expect("staged refresh");
-        assert!(failed_stage.frames.iter().any(|frame| {
-            frame
-                .ops
-                .iter()
-                .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
-        }));
-        bridge.discard_call();
-        appearance.discard_call();
-
-        let recovered = bridge
-            .recover_from_canonical()
-            .expect("canonical voxel recovery");
-        assert_eq!(recovered.len(), 1);
-        assert!(recovered[0]
-            .ops
-            .iter()
-            .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
-        assert_eq!(
-            bridge
-                .recover_from_canonical()
-                .expect("repeated canonical recovery"),
-            before_refresh_failure,
-            "recovery is detached and must not advance the active projector"
-        );
-
-        // No second canonical change occurred, but the active projector still
-        // has the pre-failure history. An ordinary refresh therefore emits the
-        // same repair rather than silently adopting recovery's detached state.
-        appearance.begin_call();
-        bridge.begin_call();
-        let api = super::api(&mut bridge, &mut appearance);
-        assert_eq!(
-            unsafe {
-                (api.refresh_scene)(
-                    api.context,
-                    presentation,
-                    &mut readout,
-                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                )
-            },
-            ABI_OK
-        );
-        let ordinary = bridge.take_staged_call().expect("ordinary repair refresh");
-        assert!(ordinary.frames[0]
-            .ops
-            .iter()
-            .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
     }
 
     #[test]
@@ -2216,7 +2030,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(payload_slots, BTreeSet::from([0, 1]));
         bridge.commit_call(staged);
-        let staged_appearance = appearance.take_staged_call().expect("staged materials");
+        let staged_appearance = appearance.take_staged_call();
         appearance.commit(staged_appearance);
 
         let first_root = bridge
@@ -2246,7 +2060,7 @@ mod tests {
         assert!(destroyed.contains(&first_root));
         assert!(!destroyed.contains(&second_root));
         bridge.commit_call(staged);
-        let staged_appearance = appearance.take_staged_call().expect("appearance cleanup");
+        let staged_appearance = appearance.take_staged_call();
         appearance.commit(staged_appearance);
 
         appearance.begin_call();
@@ -2267,7 +2081,7 @@ mod tests {
         let staged = bridge.take_staged_call().expect("survivor refresh");
         assert!(staged.frames[0].ops.is_empty());
         bridge.commit_call(staged);
-        let staged_appearance = appearance.take_staged_call().expect("appearance refresh");
+        let staged_appearance = appearance.take_staged_call();
         appearance.commit(staged_appearance);
 
         appearance.begin_call();
@@ -2286,168 +2100,6 @@ mod tests {
         let error = allocate_renderer_slots([(17, 17)], 0..=u16::MAX).unwrap_err();
         assert!(error.detail().contains("17"));
         assert!(error.detail().contains("capacity 65536"));
-    }
-
-    #[test]
-    fn fresh_attachment_rebases_voxel_projection_without_mutating_active_history() {
-        let mut spatial = RuntimeSpatialBridge::new();
-        let session = session_with_voxel(&mut spatial);
-        let second_session = session_with_voxel(&mut spatial);
-        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
-        let mut appearance =
-            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-
-        appearance.begin_call();
-        bridge.begin_call();
-        let material = material(&mut appearance);
-        let second_material = material_with_color(
-            &mut appearance,
-            NativeColor {
-                r: 0.8,
-                g: 0.2,
-                b: 0.1,
-                a: 1.0,
-            },
-        );
-        let api = super::api(&mut bridge, &mut appearance);
-        let bindings = [NativeVoxelSceneMaterialBinding {
-            material_slot: 1,
-            material,
-        }];
-        let mut presentation = NativeVoxelScenePresentationHandle::default();
-        let mut second_presentation = NativeVoxelScenePresentationHandle::default();
-        let top_override = [NativeVoxelSceneFaceMaterialBinding {
-            variant: 0,
-            material_slot: 1,
-            face: NativeSpatialFace::PosY,
-            material: second_material,
-        }];
-        assert_eq!(
-            unsafe {
-                (api.project_scene_directional)(
-                    api.context,
-                    &NativeProjectVoxelSceneDirectionalRequest {
-                        session,
-                        materials: bindings.as_ptr(),
-                        materials_len: bindings.len(),
-                        face_materials: top_override.as_ptr(),
-                        face_materials_len: top_override.len(),
-                    },
-                    &mut presentation,
-                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                )
-            },
-            ABI_OK
-        );
-        let second_bindings = [NativeVoxelSceneMaterialBinding {
-            material_slot: 1,
-            material,
-        }];
-        assert_eq!(
-            unsafe {
-                (api.project_scene)(
-                    api.context,
-                    &NativeProjectVoxelSceneRequest {
-                        session: second_session,
-                        materials: second_bindings.as_ptr(),
-                        materials_len: second_bindings.len(),
-                    },
-                    &mut second_presentation,
-                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                )
-            },
-            ABI_OK
-        );
-        let initial_voxel = bridge.take_staged_call().expect("initial voxel projection");
-        bridge.commit_call(initial_voxel);
-        let initial_appearance = appearance
-            .take_staged_call()
-            .expect("initial material projection");
-        appearance.commit(initial_appearance);
-
-        let attach_frame = |bridge: &mut RuntimeVoxelScenePresentationBridge,
-                            appearance: &mut RuntimeAppearanceBridge| {
-            appearance.begin_attach_call();
-            bridge.begin_attach_call();
-            let api = super::api(bridge, appearance);
-            let mut readout = NativeVoxelScenePresentationReadout::default();
-            assert_eq!(
-                unsafe {
-                    (api.refresh_scene)(
-                        api.context,
-                        presentation,
-                        &mut readout,
-                        &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                    )
-                },
-                ABI_OK
-            );
-            assert!(readout.present);
-            let staged = bridge.take_staged_call().expect("detached voxel baseline");
-            assert_eq!(staged.frames.len(), 1);
-            let frame = staged.frames.into_iter().next().expect("one voxel frame");
-            assert!(frame
-                .ops
-                .iter()
-                .any(|operation| matches!(operation, RenderDiff::DefineMaterial { .. })));
-            assert!(frame
-                .ops
-                .iter()
-                .any(|operation| matches!(operation, RenderDiff::Create { .. })));
-            assert!(frame
-                .ops
-                .iter()
-                .any(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. })));
-            assert_eq!(
-                frame
-                    .ops
-                    .iter()
-                    .filter(|operation| matches!(operation, RenderDiff::Create { .. }))
-                    .count(),
-                4,
-                "the detached baseline contains both retained presentations"
-            );
-            assert_eq!(
-                frame
-                    .ops
-                    .iter()
-                    .filter(|operation| matches!(operation, RenderDiff::DefineMaterial { .. }))
-                    .count(),
-                3,
-                "the detached baseline reproduces the retained directional override"
-            );
-            bridge.discard_call();
-            appearance.discard_call();
-            frame
-        };
-
-        let first_attach = attach_frame(&mut bridge, &mut appearance);
-
-        appearance.begin_call();
-        bridge.begin_call();
-        let api = super::api(&mut bridge, &mut appearance);
-        let mut readout = NativeVoxelScenePresentationReadout::default();
-        assert_eq!(
-            unsafe {
-                (api.refresh_scene)(
-                    api.context,
-                    presentation,
-                    &mut readout,
-                    &mut std::mem::zeroed::<NativeOperationErrorReceipt>(),
-                )
-            },
-            ABI_OK
-        );
-        let active = bridge
-            .take_staged_call()
-            .expect("active incremental refresh");
-        assert_eq!(active.frames.len(), 1);
-        assert!(active.frames[0].ops.is_empty());
-        bridge.discard_call();
-        appearance.discard_call();
-
-        let second_attach = attach_frame(&mut bridge, &mut appearance);
-        assert_eq!(second_attach, first_attach);
     }
 
     #[test]
@@ -2633,7 +2285,7 @@ mod tests {
             _ => panic!("texture descriptor did not retain a resource payload"),
         };
         assert!(payload_resource.starts_with("texture-resource/"));
-        let staged_appearance = appearance.take_staged_call().expect("staged appearance");
+        let staged_appearance = appearance.take_staged_call();
         appearance.commit(staged_appearance);
         let selected = appearance
             .state

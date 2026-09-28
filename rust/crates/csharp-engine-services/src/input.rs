@@ -31,11 +31,6 @@ impl RuntimeInputBridge {
         self.staged = None;
     }
 
-    pub(crate) fn discard_call(&mut self) {
-        self.accepts_replacement = false;
-        self.staged = None;
-    }
-
     pub(crate) fn take_call(&mut self) -> Option<CompiledInputMappings> {
         self.accepts_replacement = false;
         self.staged.take()

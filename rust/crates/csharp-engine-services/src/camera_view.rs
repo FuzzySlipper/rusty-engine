@@ -15,8 +15,9 @@ use crate::{
     CsharpEngineServicesError,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum CameraBackground {
+    #[default]
     Default,
     Sky(u64),
     Blend {
@@ -27,7 +28,7 @@ pub(crate) enum CameraBackground {
     Color([f32; 4]),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct CameraState {
     cameras: BTreeMap<u64, CameraEntry>,
     targets: BTreeMap<u64, CameraTargetState>,
@@ -90,25 +91,12 @@ impl RuntimeCameraViewBridge {
     }
 
     pub(crate) fn begin_call(&mut self) {
+        // The call owns the state until it finishes; nothing is copied.
         self.staged = Some(RuntimeCameraViewCall {
-            state: self.state.clone(),
+            state: std::mem::take(&mut self.state),
             composition: None,
             background: None,
         });
-    }
-
-    pub(crate) fn begin_attach_call(&mut self) -> Result<(), CsharpEngineServicesError> {
-        self.begin_call();
-        let staged = self
-            .staged
-            .as_mut()
-            .expect("attach begins a camera/view stage");
-        staged.background = Some(staged.state.background);
-        stage_composition(staged)
-    }
-
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
     }
 
     pub(crate) fn take_staged_call(
@@ -801,7 +789,7 @@ fn validate_target_descriptor(
 
 pub(crate) fn background_frame(
     change: Option<CameraBackground>,
-    appearance: Option<&RuntimeAppearanceCall>,
+    appearance: &RuntimeAppearanceCall,
 ) -> Result<Option<RenderFrameDiff>, CsharpEngineServicesError> {
     let Some(change) = change else {
         return Ok(None);
@@ -809,14 +797,7 @@ pub(crate) fn background_frame(
     let mut operations = Vec::with_capacity(2);
     match change {
         CameraBackground::Sky(handle) => {
-            let texture = appearance
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_SKY_TEXTURE",
-                        "sky background needs an appearance call that selected its texture",
-                    )
-                })?
-                .texture_descriptor(handle)?;
+            let texture = appearance.texture_descriptor(handle)?;
             let identity = texture.id.clone();
             operations.push(RenderDiff::DefineTexture { texture });
             operations.push(RenderDiff::SetSkyBackground {
@@ -831,12 +812,6 @@ pub(crate) fn background_frame(
             second,
             amount,
         } => {
-            let appearance = appearance.ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_SKY_TEXTURE",
-                    "sky blend requires retained textures",
-                )
-            })?;
             let first = appearance.texture_descriptor(first)?;
             let second = appearance.texture_descriptor(second)?;
             let background = SkyBackgroundDescriptor {
@@ -1534,150 +1509,6 @@ mod tests {
     }
 
     #[test]
-    fn retained_multi_view_target_composition_reconstructs_and_reconciles_owners() {
-        let mut bridge = RuntimeCameraViewBridge::new();
-        bridge.begin_call();
-        let front = bridge
-            .create(camera_descriptor(NativeCameraViewport {
-                x: 0.0,
-                y: 0.0,
-                width: 0.5,
-                height: 1.0,
-            }))
-            .expect("front camera");
-        let rear = bridge
-            .create(camera_descriptor(NativeCameraViewport {
-                x: 0.5,
-                y: 0.0,
-                width: 0.5,
-                height: 1.0,
-            }))
-            .expect("rear camera");
-        let target = bridge
-            .create_target(target_descriptor())
-            .expect("offscreen target");
-        let views = [
-            NativeCameraCompositionView {
-                camera: front,
-                target: NativeCameraTargetReference::default(),
-                viewport: NativeCameraViewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.5,
-                    height: 1.0,
-                },
-                order: 0,
-            },
-            NativeCameraCompositionView {
-                camera: rear,
-                target: NativeCameraTargetReference {
-                    value: target.value,
-                },
-                viewport: NativeCameraViewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-                order: 1,
-            },
-        ];
-        let presentations = [NativeCameraCompositionPresentation {
-            source_target: target,
-            destination: NativeCameraViewport {
-                x: 0.7,
-                y: 0.7,
-                width: 0.25,
-                height: 0.25,
-            },
-            order: 2,
-        }];
-        unsafe {
-            bridge
-                .set_composition(&NativeCameraCompositionRequest {
-                    views: views.as_ptr(),
-                    views_len: views.len(),
-                    presentations: presentations.as_ptr(),
-                    presentations_len: presentations.len(),
-                })
-                .expect("split and inset composition");
-        }
-        let staged = bridge.take_staged_call().expect("staged composition");
-        let composition = staged.composition.clone().expect("composition output");
-        assert_eq!(composition.cameras.len(), 2);
-        assert_eq!(composition.targets.len(), 1);
-        assert_eq!(composition.views.len(), 2);
-        assert_eq!(composition.presentations.len(), 1);
-        assert_eq!(composition.targets[0].revision, 1);
-        assert!(serde_json::to_string(&composition)
-            .expect("serializable composition")
-            .contains("csharp-target-1"));
-        bridge.commit(staged);
-
-        bridge.begin_attach_call().expect("fresh baseline");
-        let attach = bridge.take_staged_call().expect("attach output");
-        assert_eq!(attach.composition.as_ref(), Some(&composition));
-        bridge.commit(attach);
-
-        bridge.begin_call();
-        let mut updated = target_descriptor();
-        updated.sampling = NativeCameraTargetSampling::Nearest;
-        bridge
-            .update_target(NativeCameraTargetUpdateRequest {
-                target,
-                descriptor: updated,
-            })
-            .expect("target update");
-        let update = bridge.take_staged_call().expect("updated composition");
-        assert_eq!(update.composition.as_ref().unwrap().targets[0].revision, 2);
-        bridge.commit(update);
-
-        bridge.begin_call();
-        let replacement_camera = bridge
-            .replace(NativeCameraReplaceRequest {
-                camera: rear,
-                replacement: camera_descriptor(NativeCameraViewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
-                }),
-            })
-            .expect("camera replacement");
-        let replacement_target = bridge
-            .replace_target(NativeCameraTargetReplaceRequest {
-                target,
-                replacement: target_descriptor(),
-            })
-            .expect("target replacement");
-        let replacement = bridge.take_staged_call().expect("replacement composition");
-        let composition = replacement.composition.as_ref().unwrap();
-        assert!(composition
-            .views
-            .iter()
-            .any(|view| view.camera_id == format!("csharp-camera-{}", replacement_camera.value)));
-        assert_eq!(
-            composition.targets[0].id,
-            format!("csharp-target-{}", replacement_target.value)
-        );
-        bridge.commit(replacement);
-
-        bridge.begin_call();
-        bridge
-            .destroy_target(replacement_target)
-            .expect("target destroys dependent composition facts");
-        let removal = bridge.take_staged_call().expect("target removal");
-        let composition = removal.composition.as_ref().unwrap();
-        assert_eq!(composition.targets.len(), 0);
-        assert_eq!(composition.presentations.len(), 0);
-        assert_eq!(composition.views.len(), 1);
-        assert_eq!(
-            composition.views[0].camera_id,
-            format!("csharp-camera-{}", front.value)
-        );
-    }
-
-    #[test]
     fn invalid_composition_is_fail_atomic_and_active_camera_uses_it_as_convenience() {
         let mut bridge = RuntimeCameraViewBridge::new();
         bridge.begin_call();
@@ -1780,6 +1611,150 @@ mod tests {
         assert_eq!(
             bridge.staged.as_ref().unwrap().state.views[0].camera,
             camera
+        );
+    }
+
+    #[test]
+    fn retained_multi_view_target_composition_rebuilds_and_reconciles_owners() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        bridge.begin_call();
+        let front = bridge
+            .create(camera_descriptor(NativeCameraViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            }))
+            .expect("front camera");
+        let rear = bridge
+            .create(camera_descriptor(NativeCameraViewport {
+                x: 0.5,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            }))
+            .expect("rear camera");
+        let target = bridge
+            .create_target(target_descriptor())
+            .expect("offscreen target");
+        let views = [
+            NativeCameraCompositionView {
+                camera: front,
+                target: NativeCameraTargetReference::default(),
+                viewport: NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.5,
+                    height: 1.0,
+                },
+                order: 0,
+            },
+            NativeCameraCompositionView {
+                camera: rear,
+                target: NativeCameraTargetReference {
+                    value: target.value,
+                },
+                viewport: NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                order: 1,
+            },
+        ];
+        let presentations = [NativeCameraCompositionPresentation {
+            source_target: target,
+            destination: NativeCameraViewport {
+                x: 0.7,
+                y: 0.7,
+                width: 0.25,
+                height: 0.25,
+            },
+            order: 2,
+        }];
+        unsafe {
+            bridge
+                .set_composition(&NativeCameraCompositionRequest {
+                    views: views.as_ptr(),
+                    views_len: views.len(),
+                    presentations: presentations.as_ptr(),
+                    presentations_len: presentations.len(),
+                })
+                .expect("split and inset composition");
+        }
+        let staged = bridge.take_staged_call().expect("staged composition");
+        let composition = staged.composition.clone().expect("composition output");
+        assert_eq!(composition.cameras.len(), 2);
+        assert_eq!(composition.targets.len(), 1);
+        assert_eq!(composition.views.len(), 2);
+        assert_eq!(composition.presentations.len(), 1);
+        assert_eq!(composition.targets[0].revision, 1);
+        assert!(serde_json::to_string(&composition)
+            .expect("serializable composition")
+            .contains("csharp-target-1"));
+        bridge.commit(staged);
+
+        assert_eq!(
+            bridge.snapshot_composition().expect("fresh baseline"),
+            composition
+        );
+
+        bridge.begin_call();
+        let mut updated = target_descriptor();
+        updated.sampling = NativeCameraTargetSampling::Nearest;
+        bridge
+            .update_target(NativeCameraTargetUpdateRequest {
+                target,
+                descriptor: updated,
+            })
+            .expect("target update");
+        let update = bridge.take_staged_call().expect("updated composition");
+        assert_eq!(update.composition.as_ref().unwrap().targets[0].revision, 2);
+        bridge.commit(update);
+
+        bridge.begin_call();
+        let replacement_camera = bridge
+            .replace(NativeCameraReplaceRequest {
+                camera: rear,
+                replacement: camera_descriptor(NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                }),
+            })
+            .expect("camera replacement");
+        let replacement_target = bridge
+            .replace_target(NativeCameraTargetReplaceRequest {
+                target,
+                replacement: target_descriptor(),
+            })
+            .expect("target replacement");
+        let replacement = bridge.take_staged_call().expect("replacement composition");
+        let composition = replacement.composition.as_ref().unwrap();
+        assert!(composition
+            .views
+            .iter()
+            .any(|view| view.camera_id == format!("csharp-camera-{}", replacement_camera.value)));
+        assert_eq!(
+            composition.targets[0].id,
+            format!("csharp-target-{}", replacement_target.value)
+        );
+        bridge.commit(replacement);
+
+        bridge.begin_call();
+        bridge
+            .destroy_target(replacement_target)
+            .expect("target destroys dependent composition facts");
+        let removal = bridge.take_staged_call().expect("target removal");
+        let composition = removal.composition.as_ref().unwrap();
+        assert_eq!(composition.targets.len(), 0);
+        assert_eq!(composition.presentations.len(), 0);
+        assert_eq!(composition.views.len(), 1);
+        assert_eq!(
+            composition.views[0].camera_id,
+            format!("csharp-camera-{}", front.value)
         );
     }
 }

@@ -1563,7 +1563,7 @@ fn partial_fresh_baseline_reconnects_without_a_cursor_or_second_start() {
 }
 
 #[test]
-fn fresh_sse_connect_replacement_error_requests_host_termination() {
+fn fresh_sse_connect_runtime_error_is_reported_and_the_host_keeps_serving() {
     let host = start_reconnect_with_failure(
         Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicUsize::new(0)),
@@ -1575,7 +1575,10 @@ fn fresh_sse_connect_replacement_error_requests_host_termination() {
         "GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
     );
     assert!(response.starts_with("HTTP/1.1 500"), "{response}");
-    assert!(host.termination_requested());
+    assert!(
+        !host.termination_requested(),
+        "a runtime error is reported; it never ends the host"
+    );
     host.shutdown().unwrap();
 }
 
@@ -1731,8 +1734,8 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
     invalid_utf8_request.push(0xff);
     let invalid_utf8 = request_bytes(&origin, &invalid_utf8_request);
     assert!(invalid_utf8.starts_with("HTTP/1.1 400 Bad Request\r\n"));
-    // Pre-entry rejection and semantic failure leave this owner usable. A
-    // callback/runtime fault with unknown mutation must terminate it instead.
+    // Pre-entry rejection, semantic failure and a runtime fault all leave this
+    // owner serving.
     let runtime_body = "fixture.runtime";
     let runtime = request(
         &origin,
@@ -1740,7 +1743,10 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
     );
     assert!(runtime.starts_with("HTTP/1.1 500 Internal Server Error\r\n"));
     assert!(runtime.contains("FIXTURE_DEBUG_RUNTIME"));
-    assert!(host.termination_requested());
+    assert!(
+        !host.termination_requested(),
+        "a runtime error is reported; it never ends the host"
+    );
     host.shutdown().unwrap();
 }
 
@@ -1792,7 +1798,10 @@ fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
     );
     assert!(rejected.contains("FIXTURE_CALLBACK_UNKNOWN"));
     assert!(rejected.contains("\"mutation\":\"unknown\""));
-    assert!(host.termination_requested());
+    assert!(
+        !host.termination_requested(),
+        "a runtime error is reported; it never ends the host"
+    );
     host.shutdown().unwrap();
 }
 

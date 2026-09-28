@@ -1,7 +1,7 @@
 //! Concrete Engine capability adapters behind the trusted NativeAOT ABI.
 //!
-//! This crate owns the callback contexts and their staged Engine state. The
-//! runtime crate only composes this service family with a loaded product.
+//! This crate owns the callback contexts and their Engine state. The runtime
+//! crate only composes this service family with a loaded product.
 
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
@@ -19,7 +19,7 @@ use crate::{
     persistence::RuntimePersistenceBridge,
     rng::RuntimeRngBridge,
     spatial::RuntimeSpatialBridge,
-    ui::{RuntimeUiBridge, RuntimeUiCall},
+    ui::RuntimeUiBridge,
     video::{RuntimeVideoBridge, RuntimeVideoCall},
     voxel_content::RuntimeVoxelContentBridge,
     voxel_scene_presentation::RuntimeVoxelScenePresentationBridge,
@@ -270,9 +270,11 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 
 /// The concrete callback family retained while a trusted C# product is live.
 ///
-/// The runtime drives call boundaries; this owner stages and commits only
-/// Engine-facing effects created through the generated function tables.
+/// The runtime drives call boundaries. Services change their state directly
+/// during a call; there is no rollback. A call only collects the renderer work
+/// the product produced.
 pub struct EngineServiceSet {
+    in_call: bool,
     call_elapsed_seconds: f64,
     presentation_world: render_presentation::PresentationWorld,
     input: crate::input::RuntimeInputBridge,
@@ -296,23 +298,29 @@ pub struct EngineServiceSet {
     ui: RuntimeUiBridge,
 }
 
+/// A finished product call: its renderer work and any input mapping
+/// replacement it selected. Every service already holds the call's changes.
 pub struct CsharpEngineCall {
     input_mapping_replacement: Option<runtime_input::CompiledInputMappings>,
+    output: CsharpEngineCallOutput,
+}
+
+/// Each service's state for the duration of one call. Services own their
+/// state again when the call finishes, whether or not the call succeeded.
+struct ServiceCalls {
     implicit: crate::implicit_surfaces::RuntimeImplicitCall,
     presentation_world: render_presentation::PresentationWorld,
-    output: CsharpEngineCallOutput,
-    appearance: Option<RuntimeAppearanceCall>,
+    appearance: RuntimeAppearanceCall,
     audio: RuntimeAudioCall,
     video: RuntimeVideoCall,
     render_output: crate::render_output::RuntimeRenderOutputCall,
     camera_view: crate::camera_view::RuntimeCameraViewCall,
-    sky_frame: Option<render_model::RenderFrameDiff>,
-    ui: RuntimeUiCall,
+    ui: Vec<RuntimeUiProjectionEnvelope>,
     voxel_content: crate::voxel_content::RuntimeVoxelContentCall,
     voxel_scene_presentation: crate::voxel_scene_presentation::RuntimeVoxelScenePresentationCall,
 }
 
-/// Staged Engine observations from one successful product call.
+/// Engine observations from one product call.
 #[derive(Default)]
 pub struct CsharpEngineCallOutput {
     pub render_output: Option<Vec<render_host_contracts::RenderOutputJob>>,
@@ -393,6 +401,7 @@ impl EngineServiceSet {
         let mut voxel_content = RuntimeVoxelContentBridge::new();
         voxel_content.bind_content(&content);
         Ok(Self {
+            in_call: false,
             call_elapsed_seconds: 0.0,
             presentation_world: render_presentation::PresentationWorld::default(),
             input: crate::input::RuntimeInputBridge::new(direct_intents),
@@ -458,45 +467,17 @@ impl EngineServiceSet {
     }
 
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
-        self.call_elapsed_seconds = 0.0;
-        self.appearance.begin_call();
-        self.begin_other_services(ui_binding, false);
+        self.begin_services(ui_binding, None, false);
     }
 
     /// Product construction is the only non-update callback that can select a
     /// complete initial physical map before the runtime input lane exists.
     pub fn begin_create_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
-        self.call_elapsed_seconds = 0.0;
-        self.appearance.begin_call();
-        self.begin_other_services(ui_binding, true);
+        self.begin_services(ui_binding, None, true);
     }
 
     pub fn begin_lifecycle_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
-        self.call_elapsed_seconds = 0.0;
-        self.appearance.begin_call();
-        self.begin_other_services(ui_binding, true);
-    }
-
-    /// Begins a detached browser-attachment projection. Renderer-facing
-    /// projectors rebase for a fresh consumer, while commit is deliberately
-    /// left to the caller so active runtime service state is not replaced.
-    pub fn begin_attach_call(
-        &mut self,
-        ui_binding: RuntimeUiRuntimeBinding,
-    ) -> Result<(), CsharpEngineServicesError> {
-        self.call_elapsed_seconds = 0.0;
-        self.input.begin_call(false);
-        self.appearance.begin_attach_call();
-        self.audio.begin_call();
-        self.video.begin_call();
-        self.render_output.begin_call();
-        self.camera_view.begin_attach_call()?;
-        self.dynamics.begin_call();
-        self.ui.begin_call(ui_binding);
-        self.voxel_content.begin_attach_call();
-        self.voxel_scene_presentation.begin_attach_call();
-        self.implicit.begin_call();
-        Ok(())
+        self.begin_services(ui_binding, None, true);
     }
 
     pub fn begin_update_call(
@@ -506,13 +487,7 @@ impl EngineServiceSet {
     ) {
         self.spatial.reset_update_attribution();
         self.voxel_scene_presentation.reset_update_attribution();
-        self.call_elapsed_seconds =
-            facts.fixed_delta_seconds * f64::from(facts.admitted_step_count);
-        self.appearance.begin_update_call(facts);
-        self.begin_other_services(ui_binding, true);
-        self.audio.begin_update_call(self.call_elapsed_seconds);
-        self.video.begin_call();
-        self.render_output.begin_call();
+        self.begin_services(ui_binding, Some(facts), true);
     }
 
     /// Returns every committed renderer stream continuation point. Detached
@@ -550,17 +525,32 @@ impl EngineServiceSet {
         }
     }
 
-    fn begin_other_services(
+    fn begin_services(
         &mut self,
         ui_binding: RuntimeUiRuntimeBinding,
+        update: Option<NativeProductUpdateFacts>,
         accepts_input_replacement: bool,
     ) {
+        if self.in_call {
+            // A call that was never finished keeps its changes like any other.
+            let _ = self.finish_call();
+        }
+        self.in_call = true;
+        self.call_elapsed_seconds = update.map_or(0.0, |facts| {
+            facts.fixed_delta_seconds * f64::from(facts.admitted_step_count)
+        });
+        match update {
+            Some(facts) => self.appearance.begin_update_call(facts),
+            None => self.appearance.begin_call(),
+        }
         self.input.begin_call(accepts_input_replacement);
         self.audio.begin_call();
+        if update.is_some() {
+            self.audio.advance_elapsed(self.call_elapsed_seconds);
+        }
         self.video.begin_call();
         self.render_output.begin_call();
         self.camera_view.begin_call();
-        self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
         self.voxel_scene_presentation.begin_call();
@@ -631,65 +621,72 @@ impl EngineServiceSet {
         self.appearance.ingest_ghost_plate_realization(true, []);
     }
 
-    pub fn discard_call(&mut self) {
-        self.input.discard_call();
-        self.appearance.discard_call();
-        self.audio.discard_call();
-        self.video.discard_call();
-        self.render_output.discard_call();
-        self.camera_view.discard_call();
-        self.dynamics.discard_call();
-        self.ui.discard_call();
-        self.voxel_content.discard_call();
-        self.voxel_scene_presentation.discard_call();
-        self.implicit.discard_call();
+    /// Ends a product call, successful or not. Every service keeps what the
+    /// call did: there is no rollback. Returns the call's renderer work,
+    /// applied to the presentation world. On an error the services still own
+    /// the call's changes; only the remaining renderer work is lost, and the
+    /// caller rebaselines renderers.
+    pub fn finish_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
+        if !std::mem::take(&mut self.in_call) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRODUCT_CALL",
+                "no product call is open",
+            ));
+        }
+        let input_mapping_replacement = self.input.take_call();
+        let mut calls = ServiceCalls {
+            implicit: self.implicit.take_call()?,
+            presentation_world: std::mem::take(&mut self.presentation_world),
+            appearance: self.appearance.take_staged_call(),
+            audio: self.audio.take_staged_call()?,
+            video: self.video.take_staged_call()?,
+            render_output: self.render_output.take_call()?,
+            camera_view: self.camera_view.take_staged_call()?,
+            ui: self.ui.finish_call(),
+            voxel_content: self.voxel_content.take_staged_call()?,
+            voxel_scene_presentation: self.voxel_scene_presentation.take_staged_call()?,
+        };
+        let output = self.settle_call(&mut calls);
+        self.presentation_world = calls.presentation_world;
+        self.appearance.commit(calls.appearance);
+        self.implicit.commit_call(calls.implicit);
+        self.audio.commit(calls.audio);
+        self.video.commit(calls.video);
+        self.render_output.commit(calls.render_output);
+        self.camera_view.commit(calls.camera_view);
+        self.voxel_content.commit_call(calls.voxel_content);
+        self.voxel_scene_presentation
+            .commit_call(calls.voxel_scene_presentation);
+        Ok(CsharpEngineCall {
+            input_mapping_replacement,
+            output: output?,
+        })
     }
 
-    pub fn take_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
-        let input_mapping_replacement = self.input.take_call();
-        let appearance = self.appearance.take_staged_call()?;
-        let audio = self.audio.take_staged_call()?;
-        let video = self.video.take_staged_call()?;
-        let render_output = self.render_output.take_call()?;
-        let camera_view = self.camera_view.take_staged_call()?;
-        self.dynamics.take_staged_call()?;
-        // Sky resources are owned and admitted by Appearance. Resolve the
-        // cross-family handle while both staged states are available, before
-        // either state can be committed or turned into host output.
+    fn settle_call(
+        &mut self,
+        calls: &mut ServiceCalls,
+    ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
+        if let Some(error) = calls.appearance.release_error.take() {
+            return Err(error);
+        }
+        // Sky resources are owned and admitted by Appearance.
         let sky_frame =
-            crate::camera_view::background_frame(camera_view.background, appearance.as_ref())?;
-        let ui = self.ui.take_staged_call()?;
-        let voxel_content = self.voxel_content.take_staged_call()?;
-        let voxel_scene_presentation = self.voxel_scene_presentation.take_staged_call()?;
-        let implicit = self.implicit.take_call()?;
-        let mut call = CsharpEngineCall {
-            input_mapping_replacement,
-            implicit,
-            presentation_world: self.presentation_world.clone(),
-            output: CsharpEngineCallOutput::default(),
-            appearance,
-            audio,
-            video,
-            render_output,
-            camera_view,
-            sky_frame,
-            ui,
-            voxel_content,
-            voxel_scene_presentation,
-        };
-        call.presentation_world
+            crate::camera_view::background_frame(calls.camera_view.background, &calls.appearance)?;
+        calls
+            .presentation_world
             .advance_elapsed(self.call_elapsed_seconds);
-        let mut output = Self::take_raw_outputs(&mut call);
+        let mut output = Self::take_raw_outputs(calls, sky_frame);
         for item in &mut output.appearance {
             match item {
                 CsharpAppearanceCallOutput::Frame(frame) => {
-                    *frame = call
+                    *frame = calls
                         .presentation_world
                         .apply(std::mem::take(frame))
                         .map_err(presentation_world_error)?;
                 }
                 CsharpAppearanceCallOutput::Presentation(frame) => {
-                    *frame = call
+                    *frame = calls
                         .presentation_world
                         .apply_presentation(std::mem::take(frame))
                         .map_err(presentation_world_error)?;
@@ -698,29 +695,25 @@ impl EngineServiceSet {
             }
         }
         for frame in &mut output.frames {
-            *frame = call
+            *frame = calls
                 .presentation_world
                 .apply(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
         for frame in &mut output.presentation {
-            *frame = call
+            *frame = calls
                 .presentation_world
                 .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
         crate::render_output::RuntimeRenderOutputBridge::settle(
-            &mut call.render_output,
-            &call.presentation_world,
-            &call.camera_view,
-            call.appearance
-                .as_ref()
-                .map(|a| &a.state)
-                .unwrap_or(&self.appearance.state),
+            &mut calls.render_output,
+            &calls.presentation_world,
+            &calls.camera_view,
+            &calls.appearance.state,
         )?;
-        output.render_output = self.render_output.changed_jobs(&call.render_output);
-        call.output = output;
-        Ok(call)
+        output.render_output = self.render_output.changed_jobs(&calls.render_output);
+        Ok(output)
     }
 
     pub fn ingest_render_output(
@@ -728,21 +721,6 @@ impl EngineServiceSet {
         chunk: render_host_contracts::RenderOutputChunk,
     ) -> Result<(), CsharpEngineServicesError> {
         self.render_output.ingest(chunk)
-    }
-
-    pub fn commit_call(&mut self, call: CsharpEngineCall) {
-        self.presentation_world = call.presentation_world;
-        self.appearance.commit(call.appearance);
-        self.implicit.commit_call(call.implicit);
-        self.audio.commit(call.audio);
-        self.video.commit(call.video);
-        self.render_output.commit(call.render_output);
-        self.camera_view.commit(call.camera_view);
-        self.dynamics.commit_call();
-        self.ui.commit(call.ui);
-        self.voxel_content.commit_call(call.voxel_content);
-        self.voxel_scene_presentation
-            .commit_call(call.voxel_scene_presentation);
     }
 
     pub fn seal_resource_selection(&mut self) {
@@ -836,31 +814,26 @@ impl EngineServiceSet {
         })
     }
 
-    fn take_raw_outputs(call: &mut CsharpEngineCall) -> CsharpEngineCallOutput {
-        let appearance = call
-            .appearance
-            .as_mut()
-            .map(|call| {
-                std::mem::take(&mut call.outputs)
-                    .into_iter()
-                    .map(|output| match output {
-                        crate::appearance::RuntimeAppearanceCallOutput::Frame(frame) => {
-                            CsharpAppearanceCallOutput::Frame(frame)
-                        }
-                        crate::appearance::RuntimeAppearanceCallOutput::Presentation(frame) => {
-                            CsharpAppearanceCallOutput::Presentation(frame)
-                        }
-                        crate::appearance::RuntimeAppearanceCallOutput::AnimationCueDefinitions(
-                            definitions,
-                        ) => CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions),
-                    })
-                    .collect::<Vec<_>>()
+    fn take_raw_outputs(
+        call: &mut ServiceCalls,
+        sky_frame: Option<render_model::RenderFrameDiff>,
+    ) -> CsharpEngineCallOutput {
+        let appearance = std::mem::take(&mut call.appearance.outputs)
+            .into_iter()
+            .map(|output| match output {
+                crate::appearance::RuntimeAppearanceCallOutput::Frame(frame) => {
+                    CsharpAppearanceCallOutput::Frame(frame)
+                }
+                crate::appearance::RuntimeAppearanceCallOutput::Presentation(frame) => {
+                    CsharpAppearanceCallOutput::Presentation(frame)
+                }
+                crate::appearance::RuntimeAppearanceCallOutput::AnimationCueDefinitions(
+                    definitions,
+                ) => CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions),
             })
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
         let mut frames = Vec::new();
-        if let Some(frame) = call.sky_frame.take() {
-            frames.push(frame);
-        }
+        frames.extend(sky_frame);
         frames.append(&mut call.voxel_content.frames);
         frames.append(&mut call.voxel_scene_presentation.frames);
         CsharpEngineCallOutput {
@@ -868,7 +841,7 @@ impl EngineServiceSet {
             appearance,
             frames,
             view_composition: call.camera_view.composition.take(),
-            ui: std::mem::take(&mut call.ui.projections),
+            ui: std::mem::take(&mut call.ui),
             presentation: call
                 .audio
                 .frame
@@ -878,53 +851,17 @@ impl EngineServiceSet {
                 .collect(),
         }
     }
-
-    /// Extracts only the renderer work needed to reconcile retained voxel
-    /// presentation after a failed callback. This deliberately has no UI,
-    /// lifecycle, or complete-baseline marker: the product incarnation remains
-    /// tainted and normal interaction still follows the existing replacement
-    /// policy.
-    pub fn recover_voxel_presentation_outputs(
-        &mut self,
-    ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
-        let mut world = self.presentation_world.clone();
-        let frames = self
-            .voxel_scene_presentation
-            .recover_from_canonical()?
-            .iter()
-            .map(|frame| world.apply(frame.clone()).map_err(presentation_world_error))
-            .collect::<Result<Vec<_>, _>>()?;
-        // The spatial edit is already canonical. Repair presentation intent
-        // without adopting any failed product-call staging or replaying input.
-        self.presentation_world = world;
-        Ok(CsharpEngineCallOutput {
-            render_output: Some(self.render_output.snapshot()),
-            appearance: Vec::new(),
-            frames,
-            view_composition: None,
-            ui: Vec::new(),
-            presentation: Vec::new(),
-        })
-    }
 }
 
 impl CsharpEngineCall {
-    /// Move publications out while keeping the staged state available for commit.
     pub fn take_output(&mut self) -> CsharpEngineCallOutput {
         std::mem::take(&mut self.output)
     }
 
-    pub fn input_mapping_replacement(&self) -> Option<&runtime_input::CompiledInputMappings> {
-        self.input_mapping_replacement.as_ref()
-    }
-
-    /// Retags only staged UI envelopes after their owning lifecycle action has
-    /// actually succeeded. Other Engine service state stays staged unchanged.
-    pub fn rebind_ui_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
-        self.ui.rebind_runtime(binding);
-        for projection in &mut self.output.ui {
-            projection.rebind_runtime(binding);
-        }
+    pub fn take_input_mapping_replacement(
+        &mut self,
+    ) -> Option<runtime_input::CompiledInputMappings> {
+        self.input_mapping_replacement.take()
     }
 }
 
@@ -948,7 +885,7 @@ pub fn parse_runtime_appearance_catalog(
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CsharpEngineServicesError {
     code: &'static str,
     detail: String,
@@ -1068,8 +1005,7 @@ mod tests {
                 visible: true,
             })
             .expect("text billboard");
-        let call = services.take_call().unwrap();
-        services.commit_call(call);
+        services.finish_call().unwrap();
         // Creating a retained billboard changes appearance state, but
         // settlement no longer rebuilds the effect or media baselines.
         GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
@@ -1091,8 +1027,7 @@ mod tests {
                     fixed_delta_seconds: 1.0 / 60.0,
                 },
             );
-            let call = services.take_call().unwrap();
-            services.commit_call(call);
+            services.finish_call().unwrap();
         }
         GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
         MEDIA_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 0));
@@ -1106,8 +1041,7 @@ mod tests {
             .appearance
             .presentation_destroy_billboard(billboard)
             .unwrap();
-        let call = services.take_call().unwrap();
-        services.commit_call(call);
+        services.finish_call().unwrap();
         GRAPHICS_SNAPSHOT_READS.with(|c| assert_eq!(c.get(), 1));
         assert_eq!(billboards(&services), 0);
     }
@@ -1289,7 +1223,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut staged = services.take_call().expect("sky call");
+        let mut staged = services.finish_call().expect("sky call");
         let output = staged.take_output();
         assert!(matches!(
             output.frames[0].ops.as_slice(),
@@ -1300,7 +1234,6 @@ mod tests {
                 && defined.payload.is_some()
                 && defined.content_hash.is_some()
         ));
-        services.commit_call(staged);
 
         let attachment_output = services
             .snapshot_outputs(binding())
@@ -1331,13 +1264,12 @@ mod tests {
             },
             ABI_OK
         );
-        let mut call = services.take_call().unwrap();
+        let mut call = services.finish_call().unwrap();
         assert!(call
             .take_output()
             .frames
             .iter()
             .all(|frame| frame.ops.is_empty()));
-        services.commit_call(call);
         assert_eq!(services.renderer_publication_frontiers(), frontier);
 
         services.begin_call(binding());
@@ -1353,12 +1285,12 @@ mod tests {
             ABI_OK,
             "camera staging cannot inspect Appearance-owned handles"
         );
-        let error = match services.take_call() {
+        let error = match services.finish_call() {
             Ok(_) => panic!("unknown texture must fail atomically"),
             Err(error) => error,
         };
         assert_eq!(error.code(), "CSHARP_RENDER_RESOURCE_HANDLE");
-        services.discard_call();
+        let _ = services.finish_call();
 
         services.begin_call(binding());
         let api = services.api();
@@ -1379,14 +1311,13 @@ mod tests {
             },
             ABI_OK
         );
-        let mut colored = services.take_call().expect("background color");
+        let mut colored = services.finish_call().expect("background color");
         let colored_output = colored.take_output();
         assert!(matches!(
             colored_output.frames[0].ops.as_slice(),
             [render_model::RenderDiff::SetBackgroundColor { color }]
                 if *color == [0.0, 0.0, 0.0, 1.0]
         ));
-        services.commit_call(colored);
 
         services.begin_call(binding());
         let api = services.api();
@@ -1400,7 +1331,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut cleared = services.take_call().expect("clear sky");
+        let mut cleared = services.finish_call().expect("clear sky");
         let cleared_output = cleared.take_output();
         assert!(matches!(
             cleared_output.frames[0].ops.as_slice(),
@@ -1461,7 +1392,7 @@ mod tests {
             0,
             "the later generated call would throw and fail the product callback"
         );
-        services.discard_call();
+        let _ = services.finish_call();
 
         let api = services.api();
         let mut after_discard = NativeNavigationProjectionReadout::default();
@@ -1493,8 +1424,7 @@ mod tests {
             ABI_OK
         );
         assert_eq!(retry.navigation_revision, 2);
-        let staged = services.take_call().expect("unrelated staged families");
-        services.commit_call(staged);
+        services.finish_call().expect("unrelated staged families");
     }
 
     #[test]
@@ -1715,7 +1645,7 @@ mod tests {
             error,
             "CSHARP_SPATIAL_CONTENT_REFERENCE",
         );
-        services.discard_call();
+        let _ = services.finish_call();
     }
     fn assert_spatial_admission_diagnostic(
         api: &NativeSpatialApi,

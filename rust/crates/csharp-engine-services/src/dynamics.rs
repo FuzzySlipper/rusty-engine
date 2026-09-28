@@ -47,16 +47,6 @@ pub(crate) struct RuntimeDynamicsBridge {
     next_step_and_read_lease: u64,
     diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
     next_diagnostic_lease: u64,
-    staged: Option<RuntimeDynamicsCall>,
-}
-
-/// Deferred native destroy intents from one generated product callback.
-/// Ordinary Dynamics simulation remains live and is not copied per frame; the
-/// only callbacks staged here are owned world/body releases that generated C#
-/// wrappers defer locally until the Engine transaction commits.
-pub(crate) struct RuntimeDynamicsCall {
-    worlds: BTreeSet<u64>,
-    bodies: BTreeSet<u64>,
 }
 
 #[allow(
@@ -285,51 +275,6 @@ impl RuntimeDynamicsBridge {
             next_step_and_read_lease: 1,
             diagnostic_leases: BTreeMap::new(),
             next_diagnostic_lease: 1,
-            staged: None,
-        }
-    }
-
-    pub(crate) fn begin_call(&mut self) {
-        debug_assert!(self.staged.is_none(), "Dynamics call was already staged");
-        self.staged = Some(RuntimeDynamicsCall {
-            worlds: BTreeSet::new(),
-            bodies: BTreeSet::new(),
-        });
-    }
-
-    pub(crate) fn take_staged_call(&self) -> Result<(), CsharpEngineServicesError> {
-        if self.staged.is_some() {
-            Ok(())
-        } else {
-            Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_CALL",
-                "dynamics service was called outside a product call",
-            ))
-        }
-    }
-
-    pub(crate) fn discard_call(&mut self) {
-        self.staged = None;
-    }
-
-    pub(crate) fn commit_call(&mut self) {
-        let Some(staged) = self.staged.take() else {
-            return;
-        };
-        for world in staged.worlds {
-            let body_handles = match self.worlds.get(&world) {
-                Some(WorldSlot::Active(world)) => world.bodies.keys().copied().collect::<Vec<_>>(),
-                Some(WorldSlot::Tombstoned) | None => continue,
-            };
-            self.worlds.insert(world, WorldSlot::Tombstoned);
-            for body in body_handles {
-                self.bodies.insert(body, BodySlot::Tombstoned);
-            }
-        }
-        for body in staged.bodies {
-            if let Some(BodySlot::Active { .. }) = self.bodies.get(&body) {
-                self.destroy_body_committed(body);
-            }
         }
     }
 
@@ -391,16 +336,11 @@ impl RuntimeDynamicsBridge {
         handle: NativeDynamicsWorldHandle,
     ) -> Result<(), CsharpEngineServicesError> {
         match self.worlds.get(&handle.value) {
-            Some(WorldSlot::Active(_)) if self.world_pending(handle.value) => return Ok(()),
             Some(WorldSlot::Active(_)) => {}
             Some(WorldSlot::Tombstoned) => return Ok(()),
             None => return Err(unknown("world", handle.value)),
         }
-        if let Some(staged) = self.staged.as_mut() {
-            staged.worlds.insert(handle.value);
-        } else {
-            self.destroy_world_committed(handle.value);
-        }
+        self.destroy_world_committed(handle.value);
         Ok(())
     }
 
@@ -592,13 +532,6 @@ impl RuntimeDynamicsBridge {
             Some(BodySlot::Tombstoned) => return Ok(()),
             None => return Err(unknown("body", handle.value)),
         };
-        if self.body_pending(handle.value) || self.world_pending(world_handle) {
-            return Ok(());
-        }
-        if let Some(staged) = self.staged.as_mut() {
-            staged.bodies.insert(handle.value);
-            return Ok(());
-        }
         self.destroy_body_with_entity(handle.value, world_handle, entity)
     }
 
@@ -611,14 +544,6 @@ impl RuntimeDynamicsBridge {
         for body in body_handles {
             self.bodies.insert(body, BodySlot::Tombstoned);
         }
-    }
-
-    fn destroy_body_committed(&mut self, handle: u64) {
-        let Some(BodySlot::Active { world, entity }) = self.bodies.get(&handle) else {
-            return;
-        };
-        self.destroy_body_with_entity(handle, *world, *entity)
-            .expect("a previously admitted Dynamics body remains destroyable at commit");
     }
 
     fn destroy_body_with_entity(
@@ -973,16 +898,10 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsBodyAtRequest,
     ) -> Result<NativeDynamicsBodyAtReceipt, CsharpEngineServicesError> {
-        let pending_bodies = self
-            .staged
-            .as_ref()
-            .map(|staged| staged.bodies.clone())
-            .unwrap_or_default();
         let world = self.active_world_mut(request.world.value)?;
         let body = world
             .bodies
             .iter()
-            .filter(|(handle, _)| !pending_bodies.contains(handle))
             .nth(request.index as usize)
             .map(|(handle, entity)| (*handle, *entity));
         let Some((handle, entity)) = body else {
@@ -1128,24 +1047,12 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsWorldReadRequest,
     ) -> Result<NativeDynamicsWorldReadout, CsharpEngineServicesError> {
-        let pending_bodies = self
-            .staged
-            .as_ref()
-            .map(|staged| staged.bodies.clone())
-            .unwrap_or_default();
         let world = self.active_world_mut(request.world.value)?;
         let readout = world.service.readout();
         Ok(NativeDynamicsWorldReadout {
             generation: readout.map_or(0, |value| value.generation),
             entity_revision: world.entities.revision(),
-            body_count: u32::try_from(
-                world
-                    .bodies
-                    .keys()
-                    .filter(|handle| !pending_bodies.contains(handle))
-                    .count(),
-            )
-            .map_err(|_| {
+            body_count: u32::try_from(world.bodies.len()).map_err(|_| {
                 CsharpEngineServicesError::new("CSHARP_DYNAMICS_WORLD", "body count exceeded u32")
             })?,
             contact_count: u32::try_from(world.last_contact_receipts.len()).map_err(|_| {
@@ -1161,12 +1068,6 @@ impl RuntimeDynamicsBridge {
         &mut self,
         handle: u64,
     ) -> Result<&mut DynamicsWorld, CsharpEngineServicesError> {
-        if self.world_pending(handle) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_WORLD",
-                "world handle was tombstoned",
-            ));
-        }
         match self.worlds.get_mut(&handle) {
             Some(WorldSlot::Active(world)) => Ok(world),
             Some(WorldSlot::Tombstoned) => Err(CsharpEngineServicesError::new(
@@ -1178,12 +1079,6 @@ impl RuntimeDynamicsBridge {
     }
 
     fn active_world(&self, handle: u64) -> Result<&DynamicsWorld, CsharpEngineServicesError> {
-        if self.world_pending(handle) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_WORLD",
-                "world handle was tombstoned",
-            ));
-        }
         match self.worlds.get(&handle) {
             Some(WorldSlot::Active(world)) => Ok(world),
             Some(WorldSlot::Tombstoned) => Err(CsharpEngineServicesError::new(
@@ -1221,10 +1116,7 @@ impl RuntimeDynamicsBridge {
                 Some(BodySlot::Active {
                     world: active_world,
                     entity: active_entity,
-                }) if *active_world == world
-                    && *active_entity == *entity
-                    && !self.body_pending(*handle)
-                    && !self.world_pending(world) => {}
+                }) if *active_world == world && *active_entity == *entity => {}
                 _ => {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_DYNAMICS_REBASE",
@@ -1238,31 +1130,13 @@ impl RuntimeDynamicsBridge {
 
     fn active_body(&self, handle: u64) -> Result<(u64, EntityId), CsharpEngineServicesError> {
         match self.bodies.get(&handle) {
-            Some(BodySlot::Active { world, entity })
-                if !self.body_pending(handle) && !self.world_pending(*world) =>
-            {
-                Ok((*world, *entity))
-            }
-            Some(BodySlot::Active { .. }) | Some(BodySlot::Tombstoned) => {
-                Err(CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_BODY",
-                    "body handle was tombstoned",
-                ))
-            }
+            Some(BodySlot::Active { world, entity }) => Ok((*world, *entity)),
+            Some(BodySlot::Tombstoned) => Err(CsharpEngineServicesError::new(
+                "CSHARP_DYNAMICS_BODY",
+                "body handle was tombstoned",
+            )),
             None => Err(unknown("body", handle)),
         }
-    }
-
-    fn world_pending(&self, handle: u64) -> bool {
-        self.staged
-            .as_ref()
-            .is_some_and(|staged| staged.worlds.contains(&handle))
-    }
-
-    fn body_pending(&self, handle: u64) -> bool {
-        self.staged
-            .as_ref()
-            .is_some_and(|staged| staged.bodies.contains(&handle))
     }
 }
 
@@ -3354,99 +3228,6 @@ mod tests {
             .unwrap();
         bridge.destroy_world(parent_first_world).unwrap();
         bridge.destroy_body(parent_first_body).unwrap();
-    }
-
-    #[test]
-    fn staged_world_and_body_destroys_rollback_together_and_commit_once() {
-        let spatial = crate::spatial::RuntimeSpatialBridge::new();
-        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
-        let first_world = bridge
-            .create_world(NativeDynamicsWorldConfig {
-                gravity: NativeVec3::default(),
-            })
-            .expect("first world");
-        let first_body = bridge
-            .create_body(&NativeDynamicsCreateBodyRequest {
-                world: first_world,
-                body: body_config(NativeVec3::default()),
-            })
-            .expect("first body");
-        let second_world = bridge
-            .create_world(NativeDynamicsWorldConfig {
-                gravity: NativeVec3::default(),
-            })
-            .expect("second world");
-        let second_body = bridge
-            .create_body(&NativeDynamicsCreateBodyRequest {
-                world: second_world,
-                body: body_config(NativeVec3::default()),
-            })
-            .expect("second body");
-
-        bridge.begin_call();
-        bridge.destroy_body(first_body).expect("stage body destroy");
-        bridge
-            .destroy_world(second_world)
-            .expect("stage world destroy");
-        let staged_first = bridge
-            .read_world(NativeDynamicsWorldReadRequest { world: first_world })
-            .expect("world remains readable while its child destroy is staged");
-        assert_eq!(staged_first.body_count, 0);
-        assert!(
-            !bridge
-                .read_body_at(NativeDynamicsBodyAtRequest {
-                    world: first_world,
-                    index: 0
-                })
-                .expect("staged child is absent from bounded enumeration")
-                .present
-        );
-        assert!(bridge
-            .read(NativeDynamicsReadRequest { body: first_body })
-            .is_err());
-        assert!(bridge
-            .read(NativeDynamicsReadRequest { body: second_body })
-            .is_err());
-        bridge.discard_call();
-
-        // A later callback can retry both distinct release types against the
-        // original handles; no world/body counter or identity was consumed by
-        // the failed transaction.
-        assert!(bridge
-            .read(NativeDynamicsReadRequest { body: second_body })
-            .is_ok());
-        assert!(bridge
-            .read(NativeDynamicsReadRequest { body: first_body })
-            .is_ok());
-        assert_eq!(
-            bridge
-                .read_world(NativeDynamicsWorldReadRequest { world: first_world })
-                .expect("rollback restores the child to world enumeration")
-                .body_count,
-            1
-        );
-        bridge.begin_call();
-        bridge
-            .destroy_body(first_body)
-            .expect("restage body destroy");
-        bridge
-            .destroy_world(second_world)
-            .expect("restage world destroy");
-        bridge.commit_call();
-
-        assert!(bridge
-            .read(NativeDynamicsReadRequest { body: first_body })
-            .is_err());
-        assert!(bridge
-            .read(NativeDynamicsReadRequest { body: second_body })
-            .is_err());
-        // Matching generated IDisposable calls are harmless after commit.
-        bridge
-            .destroy_body(first_body)
-            .expect("committed body tombstone");
-        bridge
-            .destroy_world(second_world)
-            .expect("committed world tombstone");
     }
 
     #[test]

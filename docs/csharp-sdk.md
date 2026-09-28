@@ -69,8 +69,13 @@ reported to runtime diagnostics with its complete text and managed stack trace.
 
 A refusal is operation-local: the refused operation leaves Engine state as it
 was, and its exception is the only consequence. A product that catches
-`EngineCallException` may continue the callback, and its other output commits
-normally. An exception that escapes the callback still faults it. The
+`EngineCallException` may continue the callback, and its other output is
+published normally. An exception that escapes the callback does not undo what
+the callback already did: that output is published too, and the runtime faults
+the lifecycle. Simulation stops with the product loaded so you can inspect it;
+resume (for example through `playtest` or the live-debug lifecycle route)
+continues the same product, and restart resets it. The process is not replaced.
+The
 [caught-refusal fixture](../fixtures/csharp-caught-refusals/CaughtRefusalChecks.cs)
 catches Graphics, Audio, CameraView, Dynamics and UI refusals, then performs
 ordinary work in the same callback. Resource release still uses the exact
@@ -94,10 +99,10 @@ Restart, or an admitted Update callback. The mappings use the existing
 or change their value kinds or payload contracts. An empty set disables
 physical mappings while leaving direct intents available.
 
-`Staged` means the candidate takes effect when the callback successfully
-settles. The last valid replacement in that callback wins. `InvalidMappings`
-leaves the current mapping set and any earlier valid candidate unchanged;
-callback failure discards the staged replacement. `Unavailable` reports a call
+`Staged` means the replacement takes effect when the callback finishes, even if
+it then throws. The last valid replacement in that callback wins.
+`InvalidMappings` leaves the current mapping set and any earlier valid
+replacement unchanged. `Unavailable` reports a call
 outside those supported callbacks (such as Attach, Shutdown, debug or timeline
 completion). Duplicate mapping IDs, unknown intents, incompatible value kinds,
 and unsupported controls are invalid. Distinct mapping IDs may deliberately share a physical trigger.
@@ -449,16 +454,11 @@ lets product code accept or reject the product-owned ticket meaning.
   data; a product that does not own timeline tickets may leave the default
   rejecting implementation in place.
 
-A product callback is not a transaction over every Engine service. Each
-generated service operation preserves its own validation and failure
-atomicity, while only service families that explicitly stage call output are
-committed or discarded with the outer callback. Mutable `Spatial` and `Voxel`
-operations commit immediately: if one succeeds and product code or a later
-Engine call fails, the earlier mutation remains authoritative. Validate
-product policy before issuing mutations, retain returned revisions/receipts,
-and make retry behavior explicit. Use a named prepared/commit API when a
-multi-owner change genuinely requires coordination; do not assume an exception
-rewinds an Engine world.
+A product callback is not a transaction. Every Engine operation takes effect
+when it returns, and nothing is rolled back when product code or a later Engine
+call fails. A refused operation leaves the state as it was. Validate product
+policy before issuing mutations and make retry behavior explicit; do not assume
+an exception rewinds an Engine world.
 
 Fresh browser attachment reconstructs presentation from committed Engine
 snapshots; the host no longer invokes `IEngineProduct.Attach` to rebuild a
@@ -515,7 +515,8 @@ and does not mutate Spatial or Dynamics.
 
 An invalid descriptor raises a named `EngineCallException`.
 Catching an emission refusal permits the callback to continue and publish its
-other staged output. Letting an exception escape still faults the callback.
+other output. Letting an exception escape faults the lifecycle (see
+[Diagnosing native service refusals](#diagnosing-native-service-refusals)).
 Valid bursts return `Admitted`, `Clamped` or `Dropped` under capacity pressure.
 The [packaged fixture](../fixtures/csharp-particle-emission/ParticleEmissionChecks.cs)
 exercises caught refusals followed by cube, billboard and colliding debris

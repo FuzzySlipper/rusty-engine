@@ -317,7 +317,7 @@ fn wait_for_process_termination(
             std::thread::park_timeout(std::time::Duration::from_millis(50));
         }
         let reason = if host.termination_requested() {
-            "replace-incarnation"
+            "host-stopped"
         } else if termination.load(Ordering::Relaxed) {
             "termination-signal"
         } else {
@@ -329,7 +329,7 @@ fn wait_for_process_termination(
             std::thread::park_timeout(std::time::Duration::from_millis(100));
         }
         let reason = if host.termination_requested() {
-            "replace-incarnation"
+            "host-stopped"
         } else {
             "termination-signal"
         };
