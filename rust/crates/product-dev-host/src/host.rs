@@ -4,7 +4,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Condvar, Mutex, RwLock,
+        Arc, Condvar, Mutex, RwLock, Weak,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -23,8 +23,8 @@ use crate::{
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
     ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS,
-    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
     MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    MAX_SUBSCRIBER_QUEUE_EVENTS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -490,8 +490,7 @@ impl HostTelemetry {
             connections: transport.connections,
             subscribers: transport.subscribers,
             output_queue_items: transport.output_queue_items,
-            output_queue_capacity: MAX_OUTPUT_QUEUE_ITEMS,
-            output_queue_floor: CanonicalU64::new(transport.output_queue_floor),
+            output_queue_capacity: MAX_SUBSCRIBER_QUEUE_EVENTS,
             output_binding_active: transport.output_binding_active,
             update_attribution: self.update_attribution_snapshot(now_ns),
         }
@@ -511,7 +510,6 @@ struct TransportTelemetry {
     connections: usize,
     subscribers: usize,
     output_queue_items: usize,
-    output_queue_floor: u64,
     output_binding_active: bool,
 }
 
@@ -1130,14 +1128,8 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         );
         return;
     }
-    if request.method == "GET"
-        && matches!(
-            request.path.as_str(),
-            "/__rusty/product/runtime/outputs" | "/__rusty/product/runtime/outputs/fresh"
-        )
-    {
-        let fresh = request.path.ends_with("/fresh");
-        handle_sse(stream, state, request, fresh);
+    if request.method == "GET" && request.path == "/__rusty/product/runtime/outputs/fresh" {
+        handle_sse(stream, state, request);
         return;
     }
     // Preserve the browser attachment correlation before dispatch consumes the
@@ -1315,17 +1307,10 @@ fn invoke_renderer_resource<R: ProductDevRuntime>(
     identity: &str,
     generation: u64,
 ) -> HttpResponse {
-    let live = match state.runtime.renderer_resource(identity, generation) {
+    let resource = match state.runtime.renderer_resource(identity, generation) {
         Ok(resource) => resource,
         Err(error) => return HttpResponse::error(503, error.code(), error.diagnostic()),
     };
-    let resource = live.or_else(|| {
-        state
-            .outputs
-            .lock()
-            .ok()
-            .and_then(|outputs| outputs.renderer_resource(identity, generation))
-    });
     let Some(resource) = resource else {
         return HttpResponse::error(
             404,
@@ -1904,8 +1889,7 @@ fn telemetry_snapshot<R: ProductDevRuntime>(
         .map(|outputs| TransportTelemetry {
             connections: state.connections.load(Ordering::Acquire),
             subscribers: state.subscribers.load(Ordering::Acquire),
-            output_queue_items: outputs.events.len(),
-            output_queue_floor: outputs.floor_cursor,
+            output_queue_items: outputs.largest_backlog(),
             output_binding_active: outputs.active_binding.is_some(),
         })
         .unwrap_or_else(|_| TransportTelemetry {
@@ -2293,7 +2277,6 @@ fn handle_sse<R: ProductDevRuntime>(
     mut stream: TcpStream,
     state: Arc<HostState<R>>,
     request: HttpRequest,
-    fresh: bool,
 ) {
     if request
         .headers
@@ -2311,8 +2294,8 @@ fn handle_sse<R: ProductDevRuntime>(
         );
         return;
     }
-    // Like the worker stream, publish each small real-time event without waiting
-    // for an ACK of its predecessor. Flush alone does not disable TCP Nagle.
+    // Publish each small real-time event without waiting for an ACK of its
+    // predecessor. Flush alone does not disable TCP Nagle.
     if stream.set_nodelay(true).is_err() {
         return;
     }
@@ -2324,143 +2307,98 @@ fn handle_sse<R: ProductDevRuntime>(
         return;
     }
     let _subscriber = CounterGuard::new(&state.subscribers);
-    let fresh_connection = fresh && !request.headers.contains_key("last-event-id");
-    let mut private_events = Vec::new();
-    let mut connection_result = None;
-    let mut cursor = match request.headers.get("last-event-id") {
-        Some(value) => match parse_last_event_id(value) {
-            Some(value) => value,
-            None => {
-                let _ = write_response(
-                    &mut stream,
-                    HttpResponse::error(
-                        400,
-                        "DEV_HOST_SSE_CURSOR",
-                        "Last-Event-ID must be canonical u64 text",
-                    ),
-                );
-                return;
-            }
-        },
-        None if fresh_connection => {
-            let connection = state
-                .runtime
-                .session()
-                .with_locked_timed(
-                    || begin_telemetry(&state, ProductDevOperationKind::Connect),
-                    |runtime| {
-                        let result = runtime.connect();
-                        let receipt = state.runtime.finish_call(runtime, result)?;
-                        let (result, mut outputs) = match receipt.into_wire_parts() {
-                            Ok(parts) => parts,
-                            Err(error) => {
-                                return Ok(Err(HttpResponse::error(
-                                    503,
-                                    error.code(),
-                                    error.detail(),
-                                )));
-                            }
-                        };
-                        // Readouts are published on change, so a fresh
-                        // subscriber starts from the current one.
-                        if let Some(readout) = result.readout() {
-                            outputs.push(ProductDevRuntimeOutput::runtime_readout(readout.clone()));
-                        }
-                        // A connection baseline is subscriber-private. Keep its
-                        // complete bounded resource set even when its fragment
-                        // count exceeds the reconnect ring; public history may
-                        // retain only a tail and asks lagged clients to reconnect.
-                        let isolated = Mutex::new(OutputBus::private_baseline());
-                        if let Err(error) = push_outputs(&isolated, outputs) {
-                            return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
-                        }
-                        let isolated = match isolated.into_inner() {
-                            Ok(bus) => bus,
-                            Err(_) => {
-                                return Ok(Err(HttpResponse::error(
-                                    500,
-                                    "DEV_HOST_OUTPUT_POISONED",
-                                    "isolated output queue lock is poisoned",
-                                )));
-                            }
-                        };
-                        let Some(connection_binding) = isolated.active_binding else {
-                            return Ok(Err(HttpResponse::error(
-                                503,
-                                "DEV_HOST_OUTPUT_BASELINE",
-                                "runtime connection did not publish a complete binding baseline",
-                            )));
-                        };
-                        let result_json = match serde_json::to_string(&result) {
-                            Ok(result) => result,
-                            Err(_) => {
-                                return Ok(Err(HttpResponse::error(
-                                    500,
-                                    "DEV_HOST_RESPONSE_ENCODE",
-                                    "runtime connection result could not be encoded",
-                                )));
-                            }
-                        };
-                        let mut outputs = match state.outputs.lock() {
-                            Ok(outputs) => outputs,
-                            Err(_) => {
-                                return Ok(Err(HttpResponse::error(
-                                    500,
-                                    "DEV_HOST_OUTPUT_POISONED",
-                                    "output queue lock is poisoned",
-                                )));
-                            }
-                        };
-                        outputs.active_binding = Some(connection_binding);
-                        private_events = isolated.events.into_iter().collect();
-                        connection_result = Some(result_json);
-                        Ok(Ok(outputs.next_id))
-                    },
-                    || finish_telemetry(&state, ProductDevOperationKind::Connect),
-                )
-                .map_err(|_| crate::session::runtime_poisoned())
-                .and_then(|response| response);
-            match connection {
-                Ok(Ok(cursor)) => {
-                    state.scheduler_wake.notify();
-                    cursor
+    // Every connection starts from a fresh baseline; there is no resume. The
+    // subscriber's live queue starts at the moment its baseline is captured.
+    let connection = state
+        .runtime
+        .session()
+        .with_locked_timed(
+            || begin_telemetry(&state, ProductDevOperationKind::Connect),
+            |runtime| {
+                let result = runtime.connect();
+                let receipt = state.runtime.finish_call(runtime, result)?;
+                let (result, mut outputs) = match receipt.into_wire_parts() {
+                    Ok(parts) => parts,
+                    Err(error) => {
+                        return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
+                    }
+                };
+                // Readouts are published on change, so a fresh subscriber
+                // starts from the current one.
+                if let Some(readout) = result.readout() {
+                    outputs.push(ProductDevRuntimeOutput::runtime_readout(readout.clone()));
                 }
-                Ok(Err(response)) => {
-                    let _ = write_response(&mut stream, response);
-                    return;
-                }
-                Err(error) => {
-                    request_incarnation_replacement(&state, &error);
-                    let _ = write_response(
-                        &mut stream,
-                        HttpResponse::error(500, error.code(), error.diagnostic()),
-                    );
-                    return;
-                }
-            }
+                let (baseline, binding) = match encode_output_batches(None, outputs) {
+                    Ok(encoded) => encoded,
+                    Err(error) => {
+                        return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
+                    }
+                };
+                let Some(binding) = binding else {
+                    return Ok(Err(HttpResponse::error(
+                        503,
+                        "DEV_HOST_OUTPUT_BASELINE",
+                        "runtime connection did not publish a complete binding baseline",
+                    )));
+                };
+                let Ok(result_json) = serde_json::to_string(&result) else {
+                    return Ok(Err(HttpResponse::error(
+                        500,
+                        "DEV_HOST_RESPONSE_ENCODE",
+                        "runtime connection result could not be encoded",
+                    )));
+                };
+                let Ok(mut outputs) = state.outputs.lock() else {
+                    return Ok(Err(HttpResponse::error(
+                        500,
+                        "DEV_HOST_OUTPUT_POISONED",
+                        "output queue lock is poisoned",
+                    )));
+                };
+                outputs.active_binding = Some(binding);
+                let queue = Arc::new(SubscriberQueue::default());
+                outputs.subscribers.push(Arc::downgrade(&queue));
+                Ok(Ok((baseline, result_json, outputs.next_id, queue)))
+            },
+            || finish_telemetry(&state, ProductDevOperationKind::Connect),
+        )
+        .map_err(|_| crate::session::runtime_poisoned())
+        .and_then(|response| response);
+    let (baseline, result_json, output_through, queue) = match connection {
+        Ok(Ok(connection)) => {
+            state.scheduler_wake.notify();
+            connection
         }
-        None => 0,
+        Ok(Err(response)) => {
+            let _ = write_response(&mut stream, response);
+            return;
+        }
+        Err(error) => {
+            request_incarnation_replacement(&state, &error);
+            let _ = write_response(
+                &mut stream,
+                HttpResponse::error(500, error.code(), error.diagnostic()),
+            );
+            return;
+        }
     };
     if write_sse_headers(&mut stream).is_err() {
         return;
     }
-    for event in private_events {
-        if write_sse_private_event(&mut stream, &event).is_err() {
-            return;
-        }
-    }
-    if let Some(result) = connection_result {
-        // Subscriber-private baselines deliberately carry no SSE cursor. An
-        // id parsed before this record's terminating blank line could survive
-        // a disconnect even though JavaScript never received the completion.
-        let mut result: serde_json::Value =
-            serde_json::from_str(&result).expect("serialized connection result");
-        // This is an observed baseline boundary, not an SSE reconnect cursor.
-        result["outputThrough"] = serde_json::Value::String(cursor.to_string());
-        let payload = format!("event: rusty-output-baseline\ndata: {result}\n\n");
+    for batch in baseline {
+        let payload = format!("data: {batch}\n\n");
         if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
             return;
         }
+    }
+    let mut result: serde_json::Value =
+        serde_json::from_str(&result_json).expect("serialized connection result");
+    // The output sequence at the baseline, so a caller can wait for a later
+    // operation's outputs.
+    result["outputThrough"] = serde_json::Value::String(output_through.to_string());
+    let payload = format!("event: rusty-output-baseline\ndata: {result}\n\n");
+    if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
+        return;
     }
     let mut last_write = Instant::now();
     loop {
@@ -2468,27 +2406,17 @@ fn handle_sse<R: ProductDevRuntime>(
             break;
         }
         let observed_generation = state.output_wake.generation();
-        let snapshot = match state.outputs.lock() {
-            Ok(outputs) => outputs.after(cursor),
-            Err(_) => break,
-        };
-        // A cursor this process never issued (a browser reconnecting to a
-        // replacement process) is as unusable as one below the history floor.
-        if cursor < snapshot.floor_cursor || cursor > snapshot.next_id {
-            let payload = format!(
-                "id: {}\nevent: rusty-output-lag\ndata: {{\"code\":\"DEV_HOST_OUTPUT_LAG\"}}\n\n",
-                snapshot.floor_cursor
-            );
-            let _ = stream.write_all(payload.as_bytes());
-            let _ = stream.flush();
+        let Some(events) = queue.take() else {
+            // This subscriber fell behind. Closing the stream makes the
+            // browser reconnect for a fresh baseline.
             break;
-        }
-        let had_events = !snapshot.events.is_empty();
-        for event in snapshot.events {
-            if write_sse_event(&mut stream, &event).is_err() {
+        };
+        let had_events = !events.is_empty();
+        for event in events {
+            let payload = format!("id: {}\ndata: {}\n\n", event.id, event.json);
+            if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
                 return;
             }
-            cursor = event.id;
             last_write = Instant::now();
         }
         if had_events {
@@ -2508,114 +2436,95 @@ fn handle_sse<R: ProductDevRuntime>(
     }
 }
 
-fn write_sse_private_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()> {
-    let payload = match event.event {
-        Some(name) => format!("event: {}\ndata: {}\n\n", name, event.json),
-        None => format!("data: {}\n\n", event.json),
-    };
-    stream.write_all(payload.as_bytes())?;
-    stream.flush()
-}
-
-fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()> {
-    let payload = match event.event {
-        Some(name) => format!(
-            "id: {}\nevent: {}\ndata: {}\n\n",
-            event.id, name, event.json
-        ),
-        None => format!("id: {}\ndata: {}\n\n", event.id, event.json),
-    };
-    stream.write_all(payload.as_bytes())?;
-    stream.flush()
-}
-
+/// Publication state for the runtime's SSE subscribers. Each subscriber owns
+/// a bounded live queue; there is no shared history to resume from.
+#[derive(Default)]
 struct OutputBus {
+    /// Sequence of the last published event, sent as its SSE id so a caller
+    /// can wait until an operation's outputs have been observed.
     next_id: u64,
-    next_transfer_id: u64,
-    events: VecDeque<OutputEvent>,
-    floor_cursor: u64,
     active_binding: Option<crate::ProductDevRuntimeBinding>,
-    pending_baseline: Option<PendingBaseline>,
-    retained_event_limit: usize,
-}
-
-impl Default for OutputBus {
-    fn default() -> Self {
-        Self {
-            next_id: 0,
-            next_transfer_id: 0,
-            events: VecDeque::new(),
-            floor_cursor: 0,
-            active_binding: None,
-            pending_baseline: None,
-            retained_event_limit: MAX_OUTPUT_QUEUE_ITEMS,
-        }
-    }
-}
-
-struct PendingBaseline {
-    binding: crate::ProductDevRuntimeBinding,
-    outputs: Vec<ProductDevRuntimeOutput>,
+    subscribers: Vec<Weak<SubscriberQueue>>,
 }
 
 #[derive(Clone)]
 struct OutputEvent {
-    generation: u64,
-    resources: Arc<[crate::ProductDevRendererResource]>,
     id: u64,
-    publication_end_id: u64,
-    event: Option<&'static str>,
     json: Arc<str>,
 }
 
-struct OutputSnapshot {
-    floor_cursor: u64,
-    next_id: u64,
-    events: Vec<OutputEvent>,
+#[derive(Default)]
+struct SubscriberQueue {
+    events: Mutex<VecDeque<OutputEvent>>,
+    overflowed: AtomicBool,
+}
+
+impl SubscriberQueue {
+    fn push(&self, event: &OutputEvent) {
+        let mut events = self
+            .events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.overflowed.load(Ordering::Acquire) {
+            return;
+        }
+        if events.len() == MAX_SUBSCRIBER_QUEUE_EVENTS {
+            events.clear();
+            self.overflowed.store(true, Ordering::Release);
+            return;
+        }
+        events.push_back(event.clone());
+    }
+
+    /// Takes the queued events, or `None` once the subscriber has overflowed.
+    fn take(&self) -> Option<Vec<OutputEvent>> {
+        let mut events = self
+            .events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.overflowed.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(events.drain(..).collect())
+    }
+
+    fn len(&self) -> usize {
+        self.events
+            .lock()
+            .map(|events| events.len())
+            .unwrap_or_default()
+    }
 }
 
 impl OutputBus {
-    fn renderer_resource(
-        &self,
-        identity: &str,
-        generation: u64,
-    ) -> Option<crate::ProductDevRendererResource> {
-        if self.active_binding?.generation.get() != generation {
-            return None;
+    fn publish(&mut self, batches: Vec<String>) {
+        self.subscribers
+            .retain(|subscriber| subscriber.strong_count() > 0);
+        for json in batches {
+            self.next_id += 1;
+            let event = OutputEvent {
+                id: self.next_id,
+                json: json.into(),
+            };
+            for subscriber in self.subscribers.iter().filter_map(Weak::upgrade) {
+                subscriber.push(&event);
+            }
         }
-        self.events
+    }
+
+    /// The longest unsent backlog among live subscribers.
+    fn largest_backlog(&self) -> usize {
+        self.subscribers
             .iter()
-            .rev()
-            .filter(|event| event.generation == generation)
-            .flat_map(|event| event.resources.iter())
-            .find(|resource| resource.identity() == identity)
-            .cloned()
-    }
-
-    fn private_baseline() -> Self {
-        Self {
-            retained_event_limit: usize::MAX,
-            ..Self::default()
-        }
-    }
-
-    fn after(&self, cursor: u64) -> OutputSnapshot {
-        OutputSnapshot {
-            floor_cursor: self.floor_cursor,
-            next_id: self.next_id,
-            events: if cursor < self.floor_cursor {
-                Vec::new()
-            } else {
-                self.events
-                    .iter()
-                    .filter(|event| event.id > cursor)
-                    .cloned()
-                    .collect()
-            },
-        }
+            .filter_map(Weak::upgrade)
+            .map(|subscriber| subscriber.len())
+            .max()
+            .unwrap_or_default()
     }
 }
 
+/// Publishes one operation's outputs to every subscriber. A failure fences
+/// the binding, so the next publication must start a complete baseline.
 fn push_outputs(
     bus: &Mutex<OutputBus>,
     outputs: Vec<ProductDevRuntimeOutput>,
@@ -2623,17 +2532,14 @@ fn push_outputs(
     let mut bus = bus.lock().map_err(|_| {
         ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
     })?;
-    // Encode, fragment, order-check, and baseline-check against a bounded
-    // transaction first. A receipt arrives only after its product mutation,
-    // so partial retained publication would leave a browser with an ambiguous
-    // prefix. Existing retained JSON stays in place until the transaction is
-    // known-good; a failed preflight instead fences the old binding and
-    // requires a fresh baseline.
-    match push_outputs_staged(&mut bus, outputs) {
-        Ok(output_through) => Ok(output_through),
+    match encode_output_batches(bus.active_binding, outputs) {
+        Ok((batches, binding)) => {
+            bus.active_binding = binding;
+            bus.publish(batches);
+            Ok(bus.next_id)
+        }
         Err(error) => {
             bus.active_binding = None;
-            bus.pending_baseline = None;
             Err(error)
         }
     }
@@ -2651,282 +2557,92 @@ fn push_host_outputs<R: ProductDevRuntime>(
     Ok(output_through)
 }
 
-fn push_outputs_staged(
-    bus: &mut OutputBus,
+/// Encodes one operation's outputs as SSE batches. A binding opens a
+/// baseline that must complete within the same operation; the baseline and
+/// each run of incremental outputs become one batch each. Returns the batches
+/// and the binding that is active afterwards.
+fn encode_output_batches(
+    mut active_binding: Option<crate::ProductDevRuntimeBinding>,
     outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<u64, ProductDevHostError> {
-    let mut staged = OutputPushStage::new(bus);
-    let mut incremental_outputs = Vec::new();
+) -> Result<(Vec<String>, Option<crate::ProductDevRuntimeBinding>), ProductDevHostError> {
+    let mut batches = Vec::new();
+    let mut incremental = Vec::new();
+    let mut baseline: Option<(
+        crate::ProductDevRuntimeBinding,
+        Vec<ProductDevRuntimeOutput>,
+    )> = None;
     for output in outputs {
         if let Some(binding) = output.binding_marker() {
-            if !incremental_outputs.is_empty() {
-                let active_binding = staged.active_binding.ok_or_else(|| {
-                    ProductDevHostError::new(
-                        "DEV_HOST_OUTPUT_BASELINE",
-                        "incremental output arrived before a complete binding baseline",
-                    )
-                })?;
-                append_staged_output_events(
-                    bus,
-                    &mut staged,
-                    active_binding,
-                    std::mem::take(&mut incremental_outputs),
-                )?;
-            }
-            if staged.pending_baseline.is_some() {
+            if baseline.is_some() {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BASELINE",
                     "a new binding arrived before the previous baseline completed",
                 ));
             }
+            if !incremental.is_empty() {
+                batches.push(encode_output_batch(&std::mem::take(&mut incremental))?);
+            }
             // A runtime that begins a replacement baseline owns subsequent
             // publication. Fence the previous binding immediately so a
             // rejected replacement cannot label later incrementals with the
             // stale runtime identity.
-            staged.active_binding = None;
-            staged.pending_baseline = Some(PendingBaseline {
-                binding,
-                outputs: vec![output],
-            });
+            active_binding = None;
+            baseline = Some((binding, vec![output]));
             continue;
         }
         if let Some(binding) = output.complete_baseline_marker() {
-            let pending = {
-                let Some(pending) = staged.pending_baseline.take() else {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_OUTPUT_BASELINE",
-                        "a baseline completion arrived without its binding",
-                    ));
-                };
-                if pending.binding != binding {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_OUTPUT_BASELINE",
-                        "a baseline completion does not match its binding",
-                    ));
-                }
-                pending
-            };
-            // Admission is fail-atomic. Once a complete baseline is rejected,
-            // discard its staging buffer so the producer can replay the same
-            // full binding-to-completion sequence without a phantom baseline.
-            let mut outputs = pending.outputs;
-            let baseline = outputs.first_mut().ok_or_else(|| {
-                ProductDevHostError::new(
+            let Some((pending, mut members)) = baseline.take() else {
+                return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BASELINE",
-                    "a complete baseline lost its binding before publication",
-                )
-            })?;
-            output.attach_complete_baseline_frontiers_to_binding(baseline)?;
-            append_staged_output_events(bus, &mut staged, pending.binding, outputs)?;
-            staged.active_binding = Some(binding);
+                    "a baseline completion arrived without its binding",
+                ));
+            };
+            if pending != binding {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BASELINE",
+                    "a baseline completion does not match its binding",
+                ));
+            }
+            output.attach_complete_baseline_frontiers_to_binding(&mut members[0])?;
+            batches.push(encode_output_batch(&members)?);
+            active_binding = Some(binding);
             continue;
         }
-        if let Some(pending) = &mut staged.pending_baseline {
-            pending.outputs.push(output);
+        if let Some((_, members)) = &mut baseline {
+            members.push(output);
             continue;
         }
-        if staged.active_binding.is_none() {
+        if active_binding.is_none() {
             return Err(ProductDevHostError::new(
                 "DEV_HOST_OUTPUT_BASELINE",
                 "incremental output arrived before a complete binding baseline",
             ));
         }
-        incremental_outputs.push(output);
+        incremental.push(output);
     }
-    if !incremental_outputs.is_empty() {
-        let binding = staged.active_binding.expect("active binding was checked");
-        append_staged_output_events(bus, &mut staged, binding, incremental_outputs)?;
+    if baseline.is_some() {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_OUTPUT_BASELINE",
+            "a baseline did not complete within its publication",
+        ));
     }
-    let output_through = staged.next_id;
-    staged.commit(bus);
-    Ok(output_through)
+    if !incremental.is_empty() {
+        batches.push(encode_output_batch(&incremental)?);
+    }
+    Ok((batches, active_binding))
 }
 
-#[cfg(test)]
-fn append_output_events(
-    bus: &mut OutputBus,
-    binding: crate::ProductDevRuntimeBinding,
-    outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<(), ProductDevHostError> {
-    let mut staged = OutputPushStage::new(bus);
-    append_staged_output_events(bus, &mut staged, binding, outputs)?;
-    staged.commit(bus);
-    Ok(())
-}
-
-struct OutputPushStage {
-    next_id: u64,
-    next_transfer_id: u64,
-    active_binding: Option<crate::ProductDevRuntimeBinding>,
-    pending_baseline: Option<PendingBaseline>,
-    retained_start: usize,
-    floor_cursor: u64,
-    new_events: VecDeque<OutputEvent>,
-}
-
-impl OutputPushStage {
-    fn new(bus: &mut OutputBus) -> Self {
-        Self {
-            next_id: bus.next_id,
-            next_transfer_id: bus.next_transfer_id,
-            active_binding: bus.active_binding,
-            // A failed push fences the binding and discards this partial baseline.
-            // Transfer the accumulated prefix instead of copying it per fragment.
-            pending_baseline: bus.pending_baseline.take(),
-            retained_start: 0,
-            floor_cursor: bus.floor_cursor,
-            new_events: VecDeque::new(),
-        }
-    }
-
-    fn trim_history(&mut self, bus: &OutputBus) {
-        // Keep at least the configured event history, rounding the oldest edge
-        // outwards to a complete publication. The excess is at most one complete
-        // publication, not an unbounded backlog. A small progress event must not
-        // immediately erase the prefix of the large mesh that preceded it.
-        loop {
-            let retained = bus.events.len() - self.retained_start;
-            let total = retained + self.new_events.len();
-            let Some(first) = bus
-                .events
-                .get(self.retained_start)
-                .or_else(|| self.new_events.front())
-            else {
-                break;
-            };
-            let publication_len = (first.publication_end_id - first.id + 1) as usize;
-            if total.saturating_sub(publication_len) < bus.retained_event_limit {
-                break;
-            }
-            self.floor_cursor = first.publication_end_id;
-            let from_bus = retained.min(publication_len);
-            self.retained_start += from_bus;
-            self.new_events.drain(..publication_len - from_bus);
-        }
-    }
-
-    fn commit(self, bus: &mut OutputBus) {
-        bus.events.drain(..self.retained_start);
-        bus.events.extend(self.new_events);
-        bus.next_id = self.next_id;
-        bus.next_transfer_id = self.next_transfer_id;
-        bus.floor_cursor = self.floor_cursor;
-        bus.active_binding = self.active_binding;
-        bus.pending_baseline = self.pending_baseline;
-    }
-}
-
-fn append_staged_output_events(
-    bus: &OutputBus,
-    staged: &mut OutputPushStage,
-    binding: crate::ProductDevRuntimeBinding,
-    outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<(), ProductDevHostError> {
-    let resources: Arc<[crate::ProductDevRendererResource]> = outputs
-        .iter()
-        .flat_map(|output| output.resources().iter())
-        .cloned()
-        .collect::<Vec<_>>()
-        .into();
-    let mut encoded_events = Vec::new();
-    let mut next_transfer_id = staged.next_transfer_id;
+fn encode_output_batch(outputs: &[ProductDevRuntimeOutput]) -> Result<String, ProductDevHostError> {
     #[derive(Serialize)]
     struct OutputBatch<'a> {
         kind: &'static str,
         outputs: &'a [ProductDevRuntimeOutput],
     }
-    let encoded = serde_json::to_string(&OutputBatch {
+    serde_json::to_string(&OutputBatch {
         kind: "runtime-output-batch",
-        outputs: &outputs,
+        outputs,
     })
-    .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))?;
-    if encoded.len() <= MAX_OUTPUT_EVENT_BYTES {
-        encoded_events.push(EncodedOutputEvent {
-            event: None,
-            json: encoded,
-        });
-    } else {
-        next_transfer_id = next_transfer_id.checked_add(1).ok_or_else(|| {
-            ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output transfer sequence exhausted")
-        })?;
-        let slices = fragment_slices(&encoded);
-        for (fragment_index, data) in slices.iter().enumerate() {
-            let fragment = OutputFragment {
-                schema_version: 1,
-                transfer_id: CanonicalU64::new(next_transfer_id),
-                runtime: binding,
-                fragment_index,
-                fragment_count: slices.len(),
-                aggregate_bytes: encoded.len(),
-                data,
-            };
-            let json = serde_json::to_string(&fragment).map_err(|error| {
-                ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
-            })?;
-            if json.len() > MAX_OUTPUT_EVENT_BYTES {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BOUNDS",
-                    "output fragment exceeds host event bound",
-                ));
-            }
-            encoded_events.push(EncodedOutputEvent {
-                event: Some("rusty-output-fragment"),
-                json,
-            });
-        }
-    }
-    let final_id = staged
-        .next_id
-        .checked_add(encoded_events.len() as u64)
-        .ok_or_else(|| {
-            ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output sequence exhausted")
-        })?;
-    for encoded in encoded_events {
-        staged.next_id += 1;
-        staged.new_events.push_back(OutputEvent {
-            generation: binding.generation.get(),
-            resources: Arc::clone(&resources),
-            id: staged.next_id,
-            publication_end_id: final_id,
-            event: encoded.event,
-            json: encoded.json.into(),
-        });
-    }
-    staged.trim_history(bus);
-    debug_assert_eq!(staged.next_id, final_id);
-    staged.next_transfer_id = next_transfer_id;
-    Ok(())
-}
-
-struct EncodedOutputEvent {
-    event: Option<&'static str>,
-    json: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OutputFragment<'a> {
-    schema_version: u8,
-    transfer_id: CanonicalU64,
-    runtime: crate::ProductDevRuntimeBinding,
-    fragment_index: usize,
-    fragment_count: usize,
-    aggregate_bytes: usize,
-    data: &'a str,
-}
-
-fn fragment_slices(encoded: &str) -> Vec<&str> {
-    let mut slices = Vec::new();
-    let mut start = 0;
-    while start < encoded.len() {
-        let mut end = (start + MAX_OUTPUT_FRAGMENT_DATA_BYTES).min(encoded.len());
-        while !encoded.is_char_boundary(end) {
-            end -= 1;
-        }
-        slices.push(&encoded[start..end]);
-        start = end;
-    }
-    slices
+    .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))
 }
 
 struct CounterGuard<'a> {
@@ -3145,6 +2861,196 @@ mod tests {
         assert!(!overflowed);
     }
 
+    fn subscribed_bus() -> (Mutex<OutputBus>, Arc<SubscriberQueue>) {
+        let queue = Arc::new(SubscriberQueue::default());
+        let bus = OutputBus {
+            active_binding: Some(binding()),
+            subscribers: vec![Arc::downgrade(&queue)],
+            ..OutputBus::default()
+        };
+        (Mutex::new(bus), queue)
+    }
+
+    fn batch_json(event: &OutputEvent) -> Value {
+        serde_json::from_str(&event.json).unwrap()
+    }
+
+    #[test]
+    fn in_place_rebind_group_publishes_as_one_batch() {
+        let (bus, queue) = subscribed_bus();
+        let paused = crate::ProductDevRuntimeBinding {
+            control_revision: CanonicalU64::new(3),
+            ..binding()
+        };
+        // A same-incarnation fence: binding, the callback's own outputs, and
+        // completion, without any world snapshot between them.
+        push_outputs(
+            &bus,
+            vec![
+                ProductDevRuntimeOutput::binding(paused, CanonicalU64::new(5)),
+                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::complete_baseline(paused),
+            ],
+        )
+        .expect("in-place rebind publishes");
+        assert_eq!(bus.lock().unwrap().active_binding, Some(paused));
+        let events = queue.take().unwrap();
+        assert_eq!(events.len(), 1);
+        let value = batch_json(&events[0]);
+        assert_eq!(value["kind"], "runtime-output-batch");
+        assert_eq!(value["outputs"][0]["kind"], "binding");
+        assert_eq!(value["outputs"][0]["runtime"]["controlRevision"], "3");
+        assert_eq!(value["outputs"][1]["kind"], "frame");
+        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn one_receipt_encodes_as_one_ordered_output_batch() {
+        let (bus, queue) = subscribed_bus();
+        let output_through = push_outputs(
+            &bus,
+            vec![
+                ProductDevRuntimeOutput::runtime_readout(crate::ProductDevRuntimeReadout::new(
+                    binding(),
+                    crate::ProductDevRuntimeMode::Realtime,
+                    crate::ProductDevRuntimeState::Running,
+                )),
+                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+            ],
+        )
+        .expect("receipt batch publishes");
+        let events = queue.take().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, output_through);
+        let value = batch_json(&events[0]);
+        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
+        assert_eq!(value["outputs"][1]["kind"], "frame");
+    }
+
+    #[test]
+    fn sixty_hertz_receipts_deliver_one_event_per_receipt_in_order() {
+        let (bus, queue) = subscribed_bus();
+        for tick in 0..60 {
+            push_outputs(&bus, representative_realtime_receipt(tick)).unwrap();
+        }
+        let events = queue.take().unwrap();
+        assert_eq!(events.len(), 60);
+        for (tick, event) in events.iter().enumerate() {
+            let value = batch_json(event);
+            let kinds: Vec<_> = value["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|output| output["kind"].as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    "frame",
+                    "view-composition",
+                    "ui-projection",
+                    "runtime-readout"
+                ]
+            );
+            assert_eq!(
+                value["outputs"][0]["frame"]["publication"]["stream"],
+                format!("{{\"tick\":{tick}}}")
+            );
+        }
+    }
+
+    #[test]
+    fn subscribers_share_one_encoding_and_see_only_later_publications() {
+        let (bus, early) = subscribed_bus();
+        push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"n": 1}),
+            )],
+        )
+        .unwrap();
+        let late = Arc::new(SubscriberQueue::default());
+        bus.lock().unwrap().subscribers.push(Arc::downgrade(&late));
+        push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"n": 2}),
+            )],
+        )
+        .unwrap();
+        let early = early.take().unwrap();
+        let late = late.take().unwrap();
+        assert_eq!(early.len(), 2);
+        assert_eq!(late.len(), 1);
+        assert!(Arc::ptr_eq(&early[1].json, &late[0].json));
+        assert_eq!(late[0].id, 2);
+    }
+
+    #[test]
+    fn a_subscriber_that_falls_behind_is_closed_and_a_dropped_one_is_pruned() {
+        let (bus, slow) = subscribed_bus();
+        let gone = Arc::new(SubscriberQueue::default());
+        bus.lock().unwrap().subscribers.push(Arc::downgrade(&gone));
+        drop(gone);
+        for tick in 0..=MAX_SUBSCRIBER_QUEUE_EVENTS as u64 {
+            push_outputs(&bus, representative_realtime_receipt(tick)).unwrap();
+        }
+        assert!(
+            slow.take().is_none(),
+            "an overflowed subscriber must reconnect fresh"
+        );
+        assert_eq!(bus.lock().unwrap().subscribers.len(), 1);
+    }
+
+    #[test]
+    fn a_large_output_is_one_event() {
+        let (bus, queue) = subscribed_bus();
+        let payload = "x".repeat(4 * 1024 * 1024);
+        push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({ "payload": payload }),
+            )],
+        )
+        .unwrap();
+        let events = queue.take().unwrap();
+        assert_eq!(events.len(), 1);
+        let stream = batch_json(&events[0])["outputs"][0]["frame"]["publication"]["stream"]
+            .as_str()
+            .map(str::len);
+        assert!(stream > Some(payload.len()));
+    }
+
+    #[test]
+    fn a_rejected_publication_sends_nothing_and_fences_the_binding() {
+        let (bus, queue) = subscribed_bus();
+        let replacement = crate::ProductDevRuntimeBinding {
+            generation: CanonicalU64::new(binding().generation.get() + 1),
+            ..binding()
+        };
+        let error = push_outputs(
+            &bus,
+            vec![
+                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::binding(replacement, CanonicalU64::new(0)),
+                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+            ],
+        )
+        .expect_err("a baseline must complete within its publication");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
+        assert!(queue.take().unwrap().is_empty());
+        assert_eq!(bus.lock().unwrap().active_binding, None);
+        let error = push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({}),
+            )],
+        )
+        .expect_err("incrementals need a fresh baseline after a fence");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
+    }
+
     #[test]
     fn telemetry_snapshot_is_bounded_and_keeps_subsecond_rates() {
         let mut telemetry = HostTelemetry::default();
@@ -3162,8 +3068,7 @@ mod tests {
             TransportTelemetry {
                 connections: 2,
                 subscribers: 1,
-                output_queue_items: MAX_OUTPUT_QUEUE_ITEMS,
-                output_queue_floor: 8,
+                output_queue_items: MAX_SUBSCRIBER_QUEUE_EVENTS,
                 output_binding_active: true,
             },
         );
@@ -3184,7 +3089,7 @@ mod tests {
         assert_eq!(snapshot.oldest_input_age_ms, Some(CanonicalU64::new(2500)));
         assert!(snapshot.input_overflow_pending);
         let wire = serde_json::to_value(&snapshot).expect("telemetry is serializable");
-        assert_eq!(wire["outputQueueItems"], MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(wire["outputQueueItems"], MAX_SUBSCRIBER_QUEUE_EVENTS);
         assert_eq!(wire["runtimeProgressRateMillihertz"], "500");
         assert!(serde_json::to_vec(&snapshot).unwrap().len() < 4 * 1024);
     }
@@ -3346,213 +3251,6 @@ mod tests {
         owner_thread.join().expect("owner worker");
     }
 
-    #[test]
-    fn retired_resource_leases_follow_replay_history_without_entering_sse() {
-        let resource = crate::ProductDevRendererResource::admit_font(
-            "content/font.woff2",
-            b"wOF2fixture".to_vec(),
-        )
-        .unwrap();
-        let identity = resource.identity().to_owned();
-        let weak = Arc::downgrade(&resource.shared_bytes());
-        let output = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({}))
-            .with_resources(vec![resource].into());
-        let mut bus = OutputBus {
-            active_binding: Some(binding()),
-            retained_event_limit: 1,
-            ..OutputBus::default()
-        };
-        append_output_events(&mut bus, binding(), vec![output]).unwrap();
-        assert!(weak.upgrade().is_some());
-        assert_eq!(
-            bus.renderer_resource(&identity, binding().generation.get())
-                .unwrap()
-                .bytes(),
-            b"wOF2fixture"
-        );
-        assert!(bus
-            .renderer_resource(&identity, binding().generation.get() + 1)
-            .is_none());
-        assert!(!bus.events[0].json.contains("__retiredResources"));
-        assert!(!bus.events[0].json.contains("bodyBase64"));
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({}),
-            )],
-        )
-        .unwrap();
-        assert!(bus
-            .renderer_resource(&identity, binding().generation.get())
-            .is_none());
-        assert!(weak.upgrade().is_none());
-    }
-
-    #[test]
-    fn sse_snapshot_keeps_shared_json_alive_after_history_retirement() {
-        let mut bus = OutputBus {
-            retained_event_limit: 1,
-            ..OutputBus::default()
-        };
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({}),
-            )],
-        )
-        .unwrap();
-        let snapshot = bus.after(0);
-        assert!(Arc::ptr_eq(&snapshot.events[0].json, &bus.events[0].json));
-        let expected = snapshot.events[0].json.to_string();
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({}),
-            )],
-        )
-        .unwrap();
-        assert_eq!(bus.floor_cursor, 1);
-        assert!(bus.after(0).events.is_empty());
-        drop(bus);
-        assert_eq!(&*snapshot.events[0].json, expected);
-    }
-
-    #[test]
-    fn baseline_fragments_accumulate_across_pushes_until_completion() {
-        let runtime = binding();
-        let bus = Mutex::new(OutputBus::default());
-        push_outputs(
-            &bus,
-            vec![ProductDevRuntimeOutput::binding(
-                runtime,
-                CanonicalU64::new(0),
-            )],
-        )
-        .unwrap();
-        for tick in 0..3 {
-            push_outputs(
-                &bus,
-                vec![ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"tick": tick}),
-                )],
-            )
-            .unwrap();
-            assert!(bus.lock().unwrap().events.is_empty());
-        }
-        push_outputs(
-            &bus,
-            vec![ProductDevRuntimeOutput::complete_baseline(runtime)],
-        )
-        .unwrap();
-        let bus = bus.lock().unwrap();
-        assert!(bus.pending_baseline.is_none());
-        assert_eq!(bus.active_binding, Some(runtime));
-        let batch: serde_json::Value = serde_json::from_str(&bus.events[0].json).unwrap();
-        // Completion attaches its frontiers to the binding rather than emitting a record.
-        assert_eq!(batch["outputs"].as_array().unwrap().len(), 4);
-    }
-
-    #[test]
-    fn oversized_output_uses_bounded_ordered_fragments_while_small_output_stays_simple() {
-        let mut bus = OutputBus::default();
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"payload": "small"}),
-            )],
-        )
-        .unwrap();
-        assert_eq!(bus.events.len(), 1);
-        assert_eq!(bus.events[0].event, None);
-
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1)}),
-            )],
-        )
-        .unwrap();
-        let fragments = bus.events.iter().skip(1).collect::<Vec<_>>();
-        assert!(fragments.len() > 1);
-        assert!(fragments.iter().all(|event| {
-            event.event == Some("rusty-output-fragment")
-                && event.json.len() <= MAX_OUTPUT_EVENT_BYTES
-        }));
-        let decoded = fragments
-            .iter()
-            .map(|event| serde_json::from_str::<serde_json::Value>(&event.json).unwrap())
-            .collect::<Vec<_>>();
-        assert!(decoded.iter().enumerate().all(|(index, value)| {
-            value["fragmentIndex"] == index
-                && value["fragmentCount"] == fragments.len()
-                && value["runtime"]["generation"] == "1"
-        }));
-    }
-
-    #[test]
-    fn in_place_rebind_group_publishes_as_one_incremental_batch() {
-        let mut bus = OutputBus {
-            active_binding: Some(binding()),
-            ..OutputBus::default()
-        };
-        let paused = crate::ProductDevRuntimeBinding {
-            control_revision: CanonicalU64::new(3),
-            ..binding()
-        };
-        // A same-incarnation fence: binding, the callback's own outputs, and
-        // completion, without any world snapshot between them.
-        push_outputs_staged(
-            &mut bus,
-            vec![
-                crate::model::ProductDevRuntimeOutput::binding(paused, CanonicalU64::new(5)),
-                crate::model::ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(paused),
-            ],
-        )
-        .expect("in-place rebind publishes");
-        assert_eq!(bus.active_binding, Some(paused));
-        assert_eq!(bus.events.len(), 1);
-        let value: serde_json::Value = serde_json::from_str(&bus.events[0].json).unwrap();
-        assert_eq!(value["kind"], "runtime-output-batch");
-        assert_eq!(value["outputs"][0]["kind"], "binding");
-        assert_eq!(value["outputs"][0]["runtime"]["controlRevision"], "3");
-        assert_eq!(value["outputs"][1]["kind"], "frame");
-        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
-    }
-
-    #[test]
-    fn one_receipt_encodes_as_one_ordered_output_batch() {
-        let mut bus = OutputBus {
-            active_binding: Some(binding()),
-            ..OutputBus::default()
-        };
-        push_outputs_staged(
-            &mut bus,
-            vec![
-                crate::model::ProductDevRuntimeOutput::runtime_readout(
-                    crate::model::ProductDevRuntimeReadout::new(
-                        binding(),
-                        crate::model::ProductDevRuntimeMode::Realtime,
-                        crate::model::ProductDevRuntimeState::Running,
-                    ),
-                ),
-                crate::model::ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
-            ],
-        )
-        .expect("receipt batch publishes");
-        assert_eq!(bus.events.len(), 1);
-        let value: serde_json::Value = serde_json::from_str(&bus.events[0].json).unwrap();
-        assert_eq!(value["kind"], "runtime-output-batch");
-        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
-        assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
-        assert_eq!(value["outputs"][1]["kind"], "frame");
-    }
-
     fn representative_realtime_receipt(tick: u64) -> Vec<ProductDevRuntimeOutput> {
         let runtime = binding();
         let composition = render_host_contracts::RendererViewComposition {
@@ -3591,431 +3289,6 @@ mod tests {
                 .with_clock(None, Some(tick + 1)),
             ),
         ]
-    }
-
-    #[test]
-    fn sixty_hertz_receipts_retain_one_sse_event_and_json_parse_per_receipt() {
-        const RECEIPTS: usize = 60;
-        const OUTPUTS_PER_RECEIPT: usize = 4;
-        let expected_kinds = [
-            "frame",
-            "view-composition",
-            "ui-projection",
-            "runtime-readout",
-        ];
-        let mut bus = OutputBus {
-            active_binding: Some(binding()),
-            ..OutputBus::default()
-        };
-        for tick in 0..RECEIPTS {
-            push_outputs_staged(&mut bus, representative_realtime_receipt(tick as u64))
-                .expect("representative realtime receipt publishes");
-        }
-
-        let mut sse_delivery_callbacks = 0;
-        let mut json_parse_calls = 0;
-        let mut dispatched_kinds = Vec::with_capacity(RECEIPTS * OUTPUTS_PER_RECEIPT);
-        for event in &bus.events {
-            sse_delivery_callbacks += 1;
-            json_parse_calls += 1;
-            let payload: Value =
-                serde_json::from_str(&event.json).expect("retained SSE event is valid JSON");
-            assert_eq!(payload["kind"], "runtime-output-batch");
-            let outputs = payload["outputs"]
-                .as_array()
-                .expect("retained event contains typed outputs");
-            assert_eq!(outputs.len(), OUTPUTS_PER_RECEIPT);
-            dispatched_kinds.extend(outputs.iter().map(|output| {
-                output["kind"]
-                    .as_str()
-                    .expect("typed output kind")
-                    .to_owned()
-            }));
-        }
-
-        assert_eq!(sse_delivery_callbacks, RECEIPTS);
-        assert_eq!(json_parse_calls, RECEIPTS);
-        assert_eq!(dispatched_kinds.len(), RECEIPTS * OUTPUTS_PER_RECEIPT);
-        assert_eq!(
-            dispatched_kinds,
-            expected_kinds
-                .iter()
-                .map(|kind| (*kind).to_owned())
-                .cycle()
-                .take(RECEIPTS * OUTPUTS_PER_RECEIPT)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            RECEIPTS * OUTPUTS_PER_RECEIPT,
-            240,
-            "the old one-callback-per-output stream would deliver about 240 outputs",
-        );
-        assert!(
-            sse_delivery_callbacks < RECEIPTS * OUTPUTS_PER_RECEIPT,
-            "one SSE delivery per receipt is materially below one per contained output",
-        );
-    }
-
-    #[test]
-    fn full_queue_publication_shares_retained_payloads_and_reports_throughput() {
-        const MEASURED_PUBLISHES: usize = 120;
-        let runtime = binding();
-        let large_payload = "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1);
-        let mut large_probe = OutputBus::default();
-        append_output_events(
-            &mut large_probe,
-            runtime,
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"payload": large_payload}),
-            )],
-        )
-        .expect("representative large output fragments");
-        let large_event_count = large_probe.events.len();
-        assert!(large_event_count > 1);
-
-        let bus = Mutex::new(OutputBus {
-            active_binding: Some(runtime),
-            ..OutputBus::default()
-        });
-        for sequence in 0..MAX_OUTPUT_QUEUE_ITEMS - large_event_count {
-            push_outputs(
-                &bus,
-                vec![ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"sequence": sequence}),
-                )],
-            )
-            .expect("representative small output publishes");
-        }
-        let large_ids = {
-            let locked = bus.lock().expect("test bus lock");
-            large_probe
-                .events
-                .iter()
-                .map(|event| event.id + locked.next_id)
-                .collect::<Vec<_>>()
-        };
-        push_outputs(
-            &bus,
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1)}),
-            )],
-        )
-        .expect("large fragmented output fills retained queue");
-        let (retained_bytes, retained_payloads, initial_floor, initial_next_id) = {
-            let locked = bus.lock().expect("test bus lock");
-            assert_eq!(locked.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-            assert_eq!(
-                locked
-                    .events
-                    .iter()
-                    .filter(|event| event.event == Some("rusty-output-fragment"))
-                    .count(),
-                large_event_count
-            );
-            let retained_bytes = locked
-                .events
-                .iter()
-                .map(|event| event.json.len())
-                .sum::<usize>();
-            let retained_payloads = large_ids
-                .iter()
-                .map(|id| {
-                    let event = locked
-                        .events
-                        .iter()
-                        .find(|event| event.id == *id)
-                        .expect("large event is retained");
-                    (*id, event.json.as_ptr(), event.json.len())
-                })
-                .collect::<Vec<_>>();
-            (
-                retained_bytes,
-                retained_payloads,
-                locked.floor_cursor,
-                locked.next_id,
-            )
-        };
-
-        let started = Instant::now();
-        for sequence in 0..MEASURED_PUBLISHES {
-            push_outputs(
-                &bus,
-                vec![ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"measuredSequence": sequence}),
-                )],
-            )
-            .expect("measured output publishes");
-        }
-        let elapsed = started.elapsed();
-
-        let locked = bus.lock().expect("test bus lock");
-        assert_eq!(locked.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(
-            locked.floor_cursor,
-            initial_floor + MEASURED_PUBLISHES as u64
-        );
-        assert_eq!(locked.next_id, initial_next_id + MEASURED_PUBLISHES as u64);
-        let reconnect = locked.after(locked.floor_cursor);
-        assert_eq!(reconnect.floor_cursor, locked.floor_cursor);
-        assert_eq!(reconnect.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(reconnect.events.first().map(|event| event.id), Some(121));
-        assert_eq!(
-            reconnect.events.last().map(|event| event.id),
-            Some(locked.next_id)
-        );
-        for (id, pointer, length) in retained_payloads {
-            let event = locked
-                .events
-                .iter()
-                .find(|event| event.id == id)
-                .expect("large fragmented payload survives the measurement window");
-            assert_eq!(
-                event.json.as_ptr(),
-                pointer,
-                "retained JSON was reallocated"
-            );
-            assert_eq!(event.json.len(), length);
-        }
-        eprintln!(
-            "output-bus full_queue={} retained_bytes={} large_fragments={} publishes={} elapsed_us={} ns_per_publish={}",
-            locked.events.len(),
-            retained_bytes,
-            large_event_count,
-            MEASURED_PUBLISHES,
-            elapsed.as_micros(),
-            elapsed.as_nanos() / MEASURED_PUBLISHES as u128,
-        );
-    }
-
-    #[test]
-    fn failed_multi_segment_receipt_preserves_history_and_fences_binding() {
-        let active_runtime = binding();
-        let replacement_runtime = crate::ProductDevRuntimeBinding {
-            generation: CanonicalU64::new(2),
-            ..active_runtime
-        };
-        let bus = Mutex::new(OutputBus {
-            active_binding: Some(active_runtime),
-            ..OutputBus::default()
-        });
-        push_outputs(
-            &bus,
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"retained": true}),
-            )],
-        )
-        .expect("initial incremental output publishes");
-        let (retained_id, retained_pointer, retained_length, next_id, floor_cursor) = {
-            let locked = bus.lock().expect("test bus lock");
-            let retained = locked.events.front().expect("retained event");
-            (
-                retained.id,
-                retained.json.as_ptr(),
-                retained.json.len(),
-                locked.next_id,
-                locked.floor_cursor,
-            )
-        };
-
-        let error = push_outputs(
-            &bus,
-            vec![
-                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
-                ProductDevRuntimeOutput::binding(replacement_runtime, CanonicalU64::new(0)),
-                ProductDevRuntimeOutput::binding(replacement_runtime, CanonicalU64::new(0)),
-            ],
-        )
-        .expect_err("second binding rejects the complete receipt");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
-
-        let locked = bus.lock().expect("test bus lock");
-        assert_eq!(locked.events.len(), 1);
-        let retained = locked.events.front().expect("retained event survives");
-        assert_eq!(retained.id, retained_id);
-        assert_eq!(retained.json.as_ptr(), retained_pointer);
-        assert_eq!(retained.json.len(), retained_length);
-        assert_eq!(locked.next_id, next_id);
-        assert_eq!(locked.floor_cursor, floor_cursor);
-        assert!(locked.active_binding.is_none());
-        assert!(locked.pending_baseline.is_none());
-    }
-
-    #[test]
-    fn large_incremental_keeps_every_fragment_without_a_size_cutoff() {
-        let mut bus = OutputBus::default();
-        let payload = "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS + 1));
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"payload": payload}),
-            )],
-        )
-        .unwrap();
-        assert!(bus.events.len() > MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(bus.floor_cursor, 0);
-        let first: serde_json::Value =
-            serde_json::from_str(&bus.events.front().unwrap().json).unwrap();
-        let last: serde_json::Value =
-            serde_json::from_str(&bus.events.back().unwrap().json).unwrap();
-        assert_eq!(first["fragmentIndex"], 0);
-        assert_eq!(last["fragmentCount"], bus.events.len());
-        assert_eq!(last["fragmentIndex"], bus.events.len() - 1);
-        // One later pulse must not truncate the transfer before a subscriber can read it.
-        let transfer_end = bus.next_id;
-        append_output_events(
-            &mut bus,
-            binding(),
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({}),
-            )],
-        )
-        .unwrap();
-        assert_eq!(bus.floor_cursor, 0);
-        assert_eq!(bus.events.front().unwrap().id, 1);
-        assert_eq!(bus.events.len() as u64, transfer_end + 1);
-        // Once a full newer history exists, retire the entire transfer at once.
-        for _ in 1..MAX_OUTPUT_QUEUE_ITEMS {
-            append_output_events(
-                &mut bus,
-                binding(),
-                vec![ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({}),
-                )],
-            )
-            .unwrap();
-        }
-        assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(bus.floor_cursor, transfer_end);
-    }
-
-    #[test]
-    fn complete_large_baseline_keeps_whole_public_and_private_transfers() {
-        let runtime = binding();
-        let payload = "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS + 1));
-        let baseline = || {
-            vec![
-                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
-                crate::model::ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"payload": payload}),
-                ),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(runtime),
-            ]
-        };
-
-        let mut public = OutputBus::default();
-        push_outputs_staged(&mut public, baseline()).expect("large public baseline publishes");
-        assert!(public.events.len() > MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(
-            public.floor_cursor, 0,
-            "public history must not truncate a newly completed baseline"
-        );
-        assert_eq!(public.after(0).floor_cursor, public.floor_cursor);
-        assert_eq!(public.active_binding, Some(runtime));
-
-        let mut private = OutputBus::private_baseline();
-        push_outputs_staged(&mut private, baseline()).expect("private baseline publishes");
-        assert!(private.events.len() > MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(private.floor_cursor, 0);
-        assert_eq!(private.events.front().map(|event| event.id), Some(1));
-        assert_eq!(private.active_binding, Some(runtime));
-    }
-
-    #[test]
-    fn interrupted_large_baseline_never_leaks_a_private_prefix() {
-        let runtime = binding();
-        let bus = Mutex::new(OutputBus::private_baseline());
-        push_outputs(
-            &bus,
-            vec![
-                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
-                crate::model::ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"payload": "x".repeat(16 * 1024 * 1024 + 1)}),
-                ),
-            ],
-        )
-        .expect("incomplete baseline remains staged");
-        assert!(bus.lock().expect("private bus").events.is_empty());
-
-        let error = push_outputs(
-            &bus,
-            vec![crate::model::ProductDevRuntimeOutput::binding(
-                crate::ProductDevRuntimeBinding {
-                    generation: CanonicalU64::new(2),
-                    ..runtime
-                },
-                CanonicalU64::new(0),
-            )],
-        )
-        .expect_err("interrupted baseline is fenced");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
-        let bus = bus.lock().expect("private bus");
-        assert!(bus.events.is_empty());
-        assert!(bus.pending_baseline.is_none());
-        assert!(bus.active_binding.is_none());
-    }
-
-    #[test]
-    fn bounded_fragmented_baseline_replaces_the_active_binding() {
-        let active_runtime = binding();
-        let replacement_runtime = crate::ProductDevRuntimeBinding {
-            generation: CanonicalU64::new(2),
-            ..active_runtime
-        };
-        let fragmented_payload =
-            "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1));
-        let bus = Mutex::new(OutputBus::default());
-        push_outputs(
-            &bus,
-            vec![
-                crate::model::ProductDevRuntimeOutput::binding(
-                    active_runtime,
-                    CanonicalU64::new(0),
-                ),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(active_runtime),
-            ],
-        )
-        .expect("initial runtime baseline publishes");
-        push_outputs(
-            &bus,
-            vec![
-                crate::model::ProductDevRuntimeOutput::binding(
-                    replacement_runtime,
-                    CanonicalU64::new(0),
-                ),
-                crate::model::ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"payload": fragmented_payload}),
-                ),
-                crate::model::ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"payload": "y".repeat(
-                        MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1),
-                    )}),
-                ),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(replacement_runtime),
-            ],
-        )
-        .expect("complete producer baseline stays within its separate recovery budget");
-        let locked = bus.lock().expect("test bus lock");
-        assert!(locked.pending_baseline.is_none());
-        assert_eq!(locked.active_binding, Some(replacement_runtime));
-        assert!(locked.events.len() >= MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(
-            locked.floor_cursor, 1,
-            "only the initial complete binding publication ages out"
-        );
-        assert_eq!(locked.events.front().unwrap().id, 2);
-        drop(locked);
-
-        push_outputs(
-            &bus,
-            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"incremental": true}),
-            )],
-        )
-        .expect("incremental output follows the admitted replacement baseline");
-        let locked = bus.lock().expect("test bus lock");
-        assert!(locked.pending_baseline.is_none());
-        assert_eq!(locked.active_binding, Some(replacement_runtime));
     }
 }
 
@@ -4499,16 +3772,6 @@ fn json_response<T: Serialize>(status: u16, value: &T) -> HttpResponse {
             "response could not be encoded",
         ),
     }
-}
-
-fn parse_last_event_id(value: &str) -> Option<u64> {
-    if value.is_empty()
-        || (value.len() > 1 && value.starts_with('0'))
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    value.parse().ok()
 }
 
 fn bounded_text(value: &str, maximum: usize) -> String {

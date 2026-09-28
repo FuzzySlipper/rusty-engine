@@ -90,9 +90,9 @@ export interface LiveDebugTelemetrySnapshot {
   readonly runtimeProgressUnavailableReason: string | null;
   readonly connections: number;
   readonly subscribers: number;
+  /** Unsent events held for the slowest output subscriber, and the bound at which it is closed to reconnect fresh. */
   readonly outputQueueItems: number;
   readonly outputQueueCapacity: number;
-  readonly outputQueueFloor: string;
   readonly outputBindingActive: boolean;
   /** Completed C# update samples. Service time is nested in callback time. */
   readonly updateAttribution: LiveDebugUpdateAttributionSnapshot | null;
@@ -264,7 +264,7 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     'inputBatchCapacity', 'oldestInputAgeMs', 'inputOverflowPending',
     'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs', 'runtimeProgressUnavailableReason',
     'connections',
-    'subscribers', 'outputQueueItems', 'outputQueueCapacity', 'outputQueueFloor',
+    'subscribers', 'outputQueueItems', 'outputQueueCapacity',
     'outputBindingActive',
     'updateAttribution',
   ];
@@ -298,7 +298,6 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
   }
   if (typeof candidate.inputOverflowPending !== 'boolean'
     || typeof candidate.outputBindingActive !== 'boolean'
-    || !canonicalU64(candidate.outputQueueFloor)
     || (candidate.runtimeProgressUnavailableReason !== null && typeof candidate.runtimeProgressUnavailableReason !== 'string')
     || (candidate.updateAttribution !== null && !isObject(candidate.updateAttribution))) {
     throw new Error('Live-debug telemetry snapshot is invalid.');
@@ -320,7 +319,6 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     subscribers: candidate.subscribers as number,
     outputQueueItems: candidate.outputQueueItems as number,
     outputQueueCapacity: candidate.outputQueueCapacity as number,
-    outputQueueFloor: candidate.outputQueueFloor,
     outputBindingActive: candidate.outputBindingActive,
     updateAttribution: candidate.updateAttribution === null
       ? null

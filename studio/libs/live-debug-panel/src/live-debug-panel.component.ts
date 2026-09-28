@@ -134,7 +134,7 @@ let nextLiveDebugPanelInstance = 1;
           <span>Input queue: {{ telemetry.queuedInputBatches }}/{{ telemetry.inputBatchCapacity }} batches · {{ telemetry.queuedInputEvents }} events · oldest {{ milliseconds(telemetry.oldestInputAgeMs) }}<ng-container *ngIf="telemetry.inputOverflowPending"> · overflow pending</ng-container></span>
           <span *ngIf="telemetry.runtimeProgressUnavailableReason !== null; else runtimeProgress">Runtime progress unavailable: {{ telemetry.runtimeProgressUnavailableReason }}</span>
           <ng-template #runtimeProgress><span>Runtime progress: {{ millihertz(telemetry.runtimeProgressRateMillihertz) }} · last {{ milliseconds(telemetry.runtimeProgressAgeMs) }}</span></ng-template>
-          <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · retained output history {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · advancing floor {{ telemetry.outputQueueFloor }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
+          <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · largest subscriber backlog {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
         </section>
       </ng-container>
 

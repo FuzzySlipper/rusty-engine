@@ -213,28 +213,6 @@ test('generated product browser host disposes transport and application owners',
   await expect(page.locator('#application')).toHaveAttribute('data-product-browser-state', 'disposed');
 });
 
-test('named output lag closes the transport and leaves the host visibly failed', async ({ page }) => {
-  await page.goto('/browser/product-browser-host.html');
-  await expect(page.locator('#product-state')).toHaveText('state: ready');
-  await page.locator('#product-output-lag').click();
-  await expect(page.locator('#product-state')).toHaveText('state: failed');
-  await expect(page.locator('#application')).toHaveAttribute('data-transport-disposed', 'true');
-  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'failed');
-  await expect(page.locator('body')).toHaveAttribute(
-    'data-rusty-product-runtime-failure',
-    'fixture output lag requires a fresh snapshot',
-  );
-  const rejected = await page.evaluate(async () => {
-    try {
-      await window.__rustyProductBrowserHost?.admitDemandStep();
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    }
-  });
-  expect(rejected).toContain('has failed and its runtime transport is closed');
-});
-
 test('unbounded terminal diagnostics fail closed without exposing the payload', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html');
   await expect(page.locator('#product-state')).toHaveText('state: ready');

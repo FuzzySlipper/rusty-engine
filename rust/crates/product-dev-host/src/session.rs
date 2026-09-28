@@ -334,18 +334,14 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         result: Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     ) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
         let inventory = runtime.renderer_resource_ids();
-        let resources = runtime.take_retired_renderer_resources();
         result.map(|receipt| {
             let mut previous = self
                 .resource_inventory
                 .lock()
                 .expect("inventory is only accessed under runtime serialization");
-            // A retired body may be needed by this call's publications, but
-            // must not become part of the authoritative retained inventory.
-            let changed =
-                receipt.resource_baseline() || *previous != inventory || !resources.is_empty();
+            let changed = receipt.resource_baseline() || *previous != inventory;
             *previous = inventory.clone();
-            receipt.with_resources(resources, if changed { inventory } else { None })
+            receipt.with_resource_inventory(if changed { inventory } else { None })
         })
     }
 
@@ -402,7 +398,6 @@ mod tests {
     #[derive(Default)]
     struct FixtureRuntime {
         inventory: Option<Vec<String>>,
-        retired: Vec<ProductDevRendererResource>,
     }
 
     impl FixtureRuntime {
@@ -447,10 +442,6 @@ mod tests {
     impl ProductDevRuntime for FixtureRuntime {
         fn renderer_resource_ids(&self) -> Option<Vec<String>> {
             self.inventory.clone()
-        }
-
-        fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
-            std::mem::take(&mut self.retired)
         }
 
         fn lifecycle(
@@ -530,46 +521,32 @@ mod tests {
     }
 
     #[test]
-    fn final_release_publishes_empty_retention_in_the_same_call() {
-        for initially_loaded in [false, true] {
-            let resource = ProductDevRendererResource::admit_font(
-                "content/font.woff2",
-                b"wOF2fixture".to_vec(),
-            )
+    fn final_release_publishes_the_empty_retained_closure() {
+        let identity =
+            ProductDevRendererResource::admit_font("content/font.woff2", b"wOF2fixture".to_vec())
+                .unwrap()
+                .identity()
+                .to_owned();
+        let owner = ProductDevOperationOwner::new(FixtureRuntime {
+            inventory: Some(vec![identity]),
+        });
+        // Establish the previous mounted inventory without a binding baseline.
+        owner
+            .with_runtime(|_| Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap()))
             .unwrap();
-            let identity = resource.identity().to_owned();
-            let owner = ProductDevOperationOwner::new(FixtureRuntime {
-                inventory: Some(if initially_loaded {
-                    vec![identity.clone()]
-                } else {
-                    vec![]
-                }),
-                retired: vec![],
-            });
-            // Establish the previous mounted inventory without a binding baseline.
-            owner
-                .with_runtime(|_| Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap()))
-                .unwrap();
-            let receipt = owner
-                .with_runtime(|runtime| {
-                    runtime.inventory = Some(vec![]);
-                    runtime.retired.push(resource);
-                    Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap())
-                })
-                .unwrap();
-            let (_, outputs) = receipt.into_wire_parts().unwrap();
-            assert_eq!(outputs.len(), 2);
-            assert_eq!(
-                serde_json::to_value(&outputs[0]).unwrap()["rendererResources"],
-                serde_json::json!([identity])
-            );
-            assert_eq!(
-                serde_json::to_value(&outputs[1]).unwrap()["rendererResources"],
-                serde_json::json!([])
-            );
-            assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2fixture");
-            assert_eq!(*owner.resource_inventory.lock().unwrap(), Some(vec![]));
-        }
+        let receipt = owner
+            .with_runtime(|runtime| {
+                runtime.inventory = Some(vec![]);
+                Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap())
+            })
+            .unwrap();
+        let (_, outputs) = receipt.into_wire_parts().unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&outputs[0]).unwrap()["rendererResources"],
+            serde_json::json!([])
+        );
+        assert_eq!(*owner.resource_inventory.lock().unwrap(), Some(vec![]));
     }
 
     #[test]

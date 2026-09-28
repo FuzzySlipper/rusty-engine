@@ -1687,9 +1687,6 @@ pub(crate) struct RuntimeAppearanceCall {
     projected_frame: bool,
     /// Presentation frames emitted in this call; their sequence numbers.
     presentation_frames: u32,
-    /// Payloads released in this callback remain available through delivery of
-    /// its already-staged renderer operations, then may be dropped.
-    pub(crate) retired_resources: Vec<CsharpRenderResource>,
 }
 
 #[derive(Clone)]
@@ -2039,7 +2036,6 @@ impl RuntimeAppearanceBridge {
             outputs: Vec::new(),
             projected_frame: false,
             presentation_frames: 0,
-            retired_resources: Vec::new(),
         });
         self.operation_error = None;
     }
@@ -3534,8 +3530,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         staged.state.resource_open_counts.remove(&handle);
-        let retired = remove_resource(&mut staged.state, handle)?;
-        staged.retired_resources.push(retired);
+        remove_resource(&mut staged.state, handle)?;
         staged.resource_releases_pending = true;
         Ok(())
     }
@@ -4148,9 +4143,7 @@ impl RuntimeAppearanceBridge {
         resources
             .sprite_atlases
             .retain(|atlas| atlas.id != format!("sprite/native-{suffix}"));
-        staged
-            .retired_resources
-            .extend(release_unowned_internal_resources(&mut staged.state));
+        release_unowned_internal_resources(&mut staged.state);
         staged.resource_releases_pending = true;
         Ok(())
     }
@@ -10448,10 +10441,7 @@ fn remove_resource(
     Ok(resource)
 }
 
-fn release_unowned_internal_resources(
-    state: &mut RuntimeAppearanceState,
-) -> Vec<CsharpRenderResource> {
-    let mut retired = Vec::new();
+fn release_unowned_internal_resources(state: &mut RuntimeAppearanceState) {
     loop {
         let orphan = state.resource_identities.values().copied().find(|handle| {
             !state.resource_open_counts.contains_key(handle)
@@ -10461,9 +10451,8 @@ fn release_unowned_internal_resources(
         // The handle came from a monotonic internal slot and has no exposed
         // owner. `resource_live_owner` establishes that no retained fact can
         // still name it.
-        retired.push(remove_resource(state, handle).expect("live internal resource slot"));
+        remove_resource(state, handle).expect("live internal resource slot");
     }
-    retired
 }
 
 fn material_descriptor(
@@ -12745,11 +12734,6 @@ pub(super) mod tests {
             .unwrap();
         bridge.destroy_resource(first.handle).unwrap();
         assert!(bridge.resource(first.handle.value).is_err());
-        assert_eq!(
-            bridge.staged.as_ref().unwrap().retired_resources.len(),
-            1,
-            "same-call publication retains the released payload"
-        );
         let call = bridge.take_staged_call().unwrap().unwrap();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {
@@ -12932,11 +12916,6 @@ pub(super) mod tests {
         assert!(staged.render_frames().iter().any(|frame| frame.ops.iter().any(|op| {
             matches!(op, render_model::RenderDiff::ReleaseStaticMesh { asset } if asset == &format!("mesh/native-{}", first.value))
         })), "disposing the published appearance releases its GPU mesh definition");
-        assert_eq!(
-            staged.retired_resources.len(),
-            1,
-            "the final body survives for queued publication delivery"
-        );
         let resources = staged.state.projector.resources_mut();
         assert!(resources.static_meshes.is_empty());
         assert!(resources.materials.is_empty());

@@ -164,21 +164,30 @@ native arrays while retaining the required pin and release lifetimes.
 
 Auxiliary publication frontier checks read only the stream revision; they do
 not fork retained graphics maps. Commit rechecks after asynchronous realization.
-SSE readers share immutable encoded JSON outside the output lock, and fragmented
-baselines transfer accumulated ownership between pushes. Product artifact
+SSE subscribers share one immutable encoding of each output batch. Product artifact
 resolution checks paths/metadata without reading bodies that it would discard;
 actual loaders and UI staging consume those bodies when needed.
 
 Catalog admission canonicalizes owned data once before encoding it.
 
-Output batches use ordered fragments without a default aggregate byte/count cap.
-The host serializes actual delivery bytes, not a discarded size preflight. The
-256-event reconnect history is a retention target rounded outward to whole
-publications. Later publications cannot truncate a large transfer; it ages out
-only once a full newer history exists. Private baselines preserve every fragment
-until completion. Lost/interrupted transfers
-currently discard staging and use a fresh complete baseline. Size alone does
-not reconstruct a delta as a baseline in this implementation.
+Each operation's outputs become ordered output batches, each sent as one SSE
+event of any size; there is no default byte or count cap and no fragmenting. A
+binding opens a baseline that must complete within the same operation.
+
+There is no output history and no resume. Every SSE connection starts from a
+fresh complete baseline: a reload, a dropped connection, and a replaced runtime
+all reconnect the same way. Each subscriber gets its own live queue from the
+moment its baseline is captured. A subscriber that falls
+`MAX_SUBSCRIBER_QUEUE_EVENTS` (256) events behind, or stops reading for the
+750 ms write timeout, is closed, and the browser reconnects for a fresh
+baseline. One-shot transients published while a browser is disconnected are
+not replayed. SSE ids remain only as an output sequence, so a caller can wait
+until an operation's outputs have been observed.
+
+Renderer resources are served from the runtime's current retained set only;
+content-addressed responses are immutable and cached by the browser. A body
+released within the same callback that published an operation using it is not
+retained for that operation.
 Browser callers may choose an explicit per-batch byte budget. Immutable host bundles and C# content
 have no default file/count/aggregate byte quotas. Resource-format and browser
 loader restrictions remain separate.

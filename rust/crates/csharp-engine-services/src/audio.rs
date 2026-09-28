@@ -137,10 +137,6 @@ impl AudioRealizationFact {
 pub(crate) struct RuntimeAudioCall {
     state: AudioState,
     pub(crate) frame: Option<render_presentation::PresentationFrameDiff>,
-    /// Resources released from the final state after emitting a same-call
-    /// operation remain available to that call's renderer publication.
-    /// This is intentionally not committed into the persistent audio state.
-    pub(crate) retired_resources: Vec<CsharpRenderResource>,
 }
 
 /// Engine-owned audio admission and projector bridge. WAV resources are
@@ -274,7 +270,6 @@ impl RuntimeAudioBridge {
         self.staged = Some(RuntimeAudioCall {
             state: self.state.clone(),
             frame: None,
-            retired_resources: Vec::new(),
         });
     }
 
@@ -312,20 +307,6 @@ impl RuntimeAudioBridge {
 
     pub(crate) fn render_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.state.clips.values().map(|clip| &clip.resource)
-    }
-
-    /// Resources required to realize this call. In addition to the final
-    /// retained clip set, this includes a clip released after its same-call
-    /// voice operations were staged.
-    #[cfg(test)]
-    pub(crate) fn publication_resources(
-        call: &RuntimeAudioCall,
-    ) -> impl Iterator<Item = &CsharpRenderResource> {
-        call.state
-            .clips
-            .values()
-            .map(|clip| &clip.resource)
-            .chain(call.retired_resources.iter())
     }
 
     /// Reconstructs the retained audio intent on a fresh realization. This
@@ -1024,7 +1005,6 @@ impl RuntimeAudioBridge {
             .remove(&clip.value)
             .expect("checked clip");
         staged.state.assets.remove(&clip.asset);
-        staged.retired_resources.push(clip.resource);
         Ok(())
     }
 
@@ -2472,44 +2452,6 @@ mod tests {
             .destroy_clip(second)
             .expect("final owner releases resource");
         let call = bridge.take_staged_call().expect("staged resource release");
-        bridge.commit(call);
-        assert_eq!(bridge.render_resources().count(), 0);
-    }
-
-    #[test]
-    fn publication_keeps_same_call_retired_clip_for_its_voice_operations() {
-        let mut resources = BTreeMap::new();
-        resources.insert("audio/trial.wav".to_owned(), wav());
-        let mut bridge = RuntimeAudioBridge::new(resources);
-        bridge.begin_call();
-        let path = b"content/audio/trial.wav";
-        let clip = bridge
-            .open_clip(&NativeAudioClipRequest {
-                path: NativeUtf8Slice {
-                    bytes: path.as_ptr(),
-                    len: path.len(),
-                },
-            })
-            .expect("clip");
-        let voice = bridge
-            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
-            .expect("retained voice");
-        bridge.destroy_voice(voice).expect("voice release");
-        bridge
-            .destroy_clip(clip)
-            .expect("final clip release after same-call voice operations");
-
-        let call = bridge.take_staged_call().expect("publication call");
-        assert_eq!(
-            RuntimeAudioBridge::publication_resources(&call).count(),
-            1,
-            "the staged create and destroy operations still have their clip body"
-        );
-        assert_eq!(
-            call.frame.as_ref().expect("audio frame").ops.len(),
-            2,
-            "same-call voice create and destroy are both published"
-        );
         bridge.commit(call);
         assert_eq!(bridge.render_resources().count(), 0);
     }

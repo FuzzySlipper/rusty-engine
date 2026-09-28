@@ -31,7 +31,6 @@ struct FixtureRuntime {
     fail_lifecycle: bool,
     renderer_resource: Option<ProductDevRendererResource>,
     renderer_resource_inventory: Vec<String>,
-    retired_renderer_resources: Vec<ProductDevRendererResource>,
     debug_resource_transition: Option<ProductDevRendererResource>,
 }
 
@@ -237,10 +236,6 @@ impl ProductDevRuntime for FixtureRuntime {
             .then(|| self.renderer_resource_inventory.clone())
     }
 
-    fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
-        std::mem::take(&mut self.retired_renderer_resources)
-    }
-
     fn renderer_resource(
         &mut self,
         identity: &str,
@@ -303,7 +298,7 @@ impl ProductDevRuntime for FixtureRuntime {
         if let Some(resource) = self.debug_resource_transition.take() {
             let identity = resource.identity().to_owned();
             self.renderer_resource_inventory = vec![identity];
-            self.retired_renderer_resources.push(resource);
+            drop(resource);
         }
         let catalog = ProductDevDebugCatalog::decode_json(
             br#"{"available":true,"commands":[{"name":"fixture.echo","description":"Echoes a fixture value.","parameters":[{"name":"value","type":"string"}]}]}"#,
@@ -747,7 +742,7 @@ fn preload_bodies_are_immutable_only_under_their_content_hash() {
 }
 
 #[test]
-fn timed_debug_call_and_fresh_baseline_publish_transitioned_resource_metadata() {
+fn timed_debug_call_and_fresh_baseline_publish_the_resource_inventory() {
     let resource = ProductDevRendererResource::admit_font(
         "content/fonts/timed-transition.woff2",
         b"wOF2timed-transition".to_vec(),
@@ -784,18 +779,6 @@ fn timed_debug_call_and_fresh_baseline_publish_transitioned_resource_metadata() 
     );
     assert!(catalog.starts_with("HTTP/1.1 200 OK\r\n"), "{catalog}");
     assert!(catalog.contains("X-Rusty-Output-Through:"), "{catalog}");
-
-    // The runtime deliberately cannot serve this resource itself. A 200 here
-    // proves the timed call retained the private bytes on its published output.
-    let encoded_identity = identity.replace('/', "%2F").replace(':', "%3A");
-    let bytes = request(
-        &origin,
-        &format!(
-            "GET /__rusty/product/runtime/resource?identity={encoded_identity}&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-        ),
-    );
-    assert!(bytes.starts_with("HTTP/1.1 200 OK\r\n"), "{bytes}");
-    assert!(bytes.ends_with("wOF2timed-transition"), "{bytes}");
 
     let mut fresh = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
     let fresh_baseline = read_until(&mut fresh, "\"operation\":\"start\"");
@@ -1445,11 +1428,13 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
-    let sse = format!("GET /__rusty/product/runtime/outputs HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n");
+    let sse = format!("GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n");
     stream.write_all(sse.as_bytes()).unwrap();
     let headers = read_through_marker(&mut stream, "\r\n\r\n");
     assert!(headers.contains("HTTP/1.1 200 OK\r\n"));
     assert!(headers.contains("Content-Type: text/event-stream\r\n"));
+    read_through_marker(&mut stream, "event: rusty-output-baseline");
+    read_through_marker(&mut stream, "\n\n");
     let response = request(&origin, "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     let event = read_through_marker(&mut stream, "\n\n");
@@ -1527,7 +1512,7 @@ fn fresh_sse_connects_once_then_attaches_after_retained_outputs_are_evicted() {
     assert!(first_baseline.contains("\"operation\":\"start\""));
     drop(first);
 
-    for index in 0..=product_dev_host::MAX_OUTPUT_QUEUE_ITEMS {
+    for index in 0..=product_dev_host::MAX_SUBSCRIBER_QUEUE_EVENTS {
         let body = format!("{{\"observedTimeNs\":\"{}\"}}", index + 1);
         let response = request(
             &origin,
@@ -1623,7 +1608,7 @@ fn interrupted_baseline_completion_has_no_cursor_and_reattaches_without_reset() 
 fn idle_sse_disconnects_release_subscriber_slots() {
     let host = start();
     for _ in 0..product_dev_host::MAX_SSE_SUBSCRIBERS {
-        let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs");
+        let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
         let response = read_until(&mut stream, "\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         drop(stream);
@@ -1633,7 +1618,7 @@ fn idle_sse_disconnects_release_subscriber_slots() {
     // stack may accept the first write after the peer closes, so allow two
     // heartbeat intervals for bounded reclamation.
     thread::sleep(Duration::from_millis(2_200));
-    let mut final_stream = open_sse(host.address(), "/__rusty/product/runtime/outputs");
+    let mut final_stream = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
     let response = read_until(&mut final_stream, "\r\n\r\n");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(!response.contains("DEV_HOST_SSE_BOUNDS"));
@@ -1673,7 +1658,7 @@ fn slow_header_times_out_with_explicit_close_response() {
 }
 
 #[test]
-fn slow_body_and_lagging_sse_cursor_fail_closed_while_runtime_continues() {
+fn slow_body_fails_closed_and_a_resume_cursor_gets_a_fresh_baseline() {
     let host = start();
     let origin = host.origin();
     let address = host.address();
@@ -1684,13 +1669,18 @@ fn slow_body_and_lagging_sse_cursor_fail_closed_while_runtime_continues() {
     slow.read_to_string(&mut slow_response).unwrap();
     assert!(slow_response.starts_with("HTTP/1.1 408 Request Timeout\r\n"));
 
-    let start = "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
-    for _ in 0..=product_dev_host::MAX_OUTPUT_QUEUE_ITEMS {
-        assert!(request(&origin, start).starts_with("HTTP/1.1 200 OK\r\n"));
-    }
-    let reset = request(&origin, "GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nLast-Event-ID: 0\r\nConnection: close\r\n\r\n");
-    assert!(reset.contains("event: rusty-output-lag\n"));
-    assert!(reset.contains("\"DEV_HOST_OUTPUT_LAG\""));
+    // There is no resume: an EventSource reconnect carrying Last-Event-ID
+    // gets the same fresh baseline as a first connection.
+    let mut resumed = TcpStream::connect(address).unwrap();
+    resumed
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    resumed
+        .write_all(format!("GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nLast-Event-ID: 999\r\n\r\n").as_bytes())
+        .unwrap();
+    let baseline = read_through_marker(&mut resumed, "event: rusty-output-baseline");
+    assert!(baseline.contains("\"kind\":\"binding\""));
+    let _ = &origin;
     host.shutdown().unwrap();
 }
 

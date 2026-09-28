@@ -73,7 +73,7 @@ test('browser artifact mounts independently and routes through an injected trans
               runtimeProgressRateMillihertz: '60000', runtimeProgressAgeMs: '1',
               runtimeProgressUnavailableReason: null,
               connections: 1, subscribers: 1, outputQueueItems: 2, outputQueueCapacity: 256,
-              outputQueueFloor: '7', outputBindingActive: true, updateAttribution: null,
+              outputBindingActive: true, updateAttribution: null,
             },
           }
           : { events: [], floorSequence: '8', throughSequence: '8', nextCursor: '8', readMonotonicNanoseconds: '3000000000', lagged: false, warningCount: '1', errorCount: '0', droppedCount: '0' };

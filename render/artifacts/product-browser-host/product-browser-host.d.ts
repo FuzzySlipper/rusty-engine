@@ -374,14 +374,10 @@ export interface ProductBrowserRuntimeOutputBatchMetadata {
     readonly baseline: boolean;
     readonly recovery: 'none' | 'fresh-baseline-required';
 }
-/**
- * Terminal local-transport failures. A dropped retained-output diff cannot
- * be recovered by EventSource retry; the host must stop until a fresh runtime
- * snapshot is mounted.
- */
+/** A terminal local-transport failure: the host stops. */
 export interface ProductBrowserRuntimeTerminalFailure {
     /** The fixed Engine failure lane; products never supply an arbitrary event name. */
-    readonly kind: 'output-lag' | 'runtime-failure';
+    readonly kind: 'runtime-failure';
     readonly diagnostic: string;
 }
 /** Fixed health facts copied into the Engine diagnostic ring; never console data. */

@@ -273,7 +273,6 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// The runtime drives call boundaries; this owner stages and commits only
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
-    retired_resources: BTreeMap<String, crate::appearance::CsharpRenderResource>,
     call_elapsed_seconds: f64,
     presentation_world: render_presentation::PresentationWorld,
     input: crate::input::RuntimeInputBridge,
@@ -394,7 +393,6 @@ impl EngineServiceSet {
         let mut voxel_content = RuntimeVoxelContentBridge::new();
         voxel_content.bind_content(&content);
         Ok(Self {
-            retired_resources: BTreeMap::new(),
             call_elapsed_seconds: 0.0,
             presentation_world: render_presentation::PresentationWorld::default(),
             input: crate::input::RuntimeInputBridge::new(direct_intents),
@@ -732,24 +730,7 @@ impl EngineServiceSet {
         self.render_output.ingest(chunk)
     }
 
-    pub fn take_retired_resources(&mut self) -> Vec<crate::appearance::CsharpRenderResource> {
-        std::mem::take(&mut self.retired_resources)
-            .into_values()
-            .collect()
-    }
-
     pub fn commit_call(&mut self, call: CsharpEngineCall) {
-        for resource in call
-            .appearance
-            .as_ref()
-            .into_iter()
-            .flat_map(|call| call.retired_resources.iter())
-            .chain(call.audio.retired_resources.iter())
-        {
-            self.retired_resources
-                .insert(resource.identity().to_owned(), resource.clone());
-        }
-
         self.presentation_world = call.presentation_world;
         self.appearance.commit(call.appearance);
         self.implicit.commit_call(call.implicit);

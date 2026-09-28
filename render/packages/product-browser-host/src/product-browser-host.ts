@@ -398,14 +398,10 @@ export interface ProductBrowserRuntimeOutputBatchMetadata {
   readonly recovery: 'none' | 'fresh-baseline-required';
 }
 
-/**
- * Terminal local-transport failures. A dropped retained-output diff cannot
- * be recovered by EventSource retry; the host must stop until a fresh runtime
- * snapshot is mounted.
- */
+/** A terminal local-transport failure: the host stops. */
 export interface ProductBrowserRuntimeTerminalFailure {
   /** The fixed Engine failure lane; products never supply an arbitrary event name. */
-  readonly kind: 'output-lag' | 'runtime-failure';
+  readonly kind: 'runtime-failure';
   readonly diagnostic: string;
 }
 
@@ -3223,7 +3219,7 @@ function normalizeTerminalFailure(value: ProductBrowserRuntimeTerminalFailure): 
   if (value === null || typeof value !== 'object') {
     return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure was malformed' };
   }
-  if (value.kind !== 'output-lag' && value.kind !== 'runtime-failure') {
+  if (value.kind !== 'runtime-failure') {
     return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure kind was invalid' };
   }
   if (typeof value.diagnostic !== 'string' || value.diagnostic.length === 0) {

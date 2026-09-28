@@ -54,11 +54,11 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.closed = true;
   }
 
-  addEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
+  addEventListener(type: 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     this.namedListeners.set(type, listener);
   }
 
-  removeEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
+  removeEventListener(type: 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     if (this.namedListeners.get(type) === listener) this.namedListeners.delete(type);
   }
 
@@ -73,15 +73,10 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.onopen?.({});
   }
 
-  emitLag(value: unknown = { code: 'DEV_HOST_OUTPUT_LAG' }): void {
-    this.namedListeners.get('rusty-output-lag')?.({
-      data: JSON.stringify(value),
-      lastEventId: String(this.nextEventId++),
-    });
-  }
-
-  emitFragment(value: unknown, lastEventId = String(this.nextEventId++)): void {
-    this.namedListeners.get('rusty-output-fragment')?.({ data: JSON.stringify(value), lastEventId });
+  /** The server closed this stream (a subscriber that fell behind, or a runtime that stopped). */
+  drop(): void {
+    this.readyState = 2;
+    this.onerror?.({});
   }
 
   emitBaseline(value: unknown, lastEventId = String(this.nextEventId++)): void {
@@ -992,7 +987,7 @@ test('a committed output boundary joins a fresh baseline when its old cursor is 
   let settled = false;
   void operation.then(() => { settled = true; });
   await Promise.resolve();
-  first.emitLag();
+  first.drop();
   assert.equal(FakeEventSource.instances.length, 2);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(settled, false, 'the replacement stream alone does not settle the old committed boundary');
@@ -1148,198 +1143,6 @@ test('output cursor mismatch replaces the projection and ignores late old-stream
   }
 });
 
-test('ordinary output fragments above 16 MiB publish once after complete ordered reassembly', () => {
-  FakeEventSource.instances.length = 0;
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-  });
-  const batches: unknown[][] = [];
-  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
-  const stream = FakeEventSource.instances[0]!;
-  completeConnectionBaseline(stream);
-  const encoded = JSON.stringify({
-    kind: 'runtime-output-batch',
-    outputs: [
-      { kind: 'frame', frame: { payload: 'x'.repeat(16 * 1024 * 1024 + 1) } },
-      { kind: 'renderer-resources' },
-    ],
-  });
-  const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
-  chunks.forEach((data, fragmentIndex) => stream.emitFragment({
-    schemaVersion: 1,
-    transferId: '1',
-    runtime: RUNTIME,
-    fragmentIndex,
-    fragmentCount: chunks.length,
-    aggregateBytes: new TextEncoder().encode(encoded).byteLength,
-    data,
-  }));
-  assert.equal(batches.length, 2);
-  assert.deepEqual(batches[1]?.map((output) => (output as { kind: string }).kind), ['frame', 'renderer-resources']);
-  assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 16 * 1024 * 1024 + 1);
-  adapter.dispose();
-});
-
-test('private connection baseline admits metadata above the former 256 MiB bound without allocating it', () => {
-  FakeEventSource.instances.length = 0;
-  const errors: ProductBrowserLocalTransportError[] = [];
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-    onTransportError: (error) => errors.push(error),
-  });
-  adapter.subscribeOutputs(() => undefined);
-  const stream = FakeEventSource.instances[0]!;
-  stream.emitFragment({
-    schemaVersion: 1,
-    transferId: '1',
-    runtime: RUNTIME,
-    fragmentIndex: 0,
-    fragmentCount: Math.ceil((256 * 1024 * 1024 + 1) / (96 * 1024)),
-    aggregateBytes: 256 * 1024 * 1024 + 1,
-    data: 'x',
-  }, '');
-  assert.deepEqual(errors, [], 'the default transport admits internally coherent baseline metadata');
-  adapter.dispose();
-});
-
-test('private connection baseline admits a bounded resource set beyond the steady-state output limit', () => {
-  FakeEventSource.instances.length = 0;
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-  });
-  const batches: unknown[][] = [];
-  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
-  const stream = FakeEventSource.instances[0]!;
-  const encoded = JSON.stringify({
-    kind: 'runtime-output-batch',
-    outputs: [
-      { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
-      { kind: 'frame', frame: { payload: 'x'.repeat(96 * 1024 * 257) } },
-      ...Array.from({ length: 255 }, () => ({ kind: 'renderer-resources' })),
-    ],
-  });
-  const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
-  assert.ok(chunks.length > 256, 'the baseline exceeds the normal retained event count');
-  chunks.forEach((data, fragmentIndex) => stream.emitFragment({
-    schemaVersion: 1,
-    transferId: '1',
-    runtime: RUNTIME,
-    fragmentIndex,
-    fragmentCount: chunks.length,
-    aggregateBytes: new TextEncoder().encode(encoded).byteLength,
-    data,
-  }, ''));
-  assert.equal(batches.length, 0, 'no partial connection baseline is realized');
-  stream.emitBaseline(result('connect'), '');
-  assert.equal(batches.length, 1);
-  assert.equal(batches[0]?.length, 257, 'the complete baseline keeps all outputs above the old 256-item limit');
-  assert.equal(((batches[0]?.[1] as { frame: { payload: string } }).frame.payload).length, 96 * 1024 * 257);
-  adapter.dispose();
-});
-
-test('interrupted private connection baseline never installs a partial projection', () => {
-  FakeEventSource.instances.length = 0;
-  const batches: unknown[][] = [];
-  const failures: unknown[] = [];
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-  });
-  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
-  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
-  const stream = FakeEventSource.instances[0]!;
-  stream.emitFragment({
-    schemaVersion: 1,
-    transferId: '1',
-    runtime: RUNTIME,
-    fragmentIndex: 0,
-    fragmentCount: 2,
-    aggregateBytes: 196_608,
-    data: 'x'.repeat(98_304),
-  }, '');
-  stream.emitBaseline(result('connect'), '');
-  assert.deepEqual(batches, []);
-  assert.equal(failures.length, 1);
-  assert.equal(stream.closed, true);
-  adapter.dispose();
-});
-
-test('corrupt completed fragment replacement does not publish the corrupt batch', () => {
-  FakeEventSource.instances.length = 0;
-  const outputs: unknown[] = [];
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-  });
-  adapter.subscribeOutputs((output) => outputs.push(output));
-  const stream = FakeEventSource.instances[0]!;
-  completeConnectionBaseline(stream);
-  const encoded = JSON.stringify({ kind: 'frame', frame: { payload: 'x'.repeat(300_000) } });
-  const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
-  chunks.forEach((data, fragmentIndex) => stream.emitFragment({
-    schemaVersion: 1,
-    transferId: '1',
-    runtime: RUNTIME,
-    fragmentIndex,
-    fragmentCount: chunks.length,
-    aggregateBytes: new TextEncoder().encode(encoded).byteLength,
-    data,
-  }, fragmentIndex === chunks.length - 1 ? String(fragmentIndex) : String(fragmentIndex + 2)));
-  assert.equal(outputs.length, 1);
-  assert.equal(FakeEventSource.instances.length, 2);
-  assert.equal(stream.closed, true);
-  adapter.dispose();
-});
-
-test('output fragments recover through a fresh baseline when an active projection is corrupt', () => {
-  const cases: readonly ((stream: FakeEventSource) => void)[] = [
-    (stream) => stream.emitFragment(fragment({ fragmentIndex: 1 })),
-    (stream) => {
-      const first = fragment();
-      stream.emitFragment(first);
-      stream.emitFragment(first);
-    },
-    (stream) => stream.emitFragment(fragment({ runtime: { ...RUNTIME, generation: '2' } })),
-    (stream) => stream.emitFragment(fragment({ aggregateBytes: 16 * 1024 * 1024 + 1 })),
-    (stream) => {
-      stream.emitFragment(fragment());
-      stream.emit({ kind: 'runtime-readout', readout: READOUT });
-    },
-  ];
-  for (const exercise of cases) {
-    FakeEventSource.instances.length = 0;
-    const adapter = createProductBrowserLocalHttpAdapter({
-      fetch: async () => response({}),
-      eventSource: FakeEventSource,
-    });
-    const outputs: unknown[] = [];
-    adapter.subscribeOutputs((output) => outputs.push(output));
-    const stream = FakeEventSource.instances[0]!;
-    completeConnectionBaseline(stream);
-    exercise(stream);
-    assert.equal(outputs.length, 1);
-    assert.equal(FakeEventSource.instances.length, 2);
-    assert.equal(stream.closed, true);
-    adapter.dispose();
-  }
-});
-
-function fragment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    schemaVersion: 1,
-    transferId: '1',
-    runtime: RUNTIME,
-    fragmentIndex: 0,
-    fragmentCount: 3,
-    aggregateBytes: 300_000,
-    data: 'x'.repeat(98_304),
-    ...overrides,
-  };
-}
-
 test('local transport rejects malformed typed output and bounded paths', () => {
   const errors: ProductBrowserLocalTransportError[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -1414,7 +1217,26 @@ test('ordinary outputs honor the configured quota below the hard event bound', (
   adapter.dispose();
 });
 
-test('named output lag asks for one fresh baseline without closing the runtime transport', async () => {
+test('one output batch far above the former 256 KiB event bound arrives as one event', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const batches: unknown[][] = [];
+  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+  stream.emit({
+    kind: 'runtime-output-batch',
+    outputs: [{ kind: 'frame', frame: { payload: 'x'.repeat(4 * 1024 * 1024) } }],
+  });
+  assert.equal(batches.length, 2);
+  assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 4 * 1024 * 1024);
+  adapter.dispose();
+});
+
+test('a dropped output stream asks for one fresh baseline without closing the runtime transport', async () => {
   FakeEventSource.instances.length = 0;
   const transportErrors: unknown[] = [];
   const requestBodies: unknown[] = [];
@@ -1435,7 +1257,7 @@ test('named output lag asks for one fresh baseline without closing the runtime t
   const stream = FakeEventSource.instances[0];
   assert.ok(stream);
   completeConnectionBaseline(stream);
-  stream.emitLag();
+  stream.drop();
   assert.equal(stream.closed, true);
   assert.deepEqual(hostFailures, []);
   assert.equal(transportErrors.length, 1);
@@ -1731,7 +1553,7 @@ test('attachment health reports only renderer-confirmed baselines and correlates
   assert.deepEqual(reports[1]!.attachment.baseline, {
     runtime: RUNTIME, nextInputSequence: '1', publicationFrontiers: [],
   });
-  FakeEventSource.instances[0]!.emitLag();
+  FakeEventSource.instances[0]!.drop();
   completeConnectionBaseline(FakeEventSource.instances[1]!);
   await adapter.reportBrowserDiagnostics?.(report);
   assert.equal(reports[2]!.attachment.replaces, reports[1]!.attachment.id);

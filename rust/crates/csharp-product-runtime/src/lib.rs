@@ -2796,10 +2796,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
     fn renderer_resource_ids(&self) -> Option<Vec<String>> {
         Some(self.services.renderer_resource_ids())
     }
-    fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
-        admit_renderer_resources(&self.services.take_retired_resources())
-            .expect("retired resources were already admitted by Engine")
-    }
 
     fn renderer_resource(
         &mut self,

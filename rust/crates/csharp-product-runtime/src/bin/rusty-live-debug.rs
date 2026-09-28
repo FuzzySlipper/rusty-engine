@@ -400,7 +400,6 @@ struct DiagnosticsTelemetryWire {
     subscribers: usize,
     output_queue_items: usize,
     output_queue_capacity: usize,
-    output_queue_floor: String,
     output_binding_active: bool,
     update_attribution: Option<DiagnosticsUpdateAttributionWire>,
 }

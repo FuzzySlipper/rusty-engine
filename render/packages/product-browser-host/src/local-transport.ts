@@ -99,8 +99,6 @@ const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
 const EVENT_SOURCE_CLOSED = 2;
 const FRESH_RETRY_INITIAL_DELAY_MS = 250;
 const FRESH_RETRY_MAX_DELAY_MS = 2_000;
-const MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES = 256 * 1024;
-const MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES = 96 * 1024;
 // Mirrors ProductDevRendererDiagnosticsFeedback::MAX_SNAPSHOT_BYTES. Renderer
 // observations are not direct UI product payloads and have their own closed,
 // versioned transport budget.
@@ -222,11 +220,11 @@ export interface ProductBrowserLocalEventSource {
   /** `2` (CLOSED) once the browser has stopped reconnecting this stream. */
   readonly readyState?: number;
   readonly addEventListener?: (
-    type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline',
+    type: 'rusty-output-baseline',
     listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly removeEventListener?: (
-    type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline',
+    type: 'rusty-output-baseline',
     listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly close: () => void;
@@ -248,16 +246,6 @@ export interface ProductBrowserLocalTransportOptions {
   readonly maximumOutputBytes?: number;
   /** Stream errors are surfaced here; the operation surface remains closed. */
   readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;
-}
-
-interface PendingOutputFragment {
-  readonly transferId: string;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly fragmentCount: number;
-  readonly aggregateBytes: number;
-  nextIndex: number;
-  byteLength: number;
-  readonly data: string[];
 }
 
 export type ProductBrowserLocalTransportErrorCode =
@@ -372,10 +360,7 @@ export function createProductBrowserLocalHttpAdapter(
   );
   let disposed = false;
   let stream: ProductBrowserLocalEventSource | null = null;
-  let streamLagListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
-  let streamFragmentListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   let streamBaselineListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
-  let pendingFragment: PendingOutputFragment | null = null;
   let currentOutputBinding: RustyApplicationRuntimeIdentity | null = null;
   let outputSubscriptionReady: Promise<void> | null = null;
   let resolveOutputSubscriptionReady: (() => void) | null = null;
@@ -488,14 +473,6 @@ export function createProductBrowserLocalHttpAdapter(
     if (terminalFailure !== null) return;
     terminalFailure = Object.freeze({ ...failure });
     if (stream !== null) {
-      if (streamLagListener !== null) {
-        stream.removeEventListener?.('rusty-output-lag', streamLagListener);
-        streamLagListener = null;
-      }
-      if (streamFragmentListener !== null) {
-        stream.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
-        streamFragmentListener = null;
-      }
       if (streamBaselineListener !== null) {
         stream.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
         streamBaselineListener = null;
@@ -503,7 +480,6 @@ export function createProductBrowserLocalHttpAdapter(
       stream.close();
       stream = null;
     }
-    pendingFragment = null;
     pendingConnectionOutputs = [];
     releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
@@ -535,15 +511,10 @@ export function createProductBrowserLocalHttpAdapter(
         { route: ROUTES.freshOutputs },
       );
     }
-    if (streamLagListener !== null) stream.removeEventListener?.('rusty-output-lag', streamLagListener);
-    if (streamFragmentListener !== null) stream.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
     if (streamBaselineListener !== null) stream.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
     stream.close();
     stream = null;
-    streamLagListener = null;
-    streamFragmentListener = null;
     streamBaselineListener = null;
-    pendingFragment = null;
     pendingConnectionOutputs = [];
     currentOutputBinding = null;
     connectionBaselineComplete = false;
@@ -953,7 +924,7 @@ export function createProductBrowserLocalHttpAdapter(
       if (replacementBinding !== undefined
         && currentOutputBinding !== null
         && replacementBinding.runtime.instanceId !== currentOutputBinding.instanceId) {
-        failFragmentStream(new ProductBrowserLocalTransportError(
+        failOutputStream(new ProductBrowserLocalTransportError(
           'output_decode_failed',
           'Product Browser local runtime changed incarnation without a fresh output baseline',
           { route: ROUTES.outputs },
@@ -969,12 +940,12 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
-  const failFragmentStream = (cause: unknown): void => {
+  const failOutputStream = (cause: unknown): void => {
     const error = cause instanceof ProductBrowserLocalTransportError
       ? cause
       : new ProductBrowserLocalTransportError(
         'output_decode_failed',
-        `Product Browser local runtime emitted invalid output fragments: ${cause instanceof Error ? cause.message : String(cause)}`,
+        `Product Browser local runtime emitted an invalid output stream: ${cause instanceof Error ? cause.message : String(cause)}`,
         { cause, route: ROUTES.outputs },
     );
     if (connectionBaselineComplete) {
@@ -1018,115 +989,9 @@ export function createProductBrowserLocalHttpAdapter(
       resolveOutputSubscriptionReady?.();
       resolveOutputSubscriptionReady = null;
     };
-    streamLagListener = (event) => {
-      if (!ownsProjection()) return;
-      try {
-        const failure = decodeOutputLagEvent(event.data, maximumOutputBytes);
-        const error = new ProductBrowserLocalTransportError(
-          'stream_failed',
-          failure.diagnostic,
-          { route: ROUTES.outputs },
-        );
-        publishFreshBaselineRequired();
-        reportTransportError(error);
-        void reconnectFreshOutputs().catch((cause: unknown) => {
-          const recoveryError = cause instanceof ProductBrowserLocalTransportError
-            ? cause
-            : new ProductBrowserLocalTransportError(
-              'stream_failed',
-              `Product Browser local runtime fresh output recovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-              { cause, route: ROUTES.freshOutputs },
-            );
-          reportTerminalFailure(
-            { kind: 'runtime-failure', diagnostic: recoveryError.message },
-            recoveryError,
-          );
-        });
-      } catch (cause) {
-        const error = cause instanceof ProductBrowserLocalTransportError
-          ? cause
-          : new ProductBrowserLocalTransportError(
-            'output_decode_failed',
-            `Product Browser local runtime emitted an invalid output-lag event: ${cause instanceof Error ? cause.message : String(cause)}`,
-            { cause, route: ROUTES.outputs },
-          );
-        reportTerminalFailure(
-          {
-            kind: 'output-lag',
-            diagnostic: error.message,
-          },
-          error,
-        );
-      }
-    };
-    attachedStream.addEventListener?.('rusty-output-lag', streamLagListener);
-    streamFragmentListener = (event) => {
-      if (!ownsProjection()) return;
-      try {
-        const fragment = decodeOutputFragment(
-          parseBoundedJson(event.data, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
-          maximumOutputBytes,
-        );
-        if (currentOutputBinding === null && !connectionBaselineComplete) {
-          currentOutputBinding = fragment.runtime;
-        }
-        if (currentOutputBinding === null || !sameRuntimeIdentity(fragment.runtime, currentOutputBinding)) {
-          throw new TypeError('output fragment runtime binding is stale or unavailable');
-        }
-        if (pendingFragment === null) {
-          if (fragment.fragmentIndex !== 0) {
-            throw new TypeError('output fragment transfer must begin at index zero');
-          }
-          pendingFragment = {
-            transferId: fragment.transferId,
-            runtime: fragment.runtime,
-            fragmentCount: fragment.fragmentCount,
-            aggregateBytes: fragment.aggregateBytes,
-            nextIndex: 0,
-            byteLength: 0,
-            data: [],
-          };
-        }
-        const pending = pendingFragment;
-        if (pending.transferId !== fragment.transferId
-          || !sameRuntimeIdentity(pending.runtime, fragment.runtime)
-          || pending.fragmentCount !== fragment.fragmentCount
-          || pending.aggregateBytes !== fragment.aggregateBytes
-          || pending.nextIndex !== fragment.fragmentIndex) {
-          throw new TypeError('output fragments are duplicated, reordered, or from another transfer');
-        }
-        pending.data.push(fragment.data);
-        pending.byteLength += new TextEncoder().encode(fragment.data).byteLength;
-        pending.nextIndex += 1;
-        let completedOutputs: readonly ProductBrowserRuntimeOutput[] | null = null;
-        if (pending.byteLength > pending.aggregateBytes) {
-          throw new TypeError('output fragments exceed their declared aggregate length');
-        }
-        if (pending.nextIndex === pending.fragmentCount) {
-          if (pending.byteLength !== pending.aggregateBytes) {
-            throw new TypeError('output fragment transfer ended before its declared aggregate length');
-          }
-          const encoded = pending.data.join('');
-          pendingFragment = null;
-          completedOutputs = decodeRuntimeOutputBatch(parseBoundedJson(encoded, maximumOutputBytes));
-        }
-        if (connectionBaselineComplete) {
-          observeOutputSequence(event.lastEventId);
-        }
-        if (completedOutputs !== null) {
-          stageOrPublishOutputBatch(completedOutputs, outputEpoch);
-        }
-      } catch (cause) {
-        failFragmentStream(cause);
-      }
-    };
-    attachedStream.addEventListener?.('rusty-output-fragment', streamFragmentListener);
     streamBaselineListener = (event) => {
       if (!ownsProjection()) return;
       try {
-        if (pendingFragment !== null) {
-          throw new TypeError('connection baseline ended during an output fragment transfer');
-        }
         if (event.lastEventId !== '') {
           throw new TypeError('connection baseline completion must not carry a reconnect cursor');
         }
@@ -1178,17 +1043,7 @@ export function createProductBrowserLocalHttpAdapter(
     attachedStream.onmessage = (event) => {
       if (!ownsProjection()) return;
       try {
-        if (pendingFragment !== null) {
-          throw new ProductBrowserLocalTransportError(
-            'output_decode_failed',
-            'Product Browser local runtime interrupted an output fragment transfer',
-            { route: ROUTES.outputs },
-          );
-        }
-        const outputs = decodeRuntimeOutputBatch(parseBoundedJson(
-          event.data,
-          Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
-        ));
+        const outputs = decodeRuntimeOutputBatch(parseBoundedJson(event.data, maximumOutputBytes));
         if (connectionBaselineComplete) {
           observeOutputSequence(event.lastEventId);
         }
@@ -1204,13 +1059,12 @@ export function createProductBrowserLocalHttpAdapter(
             `Product Browser local runtime emitted an invalid output: ${cause instanceof Error ? cause.message : String(cause)}`,
             { cause, route: ROUTES.outputs },
           );
-        failFragmentStream(error);
+        failOutputStream(error);
       }
     };
     attachedStream.onerror = (event) => {
       if (!ownsProjection()) return;
       if (!connectionBaselineComplete) {
-        pendingFragment = null;
         pendingConnectionOutputs = [];
         currentOutputBinding = null;
         if (attachedStream.readyState === EVENT_SOURCE_CLOSED) {
@@ -1274,10 +1128,7 @@ export function createProductBrowserLocalHttpAdapter(
         // openFreshStream may have assigned the stream before failing.
         (stream as ProductBrowserLocalEventSource | null)?.close();
         stream = null;
-        streamLagListener = null;
-        streamFragmentListener = null;
         streamBaselineListener = null;
-        pendingFragment = null;
         pendingConnectionOutputs = [];
         releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
@@ -1299,21 +1150,12 @@ export function createProductBrowserLocalHttpAdapter(
       active = false;
       listeners.delete(listener);
       if (listeners.size === 0) {
-        if (streamLagListener !== null) {
-          stream?.removeEventListener?.('rusty-output-lag', streamLagListener);
-          streamLagListener = null;
-        }
-        if (streamFragmentListener !== null) {
-          stream?.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
-          streamFragmentListener = null;
-        }
         if (streamBaselineListener !== null) {
           stream?.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
           streamBaselineListener = null;
         }
         stream?.close();
         stream = null;
-        pendingFragment = null;
         pendingConnectionOutputs = [];
         releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
@@ -1411,21 +1253,12 @@ export function createProductBrowserLocalHttpAdapter(
     if (disposed) return;
     disposed = true;
     abortController.abort();
-    if (streamLagListener !== null) {
-      stream?.removeEventListener?.('rusty-output-lag', streamLagListener);
-      streamLagListener = null;
-    }
-    if (streamFragmentListener !== null) {
-      stream?.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
-      streamFragmentListener = null;
-    }
     if (streamBaselineListener !== null) {
       stream?.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
       streamBaselineListener = null;
     }
     stream?.close();
     stream = null;
-    pendingFragment = null;
     pendingConnectionOutputs = [];
     releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
@@ -2196,77 +2029,6 @@ function parseBoundedJson(value: string, maximumBytes: number): unknown {
       { cause, route: ROUTES.outputs },
     );
   }
-}
-
-function decodeOutputFragment(
-  value: unknown,
-  maximumAggregateBytes: number,
-): {
-  readonly transferId: string;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly fragmentIndex: number;
-  readonly fragmentCount: number;
-  readonly aggregateBytes: number;
-  readonly data: string;
-} {
-  const record = requireRecord(value, 'output fragment');
-  requireKnownFields(record, [
-    'schemaVersion', 'transferId', 'runtime', 'fragmentIndex', 'fragmentCount',
-    'aggregateBytes', 'data',
-  ], 'output fragment');
-  if (record['schemaVersion'] !== 1) throw new TypeError('output fragment schemaVersion must equal 1');
-  if (!Number.isSafeInteger(record['fragmentCount'])
-    || (record['fragmentCount'] as number) < 2) {
-    throw new TypeError('output fragment count must be a positive safe integer greater than one');
-  }
-  const fragmentCount = record['fragmentCount'] as number;
-  if (!Number.isSafeInteger(record['fragmentIndex'])
-    || (record['fragmentIndex'] as number) < 0
-    || (record['fragmentIndex'] as number) >= fragmentCount) {
-    throw new TypeError('output fragment index is outside its transfer');
-  }
-  if (!Number.isSafeInteger(record['aggregateBytes'])
-    || (record['aggregateBytes'] as number) <= MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES
-    || (record['aggregateBytes'] as number) > maximumAggregateBytes) {
-    throw new TypeError('output fragment aggregate length is outside the configured bound');
-  }
-  const aggregateBytes = record['aggregateBytes'] as number;
-  if (fragmentCount > aggregateBytes
-    || fragmentCount < Math.ceil(aggregateBytes / MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES)) {
-    throw new TypeError('output fragment count cannot carry its declared aggregate length');
-  }
-  if (typeof record.data !== 'string') throw new TypeError('output fragment data must be text');
-  const dataBytes = new TextEncoder().encode(record.data).byteLength;
-  if (dataBytes === 0 || dataBytes > MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES) {
-    throw new TypeError('output fragment data is outside the event payload bound');
-  }
-  return {
-    transferId: requireU64Text(record['transferId'], 'output fragment transferId'),
-    runtime: decodeRuntimeIdentity(record.runtime),
-    fragmentIndex: record['fragmentIndex'] as number,
-    fragmentCount,
-    aggregateBytes,
-    data: record.data,
-  };
-}
-
-function decodeOutputLagEvent(
-  value: string,
-  maximumBytes: number,
-): ProductBrowserRuntimeTerminalFailure {
-  const record = requireRecord(parseBoundedJson(value, maximumBytes), 'output-lag event');
-  requireKnownFields(record, ['code'], 'output-lag event');
-  if (record.code !== 'DEV_HOST_OUTPUT_LAG') {
-    throw new ProductBrowserLocalTransportError(
-      'output_decode_failed',
-      'Product Browser local runtime output-lag event code is invalid',
-      { route: ROUTES.outputs },
-    );
-  }
-  return Object.freeze({
-    kind: 'output-lag',
-    diagnostic: 'Product Browser local runtime output stream lost retained output; a fresh snapshot is required',
-  });
 }
 
 function decodeFault(

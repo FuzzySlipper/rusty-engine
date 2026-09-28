@@ -18,11 +18,11 @@ export interface ProductBrowserLocalEventSource {
     onerror: ((event: unknown) => void) | null;
     /** `2` (CLOSED) once the browser has stopped reconnecting this stream. */
     readonly readyState?: number;
-    readonly addEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: {
+    readonly addEventListener?: (type: 'rusty-output-baseline', listener: (event: {
         readonly data: string;
         readonly lastEventId: string;
     }) => void) => void;
-    readonly removeEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: {
+    readonly removeEventListener?: (type: 'rusty-output-baseline', listener: (event: {
         readonly data: string;
         readonly lastEventId: string;
     }) => void) => void;

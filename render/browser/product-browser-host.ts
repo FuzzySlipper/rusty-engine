@@ -243,19 +243,6 @@ const adapter: ProductBrowserRuntimeAdapter = {
 let productHost: Awaited<ReturnType<typeof mountProductBrowserHost>> | null = null;
 let productStateElement: HTMLOutputElement | null = null;
 
-function emitOutputLag(): void {
-  const failure = {
-    kind: 'output-lag' as const,
-    diagnostic: 'fixture output lag requires a fresh snapshot',
-  };
-  for (const listener of [...terminalFailureListeners]) listener(failure);
-  setTimeout(() => {
-    if (productStateElement !== null && productHost !== null) {
-      productStateElement.textContent = `state: ${productHost.readout().state}`;
-    }
-  }, 0);
-}
-
 function emitUnboundedTerminalFailure(): void {
   const failure = {
     kind: 'runtime-failure',
@@ -294,10 +281,6 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
   state.id = 'product-state';
   state.textContent = 'state: starting';
   productStateElement = state;
-  const lag = document.createElement('button');
-  lag.id = 'product-output-lag';
-  lag.textContent = 'Simulate output lag';
-  lag.addEventListener('click', emitOutputLag);
   const malformed = document.createElement('button');
   malformed.id = 'product-unbounded-terminal-failure';
   malformed.textContent = 'Simulate invalid terminal failure';
@@ -372,7 +355,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
       root.append(disposedState);
     });
   });
-  ui.append(button, projection, state, lag, malformed, scheduledInputResult, dispose);
+  ui.append(button, projection, state, malformed, scheduledInputResult, dispose);
   uiRoot.append(ui);
 };
 void mountProductBrowserHost({

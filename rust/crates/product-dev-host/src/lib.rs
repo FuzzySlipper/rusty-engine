@@ -73,14 +73,9 @@ pub use session::ProductDevOperationOwner;
 pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;
 /// Upper bound for one JSON request body or emitted JSON response body.
 pub const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024;
-/// Target reconnect history length. A single larger incremental transfer is
-/// retained whole; this is not a maximum publication size.
-pub const MAX_OUTPUT_QUEUE_ITEMS: usize = 256;
-/// Upper bound for one output event after JSON encoding.
-pub const MAX_OUTPUT_EVENT_BYTES: usize = 256 * 1024;
-/// Payload target for one fragment. The serialized fragment envelope remains
-/// below `MAX_OUTPUT_EVENT_BYTES` even when JSON quotes and escapes the slice.
-pub const MAX_OUTPUT_FRAGMENT_DATA_BYTES: usize = 96 * 1024;
+/// Unsent output events one SSE subscriber may hold. A subscriber that falls
+/// this far behind is closed and reconnects for a fresh baseline.
+pub const MAX_SUBSCRIBER_QUEUE_EVENTS: usize = 256;
 /// Upper bound for live accepted TCP connections, including SSE clients.
 pub const MAX_CONNECTIONS: usize = 32;
 /// Upper bound for simultaneous SSE subscribers.

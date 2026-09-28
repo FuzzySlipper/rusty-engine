@@ -47,7 +47,7 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
         runtimeProgressRateMillihertz: '60000', runtimeProgressAgeMs: '1',
         runtimeProgressUnavailableReason: null,
         connections: 1, subscribers: 1, outputQueueItems: 2, outputQueueCapacity: 256,
-        outputQueueFloor: '7', outputBindingActive: true,
+        outputBindingActive: true,
         updateAttribution: {
           sampleCount: '2048', callbackDurationUsP50: '80', callbackDurationUsP95: '120', callbackDurationUsMax: '140', rollingSlowestAgeMs: '20', slowestAgeMs: '2000',
           latest: { runtime: { instanceId: '42', generation: '7', controlRevision: '9' }, simulationStep: '12', admittedStepCount: '13', postCallbackDurationUs: '15', callbackDurationUs: '90', characterStepCalls: '1', characterStepDurationUs: '30', characterStepCastCount: '4', characterStepCandidateCount: '16', characterStepNarrowPhaseCount: '16', voxelResidencyCalls: '0', voxelResidencyDurationUs: '0', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '10' },
@@ -82,7 +82,7 @@ test('diagnostics reject a malformed optional telemetry snapshot', async () => {
         runtimeProgressRateMillihertz: null, runtimeProgressAgeMs: null,
         runtimeProgressUnavailableReason: 'No completed update observed in this incarnation',
         connections: 0, subscribers: 0, outputQueueItems: 0, outputQueueCapacity: 256,
-        outputQueueFloor: '0', outputBindingActive: false,
+        outputBindingActive: false,
         updateAttribution: null,
       },
     }), { status: 200 })) as typeof fetch,

@@ -626,7 +626,7 @@ Audio service retains its encoded clip budgets ([audio policy](recorded-audio.md
 dimensions are checked against the active browser GPU before retained PNG
 decoding, with no fixed 4,096-pixel or texel-count policy in the model/catalog.
 Generated presentation output has no default aggregate
-byte/count cap: the host fragments large deltas without rebuilding the scene.
+byte/count cap: a large delta is one output batch, without rebuilding the scene.
 Allocation and browser/backend capacity still apply. Browser embedders may
 select a per-output-batch `maximumOutputBytes` budget.
 
@@ -1601,9 +1601,8 @@ those invalid solutions from driving collapse. `BoundedLeafVertices` counts thes
 adaptive recoveries. This bounds placement; it does not guarantee thin-feature
 survival or self-intersection-free output. The patch and its source/license ship
 in the runtime pack's `share/third-party/fidget-mesh` directory.
-Large retained replacements remain ordinary deltas. The host encodes the actual
-batch and fragments it for delivery. Reconnect history ages out whole publications,
-so later publications cannot remove a large transfer's prefix. Complete committed snapshots still serve fresh connections and recovery;
+Large retained replacements remain ordinary deltas, sent as one output batch.
+Complete committed snapshots serve every browser connection and recovery;
 size alone does not replay/reconstruct the scene or re-enter product callbacks.
 
 Implicit generation readouts also report boundary, non-manifold, and inconsistent

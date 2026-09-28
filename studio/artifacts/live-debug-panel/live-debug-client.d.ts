@@ -66,9 +66,9 @@ export interface LiveDebugTelemetrySnapshot {
     readonly runtimeProgressUnavailableReason: string | null;
     readonly connections: number;
     readonly subscribers: number;
+    /** Unsent events held for the slowest output subscriber, and the bound at which it is closed to reconnect fresh. */
     readonly outputQueueItems: number;
     readonly outputQueueCapacity: number;
-    readonly outputQueueFloor: string;
     readonly outputBindingActive: boolean;
     /** Completed C# update samples. Service time is nested in callback time. */
     readonly updateAttribution: LiveDebugUpdateAttributionSnapshot | null;

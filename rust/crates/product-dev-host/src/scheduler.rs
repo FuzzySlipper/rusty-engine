@@ -99,7 +99,6 @@ mod tests {
     #[derive(Default)]
     struct FixtureRuntime {
         renderer_resources: Vec<String>,
-        retired_renderer_resources: Vec<ProductDevRendererResource>,
         scheduled_asset_transition: Option<ProductDevRendererResource>,
     }
 
@@ -147,10 +146,6 @@ mod tests {
             (!self.renderer_resources.is_empty()).then(|| self.renderer_resources.clone())
         }
 
-        fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
-            std::mem::take(&mut self.retired_renderer_resources)
-        }
-
         fn lifecycle(
             &mut self,
             operation: ProductDevLifecycleOperation,
@@ -192,7 +187,6 @@ mod tests {
         {
             if let Some(resource) = self.scheduled_asset_transition.take() {
                 self.renderer_resources.push(resource.identity().to_owned());
-                self.retired_renderer_resources.push(resource);
                 return Ok(ProductDevRuntimeReceipt::new(
                     ProductDevOperationResult::accepted(
                         ProductDevOperationKind::AdvanceRealtime,
@@ -303,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_asset_transition_publishes_inventory_and_retired_resource_bytes() {
+    fn scheduled_asset_transition_publishes_its_resource_inventory() {
         let resource = ProductDevRendererResource::admit_font(
             "content/fonts/scheduled.woff2",
             b"wOF2scheduled-font".to_vec(),
@@ -332,9 +326,6 @@ mod tests {
             .into_wire_parts()
             .expect("scheduled receipt encodes for publication");
         assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].resources().len(), 1);
-        assert_eq!(outputs[0].resources()[0].identity(), identity);
-        assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2scheduled-font");
 
         let public_wire = serde_json::to_value(&outputs[0]).expect("public output wire");
         assert_eq!(

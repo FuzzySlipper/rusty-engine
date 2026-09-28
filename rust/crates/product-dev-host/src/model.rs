@@ -1163,7 +1163,6 @@ pub struct ProductDevTelemetrySnapshot {
     pub subscribers: usize,
     pub output_queue_items: usize,
     pub output_queue_capacity: usize,
-    pub output_queue_floor: CanonicalU64,
     pub output_binding_active: bool,
     /// Bounded attribution for completed C# update callbacks. Service totals
     /// are nested within the callback duration, not additional frame time.
@@ -2384,7 +2383,6 @@ impl ProductDevTimelineCompletionResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductDevRuntimeOutput {
     renderer_resources: Option<Vec<String>>,
-    resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
     wire: ProductDevRuntimeOutputWire,
 }
 
@@ -2532,21 +2530,8 @@ impl ProductDevRuntimeOutput {
     pub fn resource_inventory() -> Self {
         Self {
             wire: ProductDevRuntimeOutputWire::RendererResources,
-            resources: Default::default(),
             renderer_resources: None,
         }
-    }
-
-    pub fn resources(&self) -> &std::sync::Arc<[crate::ProductDevRendererResource]> {
-        &self.resources
-    }
-
-    pub fn with_resources(
-        mut self,
-        resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
-    ) -> Self {
-        self.resources = resources;
-        self
     }
 
     /// Decodes one output through the same JSON representation used by the
@@ -2607,17 +2592,14 @@ impl ProductDevRuntimeOutput {
             )),
             RuntimePublication::Frame(frame) => Ok(Self {
                 renderer_resources: None,
-                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::Frame { frame },
             }),
             RuntimePublication::ViewComposition(composition) => Ok(Self {
                 renderer_resources: None,
-                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
             }),
             RuntimePublication::Presentation(frame) => Ok(Self {
                 renderer_resources: None,
-                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::Presentation { frame },
             }),
             RuntimePublication::AnimationCueDefinitions(definitions) => {
@@ -2629,12 +2611,10 @@ impl ProductDevRuntimeOutput {
             }
             RuntimePublication::RenderOutput(jobs) => Ok(Self {
                 renderer_resources: None,
-                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::RenderOutput { jobs },
             }),
             RuntimePublication::UiProjection(envelope) => Ok(Self {
                 renderer_resources: None,
-                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
             }),
         }
@@ -2726,7 +2706,6 @@ impl ProductDevRuntimeOutput {
         };
         Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Frame { frame },
         }
     }
@@ -2734,7 +2713,6 @@ impl ProductDevRuntimeOutput {
     pub fn binding(runtime: ProductDevRuntimeBinding, next_input_sequence: CanonicalU64) -> Self {
         Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Binding {
                 runtime,
                 next_input_sequence,
@@ -2749,7 +2727,6 @@ impl ProductDevRuntimeOutput {
         let frame = frame.clone();
         Ok(Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Frame { frame },
         })
     }
@@ -2765,7 +2742,6 @@ impl ProductDevRuntimeOutput {
         let composition = composition.clone();
         Ok(Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
         })
     }
@@ -2792,7 +2768,6 @@ impl ProductDevRuntimeOutput {
         let frame = frame.clone();
         Ok(Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Presentation { frame },
         })
     }
@@ -2839,7 +2814,6 @@ impl ProductDevRuntimeOutput {
         }
         Ok(Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions },
         })
     }
@@ -2849,14 +2823,12 @@ impl ProductDevRuntimeOutput {
         let envelope = envelope.clone();
         Ok(Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
         })
     }
     pub fn runtime_readout(readout: ProductDevRuntimeReadout) -> Self {
         Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::RuntimeReadout { readout },
         }
     }
@@ -2867,7 +2839,6 @@ impl ProductDevRuntimeOutput {
     pub fn runtime_input_result(result: ProductDevInputResult) -> Self {
         Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::RuntimeInputResult { result },
         }
     }
@@ -2885,7 +2856,6 @@ impl ProductDevRuntimeOutput {
     ) -> Self {
         Self {
             renderer_resources: None,
-            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::CompleteBaseline {
                 runtime,
                 publication_frontiers,
@@ -3067,7 +3037,6 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
         Ok(Self {
             wire,
             renderer_resources: resources,
-            resources: Default::default(),
         })
     }
 }
@@ -3078,7 +3047,6 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
 pub struct ProductDevRuntimeReceipt<T> {
     resource_baseline: bool,
     renderer_resources: Option<Vec<String>>,
-    resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
     receipt: runtime_publication::RuntimeReceipt<T>,
 }
 
@@ -3136,7 +3104,6 @@ impl<T> ProductDevRuntimeReceipt<T> {
                 .iter()
                 .any(|output| matches!(output, RuntimePublication::Binding { .. })),
             renderer_resources: None,
-            resources: Default::default(),
             receipt: runtime_session::RuntimeReceipt::new(result, outputs),
         })
     }
@@ -3145,39 +3112,12 @@ impl<T> ProductDevRuntimeReceipt<T> {
         self.resource_baseline
     }
 
-    pub fn with_resources(
-        mut self,
-        resources: Vec<crate::ProductDevRendererResource>,
-        mut inventory: Option<Vec<String>>,
-    ) -> Self {
-        if inventory.is_none() {
-            inventory = self.renderer_resources.take();
+    /// Attaches the retained renderer resource closure, when it changed.
+    pub fn with_resource_inventory(mut self, inventory: Option<Vec<String>>) -> Self {
+        if inventory.is_some() {
+            self.renderer_resources = inventory;
         }
-        let mut combined: std::collections::BTreeMap<_, _> = self
-            .resources
-            .iter()
-            .map(|resource| (resource.identity().to_owned(), resource.clone()))
-            .collect();
-        combined.extend(
-            resources
-                .into_iter()
-                .map(|resource| (resource.identity().to_owned(), resource)),
-        );
-        let resources: Vec<_> = combined.into_values().collect();
-        self.renderer_resources = inventory;
-        self.resources = resources.into();
         self
-    }
-
-    pub fn into_parts_with_resources(
-        self,
-    ) -> (
-        T,
-        Vec<RuntimePublication>,
-        std::sync::Arc<[crate::ProductDevRendererResource]>,
-    ) {
-        let (result, outputs) = self.receipt.into_parts();
-        (result, outputs, self.resources)
     }
 
     pub fn result(&self) -> &T {
@@ -3192,38 +3132,16 @@ impl<T> ProductDevRuntimeReceipt<T> {
     /// Engine facts; byte budgets and JSON conversion belong to this adapter.
     pub fn into_wire_parts(self) -> Result<(T, Vec<ProductDevRuntimeOutput>), ProductDevHostError> {
         let inventory = self.renderer_resources.clone();
-        let (result, publications, resources) = self.into_parts_with_resources();
+        let (result, publications) = self.receipt.into_parts();
         let mut outputs = publications
             .into_iter()
             .map(ProductDevRuntimeOutput::from_publication)
             .collect::<Result<Vec<_>, _>>()?;
-        if outputs.is_empty() && (!resources.is_empty() || inventory.is_some()) {
+        if outputs.is_empty() && inventory.is_some() {
             outputs.push(ProductDevRuntimeOutput::resource_inventory());
         }
-        // Retired bodies can be referenced by an earlier publication in this
-        // call (including create/use/release in one callback). Admit them before
-        // applying the group, then publish the true retained closure after the
-        // last publication. No later product callback is required to prune them.
-        let delivery_inventory = inventory.as_ref().map(|inventory| {
-            let mut delivery = inventory.clone();
-            delivery.extend(
-                resources
-                    .iter()
-                    .map(|resource| resource.identity().to_owned()),
-            );
-            delivery.sort();
-            delivery.dedup();
-            delivery
-        });
-        let prune_after_publications = delivery_inventory != inventory;
         if let Some(output) = outputs.first_mut() {
-            output.resources = resources;
-            output.renderer_resources = delivery_inventory;
-        }
-        if prune_after_publications {
-            let mut output = ProductDevRuntimeOutput::resource_inventory();
             output.renderer_resources = inventory;
-            outputs.push(output);
         }
         ProductDevRuntimeOutput::validate_output_group(&outputs)?;
         Ok((result, outputs))
@@ -3238,9 +3156,6 @@ impl<T> ProductDevRuntimeReceipt<T> {
 pub trait ProductDevRuntime: Send + 'static {
     fn renderer_resource_ids(&self) -> Option<Vec<String>> {
         None
-    }
-    fn take_retired_renderer_resources(&mut self) -> Vec<crate::ProductDevRendererResource> {
-        Vec::new()
     }
     /// Returns a currently retained renderer body for the exact runtime
     /// generation. Browser delivery uses this read-only path only when a
