@@ -598,8 +598,8 @@ struct StagedProduct {
     watches: Vec<PathBuf>,
 }
 
-/// Build, stage and read the staged directory and watch declaration in one
-/// MSBuild invocation. Build output stays on the console; the evaluated
+/// Restore, build, stage and read the staged directory and watch declaration
+/// in one MSBuild invocation. Build output stays on the console; the evaluated
 /// properties are written to a result file.
 fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
     let project = absolute(&options.project)?;
@@ -618,9 +618,13 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
         .to_str()
         .ok_or("RUSTY_DEV_STAGE: temporary result path must be UTF-8")?
         .to_owned();
+    // `-restore` restores in its own evaluation and re-evaluates before the
+    // target, so a fresh or package-changed project imports the SDK's staging
+    // targets. Restore is incremental when its inputs are unchanged.
     let mut arguments = vec![
         "msbuild".to_owned(),
         project_argument,
+        "-restore".to_owned(),
         "-nologo".to_owned(),
         "-verbosity:minimal".to_owned(),
         format!("-t:{STAGE_TARGET}"),
