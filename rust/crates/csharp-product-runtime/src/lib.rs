@@ -2441,8 +2441,12 @@ impl CsharpProductRuntime {
     }
 
     fn readout(&self) -> ProductDevRuntimeReadout {
-        let hz = match self.lifecycle.configuration() { RuntimeLifecycleConfig::Realtime(config) => config.fixed_step_hz(), _ => 0 };
-        dev_readout(self.lifecycle.readout()).with_inspection_time(self.playtest_time.name().to_owned(), hz)
+        let hz = match self.lifecycle.configuration() {
+            RuntimeLifecycleConfig::Realtime(config) => config.fixed_step_hz(),
+            _ => 0,
+        };
+        dev_readout(self.lifecycle.readout())
+            .with_inspection_time(self.playtest_time.name().to_owned(), hz)
     }
 
     fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
@@ -3054,7 +3058,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
         command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
         self.require_not_tainted()?;
-        if command.split_whitespace().next().is_some_and(|name| matches!(name, "engine.time" | "engine.time.mode" | "engine.time.advance")) {
+        if command.split_whitespace().next().is_some_and(|name| {
+            matches!(
+                name,
+                "engine.time" | "engine.time.mode" | "engine.time.advance"
+            )
+        }) {
             return self.execute_time_debug(command);
         }
         if let Some(action) = renderer_debug_command(command) {

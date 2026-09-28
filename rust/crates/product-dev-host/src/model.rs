@@ -1354,7 +1354,8 @@ pub struct ProductDevRuntimeReadout {
 
 impl ProductDevRuntimeReadout {
     pub fn with_inspection_time(mut self, mode: String, hz: u32) -> Self {
-        self.inspection_time = Some((mode, hz)); self
+        self.inspection_time = Some((mode, hz));
+        self
     }
     pub fn new(
         runtime: ProductDevRuntimeBinding,
@@ -1625,8 +1626,13 @@ fn validate_debug_descriptor_text(value: &str) -> Result<(), ProductDevHostError
 }
 
 impl ProductDevDebugResult {
-    pub fn with_readout(mut self, readout: ProductDevRuntimeReadout) -> Self { self.readout = Some(readout); self }
-    pub fn readout(&self) -> Option<&ProductDevRuntimeReadout> { self.readout.as_ref() }
+    pub fn with_readout(mut self, readout: ProductDevRuntimeReadout) -> Self {
+        self.readout = Some(readout);
+        self
+    }
+    pub fn readout(&self) -> Option<&ProductDevRuntimeReadout> {
+        self.readout.as_ref()
+    }
     pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
     pub fn new(succeeded: bool, message: String) -> Result<Self, ProductDevHostError> {
@@ -1636,7 +1642,11 @@ impl ProductDevDebugResult {
                 "debug result exceeds the host result bound",
             ));
         }
-        Ok(Self { succeeded, message, readout: None })
+        Ok(Self {
+            succeeded,
+            message,
+            readout: None,
+        })
     }
 
     pub const fn succeeded(&self) -> bool {

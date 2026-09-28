@@ -1791,7 +1791,11 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                         ));
                     }
                 };
-                if let Some(readout) = result.readout() { outputs.push(crate::ProductDevRuntimeOutput::runtime_readout(readout.clone())); }
+                if let Some(readout) = result.readout() {
+                    outputs.push(crate::ProductDevRuntimeOutput::runtime_readout(
+                        readout.clone(),
+                    ));
+                }
                 let output_through = match push_host_outputs(state, outputs) {
                     Ok(output_through) => output_through,
                     Err(error) => {
@@ -2776,7 +2780,8 @@ fn handle_sse<R: ProductDevRuntime>(
         // Subscriber-private baselines deliberately carry no SSE cursor. An
         // id parsed before this record's terminating blank line could survive
         // a disconnect even though JavaScript never received the completion.
-        let mut result: serde_json::Value = serde_json::from_str(&result).expect("serialized connection result");
+        let mut result: serde_json::Value =
+            serde_json::from_str(&result).expect("serialized connection result");
         // This is an observed baseline boundary, not an SSE reconnect cursor.
         result["outputThrough"] = serde_json::Value::String(cursor.to_string());
         let payload = format!("event: rusty-output-baseline\ndata: {result}\n\n");

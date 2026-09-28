@@ -166,9 +166,12 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
 
     /// Bring already queued input into the same owner scope before a time command.
     pub fn execute_debug_with_input<F>(
-        &self, command: &str, drain: F,
+        &self,
+        command: &str,
+        drain: F,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError>
-    where F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
+    where
+        F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
     {
         self.with_runtime(|runtime| {
             let (batches, overflowed) = drain();

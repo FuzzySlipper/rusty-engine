@@ -2571,7 +2571,8 @@ fn worker_request(
                 .and_then(|batch| {
                     if matches!(
                         owner.realtime_schedule_state(),
-                        Ok(ProductDevRuntimeScheduleState::Unsupported | ProductDevRuntimeScheduleState::Paused)
+                        Ok(ProductDevRuntimeScheduleState::Unsupported
+                            | ProductDevRuntimeScheduleState::Paused)
                     ) {
                         return owner.input(batch);
                     }
@@ -2631,9 +2632,18 @@ fn worker_request(
         },
         ProductDevWorkerRequest::Debug { command, .. } => match command {
             Some(command) if command.len() <= product_dev_host::MAX_REQUEST_BODY_BYTES => {
-                worker_receipt(request_id, if matches!(command.split_whitespace().next(), Some("engine.time.mode" | "engine.time.advance")) {
-                    owner.execute_debug_with_input(&command, || mailbox.drain())
-                } else { owner.execute_debug(&command) }, settle_request)?
+                worker_receipt(
+                    request_id,
+                    if matches!(
+                        command.split_whitespace().next(),
+                        Some("engine.time.mode" | "engine.time.advance")
+                    ) {
+                        owner.execute_debug_with_input(&command, || mailbox.drain())
+                    } else {
+                        owner.execute_debug(&command)
+                    },
+                    settle_request,
+                )?
             }
             Some(_) => worker_fault_response(
                 request_id,

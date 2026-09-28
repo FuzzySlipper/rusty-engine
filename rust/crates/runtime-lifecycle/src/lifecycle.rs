@@ -272,7 +272,10 @@ impl RuntimeLifecycle {
     /// Admits one explicit forward step using the configured cadence. The host
     /// must suspend its automatic scheduler before calling this operation.
     pub fn admit_manual_step(&mut self) -> Result<SimulationAdmission, RuntimeLifecycleError> {
-        self.require_state(LifecycleOperation::AdmitDemandStep, &[RuntimeState::Running])?;
+        self.require_state(
+            LifecycleOperation::AdmitDemandStep,
+            &[RuntimeState::Running],
+        )?;
         self.clear_realtime_baseline();
         self.prepare_simulation_admission(1)
     }
