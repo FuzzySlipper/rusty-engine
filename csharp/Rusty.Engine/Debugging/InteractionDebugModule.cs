@@ -54,6 +54,15 @@ public sealed partial class InteractionDebugModule(WorldInteraction interaction,
                 writer.WriteString("label", candidate.Label); Point(writer, "point", candidate.Point);
                 writer.WriteNumber("distance", row.Distance); writer.WriteNumber("reachDistance", candidate.ReachDistance);
                 writer.WriteNumber("angleRadians", row.AngleRadians); writer.WriteBoolean("selected", row.Selected);
+                Vector3 toward = candidate.Point - readout.Scene.Query.Origin;
+                Vector3 facing = readout.Scene.Query.Direction;
+                double yaw = Math.Atan2(toward.X, -toward.Z) - Math.Atan2(facing.X, -facing.Z);
+                yaw = Math.Atan2(Math.Sin(yaw), Math.Cos(yaw));
+                double pitch = Math.Atan2(toward.Y, Math.Sqrt(toward.X * toward.X + toward.Z * toward.Z))
+                    - Math.Atan2(facing.Y, Math.Sqrt(facing.X * facing.X + facing.Z * facing.Z));
+                writer.WriteNumber("yawDeltaDegrees", yaw * 180 / Math.PI);
+                writer.WriteNumber("pitchDeltaDegrees", pitch * 180 / Math.PI);
+                writer.WriteString("lookConvention", "relative degrees; positive yaw right, positive pitch up; aim guidance does not establish reach or visibility");
                 writer.WriteString("visibility", candidate.Visibility.ToString());
                 writer.WriteString("availability", candidate.Availability.ToString());
                 writer.WriteString("route", candidate.Route.ToString());

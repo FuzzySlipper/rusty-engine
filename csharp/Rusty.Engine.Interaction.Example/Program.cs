@@ -57,9 +57,35 @@ using (var json = System.Text.Json.JsonDocument.Parse(debug.Inspect().Message))
 {
  Check(json.RootElement.GetProperty("candidates")[0].GetProperty("useCommand").GetString() == "interaction.use 1 1", "Inspection gives exact action command");
 }
+scene.Candidate = A with { Point = new(1, 1, -1) };
+using (var json = System.Text.Json.JsonDocument.Parse(debug.Inspect().Message))
+{
+ var candidate = json.RootElement.GetProperty("candidates")[0];
+ Check(Math.Abs(candidate.GetProperty("yawDeltaDegrees").GetDouble() - 45) < .001,
+     "Look guidance turns right toward positive X");
+ Check(Math.Abs(candidate.GetProperty("pitchDeltaDegrees").GetDouble() - 35.2643897) < .001,
+     "Look guidance raises view toward elevated point");
+}
 scene.Candidate = A with { Availability = InteractionAvailability.Locked };
 using (var json = System.Text.Json.JsonDocument.Parse(debug.Use(1,1).Message))
  Check(!json.RootElement.GetProperty("performed").GetBoolean(), "Command receipt reports domain rejection");
+
+var jumpTuning = default(Rusty.Engine.CharacterControllerConfig);
+jumpTuning = jumpTuning with {
+ Ground = jumpTuning.Ground with { ForwardSpeed = 5 },
+ Vertical = jumpTuning.Vertical with { Gravity = 10, JumpSpeed = 5 }
+};
+var jumpPlan = Rusty.Engine.Debugging.PlaytestTraversal.JumpToward(Vector3.Zero, -Vector3.UnitZ,
+ new Vector3(2, 0, 0), jumpTuning, true, "Space", "KeyW");
+Check(jumpPlan.Available && Math.Abs(jumpPlan.YawDeltaDegrees - 90) < .001 &&
+ jumpPlan.Action?.Hold == false && jumpPlan.Action.HeldKeys?.Single() == "KeyW",
+ "Jump guidance combines a pulse with forward movement from current tuning");
+Check(!Rusty.Engine.Debugging.PlaytestTraversal.JumpToward(Vector3.Zero, -Vector3.UnitZ,
+ new Vector3(2, 0, 0), jumpTuning, false, "Space", "KeyW").Available,
+ "Airborne player cannot start grounded jump guidance");
+Check(!Rusty.Engine.Debugging.PlaytestTraversal.JumpToward(Vector3.Zero, -Vector3.UnitZ,
+ new Vector3(2, 2, 0), jumpTuning, true, "Space", "KeyW").Available,
+ "Jump guidance refuses target above current jump height");
 
 var assist = new AimAssist();
 var config = new AimAssistConfig(.2f, .3f, .5f, .15f, .1f);

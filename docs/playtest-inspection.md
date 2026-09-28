@@ -61,3 +61,29 @@ Camera coordinates use the renderer's Y-up convention; positive yaw turns right.
 See crew-services `docs/playtest.md` for CLI examples, evidence handling and
 shared-host/reset semantics. Raw keyboard input is unchanged; `assist act` is the
 bounded action that pairs physical input with manual advancement automatically.
+
+## Triggered spatial diagnostics
+
+Register `SpatialInspectionDebugModule` with product delegates for the current
+session, player pose and controller tuning. `SpatialGridSnapshot.Capture` formats
+stacked native `ReadMap` collision queries into an XYZ occupancy volume. Each Y
+slice contains Z rows whose characters increase along X. Origin, cell size,
+dimensions and source/legend accompany the result. The helper permits at most
+31 cells per axis and 8192 cells total. Products choose which dynamic colliders
+to supply and document that coverage. Empty collision cells do not prove a route.
+
+`PlaytestTraversal.Probe` samples native rays at ankle, above-step and head heights,
+plus nearby downward floor rays. Products can pair these with their latest
+`CharacterStepReceipt` to explain blocked movement and rejected steps. Neither
+helper runs continuously or advances simulation.
+
+`PlaytestTraversal.JumpToward` produces a short ordinary input plan from live
+character tuning and grounded state. The harness turns toward the target, pulses
+jump, holds forward and settles with released controls. Acceleration and collision
+can change the landing, so consumers inspect the actual endpoint. It introduces
+no second controller, teleport, rewind or successful-arrival promise.
+
+`InteractionDebugModule` includes signed yaw/pitch deltas to each candidate point.
+These support look adjustment while retaining reach, visibility and availability
+checks. The browser assist surface names this query `interaction`; the native
+debug command remains `interaction.inspect`.

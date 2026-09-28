@@ -19,6 +19,26 @@ function e(e, t, n) {
 				let e = (await fetch("/__rusty/product/runtime/debug/catalog").then((e) => e.json())).commands.map((e) => e.name);
 				return {
 					commands: e,
+					nativeCommands: e,
+					operations: [
+						"discover",
+						"observe",
+						"action",
+						"look",
+						"time",
+						"advance",
+						"drawing",
+						"frame",
+						"camera",
+						"targets",
+						"route",
+						"focus",
+						...e.includes("interaction.inspect") ? ["interaction"] : [],
+						...e.includes("spatial.grid") ? ["grid"] : [],
+						...e.includes("spatial.probe") ? ["probe"] : [],
+						...e.includes("playtest.jump-plan") ? ["jump-plan"] : []
+					],
+					commandNote: "nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions",
 					time: e.includes("engine.time"),
 					timeModes: [
 						"realtime",
@@ -44,6 +64,24 @@ function e(e, t, n) {
 			};
 			case "flush": return await t(), { flushed: !0 };
 			case "observe": return i("playtest.observe");
+			case "interaction": return i("interaction.inspect");
+			case "grid": {
+				let e = r.radius ?? 4, t = r.verticalRadius ?? 4, n = r.cellSize ?? .25;
+				if (!Number.isInteger(e) || !Number.isInteger(t) || e < 0 || t < 0 || e > 15 || t > 15 || !Number.isFinite(n) || n < .125 || n > 2) throw Error("invalid grid dimensions; radii0..15, cellSize.125..2");
+				return i(`spatial.grid ${e} ${t} ${n}`);
+			}
+			case "probe": {
+				let e = r.distance ?? 2;
+				if (!Number.isFinite(e) || e <= 0 || e > 8) throw Error("probe distance must be in (0,8]");
+				return i(`spatial.probe ${e}`);
+			}
+			case "jump-plan":
+				if (![
+					r.x,
+					r.y,
+					r.z
+				].every((e) => typeof e == "number" && Number.isFinite(e))) throw Error("jump target requires finite x/y/z feet coordinates");
+				return i(`playtest.jump-plan ${r.x} ${r.y} ${r.z}`);
 			case "action": return i(`playtest.action ${o}`);
 			case "targets": return i("navigation.targets");
 			case "route": return i(`navigation.route ${o}`);

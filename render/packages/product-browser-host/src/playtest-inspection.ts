@@ -1,8 +1,9 @@
 import type { RustyApplicationRendererPort } from '@rusty-engine/application-host';
 type Camera = { position: readonly [number, number, number]; yawDegrees: number; pitchDegrees: number };
 export interface PlaytestInspectionRequest {
-  op: 'discover' | 'observe' | 'action' | 'look' | 'time' | 'advance' | 'drawing' | 'frame' | 'camera' | 'targets' | 'route' | 'flush' | 'focus';
+  op: 'discover' | 'observe' | 'action' | 'look' | 'time' | 'advance' | 'drawing' | 'frame' | 'camera' | 'targets' | 'route' | 'flush' | 'focus' | 'interaction' | 'grid' | 'probe' | 'jump-plan';
   mode?: string; id?: string; ms?: number; yaw?: number; pitch?: number; camera?: Camera | null;
+  x?: number; y?: number; z?: number; radius?: number; verticalRadius?: number; cellSize?: number; distance?: number;
   move?: readonly [number, number, number]; lookAt?: readonly [number, number, number]; orbit?: { target: readonly [number, number, number]; yaw: number };
 }
 /** Engine-owned browser inspection adapter; gameplay remains in the product. */
@@ -24,11 +25,27 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
       case 'discover': {
         const catalog = await fetch('/__rusty/product/runtime/debug/catalog').then(r => r.json()) as { commands: { name: string }[] };
         const names = catalog.commands.map(c => c.name);
-        return { commands: names, time: names.includes('engine.time'), timeModes: ['realtime', 'manual', 'action-driven'], drawingModes: ['continuous', 'on-demand'], observer: ['pose', 'move', 'lookAt', 'orbit', 'restore'], lookAdvancesTime: false, inspection: true, product: names.includes('playtest.help') ? await debug('playtest.help') : null };
+        return { commands: names, nativeCommands: names, operations: ['discover','observe','action','look','time','advance','drawing','frame','camera','targets','route','focus', ...(names.includes('interaction.inspect') ? ['interaction'] : []), ...(names.includes('spatial.grid') ? ['grid'] : []), ...(names.includes('spatial.probe') ? ['probe'] : []), ...(names.includes('playtest.jump-plan') ? ['jump-plan'] : [])], commandNote: 'nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions', time: names.includes('engine.time'), timeModes: ['realtime', 'manual', 'action-driven'], drawingModes: ['continuous', 'on-demand'], observer: ['pose', 'move', 'lookAt', 'orbit', 'restore'], lookAdvancesTime: false, inspection: true, product: names.includes('playtest.help') ? await debug('playtest.help') : null };
       }
       case 'focus': return { focused: document.activeElement?.tagName === 'CANVAS', pointerLocked: document.pointerLockElement !== null };
       case 'flush': await flushInput(); return { flushed: true };
       case 'observe': return debug('playtest.observe');
+      case 'interaction': return debug('interaction.inspect');
+      case 'grid': {
+        const radius = request.radius ?? 4, vertical = request.verticalRadius ?? 4, size = request.cellSize ?? 0.25;
+        if (!Number.isInteger(radius) || !Number.isInteger(vertical) || radius < 0 || vertical < 0 || radius > 15 || vertical > 15 || !Number.isFinite(size) || size < .125 || size > 2) throw new Error('invalid grid dimensions; radii0..15, cellSize.125..2');
+        return debug(`spatial.grid ${radius} ${vertical} ${size}`);
+      }
+      case 'probe': {
+        const distance = request.distance ?? 2;
+        if (!Number.isFinite(distance) || distance <= 0 || distance > 8) throw new Error('probe distance must be in (0,8]');
+        return debug(`spatial.probe ${distance}`);
+      }
+      case 'jump-plan': {
+        if (![request.x, request.y, request.z].every(v => typeof v === 'number' && Number.isFinite(v))) throw new Error('jump target requires finite x/y/z feet coordinates');
+        return debug(`playtest.jump-plan ${request.x} ${request.y} ${request.z}`);
+      }
+
       case 'action': return debug(`playtest.action ${id}`);
       case 'targets': return debug('navigation.targets');
       case 'route': return debug(`navigation.route ${id}`);

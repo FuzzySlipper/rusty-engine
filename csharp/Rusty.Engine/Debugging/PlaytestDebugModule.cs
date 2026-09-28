@@ -6,7 +6,7 @@ namespace Rusty.Engine.Debugging;
 
 /// <summary>Product-resolved action timing and ordinary physical controls for inspection tools.</summary>
 public sealed record PlaytestAction(string Id, string Key, double DurationMs, bool Hold,
-    bool Available = true, string? Reason = null, string? Equipment = null);
+    bool Available = true, string? Reason = null, string? Equipment = null, IReadOnlyList<string>? HeldKeys = null);
 
 /// <summary>Small product adapter over the existing generated debug catalog. Queries never act.</summary>
 public sealed class PlaytestDebugModule(
