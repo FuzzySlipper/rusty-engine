@@ -26,6 +26,10 @@ service families. The declarations originate in
 live in [`csharp-engine-services`](../rust/crates/csharp-engine-services), and
 the ignored `obj/Generated` output is produced by
 [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh).
+The script fingerprints the ABI crate, the binding generator, itself (it pins
+cbindgen), the clang and dotnet versions, and its previous outputs. It skips
+the pipeline when none of them changed; delete `obj/Generated/.generation-stamp`
+to force a rerun.
 
 | Family | Product-facing purpose |
 | --- | --- |
