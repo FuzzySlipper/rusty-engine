@@ -33,7 +33,7 @@ pub(crate) unsafe extern "C" fn create_billboard(
                 ABI_OK
             }
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -56,7 +56,7 @@ pub(crate) unsafe extern "C" fn update_billboard(
         match bridge.presentation_update_billboard(owner, unsafe { &*request }) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -82,7 +82,7 @@ pub(crate) unsafe extern "C" fn create_structured_billboard(
                 ABI_OK
             }
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -105,7 +105,7 @@ pub(crate) unsafe extern "C" fn update_structured_billboard(
         match bridge.presentation_update_structured_billboard(owner, unsafe { &*request }) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -124,7 +124,7 @@ pub(crate) unsafe extern "C" fn destroy_billboard(
         match bridge.presentation_destroy_billboard(owner) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -137,7 +137,7 @@ pub(crate) unsafe extern "C" fn emit_particles(
     result: *mut NativePresentationParticleEmissionReceipt,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    crate::appearance::atomic_appearance_operation(context, operation_error, || {
+    crate::appearance::appearance_operation(context, operation_error, || {
         if request.is_null() || result.is_null() {
             return 0;
         }
@@ -151,7 +151,7 @@ pub(crate) unsafe extern "C" fn emit_particles(
                 ABI_OK
             }
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -177,7 +177,7 @@ pub(crate) unsafe extern "C" fn create_emitter(
                 ABI_OK
             }
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -200,7 +200,7 @@ pub(crate) unsafe extern "C" fn update_emitter(
         match bridge.presentation_update_emitter(owner, unsafe { &*request }) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -219,7 +219,7 @@ pub(crate) unsafe extern "C" fn destroy_emitter(
         match bridge.presentation_destroy_emitter(owner) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -280,7 +280,7 @@ pub(crate) unsafe extern "C" fn create_ghost_plate(
                 ABI_OK
             }
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -302,7 +302,7 @@ pub(crate) unsafe extern "C" fn update_ghost_plate(
         match bridge.presentation_update_ghost_plate(unsafe { *request }) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -324,7 +324,7 @@ pub(crate) unsafe extern "C" fn recapture_ghost_plate(
         match bridge.presentation_recapture_ghost_plate(unsafe { *request }) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -350,7 +350,7 @@ pub(crate) unsafe extern "C" fn read_ghost_plate(
                 ABI_OK
             }
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }
@@ -369,7 +369,7 @@ pub(crate) unsafe extern "C" fn destroy_ghost_plate(
         match bridge.presentation_destroy_ghost_plate(presentation) {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.record_callback_error(error);
+                bridge.record_operation_error(error);
                 0
             }
         }

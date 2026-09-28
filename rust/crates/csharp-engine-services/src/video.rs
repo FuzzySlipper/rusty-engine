@@ -61,7 +61,6 @@ pub(crate) struct RuntimeVideoBridge {
     state: VideoState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
     staged: Option<RuntimeVideoCall>,
-    callback_error: Option<CsharpEngineServicesError>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     facts: VecDeque<VideoRealizationFact>,
     evicted: u64,
@@ -80,7 +79,6 @@ impl RuntimeVideoBridge {
             },
             content_resources,
             staged: None,
-            callback_error: None,
             operation_diagnostics: Default::default(),
             facts: VecDeque::new(),
             evicted: 0,
@@ -97,11 +95,9 @@ impl RuntimeVideoBridge {
             state: self.state.clone(),
             frame: None,
         });
-        self.callback_error = None;
     }
     pub(crate) fn discard_call(&mut self) {
         self.staged = None;
-        self.callback_error = None;
     }
     pub(crate) fn take_staged_call(
         &mut self,
@@ -317,7 +313,7 @@ impl RuntimeVideoBridge {
     }
 }
 
-macro_rules! call { ($name:ident, $method:ident $(, $arg:ident : $ty:ty )* => $out:ty) => { pub(crate) unsafe extern "C" fn $name(context: *mut c_void, $($arg: $ty,)* result: *mut $out, operation_error: *mut NativeOperationErrorReceipt) -> i32 { if !operation_error.is_null() { unsafe { *operation_error = std::mem::zeroed() }; } if context.is_null() || result.is_null() { return 0; } let bridge = unsafe { &mut *context.cast::<RuntimeVideoBridge>() }; match bridge.$method($($arg),*) { Ok(value) => { unsafe { *result = value; } ABI_OK }, Err(error) => { bridge.operation_diagnostics.retain(&error, operation_error); bridge.callback_error = Some(error); 0 } } } }; }
+macro_rules! call { ($name:ident, $method:ident $(, $arg:ident : $ty:ty )* => $out:ty) => { pub(crate) unsafe extern "C" fn $name(context: *mut c_void, $($arg: $ty,)* result: *mut $out, operation_error: *mut NativeOperationErrorReceipt) -> i32 { if !operation_error.is_null() { unsafe { *operation_error = std::mem::zeroed() }; } if context.is_null() || result.is_null() { return 0; } let bridge = unsafe { &mut *context.cast::<RuntimeVideoBridge>() }; match bridge.$method($($arg),*) { Ok(value) => { unsafe { *result = value; } ABI_OK }, Err(error) => { bridge.operation_diagnostics.retain(&error, operation_error); 0 } } } }; }
 pub(crate) unsafe extern "C" fn play_video(
     context: *mut c_void,
     request: *const NativePlayVideoRequest,
@@ -354,7 +350,6 @@ pub(crate) unsafe extern "C" fn play_video_from_content(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -376,7 +371,6 @@ pub(crate) unsafe extern "C" fn stop_video(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -397,7 +391,6 @@ pub(crate) unsafe extern "C" fn skip_video(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }

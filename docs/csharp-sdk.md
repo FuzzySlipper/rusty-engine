@@ -65,11 +65,15 @@ and implicit-field operations preserve their recorded native refusal reasons.
 For example, an unadmitted audio clip reports `CSHARP_AUDIO_CLIP_HANDLE`, and a
 stale sprite atlas reports `CSHARP_SPRITE_ATLAS_HANDLE`.
 
-A diagnostic receipt does not change the operation's commit/recovery contract.
-Catching an exception does not promise that a failed product callback or a
-partially completed collection of service calls can continue. Resource release
-still uses the exact owning service. Adopt the matching SDK **and** runtime:
-these receipts change the native function table.
+A refusal is operation-local: the refused operation leaves Engine state as it
+was, and its exception is the only consequence. A product that catches
+`EngineCallException` may continue the callback, and its other output commits
+normally. An exception that escapes the callback still faults it. The
+[caught-refusal fixture](../fixtures/csharp-caught-refusals/CaughtRefusalChecks.cs)
+catches Graphics, Audio, CameraView and UI refusals, then performs ordinary
+work in the same callback. Resource release still uses the exact owning
+service. Adopt the matching SDK **and** runtime: these receipts change the
+native function table.
 
 ### Runtime input remapping
 

@@ -68,7 +68,6 @@ pub(crate) struct RuntimeCameraViewCall {
 pub(crate) struct RuntimeCameraViewBridge {
     state: CameraState,
     staged: Option<RuntimeCameraViewCall>,
-    callback_error: Option<CsharpEngineServicesError>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
 
@@ -86,7 +85,6 @@ impl RuntimeCameraViewBridge {
                 next_target: 1,
             },
             staged: None,
-            callback_error: None,
             operation_diagnostics: Default::default(),
         }
     }
@@ -97,7 +95,6 @@ impl RuntimeCameraViewBridge {
             composition: None,
             background: None,
         });
-        self.callback_error = None;
     }
 
     pub(crate) fn begin_attach_call(&mut self) -> Result<(), CsharpEngineServicesError> {
@@ -112,16 +109,11 @@ impl RuntimeCameraViewBridge {
 
     pub(crate) fn discard_call(&mut self) {
         self.staged = None;
-        self.callback_error = None;
     }
 
     pub(crate) fn take_staged_call(
         &mut self,
     ) -> Result<RuntimeCameraViewCall, CsharpEngineServicesError> {
-        if let Some(error) = self.callback_error.take() {
-            self.staged = None;
-            return Err(error);
-        }
         self.staged.take().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_CAMERA_VIEW_CALL",
@@ -326,25 +318,26 @@ impl RuntimeCameraViewBridge {
         request: NativeCameraTargetUpdateRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         validate_target_descriptor(request.descriptor)?;
-        let staged = self.staged_mut()?;
-        let target = staged
-            .state
-            .targets
-            .get_mut(&request.target.value)
-            .ok_or_else(|| {
+        self.with_state_restored_on_refusal(|staged| {
+            let target = staged
+                .state
+                .targets
+                .get_mut(&request.target.value)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_CAMERA_TARGET_HANDLE",
+                        "target handle is not live",
+                    )
+                })?;
+            target.descriptor = request.descriptor;
+            target.revision = target.revision.checked_add(1).ok_or_else(|| {
                 CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_TARGET_HANDLE",
-                    "target handle is not live",
+                    "CSHARP_CAMERA_TARGET_REVISION",
+                    "target revision overflow",
                 )
             })?;
-        target.descriptor = request.descriptor;
-        target.revision = target.revision.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_CAMERA_TARGET_REVISION",
-                "target revision overflow",
-            )
-        })?;
-        stage_composition(staged)
+            stage_composition(staged)
+        })
     }
 
     fn replace_target(
@@ -352,37 +345,56 @@ impl RuntimeCameraViewBridge {
         request: NativeCameraTargetReplaceRequest,
     ) -> Result<NativeCameraTargetHandle, CsharpEngineServicesError> {
         validate_target_descriptor(request.replacement)?;
+        self.with_state_restored_on_refusal(|staged| {
+            if staged.state.targets.remove(&request.target.value).is_none() {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_CAMERA_TARGET_HANDLE",
+                    "target handle is not live",
+                ));
+            }
+            let handle = staged.state.next_target;
+            staged.state.next_target = handle.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_CAMERA_TARGET_HANDLE",
+                    "target handle overflow",
+                )
+            })?;
+            staged.state.targets.insert(
+                handle,
+                CameraTargetState {
+                    descriptor: request.replacement,
+                    revision: 1,
+                },
+            );
+            let replacement = NativeCameraTargetHandle { value: handle };
+            for view in &mut staged.state.views {
+                if view.target.value == request.target.value {
+                    view.target = NativeCameraTargetReference { value: handle };
+                }
+            }
+            for presentation in &mut staged.state.presentations {
+                if presentation.source_target == request.target {
+                    presentation.source_target = replacement;
+                }
+            }
+            stage_composition(staged)?;
+            Ok(replacement)
+        })
+    }
+
+    /// Target edits change retained state before the composition budget is
+    /// checked. Restore that state when composition refuses the edit.
+    fn with_state_restored_on_refusal<T>(
+        &mut self,
+        change: impl FnOnce(&mut RuntimeCameraViewCall) -> Result<T, CsharpEngineServicesError>,
+    ) -> Result<T, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        if staged.state.targets.remove(&request.target.value).is_none() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_CAMERA_TARGET_HANDLE",
-                "target handle is not live",
-            ));
+        let previous = staged.state.clone();
+        let result = change(staged);
+        if result.is_err() {
+            staged.state = previous;
         }
-        let handle = staged.state.next_target;
-        staged.state.next_target = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_CAMERA_TARGET_HANDLE", "target handle overflow")
-        })?;
-        staged.state.targets.insert(
-            handle,
-            CameraTargetState {
-                descriptor: request.replacement,
-                revision: 1,
-            },
-        );
-        let replacement = NativeCameraTargetHandle { value: handle };
-        for view in &mut staged.state.views {
-            if view.target.value == request.target.value {
-                view.target = NativeCameraTargetReference { value: handle };
-            }
-        }
-        for presentation in &mut staged.state.presentations {
-            if presentation.source_target == request.target {
-                presentation.source_target = replacement;
-            }
-        }
-        stage_composition(staged)?;
-        Ok(replacement)
+        result
     }
 
     fn destroy_target(
@@ -875,7 +887,6 @@ pub(crate) unsafe extern "C" fn create_camera(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -897,7 +908,6 @@ pub(crate) unsafe extern "C" fn update_camera(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -919,7 +929,6 @@ pub(crate) unsafe extern "C" fn update_camera_sample(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -945,7 +954,6 @@ pub(crate) unsafe extern "C" fn replace_camera(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -967,7 +975,6 @@ pub(crate) unsafe extern "C" fn destroy_camera(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -993,7 +1000,6 @@ pub(crate) unsafe extern "C" fn create_camera_target(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1015,7 +1021,6 @@ pub(crate) unsafe extern "C" fn update_camera_target(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1041,7 +1046,6 @@ pub(crate) unsafe extern "C" fn replace_camera_target(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1063,7 +1067,6 @@ pub(crate) unsafe extern "C" fn destroy_camera_target(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1085,7 +1088,6 @@ pub(crate) unsafe extern "C" fn set_camera_composition(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1107,7 +1109,6 @@ pub(crate) unsafe extern "C" fn set_active_camera(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1129,7 +1130,6 @@ pub(crate) unsafe extern "C" fn clear_active_camera(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1151,7 +1151,6 @@ pub(crate) unsafe extern "C" fn set_sky_background(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1173,7 +1172,6 @@ pub(crate) unsafe extern "C" fn clear_sky_background(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1195,7 +1193,6 @@ pub(crate) unsafe extern "C" fn set_background_color(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1252,7 +1249,6 @@ pub(crate) unsafe extern "C" fn set_sky_background_blend(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1321,6 +1317,67 @@ mod tests {
             interpolation,
             cut: u8::from(cut),
         }
+    }
+
+    #[test]
+    fn refused_target_update_keeps_prior_descriptor_and_composition() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        bridge.begin_call();
+        let full = NativeCameraViewport {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        let camera = bridge.create(camera_descriptor(full)).expect("camera");
+        let targets = [(); 3].map(|()| bridge.create_target(target_descriptor()).expect("target"));
+        let views = targets.map(|target| NativeCameraCompositionView {
+            camera,
+            target: NativeCameraTargetReference {
+                value: target.value,
+            },
+            viewport: full,
+            order: 0,
+        });
+        unsafe {
+            bridge
+                .set_composition(&NativeCameraCompositionRequest {
+                    views: views.as_ptr(),
+                    views_len: views.len(),
+                    presentations: std::ptr::null(),
+                    presentations_len: 0,
+                })
+                .expect("three referenced targets");
+        }
+        let initial = bridge.take_staged_call().expect("initial composition");
+        bridge.commit(initial);
+
+        bridge.begin_call();
+        let largest = NativeCameraTargetDescriptor {
+            width: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
+            height: render_host_contracts::MAX_RENDERER_TARGET_DIMENSION,
+            ..target_descriptor()
+        };
+        bridge
+            .update_target(NativeCameraTargetUpdateRequest {
+                target: targets[0],
+                descriptor: largest,
+            })
+            .expect("one large target fits the pixel budget");
+        bridge
+            .update_target(NativeCameraTargetUpdateRequest {
+                target: targets[1],
+                descriptor: largest,
+            })
+            .expect_err("a second large target exceeds the pixel budget");
+        let staged = bridge.take_staged_call().expect("refusal does not fail the call");
+        let retained = &staged.state.targets[&targets[1].value];
+        assert_eq!(retained.descriptor.width, target_descriptor().width);
+        assert_eq!(retained.revision, 1);
+        let composition = staged.composition.clone().expect("accepted update output");
+        assert_eq!(composition.targets.len(), 3);
+        bridge.commit(staged);
+        assert!(bridge.snapshot_composition().is_ok());
     }
 
     #[test]

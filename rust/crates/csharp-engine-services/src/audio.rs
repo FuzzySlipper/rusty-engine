@@ -150,7 +150,6 @@ pub(crate) struct RuntimeAudioBridge {
     state: AudioState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
     staged: Option<RuntimeAudioCall>,
-    callback_error: Option<CsharpEngineServicesError>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     realized_facts: VecDeque<AudioRealizationFact>,
     renderer_evicted_fact_count: u64,
@@ -178,7 +177,6 @@ impl RuntimeAudioBridge {
             },
             content_resources,
             staged: None,
-            callback_error: None,
             operation_diagnostics: Default::default(),
             realized_facts: VecDeque::new(),
             renderer_evicted_fact_count: 0,
@@ -278,7 +276,6 @@ impl RuntimeAudioBridge {
             frame: None,
             retired_resources: Vec::new(),
         });
-        self.callback_error = None;
     }
 
     /// Stages retained playback against the update interval that the runtime
@@ -293,16 +290,11 @@ impl RuntimeAudioBridge {
 
     pub(crate) fn discard_call(&mut self) {
         self.staged = None;
-        self.callback_error = None;
     }
 
     pub(crate) fn take_staged_call(
         &mut self,
     ) -> Result<RuntimeAudioCall, CsharpEngineServicesError> {
-        if let Some(error) = self.callback_error.take() {
-            self.staged = None;
-            return Err(error);
-        }
         self.staged.take().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_CALL",
@@ -766,23 +758,37 @@ impl RuntimeAudioBridge {
     }
 
     fn stage_op(&mut self, op: AudioProjectionOp) -> Result<(), CsharpEngineServicesError> {
+        self.stage_ops(vec![op])
+    }
+
+    /// Projects the operations together; a refusal leaves projector and frame unchanged.
+    fn stage_ops(&mut self, ops: Vec<AudioProjectionOp>) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        let sequence = u32::try_from(staged.frame.as_ref().map_or(0, |frame| frame.ops.len()))
-            .map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_FRAME",
-                    "audio presentation frame has too many operations",
-                )
-            })?;
+        let first = staged.frame.as_ref().map_or(0, |frame| frame.ops.len());
+        let ops = ops
+            .into_iter()
+            .enumerate()
+            .map(|(offset, op)| {
+                u32::try_from(first + offset)
+                    .map(|sequence| (PresentationOpMeta::new(sequence), op))
+                    .map_err(|_| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_AUDIO_FRAME",
+                            "audio presentation frame has too many operations",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let projected = staged
             .state
             .projector
-            .project(&staged.state.assets, PresentationOpMeta::new(sequence), op)
+            .project_batch(&staged.state.assets, ops)
             .map_err(audio_error)?;
-        let frame = staged
+        staged
             .frame
-            .get_or_insert_with(render_presentation::PresentationFrameDiff::new);
-        frame.ops.push(projected);
+            .get_or_insert_with(render_presentation::PresentationFrameDiff::new)
+            .ops
+            .extend(projected);
         Ok(())
     }
 
@@ -834,24 +840,7 @@ impl RuntimeAudioBridge {
     ) -> Result<NativeAudioVoiceHandle, CsharpEngineServicesError> {
         let clip = descriptor.clip.value;
         let descriptor = self.descriptor(descriptor)?;
-        let voice = {
-            let staged = self.staged_mut()?;
-            let voice = staged.state.next_voice;
-            staged.state.next_voice = voice.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_VOICE_HANDLE",
-                    "audio voice handles exhausted",
-                )
-            })?;
-            staged.state.voices.insert(voice, AudioHandle::new(voice));
-            staged.state.voice_clips.insert(voice, clip);
-            voice
-        };
-        self.stage_op(AudioProjectionOp::Create {
-            handle: AudioHandle::new(voice),
-            descriptor,
-        })?;
-        Ok(NativeAudioVoiceHandle { value: voice })
+        self.create_voice_native(descriptor, clip)
     }
 
     fn update_voice(
@@ -910,23 +899,20 @@ impl RuntimeAudioBridge {
     ) -> Result<NativeAudioVoiceHandle, CsharpEngineServicesError> {
         let replacement_clip = request.descriptor.clip.value;
         let descriptor = self.descriptor(request.descriptor)?;
-        let old = self
-            .staged_mut()?
-            .state
-            .voices
-            .remove(&request.voice.value)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_VOICE_HANDLE",
-                    "audio voice handle is not live",
-                )
-            })?;
-        self.staged_mut()?
-            .state
-            .voice_clips
-            .remove(&request.voice.value);
-        self.stage_op(AudioProjectionOp::Destroy { handle: old })?;
-        self.create_voice_native(descriptor, replacement_clip)
+        let old = self.live_voice(request.voice.value)?;
+        let voice = self.next_voice_handle()?;
+        // Destroy and create project together, so a refused replacement keeps the prior voice.
+        self.stage_ops(vec![
+            AudioProjectionOp::Destroy { handle: old },
+            AudioProjectionOp::Create {
+                handle: AudioHandle::new(voice),
+                descriptor,
+            },
+        ])?;
+        let state = &mut self.staged_mut()?.state;
+        state.voices.remove(&request.voice.value);
+        state.voice_clips.remove(&request.voice.value);
+        Ok(Self::retain_voice(state, voice, replacement_clip))
     }
 
     fn create_voice_native(
@@ -934,35 +920,62 @@ impl RuntimeAudioBridge {
         descriptor: AudioSourceDescriptor,
         clip: u64,
     ) -> Result<NativeAudioVoiceHandle, CsharpEngineServicesError> {
-        let voice = {
-            let staged = self.staged_mut()?;
-            let voice = staged.state.next_voice;
-            staged.state.next_voice = voice.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_VOICE_HANDLE",
-                    "audio voice handles exhausted",
-                )
-            })?;
-            staged.state.voices.insert(voice, AudioHandle::new(voice));
-            staged.state.voice_clips.insert(voice, clip);
-            voice
-        };
+        let voice = self.next_voice_handle()?;
         self.stage_op(AudioProjectionOp::Create {
             handle: AudioHandle::new(voice),
             descriptor,
         })?;
-        Ok(NativeAudioVoiceHandle { value: voice })
+        Ok(Self::retain_voice(
+            &mut self.staged_mut()?.state,
+            voice,
+            clip,
+        ))
+    }
+
+    fn next_voice_handle(&mut self) -> Result<u64, CsharpEngineServicesError> {
+        let voice = self.staged_mut()?.state.next_voice;
+        voice.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_VOICE_HANDLE",
+                "audio voice handles exhausted",
+            )
+        })?;
+        Ok(voice)
+    }
+
+    fn retain_voice(state: &mut AudioState, voice: u64, clip: u64) -> NativeAudioVoiceHandle {
+        state.next_voice = voice + 1;
+        state.voices.insert(voice, AudioHandle::new(voice));
+        state.voice_clips.insert(voice, clip);
+        NativeAudioVoiceHandle { value: voice }
+    }
+
+    fn live_voice(&mut self, voice: u64) -> Result<AudioHandle, CsharpEngineServicesError> {
+        self.staged_mut()?
+            .state
+            .voices
+            .get(&voice)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_AUDIO_VOICE_HANDLE",
+                    "audio voice handle is not live",
+                )
+            })
     }
 
     fn destroy_voice(
         &mut self,
         voice: NativeAudioVoiceHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        let Some(handle) = self.staged_mut()?.state.voices.remove(&voice.value) else {
+        let Some(handle) = self.staged_mut()?.state.voices.get(&voice.value).copied() else {
             return Ok(());
         };
-        self.staged_mut()?.state.voice_clips.remove(&voice.value);
-        self.stage_op(AudioProjectionOp::Destroy { handle })
+        self.stage_op(AudioProjectionOp::Destroy { handle })?;
+        let state = &mut self.staged_mut()?.state;
+        state.voices.remove(&voice.value);
+        state.voice_clips.remove(&voice.value);
+        Ok(())
     }
 
     fn destroy_clip(
@@ -1308,7 +1321,6 @@ pub(crate) unsafe extern "C" fn open_audio_clip(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1336,7 +1348,6 @@ pub(crate) unsafe extern "C" fn open_audio_clip_from_content(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1362,7 +1373,6 @@ pub(crate) unsafe extern "C" fn preload_optional_audio_clip(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1389,7 +1399,6 @@ pub(crate) unsafe extern "C" fn emit_audio(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1416,7 +1425,6 @@ pub(crate) unsafe extern "C" fn create_audio_voice(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1437,7 +1445,6 @@ pub(crate) unsafe extern "C" fn update_audio_voice(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1464,7 +1471,6 @@ pub(crate) unsafe extern "C" fn replace_audio_voice(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1486,7 +1492,6 @@ pub(crate) unsafe extern "C" fn destroy_audio_voice(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1508,7 +1513,6 @@ pub(crate) unsafe extern "C" fn destroy_audio_clip(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1531,7 +1535,6 @@ pub(crate) unsafe extern "C" fn control_audio_voice(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1554,7 +1557,6 @@ pub(crate) unsafe extern "C" fn set_audio_bus_volume(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1577,7 +1579,6 @@ pub(crate) unsafe extern "C" fn set_audio_bus_muted(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1603,7 +1604,6 @@ pub(crate) unsafe extern "C" fn read_audio(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1631,7 +1631,6 @@ pub(crate) unsafe extern "C" fn read_audio_voice(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1659,7 +1658,6 @@ pub(crate) unsafe extern "C" fn read_audio_bus(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1686,7 +1684,6 @@ pub(crate) unsafe extern "C" fn read_audio_diagnostic_at(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1713,7 +1710,6 @@ pub(crate) unsafe extern "C" fn read_audio_realization(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -1741,7 +1737,6 @@ pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
         }
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -2199,6 +2194,54 @@ mod tests {
 
         let staged = bridge.take_staged_call().expect("staged controls");
         assert_eq!(staged.frame.expect("audio frame").ops.len(), 6);
+    }
+
+    #[test]
+    fn refused_voice_create_and_replace_leave_retained_voices_unchanged() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted WAV clip");
+        let voice = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
+            .expect("retained voice");
+        // The projector refuses the volume after the bridge converts the descriptor.
+        let invalid = NativeAudioSourceDescriptor {
+            volume: 2.0,
+            ..descriptor(clip, NativeAudioBus::Sfx)
+        };
+        bridge
+            .create_voice(invalid)
+            .expect_err("invalid voice is refused");
+        bridge
+            .replace_voice(NativeAudioVoiceReplaceRequest {
+                voice,
+                descriptor: invalid,
+            })
+            .expect_err("invalid replacement is refused");
+
+        assert_eq!(bridge.read().expect("readout").active_voices, 1);
+        assert!(bridge.read_voice(voice).expect("prior voice").present);
+        let call = bridge
+            .take_staged_call()
+            .expect("refusals do not fail the call");
+        assert_eq!(call.frame.as_ref().expect("audio frame").ops.len(), 1);
+        bridge.commit(call);
+
+        bridge.begin_call();
+        bridge.destroy_voice(voice).expect("prior voice destroys");
+        bridge
+            .destroy_clip(clip)
+            .expect("no phantom voice keeps the clip in use");
     }
 
     #[test]

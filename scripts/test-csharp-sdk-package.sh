@@ -160,6 +160,7 @@ cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_d
 cp "$repo_root/fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs" "$consumer_dir/SpatialArtifactChecks.cs"
 cp "$repo_root/fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs" "$consumer_dir/NavigationMappingChecks.cs"
 cp "$repo_root/fixtures/csharp-particle-emission/ParticleEmissionChecks.cs" "$consumer_dir/ParticleEmissionChecks.cs"
+cp "$repo_root/fixtures/csharp-caught-refusals/CaughtRefusalChecks.cs" "$consumer_dir/CaughtRefusalChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -204,7 +205,11 @@ public sealed class Product : IEngineProduct
     {
         if (!_particlesChecked)
         {
-            try { ParticleEmissionChecks.Run(_engine); }
+            try
+            {
+                ParticleEmissionChecks.Run(_engine);
+                CaughtRefusalChecks.Run(_engine, _stream);
+            }
             catch (System.Exception error) { System.Console.Error.WriteLine(error); throw; }
             _particlesChecked = true;
         }

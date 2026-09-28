@@ -17,7 +17,6 @@ pub(crate) struct RuntimeUiBridge {
     staged_streams: Option<BTreeMap<u64, RuntimeUiStream>>,
     next_stream: u64,
     staged_next_stream: Option<u64>,
-    callback_error: Option<CsharpEngineServicesError>,
     diagnostic_leases: BTreeMap<u64, RuntimeUiDiagnosticLease>,
     next_diagnostic_lease: u64,
 }
@@ -77,7 +76,6 @@ impl RuntimeUiBridge {
             staged_streams: None,
             next_stream: 1,
             staged_next_stream: None,
-            callback_error: None,
             diagnostic_leases: BTreeMap::new(),
             next_diagnostic_lease: 1,
         }
@@ -88,7 +86,6 @@ impl RuntimeUiBridge {
         self.staged_binding = Some(binding);
         self.staged_streams = Some(self.streams.clone());
         self.staged_next_stream = Some(self.next_stream);
-        self.callback_error = None;
     }
 
     pub(crate) fn discard_call(&mut self) {
@@ -96,14 +93,9 @@ impl RuntimeUiBridge {
         self.staged_binding = None;
         self.staged_streams = None;
         self.staged_next_stream = None;
-        self.callback_error = None;
     }
 
     pub(crate) fn take_staged_call(&mut self) -> Result<RuntimeUiCall, CsharpEngineServicesError> {
-        if let Some(error) = self.callback_error.take() {
-            self.discard_call();
-            return Err(error);
-        }
         self.staged_binding
             .take()
             .expect("every native call starts a UI stage with a runtime binding");
@@ -344,7 +336,6 @@ unsafe extern "C" fn publish_ui_projection(
         Ok(()) => 1,
         Err(error) => {
             bridge.retain_operation_error(&error, receipt, b"PublishProjection");
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -381,7 +372,6 @@ unsafe extern "C" fn open_ui_stream(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.retain_operation_error(&error, operation_error, b"OpenStream");
-            bridge.callback_error = Some(error);
             0
         }
     }
@@ -404,9 +394,6 @@ unsafe extern "C" fn destroy_ui_stream(
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.retain_operation_error(&error, operation_error, b"DestroyStream");
-            if bridge.staged_streams.is_some() {
-                bridge.callback_error = Some(error);
-            }
             0
         }
     }
@@ -760,20 +747,14 @@ mod tests {
             0,
             "duplicate staged close is rejected"
         );
-        assert!(
-            bridge.take_staged_call().is_err(),
-            "failed call cannot commit"
-        );
-
-        assert_eq!(
-            unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
-            ABI_OK,
-            "discard rolled the staged close back into committed state"
-        );
+        let call = bridge
+            .take_staged_call()
+            .expect("a refused duplicate close does not fail the call");
+        bridge.commit(call);
         assert_eq!(
             unsafe { (api.destroy_stream)(api.context, stream, std::ptr::null_mut()) },
             0,
-            "duplicate committed teardown is rejected"
+            "the committed close leaves no stream to tear down"
         );
 
         bridge.begin_call(binding(14));
@@ -790,8 +771,8 @@ mod tests {
             "publish after committed close is rejected"
         );
         assert!(
-            bridge.take_staged_call().is_err(),
-            "stale publish prevents the call from committing"
+            bridge.take_staged_call().is_ok(),
+            "a refused stale publish does not fail the call"
         );
     }
 

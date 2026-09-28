@@ -1822,7 +1822,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     content: Option<*const crate::content::RuntimeContentBridge>,
     camera_view: Option<*const crate::camera_view::RuntimeCameraViewBridge>,
     staged: Option<RuntimeAppearanceCall>,
-    callback_error: Option<CsharpEngineServicesError>,
+    operation_error: Option<CsharpEngineServicesError>,
     presentation_diagnostics: Vec<StoredPresentationDiagnostic>,
     ghost_plate_realization: BTreeMap<u64, GhostPlateRealizationFact>,
     animation_realization_facts: VecDeque<AnimationRealizationFact>,
@@ -1906,7 +1906,7 @@ impl RuntimeAppearanceBridge {
             content: None,
             camera_view: None,
             staged: None,
-            callback_error: None,
+            operation_error: None,
             presentation_diagnostics: Vec::new(),
             ghost_plate_realization: BTreeMap::new(),
             animation_realization_facts: VecDeque::new(),
@@ -2011,7 +2011,7 @@ impl RuntimeAppearanceBridge {
             presentation: Vec::new(),
             retired_resources: Vec::new(),
         });
-        self.callback_error = None;
+        self.operation_error = None;
     }
 
     pub(crate) fn ingest_animation_realization_feedback(
@@ -2070,16 +2070,13 @@ impl RuntimeAppearanceBridge {
 
     pub(crate) fn discard_call(&mut self) {
         self.staged = None;
-        self.callback_error = None;
+        self.operation_error = None;
     }
 
     pub(crate) fn take_staged_call(
         &mut self,
     ) -> Result<Option<RuntimeAppearanceCall>, CsharpEngineServicesError> {
-        if let Some(error) = self.callback_error.take() {
-            self.staged = None;
-            return Err(error);
-        }
+        self.operation_error = None;
         let mut staged = self.staged.take();
         if let Some(call) = &mut staged {
             if call.resource_releases_pending {
@@ -2766,8 +2763,8 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
-    pub(crate) fn record_callback_error(&mut self, error: CsharpEngineServicesError) {
-        self.callback_error = Some(error);
+    pub(crate) fn record_operation_error(&mut self, error: CsharpEngineServicesError) {
+        self.operation_error = Some(error);
     }
 
     fn presentation_diagnostic_count(&self, domain: NativePresentationDiagnosticDomain) -> u32 {
@@ -3701,11 +3698,13 @@ impl RuntimeAppearanceBridge {
             ));
         }
         let handle = staged.state.next_light;
-        staged.state.next_light = handle.checked_add(1).ok_or_else(|| {
+        let next_light = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
         })?;
-        staged.state.lights.insert(handle, fact);
-        project_staged_lights(staged)?;
+        let mut lights = staged.state.lights.clone();
+        lights.insert(handle, fact);
+        project_candidate_lights(staged, lights)?;
+        staged.state.next_light = next_light;
         Ok(NativeLightHandle { value: handle })
     }
 
@@ -3729,22 +3728,44 @@ impl RuntimeAppearanceBridge {
                 "logical light id is already owned by a different live light",
             ));
         }
-        staged.state.lights.insert(request.light.value, replacement);
-        project_staged_lights(staged)
+        let mut lights = staged.state.lights.clone();
+        lights.insert(request.light.value, replacement);
+        project_candidate_lights(staged, lights)
     }
 
     fn replace_light(
         &mut self,
         request: NativeLightUpdateRequest,
     ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
-        self.destroy_light(request.light)?;
-        self.create_light(request.replacement)
+        let replacement = runtime_light_fact(request.replacement)?;
+        let staged = self.staged_mut()?;
+        let mut lights = staged.state.lights.clone();
+        lights.remove(&request.light.value);
+        if lights
+            .values()
+            .any(|candidate| candidate.light_id == replacement.light_id)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_LIGHT_LOGICAL_ID",
+                "logical light id is already owned by a live light",
+            ));
+        }
+        let handle = staged.state.next_light;
+        let next_light = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
+        })?;
+        lights.insert(handle, replacement);
+        project_candidate_lights(staged, lights)?;
+        staged.state.next_light = next_light;
+        Ok(NativeLightHandle { value: handle })
     }
 
     fn destroy_light(&mut self, light: NativeLightHandle) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        if staged.state.lights.remove(&light.value).is_some() {
-            project_staged_lights(staged)?;
+        if staged.state.lights.contains_key(&light.value) {
+            let mut lights = staged.state.lights.clone();
+            lights.remove(&light.value);
+            project_candidate_lights(staged, lights)?;
         }
         // A successful replacement turns the prior generated owner into a
         // tombstone, so a later IDisposable release is ordinary teardown.
@@ -3773,12 +3794,13 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
         let handle = staged.state.next_material;
-        staged.state.next_material = handle.checked_add(1).ok_or_else(|| {
+        let next_material = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
         })?;
         let id = format!("material/csharp-{handle}");
         let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
         let texture = texture_descriptor_for_material(&descriptor, &staged.state.render_resources)?;
+        staged.state.next_material = next_material;
         let resources = staged.state.projector.resources_mut();
         if let Some(texture) = texture {
             retain_texture_descriptor(&mut resources.textures, texture)?;
@@ -3946,6 +3968,10 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeMaterialUpdateRequest,
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
+        // Refuse an invalid replacement before the prior material is released.
+        let resources = &self.staged_ref()?.state.render_resources;
+        let descriptor = material_descriptor(String::new(), request.replacement, resources)?;
+        texture_descriptor_for_material(&descriptor, resources)?;
         self.destroy_material(request.material)?;
         self.create_material(request.replacement)
     }
@@ -4884,6 +4910,11 @@ impl RuntimeAppearanceBridge {
             material_slots: material_slots.clone(),
             collision: MeshCollisionPolicy::VisualOnly,
         };
+        // Every later projection revalidates catalog meshes, so refuse here rather
+        // than retaining an entry that would fail each subsequent snapshot.
+        asset.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_STATIC_MESH_LAYOUT", format!("{error:?}"))
+        })?;
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
             resources.materials.extend(materials);
@@ -6001,6 +6032,10 @@ impl RuntimeAppearanceBridge {
         sprite.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
         })?;
+        // Catalog atlases are revalidated by every projection; refuse before retaining.
+        atlas.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
+        })?;
         self.retain_sprite_material_textures(request.material)?;
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
@@ -6270,19 +6305,7 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeAnimatedMeshAppearanceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        let resource = self.resource(request.resource.value)?.clone();
-        if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_KIND",
-                "animated mesh appearance requires an admitted primary animated GLB resource",
-            ));
-        }
-        let asset = resource.animated_mesh().cloned().ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_KIND",
-                "animated mesh appearance requires an admitted animated GLB resource",
-            )
-        })?;
+        let asset = self.animated_mesh_asset(request.resource.value)?;
         {
             let staged = self.staged_mut()?;
             if !staged
@@ -6320,16 +6343,68 @@ impl RuntimeAppearanceBridge {
         appearance: NativeAppearanceHandle,
         request: NativeAnimatedMeshAppearanceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        // Refuse an unusable replacement before the prior appearance is released.
+        self.animated_mesh_asset(request.resource.value)?;
         self.destroy_appearance(appearance)?;
         self.create_animated_mesh_appearance(request)
+    }
+
+    fn animated_mesh_asset(
+        &self,
+        resource: u64,
+    ) -> Result<AnimatedMeshAsset, CsharpEngineServicesError> {
+        let resource = self.resource(resource)?;
+        if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE_KIND",
+                "animated mesh appearance requires an admitted primary animated GLB resource",
+            ));
+        }
+        resource.animated_mesh().cloned().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE_KIND",
+                "animated mesh appearance requires an admitted animated GLB resource",
+            )
+        })
     }
 
     fn create_animation_instance(
         &mut self,
         request: NativeAnimationInstanceRequest,
     ) -> Result<NativeAnimationInstanceHandle, CsharpEngineServicesError> {
-        let staged = self.staged_mut()?;
-        let state = &mut *staged.state;
+        let (asset, content_hash) = self.animation_instance_mesh(request, None)?;
+        let state = &mut *self.staged_mut()?.state;
+        let handle = state.next_animation_instance;
+        state.next_animation_instance = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_INSTANCE",
+                "animation instance handles exhausted",
+            )
+        })?;
+        state.animation_instances.insert(
+            handle,
+            AnimationInstance {
+                appearance: request.appearance.value,
+                object_id: request.object_id,
+                asset,
+                content_hash,
+                direct_playback: None,
+                pending_playback: false,
+                last_playback_target: None,
+                controller: None,
+            },
+        );
+        Ok(NativeAnimationInstanceHandle { value: handle })
+    }
+
+    /// Resolves the animated asset for an instance request. `replacing` names
+    /// the instance being replaced, which may keep its object identity.
+    fn animation_instance_mesh(
+        &self,
+        request: NativeAnimationInstanceRequest,
+        replacing: Option<u64>,
+    ) -> Result<(String, String), CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
         let resource = state
             .animated_appearances
             .get(&request.appearance.value)
@@ -6340,11 +6415,9 @@ impl RuntimeAppearanceBridge {
                     "animation instances require a live animated-mesh appearance",
                 )
             })?;
-        if state
-            .animation_instances
-            .values()
-            .any(|instance| instance.object_id == request.object_id)
-        {
+        if state.animation_instances.iter().any(|(handle, instance)| {
+            Some(*handle) != replacing && instance.object_id == request.object_id
+        }) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_INSTANCE_OBJECT",
                 "a product object may have only one retained animation instance",
@@ -6365,27 +6438,10 @@ impl RuntimeAppearanceBridge {
                     "animated appearance resource is unavailable",
                 )
             })?;
-        let handle = state.next_animation_instance;
-        state.next_animation_instance = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_INSTANCE",
-                "animation instance handles exhausted",
-            )
-        })?;
-        state.animation_instances.insert(
-            handle,
-            AnimationInstance {
-                appearance: request.appearance.value,
-                object_id: request.object_id,
-                asset: mesh.asset.clone(),
-                content_hash: mesh.content_hash.clone().unwrap_or_default(),
-                direct_playback: None,
-                pending_playback: false,
-                last_playback_target: None,
-                controller: None,
-            },
-        );
-        Ok(NativeAnimationInstanceHandle { value: handle })
+        Ok((
+            mesh.asset.clone(),
+            mesh.content_hash.clone().unwrap_or_default(),
+        ))
     }
 
     fn replace_animation_cue_definitions(
@@ -6497,6 +6553,8 @@ impl RuntimeAppearanceBridge {
         prior: NativeAnimationInstanceHandle,
         request: NativeAnimationInstanceRequest,
     ) -> Result<NativeAnimationInstanceHandle, CsharpEngineServicesError> {
+        // Refuse an unusable replacement before the prior instance is released.
+        self.animation_instance_mesh(request, Some(prior.value))?;
         self.destroy_animation_instance(prior)?;
         self.create_animation_instance(request)
     }
@@ -6991,29 +7049,33 @@ impl RuntimeAppearanceBridge {
                 "dispose the animation controller before publishing its removal snapshot",
             ));
         }
-        let Some(controller) = staged.state.animation_controllers.remove(&handle.value) else {
+        let Some(controller) = staged.state.animation_controllers.get(&handle.value) else {
             return Ok(());
         };
-        if controller.projected {
+        let instance_handle = controller.instance;
+        // Build the renderer removal before releasing the controller so a
+        // refusal leaves the controller and its instance binding intact.
+        let frame = if controller.projected {
             let sequence = u32::try_from(staged.presentation.len()).map_err(|_| {
                 CsharpEngineServicesError::new(
                     "CSHARP_ANIMATION_PRESENTATION",
                     "too many animation presentation frames in one product call",
                 )
             })?;
-            let instance = staged
+            let object_id = staged
                 .state
                 .animation_instances
-                .get(&controller.instance)
+                .get(&instance_handle)
                 .ok_or_else(|| {
                     CsharpEngineServicesError::new(
                         "CSHARP_ANIMATION_INSTANCE",
                         "animation controller instance is not live",
                     )
-                })?;
-            let mut projector = controller.projector;
+                })?
+                .object_id;
+            let mut projector = controller.projector.clone();
             let op = projector
-                .destroy_entity(instance.object_id, PresentationOpMeta::new(sequence))
+                .destroy_entity(object_id, PresentationOpMeta::new(sequence))
                 .map_err(|diagnostic| {
                     CsharpEngineServicesError::new(
                         "CSHARP_ANIMATION_PROJECTION",
@@ -7022,13 +7084,15 @@ impl RuntimeAppearanceBridge {
                 })?;
             let mut frame = PresentationFrameDiff::new();
             frame.ops.push(op);
+            Some(frame)
+        } else {
+            None
+        };
+        staged.state.animation_controllers.remove(&handle.value);
+        if let Some(frame) = frame {
             push_presentation_frame(staged, frame);
         }
-        if let Some(instance) = staged
-            .state
-            .animation_instances
-            .get_mut(&controller.instance)
-        {
+        if let Some(instance) = staged.state.animation_instances.get_mut(&instance_handle) {
             instance.controller = None;
         }
         Ok(())
@@ -7064,6 +7128,7 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
+        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -7108,6 +7173,7 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
+        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -7152,6 +7218,7 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
+        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -7188,6 +7255,7 @@ impl RuntimeAppearanceBridge {
             .get(&instance)
             .expect("controller instance remains live")
             .object_id;
+        require_projectable_controller(staged, request.controller.value)?;
         let controller = staged
             .state
             .animation_controllers
@@ -8161,10 +8229,39 @@ fn native_render_layer(value: NativeRenderLayer) -> Result<RenderLayer, CsharpEn
     }
 }
 
-fn project_staged_lights(
-    staged: &mut RuntimeAppearanceCall,
+/// A projected controller whose target left the published snapshot cannot
+/// flush. Refuse before changing controller state so the refusal is local.
+fn require_projectable_controller(
+    staged: &RuntimeAppearanceCall,
+    controller_handle: u64,
 ) -> Result<(), CsharpEngineServicesError> {
-    let facts: Vec<RuntimeLightFact> = staged.state.lights.values().cloned().collect();
+    let controller = staged
+        .state
+        .animation_controllers
+        .get(&controller_handle)
+        .expect("controller was checked by the caller");
+    let object_id = staged
+        .state
+        .animation_instances
+        .get(&controller.instance)
+        .expect("controller instance remains live")
+        .object_id;
+    if controller.projected && staged.state.projector.object_handle(object_id).is_none() {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_ANIMATION_SNAPSHOT_ORDER",
+            "remove a projected controller before publishing a snapshot that removes or replaces its animated target",
+        ));
+    }
+    Ok(())
+}
+
+/// Projects a candidate light set and retains it only when projection succeeds,
+/// so a refused light operation leaves the staged lights unchanged.
+fn project_candidate_lights(
+    staged: &mut RuntimeAppearanceCall,
+    lights: BTreeMap<u64, RuntimeLightFact>,
+) -> Result<(), CsharpEngineServicesError> {
+    let facts: Vec<RuntimeLightFact> = lights.values().cloned().collect();
     let projection = staged
         .state
         .projector
@@ -8172,6 +8269,7 @@ fn project_staged_lights(
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_PROJECTION", format!("{error:?}"))
         })?;
+    staged.state.lights = lights;
     staged.state.retained_object_count = narrow_retained_count(
         projection.retained_objects,
         "retained object count exceeded u32",
@@ -8547,7 +8645,7 @@ pub(crate) unsafe extern "C" fn open_render_resource(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -8865,7 +8963,7 @@ pub(crate) unsafe extern "C" fn read_sprite(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -8889,7 +8987,7 @@ pub(crate) unsafe extern "C" fn create_sprite_playback(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -8923,7 +9021,7 @@ pub(crate) unsafe extern "C" fn control_sprite_playback(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -8947,7 +9045,7 @@ pub(crate) unsafe extern "C" fn select_sprite_playback_frame(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -8971,7 +9069,7 @@ pub(crate) unsafe extern "C" fn advance_sprite_playback(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -9007,7 +9105,7 @@ pub(crate) unsafe extern "C" fn sample_sprite_playback(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -9031,7 +9129,7 @@ pub(crate) unsafe extern "C" fn read_sprite_playback(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -9107,7 +9205,7 @@ pub(crate) unsafe extern "C" fn read_light(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -9145,7 +9243,7 @@ pub(crate) unsafe extern "C" fn create_authored_material(
         } {
             Ok(material_id) => material_id,
             Err(error) => {
-                unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.callback_error =
+                unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.operation_error =
                     Some(error);
                 return 0;
             }
@@ -9204,7 +9302,7 @@ fn appearance_result(
             ABI_OK
         }
         Err(error) => {
-            bridge.callback_error = Some(error);
+            bridge.operation_error = Some(error);
             0
         }
     }
@@ -9227,7 +9325,7 @@ fn light_result(
             ABI_OK
         }
         Err(error) => {
-            bridge.callback_error = Some(error);
+            bridge.operation_error = Some(error);
             0
         }
     }
@@ -9250,7 +9348,7 @@ fn material_result(
             ABI_OK
         }
         Err(error) => {
-            bridge.callback_error = Some(error);
+            bridge.operation_error = Some(error);
             0
         }
     }
@@ -9273,7 +9371,7 @@ fn sprite_atlas_result(
             ABI_OK
         }
         Err(error) => {
-            bridge.callback_error = Some(error);
+            bridge.operation_error = Some(error);
             0
         }
     }
@@ -9290,7 +9388,7 @@ fn appearance_void(
     match action(bridge) {
         Ok(()) => ABI_OK,
         Err(error) => {
-            bridge.callback_error = Some(error);
+            bridge.operation_error = Some(error);
             0
         }
     }
@@ -9312,7 +9410,7 @@ pub(crate) unsafe extern "C" fn publish_appearance_snapshot(
         match unsafe { bridge.stage_snapshot(facts, fact_count) } {
             Ok(()) => ABI_OK,
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -9374,7 +9472,7 @@ fn animation_result<T: Copy>(
             ABI_OK
         }
         Err(error) => {
-            bridge.callback_error = Some(error);
+            bridge.operation_error = Some(error);
             0
         }
     }
@@ -10495,7 +10593,7 @@ pub(crate) unsafe extern "C" fn open_render_resource_from_content(
                 ABI_OK
             }
             Err(error) => {
-                bridge.callback_error = Some(error);
+                bridge.operation_error = Some(error);
                 0
             }
         }
@@ -10830,25 +10928,9 @@ pub(crate) unsafe extern "C" fn publish_attached_snapshot(
     }
 }
 
-/// Use only for operations whose refusals leave staged presentation intact.
-/// The generated caller owns the exception; a caught refusal must not poison
-/// settlement. Preserve any failure from an earlier, nonrecoverable operation.
-pub(crate) fn atomic_appearance_operation(
-    context: *mut c_void,
-    receipt: *mut NativeOperationErrorReceipt,
-    call: impl FnOnce() -> i32,
-) -> i32 {
-    if context.is_null() {
-        return appearance_operation(context, receipt, call);
-    }
-    let previous = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }
-        .callback_error
-        .take();
-    let status = appearance_operation(context, receipt, call);
-    unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.callback_error = previous;
-    status
-}
-
+/// Runs one graphics operation and returns its refusal through the receipt.
+/// A refusal is operation-local: the operation leaves staged state unchanged,
+/// and the generated caller owns the resulting exception. Nothing latches.
 pub(crate) fn appearance_operation(
     context: *mut c_void,
     receipt: *mut NativeOperationErrorReceipt,
@@ -10860,15 +10942,12 @@ pub(crate) fn appearance_operation(
     if context.is_null() {
         return 0;
     }
-    // Isolate this operation's reason while preserving callback-level failure semantics.
-    let previous = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }
-        .callback_error
-        .take();
+    unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.operation_error = None;
     let status = call();
     let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    let operation_error = bridge.operation_error.take();
     if status != ABI_OK && !receipt.is_null() {
-        let error = bridge
-            .callback_error
+        let error = operation_error
             .as_ref()
             .map(|error| CsharpEngineServicesError::new(error.code(), error.detail()))
             .unwrap_or_else(|| {
@@ -10905,9 +10984,6 @@ pub(crate) fn appearance_operation(
             };
         }
         bridge.admission_diagnostics.insert(handle, lease);
-    }
-    if bridge.callback_error.is_none() {
-        bridge.callback_error = previous;
     }
     status
 }
@@ -10986,46 +11062,32 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn atomic_refusal_retains_diagnostics_and_preserves_prior_callback_failure() {
+    fn refusal_returns_diagnostic_without_latching_the_call() {
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-        for prior in [false, true] {
-            bridge.begin_call();
-            if prior {
-                bridge.record_callback_error(CsharpEngineServicesError::new(
-                    "PRIOR",
-                    "earlier failure",
-                ));
-            }
-            let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
-            let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-            let status = atomic_appearance_operation(context, &mut receipt, || {
-                unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.record_callback_error(
-                    CsharpEngineServicesError::new("REFUSED", "invalid particle"),
-                );
-                0
-            });
-            assert_eq!(status, 0);
-            assert_eq!(receipt.diagnostics.diagnostics_len, 1);
-            let diagnostic = unsafe { &*receipt.diagnostics.diagnostics };
-            assert_eq!(
-                unsafe { borrowed_utf8(diagnostic.code.bytes, diagnostic.code.len, "code") }
-                    .unwrap(),
-                "REFUSED"
+        bridge.begin_call();
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        let status = appearance_operation(context, &mut receipt, || {
+            unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.record_operation_error(
+                CsharpEngineServicesError::new("REFUSED", "invalid particle"),
             );
-            assert_eq!(
-                unsafe {
-                    destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle)
-                },
-                ABI_OK
-            );
-            assert!(bridge.admission_diagnostics.is_empty());
-            if prior {
-                assert_eq!(bridge.take_staged_call().err().unwrap().code(), "PRIOR");
-            } else {
-                assert!(bridge.take_staged_call().unwrap().is_some());
-            }
-        }
+            0
+        });
+        assert_eq!(status, 0);
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { &*receipt.diagnostics.diagnostics };
+        assert_eq!(
+            unsafe { borrowed_utf8(diagnostic.code.bytes, diagnostic.code.len, "code") }.unwrap(),
+            "REFUSED"
+        );
+        assert_eq!(
+            unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
+            ABI_OK
+        );
+        assert!(bridge.admission_diagnostics.is_empty());
+        assert!(bridge.operation_error.is_none());
+        assert!(bridge.take_staged_call().unwrap().is_some());
     }
 
     #[test]
@@ -11098,7 +11160,7 @@ pub(super) mod tests {
             bridge.staged_ref().unwrap().state.joint_attachments[&8],
             "RightHand"
         );
-        assert!(bridge.callback_error.is_none());
+        assert!(bridge.operation_error.is_none());
         assert_eq!(
             unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
             ABI_OK
@@ -12236,6 +12298,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn refused_light_projection_does_not_retain_the_light_or_poison_later_lights() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let error = bridge
+            .create_light(point_light_request(91, Some(7)))
+            .expect_err("parent object 7 is not in the snapshot");
+        assert_eq!(error.code(), "CSHARP_LIGHT_PROJECTION");
+        let light = bridge
+            .create_light(point_light_request(92, None))
+            .expect("a later light is unaffected by the refusal");
+        let staged = bridge.take_staged_call().unwrap().unwrap();
+        assert_eq!(staged.state.lights.len(), 1);
+        assert!(staged.state.lights.contains_key(&light.value));
+        assert_eq!(staged.state.retained_light_count, 1);
+    }
+
+    #[test]
     fn invalid_light_replacement_preserves_the_committed_owner_and_requested_facts() {
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
@@ -12255,9 +12335,7 @@ pub(super) mod tests {
             })
             .unwrap_err();
         assert_eq!(error.code(), "CSHARP_LIGHT_DESCRIPTOR");
-        bridge.discard_call();
 
-        bridge.begin_call();
         let retained = bridge.read_light(light).unwrap();
         assert_eq!(retained.logical_id, 91);
         assert_eq!(retained.descriptor.kind, NativeLightKind::Point);
@@ -13199,7 +13277,7 @@ pub(super) mod tests {
         );
         let receipt = unsafe { receipt.assume_init() };
         assert_eq!(receipt.diagnostics.diagnostics_len, 1);
-        assert!(bridge.callback_error.is_none());
+        assert!(bridge.operation_error.is_none());
         assert!(bridge.resource(resource.value).is_ok());
         assert_eq!(
             unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
@@ -13997,7 +14075,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn rejected_presentation_fact_keeps_bounded_diagnostic_after_call_discard() {
+    fn rejected_presentation_fact_keeps_bounded_diagnostic_after_call_commit() {
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
         let key = b"status";
@@ -14051,7 +14129,7 @@ pub(super) mod tests {
         let error = bridge
             .presentation_create_billboard(&descriptor)
             .expect_err("duplicate billboard");
-        bridge.record_callback_error(error);
+        bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
         assert_eq!(
             bridge
@@ -14062,7 +14140,8 @@ pub(super) mod tests {
                 .logical_id,
             7
         );
-        assert!(bridge.take_staged_call().is_err());
+        let call = bridge.take_staged_call().expect("a refusal does not fail the call");
+        bridge.commit(call);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
     }
 
@@ -14281,9 +14360,10 @@ pub(super) mod tests {
         let error = bridge
             .presentation_update_structured_billboard(owner, &invalid)
             .expect_err("invalid meter update");
-        bridge.record_callback_error(error);
+        bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
-        assert!(bridge.take_staged_call().is_err());
+        let call = bridge.take_staged_call().expect("a refusal does not fail the call");
+        bridge.commit(call);
         let retained = bridge
             .state
             .billboard_projector
@@ -14468,9 +14548,10 @@ pub(super) mod tests {
         let error = bridge
             .presentation_update_emitter(owner, &descriptor(&invalid))
             .expect_err("invalid collision update");
-        bridge.record_callback_error(error);
+        bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().particle_diagnostic_count, 1);
-        assert!(bridge.take_staged_call().is_err());
+        let call = bridge.take_staged_call().expect("a refusal does not fail the call");
+        bridge.commit(call);
         let retained = bridge
             .state
             .particle_projector

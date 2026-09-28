@@ -506,8 +506,9 @@ fn call<T>(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
-    // Fidget/JIT failures must not unwind through the ABI. Normal errors retain
-    // their actual detail for the owning failed product call.
+    // Fidget/JIT failures must not unwind through the ABI. A refusal is only
+    // its returned diagnostic; a panic may leave staged state part-written, so
+    // it still fails the owning product call.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(bridge))) {
         Ok(Ok(value)) => {
             unsafe { *result = value };
@@ -515,13 +516,8 @@ fn call<T>(
         }
         Ok(Err(e)) => {
             if !operation_error.is_null() {
-                bridge.retain_operation_error(
-                    b"",
-                    CsharpEngineServicesError::new(e.code(), e.detail()),
-                    operation_error,
-                );
+                bridge.retain_operation_error(b"", e, operation_error);
             }
-            bridge.callback_error = Some(e);
             0
         }
         Err(_) => {
