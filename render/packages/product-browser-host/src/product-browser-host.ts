@@ -2081,23 +2081,17 @@ export async function mountProductBrowserHostWithApplication(
           enqueueRendererOutput(async () => {
             await admitOutputResources(host, output);
             const receipt = await host.renderer.applyPresentation(output.frame);
-            // `unavailableHost` is emitted only for a domain without a host.
-            // It is an optional realization capability and does not invalidate
-            // the retained presentation projection. Every other diagnostic is
-            // from a configured domain that did not realize the publication.
-            const configuredDiagnostics = receipt.diagnostics.filter((diagnostic) => (
-              diagnostic.code !== 'unavailableHost'
-            ));
-            if (requireAppliedPresentation && receipt.outcome !== 'applied'
-              && (configuredDiagnostics.length > 0 || receipt.diagnostics.length === 0)) {
-              const diagnostic = configuredDiagnostics.map((entry) => entry.message).join('; ')
-                || 'configured retained presentation was not realized';
-              requestPublishedProjectionRecovery(outputEpoch, diagnostic);
-              return;
-            }
-            if (output.frame['publication'] !== undefined && configuredDiagnostics.length > 0) {
-              const diagnostic = configuredDiagnostics.map((entry) => entry.message).join('; ')
-                || 'renderer did not apply configured presentation';
+            // Refused operations (budget, missing asset, absent host) leave
+            // the retained realization coherent and stay visible as renderer
+            // diagnostics. A published projection needs a fresh baseline only
+            // when the renderer did not take the frame: a degraded domain
+            // (`terminal`) or an application-level rejection of the whole frame.
+            const frameNotTaken = receipt.outcome === 'terminal'
+              || receipt.diagnostics.some((entry) => entry.domain === 'application');
+            if (frameNotTaken
+              && (requireAppliedPresentation || output.frame['publication'] !== undefined)) {
+              const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
+                || 'renderer did not take the published presentation';
               requestPublishedProjectionRecovery(outputEpoch, diagnostic);
               return;
             }

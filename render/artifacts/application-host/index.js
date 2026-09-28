@@ -25400,7 +25400,7 @@ function xC(e, t, n = {}) {
 				--b;
 			}
 			if (E) throw Error("renderer surface was disposed during presentation");
-			return t.domains.every((e) => !e.configured || e.outcome === "applied") && (c.commitPublication(e.publication, e.ops.length), P()), t.applied > 0 && P(), t;
+			return t.domains.every((e) => e.outcome !== "terminal") && (c.commitPublication(e.publication, e.ops.length), P()), t.applied > 0 && P(), t;
 		},
 		audioRealizedFacts: () => f?.readAudioRealizedFacts() ?? null,
 		videoRealizedFacts: () => f?.readVideoRealizedFacts() ?? null,

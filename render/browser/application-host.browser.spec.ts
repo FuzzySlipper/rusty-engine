@@ -703,6 +703,55 @@ test('Engine application host realizes and advances Three particle bursts', asyn
   expect(magentaPixels).toBeGreaterThan(100);
 });
 
+test('a refused particle burst keeps the presentation publication advancing', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const receipts = await page.evaluate(async () => {
+    const renderer = window.__rustyApplicationHost!.renderer;
+    const burst = (sequence: number) => ({
+      domain: 'particle' as const,
+      meta: { sequence },
+      op: {
+        op: 'emit' as const,
+        signalId: `budget-proof-${String(sequence)}`,
+        descriptor: {
+          anchor: { kind: 'world' as const, position: [0, 0, 1.5] as [number, number, number] },
+          visual: { kind: 'cube' as const },
+          ratePerSecond: 0,
+          burstCount: 1024,
+          lifetimeSeconds: [30, 30] as [number, number],
+          velocityMin: [0, 0, 0] as [number, number, number],
+          velocityMax: [0, 0, 0] as [number, number, number],
+          acceleration: [0, 0, 0] as [number, number, number],
+          sizeCurve: [{ age: 0, value: 0.1 }, { age: 1, value: 0.1 }],
+          colorCurve: [{ age: 0, color: [1, 0, 1, 1] as [number, number, number, number] },
+            { age: 1, color: [1, 0, 1, 1] as [number, number, number, number] }],
+          flipbookFramesPerSecond: 0,
+          seed: sequence,
+          maxParticles: 1024,
+          visible: true,
+        },
+      },
+    });
+    // Five full bursts exceed the host's 4096-particle pool.
+    const refused = await renderer.applyPresentation({
+      schemaVersion: 1,
+      publication: { stream: 'presentation-world', baseRevision: 0, revision: 1, operationCount: 5 },
+      ops: [0, 1, 2, 3, 4].map(burst),
+    } as never);
+    const next = await renderer.applyPresentation({
+      schemaVersion: 1,
+      publication: { stream: 'presentation-world', baseRevision: 1, revision: 2, operationCount: 0 },
+      ops: [],
+    } as never);
+    return { refused, next };
+  });
+  expect(receipts.refused.outcome).toBe('partial');
+  expect(receipts.refused.diagnostics.map((entry) => entry.code)).toEqual(['budgetExceeded']);
+  // The refusal is visible, but the renderer took the publication, so the
+  // next contiguous publication is accepted rather than rejected as a gap.
+  expect(receipts.next).toEqual({ applied: 0, outcome: 'applied', diagnostics: [] });
+});
+
 test('typed ghost-plate presentation operations reach Three and hard-snap sectors', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const result = await page.evaluate(async () => {

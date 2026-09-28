@@ -497,7 +497,7 @@ test(`host rebuilds after ${graphicsFailure} before applying current-epoch trail
     let demandCalls = 0;
     let freshOutputRecoveries = 0;
     let activePublicationRevision = 0;
-    let presentationDomainConfigured = false;
+    let presentationDomain: 'absent' | 'refusing' | 'degraded' = 'absent';
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
         accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
@@ -565,21 +565,34 @@ test(`host rebuilds after ${graphicsFailure} before applying current-epoch trail
           }
           return { outcome: 'applied' as const, diagnostics: [] };
         },
-        applyPresentation: async () => ({
-          applied: 0,
-          outcome: 'rejected_atomic' as const,
-          diagnostics: [presentationDomainConfigured
-            ? {
-              domain: 'audio' as const,
+        // Mirrors RendererPresentationHostSet: an absent host or a refused
+        // operation is `rejected_atomic`; a hostFailure degrades the domain
+        // and is always `terminal`.
+        applyPresentation: async () => (presentationDomain === 'degraded'
+          ? {
+            applied: 0,
+            outcome: 'terminal' as const,
+            diagnostics: [{
+              domain: 'particle' as const,
               code: 'hostFailure',
-              message: 'configured audio presentation was not realized',
-            }
-            : {
-              domain: 'audio' as const,
-              code: 'unavailableHost',
-              message: 'audio presentation was requested without a configured host',
+              message: 'particle presentation host is degraded after an earlier failure',
             }],
-        }),
+          }
+          : {
+            applied: 0,
+            outcome: 'rejected_atomic' as const,
+            diagnostics: [presentationDomain === 'refusing'
+              ? {
+                domain: 'particle' as const,
+                code: 'budgetExceeded',
+                message: 'particle emitter budget is exhausted',
+              }
+              : {
+                domain: 'audio' as const,
+                code: 'unavailableHost',
+                message: 'audio presentation was requested without a configured host',
+              }],
+          }),
       },
       input: {
         sampleController: () => 0,
@@ -687,7 +700,7 @@ test(`host rebuilds after ${graphicsFailure} before applying current-epoch trail
     );
     assert.equal(host.readout().state, 'ready');
 
-    presentationDomainConfigured = true;
+    presentationDomain = 'refusing';
     publish([{
       kind: 'presentation',
       frame: {
@@ -699,8 +712,25 @@ test(`host rebuilds after ${graphicsFailure} before applying current-epoch trail
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(
       freshOutputRecoveries,
+      1,
+      'a refused operation keeps the mounted renderer and its projection',
+    );
+    assert.equal(host.readout().state, 'ready');
+
+    presentationDomain = 'degraded';
+    publish([{
+      kind: 'presentation',
+      frame: {
+        schemaVersion: 1,
+        publication: { stream: 'presentation-world', baseRevision: 9, revision: 10, operationCount: 0 },
+        ops: [],
+      },
+    } as never], { epoch: 2, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      freshOutputRecoveries,
       2,
-      'a configured presentation domain rejection requests one fresh projection baseline',
+      'a degraded presentation domain requests one fresh projection baseline',
     );
     assert.equal(host.readout().state, 'degraded');
     await host.dispose();

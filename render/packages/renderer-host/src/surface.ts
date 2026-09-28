@@ -1256,12 +1256,13 @@ function mountPreparedRendererSurface(
         pendingRealizations -= 1;
       }
       if (disposed) throw new Error('renderer surface was disposed during presentation');
-      // An absent optional capability is explicit, but a configured host that
-      // failed to realize its operations needs a fresh committed baseline.
-      if (receipt.domains.every((domain) => !domain.configured || domain.outcome === 'applied')) {
+      // A host that refuses individual operations (budget, missing asset,
+      // unknown handle) keeps the rest of its realization and reports the
+      // refusals as diagnostics, so the publication still advances. Only a
+      // terminal domain, whose host is degraded, leaves the frontier behind.
+      if (receipt.domains.every((domain) => domain.outcome !== 'terminal')) {
         projection.commitPublication(presentationFrame.publication, presentationFrame.ops.length);
-        // Even an explicitly absent optional host advances the shared frontier.
-        // Submit once so that frontier obtains actual draw provenance.
+        // Submit once so the advanced frontier obtains actual draw provenance.
         requestAutomaticSubmission();
       }
       if (receipt.applied > 0) {

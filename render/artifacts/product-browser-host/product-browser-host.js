@@ -25489,7 +25489,7 @@ function TC(e, t, n = {}) {
 				--b;
 			}
 			if (E) throw Error("renderer surface was disposed during presentation");
-			return t.domains.every((e) => !e.configured || e.outcome === "applied") && (c.commitPublication(e.publication, e.ops.length), te()), t.applied > 0 && te(), t;
+			return t.domains.every((e) => e.outcome !== "terminal") && (c.commitPublication(e.publication, e.ops.length), te()), t.applied > 0 && te(), t;
 		},
 		audioRealizedFacts: () => f?.readAudioRealizedFacts() ?? null,
 		videoRealizedFacts: () => f?.readVideoRealizedFacts() ?? null,
@@ -30675,14 +30675,9 @@ async function DO(t, n) {
 				case "presentation":
 					We(async () => {
 						await Ge(c, e);
-						let t = await c.renderer.applyPresentation(e.frame), r = t.diagnostics.filter((e) => e.code !== "unavailableHost");
-						if (l && t.outcome !== "applied" && (r.length > 0 || t.diagnostics.length === 0)) {
-							let e = r.map((e) => e.message).join("; ") || "configured retained presentation was not realized";
-							Je(n, e);
-							return;
-						}
-						if (e.frame.publication !== void 0 && r.length > 0) {
-							let e = r.map((e) => e.message).join("; ") || "renderer did not apply configured presentation";
+						let t = await c.renderer.applyPresentation(e.frame);
+						if ((t.outcome === "terminal" || t.diagnostics.some((e) => e.domain === "application")) && (l || e.frame.publication !== void 0)) {
+							let e = t.diagnostics.map((e) => e.message).join("; ") || "renderer did not take the published presentation";
 							Je(n, e);
 							return;
 						}

@@ -44,6 +44,8 @@ export interface RustyApplicationSurfaceResourceOptions {
     readonly resolveTextureResource?: (descriptor: RendererTextureResourceDescriptor) => Promise<ArrayBuffer>;
 }
 export declare function prepareRustyApplicationContent(content: RustyApplicationContent): PreparedRustyApplicationContent;
+/** Classify and borrow resource bodies without touching any frame. */
+export declare function prepareRustyApplicationResources(resources: readonly RustyApplicationResource[]): readonly PreparedRustyApplicationResource[];
 /** One mutable Engine-owned resource catalog shared by a mounted surface and
  * its presentation hosts. Product Browser admits immutable bytes here before
  * applying the output group that names them. */
