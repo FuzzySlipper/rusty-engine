@@ -17,7 +17,6 @@ using StateMachineTransitionRequest = Rusty.Engine.StateMachine.StateMachineTran
 
 // This executable is a deliberately broad managed-helper proof harness. It is not a recommended
 // product architecture or a template for assembling unrelated gameplay domains in one program.
-EntityAdapterSafetyExercise.Run();
 
 const uint HealthLocalComponentId = 1;
 const uint ArmorLocalComponentId = 2;
@@ -33,7 +32,7 @@ using var world = new EntityStore([EngineComponentTypes.Transform, EngineCompone
 EntityId actor = world.Create();
 EntityId pack = world.Create();
 EntityId pouch = world.Create(EntityLifecycle.Disabled);
-ContainmentReceipt contained = world.SetContainment(pouch, pack, world.Revision);
+ContainmentReceipt contained = world.SetContainment(pouch, pack);
 Require(contained.Changed && world.TryGetContainedIn(pouch, out EntityId container) && container == pack,
     "canonical containment did not preserve its parent");
 Require(world.ContainedEntities(pack).SequenceEqual([pouch]), "reverse containment was not deterministic");
@@ -44,26 +43,23 @@ Require(world.TryGetContainedIn(pouch, out container) && container == pack, "exp
 world.Set(actor, health, new Health(InitialHealth));
 Throws(() => world.Set(actor, health, new Health(-1)), "typed component validator did not reject invalid state");
 world.Set(actor, armor, new Armor(InitialArmor));
-ComponentRevision healthRevision = world.GetComponentRevision(actor, health);
 
 ulong revisionBeforeEdit = world.Revision;
-EntityBatchReceipt receipt = world.Commit(new EntityBatch()
-    .Set(actor, health, new Health(6), healthRevision), expectedRevision: revisionBeforeEdit);
-Require(receipt.RevisionAfter == revisionBeforeEdit + 1, "a prepared edit should publish one structural version");
+EntityBatchReceipt receipt = world.Commit(new EntityBatch().Set(actor, health, new Health(6)));
+Require(receipt.RevisionBefore == revisionBeforeEdit && receipt.RevisionAfter == revisionBeforeEdit + 1,
+    "a one-write batch should advance the change counter once");
 world.SetLifecycle(actor, EntityLifecycle.Disabled);
 Require(world.Query(health).Count == 0, "disabled entities are omitted from normal queries");
 Require(world.Query(health, includeDisabled: true).Single().Value.Current == 6, "typed replacement did not commit");
 Require(world.Query(health, armor, includeDisabled: true).Single().Second.Current == InitialArmor, "two-component query did not join typed columns");
-ulong beforeRejectedEdit = world.Revision;
 Throws(
     () => world.Commit(new EntityBatch()
         .Set(actor, health, new Health(4))
         .Set(new EntityId(999), health, new Health(1))),
-    "a rejected edit must report its invalid value replacement");
-Require(world.Get(actor, health).Current == 6 && world.Revision == beforeRejectedEdit, "a rejected edit changed live state");
+    "a batch must report its failing write");
+Require(world.Get(actor, health).Current == 4, "writes before the failing one stay applied");
 world.SetLifecycle(actor, EntityLifecycle.Active);
 world.Set(actor, health, new Health(InitialHealth));
-Throws(() => world.Set(actor, health, new Health(9), healthRevision), "an old component guard accepted an explicit replacement");
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
 ClassComponentExercise.Run();
@@ -126,31 +122,9 @@ static void ExercisePreparedValueEdits()
     store.Set(entity, references, new ReferenceComponent(source));
     source[0] = 99;
     Require(store.Get(entity, references).Values[0] == 99, "ordinary values must retain C# nested reference semantics");
-    store.Set(entity, values, 1);
-
-    using EntityEdit stale = store.PrepareBatch(new EntityBatch().Set(entity, values, 2));
-    store.Register(ComponentType<long>.Create(ProductComponentKeys.Create(93)));
-    Throws(() => stale.Publish(), "stale edit overwrote a later registration");
-    try
-    {
-        stale.Publish();
-        throw new Exception("failed edit was reusable");
-    }
-    catch (InvalidOperationException error)
-    {
-        Require(error.Message.Contains("failed or been disposed", StringComparison.Ordinal), "failed edit did not become terminal");
-    }
-    Require(store.Get(entity, values) == 1, "stale edit discarded live state");
-
-    using EntityEdit canceled = store.PrepareBatch(new EntityBatch().Set(entity, values, 3));
-    canceled.Dispose();
-    Throws(() => canceled.Publish(), "disposed edit was reusable");
-    using EntityEdit published = store.PrepareBatch(new EntityBatch().Set(entity, values, 4));
-    published.Publish();
-    ulong afterPublish = store.Revision;
-    published.Publish();
-    Require(store.Revision == afterPublish && store.Get(entity, values) == 4, "successful publication was not idempotent");
-    Require(ReferenceEquals(store.Get(entity, references).Values, source), "prepared value edit copied an unrelated family");
+    store.Commit(new EntityBatch().Set(entity, values, 4));
+    Require(store.Get(entity, values) == 4, "a batch write did not apply");
+    Require(ReferenceEquals(store.Get(entity, references).Values, source), "a batch write copied an unrelated family");
     Throws(() => store.Create((EntityLifecycle)99), "create admitted an undeclared lifecycle");
     store.Dispose();
     Throws(() => store.Diagnostics(), "disposed store allowed diagnostics");
@@ -391,7 +365,7 @@ static void ExerciseManagedMechanics()
         && inventory.View(chest).UniqueItems.Single().Entity == swordEntity,
         "managed inventory did not transfer the unequipped unique item");
 
-    InventoryEdit candidate = inventory.Prepare(inventory.Revision);
+    InventoryEdit candidate = inventory.Prepare();
     InventoryStackId chestPotionStack = InventoryStackId.Parse("chest-potions");
     InventoryMutationReceipt chestPotions = candidate.Grant(chest, potion, chestPotionStack, 2);
     candidate.Publish();
@@ -433,7 +407,7 @@ static void ExerciseWorldOriginEntityComposition()
     var service = new WorldOriginServiceFake();
     var adapter = new EntityOriginRebaser(world, service, service.Session, globalPositions);
 
-    using EntityOriginRebaserPrepared prepared = adapter.Prepare(100, 0, 0, maximumEntities: 1);
+    using EntityOriginRebaserPrepared prepared = adapter.Prepare(100, 0, 0);
     Require(prepared.Receipt.Native.AffectedEntityCount == 1
         && prepared.Receipt.Affected.Span[0].EntityId == entity.Value,
         "world-origin prepare did not retain one deterministic root fact");
@@ -441,13 +415,6 @@ static void ExerciseWorldOriginEntityComposition()
     Require(committed.Native.OriginAfterCellX == 100
         && world.Get(entity, EngineComponentTypes.Transform).Translation.X == 0.0f,
         "world-origin commit did not pair the native receipt with one managed transform batch");
-
-    using EntityOriginRebaserPrepared stale = adapter.Prepare(200, 0, 0, maximumEntities: 1);
-    world.Set(entity, EngineComponentTypes.Transform, new Transform(
-        new Vector3(1.0f, 2.0f, -3.0f), Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
-    Throws(() => stale.Commit(), "world-origin candidate did not reject stale managed transform state");
-    Require(service.CommitCount == 1,
-        "stale managed world state crossed into the native world-origin commit");
 }
 
 static void ExerciseMotionEntityComposition()
@@ -466,21 +433,10 @@ static void ExerciseMotionEntityComposition()
     var service = new MotionServiceFake();
     var adapter = new EntityMotionResolver(world, service, EngineComponentTypes.SpatialCollider);
 
-    EntityMotionResolverReceipt moved = adapter.Resolve(mover, new Vector3(1.0f, 0.0f, 0.0f), maximumEntities: 2);
+    EntityMotionResolverReceipt moved = adapter.Resolve(mover, new Vector3(1.0f, 0.0f, 0.0f));
     Require(moved.Resolution.Outcome == MotionOutcome.Moved
         && world.Get(mover, EngineComponentTypes.Transform).Translation.X == 1.0f,
         "motion adapter did not apply the pure candidate transform in one managed batch");
-
-    world.Set(mover, EngineComponentTypes.Transform, new Transform(
-        Vector3.Zero, Quaternion.Identity, Vector3.One));
-    Throws(() => adapter.Resolve(
-        mover,
-        new Vector3(1.0f, 0.0f, 0.0f),
-        maximumEntities: 2,
-        expectedGuard: moved.Guard),
-        "motion adapter did not reject stale managed projection evidence");
-    Require(service.ResolveCount == 1,
-        "stale managed motion state reached the pure generated service");
 }
 
 static void ExerciseKinematicEntityComposition()
@@ -505,42 +461,31 @@ static void ExerciseKinematicEntityComposition()
     var adapter = new EntityKinematicMotion(world, service, EngineComponentTypes.SpatialCollider);
 
     ulong before = world.Revision;
-    EntityKinematicMotionPrepared prepared = adapter.Prepare(
+    EntityKinematicMotionReceipt applied = adapter.Step(
         service.Session,
         deltaSeconds: 1.0f,
-        maximumEntities: 3,
         selection: new EntityId[] { mover, selectedPeer });
-    Require(prepared.Motion.BodiesConsidered == 2
-        && prepared.Motion.Candidates.Span.Length == 1
-        && prepared.Motion.Facts.Span.Length == 2
-        && prepared.Motion.Facts.Span[0].Kind == KinematicMotionFactKind.Blocked
-        && prepared.Motion.Facts.Span[0].EntityId == mover.Value
-        && prepared.Motion.Facts.Span[1].Kind == KinematicMotionFactKind.Moved
-        && prepared.Motion.Facts.Span[1].EntityId == mover.Value,
-        "Kinematic prepare did not preserve deterministic selected blocked and moved facts");
-    EntityKinematicMotionReceipt applied = prepared.Apply();
+    Require(applied.Motion.BodiesConsidered == 2
+        && applied.Motion.Candidates.Span.Length == 1
+        && applied.Motion.Facts.Span.Length == 2
+        && applied.Motion.Facts.Span[0].Kind == KinematicMotionFactKind.Blocked
+        && applied.Motion.Facts.Span[0].EntityId == mover.Value
+        && applied.Motion.Facts.Span[1].Kind == KinematicMotionFactKind.Moved
+        && applied.Motion.Facts.Span[1].EntityId == mover.Value,
+        "Kinematic step did not preserve deterministic selected blocked and moved facts");
     Require(applied.Managed.RevisionBefore == before
-        && applied.Managed.RevisionAfter == before + 1
+        && applied.Managed.RevisionAfter == before + 2
         && world.Get(mover, EngineComponentTypes.Transform).Translation == new Vector3(2.0f, 0.0f, 0.0f)
         && world.Get(mover, EngineComponentTypes.Kinematic).Velocity == new Vector3(2.0f, 0.0f, 0.0f)
         && world.Get(blocker, EngineComponentTypes.Transform).Translation == new Vector3(2.0f, 0.0f, 1.0f)
         && world.Get(blocker, EngineComponentTypes.Kinematic).Velocity == Vector3.Zero,
-        "Kinematic apply did not publish exactly one managed mover batch while retaining the blocker");
-
-    int callsBeforeStale = service.RunCount;
-    world.Set(selectedPeer, EngineComponentTypes.Kinematic, new Kinematic(new Vector3(0.4f), new Vector3(1.0f, 0.0f, 0.0f)));
-    Throws(
-        () => adapter.Prepare(service.Session, 1.0f, 3, new EntityId[] { mover }, applied.Guard),
-        "Kinematic stale managed guard was not rejected before native crossing");
-    Require(service.RunCount == callsBeforeStale,
-        "Kinematic stale managed guard reached the generated service");
+        "Kinematic step did not write the mover's transform and velocity while retaining the blocker");
 
     ulong noOpBefore = world.Revision;
-    EntityKinematicMotionReceipt noOp = adapter.Prepare(
+    EntityKinematicMotionReceipt noOp = adapter.Step(
         service.Session,
         1.0f,
-        3,
-        ReadOnlyMemory<EntityId>.Empty).Apply();
+        ReadOnlyMemory<EntityId>.Empty);
     Require(noOp.Managed.RevisionBefore == noOpBefore && noOp.Managed.RevisionAfter == noOpBefore,
         "Kinematic empty selected phase changed the managed world revision");
 }
@@ -563,30 +508,15 @@ static void ExerciseDynamicsEntityComposition()
         stepSeconds: 1.0f / 60.0f,
         steps: 1,
         bindings: new[] { new DynamicsEntityBinding(entity, body) },
-        actions: new[] { new DynamicsEntityAction(entity, new Vector3(3.0f, 0.0f, 0.0f), Vector3.Zero, Vector3.Zero, Vector3.Zero, true) },
-        maximumBodies: 1,
-        maximumActions: 1);
+        actions: new[] { new DynamicsEntityAction(entity, new Vector3(3.0f, 0.0f, 0.0f), Vector3.Zero, Vector3.Zero, Vector3.Zero, true) });
     Require(receipt.Native.Bodies.Length == 1
         && receipt.Native.Bodies.Span[0].Body.Value == body.Handle.Value
         && receipt.Managed.RevisionBefore == before
-        && receipt.Managed.RevisionAfter == before + 1
+        && receipt.Managed.RevisionAfter == before + 2
         && entities.Get(entity, EngineComponentTypes.Transform).Translation == new Vector3(3.0f, 0.0f, 0.0f)
         && entities.Get(entity, EngineComponentTypes.Transform).Scale == new Vector3(2.0f, 3.0f, 4.0f)
         && entities.Get(entity, EngineComponentTypes.DynamicsMotion).LinearVelocity == new Vector3(3.0f, 0.0f, 0.0f),
-        "Dynamics adapter did not publish the one correlated native body readout in one managed batch");
-
-    int callsBeforeStale = service.StepAndReadCalls;
-    entities.Set(entity, EngineComponentTypes.DynamicsMotion, new DynamicsMotion(Vector3.One, Vector3.Zero, false));
-    Throws(
-        () => adapter.Step(1.0f / 60.0f, 1,
-            new[] { new DynamicsEntityBinding(entity, body) },
-            Array.Empty<DynamicsEntityAction>(),
-            maximumBodies: 1,
-            maximumActions: 0,
-            expectedGuard: receipt.Guard),
-        "Dynamics adapter did not reject stale managed state before its native crossing");
-    Require(service.StepAndReadCalls == callsBeforeStale,
-        "Dynamics stale managed state reached the generated step/read crossing");
+        "Dynamics adapter did not write the one correlated native body readout");
 }
 
 static void ExerciseSpatialEntityProjection()
@@ -612,9 +542,7 @@ static void ExerciseSpatialEntityProjection()
 
     EntityTriggerProjectionReconcileReceipt receipt = adapter.ReconcileTriggers(
         tick: 7,
-        cause: SpatialTriggerCause.Movement,
-        maximumEntities: 4,
-        maximumFactReadback: 1);
+        cause: SpatialTriggerCause.Movement);
     Require(receipt.Entities.Length == 1, "spatial projection did not produce one active entity");
     SpatialEntityCollider projected = receipt.Entities.Span[0];
     Require(spatial.ReconcileCalls == 1
@@ -625,22 +553,8 @@ static void ExerciseSpatialEntityProjection()
     Require(receipt.Trigger.Tick == 7
         && receipt.Facts.Length == 1
         && receipt.Facts.Span[0].Present
-        && receipt.Facts.Span[0].Subject == actor.Value
-        && !receipt.FactsTruncated,
-        "spatial reconciliation did not copy its bounded generated readback");
-
-    world.Set(actor, EngineComponentTypes.Transform, new Transform(
-        new Vector3(11f, 2f, -3f),
-        Quaternion.Identity,
-        new Vector3(2f, 1f, 1f)));
-    Throws(
-        () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, receipt.Guard),
-        "stale spatial world guard was accepted");
-    EntityTriggerProjectionGuard staleComponentGuard = receipt.Guard with { StoreRevision = world.Revision };
-    Throws(
-        () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, staleComponentGuard),
-        "stale spatial component guard was accepted");
-    Require(spatial.ReconcileCalls == 1, "stale spatial projection crossed into the generated service");
+        && receipt.Facts.Span[0].Subject == actor.Value,
+        "spatial reconciliation did not copy its generated readback");
 }
 
 static void ExerciseCharacterEntityComposition()
@@ -684,21 +598,12 @@ static void ExerciseCharacterEntityComposition()
     Require(receipt.Entity == actor
         && receipt.Native.Entity == 1
         && receipt.Managed.RevisionBefore == before
-        && receipt.Managed.RevisionAfter == before + 1
+        && receipt.Managed.RevisionAfter == before + 2
         && world.Get(actor, EngineComponentTypes.Transform).Translation == Vector3.UnitX
         && world.Get(actor, EngineComponentTypes.Transform).Rotation == actorRotation
         && world.Get(actor, EngineComponentTypes.Transform).Scale == actorScale
         && world.Get(actor, EngineComponentTypes.CharacterMotion).LastCommandSequence == command.Sequence,
         "character adapter did not preserve a non-native managed identity and transform shape while publishing its returned state");
-
-    int callsBeforeStale = spatial.CharacterStepCalls;
-    CharacterMotion stale = world.Get(actor, EngineComponentTypes.CharacterMotion) with { LastCommandSequence = 8 };
-    world.Set(actor, EngineComponentTypes.CharacterMotion, stale);
-    Throws(
-        () => adapter.Step(actor, spatial.Session, default, default, command, receipt.Guard),
-        "character adapter accepted a stale managed projection");
-    Require(spatial.CharacterStepCalls == callsBeforeStale,
-        "stale character managed state reached the generated service");
 }
 
 static void ExerciseAppearanceEntityComposition()
@@ -718,7 +623,7 @@ static void ExerciseAppearanceEntityComposition()
         new(first, firstHandle, true, RenderLayer.Scene),
     ];
 
-    EntityGraphicsProjectionReceipt receipt = adapter.Publish(entries, maximumEntities: 2);
+    EntityGraphicsProjectionReceipt receipt = adapter.Publish(entries);
     Require(graphics.PublishCalls == 1
         && receipt.Facts.Span.Length == 2
         && graphics.LastSnapshot.Span[0].ObjectId == first.Value
@@ -731,16 +636,8 @@ static void ExerciseAppearanceEntityComposition()
 
     Throws(
         () => adapter.Publish(
-            new EntityGraphicsProjectionEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) },
-            maximumEntities: 1),
+            new EntityGraphicsProjectionEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) }),
         "graphics adapter accepted a parent that was absent from its complete snapshot");
-
-    world.Set(first, EngineComponentTypes.Transform, new Transform(Vector3.UnitY, Quaternion.Identity, Vector3.One));
-    Throws(
-        () => adapter.Publish(entries, maximumEntities: 2, receipt.Guard),
-        "appearance adapter accepted a stale managed transform projection");
-    Require(graphics.PublishCalls == 1,
-        "stale appearance managed state reached the generated service");
 }
 
 sealed class SpatialServiceFake : ISpatialService

@@ -78,15 +78,14 @@ internal static class ClassComponentExercise
             "class debug projection cached by structural revision");
         store.Replace(actor, state);
         Require(store.GetComponentRevision(actor, explicitState) == slot, "slot revision tracked object internals");
-        // Typed preparation replaces selected value slots only. Class identity/state remains live.
-        EntityEdit edit = store.PrepareBatch(new EntityBatch().Set(actor, facts, new Position(9)), store.Revision);
+        // A batch writes selected value slots only. Class identity/state remains live.
         state.Health = 2;
-        edit.Publish();
+        store.Commit(new EntityBatch().Set(actor, facts, new Position(9)));
         Require(ReferenceEquals(store.Get<ActorState>(actor), state) && state.Health == 2
             && store.Get<Position>(actor).X == 9, "typed value edit overwrote a live class");
-        Throws(() => store.PrepareBatch(new EntityBatch().Set(actor, facts, new Position(12))
+        Throws(() => store.Commit(new EntityBatch().Set(actor, facts, new Position(12))
             .Set(new EntityId(999), facts, new Position(13))), "invalid value edit was accepted");
-        Require(store.Get<Position>(actor).X == 9, "failed preparation changed a live value");
+        Require(store.Get<Position>(actor).X == 12, "writes before the failing one stay applied");
 
         EntityId child = store.Create();
         store.SetContainment(child, actor);

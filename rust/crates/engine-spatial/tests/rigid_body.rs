@@ -458,7 +458,6 @@ fn dynamic_bodies_contact_voxel_and_static_mesh_environment() {
     let hash = asset.geometry_hash;
     mesh_scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(1),
@@ -704,7 +703,6 @@ fn prepared_steps_reject_static_environment_replacement_without_entity_mutation(
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(99),

@@ -95,7 +95,6 @@ fn ramp_scene(rise: f64) -> VoxelCollisionScene {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(1),
@@ -133,7 +132,6 @@ fn quarter_step_scene(with_low_ceiling: bool) -> VoxelCollisionScene {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(41),
@@ -162,7 +160,6 @@ fn moving_mesh_scene(translation_x: f64) -> VoxelCollisionScene {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(101),
@@ -203,7 +200,6 @@ fn hollow_frame_scene() -> VoxelCollisionScene {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(102),
@@ -467,7 +463,7 @@ fn environment_change_between_prepare_and_commit_is_fail_atomic() {
         .prepare(&state, &scene, entity, &config, command(1, Vec2::ZERO))
         .unwrap();
     let before = state.clone();
-    scene.replace_static_mesh_colliders(0, [], []).unwrap();
+    scene.replace_static_mesh_colliders([], []).unwrap();
     assert!(matches!(
         service.commit(&mut state, &scene, prepared),
         Err(CharacterControllerError::StaleEnvironment)
@@ -680,7 +676,6 @@ fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
             },
         )
         .unwrap();
-    let mesh_revision = scene.static_mesh_collision_revision();
     let asset = StaticMeshColliderAsset::new(
         StaticMeshAssetId(101),
         vec![
@@ -695,7 +690,6 @@ fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
     let asset_hash = asset.geometry_hash;
     scene
         .apply_static_mesh_residency(
-            mesh_revision,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(101),
@@ -745,7 +739,6 @@ fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
             },
         )
         .unwrap();
-    let mesh_revision = scene.static_mesh_collision_revision();
     let changed_asset = StaticMeshColliderAsset::new(
         StaticMeshAssetId(101),
         vec![
@@ -760,7 +753,6 @@ fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
     let changed_hash = changed_asset.geometry_hash;
     scene
         .apply_static_mesh_residency(
-            mesh_revision,
             [changed_asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(101),
@@ -1654,7 +1646,6 @@ fn airborne_character_landing_on_steep_ramp_keeps_sliding_down() {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(10),

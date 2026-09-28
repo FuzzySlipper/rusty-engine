@@ -12,10 +12,8 @@ namespace Rusty.Engine.Entities;
 public sealed class EntityStore : IDisposable
 {
     private const int MaximumDiagnosticSample = 64;
-    private StoreState _state;
+    private readonly StoreState _state;
     private bool _isDisposed;
-    private bool _staging;
-    private readonly HashSet<Type> _editedFamilies = [];
 
     public EntityStore(IEnumerable<ComponentType>? componentTypes = null)
     {
@@ -31,13 +29,10 @@ public sealed class EntityStore : IDisposable
         }
     }
 
-    private EntityStore(StoreState state, bool staging)
-    {
-        _state = state;
-        _staging = staging;
-    }
-
-    /// <summary>Explicit structural/replacement version; does not track fields inside attached objects.</summary>
+    /// <summary>
+    /// Change counter: advances on every structural or replacement write. It does not track
+    /// fields inside attached objects.
+    /// </summary>
     public ulong Revision
     {
         get
@@ -60,10 +55,6 @@ public sealed class EntityStore : IDisposable
     public void Register<T>(ComponentType<T> componentType) where T : notnull
     {
         ThrowIfDisposed();
-        if (_staging)
-        {
-            throw new InvalidOperationException("Component registration must complete before a batch is staged.");
-        }
         ArgumentNullException.ThrowIfNull(componentType);
         RegisterUntyped(componentType);
         Mutated();
@@ -129,19 +120,18 @@ public sealed class EntityStore : IDisposable
             && record.Lifecycle != EntityLifecycle.Tombstoned;
     }
 
-    public void SetLifecycle(EntityId entity, EntityLifecycle lifecycle, EntityRevision? expectedRevision = null)
+    public void SetLifecycle(EntityId entity, EntityLifecycle lifecycle)
     {
         ThrowIfDisposed();
         EntityLifecycleValidation.EnsureDefined(lifecycle, nameof(lifecycle));
         EntityRecord record = RequireEntity(entity);
-        EnsureEntityRevision(entity, record, expectedRevision);
         if (record.Lifecycle == EntityLifecycle.Tombstoned)
         {
             throw new InvalidOperationException($"Entity {entity.Value} has been tombstoned.");
         }
         if (lifecycle == EntityLifecycle.Tombstoned)
         {
-            Destroy(entity, expectedRevision);
+            Destroy(entity);
             return;
         }
         if (record.Lifecycle == lifecycle)
@@ -154,11 +144,10 @@ public sealed class EntityStore : IDisposable
         Mutated();
     }
 
-    public void Destroy(EntityId entity, EntityRevision? expectedRevision = null)
+    public void Destroy(EntityId entity)
     {
         ThrowIfDisposed();
         EntityRecord record = RequireEntity(entity);
-        EnsureEntityRevision(entity, record, expectedRevision);
         if (record.Lifecycle == EntityLifecycle.Tombstoned)
         {
             throw new InvalidOperationException($"Entity {entity.Value} has already been tombstoned.");
@@ -177,10 +166,9 @@ public sealed class EntityStore : IDisposable
     /// Places one live entity in one live container. Reparenting is atomic and a relation that
     /// already has the requested container is an idempotent no-op.
     /// </summary>
-    public ContainmentReceipt SetContainment(EntityId child, EntityId container, ulong? expectedRevision = null)
+    public ContainmentReceipt SetContainment(EntityId child, EntityId container)
     {
         ThrowIfDisposed();
-        EnsureStoreRevision(expectedRevision);
         RequireAlive(child);
         RequireAlive(container);
         if (child == container)
@@ -215,10 +203,9 @@ public sealed class EntityStore : IDisposable
     }
 
     /// <summary>Clears one live entity's container, if present.</summary>
-    public ContainmentReceipt ClearContainment(EntityId child, ulong? expectedRevision = null)
+    public ContainmentReceipt ClearContainment(EntityId child)
     {
         ThrowIfDisposed();
-        EnsureStoreRevision(expectedRevision);
         RequireAlive(child);
         ulong revisionBefore = _state.Revision;
         if (!_state.Containment.Remove(child.Value, out ulong container))
@@ -370,14 +357,12 @@ public sealed class EntityStore : IDisposable
             : throw new InvalidOperationException($"Entity {entity.Value} does not have component {componentType.Key.Value}.");
     }
 
-    public void Set<T>(EntityId entity, ComponentType<T> componentType, T value, ComponentRevision? expectedRevision = null)
+    public void Set<T>(EntityId entity, ComponentType<T> componentType, T value)
         where T : notnull
     {
         ThrowIfDisposed();
         RequireAlive(entity);
         ComponentTable<T> table = GetTable(componentType);
-        EnsureComponentRevision(entity, componentType, table, expectedRevision);
-        table = WritableTable(table);
         if (!table.Set(entity, value))
         {
             return;
@@ -386,13 +371,12 @@ public sealed class EntityStore : IDisposable
         Mutated();
     }
 
-    public bool Remove<T>(EntityId entity, ComponentType<T> componentType, ComponentRevision? expectedRevision = null)
+    public bool Remove<T>(EntityId entity, ComponentType<T> componentType)
         where T : notnull
     {
         ThrowIfDisposed();
         RequireAlive(entity);
         ComponentTable<T> table = GetTable(componentType);
-        EnsureComponentRevision(entity, componentType, table, expectedRevision);
         if (!table.Remove(entity))
         {
             return false;
@@ -441,44 +425,20 @@ public sealed class EntityStore : IDisposable
         return result;
     }
 
-    public EntityBatchReceipt Commit(EntityBatch batch, ulong? expectedRevision = null)
-    {
-        EntityEdit prepared = PrepareBatch(batch, expectedRevision);
-        prepared.Publish();
-        return prepared.Receipt;
-    }
-
     /// <summary>
-    /// Validates and stages one batch without changing the live store. This is
-    /// a scoped set of value replacements. Callers coordinating another owner
-    /// must manage its commit order; this edit cannot roll that owner back.
+    /// Applies one batch's writes in order, directly to this store. A failing write leaves the
+    /// earlier ones applied, like any sequence of writes.
     /// </summary>
-    public EntityEdit PrepareBatch(EntityBatch batch, ulong? expectedRevision = null)
+    public EntityBatchReceipt Commit(EntityBatch batch)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(batch);
-        if (expectedRevision is ulong expected && expected != _state.Revision)
-        {
-            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
-        }
-
         ulong revisionBefore = _state.Revision;
-        StoreState stagedState = _state.ForkForEdit();
-        var staged = new EntityStore(stagedState, staging: true);
         foreach (Action<EntityStore> mutation in batch.Mutations)
         {
-            mutation(staged);
+            mutation(this);
         }
-
-        if (batch.Mutations.Count != 0)
-        {
-            staged._state.Revision = checked(revisionBefore + 1);
-        }
-        return new EntityEdit(
-            this,
-            staged._state,
-            revisionBefore,
-            new EntityBatchReceipt(revisionBefore, staged._state.Revision));
+        return new EntityBatchReceipt(revisionBefore, _state.Revision);
     }
 
     public EntityStoreDiagnostics Diagnostics(int maxEntitySample = MaximumDiagnosticSample)
@@ -550,10 +510,6 @@ public sealed class EntityStore : IDisposable
 
     public void Dispose()
     {
-        if (_staging)
-        {
-            throw new InvalidOperationException("A batch cannot dispose its staging store.");
-        }
         if (_isDisposed)
         {
             return;
@@ -632,10 +588,6 @@ public sealed class EntityStore : IDisposable
         {
             return existing;
         }
-        if (_staging)
-        {
-            throw new InvalidOperationException("Register new component families before preparing a legacy edit.");
-        }
         // These keys support legacy diagnostics only. Ordinary callers never allocate keys.
         var table = new ComponentTable<T>(ComponentType<T>.CreateAutomatic(FindAutomaticKey()));
         _state.AddTable(table);
@@ -651,14 +603,6 @@ public sealed class EntityStore : IDisposable
         if (RequireEntity(entity).Lifecycle == EntityLifecycle.Tombstoned)
         {
             throw new InvalidOperationException($"Entity {entity.Value} has been tombstoned.");
-        }
-    }
-
-    private void EnsureStoreRevision(ulong? expectedRevision)
-    {
-        if (expectedRevision is ulong expected && expected != _state.Revision)
-        {
-            throw new InvalidOperationException($"Store revision is stale: expected {expected}, actual {_state.Revision}.");
         }
     }
 
@@ -701,58 +645,9 @@ public sealed class EntityStore : IDisposable
         }
     }
 
-    private static void EnsureEntityRevision(EntityId entity, EntityRecord record, EntityRevision? expected)
-    {
-        if (expected is EntityRevision guard && (guard.Entity != entity || guard.Revision != record.Revision))
-        {
-            throw new InvalidOperationException($"Entity revision is stale for entity {entity.Value}.");
-        }
-    }
+    private void TouchEntity(EntityId entity) => RequireEntity(entity).Revision++;
 
-    private static void EnsureComponentRevision<T>(EntityId entity, ComponentType<T> componentType, ComponentTable<T> table, ComponentRevision? expected)
-        where T : notnull
-    {
-        if (expected is ComponentRevision guard
-            && (guard.Entity != entity || guard.Component != componentType.Key || guard.Revision != table.RevisionFor(entity)))
-        {
-            throw new InvalidOperationException($"Component revision is stale for entity {entity.Value}, component {componentType.Key.Value}.");
-        }
-    }
-
-    private void TouchEntity(EntityId entity)
-    {
-        EntityRecord record = RequireEntity(entity);
-        if (_staging)
-        {
-            record = record.Clone();
-            _state.Entities[entity.Value] = record;
-        }
-        record.Revision++;
-    }
-
-    private ComponentTable<T> WritableTable<T>(ComponentTable<T> table) where T : notnull
-    {
-        if (!_staging || !_editedFamilies.Add(typeof(T))) return table;
-        var copy = (ComponentTable<T>)table.CopySlots();
-        _state.Tables[copy.Descriptor.Key] = copy;
-        _state.Families[typeof(T)] = copy;
-        return copy;
-    }
-
-    private void Mutated()
-    {
-        if (!_staging)
-        {
-            _state.Revision = checked(_state.Revision + 1);
-        }
-    }
-
-    internal void PublishPreparedBatch(StoreState state, ulong preparedRevision)
-    {
-        ThrowIfDisposed();
-        EnsureStoreRevision(preparedRevision);
-        _state = state;
-    }
+    private void Mutated() => _state.Revision = checked(_state.Revision + 1);
 
     internal sealed class StoreState
     {
@@ -761,32 +656,13 @@ public sealed class EntityStore : IDisposable
         internal SortedDictionary<ulong, EntityRecord> Entities { get; } = [];
         internal SortedDictionary<ComponentTypeKey, ComponentTable> Tables { get; } = [];
         internal Dictionary<Type, ComponentTable> Families { get; } = [];
-        internal SortedDictionary<ulong, ulong> Containment { get; private init; } = [];
-        internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; private init; } = [];
+        internal SortedDictionary<ulong, ulong> Containment { get; } = [];
+        internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; } = [];
 
         internal void AddTable(ComponentTable table)
         {
             Tables.Add(table.Descriptor.Key, table);
             Families.Add(table.Descriptor.Family, table);
-        }
-
-        // Only Create and typed Set can run on an edit's private store. They do not
-        // change relations. Entity records copy on write and value families on first write;
-        // unrelated classes remain the exact same attachments, never graph copies.
-        internal StoreState ForkForEdit()
-        {
-            var result = new StoreState
-            {
-                Revision = Revision,
-                NextEntityValue = NextEntityValue,
-                Containment = Containment,
-                ContainedChildren = ContainedChildren,
-            };
-            foreach ((ulong id, EntityRecord entity) in Entities)
-                result.Entities.Add(id, entity);
-            foreach (ComponentTable table in Tables.Values)
-                result.AddTable(table);
-            return result;
         }
     }
 
@@ -795,14 +671,12 @@ public sealed class EntityStore : IDisposable
         internal EntityLifecycle Lifecycle { get; set; } = lifecycle;
         internal ulong Revision { get; set; } = revision;
         internal EntityTypeId TypeId { get; } = typeId;
-        internal EntityRecord Clone() => new(Lifecycle, Revision, TypeId);
     }
 
     internal abstract class ComponentTable
     {
         protected ComponentTable(ComponentType descriptor) => Descriptor = descriptor;
         internal ComponentType Descriptor { get; private protected set; }
-        internal abstract ComponentTable CopySlots();
         internal abstract void BindDescriptor(ComponentType descriptor);
         internal abstract void RelocateAutomaticDescriptor(ComponentTypeKey key);
         internal abstract void Forget(EntityId entity);
@@ -819,21 +693,7 @@ public sealed class EntityStore : IDisposable
 
         public ComponentTable(ComponentType<T> descriptor) : base(descriptor) { }
 
-        private ComponentTable(ComponentTable<T> source) : base(source.TypedDescriptor)
-        {
-            foreach ((ulong entity, T value) in source._values)
-            {
-                _values.Add(entity, value);
-            }
-            foreach ((ulong entity, ulong revision) in source._revisions)
-            {
-                _revisions.Add(entity, revision);
-            }
-        }
-
         private ComponentType<T> TypedDescriptor => (ComponentType<T>)Descriptor;
-
-        internal override ComponentTable CopySlots() => new ComponentTable<T>(this);
 
         internal override void RelocateAutomaticDescriptor(ComponentTypeKey key)
             => Descriptor = ComponentType<T>.CreateAutomatic(key);

@@ -579,7 +579,6 @@ fn install_static_mesh(scene: &mut VoxelCollisionScene) {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(79),

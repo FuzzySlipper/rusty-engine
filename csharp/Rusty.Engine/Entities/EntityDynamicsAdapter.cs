@@ -27,32 +27,10 @@ public readonly record struct DynamicsEntityAction(
     Vector3 TorqueImpulse,
     bool Wake);
 
-/// <summary>Exact managed revision evidence for one Dynamics publication row.</summary>
-public readonly record struct EntityDynamicsAdapterComponentGuard(
-    EntityId Entity,
-    ComponentRevision TransformRevision,
-    ComponentRevision MotionRevision,
-    DynamicsBodyHandle Body);
-
-/// <summary>Copied managed evidence required before and after one Dynamics crossing.</summary>
-public readonly record struct EntityDynamicsAdapterGuard(
-    ulong StoreRevision,
-    ReadOnlyMemory<EntityDynamicsAdapterComponentGuard> Components);
-
-/// <summary>One native coherent step/read and its one canonical managed batch.</summary>
+/// <summary>One native step/read and the managed writes that applied it.</summary>
 public readonly record struct EntityDynamicsAdapterReceipt(
     DynamicsStepAndReadLeaseReceipt Native,
-    EntityBatchReceipt Managed,
-    EntityDynamicsAdapterGuard Guard);
-
-/// <summary>
-/// One fully captured managed input row for an irreversible Dynamics step.
-/// The public guard remains revision and binding evidence; this private
-/// projection retains the values the adapter must preserve in its publication.
-/// </summary>
-internal readonly record struct EntityDynamicsAdapterProjection(
-    EntityDynamicsAdapterComponentGuard Guard,
-    Vector3 Scale);
+    EntityBatchReceipt Managed);
 
 /// <summary>
 /// Composes caller-owned EntityId-to-DynamicsBody bindings with canonical
@@ -76,107 +54,40 @@ public sealed class EntityDynamicsAdapter
     }
 
     /// <summary>
-    /// Preflights the exact participating values and component revisions, runs
-    /// one bounded typed Dynamics operation, then attempts to publish every
-    /// returned Transform/DynamicsMotion pair in exactly one EntityBatch.
-    /// Binding and action order are explicit and preserved by the native lease.
-    /// A post-step receipt or managed-publication failure does not undo or retry
-    /// the retained Dynamics step.
+    /// Runs one Dynamics step/read for the bound bodies and writes every returned
+    /// Transform/DynamicsMotion pair. Binding and action order are preserved by the
+    /// native readout.
     /// </summary>
     public EntityDynamicsAdapterReceipt Step(
         float stepSeconds,
         uint steps,
         ReadOnlyMemory<DynamicsEntityBinding> bindings,
-        ReadOnlyMemory<DynamicsEntityAction> actions,
-        int maximumBodies,
-        int maximumActions,
-        EntityDynamicsAdapterGuard? expectedGuard = null)
+        ReadOnlyMemory<DynamicsEntityAction> actions)
     {
-        if (maximumBodies < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumBodies));
-        }
-        if (maximumActions < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumActions));
-        }
-        if (bindings.Length > maximumBodies)
-        {
-            throw new InvalidOperationException(
-                $"Dynamics has {bindings.Length} bindings, exceeding its explicit batch bound {maximumBodies}.");
-        }
-        if (actions.Length > maximumActions)
-        {
-            throw new InvalidOperationException(
-                $"Dynamics has {actions.Length} actions, exceeding its explicit action bound {maximumActions}.");
-        }
-
-        DynamicsEntityBinding[] projectedBindings = bindings.ToArray();
-        EntityDynamicsAdapterProjection[] projection = CaptureProjection(projectedBindings);
-        EntityDynamicsAdapterGuard guard = new(
-            _entities.Revision,
-            projection.Select(row => row.Guard).ToArray());
-        if (expectedGuard is EntityDynamicsAdapterGuard expected)
-        {
-            ValidateGuard(expected, guard);
-        }
-
-        DynamicsAction[] projectedActions = ProjectActions(projectedBindings, actions.Span);
-        DynamicsBody[] selectedBodies = projectedBindings.Select(binding => binding.Body).ToArray();
+        DynamicsEntityBinding[] bound = bindings.ToArray();
         DynamicsStepAndReadLeaseReceipt native = _dynamics.StepAndRead(new DynamicsStepAndReadRequest(
             _world,
             stepSeconds,
             steps,
-            projectedActions,
-            selectedBodies));
+            ProjectActions(bound, actions.Span),
+            bound.Select(binding => binding.Body).ToArray()));
 
-        // StepAndRead has already advanced the retained Dynamics world.  Its
-        // output must therefore be handled as one committed native outcome:
-        // there is no managed rollback or retry path if a generated receipt is
-        // invalid.  All product facts needed to publish it were captured above.
-        ValidateNativeReceipt(projectedBindings, native);
-        EntityEdit managed = _entities.PrepareBatch(BuildBatch(projection, native), guard.StoreRevision);
-        managed.Publish();
-        return new EntityDynamicsAdapterReceipt(native, managed.Receipt, guard);
-    }
-
-    private EntityDynamicsAdapterProjection[] CaptureProjection(ReadOnlySpan<DynamicsEntityBinding> bindings)
-    {
-        var active = new HashSet<EntityId>(_entities.Query(
-            EngineComponentTypes.Transform,
-            EngineComponentTypes.DynamicsMotion).Select(row => row.Entity));
-        var entities = new HashSet<ulong>();
-        var bodies = new HashSet<ulong>();
-        var projection = new EntityDynamicsAdapterProjection[bindings.Length];
-        for (int index = 0; index < bindings.Length; index++)
+        var batch = new EntityBatch();
+        ReadOnlySpan<DynamicsStepAndReadBody> rows = native.Bodies.Span;
+        for (int index = 0; index < rows.Length; index++)
         {
-            DynamicsEntityBinding binding = bindings[index];
-            if (binding.Body is null)
-            {
-                throw new ArgumentNullException(nameof(bindings), $"Dynamics entity {binding.Entity.Value} has no caller-owned body.");
-            }
-            if (!entities.Add(binding.Entity.Value))
-            {
-                throw new ArgumentException($"Dynamics bindings contain duplicate entity {binding.Entity.Value}.", nameof(bindings));
-            }
-            if (!bodies.Add(binding.Body.Handle.Value))
-            {
-                throw new ArgumentException($"Dynamics bindings contain duplicate body {binding.Body.Handle.Value}.", nameof(bindings));
-            }
-            if (!active.Contains(binding.Entity))
-            {
-                throw new InvalidOperationException(
-                    $"Dynamics entity {binding.Entity.Value} must be active with Transform and DynamicsMotion components.");
-            }
-            Transform transform = _entities.Get(binding.Entity, EngineComponentTypes.Transform);
-            var guard = new EntityDynamicsAdapterComponentGuard(
-                binding.Entity,
-                _entities.GetComponentRevision(binding.Entity, EngineComponentTypes.Transform),
-                _entities.GetComponentRevision(binding.Entity, EngineComponentTypes.DynamicsMotion),
-                binding.Body.Handle);
-            projection[index] = new EntityDynamicsAdapterProjection(guard, transform.Scale);
+            EntityId entity = bound[index].Entity;
+            DynamicsReadout readout = rows[index].Readout;
+            // Rigid dynamics owns translation and rotation. Scale is a product
+            // render/layout fact outside the unit-scale body representation.
+            Vector3 scale = _entities.Get(entity, EngineComponentTypes.Transform).Scale;
+            batch.Set(entity, EngineComponentTypes.Transform, readout.Transform with { Scale = scale })
+                .Set(entity, EngineComponentTypes.DynamicsMotion, new DynamicsMotion(
+                    readout.LinearVelocity,
+                    readout.AngularVelocity,
+                    readout.Sleeping));
         }
-        return projection;
+        return new EntityDynamicsAdapterReceipt(native, _entities.Commit(batch));
     }
 
     private static DynamicsAction[] ProjectActions(
@@ -206,78 +117,5 @@ public sealed class EntityDynamicsAdapter
                 action.Wake);
         }
         return projected;
-    }
-
-    private static void ValidateGuard(
-        EntityDynamicsAdapterGuard expected,
-        EntityDynamicsAdapterGuard observed)
-    {
-        if (expected.StoreRevision != observed.StoreRevision)
-        {
-            throw new InvalidOperationException(
-                $"Dynamics managed store revision is stale: expected {expected.StoreRevision}, actual {observed.StoreRevision}.");
-        }
-        ReadOnlySpan<EntityDynamicsAdapterComponentGuard> expectedRows = expected.Components.Span;
-        ReadOnlySpan<EntityDynamicsAdapterComponentGuard> observedRows = observed.Components.Span;
-        if (expectedRows.Length != observedRows.Length)
-        {
-            throw new InvalidOperationException("Dynamics managed binding set is stale.");
-        }
-        for (int index = 0; index < expectedRows.Length; index++)
-        {
-            if (expectedRows[index] != observedRows[index])
-            {
-                throw new InvalidOperationException(
-                    $"Dynamics managed component or binding is stale for entity {expectedRows[index].Entity.Value}.");
-            }
-        }
-    }
-
-    private static void ValidateNativeReceipt(
-        ReadOnlySpan<DynamicsEntityBinding> bindings,
-        DynamicsStepAndReadLeaseReceipt native)
-    {
-        ReadOnlySpan<DynamicsStepAndReadBody> rows = native.Bodies.Span;
-        if (rows.Length != bindings.Length || native.BodyCount < rows.Length)
-        {
-            throw new InvalidOperationException("Dynamics step/read receipt did not contain the requested body set.");
-        }
-        for (int index = 0; index < rows.Length; index++)
-        {
-            if (rows[index].Body.Value != bindings[index].Body.Handle.Value)
-            {
-                throw new InvalidOperationException("Dynamics step/read receipt did not preserve explicit binding order.");
-            }
-        }
-    }
-
-    private static EntityBatch BuildBatch(
-        ReadOnlySpan<EntityDynamicsAdapterProjection> projection,
-        DynamicsStepAndReadLeaseReceipt native)
-    {
-        var batch = new EntityBatch();
-        ReadOnlySpan<DynamicsStepAndReadBody> rows = native.Bodies.Span;
-        for (int index = 0; index < rows.Length; index++)
-        {
-            EntityDynamicsAdapterProjection input = projection[index];
-            EntityDynamicsAdapterComponentGuard component = input.Guard;
-            DynamicsReadout readout = rows[index].Readout;
-            Transform transform = readout.Transform with
-            {
-                // Rigid dynamics owns translation and rotation. Scale is a
-                // canonical product render/layout fact and remains outside
-                // the retained unit-scale body representation. It was captured
-                // before the native step so this publication performs no
-                // managed source reads after that irreversible crossing.
-                Scale = input.Scale,
-            };
-            DynamicsMotion motion = new(
-                readout.LinearVelocity,
-                readout.AngularVelocity,
-                readout.Sleeping);
-            batch.Set(component.Entity, EngineComponentTypes.Transform, transform, component.TransformRevision)
-                .Set(component.Entity, EngineComponentTypes.DynamicsMotion, motion, component.MotionRevision);
-        }
-        return batch;
     }
 }

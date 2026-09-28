@@ -215,6 +215,8 @@ sealed class ExampleEngineContext : IEngineContext
     public IImplicitSurfacesService ImplicitSurfaces => throw new NotSupportedException();
     public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
+    public IVideoService Video => throw new NotSupportedException();
+    public IRenderOutputService RenderOutput => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();
     public IKinematicService Kinematic => throw new NotSupportedException();

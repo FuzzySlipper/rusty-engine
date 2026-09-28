@@ -998,12 +998,10 @@ impl VoxelCollisionScene {
 
     pub fn replace_static_mesh_colliders(
         &mut self,
-        expected_revision: u64,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        self.projection
-            .replace_static_meshes(expected_revision, assets, instances)
+        self.projection.replace_static_meshes(assets, instances)
     }
 
     pub fn static_mesh_asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
@@ -1013,14 +1011,12 @@ impl VoxelCollisionScene {
     /// Incremental authored collision residency in the current local origin frame.
     pub fn apply_static_mesh_residency(
         &mut self,
-        expected_revision: u64,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
         removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
         removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
         self.projection.apply_static_mesh_residency(
-            expected_revision,
             assets,
             instances,
             removed_assets,

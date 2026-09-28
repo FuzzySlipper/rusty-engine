@@ -357,7 +357,6 @@ mod tests {
         let geometry_hash = asset.geometry_hash;
         scene
             .replace_static_mesh_colliders(
-                0,
                 [asset],
                 [engine_spatial::StaticMeshColliderInstance {
                     id: engine_spatial::StaticMeshInstanceId(23),

@@ -103,7 +103,6 @@ fn retained_static_mesh_occludes_visibility_while_a_clear_target_remains_visible
     let geometry_hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(23),

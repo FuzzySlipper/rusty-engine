@@ -211,7 +211,6 @@ fn golden_static_ramp_imports_into_the_shared_trimesh_query_service() {
     let mut collision = StaticMeshCollisionProjection::default();
     collision
         .replace_all(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(2),

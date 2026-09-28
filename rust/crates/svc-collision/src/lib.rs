@@ -843,12 +843,10 @@ impl CollisionProjection {
 
     pub fn replace_static_meshes(
         &mut self,
-        expected_revision: u64,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        self.static_meshes
-            .replace_all(expected_revision, assets, instances)
+        self.static_meshes.replace_all(assets, instances)
     }
 
     pub fn static_mesh_asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
@@ -857,19 +855,13 @@ impl CollisionProjection {
 
     pub fn apply_static_mesh_residency(
         &mut self,
-        expected_revision: u64,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
         removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
         removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        self.static_meshes.apply_residency(
-            expected_revision,
-            assets,
-            instances,
-            removed_assets,
-            removed_instances,
-        )
+        self.static_meshes
+            .apply_residency(assets, instances, removed_assets, removed_instances)
     }
 
     /// Preserve the caller-owned derived static-mesh projection while voxel
@@ -1581,7 +1573,6 @@ mod tests {
         let hash = asset.geometry_hash;
         projection
             .replace_static_meshes(
-                0,
                 [asset],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(41),
@@ -1943,7 +1934,6 @@ mod tests {
         let hash = asset.geometry_hash;
         projection
             .replace_static_meshes(
-                0,
                 [asset],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(9),

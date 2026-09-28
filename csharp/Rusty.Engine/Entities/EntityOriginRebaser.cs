@@ -2,25 +2,9 @@ using Rusty.Engine;
 
 namespace Rusty.Engine.Entities;
 
-/// <summary>Exact managed revision evidence for one root supplied to WorldOrigin.</summary>
-public readonly record struct EntityOriginRebaserComponentGuard(
-    EntityId Entity,
-    ComponentRevision TransformRevision,
-    ComponentRevision GlobalPositionRevision);
-
-/// <summary>
-/// A deterministic product-world snapshot guard. The native WorldOrigin
-/// service owns only origin and collision-scene guards; this guard remains
-/// managed because <see cref="EntityStore"/> is the product's canonical state.
-/// </summary>
-public readonly record struct EntityOriginRebaserGuard(
-    ulong StoreRevision,
-    ReadOnlyMemory<EntityOriginRebaserComponentGuard> Components);
-
-/// <summary>Copied bounded facts from a prepared rebase before either owner publishes it.</summary>
+/// <summary>Copied facts from a prepared rebase before either owner applies it.</summary>
 public readonly record struct EntityOriginRebaserPrepareReceipt(
     WorldOriginPreparedReadout Native,
-    EntityOriginRebaserGuard Guard,
     ReadOnlyMemory<WorldOriginAffectedAtReceipt> Affected);
 
 /// <summary>One paired native-origin and managed-transform publication result.</summary>
@@ -36,8 +20,6 @@ public readonly record struct EntityOriginRebaserCommitReceipt(
 /// </summary>
 public sealed class EntityOriginRebaser
 {
-    private const int MinimumMaximumEntities = 1;
-
     private readonly EntityStore _entities;
     private readonly IWorldOriginService _worldOrigins;
     private readonly SpatialSession _session;
@@ -56,56 +38,21 @@ public sealed class EntityOriginRebaser
     }
 
     /// <summary>
-    /// Captures every active Transform/global-position root in deterministic
-    /// entity order and asks Engine to prepare, but not publish, a rebased
-    /// origin and collision scene. Product code chooses when and where to
-    /// rebase by passing the target cell explicitly.
+    /// Captures every active Transform/global-position root and asks Engine to
+    /// prepare a rebased origin and collision scene. Product code chooses when and
+    /// where to rebase by passing the target cell explicitly.
     /// </summary>
-    public EntityOriginRebaserPrepared Prepare(
-        long targetCellX,
-        long targetCellY,
-        long targetCellZ,
-        int maximumEntities,
-        EntityOriginRebaserGuard? expectedGuard = null)
+    public EntityOriginRebaserPrepared Prepare(long targetCellX, long targetCellY, long targetCellZ)
     {
-        if (maximumEntities < MinimumMaximumEntities)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumEntities));
-        }
-
         WorldOriginReadout origin = _worldOrigins.Read(new WorldOriginReadRequest(_session));
-        ulong storeRevision = _entities.Revision;
-        if (expectedGuard is EntityOriginRebaserGuard expected && expected.StoreRevision != storeRevision)
-        {
-            throw new InvalidOperationException(
-                $"WorldOrigin managed store revision is stale: expected {expected.StoreRevision}, actual {storeRevision}.");
-        }
-
         IReadOnlyList<EntityComponents<Transform, WorldOriginGlobalPosition>> joined = _entities.Query(
             EngineComponentTypes.Transform,
             _globalPositions);
-        if (joined.Count > maximumEntities)
-        {
-            throw new InvalidOperationException(
-                $"WorldOrigin has {joined.Count} roots, exceeding its explicit batch bound {maximumEntities}.");
-        }
-
         var rows = new WorldOriginEntityRow[joined.Count];
-        var guards = new EntityOriginRebaserComponentGuard[joined.Count];
         for (int index = 0; index < joined.Count; index++)
         {
             EntityComponents<Transform, WorldOriginGlobalPosition> row = joined[index];
             rows[index] = new WorldOriginEntityRow(row.Entity.Value, row.First, row.Second);
-            guards[index] = new EntityOriginRebaserComponentGuard(
-                row.Entity,
-                _entities.GetComponentRevision(row.Entity, EngineComponentTypes.Transform),
-                _entities.GetComponentRevision(row.Entity, _globalPositions));
-        }
-
-        var guard = new EntityOriginRebaserGuard(storeRevision, guards);
-        if (expectedGuard is EntityOriginRebaserGuard supplied)
-        {
-            ValidateGuard(supplied, guard);
         }
 
         WorldOriginPrepared native = _worldOrigins.Prepare(new WorldOriginPrepareRequest(
@@ -121,23 +68,12 @@ public sealed class EntityOriginRebaser
         {
             WorldOriginPreparedReadout summary = _worldOrigins.ReadPrepared(
                 new WorldOriginPreparedReadRequest(native));
-            if (!summary.Present || summary.AffectedEntityCount != (uint)rows.Length)
-            {
-                throw new InvalidOperationException("WorldOrigin prepared facts did not preserve the complete managed root set.");
-            }
-
-            var affected = new WorldOriginAffectedAtReceipt[rows.Length];
+            var affected = new WorldOriginAffectedAtReceipt[summary.AffectedEntityCount];
             for (uint index = 0; index < (uint)affected.Length; index++)
             {
-                WorldOriginAffectedAtReceipt fact = _worldOrigins.ReadAffectedAt(
-                    new WorldOriginAffectedAtRequest(native, index));
-                if (!fact.Present || fact.EntityId != rows[index].EntityId)
-                {
-                    throw new InvalidOperationException("WorldOrigin affected-fact order does not match the deterministic managed root set.");
-                }
-                affected[index] = fact;
+                affected[index] = _worldOrigins.ReadAffectedAt(new WorldOriginAffectedAtRequest(native, index));
             }
-            return new EntityOriginRebaserPrepared(this, native, new EntityOriginRebaserPrepareReceipt(summary, guard, affected));
+            return new EntityOriginRebaserPrepared(this, native, new EntityOriginRebaserPrepareReceipt(summary, affected));
         }
         catch
         {
@@ -150,84 +86,13 @@ public sealed class EntityOriginRebaser
         WorldOriginPrepared native,
         EntityOriginRebaserPrepareReceipt prepared)
     {
-        // Recheck all product-owned facts immediately before the native call.
-        // PrepareBatch validates the selected value replacements before native
-        // commit. It does not snapshot or promise rollback of class internals.
-        ValidateGuard(prepared.Guard, CaptureGuard());
-        EntityEdit managed = _entities.PrepareBatch(
-            TransformBatch(prepared.Affected.Span, prepared.Guard.Components.Span),
-            prepared.Guard.StoreRevision);
         WorldOriginCommitReceipt nativeReceipt = _worldOrigins.Commit(new WorldOriginCommitRequest(native));
-        managed.Publish();
-        return new EntityOriginRebaserCommitReceipt(nativeReceipt, managed.Receipt);
-    }
-
-    private EntityBatch TransformBatch(
-        ReadOnlySpan<WorldOriginAffectedAtReceipt> affected,
-        ReadOnlySpan<EntityOriginRebaserComponentGuard> guards)
-    {
-        if (affected.Length != guards.Length)
-        {
-            throw new InvalidOperationException("WorldOrigin prepared transform facts no longer match their component guards.");
-        }
         var batch = new EntityBatch();
-        for (int index = 0; index < affected.Length; index++)
+        foreach (WorldOriginAffectedAtReceipt fact in prepared.Affected.Span)
         {
-            WorldOriginAffectedAtReceipt fact = affected[index];
-            EntityOriginRebaserComponentGuard guard = guards[index];
-            if (!fact.Present || fact.EntityId != guard.Entity.Value)
-            {
-                throw new InvalidOperationException("WorldOrigin prepared transform facts no longer match their managed entities.");
-            }
-            batch.Set(
-                guard.Entity,
-                EngineComponentTypes.Transform,
-                fact.LocalTransform,
-                guard.TransformRevision);
+            batch.Set(new EntityId(fact.EntityId), EngineComponentTypes.Transform, fact.LocalTransform);
         }
-        return batch;
-    }
-
-    private EntityOriginRebaserGuard CaptureGuard()
-    {
-        IReadOnlyList<EntityComponents<Transform, WorldOriginGlobalPosition>> joined = _entities.Query(
-            EngineComponentTypes.Transform,
-            _globalPositions);
-        var guards = new EntityOriginRebaserComponentGuard[joined.Count];
-        for (int index = 0; index < joined.Count; index++)
-        {
-            EntityComponents<Transform, WorldOriginGlobalPosition> row = joined[index];
-            guards[index] = new EntityOriginRebaserComponentGuard(
-                row.Entity,
-                _entities.GetComponentRevision(row.Entity, EngineComponentTypes.Transform),
-                _entities.GetComponentRevision(row.Entity, _globalPositions));
-        }
-        return new EntityOriginRebaserGuard(_entities.Revision, guards);
-    }
-
-    private static void ValidateGuard(
-        EntityOriginRebaserGuard expected,
-        EntityOriginRebaserGuard observed)
-    {
-        if (expected.StoreRevision != observed.StoreRevision)
-        {
-            throw new InvalidOperationException(
-                $"WorldOrigin managed store revision is stale: expected {expected.StoreRevision}, actual {observed.StoreRevision}.");
-        }
-        ReadOnlySpan<EntityOriginRebaserComponentGuard> expectedComponents = expected.Components.Span;
-        ReadOnlySpan<EntityOriginRebaserComponentGuard> observedComponents = observed.Components.Span;
-        if (expectedComponents.Length != observedComponents.Length)
-        {
-            throw new InvalidOperationException("WorldOrigin managed root set is stale.");
-        }
-        for (int index = 0; index < expectedComponents.Length; index++)
-        {
-            if (expectedComponents[index] != observedComponents[index])
-            {
-                throw new InvalidOperationException(
-                    $"WorldOrigin managed component revision is stale for entity {observedComponents[index].Entity.Value}.");
-            }
-        }
+        return new EntityOriginRebaserCommitReceipt(nativeReceipt, _entities.Commit(batch));
     }
 }
 
@@ -254,9 +119,7 @@ public sealed class EntityOriginRebaserPrepared : IDisposable
     public EntityOriginRebaserPrepareReceipt Receipt { get; }
 
     /// <summary>
-    /// Commits Engine's prepared origin/scene, then assigns an already
-    /// validated managed transform candidate. The adapter's synchronous
-    /// contract forbids concurrent EntityStore mutation during this call.
+    /// Commits Engine's prepared origin/scene, then writes the rebased transforms.
     /// </summary>
     public EntityOriginRebaserCommitReceipt Commit()
     {

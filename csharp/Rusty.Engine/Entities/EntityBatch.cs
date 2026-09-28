@@ -1,30 +1,30 @@
 namespace Rusty.Engine.Entities;
 
 /// <summary>
-/// Explicit preparation of membership and value-fact replacements. Typed operations preserve
-/// attached class references; they do not snapshot or roll back mutable object graphs.
+/// An ordered list of entity creations and value-fact writes that
+/// <see cref="EntityStore.Commit"/> applies directly.
 /// </summary>
 public sealed class EntityBatch
 {
     private readonly List<Action<EntityStore>> _mutations = [];
 
-    /// <summary>Stages one value-fact replacement without running a caller callback.</summary>
-    public EntityBatch Set<T>(EntityId entity, ComponentType<T> componentType, T value, ComponentRevision? expectedRevision = null)
+    /// <summary>Adds one value-fact write.</summary>
+    public EntityBatch Set<T>(EntityId entity, ComponentType<T> componentType, T value)
         where T : struct
     {
         ArgumentNullException.ThrowIfNull(componentType);
-        _mutations.Add(store => store.Set(entity, componentType, value, expectedRevision));
+        _mutations.Add(store => store.Set(entity, componentType, value));
         return this;
     }
 
-    /// <summary>Creates the next local ID, rejecting a changed allocator before publication.</summary>
+    /// <summary>Creates the next entity, which must receive <paramref name="expectedId"/>.</summary>
     public EntityBatch Create(EntityId expectedId, EntityLifecycle lifecycle = EntityLifecycle.Active)
     {
         _mutations.Add(store =>
         {
             if (store.NextEntityValue != expectedId.Value)
             {
-                throw new InvalidOperationException("Entity identity changed while preparing creation.");
+                throw new InvalidOperationException($"The next entity is {store.NextEntityValue}, not {expectedId.Value}.");
             }
             store.Create(lifecycle);
         });

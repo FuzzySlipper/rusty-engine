@@ -1219,7 +1219,7 @@ The completed naming migration is source-breaking (the left column is historical
 | --- | --- |
 | `EntityWorld` | `EntityStore` — managed entity/component storage |
 | `InventoryWorld` | `InventoryStore` — inventory/item/equipment storage |
-| `InventoryWorldCandidate` | `InventoryEdit` — detached inventory edit |
+| `InventoryWorldCandidate` | `InventoryEdit` — grouped inventory edit |
 | `AppearanceEntityWorld` | `EntityGraphicsProjection` |
 | `SpatialEntityWorld` | `EntityTriggerProjection` |
 | `MotionEntityWorld` | `EntityMotionResolver` |
@@ -1231,8 +1231,8 @@ The completed naming migration is source-breaking (the left column is historical
 | `EntityWorldDiagnostics` | `EntityStoreDiagnostics` |
 | `PhysicsWorld` (C# configuration) | `PhysicsSettings` |
 
-Related adapter guards/results follow their owning adapter name and use
-`StoreRevision`. `InventoryView.StoreRevision` identifies the whole inventory
+Adapter receipts follow their owning adapter name; adapters take no guards.
+`InventoryView.StoreRevision` identifies the whole inventory
 store revision; its existing `InventoryRevision` identifies the individual owner
 inventory revision. Item receipts use `InventoryRevisionBefore` and
 `InventoryRevisionAfter`. Debug registration uses
@@ -1335,23 +1335,22 @@ Ordinary access never deep-copies components. Direct gameplay methods need no
 transaction session or receipt graph. The unused `Rusty.Engine.Resolution`
 module has been removed; optional Application and StateMachine helpers remain.
 
-For callers that need prepared value replacements, `EntityBatch.Set` and
-`EntityBatch.Create` describe closed operations. `EntityStore.PrepareBatch`
-returns a disposable `EntityEdit`. Preparation copies index maps and only the
-value families it changes; unrelated attached classes retain their identity.
-Publication checks the store's structural revision. It does not freeze class
-internals or roll back nested references or external owners. A failed or disposed
-edit cannot publish; successful publication is idempotent. Receipts report
-structural revisions, not an ambiguous mutation count.
+Every `EntityStore` write applies directly; there are no expected-revision
+guards. `EntityStore.Revision` and the entity and component revisions are change
+counters you may read to skip work. `EntityBatch.Set` and `EntityBatch.Create`
+list several writes, and `EntityStore.Commit(batch)` applies them in order and
+returns the store revision before and after. A failing write leaves the earlier
+ones applied, like any sequence of writes; nothing is rolled back.
 
-D20 uses this path for value facts. Entity/native adapters capture their selected
-values before native commits and publish typed replacements afterward. Their native
-lifetime and failure rules remain in force. No arbitrary mutation callback or
-whole-store restore is offered.
+D20 uses batches for value facts. The entity adapters (character, Dynamics,
+kinematic, motion, trigger, world-origin and graphics) read the store, make their
+native call, and write the results directly.
 
-`InventoryEdit` retains detached planning required by inventory operations.
-Failed operations, stale publication, cancellation and disposal close the edit;
-none can publish earlier partially staged operations afterward.
+`InventoryEdit` groups inventory operations that must apply together, such as a
+payment and a grant. Its operations run on a working copy and apply on `Publish`;
+a failed operation, cancellation or disposal leaves the store unchanged. Because
+the working copy replaces the store's contents, `Publish` refuses if the store
+changed directly after the edit began, so that change is never lost.
 
 Explicit saves use `ProductStateStore<T>` with a product-defined codec and data.
 The product decides what to capture, validates/rebuilds a candidate when needed,
@@ -1827,7 +1826,8 @@ Use its direct Grant/Consume/TransferFungible, MaterializeUnique/TransferUnique/
 DestroyUnique, and Equip/Unequip/Swap methods for ordinary operations. Redundant
 static InventoryService/ItemService/EquipmentService forwarding APIs are removed.
 `InventoryEdit` remains optional for grouped changes such as unequip → transfer →
-equip. Failed edits leave the store unchanged; publication rejects stale edits.
+equip. A failed edit leaves the store unchanged; `Publish` refuses if the store
+changed directly after the edit began.
 
 After registering an owner's inventory/equipment, attach live facades if useful:
 

@@ -17,30 +17,13 @@ public readonly record struct SpatialCollider(
     bool StaticCollider,
     bool Trigger);
 
-/// <summary>One exact managed-state guard for a Spatial projection row.</summary>
-public readonly record struct EntityTriggerProjectionComponentGuard(
-    EntityId Entity,
-    ComponentRevision TransformRevision,
-    ComponentRevision ColliderRevision);
-
 /// <summary>
-/// Copied managed revision evidence for a Spatial projection. Supplying it on a later call
-/// rejects a changed world or changed participating component before crossing into Spatial.
-/// </summary>
-public readonly record struct EntityTriggerProjectionGuard(
-    ulong StoreRevision,
-    ReadOnlyMemory<EntityTriggerProjectionComponentGuard> Components);
-
-/// <summary>
-/// A copied result from one coherent trigger reconciliation. Facts are read immediately from the
-/// generated bounded indexed readback while the reconciliation result is still current.
+/// A copied result from one trigger reconciliation, with every fact it produced.
 /// </summary>
 public readonly record struct EntityTriggerProjectionReconcileReceipt(
     SpatialTriggerReceipt Trigger,
-    EntityTriggerProjectionGuard Guard,
     ReadOnlyMemory<SpatialEntityCollider> Entities,
-    ReadOnlyMemory<SpatialTriggerFactAtReceipt> Facts,
-    bool FactsTruncated);
+    ReadOnlyMemory<SpatialTriggerFactAtReceipt> Facts);
 
 /// <summary>
 /// Explicitly projects the managed Transform and SpatialCollider built-ins into one generated
@@ -67,98 +50,29 @@ public sealed class EntityTriggerProjection
     }
 
     /// <summary>
-    /// Projects the deterministic active Transform/collider join as one generated batch. The
-    /// caller supplies explicit bounds for both admission and copied fact readback; oversized
-    /// projections are rejected before the native call instead of silently becoming partial.
+    /// Projects the active Transform/collider entities as one generated batch and reads back
+    /// every trigger fact the reconciliation produced.
     /// </summary>
-    public EntityTriggerProjectionReconcileReceipt ReconcileTriggers(
-        ulong tick,
-        SpatialTriggerCause cause,
-        int maximumEntities,
-        int maximumFactReadback,
-        EntityTriggerProjectionGuard? expectedGuard = null)
+    public EntityTriggerProjectionReconcileReceipt ReconcileTriggers(ulong tick, SpatialTriggerCause cause)
     {
-        if (maximumEntities < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumEntities));
-        }
-        if (maximumFactReadback < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumFactReadback));
-        }
-
-        ulong storeRevision = _entities.Revision;
-        if (expectedGuard is EntityTriggerProjectionGuard expected && expected.StoreRevision != storeRevision)
-        {
-            throw new InvalidOperationException(
-                $"Spatial projection store revision is stale: expected {expected.StoreRevision}, actual {storeRevision}.");
-        }
-
         IReadOnlyList<EntityComponents<Transform, SpatialCollider>> joined = _entities.Query(
             EngineComponentTypes.Transform,
             _colliders);
-        if (joined.Count > maximumEntities)
-        {
-            throw new InvalidOperationException(
-                $"Spatial projection has {joined.Count} entities, exceeding its explicit batch bound {maximumEntities}.");
-        }
-
         var projected = new SpatialEntityCollider[joined.Count];
-        var guards = new EntityTriggerProjectionComponentGuard[joined.Count];
         for (int index = 0; index < joined.Count; index++)
         {
             EntityComponents<Transform, SpatialCollider> row = joined[index];
             projected[index] = Project(row.Entity, row.First, row.Second);
-            guards[index] = new EntityTriggerProjectionComponentGuard(
-                row.Entity,
-                _entities.GetComponentRevision(row.Entity, EngineComponentTypes.Transform),
-                _entities.GetComponentRevision(row.Entity, _colliders));
         }
 
-        if (expectedGuard is EntityTriggerProjectionGuard supplied)
-        {
-            ValidateComponentGuards(supplied, guards);
-        }
-
-        // ReconcileTriggers owns atomic trigger-state publication. The managed side is only the
-        // immutable call input, so all stale checks and the bounded fact buffer happen before
-        // that single service crossing. A failure while reading the committed result does not
-        // imply rollback of Spatial state.
-        var facts = new SpatialTriggerFactAtReceipt[maximumFactReadback];
         SpatialTriggerReceipt trigger = _spatial.ReconcileTriggers(
             new SpatialTriggerReconcileRequest(_session, tick, cause, projected));
-        ulong factCount = trigger.FactCount;
-        int readCount = (int)Math.Min(factCount, (ulong)maximumFactReadback);
-        for (uint index = 0; index < (uint)readCount; index++)
+        var facts = new SpatialTriggerFactAtReceipt[trigger.FactCount];
+        for (uint index = 0; index < (uint)facts.Length; index++)
         {
             facts[index] = _spatial.ReadTriggerFactAt(new SpatialTriggerFactAtRequest(_session, index));
         }
-
-        return new EntityTriggerProjectionReconcileReceipt(
-            trigger,
-            new EntityTriggerProjectionGuard(storeRevision, guards),
-            projected,
-            facts.AsMemory(0, readCount),
-            factCount > (ulong)readCount);
-    }
-
-    private static void ValidateComponentGuards(
-        EntityTriggerProjectionGuard expected,
-        IReadOnlyList<EntityTriggerProjectionComponentGuard> observed)
-    {
-        ReadOnlySpan<EntityTriggerProjectionComponentGuard> supplied = expected.Components.Span;
-        if (supplied.Length != observed.Count)
-        {
-            throw new InvalidOperationException("Spatial projection component set is stale.");
-        }
-        for (int index = 0; index < observed.Count; index++)
-        {
-            if (supplied[index] != observed[index])
-            {
-                throw new InvalidOperationException(
-                    $"Spatial projection component revision is stale for entity {observed[index].Entity.Value}.");
-            }
-        }
+        return new EntityTriggerProjectionReconcileReceipt(trigger, projected, facts);
     }
 
     private static SpatialEntityCollider Project(EntityId entity, Transform transform, SpatialCollider collider)

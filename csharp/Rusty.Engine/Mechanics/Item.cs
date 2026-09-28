@@ -144,13 +144,13 @@ public sealed class ItemDestroyReceipt
 public sealed partial class InventoryStore
 {
     public ItemMaterializationReceipt MaterializeUnique(ItemState item, EntityId owner) =>
-        Commit(candidate => candidate.MaterializeUnique(item, owner));
+        MaterializeUniqueCore(item, owner);
 
     public ItemTransferReceipt TransferUnique(EntityId item, EntityId fromOwner, EntityId toOwner) =>
-        Commit(candidate => candidate.TransferUnique(item, fromOwner, toOwner));
+        TransferUniqueCore(item, fromOwner, toOwner);
 
     public ItemDestroyReceipt DestroyUnique(EntityId item) =>
-        Commit(candidate => candidate.DestroyUnique(item));
+        DestroyUniqueCore(item);
 
     internal ItemMaterializationReceipt MaterializeUniqueCore(ItemState item, EntityId owner)
     {

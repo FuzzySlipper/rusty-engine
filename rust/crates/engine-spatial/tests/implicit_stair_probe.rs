@@ -136,7 +136,7 @@ fn scene(stairs: StaticMesh) -> VoxelCollisionScene {
         .collect();
     let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
     scene
-        .replace_static_mesh_colliders(0, assets, instances)
+        .replace_static_mesh_colliders(assets, instances)
         .unwrap();
     scene
 }

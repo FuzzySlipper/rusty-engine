@@ -870,18 +870,13 @@ impl RuntimeSpatialBridge {
             let mut candidate = (*session.scene).clone();
             let receipt = if let Some((removed_assets, removed_instances)) = removed {
                 candidate.apply_static_mesh_residency(
-                    candidate.static_mesh_collision_revision(),
                     admitted,
                     instances,
                     removed_assets.iter().copied().map(StaticMeshAssetId),
                     removed_instances.iter().copied().map(StaticMeshInstanceId),
                 )
             } else {
-                candidate.replace_static_mesh_colliders(
-                    candidate.static_mesh_collision_revision(),
-                    admitted,
-                    instances,
-                )
+                candidate.replace_static_mesh_colliders(admitted, instances)
             }
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_COLLISION_REPLACE", format!("{error:?}"))
@@ -1014,11 +1009,7 @@ impl RuntimeSpatialBridge {
             let session = self.session_mut(request.session)?;
             let mut candidate = (*session.scene).clone();
             let collision = candidate
-                .replace_static_mesh_colliders(
-                    candidate.static_mesh_collision_revision(),
-                    assets,
-                    instances,
-                )
+                .replace_static_mesh_colliders(assets, instances)
                 .map_err(|error| {
                     CsharpEngineServicesError::new(
                         "CSHARP_SPATIAL_CONTENT_COLLISION",
@@ -7819,11 +7810,7 @@ mod tests {
             let current = bridge.sessions.get(&session.value).unwrap().scene.as_ref();
             let mut candidate = current.clone();
             candidate
-                .replace_static_mesh_colliders(
-                    candidate.static_mesh_collision_revision(),
-                    [asset],
-                    instances,
-                )
+                .replace_static_mesh_colliders([asset], instances)
                 .expect("mesh residency admits");
             Arc::new(candidate)
         };

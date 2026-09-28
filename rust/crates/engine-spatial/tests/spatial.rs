@@ -44,7 +44,6 @@ fn static_mesh_projection_joins_world_queries_and_survives_voxel_rebuilds() {
     let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(23),

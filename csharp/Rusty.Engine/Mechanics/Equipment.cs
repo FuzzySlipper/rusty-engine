@@ -156,17 +156,17 @@ public sealed partial class InventoryStore
         EntityId owner,
         EntityId item,
         IEnumerable<EquipmentSlotDefinition> slots) =>
-        Commit(candidate => candidate.Equip(owner, item, slots));
+        EquipCore(owner, item, slots);
 
     public EquipmentMutationReceipt Unequip(EntityId owner, EntityId item) =>
-        Commit(candidate => candidate.Unequip(owner, item));
+        UnequipCore(owner, item);
 
     public EquipmentMutationReceipt Swap(
         EntityId owner,
         EntityId outgoingItem,
         EntityId incomingItem,
         IEnumerable<EquipmentSlotDefinition> slots) =>
-        Commit(candidate => candidate.Swap(owner, outgoingItem, incomingItem, slots));
+        SwapCore(owner, outgoingItem, incomingItem, slots);
 
     internal EquipmentMutationReceipt EquipCore(
         EntityId owner,

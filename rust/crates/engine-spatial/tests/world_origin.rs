@@ -76,7 +76,6 @@ fn fixture() -> (WorldOriginState, EntityState, VoxelCollisionScene) {
     let geometry_hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
-            0,
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(12),

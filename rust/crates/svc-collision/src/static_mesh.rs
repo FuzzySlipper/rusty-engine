@@ -100,10 +100,6 @@ pub struct StaticMeshHit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticMeshCollisionError {
-    RevisionMismatch {
-        expected: u64,
-        actual: u64,
-    },
     RevisionExhausted,
     TooManyAssets {
         limit: usize,
@@ -257,7 +253,7 @@ impl StaticMeshCollisionProjection {
             })
             .collect::<Vec<_>>();
         let mut candidate = Self::default();
-        candidate.replace_all(0, assets, instances)?;
+        candidate.replace_all(assets, instances)?;
         candidate.revision = self.revision;
         Ok(candidate)
     }
@@ -297,16 +293,9 @@ impl StaticMeshCollisionProjection {
 
     pub fn replace_all(
         &mut self,
-        expected_revision: u64,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        if expected_revision != self.revision {
-            return Err(StaticMeshCollisionError::RevisionMismatch {
-                expected: expected_revision,
-                actual: self.revision,
-            });
-        }
         let mut next_assets = BTreeMap::new();
         let mut vertex_count = 0usize;
         let mut triangle_count = 0usize;
@@ -346,7 +335,7 @@ impl StaticMeshCollisionProjection {
             }
         }
 
-        self.commit_projection(expected_revision, next_assets, instances)
+        self.commit_projection(next_assets, instances)
     }
 
     pub fn asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
@@ -358,14 +347,13 @@ impl StaticMeshCollisionProjection {
     /// Assets still referenced by retained instances cannot be removed.
     pub fn apply_residency(
         &mut self,
-        expected_revision: u64,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
         removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
         removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
         let mut admitted = Self::default();
-        admitted.replace_all(0, assets, [])?;
+        admitted.replace_all(assets, [])?;
         let mut next_assets = self.assets.clone();
         for id in removed_assets {
             next_assets.remove(&id);
@@ -399,21 +387,14 @@ impl StaticMeshCollisionProjection {
             }
         }
         next_instances.extend(upserts);
-        self.commit_projection(expected_revision, next_assets, next_instances.into_values())
+        self.commit_projection(next_assets, next_instances.into_values())
     }
 
     fn commit_projection(
         &mut self,
-        expected_revision: u64,
         next_assets: BTreeMap<StaticMeshAssetId, Arc<StaticMeshColliderAsset>>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        if expected_revision != self.revision {
-            return Err(StaticMeshCollisionError::RevisionMismatch {
-                expected: expected_revision,
-                actual: self.revision,
-            });
-        }
         let revision_after = self
             .revision
             .checked_add(1)
@@ -836,7 +817,7 @@ mod tests {
             transform: StaticMeshTransform::IDENTITY,
         };
         projection
-            .apply_residency(0, [first], [first_instance], [], [])
+            .apply_residency([first], [first_instance], [], [])
             .unwrap();
         let retained_asset = Arc::clone(&projection.assets[&StaticMeshAssetId(7)]);
         let retained_shape = projection.instances[&StaticMeshInstanceId(11)]
@@ -849,7 +830,7 @@ mod tests {
         second_instance.asset = second.id;
         second_instance.transform.translation[0] = 10.0;
         projection
-            .apply_residency(1, [second], [second_instance], [], [])
+            .apply_residency([second], [second_instance], [], [])
             .unwrap();
         assert!(Arc::ptr_eq(
             &retained_asset,
@@ -863,19 +844,13 @@ mod tests {
         ));
         let identity = projection.identity_hash();
         assert!(matches!(
-            projection.apply_residency(2, [], [], [StaticMeshAssetId(7)], []),
+            projection.apply_residency([], [], [StaticMeshAssetId(7)], []),
             Err(StaticMeshCollisionError::MissingAsset { .. })
         ));
         assert_eq!(projection.revision(), 2);
         assert_eq!(projection.identity_hash(), identity);
         projection
-            .apply_residency(
-                2,
-                [],
-                [],
-                [StaticMeshAssetId(7)],
-                [StaticMeshInstanceId(11)],
-            )
+            .apply_residency([], [], [StaticMeshAssetId(7)], [StaticMeshInstanceId(11)])
             .unwrap();
         assert_eq!(projection.asset_count(), 1);
         let shifted = projection
@@ -906,19 +881,19 @@ mod tests {
         let none = std::collections::BTreeSet::new();
         let mut empty = StaticMeshCollisionProjection::default();
         let default_identity = empty.topology_hash_excluding_pose(&none);
-        empty.replace_all(0, [], []).unwrap();
+        empty.replace_all([], []).unwrap();
         assert_eq!(empty.topology_hash_excluding_pose(&none), default_identity);
 
         let mut whole = StaticMeshCollisionProjection::default();
         whole
-            .replace_all(0, [asset.clone()], [instance(11, 0.0), instance(12, 5.0)])
+            .replace_all([asset.clone()], [instance(11, 0.0), instance(12, 5.0)])
             .unwrap();
         let mut incremental = StaticMeshCollisionProjection::default();
         incremental
-            .replace_all(0, [asset], [instance(12, 1.0)])
+            .replace_all([asset], [instance(12, 1.0)])
             .unwrap();
         incremental
-            .apply_residency(1, [], [instance(11, 0.0), instance(12, 5.0)], [], [])
+            .apply_residency([], [instance(11, 0.0), instance(12, 5.0)], [], [])
             .unwrap();
         assert_eq!(
             incremental.topology_hash_excluding_pose(&none),
@@ -938,7 +913,6 @@ mod tests {
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
-                0,
                 [asset],
                 [
                     StaticMeshColliderInstance {
@@ -964,7 +938,6 @@ mod tests {
         let full_before = projection.identity_hash();
         projection
             .apply_residency(
-                1,
                 [],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(11),
@@ -984,7 +957,6 @@ mod tests {
 
         projection
             .apply_residency(
-                2,
                 [],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(12),
@@ -1009,7 +981,6 @@ mod tests {
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
-                0,
                 [asset],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(11),
@@ -1047,7 +1018,6 @@ mod tests {
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
-                0,
                 [asset.clone()],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(11),
@@ -1065,7 +1035,6 @@ mod tests {
             .unwrap();
 
         let rejected = projection.replace_all(
-            1,
             [asset.clone()],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(11),
@@ -1103,7 +1072,6 @@ mod tests {
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
-                0,
                 [asset],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(41),

@@ -516,11 +516,11 @@ public sealed class InventoryState
 /// </summary>
 public sealed partial class InventoryStore
 {
-    private readonly Dictionary<EntityId, InventoryState> _inventories = [];
-    private readonly Dictionary<EntityId, ItemState> _items = [];
-    private readonly Dictionary<EntityId, EquipmentState> _equipment = [];
-    private readonly Dictionary<EntityId, EntityId> _containment = [];
-    private readonly Dictionary<EntityId, SortedSet<EntityId>> _containedChildren = [];
+    private Dictionary<EntityId, InventoryState> _inventories = [];
+    private Dictionary<EntityId, ItemState> _items = [];
+    private Dictionary<EntityId, EquipmentState> _equipment = [];
+    private Dictionary<EntityId, EntityId> _containment = [];
+    private Dictionary<EntityId, SortedSet<EntityId>> _containedChildren = [];
     private ulong _revision;
 
     public ulong Revision => _revision;
@@ -610,16 +610,12 @@ public sealed partial class InventoryStore
         return BuildView(owner, inventory, ComputeCapacity(owner, inventory));
     }
 
-    public InventoryEdit Prepare(ulong? expectedRevision = null)
-    {
-        if (expectedRevision is ulong expected && expected != _revision)
-        {
-            throw new MechanicsException(
-                $"Inventory store revision is stale: expected {expected}, actual {_revision}.");
-        }
-
-        return new InventoryEdit(this, Clone(), _revision);
-    }
+    /// <summary>
+    /// Starts an edit that groups several operations: they apply together on
+    /// <see cref="InventoryEdit.Publish"/>, or not at all if one fails or the edit is dropped.
+    /// Single operations on the store apply directly and need no edit.
+    /// </summary>
+    public InventoryEdit Prepare() => new(this, Clone(), _revision);
 
     /// <summary>Adds quantity to one product-selected stack, creating it when its ID is unused by this owner.</summary>
     public InventoryMutationReceipt Grant(
@@ -627,11 +623,11 @@ public sealed partial class InventoryStore
         ItemDefinition definition,
         InventoryStackId stack,
         ulong quantity) =>
-        Commit(candidate => candidate.Grant(owner, definition, stack, quantity));
+        GrantCore(owner, definition, stack, quantity);
 
     /// <summary>Consumes quantity from one selected stack and retires it when its quantity reaches zero.</summary>
     public InventoryMutationReceipt Consume(EntityId owner, InventoryStackId stack, ulong quantity) =>
-        Commit(candidate => candidate.Consume(owner, stack, quantity));
+        ConsumeCore(owner, stack, quantity);
 
     /// <summary>Moves an entire selected stack to another owner while retaining its stack identity.</summary>
     public InventoryTransferReceipt TransferFungible(
@@ -639,7 +635,7 @@ public sealed partial class InventoryStore
         EntityId toOwner,
         InventoryStackId stack,
         ulong quantity) =>
-        Commit(candidate => candidate.TransferFungible(fromOwner, toOwner, stack, quantity));
+        TransferFungibleCore(fromOwner, toOwner, stack, quantity);
 
     /// <summary>
     /// Transfers selected quantity to a product-selected destination stack. An
@@ -652,7 +648,7 @@ public sealed partial class InventoryStore
         InventoryStackId sourceStack,
         InventoryStackId destinationStack,
         ulong quantity) =>
-        Commit(candidate => candidate.TransferFungible(fromOwner, toOwner, sourceStack, destinationStack, quantity));
+        TransferFungibleCore(fromOwner, toOwner, sourceStack, destinationStack, quantity);
 
     /// <summary>Creates a new selected stack from part of another stack without changing the owner's capacity.</summary>
     public InventorySplitReceipt SplitFungible(
@@ -660,7 +656,7 @@ public sealed partial class InventoryStore
         InventoryStackId sourceStack,
         InventoryStackId splitStack,
         ulong quantity) =>
-        Commit(candidate => candidate.SplitFungible(owner, sourceStack, splitStack, quantity));
+        SplitFungibleCore(owner, sourceStack, splitStack, quantity);
 
     /// <summary>
     /// Merges two selected stacks of the same definition and retires the source.
@@ -671,7 +667,7 @@ public sealed partial class InventoryStore
         EntityId owner,
         InventoryStackId sourceStack,
         InventoryStackId destinationStack) =>
-        Commit(candidate => candidate.MergeFungible(owner, sourceStack, destinationStack));
+        MergeFungibleCore(owner, sourceStack, destinationStack);
 
     public InventoryView Read(EntityId owner) => View(owner);
 
@@ -998,76 +994,37 @@ public sealed partial class InventoryStore
             candidate.Revision);
     }
 
-    internal InventoryStore Clone()
+    /// <summary>
+    /// A working copy for an edit. Operations replace inventory and equipment
+    /// states rather than changing them, so those are shared; containment child
+    /// sets change in place and are copied.
+    /// </summary>
+    private InventoryStore Clone() => new()
     {
-        var result = new InventoryStore { _revision = _revision };
-        foreach ((EntityId owner, InventoryState state) in _inventories)
-        {
-            result._inventories.Add(owner, state.Clone());
-        }
-        foreach ((EntityId item, ItemState state) in _items)
-        {
-            result._items.Add(item, state);
-        }
-        foreach ((EntityId owner, EquipmentState state) in _equipment)
-        {
-            result._equipment.Add(owner, state.Clone());
-        }
-        foreach ((EntityId child, EntityId container) in _containment)
-        {
-            result._containment.Add(child, container);
-        }
-        foreach ((EntityId container, SortedSet<EntityId> children) in _containedChildren)
-        {
-            result._containedChildren.Add(container, [.. children]);
-        }
+        _revision = _revision,
+        _inventories = new(_inventories),
+        _items = new(_items),
+        _equipment = new(_equipment),
+        _containment = new(_containment),
+        _containedChildren = _containedChildren.ToDictionary(
+            entry => entry.Key, entry => new SortedSet<EntityId>(entry.Value)),
+    };
 
-        return result;
-    }
-
-    internal void PublishCandidate(InventoryStore candidate, ulong expectedRevision)
+    internal void PublishCandidate(InventoryStore candidate, ulong preparedRevision)
     {
-        if (_revision != expectedRevision)
+        // The working copy replaces the whole store, so a change made directly to the
+        // store after the edit began would be lost. Refuse instead.
+        if (_revision != preparedRevision)
         {
             throw new MechanicsException(
-                $"Inventory store changed while a candidate was prepared: expected {expectedRevision}, actual {_revision}.");
+                "The inventory store changed after this edit began; its operations were not applied.");
         }
-
-        candidate.ValidateStore();
-        _inventories.Clear();
-        foreach ((EntityId owner, InventoryState state) in candidate._inventories)
-        {
-            _inventories.Add(owner, state);
-        }
-        _items.Clear();
-        foreach ((EntityId item, ItemState state) in candidate._items)
-        {
-            _items.Add(item, state);
-        }
-        _equipment.Clear();
-        foreach ((EntityId owner, EquipmentState state) in candidate._equipment)
-        {
-            _equipment.Add(owner, state);
-        }
-        _containment.Clear();
-        foreach ((EntityId child, EntityId container) in candidate._containment)
-        {
-            _containment.Add(child, container);
-        }
-        _containedChildren.Clear();
-        foreach ((EntityId container, SortedSet<EntityId> children) in candidate._containedChildren)
-        {
-            _containedChildren.Add(container, children);
-        }
+        _inventories = candidate._inventories;
+        _items = candidate._items;
+        _equipment = candidate._equipment;
+        _containment = candidate._containment;
+        _containedChildren = candidate._containedChildren;
         _revision = candidate._revision;
-    }
-
-    private T Commit<T>(Func<InventoryEdit, T> operation)
-    {
-        InventoryEdit candidate = Prepare();
-        T receipt = operation(candidate);
-        candidate.Publish();
-        return receipt;
     }
 
     private void TouchStore() => _revision = checked(_revision + 1);
@@ -1186,40 +1143,6 @@ public sealed partial class InventoryStore
         }
     }
 
-    internal void ValidateStore()
-    {
-        foreach ((EntityId owner, InventoryState inventory) in _inventories)
-        {
-            _ = ComputeCapacity(owner, inventory);
-        }
-
-        foreach ((EntityId child, EntityId container) in _containment)
-        {
-            if (!_items.ContainsKey(child) || !_inventories.ContainsKey(container)
-                || !_containedChildren.TryGetValue(container, out SortedSet<EntityId>? children)
-                || !children.Contains(child))
-            {
-                throw new MechanicsException("Inventory containment indexes are inconsistent.");
-            }
-        }
-
-        foreach ((EntityId container, SortedSet<EntityId> children) in _containedChildren)
-        {
-            if (!_inventories.ContainsKey(container)
-                || children.Any(child => !_items.ContainsKey(child)
-                    || !_containment.TryGetValue(child, out EntityId actual)
-                    || actual != container))
-            {
-                throw new MechanicsException("Inventory containment reverse indexes are inconsistent.");
-            }
-        }
-
-        foreach ((EntityId owner, EquipmentState equipment) in _equipment)
-        {
-            ValidateEquipment(owner, equipment, out _);
-        }
-    }
-
     private static void EnsureFungible(ItemDefinition definition)
     {
         if (definition.Kind != ItemKind.Fungible)
@@ -1258,24 +1181,22 @@ public sealed partial class InventoryStore
 }
 
 /// <summary>
-/// Detached managed inventory candidate. Mutations are applied to the detached
-/// copy and become live only when <see cref="Publish"/> succeeds.
+/// A group of inventory operations that apply together. Operations run on a
+/// working copy and become live when <see cref="Publish"/> is called; a failed
+/// operation or a dropped edit leaves the store unchanged.
 /// </summary>
 public sealed partial class InventoryEdit : IDisposable
 {
     private readonly InventoryStore _owner;
+    private readonly ulong _preparedRevision;
     private InventoryStore? _working;
-    private readonly ulong _expectedOwnerRevision;
     private bool _published;
 
-    internal InventoryEdit(
-        InventoryStore owner,
-        InventoryStore working,
-        ulong expectedOwnerRevision)
+    internal InventoryEdit(InventoryStore owner, InventoryStore working, ulong preparedRevision)
     {
         _owner = owner;
         _working = working;
-        _expectedOwnerRevision = expectedOwnerRevision;
+        _preparedRevision = preparedRevision;
     }
 
     public ulong Revision
@@ -1285,15 +1206,11 @@ public sealed partial class InventoryEdit : IDisposable
 
     public InventoryView View(EntityId owner) => Execute(working => working.View(owner));
 
-    public void Validate() => Execute(static working => working.ValidateStore());
-
     public void Publish()
     {
-        InventoryStore working = EnsureOpen();
         try
         {
-            working.ValidateStore();
-            _owner.PublishCandidate(working, _expectedOwnerRevision);
+            _owner.PublishCandidate(EnsureOpen(), _preparedRevision);
             _published = true;
         }
         finally
@@ -1377,20 +1294,6 @@ public sealed partial class InventoryEdit : IDisposable
         try
         {
             return operation(working);
-        }
-        catch
-        {
-            Discard();
-            throw;
-        }
-    }
-
-    private void Execute(Action<InventoryStore> operation)
-    {
-        InventoryStore working = EnsureOpen();
-        try
-        {
-            operation(working);
         }
         catch
         {
