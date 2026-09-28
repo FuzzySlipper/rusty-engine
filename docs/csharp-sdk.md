@@ -453,6 +453,55 @@ update facts, and ghost plates reconstruct from their capture-time source.
 Historical sounds, particle bursts, animation cues, and completion callbacks
 are not replayed. Continuous emitters restart their cosmetic simulation.
 
+### Particle bursts
+
+`Presentation.EmitParticles` does not need signal registration, an appearance,
+or a retained emitter. Each one-shot needs a unique `SignalId`; `LogicalId` is
+for retained emitters and is ignored by the one-shot call. A minimal valid cube
+burst inside an admitted product callback is:
+
+```csharp
+engine.Presentation.EmitParticles(new PresentationParticleDescriptor
+{
+    SignalId = $"blast.{sequence}", // product-owned emission sequence
+    Anchor = new() { Kind = PresentationAnchorKind.World, Position = centre },
+    Visual = PresentationParticleVisual.Cube,
+    Visible = true,
+    BurstCount = 8,
+    MaxParticles = 8,
+    LifetimeMinSeconds = 0.5f,
+    LifetimeMaxSeconds = 1,
+    SizeCurve = new PresentationParticleScalarKey[] { new(0, 0.2f), new(1, 0.1f) },
+    ColorCurve = new PresentationParticleColorKey[]
+    {
+        new(0, new Color(1, 1, 1, 1)), new(1, new Color(1, 1, 1, 0)),
+    },
+});
+```
+
+The zero-initialized descriptor is incomplete: enum zero is not World or
+Billboard, lifetime and capacity are zero, and curves are empty. Set the enums
+explicitly. Both curves require 2–8 keys, ages strictly increasing from 0 to 1;
+sizes must be finite and nonnegative, color channels in 0–1. Lifetimes must be
+ordered within 0.01–60 seconds, velocity bounds ordered and finite, and
+acceleration finite. `BurstCount <= MaxParticles <= 1024`, `MaxParticles > 0`,
+and `Seed <= 9007199254740991` (53 bits) are required.
+
+For billboard smoke, use an admitted `Graphics.OpenResource` image handle as
+`Sprite` and set `SpriteFrameCount = 1`. More frames require a positive
+`FlipbookFramesPerSecond` (at most 120); cubes require zero. `HasCollision`
+enables the explicit collision material and spawn-relative plane/AABB volumes;
+set `Collision.LimitBehavior` and each volume's `Kind`. Collision is cosmetic
+and does not mutate Spatial or Dynamics.
+
+An invalid descriptor or repeated signal raises a named `EngineCallException`.
+Catching an emission refusal permits the callback to continue and publish its
+other staged output. Letting an exception escape still faults the callback.
+Valid bursts return `Admitted`, `Clamped` or `Dropped` under capacity pressure.
+The [packaged fixture](../fixtures/csharp-particle-emission/ParticleEmissionChecks.cs)
+exercises caught refusals followed by cube, billboard and colliding debris
+admission in the same callback.
+
 Current `IEngineContext` properties are named service families generated from
 the ABI: dynamics, motion, kinematic, spatial, perception, world origin,
 voxel, voxel content and presentation, content, authored content, graphics,

@@ -71,3 +71,21 @@ levels or scanning cells. A reported walkable count includes every retained
 support level; it does not imply that every point inside the publication box
 is walkable. See `docs/csharp-sdk.md#collision-navigation-coordinates` and the
 packaged `fixtures/csharp-navigation-mapping` example in the Engine repository.
+
+## Particle bursts
+
+`Presentation.EmitParticles` needs no prior signal or appearance registration.
+Use a new `SignalId` for each burst, explicitly set `Anchor.Kind` and `Visual`,
+and supply `MaxParticles`, positive ordered lifetimes, and both size/color
+curves (2–8 keys, ages strictly increasing from 0 to 1). `BurstCount` must not
+exceed `MaxParticles` (at most 1024); `Seed` must fit 53 bits. For a billboard,
+open an image with `Graphics.OpenResource`, pass its handle as `Sprite`, and set
+`SpriteFrameCount = 1` for a static sprite. Animated sprites need a positive
+frame rate. Cubes need no sprite and use zero flipbook rate.
+
+Invalid descriptors raise `EngineCallException` with a named diagnostic.
+A caught emission refusal preserves staged presentation; an exception escaping
+the product callback still faults that callback. A valid optional burst may
+return `Admitted`, `Clamped` or `Dropped` according to presentation capacity.
+See the source SDK guide and `fixtures/csharp-particle-emission` for a complete
+executable example, including collision.

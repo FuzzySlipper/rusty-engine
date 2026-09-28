@@ -151,3 +151,41 @@ explicit admission limits reject the transaction. Track `ResidentChunkCount`,
 `RemovedMeshChunks`, residency receipts and `ColliderChunkCount`, plus the separate
 start/prepare/commit/presentation timings. A 100 km² world on disk does not specify
 how much can be resident or remeshed per tick.
+
+## Edit transaction cost (#8712)
+
+Single-cell and multi-cell `Voxel.ApplyEdits` use the same native history/edit
+path. A transaction still copies and validates scene voxel data and rebuilds
+collision/navigation for the resident world; only the mesh projection reuses
+unaffected chunks. Cells changed alone therefore do not predict latency.
+
+The resident-scene builder previously constructed and discarded a complete
+collision/navigation/mesh scene before constructing the requested incremental
+scene. It now builds the voxel world directly and projects it once. Validation,
+world origin, empty resident chunks and revision handling remain the same.
+
+Reproduce the core history path with:
+
+```sh
+cargo run --release --locked -p engine-spatial --example voxel_edit_scaling -- 32
+```
+
+The probe uses separated 16-cell chunks, each with a four-cell-high solid slab.
+Every sample starts from the same scene; 1, 7, 33, 41 or 123 interior cells are
+cleared in one chunk. Seven runs per size report median clone/apply time and
+actual changed/rebuilt/reused counts. On the development host, Rust 1.98.1,
+optimized build, the observed apply medians were:
+
+| Resident chunks | 1 cell before / after | 41 cells before / after | 123 cells before / after |
+| --- | --- | --- | --- |
+| 8 | 13.1 / 6.2 ms | 14.1 / 6.3 ms | 13.4 / 6.2 ms |
+| 32 | 60.4 / 25.8 ms | 55.3 / 25.2 ms | 56.9 / 25.0 ms |
+| 64 | 106.4 / 51.9 ms | 113.1 / 55.4 ms | 110.3 / 54.0 ms |
+
+Each sample rebuilt one mesh chunk and reused the rest. Scene clone time was
+measured separately (roughly 0.2–2.4 ms). These are core-path observations, not
+frame-time guarantees or a reproduction of CraftSurvive's exact 198 ms. They
+show substantial avoidable scene-wide cost and residual resident-world cost,
+without a special multi-cell threshold. Comparing product edits also requires
+holding resident scene, affected chunks, geometry and build profile constant.
+Product save/residency/presentation stages are outside this probe.

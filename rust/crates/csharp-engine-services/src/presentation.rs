@@ -137,7 +137,7 @@ pub(crate) unsafe extern "C" fn emit_particles(
     result: *mut NativePresentationParticleEmissionReceipt,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    crate::appearance::appearance_operation(context, operation_error, || {
+    crate::appearance::atomic_appearance_operation(context, operation_error, || {
         if request.is_null() || result.is_null() {
             return 0;
         }

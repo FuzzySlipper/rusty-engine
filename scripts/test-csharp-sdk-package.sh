@@ -159,6 +159,7 @@ cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/Pr
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
 cp "$repo_root/fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs" "$consumer_dir/SpatialArtifactChecks.cs"
 cp "$repo_root/fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs" "$consumer_dir/NavigationMappingChecks.cs"
+cp "$repo_root/fixtures/csharp-particle-emission/ParticleEmissionChecks.cs" "$consumer_dir/ParticleEmissionChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -173,6 +174,7 @@ public sealed class Product : IEngineProduct
     private readonly VoxelScenePresentation _voxelPresentation;
     private readonly ProductContentMixedBundleChecks _mixedBundleChecks;
     private ulong _sequence;
+    private bool _particlesChecked;
 
     public Product(ProductCreateContext context)
     {
@@ -200,6 +202,12 @@ public sealed class Product : IEngineProduct
     public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update)
     {
+        if (!_particlesChecked)
+        {
+            try { ParticleEmissionChecks.Run(_engine); }
+            catch (System.Exception error) { System.Console.Error.WriteLine(error); throw; }
+            _particlesChecked = true;
+        }
         _mixedBundleChecks.Update();
         PublishUi();
         foreach (ProductInputEvent input in update.Input)
@@ -247,6 +255,7 @@ printf '{"id":"enemy"}' > "$consumer_dir/content/rules/renamed.json"
 printf '{}' > "$consumer_dir/content/rules/nested/other.json"
 dd if=/dev/zero of="$consumer_dir/content/rules/large.bin" bs=1048589 count=1 status=none
 cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer_dir/content/mixed/texture.png"
+cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer_dir/content/spatial-particle.png"
 cp "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer_dir/content/mixed/character.glb"
 python3 - "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer_dir/content/mixed/clip-pack.glb" <<'PY'
 import json

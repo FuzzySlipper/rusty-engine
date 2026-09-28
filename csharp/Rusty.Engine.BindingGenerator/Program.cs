@@ -924,6 +924,24 @@ internal static class Emit
         for (int index = 0; index < leading.Length; index++) output.AppendLine($"        {RawType(leading[index])} raw{index} = NativeConversions.ToNative(arg{index});");
         int requestIndex = leading.Length;
         string requestArgument = $"arg{requestIndex}";
+        if (requestName == "NativePresentationParticleDescriptor")
+        {
+            // Rust enum fields must contain declared discriminants, including
+            // nested fields whose semantic use is optional.
+            void RequireEnum(string type, string expression)
+            {
+                string allowed = string.Join(" or ", model.Enums[type].Members.Select(member => $"{SafeType(type)}.{SafeEnumMember(type, member.Name)}"));
+                output.AppendLine($"        if ({expression} is not ({allowed})) throw new EngineCallException(\"Presentation\", \"{Pascal(operation)}\", 0, new EngineDiagnostic[] {{ new(\"CSHARP_PRESENTATION_PARTICLE\", \"{expression} must name a declared {SafeType(type)} value\", string.Empty) }});");
+            }
+            RequireEnum("NativePresentationAnchorKind", $"{requestArgument}.Anchor.Kind");
+            RequireEnum("NativePresentationParticleVisual", $"{requestArgument}.Visual");
+            output.AppendLine($"        if (!{requestArgument}.HasCollision) {requestArgument} = {requestArgument} with {{ Collision = new() {{ LimitBehavior = PresentationParticleCollisionLimitBehavior.Sleep }}, CollisionVolumes = default }};");
+            RequireEnum("NativePresentationParticleCollisionLimitBehavior", $"{requestArgument}.Collision.LimitBehavior");
+            output.AppendLine($"        foreach (var volume in {requestArgument}.CollisionVolumes.Span)");
+            output.AppendLine("        {");
+            RequireEnum("NativePresentationParticleCollisionVolumeKind", "volume.Kind");
+            output.AppendLine("        }");
+        }
         List<string> closers = [];
         Field[] specialSpanFields = request.Fields.Where(field => field.Type.Contains('*', StringComparison.Ordinal) && BorrowedSpanElementHasImmediateFields(model, BindingModel.Bare(field.Type))).ToArray();
         List<string> temporaryPinArrays = specialSpanFields.SelectMany(field => BorrowedSpanElementPinNames(model, field)).ToList();

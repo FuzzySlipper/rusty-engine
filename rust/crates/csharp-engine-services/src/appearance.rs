@@ -10830,6 +10830,25 @@ pub(crate) unsafe extern "C" fn publish_attached_snapshot(
     }
 }
 
+/// Use only for operations whose refusals leave staged presentation intact.
+/// The generated caller owns the exception; a caught refusal must not poison
+/// settlement. Preserve any failure from an earlier, nonrecoverable operation.
+pub(crate) fn atomic_appearance_operation(
+    context: *mut c_void,
+    receipt: *mut NativeOperationErrorReceipt,
+    call: impl FnOnce() -> i32,
+) -> i32 {
+    if context.is_null() {
+        return appearance_operation(context, receipt, call);
+    }
+    let previous = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }
+        .callback_error
+        .take();
+    let status = appearance_operation(context, receipt, call);
+    unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.callback_error = previous;
+    status
+}
+
 pub(crate) fn appearance_operation(
     context: *mut c_void,
     receipt: *mut NativeOperationErrorReceipt,
@@ -10963,6 +10982,49 @@ pub(super) mod tests {
                 b: 1.0,
                 a: 1.0,
             },
+        }
+    }
+
+    #[test]
+    fn atomic_refusal_retains_diagnostics_and_preserves_prior_callback_failure() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        for prior in [false, true] {
+            bridge.begin_call();
+            if prior {
+                bridge.record_callback_error(CsharpEngineServicesError::new(
+                    "PRIOR",
+                    "earlier failure",
+                ));
+            }
+            let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+            let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            let status = atomic_appearance_operation(context, &mut receipt, || {
+                unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.record_callback_error(
+                    CsharpEngineServicesError::new("REFUSED", "invalid particle"),
+                );
+                0
+            });
+            assert_eq!(status, 0);
+            assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+            let diagnostic = unsafe { &*receipt.diagnostics.diagnostics };
+            assert_eq!(
+                unsafe { borrowed_utf8(diagnostic.code.bytes, diagnostic.code.len, "code") }
+                    .unwrap(),
+                "REFUSED"
+            );
+            assert_eq!(
+                unsafe {
+                    destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle)
+                },
+                ABI_OK
+            );
+            assert!(bridge.admission_diagnostics.is_empty());
+            if prior {
+                assert_eq!(bridge.take_staged_call().err().unwrap().code(), "PRIOR");
+            } else {
+                assert!(bridge.take_staged_call().unwrap().is_some());
+            }
         }
     }
 

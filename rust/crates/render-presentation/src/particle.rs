@@ -621,7 +621,15 @@ impl ParticleProjector {
                 {
                     return Err(ParticleProjectionDiagnosticCode::InvalidDescriptor);
                 }
-                let kind = if sprite.frame_count == 1 {
+                // Packaged C# graphics admits image bytes as Texture. The
+                // descriptor supplies frame layout; keep that resource's real
+                // identity/hash rather than inventing a sprite alias.
+                let kind = if assets
+                    .get_presentation_asset(&sprite.asset)
+                    .is_some_and(|asset| asset.kind == RenderAssetKind::Texture)
+                {
+                    RenderAssetKind::Texture
+                } else if sprite.frame_count == 1 {
                     RenderAssetKind::Sprite
                 } else {
                     RenderAssetKind::SpriteAtlas

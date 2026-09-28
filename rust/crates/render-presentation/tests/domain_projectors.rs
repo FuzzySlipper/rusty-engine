@@ -878,3 +878,41 @@ fn every_retained_domain_rejects_unknown_handles() {
         TelemetryOverlayDiagnosticCode::UnknownHandle
     );
 }
+
+#[test]
+fn particle_billboards_accept_admitted_textures_and_verify_their_hash() {
+    for frame_count in [1, 4] {
+        let mut descriptor = particle_descriptor();
+        descriptor.visual = ParticleVisual::Billboard {
+            sprite: ParticleSpriteRef {
+                asset: "texture/alert".into(),
+                content_hash: "cc".into(),
+                frame_count,
+            },
+        };
+        let mut projector = ParticleProjector::default();
+        projector
+            .project_optional_emit(
+                &assets(),
+                PresentationOpMeta::new(0),
+                "valid".into(),
+                descriptor.clone(),
+            )
+            .unwrap();
+        if let ParticleVisual::Billboard { sprite } = &mut descriptor.visual {
+            sprite.content_hash = "wrong".into();
+        }
+        assert_eq!(
+            projector
+                .project_optional_emit(
+                    &assets(),
+                    PresentationOpMeta::new(0),
+                    "wrong".into(),
+                    descriptor
+                )
+                .unwrap_err()
+                .code,
+            ParticleProjectionDiagnosticCode::ContentHashMismatch
+        );
+    }
+}

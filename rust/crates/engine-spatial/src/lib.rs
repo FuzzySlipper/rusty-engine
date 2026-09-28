@@ -453,16 +453,9 @@ impl VoxelCollisionScene {
         mesh_options: SurfaceMeshOptions,
         incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
     ) -> Result<Self, CollisionSceneError> {
-        let base = Self::build_at_revision(
-            voxel_size,
-            chunk_size,
-            voxels,
-            revisions.source,
-            mesh_options,
-            None,
-        )?;
+        let voxel_world = Self::build_voxel_world(voxel_size, chunk_size, voxels)?;
         let target = revisions.world_origin.cell();
-        let mut world = base.voxel_world.with_world_origin(WorldPos::new(
+        let mut world = voxel_world.with_world_origin(WorldPos::new(
             -(target[0] as f64),
             -(target[1] as f64),
             -(target[2] as f64),
@@ -508,6 +501,22 @@ impl VoxelCollisionScene {
         mesh_options: SurfaceMeshOptions,
         incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
     ) -> Result<Self, CollisionSceneError> {
+        let voxel_world = Self::build_voxel_world(voxel_size, chunk_size, voxels)?;
+        Self::build_from_voxel_world_at_revision(
+            voxel_size,
+            chunk_size,
+            voxel_world,
+            SceneBuildRevision::initial(source_revision),
+            mesh_options,
+            incremental_mesh,
+        )
+    }
+
+    fn build_voxel_world(
+        voxel_size: f64,
+        chunk_size: u32,
+        voxels: impl IntoIterator<Item = MaterialVoxel>,
+    ) -> Result<VoxelWorld, CollisionSceneError> {
         if !(1..=MAX_CHUNK_SIZE).contains(&chunk_size) {
             return Err(CollisionSceneError::InvalidChunkSize);
         }
@@ -577,14 +586,7 @@ impl VoxelCollisionScene {
         for (coord, chunk) in chunks {
             voxel_world.insert(coord, chunk);
         }
-        Self::build_from_voxel_world_at_revision(
-            voxel_size,
-            chunk_size,
-            voxel_world,
-            SceneBuildRevision::initial(source_revision),
-            mesh_options,
-            incremental_mesh,
-        )
+        Ok(voxel_world)
     }
 
     pub(crate) fn build_from_voxel_world_at_revision(
