@@ -336,6 +336,8 @@ interface StaticInstanceBatch {
   readonly mesh: THREE.InstancedMesh;
   candidateHandles: readonly RenderHandle[];
   handles: readonly RenderHandle[];
+  /** Handles of the last write; unchanged with current matrices means no upload. */
+  submitted: readonly RenderHandle[];
 }
 
 const STATIC_INSTANCE_BATCH_LAYER = 31;
@@ -1142,7 +1144,8 @@ export class ThreeRenderer {
     if (this.#disposed) {
       throw new RenderApplyError('renderer is disposed');
     }
-    this.scene.updateMatrixWorld(true);
+    // Member world matrices are refreshed when frames change them
+    // (#syncStaticInstanceBatches), so only the camera needs updating here.
     camera.updateMatrixWorld(true);
     const projectionView = new THREE.Matrix4().multiplyMatrices(
       camera.projectionMatrix,
@@ -1157,6 +1160,9 @@ export class ThreeRenderer {
           && entry.object instanceof THREE.Mesh
           && frustum.intersectsObject(entry.object);
       });
+      // Any member transform or membership change rewrites the batch during
+      // frame application, so an identical visible subset is already current.
+      if (sameHandles(batch.submitted, visibleHandles)) continue;
       this.#writeStaticInstanceBatch(batch, visibleHandles);
     }
   }
@@ -1231,7 +1237,14 @@ export class ThreeRenderer {
       throw new RenderApplyError('renderer is disposed');
     }
     camera.updateMatrixWorld(true);
-    scene.updateMatrixWorld(true);
+    const sprites = [...this.#cameraSpriteHandles]
+      .map((handle) => this.#handles.get(handle))
+      .filter((entry): entry is NodeEntry => entry !== undefined
+        && entry.kind === 'sprite'
+        && entry.sprite !== undefined
+        && isDescendantOf(entry.object, scene))
+      .sort((left, rightEntry) => objectDepth(left.object) - objectDepth(rightEntry.object));
+    if (sprites.length === 0) return;
     const cameraPosition = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
     const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion());
     const cameraDirection = new THREE.Vector3();
@@ -1244,13 +1257,6 @@ export class ThreeRenderer {
     const right = new THREE.Vector3();
     const worldUp = new THREE.Vector3(0, 1, 0);
     const basis = new THREE.Matrix4();
-    const sprites = [...this.#cameraSpriteHandles]
-      .map((handle) => this.#handles.get(handle))
-      .filter((entry): entry is NodeEntry => entry !== undefined
-        && entry.kind === 'sprite'
-        && entry.sprite !== undefined
-        && isDescendantOf(entry.object, scene))
-      .sort((left, rightEntry) => objectDepth(left.object) - objectDepth(rightEntry.object));
 
     // A preparation may follow a different camera in the same submission.
     // Reacquire authored transforms before applying camera-local realization.
@@ -1266,15 +1272,19 @@ export class ThreeRenderer {
     for (const entry of sprites) {
       const sprite = entry.sprite;
       if (sprite === undefined) continue;
+      const object = entry.object;
       if (sprite.viewportPlacement !== null && sprite.viewportPlacement !== undefined) {
-        this.#applySpriteViewportPlacement(entry.object as THREE.Mesh, sprite, camera);
+        this.#applySpriteViewportPlacement(object as THREE.Mesh, sprite, camera);
+        object.updateMatrixWorld(true);
         continue;
       }
       if (sprite.sizeMode === 'pixel') {
-        this.#applyPixelSpriteSize(entry.object as THREE.Mesh, sprite, camera);
+        this.#applyPixelSpriteSize(object as THREE.Mesh, sprite, camera);
       }
-      if (sprite.billboard === 'none') continue;
-      const object = entry.object;
+      if (sprite.billboard === 'none') {
+        object.updateMatrixWorld(true);
+        continue;
+      }
       object.updateMatrixWorld(true);
       object.getWorldPosition(worldPosition);
       if (sprite.billboard === 'spherical') {
@@ -1311,9 +1321,9 @@ export class ThreeRenderer {
           .normalize();
         object.quaternion.copy(localQuaternion);
       }
+      // Updates this sprite's subtree; nothing else in the scene changed.
       object.updateMatrixWorld(true);
     }
-    scene.updateMatrixWorld(true);
   }
 
   /**
@@ -2046,7 +2056,7 @@ export class ThreeRenderer {
           mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           mesh.layers.set(0);
           this.#sceneGroup.add(mesh);
-          batch = { mesh, candidateHandles: [], handles: [] };
+          batch = { mesh, candidateHandles: [], handles: [], submitted: [] };
           this.#staticInstanceBatches.set(batchKey, batch);
           this.#staticInstanceBatchByObject.set(mesh, batch);
         }
@@ -2084,6 +2094,7 @@ export class ThreeRenderer {
     batch: StaticInstanceBatch,
     submittedHandles: readonly RenderHandle[],
   ): void {
+    batch.submitted = [...submittedHandles];
     for (const handle of batch.candidateHandles) {
       const entry = this.#handles.get(handle);
       if (entry?.object instanceof THREE.Mesh) {
@@ -3891,6 +3902,10 @@ function isFrustumDrawable(object: THREE.Object3D): object is THREE.Mesh | THREE
 
 function matrixIsFinite(matrix: THREE.Matrix4): boolean {
   return matrix.elements.every(Number.isFinite);
+}
+
+function sameHandles(left: readonly RenderHandle[], right: readonly RenderHandle[]): boolean {
+  return left.length === right.length && left.every((handle, index) => handle === right[index]);
 }
 
 function applyTransform(object: THREE.Object3D, t: Transform): void {

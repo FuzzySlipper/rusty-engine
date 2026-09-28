@@ -428,7 +428,6 @@ export class RendererViewCompositionBackend {
     updateCameraAspect(camera, area.width / area.height);
     this.#projection.setViewportSize(area.width, area.height);
     camera.updateMatrixWorld(true);
-    this.#projection.scene.updateMatrixWorld(true);
     this.#webgl.setRenderTarget(target.target);
     this.#webgl.setScissorTest(false);
     setPhysicalViewport(this.#webgl, area);

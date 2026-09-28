@@ -2121,6 +2121,60 @@ void test('compatible static batches repack exact visible handles as the camera 
   assert.equal(renderer.handleCount, 0);
 });
 
+void test('an unchanged camera pass does not rewrite or re-upload a static batch', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: crateAsset() },
+      ...[0, 1, 2].map((x, index): RenderDiff => ({
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(3_000 + index),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          transform: { translation: [x, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        },
+      })),
+    ],
+  });
+  const batches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) batches.push(object);
+  });
+  const batch = batches[0]!;
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  camera.position.set(1, 0, 8);
+  camera.lookAt(1, 0, 0);
+
+  renderer.prepareStaticInstanceBatches(camera);
+  const uploaded = batch.instanceMatrix.version;
+  const sphere = batch.boundingSphere;
+  renderer.prepareStaticInstanceBatches(camera);
+  renderer.prepareStaticInstanceBatches(camera);
+  assert.equal(batch.instanceMatrix.version, uploaded, 'no re-upload for an identical visible set');
+  assert.equal(batch.boundingSphere, sphere, 'bounds are not recomputed');
+
+  // A member moves but stays visible: the frame rewrites the batch.
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update', handle: renderHandle(3_000),
+      transform: { translation: [0.5, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      material: null, visible: null, metadata: null,
+    }],
+  });
+  renderer.prepareStaticInstanceBatches(camera);
+  assert.equal(batch.count, 3);
+  const index = Array.from({ length: batch.count }, (_, slot) =>
+    renderer.projectionIdentityForObject(batch, slot)?.handle).indexOf(renderHandle(3_000));
+  const matrix = new THREE.Matrix4();
+  batch.getMatrixAt(index, matrix);
+  assert.deepEqual(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(), [0.5, 0, 0]);
+  assert.ok(batch.instanceMatrix.version > uploaded);
+  renderer.dispose();
+});
+
 void test('batch admission excludes invisible, overridden, reflected, and non-world instances', () => {
   const renderer = new ThreeRenderer();
   renderer.applyFrame({
