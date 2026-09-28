@@ -23,7 +23,10 @@ void test('input ingress normalizes exactly the Engine keyboard catalog', () => 
   assert.equal(normalizeRustyApplicationKeyboardControl('Digit7'), 'digit-7');
   assert.equal(normalizeRustyApplicationKeyboardControl('ShiftLeft'), 'shift-left');
   assert.equal(normalizeRustyApplicationKeyboardControl('ControlRight'), 'control-right');
-  assert.equal(normalizeRustyApplicationKeyboardControl('ArrowUp'), null);
+  assert.equal(normalizeRustyApplicationKeyboardControl('ArrowUp'), 'arrow-up');
+  assert.equal(normalizeRustyApplicationKeyboardControl('ArrowDown'), 'arrow-down');
+  assert.equal(normalizeRustyApplicationKeyboardControl('ArrowLeft'), 'arrow-left');
+  assert.equal(normalizeRustyApplicationKeyboardControl('ArrowRight'), 'arrow-right');
   assert.equal(normalizeRustyApplicationKeyboardControl('Tab'), null);
   assert.equal(normalizeRustyApplicationKeyboardControl('KeyAA'), null);
 });

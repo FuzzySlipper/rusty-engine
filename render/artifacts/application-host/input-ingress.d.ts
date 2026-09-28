@@ -25,7 +25,7 @@ export interface RustyApplicationRuntimeInputBinding {
     readonly nextSequence?: string;
 }
 /** Mirrors the closed Engine input control catalog; navigation keys are not admitted yet. */
-export type RustyApplicationKeyboardControl = 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g' | 'key-h' | 'key-i' | 'key-j' | 'key-k' | 'key-l' | 'key-m' | 'key-n' | 'key-o' | 'key-p' | 'key-q' | 'key-r' | 'key-s' | 'key-t' | 'key-u' | 'key-v' | 'key-w' | 'key-x' | 'key-y' | 'key-z' | 'digit-0' | 'digit-1' | 'digit-2' | 'digit-3' | 'digit-4' | 'digit-5' | 'digit-6' | 'digit-7' | 'digit-8' | 'digit-9' | 'space' | 'enter' | 'escape' | 'shift-left' | 'shift-right' | 'control-left' | 'control-right' | 'alt-left' | 'alt-right';
+export type RustyApplicationKeyboardControl = 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g' | 'key-h' | 'key-i' | 'key-j' | 'key-k' | 'key-l' | 'key-m' | 'key-n' | 'key-o' | 'key-p' | 'key-q' | 'key-r' | 'key-s' | 'key-t' | 'key-u' | 'key-v' | 'key-w' | 'key-x' | 'key-y' | 'key-z' | 'digit-0' | 'digit-1' | 'digit-2' | 'digit-3' | 'digit-4' | 'digit-5' | 'digit-6' | 'digit-7' | 'digit-8' | 'digit-9' | 'space' | 'enter' | 'escape' | 'shift-left' | 'shift-right' | 'control-left' | 'control-right' | 'alt-left' | 'alt-right' | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right';
 export type RustyApplicationPointerButton = 'primary' | 'secondary' | 'middle';
 export type RustyApplicationControllerButton = 'button-0' | 'button-1' | 'button-2' | 'button-3' | 'button-4' | 'button-5' | 'button-6' | 'button-7' | 'button-8' | 'button-9' | 'button-10' | 'button-11' | 'button-12' | 'button-13' | 'button-14' | 'button-15';
 export type RustyApplicationControllerAxis = 'axis-0' | 'axis-1' | 'axis-2' | 'axis-3';

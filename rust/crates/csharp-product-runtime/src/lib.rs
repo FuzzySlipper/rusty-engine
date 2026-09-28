@@ -5353,6 +5353,10 @@ fn keyboard_control(value: runtime_input_model::KeyboardControl) -> NativeKeyboa
         runtime_input_model::KeyboardControl::ControlRight => NativeKeyboardControl::ControlRight,
         runtime_input_model::KeyboardControl::AltLeft => NativeKeyboardControl::AltLeft,
         runtime_input_model::KeyboardControl::AltRight => NativeKeyboardControl::AltRight,
+        runtime_input_model::KeyboardControl::ArrowUp => NativeKeyboardControl::ArrowUp,
+        runtime_input_model::KeyboardControl::ArrowDown => NativeKeyboardControl::ArrowDown,
+        runtime_input_model::KeyboardControl::ArrowLeft => NativeKeyboardControl::ArrowLeft,
+        runtime_input_model::KeyboardControl::ArrowRight => NativeKeyboardControl::ArrowRight,
     }
 }
 

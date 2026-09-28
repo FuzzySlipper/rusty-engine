@@ -167,7 +167,7 @@ fn axis(value: NativeInputAxis) -> Option<InputAxis> {
 }
 
 fn keyboard(value: NativeKeyboardControl) -> Option<KeyboardControl> {
-    const VALUES: [KeyboardControl; 45] = [
+    const VALUES: [KeyboardControl; 49] = [
         KeyboardControl::KeyA,
         KeyboardControl::KeyB,
         KeyboardControl::KeyC,
@@ -213,6 +213,10 @@ fn keyboard(value: NativeKeyboardControl) -> Option<KeyboardControl> {
         KeyboardControl::ControlRight,
         KeyboardControl::AltLeft,
         KeyboardControl::AltRight,
+        KeyboardControl::ArrowUp,
+        KeyboardControl::ArrowDown,
+        KeyboardControl::ArrowLeft,
+        KeyboardControl::ArrowRight,
     ];
     let index = (value as u32).checked_sub(1)? as usize;
     VALUES.get(index).copied()
@@ -288,6 +292,26 @@ mod tests {
             context: std::ptr::null(),
             context_len: 0,
         }
+    }
+
+    #[test]
+    fn arrow_controls_decode_from_appended_abi_values() {
+        for (native, expected) in [
+            (NativeKeyboardControl::ArrowUp, KeyboardControl::ArrowUp),
+            (NativeKeyboardControl::ArrowDown, KeyboardControl::ArrowDown),
+            (NativeKeyboardControl::ArrowLeft, KeyboardControl::ArrowLeft),
+            (
+                NativeKeyboardControl::ArrowRight,
+                KeyboardControl::ArrowRight,
+            ),
+        ] {
+            assert_eq!(keyboard(native), Some(expected));
+        }
+        assert_eq!(keyboard(NativeKeyboardControl::None), None);
+        assert_eq!(
+            keyboard(NativeKeyboardControl::Enter),
+            Some(KeyboardControl::Enter)
+        );
     }
 
     #[test]

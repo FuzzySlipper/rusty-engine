@@ -61,7 +61,8 @@ const PHYSICAL_MAPPING_USAGE: &str = "--physical-mapping <mapping-id>=<intent-id
   controller-button-value:<button-0..button-15>[:context=<identity>]\n\
   controller-axis:<axis-0..axis-3>[:context=<identity>]\n\
 keyboard controls: key-a..key-z, digit-0..digit-9, space, enter, escape, shift-left,\n\
-  shift-right, control-left, control-right, alt-left, alt-right";
+  shift-right, control-left, control-right, alt-left, alt-right,
+  arrow-up, arrow-down, arrow-left, arrow-right";
 
 fn main() -> Result<(), String> {
     let args = match Invocation::parse()? {
@@ -3794,6 +3795,10 @@ fn parse_keyboard_control(value: &str) -> Result<KeyboardControl, String> {
         "control-right" => KeyboardControl::ControlRight,
         "alt-left" => KeyboardControl::AltLeft,
         "alt-right" => KeyboardControl::AltRight,
+        "arrow-up" => KeyboardControl::ArrowUp,
+        "arrow-down" => KeyboardControl::ArrowDown,
+        "arrow-left" => KeyboardControl::ArrowLeft,
+        "arrow-right" => KeyboardControl::ArrowRight,
         _ => {
             return Err(format!(
                 "--physical-mapping keyboard control `{value}` is unsupported"
@@ -5011,6 +5016,30 @@ mod tests {
             mappings[6].trigger(),
             RuntimeInputTrigger::ControllerAxis { .. }
         ));
+    }
+
+    #[test]
+    fn parser_admits_arrow_mappings_and_matches_wire_names() {
+        for (name, expected) in [
+            ("arrow-up", KeyboardControl::ArrowUp),
+            ("arrow-down", KeyboardControl::ArrowDown),
+            ("arrow-left", KeyboardControl::ArrowLeft),
+            ("arrow-right", KeyboardControl::ArrowRight),
+            ("enter", KeyboardControl::Enter),
+        ] {
+            let mapping =
+                parse_physical_mapping(&format!("navigate=menu.navigate:key:{name}:pressed"))
+                    .unwrap();
+            let RuntimeInputTrigger::Key { code, .. } = mapping.trigger() else {
+                panic!("key mapping");
+            };
+            assert_eq!(*code, expected);
+            assert_eq!(serde_json::to_value(expected).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<KeyboardControl>(serde_json::json!(name)).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]

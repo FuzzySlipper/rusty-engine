@@ -28822,7 +28822,11 @@ var rD = /* @__PURE__ */ new Map([
 	["ControlLeft", "control-left"],
 	["ControlRight", "control-right"],
 	["AltLeft", "alt-left"],
-	["AltRight", "alt-right"]
+	["AltRight", "alt-right"],
+	["ArrowUp", "arrow-up"],
+	["ArrowDown", "arrow-down"],
+	["ArrowLeft", "arrow-left"],
+	["ArrowRight", "arrow-right"]
 ]), iD = /* @__PURE__ */ new Set([
 	...Array.from({ length: 26 }, (e, t) => `key-${String.fromCharCode(97 + t)}`),
 	...Array.from({ length: 10 }, (e, t) => `digit-${String(t)}`),
@@ -28834,7 +28838,11 @@ var rD = /* @__PURE__ */ new Map([
 	"control-left",
 	"control-right",
 	"alt-left",
-	"alt-right"
+	"alt-right",
+	"arrow-up",
+	"arrow-down",
+	"arrow-left",
+	"arrow-right"
 ]), aD = /* @__PURE__ */ new Set([
 	"focus-loss",
 	"ingress-overflow",

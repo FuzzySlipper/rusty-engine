@@ -73,6 +73,14 @@ these receipts change the native function table.
 
 ### Runtime input remapping
 
+Keyboard mappings use `key-a`–`key-z`, `digit-0`–`digit-9`, `space`, `enter`,
+`escape`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, and the
+`shift-left/right`, `control-left/right`, `alt-left/right` pairs. In C#, use
+`KeyboardControl.ArrowUp` (and the other directions) or `KeyboardControl.Enter`.
+The manifest name for Enter is `enter`, not `key-enter`; arrow names use
+`arrow-`, not `key-`. Browser `ArrowUp/Down/Left/Right` events use the same
+Engine input path as other keys. Consume a matching SDK/runtime pair.
+
 Use `context.Engine.Input.ReplacePhysicalMappings(mappings)` to replace the
 whole physical mapping set during product creation, Start, Pause, Resume,
 Restart, or an admitted Update callback. The mappings use the existing

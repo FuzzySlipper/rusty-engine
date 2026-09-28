@@ -90,6 +90,10 @@ pub enum KeyboardControl {
     ControlRight,
     AltLeft,
     AltRight,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

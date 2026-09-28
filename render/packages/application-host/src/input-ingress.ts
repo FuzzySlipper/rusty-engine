@@ -39,7 +39,8 @@ export type RustyApplicationKeyboardControl =
   | 'space' | 'enter' | 'escape'
   | 'shift-left' | 'shift-right'
   | 'control-left' | 'control-right'
-  | 'alt-left' | 'alt-right';
+  | 'alt-left' | 'alt-right'
+  | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right';
 
 export type RustyApplicationPointerButton = 'primary' | 'secondary' | 'middle';
 export type RustyApplicationControllerButton =
@@ -1155,6 +1156,8 @@ const KEYBOARD_CODE_MAP: ReadonlyMap<string, RustyApplicationKeyboardControl> = 
   ['ShiftLeft', 'shift-left'], ['ShiftRight', 'shift-right'],
   ['ControlLeft', 'control-left'], ['ControlRight', 'control-right'],
   ['AltLeft', 'alt-left'], ['AltRight', 'alt-right'],
+  ['ArrowUp', 'arrow-up'], ['ArrowDown', 'arrow-down'],
+  ['ArrowLeft', 'arrow-left'], ['ArrowRight', 'arrow-right'],
 ]);
 
 const KEYBOARD_CONTROLS: ReadonlySet<RustyApplicationKeyboardControl> = new Set([
@@ -1162,6 +1165,7 @@ const KEYBOARD_CONTROLS: ReadonlySet<RustyApplicationKeyboardControl> = new Set(
   ...Array.from({ length: 10 }, (_, index) => `digit-${String(index)}` as RustyApplicationKeyboardControl),
   'space', 'enter', 'escape',
   'shift-left', 'shift-right', 'control-left', 'control-right', 'alt-left', 'alt-right',
+  'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
 ]);
 
 const INPUT_CLEAR_REASONS: ReadonlySet<RustyApplicationInputClearReason> = new Set([

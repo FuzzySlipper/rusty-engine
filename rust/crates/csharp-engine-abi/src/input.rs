@@ -155,6 +155,10 @@ pub enum NativeKeyboardControl {
     ControlRight = 43,
     AltLeft = 44,
     AltRight = 45,
+    ArrowUp = 46,
+    ArrowDown = 47,
+    ArrowLeft = 48,
+    ArrowRight = 49,
 }
 
 #[repr(u32)]

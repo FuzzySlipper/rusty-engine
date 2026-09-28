@@ -116,6 +116,7 @@ const KEYBOARD_CONTROLS = new Set<string>([
   ...Array.from({ length: 10 }, (_, index) => `digit-${String(index)}`),
   'space', 'enter', 'escape', 'shift-left', 'shift-right', 'control-left', 'control-right',
   'alt-left', 'alt-right',
+  'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
 ]);
 const POINTER_BUTTONS = new Set<string>(['primary', 'secondary', 'middle']);
 const CONTROLLER_BUTTONS = new Set<string>(Array.from({ length: 16 }, (_, index) => `button-${String(index)}`));

@@ -1800,3 +1800,20 @@ test('held connection baseline satisfies response output fences without another 
   unsubscribe();
   adapter.dispose();
 });
+
+test('local transport admits all four arrow key controls', async () => {
+  const batch: RustyApplicationRuntimeInputEnvelope[] = (['arrow-up', 'arrow-down', 'arrow-left', 'arrow-right'] as const).map((code, index) => ({
+    runtime: RUNTIME,
+    sequence: String(index + 1),
+    context: 'gameplay.default',
+    fact: { kind: 'key', code, edge: 'pressed' },
+  }));
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      assert.deepEqual(JSON.parse(String(init?.body)).batch, batch);
+      return response({ accepted: true, ...ACCEPTED_FAULT, count: batch.length, binding: RUNTIME, readout: READOUT });
+    },
+    eventSource: FakeEventSource,
+  });
+  assert.equal((await adapter.input(batch)).count, 4);
+});
