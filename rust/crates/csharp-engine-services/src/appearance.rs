@@ -3830,7 +3830,7 @@ impl RuntimeAppearanceBridge {
         let next_material = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
         })?;
-        let id = format!("material/csharp-{handle}");
+        let id = runtime_material_id(handle);
         let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
         let texture = texture_descriptor_for_material(&descriptor, &staged.state.render_resources)?;
         staged.state.next_material = next_material;
@@ -4001,10 +4001,15 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeMaterialUpdateRequest,
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
-        // Refuse an invalid replacement before the prior material is released.
-        let resources = &self.staged_ref()?.state.render_resources;
-        let descriptor = material_descriptor(String::new(), request.replacement, resources)?;
-        texture_descriptor_for_material(&descriptor, resources)?;
+        // Refuse an invalid replacement before the prior material is released,
+        // validating it under the identity create_material will assign.
+        let state = &self.staged_ref()?.state;
+        let descriptor = material_descriptor(
+            runtime_material_id(state.next_material),
+            request.replacement,
+            &state.render_resources,
+        )?;
+        texture_descriptor_for_material(&descriptor, &state.render_resources)?;
         self.destroy_material(request.material)?;
         self.create_material(request.replacement)
     }
@@ -8253,6 +8258,10 @@ fn native_render_layer(value: NativeRenderLayer) -> Result<RenderLayer, CsharpEn
 }
 
 /// A projected controller whose target left the published snapshot cannot
+fn runtime_material_id(handle: u64) -> String {
+    format!("material/csharp-{handle}")
+}
+
 /// flush. Refuse before changing controller state so the refusal is local.
 fn require_projectable_controller(
     staged: &RuntimeAppearanceCall,
@@ -12318,6 +12327,54 @@ pub(super) mod tests {
         assert_eq!(staged.state.lights.len(), 1);
         assert!(staged.state.lights.contains_key(&light.value));
         assert_eq!(staged.state.retained_light_count, 1);
+    }
+
+    #[test]
+    fn material_replacement_succeeds_and_an_invalid_one_keeps_the_prior_material() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let color = NativeColor {
+            r: 0.2,
+            g: 0.4,
+            b: 0.6,
+            a: 1.0,
+        };
+        let request = NativeMaterialRequest {
+            color,
+            texture: NativeRenderResourceReference { value: 0 },
+            roughness: 0.5,
+            texture_tint: color,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+        };
+        let original = bridge.create_material(request).expect("material");
+        let replacement = bridge
+            .replace_material(NativeMaterialUpdateRequest {
+                material: original,
+                replacement: request,
+            })
+            .expect("an identical descriptor is a valid replacement");
+        assert_ne!(replacement.value, original.value);
+        let state = &bridge.staged_ref().unwrap().state;
+        assert!(!state.materials.contains_key(&original.value));
+        assert!(state.materials.contains_key(&replacement.value));
+
+        let invalid = NativeMaterialRequest {
+            texture: NativeRenderResourceReference { value: 99 },
+            ..request
+        };
+        bridge
+            .replace_material(NativeMaterialUpdateRequest {
+                material: replacement,
+                replacement: invalid,
+            })
+            .expect_err("an unknown texture is refused");
+        let state = &bridge.staged_ref().unwrap().state;
+        assert!(state.materials.contains_key(&replacement.value));
     }
 
     #[test]
