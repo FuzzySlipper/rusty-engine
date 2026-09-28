@@ -22,7 +22,7 @@ an observed output boundary so a held host can accept feedback before another ti
 
 Register `Rusty.Engine.Debugging.PlaytestDebugModule` in the existing generated
 catalog with read-only observation/action delegates and a product look delegate.
-`PlaytestAction` describes id, physical keyboard code, live duration in ms, tap
+`PlaytestAction` describes id, physical keyboard code (or Primary/Secondary/Auxiliary pointer button), live duration in ms, tap
 versus hold, current availability/reason and optional equipment. Resolve each
 query from current product state. Ordinary input still performs gameplay admission;
 a plan's availability does not establish that the subsequent action succeeded.

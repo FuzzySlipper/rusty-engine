@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Rusty.Engine.Debugging;
 
-/// <summary>Product-resolved action timing and ordinary physical controls for inspection tools.</summary>
+/// <summary>Product-resolved action timing and ordinary physical controls for inspection tools. Key accepts keyboard codes or Primary/Secondary/Auxiliary pointer buttons.</summary>
 public sealed record PlaytestAction(string Id, string Key, double DurationMs, bool Hold,
     bool Available = true, string? Reason = null, string? Equipment = null, IReadOnlyList<string>? HeldKeys = null);
 
@@ -21,7 +21,7 @@ public sealed class PlaytestDebugModule(
     public DebugCommandResult Help() => DebugCommandResult.Success(JsonSerializer.Serialize(new
     {
         observe = "playtest.observe", action = "playtest.action", look = "playtest.look", actions,
-        inputPath = "physical-keyboard", lookAdvancesTime = false,
+        inputPath = "physical-keyboard-or-pointer", lookAdvancesTime = false,
     }, Json));
 
     [DebugCommand("playtest.observe", Description = "Read current product gameplay facts without advancing simulation.")]
