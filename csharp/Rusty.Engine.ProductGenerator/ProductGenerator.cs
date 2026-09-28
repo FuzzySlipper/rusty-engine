@@ -564,28 +564,29 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     string service = "CSharpProduct";
                     string operation = "Callback";
                     int status = 99;
-                    string message = exception.Message;
+                    // Keep the complete exception text, including its stack trace.
+                    string message = exception.ToString();
                     if (exception is EngineCallException engineError)
                     {
                         service = engineError.Service;
                         operation = engineError.Operation;
                         status = engineError.Status;
-                        message = DescribeEngineError(engineError);
+                        message = DescribeEngineError(engineError) + Environment.NewLine + engineError.StackTrace;
                     }
                     byte* serviceBytes = null;
                     byte* operationBytes = null;
                     byte* messageBytes = null;
                     try
                     {
-                        serviceBytes = AllocateProductErrorText(service);
-                        operationBytes = AllocateProductErrorText(operation);
-                        messageBytes = AllocateProductErrorText(message);
+                        serviceBytes = AllocateProductErrorText(service, out nuint serviceLength);
+                        operationBytes = AllocateProductErrorText(operation, out nuint operationLength);
+                        messageBytes = AllocateProductErrorText(message, out nuint messageLength);
                         *result = new NativeProductCallError
                         {
-                            service = new NativeUtf8Slice { bytes = serviceBytes, len = Utf8Length(service) },
-                            operation = new NativeUtf8Slice { bytes = operationBytes, len = Utf8Length(operation) },
+                            service = new NativeUtf8Slice { bytes = serviceBytes, len = serviceLength },
+                            operation = new NativeUtf8Slice { bytes = operationBytes, len = operationLength },
                             status = status,
-                            message = new NativeUtf8Slice { bytes = messageBytes, len = Utf8Length(message) },
+                            message = new NativeUtf8Slice { bytes = messageBytes, len = messageLength },
                         };
                         return 1;
                     }
@@ -611,18 +612,17 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     return message.ToString();
                 }
 
-                private static byte* AllocateProductErrorText(string value)
+                private static byte* AllocateProductErrorText(string value, out nuint length)
                 {
-                    byte[] bytes = StrictUtf8.GetBytes(value);
-                    if (bytes.Length > MaxProductErrorBytes) throw new InvalidOperationException("product callback diagnostic exceeded the supported copy bound");
+                    // Replacing, not strict: a lone surrogate must not lose the product's error.
+                    byte[] bytes = Encoding.UTF8.GetBytes(value);
+                    length = (nuint)bytes.Length;
                     if (bytes.Length == 0) return null;
                     byte* allocated = (byte*)NativeMemory.Alloc((nuint)bytes.Length);
                     if (allocated is null) throw new OutOfMemoryException();
                     bytes.CopyTo(new Span<byte>(allocated, bytes.Length));
                     return allocated;
                 }
-
-                private static nuint Utf8Length(string value) => (nuint)StrictUtf8.GetByteCount(value);
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static void Destroy(void* handle)
@@ -674,7 +674,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
                 private const int MaxDebugCommandBytes = 64 * 1024;
                 private const int MaxDebugResultBytes = 64 * 1024;
-                private const int MaxProductErrorBytes = 64 * 1024;
                 private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
                 private static ProductContentFile[] CopyContent(NativeContentFile* source, nuint count)

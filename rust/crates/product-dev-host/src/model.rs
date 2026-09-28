@@ -194,8 +194,7 @@ fn runtime_fault_fields(
     (
         error.code().to_owned(),
         disposition,
-        bounded_diagnostic(error.diagnostic().to_owned())
-            .expect("runtime error diagnostics are bounded at construction"),
+        error.diagnostic().to_owned(),
         error.recovery(),
     )
 }
@@ -412,7 +411,7 @@ impl ProductDevAudioFeedbackResult {
             recovery: None,
             runtime,
             accepted_through_fact_id: None,
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -727,7 +726,7 @@ impl ProductDevAnimationFeedbackResult {
             recovery: None,
             runtime,
             accepted_through_fact_id: None,
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -865,7 +864,7 @@ impl ProductDevGhostPlateFeedbackResult {
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
             recovery: None,
             runtime,
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -1313,7 +1312,7 @@ impl ProductDevRendererDiagnosticsFeedbackResult {
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
             recovery: None,
             runtime,
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -1713,7 +1712,7 @@ impl ProductDevOperationResult {
         operation: ProductDevOperationKind,
         diagnostic: impl Into<String>,
     ) -> Result<Self, ProductDevHostError> {
-        let diagnostic = bounded_diagnostic(diagnostic.into())?;
+        let diagnostic = diagnostic.into();
         Ok(Self {
             accepted: false,
             code: "DEV_HOST_OPERATION_REJECTED".to_owned(),
@@ -1781,7 +1780,7 @@ impl ProductDevOperationResult {
             next_input_sequence: Some(next_input_sequence),
             admitted_through,
             readout: Some(readout),
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 }
@@ -1960,9 +1959,7 @@ impl ProductDevInputResult {
             next_input_sequence: None,
             binding: None,
             readout: None,
-            diagnostic: Some(bounded_diagnostic(
-                "Rust-host input mailbox overflow cleared queued input; obtain a fresh runtime baseline before retrying".to_owned(),
-            )?),
+            diagnostic: Some("Rust-host input mailbox overflow cleared queued input; obtain a fresh runtime baseline before retrying".to_owned()),
         })
     }
 
@@ -1987,9 +1984,7 @@ impl ProductDevInputResult {
             next_input_sequence: None,
             binding: None,
             readout: None,
-            diagnostic: Some(bounded_diagnostic(
-                "input batch was not a strict runtime-input wire batch; the runtime input binding was resynchronized".to_owned(),
-            )?),
+            diagnostic: Some("input batch was not a strict runtime-input wire batch; the runtime input binding was resynchronized".to_owned()),
         })
     }
 
@@ -2031,7 +2026,7 @@ impl ProductDevInputResult {
             next_input_sequence: None,
             binding: None,
             readout: None,
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -2118,9 +2113,9 @@ impl ProductDevInputResult {
             diagnostic: if complete {
                 None
             } else {
-                Some(bounded_diagnostic(format!(
+                Some(format!(
                     "dropped {dropped_count} stale or duplicate input event(s); synchronize the input cursor and do not replay them"
-                ))?)
+                ))
             },
         })
     }
@@ -2304,7 +2299,7 @@ impl ProductDevTimelineCompletionResult {
             ticket,
             binding: None,
             readout: None,
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -2332,7 +2327,7 @@ impl ProductDevTimelineCompletionResult {
             ticket,
             binding: Some(binding),
             readout: Some(readout),
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -2361,7 +2356,7 @@ impl ProductDevTimelineCompletionResult {
             ticket,
             binding: Some(binding),
             readout: Some(readout),
-            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+            diagnostic: Some(diagnostic.into()),
         })
     }
 
@@ -3196,16 +3191,6 @@ fn complete_baseline_end(
     Ok(None)
 }
 
-fn bounded_diagnostic(value: String) -> Result<String, ProductDevHostError> {
-    if value.is_empty() || value.len() > 1_024 {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_RESULT_DIAGNOSTIC",
-            "runtime result diagnostic exceeds host bounds",
-        ));
-    }
-    Ok(value)
-}
-
 impl<T> ProductDevRuntimeReceipt<T> {
     pub fn new(result: T, outputs: Vec<RuntimePublication>) -> Result<Self, ProductDevHostError> {
         for output in &outputs {
@@ -3432,8 +3417,7 @@ pub trait ProductDevRuntime: Send + 'static {
                 "{} control is not supported by this runtime",
                 operation.as_wire()
             ),
-        )
-        .expect("fixed control diagnostic"))
+        ))
     }
 
     fn input(
@@ -3451,8 +3435,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_INPUT_RESYNC_UNSUPPORTED",
             "runtime does not expose host input-overflow recovery",
-        )
-        .expect("fixed input-resync unsupported diagnostic"))
+        ))
     }
 
     /// Executes one bounded product-owned generated debug command between
@@ -3465,8 +3448,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_DEBUG_UNSUPPORTED",
             "live debug commands are not supported by this runtime",
-        )
-        .expect("fixed debug unsupported diagnostic"))
+        ))
     }
 
     /// Returns generated product catalog descriptor data when this product
@@ -3474,12 +3456,8 @@ pub trait ProductDevRuntime: Send + 'static {
     fn describe_debug(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugCatalog>, ProductDevRuntimeError> {
-        ProductDevRuntimeReceipt::new(ProductDevDebugCatalog::unavailable(), Vec::new()).map_err(
-            |error| {
-                ProductDevRuntimeError::new(error.code(), error.detail())
-                    .expect("fixed catalog unavailable diagnostic")
-            },
-        )
+        ProductDevRuntimeReceipt::new(ProductDevDebugCatalog::unavailable(), Vec::new())
+            .map_err(|error| ProductDevRuntimeError::new(error.code(), error.detail()))
     }
 
     fn advance_realtime(
@@ -3512,8 +3490,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_AUDIO_FEEDBACK_UNSUPPORTED",
             "audio feedback is not supported by this runtime",
-        )
-        .expect("fixed audio-feedback diagnostic"))
+        ))
     }
 
     fn report_video_feedback(
@@ -3524,8 +3501,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new(
             "DEV_HOST_VIDEO_FEEDBACK_UNSUPPORTED",
             "video feedback is not supported by this runtime",
-        )
-        .expect("fixed video feedback diagnostic"))
+        ))
     }
 
     fn report_animation_feedback(
@@ -3536,8 +3512,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_ANIMATION_FEEDBACK_UNSUPPORTED",
             "animation feedback is not supported by this runtime",
-        )
-        .expect("fixed animation-feedback diagnostic"))
+        ))
     }
 
     /// Ingests the latest retained ghost-plate renderer snapshot. It is
@@ -3550,8 +3525,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_GHOST_PLATE_FEEDBACK_UNSUPPORTED",
             "ghost plate feedback is not supported by this runtime",
-        )
-        .expect("fixed ghost-plate feedback diagnostic"))
+        ))
     }
 
     /// Ingests one bounded completed image or authored-scene output chunk.
@@ -3564,8 +3538,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_RENDER_OUTPUT_FEEDBACK_UNSUPPORTED",
             "render output feedback is not supported by this runtime",
-        )
-        .expect("fixed render-output feedback diagnostic"))
+        ))
     }
 
     fn report_renderer_diagnostics(
@@ -3578,8 +3551,7 @@ pub trait ProductDevRuntime: Send + 'static {
         Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED",
             "renderer diagnostics are not supported by this runtime",
-        )
-        .expect("fixed renderer-diagnostics diagnostic"))
+        ))
     }
 }
 
@@ -3819,8 +3791,7 @@ mod tests {
             ProductDevRuntimeError::new_not_applied(
                 "CSHARP_NEW_SOURCE_REJECTION",
                 "source rejected this operation before admission",
-            )
-            .unwrap(),
+            ),
         )
         .unwrap();
         let ordinary = serde_json::to_value(ordinary).unwrap();
@@ -3835,15 +3806,14 @@ mod tests {
             ProductDevRuntimeError::new(
                 "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED",
                 "runtime counter exhausted",
-            )
-            .unwrap(),
+            ),
         )
         .unwrap();
         let exhausted = serde_json::to_value(exhausted).unwrap();
         assert_eq!(exhausted["disposition"], "terminal");
 
         let unknown_error =
-            ProductDevRuntimeError::new("CSHARP_NEW_FAILURE", "unmapped runtime failure").unwrap();
+            ProductDevRuntimeError::new("CSHARP_NEW_FAILURE", "unmapped runtime failure");
         assert_eq!(
             unknown_error.recovery().mutation(),
             ProductDevMutationCertainty::Unknown
@@ -3873,8 +3843,7 @@ mod tests {
             ProductDevRuntimeError::new_output_rebaseline(
                 "DEV_HOST_PROJECTION_ONLY",
                 "retained output needs a fresh baseline",
-            )
-            .unwrap(),
+            ),
         )
         .unwrap();
         let projection_only = serde_json::to_value(projection_only).unwrap();

@@ -139,8 +139,7 @@ impl ProductDevRuntime for ReconnectRuntime {
             return Err(product_dev_host::ProductDevRuntimeError::new(
                 "FIXTURE_CONNECT_TAINTED",
                 "fixture start callback escaped after entry",
-            )
-            .unwrap());
+            ));
         }
         let operation = if self.started {
             self.attaches.fetch_add(1, Ordering::SeqCst);
@@ -264,8 +263,7 @@ impl ProductDevRuntime for FixtureRuntime {
             return Err(product_dev_host::ProductDevRuntimeError::new(
                 "FIXTURE_CALLBACK_UNKNOWN",
                 "callback effects are unknown",
-            )
-            .unwrap());
+            ));
         }
         Ok(Self::operation(operation.operation_kind()))
     }
@@ -328,8 +326,7 @@ impl ProductDevRuntime for FixtureRuntime {
                 return Err(product_dev_host::ProductDevRuntimeError::new(
                     "FIXTURE_DEBUG_RUNTIME",
                     "fixture runtime failure",
-                )
-                .unwrap())
+                ))
             }
             _ => ProductDevDebugResult::new(true, format!("executed {command}")).unwrap(),
         };
@@ -395,8 +392,7 @@ impl ProductDevRuntime for FixtureRuntime {
             return Err(product_dev_host::ProductDevRuntimeError::new(
                 "FIXTURE_AUDIO_BINDING",
                 "audio feedback does not name the current binding",
-            )
-            .unwrap());
+            ));
         }
         let accepted_through = feedback.facts.last().map(|fact| fact.fact_id());
         Ok(ProductDevRuntimeReceipt::new(

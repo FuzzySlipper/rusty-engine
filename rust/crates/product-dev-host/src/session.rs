@@ -371,7 +371,6 @@ pub(crate) fn runtime_poisoned() -> ProductDevRuntimeError {
         "DEV_HOST_RUNTIME_POISONED",
         "runtime serialization lock is poisoned",
     )
-    .expect("fixed runtime poison diagnostic is valid")
 }
 
 fn decode_canonical_u64(bytes: &[u8]) -> Result<CanonicalU64, ProductDevRuntimeError> {
@@ -390,7 +389,6 @@ fn decode_canonical_u64(bytes: &[u8]) -> Result<CanonicalU64, ProductDevRuntimeE
 
 fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new(error.code(), error.detail())
-        .expect("bounded host error has a valid runtime diagnostic")
 }
 
 #[cfg(test)]

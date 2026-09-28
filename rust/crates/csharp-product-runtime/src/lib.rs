@@ -89,7 +89,6 @@ const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::E
 // the aggregate limit matches the existing product persistence payload limit.
 const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
-const MAX_PRODUCT_ERROR_BYTES: usize = 64 * 1024;
 const MAX_PRODUCT_ABI_IDENTITY_BYTES: usize = 128;
 const HOST_ABI_BUILD_IDENTITY: &[u8] = b"rusty-engine-host/v1";
 
@@ -608,7 +607,6 @@ impl From<CsharpEngineServicesError> for CsharpProductRuntimeError {
 impl From<CsharpProductRuntimeError> for ProductDevRuntimeError {
     fn from(error: CsharpProductRuntimeError) -> Self {
         ProductDevRuntimeError::new(error.code, error.detail)
-            .expect("fixed bounded NativeAOT error")
     }
 }
 
@@ -2367,8 +2365,7 @@ impl CsharpProductRuntime {
         operation: ProductDevOperationKind,
         error: CsharpProductRuntimeError,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
-            .expect("fixed bounded NativeAOT error");
+        let error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned());
         if self.tainted {
             // A canonical voxel repair has a normal receipt/output route even
             // though the callback itself is terminal. Deliver it once, then
@@ -2450,15 +2447,13 @@ impl CsharpProductRuntime {
     }
 
     fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
-        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
-            .expect("fixed bounded NativeAOT error");
+        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned());
         self.publish_diagnostic(&runtime_error);
         runtime_error
     }
 
     fn resync_runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
-        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
-            .expect("fixed bounded NativeAOT error");
+        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned());
         self.publish_diagnostic_as(&runtime_error, ProductDevFaultDisposition::ResyncRequired);
         runtime_error
     }
@@ -2547,8 +2542,7 @@ impl CsharpProductRuntime {
         Err(ProductDevRuntimeError::new_not_applied(
             "CSHARP_CONTROL_BINDING",
             "lifecycle control does not name the current runtime binding",
-        )
-        .expect("fixed control-binding diagnostic"))
+        ))
     }
 
     /// Checks restart's lifecycle state without advancing any Engine-owned
@@ -2569,8 +2563,7 @@ impl CsharpProductRuntime {
                 "restart is not admitted from lifecycle state {:?}",
                 self.lifecycle.state()
             ),
-        )
-        .expect("fixed lifecycle-state diagnostic"))
+        ))
     }
 
     fn require_not_tainted(&self) -> Result<(), ProductDevRuntimeError> {
@@ -2580,8 +2573,7 @@ impl CsharpProductRuntime {
         Err(ProductDevRuntimeError::new(
             "CSHARP_RUNTIME_TAINTED",
             "a C# product callback escaped after entry; replace this runtime incarnation",
-        )
-        .expect("fixed tainted-runtime diagnostic"))
+        ))
     }
 
     fn tag_complete_baseline(
@@ -2728,7 +2720,6 @@ impl CsharpProductRuntime {
                 "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
                 format!("renderer diagnostics summary could not be encoded: {error}"),
             )
-            .expect("fixed renderer diagnostics encoding diagnostic")
         })?;
         // A read with no browser snapshot remains a failed observation for
         // callers. Visibility operations are successful even before the first
@@ -2768,10 +2759,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         resource
             .map(|resource| admit_renderer_resource(&resource))
             .transpose()
-            .map_err(|error| {
-                ProductDevRuntimeError::new(error.code(), error.to_string())
-                    .expect("resource error is bounded")
-            })
+            .map_err(|error| ProductDevRuntimeError::new(error.code(), error.to_string()))
     }
 
     fn take_update_attribution(&mut self) -> Option<ProductDevUpdateAttribution> {
@@ -2821,8 +2809,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_CONNECT_STATE",
                 "a shutdown runtime cannot accept a browser connection",
-            )
-            .expect("fixed connect-state diagnostic"));
+            ));
         }
         self.receipt(
             ProductDevOperationKind::Connect,
@@ -2978,8 +2965,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_INPUT_STATE",
                 "input is admitted only while the standard runtime is running",
-            )
-            .expect("fixed input-state diagnostic"));
+            ));
         }
         // RuntimeInputLane owns the checkpoint. This keeps a valid prefix from
         // reaching the product when a later event is malformed or from a
@@ -3074,15 +3060,13 @@ impl ProductDevRuntime for CsharpProductRuntime {
             return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_DEBUG_INPUT_BOUNDS",
                 "debug command exceeds the generated callback input bound",
-            )
-            .expect("fixed debug input diagnostic"));
+            ));
         }
         let Some((execute, release)) = self.api.debug else {
             return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_DEBUG_UNSUPPORTED",
                 "the loaded product does not expose generated live-debug callbacks",
-            )
-            .expect("fixed debug unsupported diagnostic"));
+            ));
         };
 
         // Debug commands may use ordinary generated Engine services. Keep
@@ -3264,7 +3248,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
                         "CSHARP_TIMELINE_DATA",
                         format!("timeline outcome data could not be copied: {error}"),
                     )
-                    .expect("bounded serialization diagnostic")
                 })?,
         };
         let provenance_detail = envelope
@@ -3277,7 +3260,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     "CSHARP_TIMELINE_DATA",
                     format!("timeline provenance data could not be copied: {error}"),
                 )
-                .expect("bounded serialization diagnostic")
             })?;
         let native = NativeProductTimelineCompletion {
             ticket: ticket.get(),
@@ -3492,8 +3474,7 @@ fn ghost_plate_realization_fact(
                 Err(ProductDevRuntimeError::new(
                     "CSHARP_GHOST_PLATE_FEEDBACK",
                     format!("ghost plate {field} is invalid"),
-                )
-                .expect("bounded ghost-plate feedback diagnostic"))
+                ))
             } else {
                 Ok(value)
             }
@@ -3505,8 +3486,7 @@ fn ghost_plate_realization_fact(
                 return Err(ProductDevRuntimeError::new(
                     "CSHARP_GHOST_PLATE_FEEDBACK",
                     "ghost plate local angular offset is invalid",
-                )
-                .expect("bounded ghost-plate feedback diagnostic"));
+                ));
             }
             Ok(value)
         })
@@ -3516,8 +3496,7 @@ fn ghost_plate_realization_fact(
                 Err(ProductDevRuntimeError::new(
                     "CSHARP_GHOST_PLATE_FEEDBACK",
                     "ghost plate local angular offset exceeded f32 range",
-                )
-                .expect("bounded ghost-plate feedback diagnostic"))
+                ))
             } else {
                 Ok(value as f32)
             }
@@ -3545,8 +3524,7 @@ fn ghost_plate_realization_fact(
                 return Err(ProductDevRuntimeError::new(
                     "CSHARP_GHOST_PLATE_FEEDBACK",
                     "ghost plate limitation mask is not a supported retained profile",
-                )
-                .expect("bounded ghost-plate feedback diagnostic"));
+                ));
             }
         },
         preparation_cpu_milliseconds: scalar(
@@ -3573,8 +3551,7 @@ fn animation_realization_fact(
             Err(ProductDevRuntimeError::new(
                 "CSHARP_ANIMATION_FEEDBACK",
                 "animation feedback time is invalid",
-            )
-            .expect("fixed"))
+            ))
         } else {
             Ok((seconds * 1000.0).round() as u64)
         }
@@ -3746,8 +3723,7 @@ fn video_realization_fact(
                     return Err(ProductDevRuntimeError::new(
                         "CSHARP_VIDEO_FEEDBACK",
                         "video feedback failure code is invalid",
-                    )
-                    .expect("fixed"))
+                    ))
                 }
             },
         },
@@ -4164,7 +4140,6 @@ fn prepare_content_store_root(
 
 fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new_not_applied(input_error_code(&error), error.to_string())
-        .expect("bounded input admission diagnostic")
 }
 
 fn lifecycle_error(error: runtime_lifecycle::RuntimeLifecycleError) -> CsharpProductRuntimeError {
@@ -4175,7 +4150,6 @@ fn lifecycle_runtime_error(
     error: runtime_lifecycle::RuntimeLifecycleError,
 ) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new_not_applied(lifecycle_error_code(&error), error.to_string())
-        .expect("bounded lifecycle admission diagnostic")
 }
 
 fn lifecycle_error_code(error: &runtime_lifecycle::RuntimeLifecycleError) -> &'static str {
@@ -4406,12 +4380,6 @@ fn copy_product_error_text(
     value: NativeUtf8Slice,
     field: &str,
 ) -> Result<String, CsharpProductRuntimeError> {
-    if value.len > MAX_PRODUCT_ERROR_BYTES {
-        return Err(CsharpProductRuntimeError::new(
-            "CSHARP_PRODUCT_DIAGNOSTIC_BOUNDS",
-            format!("product callback {field} exceeds the host diagnostic bound"),
-        ));
-    }
     if value.len != 0 && value.bytes.is_null() {
         return Err(CsharpProductRuntimeError::new(
             "CSHARP_PRODUCT_DIAGNOSTIC_POINTER",
@@ -4419,20 +4387,13 @@ fn copy_product_error_text(
         ));
     }
     // SAFETY: the product release callback keeps the returned bytes alive until
-    // after this bounded copy.
+    // after this copy. A damaged encoding must not discard the product's error.
     let bytes = if value.len == 0 {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(value.bytes, value.len) }
     };
-    std::str::from_utf8(bytes)
-        .map(str::to_owned)
-        .map_err(|error| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_PRODUCT_DIAGNOSTIC_UTF8",
-                format!("product callback {field} is not UTF-8: {error}"),
-            )
-        })
+    Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn call_debug(
@@ -5617,7 +5578,6 @@ fn complete_voxel_baseline(
 
 fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
-        .expect("bounded host error")
 }
 
 #[cfg(test)]
@@ -6844,6 +6804,71 @@ mod tests {
         assert!(!events.contains(&"terminal"));
         assert!(!events.contains(&"destroy"));
         fs::remove_dir_all(root).expect("remove tainted fixture content");
+    }
+
+    fn long_product_error() -> &'static str {
+        static MESSAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        MESSAGE.get_or_init(|| {
+            let mut message = String::from("System.InvalidOperationException: fixture failure\n");
+            for frame in 0..64 {
+                message.push_str(&format!(
+                    "   at Fixture.Frame{frame}() in /src/Fixture.cs:line {frame}\n"
+                ));
+            }
+            message
+        })
+    }
+
+    unsafe extern "C" fn long_product_error_read(
+        _handle: *mut c_void,
+        result: *mut NativeProductCallError,
+    ) -> i32 {
+        let message = long_product_error().as_bytes();
+        // SAFETY: the fixture writes the call helper's result and exposes
+        // static bytes until the matching release callback.
+        unsafe {
+            *result = NativeProductCallError {
+                service: NativeUtf8Slice::default(),
+                operation: NativeUtf8Slice::default(),
+                status: 99,
+                message: NativeUtf8Slice {
+                    bytes: message.as_ptr(),
+                    len: message.len(),
+                },
+            };
+        }
+        ABI_OK
+    }
+
+    #[test]
+    fn long_multiline_product_error_is_reported_whole_without_panicking() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
+        UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(false, Ordering::SeqCst);
+        UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        let (mut runtime, root) =
+            drop_fixture_runtime_with_diagnostics("long-product-error", diagnostics.clone());
+        runtime.api.call_error = Some((long_product_error_read, product_error_fixture_release));
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("fixture start");
+        let (result, _) = runtime
+            .admit_demand_step()
+            .expect("a failed callback still returns its receipt")
+            .into_parts();
+        UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        assert!(!result.is_accepted());
+        assert!(long_product_error().len() > 1_024);
+        assert!(
+            diagnostics
+                .snapshot()
+                .events
+                .iter()
+                .any(|event| event.message().contains(long_product_error())),
+            "the complete multiline product error reaches runtime diagnostics"
+        );
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove long-error fixture content");
     }
 
     #[test]

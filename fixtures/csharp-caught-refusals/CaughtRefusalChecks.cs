@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using Rusty.Engine;
 
 namespace SdkPackageConsumer;
@@ -23,6 +24,13 @@ internal static class CaughtRefusalChecks
         RenderResourceInfo sky = engine.Graphics.OpenResource(new RenderResourceRequest(PresentTexture));
         ExpectRefusal("CameraView", () => engine.CameraView.SetSkyBackgroundBlend(
             new SkyBackgroundBlendRequest(sky.Handle, sky.Handle, OutOfRangeBlendAmount)));
+        EngineCallException dynamics = ExpectRefusal("Dynamics", () => engine.Dynamics.CreateWorld(
+            new DynamicsWorldConfig(new Vector3(float.NaN, 0, 0))));
+        if (dynamics.Diagnostics.Span[0].Code != "CSHARP_DYNAMICS_WORLD")
+        {
+            throw new InvalidOperationException($"Dynamics refusal lost its reason: {dynamics.Message}");
+        }
+
         StructuredValueNode[] nodes = [new(StructuredValueKind.Null, 0, 0, 0, 0, 0, 0, 0, 0)];
         ExpectRefusal("Ui", () => engine.Ui.PublishProjection(new UiProjection(
             stream,
@@ -42,7 +50,7 @@ internal static class CaughtRefusalChecks
         Console.WriteLine("CAUGHT_REFUSAL_CHECKS_PASSED");
     }
 
-    private static void ExpectRefusal(string service, Action call)
+    private static EngineCallException ExpectRefusal(string service, Action call)
     {
         try
         {
@@ -57,7 +65,7 @@ internal static class CaughtRefusalChecks
                     $"{service} refusal lost its named diagnostic: {error.Message}");
             }
 
-            return;
+            return error;
         }
 
         throw new InvalidOperationException($"{service} accepted a request that must be refused");

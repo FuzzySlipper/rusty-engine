@@ -1,6 +1,7 @@
 mod anchor;
 mod chain;
 mod errors;
+use errors::{clear_receipt, refuse};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1768,7 +1769,9 @@ unsafe extern "C" fn create_world(
     context: *mut c_void,
     config: NativeDynamicsWorldConfig,
     handle: *mut NativeDynamicsWorldHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || handle.is_null() {
         return 0;
     }
@@ -1778,17 +1781,22 @@ unsafe extern "C" fn create_world(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"CreateWorld"),
     }
 }
 
-unsafe extern "C" fn destroy_world(context: *mut c_void, handle: NativeDynamicsWorldHandle) -> i32 {
+unsafe extern "C" fn destroy_world(
+    context: *mut c_void,
+    handle: NativeDynamicsWorldHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.destroy_world(handle) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"DestroyWorld"),
     }
 }
 
@@ -1796,7 +1804,9 @@ unsafe extern "C" fn create_body(
     context: *mut c_void,
     request: *const NativeDynamicsCreateBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || handle.is_null() {
         return 0;
     }
@@ -1806,7 +1816,7 @@ unsafe extern "C" fn create_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"CreateBody"),
     }
 }
 
@@ -1814,7 +1824,9 @@ unsafe extern "C" fn create_sphere_body(
     context: *mut c_void,
     request: *const NativeDynamicsCreateSphereBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || handle.is_null() {
         return 0;
     }
@@ -1825,7 +1837,7 @@ unsafe extern "C" fn create_sphere_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"CreateSphereBody"),
     }
 }
 
@@ -1833,7 +1845,9 @@ unsafe extern "C" fn create_cuboid_body(
     context: *mut c_void,
     request: *const NativeDynamicsCreateCuboidBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || handle.is_null() {
         return 0;
     }
@@ -1844,7 +1858,7 @@ unsafe extern "C" fn create_cuboid_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"CreateCuboidBody"),
     }
 }
 
@@ -1852,7 +1866,9 @@ unsafe extern "C" fn create_sphere_body_with_properties(
     context: *mut c_void,
     request: *const NativeDynamicsCreateSphereBodyPropertiesRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || handle.is_null() {
         return 0;
     }
@@ -1863,7 +1879,12 @@ unsafe extern "C" fn create_sphere_body_with_properties(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(
+            context,
+            &error,
+            operation_error,
+            b"CreateSphereBodyWithProperties",
+        ),
     }
 }
 
@@ -1871,7 +1892,9 @@ unsafe extern "C" fn create_capsule_body(
     context: *mut c_void,
     request: *const NativeDynamicsCreateCapsuleBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || handle.is_null() {
         return 0;
     }
@@ -1882,20 +1905,22 @@ unsafe extern "C" fn create_capsule_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"CreateCapsuleBody"),
     }
 }
 
 unsafe extern "C" fn bind_world_collision(
     context: *mut c_void,
     request: NativeDynamicsWorldCollisionBindingRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.bind_world_collision(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"BindWorldCollision"),
     }
 }
 
@@ -1903,7 +1928,9 @@ unsafe extern "C" fn rebase_world_origin(
     context: *mut c_void,
     request: NativeDynamicsRebaseWorldOriginRequest,
     receipt: *mut NativeDynamicsRebaseWorldOriginReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -1912,17 +1939,22 @@ unsafe extern "C" fn rebase_world_origin(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"RebaseWorldOrigin"),
     }
 }
 
-unsafe extern "C" fn destroy_body(context: *mut c_void, handle: NativeDynamicsBodyHandle) -> i32 {
+unsafe extern "C" fn destroy_body(
+    context: *mut c_void,
+    handle: NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.destroy_body(handle) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"DestroyBody"),
     }
 }
 
@@ -1930,7 +1962,9 @@ unsafe extern "C" fn step(
     context: *mut c_void,
     request: *const NativeDynamicsStepRequest,
     receipt: *mut NativeDynamicsStepReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -1939,7 +1973,7 @@ unsafe extern "C" fn step(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"Step"),
     }
 }
 
@@ -1947,7 +1981,9 @@ unsafe extern "C" fn step_and_read(
     context: *mut c_void,
     request: *const NativeDynamicsStepAndReadRequest,
     lease: *mut NativeDynamicsStepAndReadLease,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || lease.is_null() {
         return 0;
     }
@@ -1958,7 +1994,7 @@ unsafe extern "C" fn step_and_read(
             unsafe { *lease = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"StepAndRead"),
     }
 }
 
@@ -1981,7 +2017,9 @@ unsafe extern "C" fn read(
     context: *mut c_void,
     request: NativeDynamicsReadRequest,
     readout: *mut NativeDynamicsReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -1990,30 +2028,37 @@ unsafe extern "C" fn read(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"Read"),
     }
 }
 
-unsafe extern "C" fn reset(context: *mut c_void, request: NativeDynamicsResetRequest) -> i32 {
+unsafe extern "C" fn reset(
+    context: *mut c_void,
+    request: NativeDynamicsResetRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.reset(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"Reset"),
     }
 }
 
 unsafe extern "C" fn update_body(
     context: *mut c_void,
     request: NativeDynamicsUpdateBodyRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.update_body(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"UpdateBody"),
     }
 }
 
@@ -2021,7 +2066,9 @@ unsafe extern "C" fn read_world(
     context: *mut c_void,
     request: NativeDynamicsWorldReadRequest,
     readout: *mut NativeDynamicsWorldReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -2030,7 +2077,7 @@ unsafe extern "C" fn read_world(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReadWorld"),
     }
 }
 
@@ -2038,7 +2085,9 @@ unsafe extern "C" fn read_body_at(
     context: *mut c_void,
     request: NativeDynamicsBodyAtRequest,
     receipt: *mut NativeDynamicsBodyAtReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -2047,7 +2096,7 @@ unsafe extern "C" fn read_body_at(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReadBodyAt"),
     }
 }
 
@@ -2055,7 +2104,9 @@ unsafe extern "C" fn read_contact_at(
     context: *mut c_void,
     request: NativeDynamicsContactAtRequest,
     receipt: *mut NativeDynamicsContactAtReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -2064,7 +2115,7 @@ unsafe extern "C" fn read_contact_at(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReadContactAt"),
     }
 }
 
@@ -2072,7 +2123,9 @@ unsafe extern "C" fn replace_body(
     context: *mut c_void,
     request: NativeDynamicsReplaceBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || handle.is_null() {
         return 0;
     }
@@ -2081,7 +2134,7 @@ unsafe extern "C" fn replace_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReplaceBody"),
     }
 }
 
@@ -2089,7 +2142,9 @@ unsafe extern "C" fn replace_cuboid_body(
     context: *mut c_void,
     request: NativeDynamicsReplaceCuboidBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || handle.is_null() {
         return 0;
     }
@@ -2098,7 +2153,7 @@ unsafe extern "C" fn replace_cuboid_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReplaceCuboidBody"),
     }
 }
 
@@ -2106,7 +2161,9 @@ unsafe extern "C" fn replace_sphere_body(
     context: *mut c_void,
     request: NativeDynamicsReplaceSphereBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || handle.is_null() {
         return 0;
     }
@@ -2115,7 +2172,7 @@ unsafe extern "C" fn replace_sphere_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReplaceSphereBody"),
     }
 }
 
@@ -2123,7 +2180,9 @@ unsafe extern "C" fn replace_capsule_body(
     context: *mut c_void,
     request: NativeDynamicsReplaceCapsuleBodyRequest,
     handle: *mut NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || handle.is_null() {
         return 0;
     }
@@ -2132,7 +2191,7 @@ unsafe extern "C" fn replace_capsule_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ReplaceCapsuleBody"),
     }
 }
 

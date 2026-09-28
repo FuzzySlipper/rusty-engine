@@ -31,94 +31,130 @@ pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldConfig,
     *mut NativeDynamicsWorldHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyDynamicsWorld =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsWorldHandle) -> i32;
+pub type NativeDestroyDynamicsWorld = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsWorldHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateDynamicsBody = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsCreateBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateDynamicsSphereBody = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsCreateSphereBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateDynamicsCuboidBody = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsCreateCuboidBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateDynamicsSphereBodyWithProperties = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsCreateSphereBodyPropertiesRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateDynamicsCapsuleBody = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsCreateCapsuleBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeBindDynamicsWorldCollision =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsWorldCollisionBindingRequest) -> i32;
+pub type NativeBindDynamicsWorldCollision = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsWorldCollisionBindingRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeRebaseDynamicsWorldOrigin = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsRebaseWorldOriginRequest,
     *mut NativeDynamicsRebaseWorldOriginReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyDynamicsBody =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsBodyHandle) -> i32;
+pub type NativeDestroyDynamicsBody = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeStepDynamics = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsStepRequest,
     *mut NativeDynamicsStepReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeStepAndReadDynamics = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsStepAndReadRequest,
     *mut NativeDynamicsStepAndReadLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyDynamicsStepAndReadLease =
     unsafe extern "C" fn(*mut c_void, NativeDynamicsStepAndReadLeaseHandle) -> i32;
-pub type NativeReadDynamics =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsReadRequest, *mut NativeDynamicsReadout) -> i32;
-pub type NativeResetDynamics = unsafe extern "C" fn(*mut c_void, NativeDynamicsResetRequest) -> i32;
-pub type NativeUpdateDynamicsBody =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsUpdateBodyRequest) -> i32;
+pub type NativeReadDynamics = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsReadRequest,
+    *mut NativeDynamicsReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeResetDynamics = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsResetRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeUpdateDynamicsBody = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsUpdateBodyRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldReadRequest,
     *mut NativeDynamicsWorldReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadDynamicsBodyAt = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsBodyAtRequest,
     *mut NativeDynamicsBodyAtReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadDynamicsContactAt = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsContactAtRequest,
     *mut NativeDynamicsContactAtReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceDynamicsBody = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsReplaceBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceDynamicsCuboidBody = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsReplaceCuboidBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceDynamicsSphereBody = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsReplaceSphereBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceDynamicsCapsuleBody = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsReplaceCapsuleBodyRequest,
     *mut NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateSpatialSession = unsafe extern "C" fn(
     *mut c_void,
@@ -1981,14 +2017,17 @@ pub type NativeObserveDynamicsAnchor = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsObserveAnchorRequest,
     *mut NativeDynamicsAnchorObservation,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRefreshDynamicsAnchor = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsRefreshAnchorRequest,
     *mut NativeDynamicsAnchorObservation,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeStepDynamicsWithReactions = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsStepWithReactionsRequest,
     *mut NativeDynamicsStepReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;

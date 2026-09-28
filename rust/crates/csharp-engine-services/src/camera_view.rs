@@ -1370,7 +1370,9 @@ mod tests {
                 descriptor: largest,
             })
             .expect_err("a second large target exceeds the pixel budget");
-        let staged = bridge.take_staged_call().expect("refusal does not fail the call");
+        let staged = bridge
+            .take_staged_call()
+            .expect("refusal does not fail the call");
         let retained = &staged.state.targets[&targets[1].value];
         assert_eq!(retained.descriptor.width, target_descriptor().width);
         assert_eq!(retained.revision, 1);

@@ -14140,7 +14140,9 @@ pub(super) mod tests {
                 .logical_id,
             7
         );
-        let call = bridge.take_staged_call().expect("a refusal does not fail the call");
+        let call = bridge
+            .take_staged_call()
+            .expect("a refusal does not fail the call");
         bridge.commit(call);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
     }
@@ -14362,7 +14364,9 @@ pub(super) mod tests {
             .expect_err("invalid meter update");
         bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
-        let call = bridge.take_staged_call().expect("a refusal does not fail the call");
+        let call = bridge
+            .take_staged_call()
+            .expect("a refusal does not fail the call");
         bridge.commit(call);
         let retained = bridge
             .state
@@ -14550,7 +14554,9 @@ pub(super) mod tests {
             .expect_err("invalid collision update");
         bridge.record_operation_error(error);
         assert_eq!(bridge.presentation_readout().particle_diagnostic_count, 1);
-        let call = bridge.take_staged_call().expect("a refusal does not fail the call");
+        let call = bridge
+            .take_staged_call()
+            .expect("a refusal does not fail the call");
         bridge.commit(call);
         let retained = bridge
             .state

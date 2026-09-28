@@ -17,11 +17,9 @@ const DEFAULT_RING_CAPACITY: usize = 256;
 const MAX_RING_CAPACITY: usize = 1_024;
 const MAX_SOURCE_BYTES: usize = 64;
 const MAX_CODE_BYTES: usize = 128;
-const MAX_MESSAGE_BYTES: usize = 1_024;
 const MAX_CORRELATION_BYTES: usize = 128;
 const MAX_FIELDS: usize = 8;
 const MAX_FIELD_KEY_BYTES: usize = 64;
-const MAX_FIELD_VALUE_BYTES: usize = 256;
 const MAX_BATCH_EVENTS: usize = 64;
 const MAX_RECOVERABLE_CODES: usize = 64;
 
@@ -192,7 +190,7 @@ impl RuntimeDiagnosticEvent {
             disposition,
             source: bounded_identity(source.into(), MAX_SOURCE_BYTES, "source")?,
             code: bounded_identity(code.into(), MAX_CODE_BYTES, "code")?,
-            message: bounded_text(message.into(), MAX_MESSAGE_BYTES, "message")?,
+            message: message.into(),
             runtime: None,
             correlation: None,
             fields: Vec::new(),
@@ -236,7 +234,7 @@ impl RuntimeDiagnosticEvent {
         }
         self.fields.push(RuntimeDiagnosticField {
             key,
-            value: bounded_text(value.into(), MAX_FIELD_VALUE_BYTES, "field value")?,
+            value: value.into(),
         });
         Ok(self)
     }
@@ -538,25 +536,6 @@ fn bounded_identity(
     Ok(value)
 }
 
-fn bounded_text(
-    value: String,
-    maximum: usize,
-    field: &str,
-) -> Result<String, RuntimeDiagnosticsError> {
-    if value.is_empty()
-        || value.len() > maximum
-        || value
-            .chars()
-            .any(|character| character.is_control() && character != '\t')
-    {
-        return Err(RuntimeDiagnosticsError::new(
-            "RUNTIME_DIAGNOSTICS_EVENT",
-            format!("diagnostic {field} is invalid"),
-        ));
-    }
-    Ok(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,7 +546,7 @@ mod tests {
             RuntimeDiagnosticDisposition::Accepted,
             "s".repeat(MAX_SOURCE_BYTES),
             format!("DENSE_{index:03}"),
-            "m".repeat(MAX_MESSAGE_BYTES),
+            "m".repeat(1_024),
         )
         .unwrap()
         .with_correlation("r".repeat(MAX_CORRELATION_BYTES))
@@ -576,7 +555,7 @@ mod tests {
             event = event
                 .with_field(
                     format!("{field_index}{}", "k".repeat(MAX_FIELD_KEY_BYTES - 1)),
-                    "v".repeat(MAX_FIELD_VALUE_BYTES),
+                    "v".repeat(256),
                 )
                 .unwrap();
         }

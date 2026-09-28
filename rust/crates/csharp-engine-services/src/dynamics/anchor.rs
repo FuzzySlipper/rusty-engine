@@ -155,7 +155,9 @@ pub(super) unsafe extern "C" fn observe_anchor(
     context: *mut c_void,
     request: NativeDynamicsObserveAnchorRequest,
     output: *mut NativeDynamicsAnchorObservation,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -164,14 +166,16 @@ pub(super) unsafe extern "C" fn observe_anchor(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"ObserveAnchor"),
     }
 }
 pub(super) unsafe extern "C" fn refresh_anchor(
     context: *mut c_void,
     request: NativeDynamicsRefreshAnchorRequest,
     output: *mut NativeDynamicsAnchorObservation,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -180,14 +184,16 @@ pub(super) unsafe extern "C" fn refresh_anchor(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"RefreshAnchor"),
     }
 }
 pub(super) unsafe extern "C" fn step_with_reactions(
     context: *mut c_void,
     request: *const NativeDynamicsStepWithReactionsRequest,
     output: *mut NativeDynamicsStepReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(operation_error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -198,6 +204,6 @@ pub(super) unsafe extern "C" fn step_with_reactions(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => refuse(context, &error, operation_error, b"StepWithReactions"),
     }
 }

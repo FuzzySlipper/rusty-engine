@@ -73,10 +73,7 @@ impl ProductDevRuntimeError {
     /// intentionally conservative: once a runtime operation may have crossed
     /// into product or Engine ownership, replacement is required.  Known
     /// source conditions should use one of the classified constructors below.
-    pub fn new(
-        code: impl Into<String>,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
+    pub fn new(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
         Self::with_recovery(
             code,
             diagnostic,
@@ -85,19 +82,13 @@ impl ProductDevRuntimeError {
     }
 
     /// Constructs a failure known to have been rejected before mutation.
-    pub fn new_not_applied(
-        code: impl Into<String>,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
+    pub fn new_not_applied(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
         Self::with_recovery(code, diagnostic, ProductDevRuntimeRecovery::not_applied())
     }
 
     /// Constructs a failure whose retained output projection must be rebuilt,
     /// but whose runtime incarnation is still the current owner.
-    pub fn new_output_rebaseline(
-        code: impl Into<String>,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
+    pub fn new_output_rebaseline(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
         Self::with_recovery(
             code,
             diagnostic,
@@ -105,24 +96,17 @@ impl ProductDevRuntimeError {
         )
     }
 
+    /// Keeps the complete diagnostic, including multiline managed stack traces.
     pub fn with_recovery(
         code: impl Into<String>,
         diagnostic: impl Into<String>,
         recovery: ProductDevRuntimeRecovery,
-    ) -> Result<Self, ProductDevHostError> {
-        let code = code.into();
-        let diagnostic = diagnostic.into();
-        if !is_identity(&code) || diagnostic.len() > 1_024 {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_RUNTIME_DIAGNOSTIC",
-                "runtime error code or diagnostic exceeds the closed host bounds",
-            ));
-        }
-        Ok(Self {
-            code,
-            diagnostic,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            diagnostic: diagnostic.into(),
             recovery,
-        })
+        }
     }
 
     pub fn code(&self) -> &str {
@@ -136,12 +120,4 @@ impl ProductDevRuntimeError {
     pub const fn recovery(&self) -> ProductDevRuntimeRecovery {
         self.recovery
     }
-}
-
-fn is_identity(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }

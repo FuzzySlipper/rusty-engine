@@ -2912,9 +2912,6 @@ function requireKnownFields(
 }
 
 function requireDiagnostic(value: unknown): string {
-  if (typeof value !== 'string' || value.length === 0
-    || new TextEncoder().encode(value).byteLength > 1_024) {
-    throw new TypeError('diagnostic must be a non-empty string no greater than 1024 bytes');
-  }
+  if (typeof value !== 'string') throw new TypeError('diagnostic must be a string');
   return value;
 }

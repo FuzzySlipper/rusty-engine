@@ -1955,7 +1955,6 @@ fn recover_rejected_input_batch<R: ProductDevRuntime>(
 
 fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new(error.code(), error.detail())
-        .expect("bounded host error has a valid runtime diagnostic")
 }
 
 fn invoke_realtime<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
@@ -3458,7 +3457,7 @@ mod tests {
     struct BlockingRealtimeRuntime;
 
     fn blocking_runtime_error() -> crate::ProductDevRuntimeError {
-        crate::ProductDevRuntimeError::new("TEST_RUNTIME", "test runtime operation").unwrap()
+        crate::ProductDevRuntimeError::new("TEST_RUNTIME", "test runtime operation")
     }
 
     impl crate::ProductDevRuntime for BlockingRealtimeRuntime {

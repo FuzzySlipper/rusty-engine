@@ -1157,8 +1157,7 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
         return Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_WORKER_REPLACING",
             "worker replacement is in progress; request was not applied",
-        )
-        .expect("fixed replacement diagnostic"));
+        ));
     }
     invoke_connection_inner(failures, connection, request)
         .map_err(|error| connection.terminal_cause.retain(error))
@@ -1554,13 +1553,7 @@ fn worker_reader(
                 detail,
                 recovery,
             }) => {
-                let error = ProductDevRuntimeError::with_recovery(code, detail, recovery)
-                    .unwrap_or_else(|_| {
-                        worker_runtime_error(
-                            "DEV_HOST_WORKER_HEALTH",
-                            "worker emitted an invalid bounded health fact",
-                        )
-                    });
+                let error = ProductDevRuntimeError::with_recovery(code, detail, recovery);
                 let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
                     error.clone(),
                 ));
@@ -1680,12 +1673,11 @@ fn worker_runtime_error(
     code: impl Into<String>,
     detail: impl Into<String>,
 ) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new(code, detail).expect("fixed worker diagnostic is bounded")
+    ProductDevRuntimeError::new(code, detail)
 }
 
 fn worker_fault_error(fault: ProductDevWorkerFault) -> ProductDevRuntimeError {
     ProductDevRuntimeError::with_recovery(fault.code, fault.diagnostic, fault.recovery)
-        .expect("worker fault was admitted before crossing the local channel")
 }
 
 impl ProductDevRuntime for WorkerRuntime {
@@ -2092,8 +2084,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
                 ProductDevRuntimeError::new_not_applied(
                     "DEV_HOST_WORKER_NOT_ACTIVE",
                     "worker has not completed the shell projection activation",
-                )
-                .expect("fixed worker inactive diagnostic is bounded"),
+                ),
             );
             let write = writer
                 .lock()

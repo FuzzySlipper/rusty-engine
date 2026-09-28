@@ -57,6 +57,27 @@ impl RuntimeDynamicsBridge {
     }
 }
 
+pub(super) fn clear_receipt(receipt: *mut NativeOperationErrorReceipt) {
+    if !receipt.is_null() {
+        unsafe { *receipt = std::mem::zeroed() };
+    }
+}
+
+/// Returns a Dynamics refusal through its operation receipt. The refusal is
+/// the failure's only effect; C# receives the named reason.
+pub(super) fn refuse(
+    context: *mut c_void,
+    error: &CsharpEngineServicesError,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: &'static [u8],
+) -> i32 {
+    if !receipt.is_null() {
+        unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+            .retain_operation_error(error, receipt, operation);
+    }
+    0
+}
+
 pub(super) unsafe extern "C" fn destroy_operation_diagnostic_lease(
     context: *mut c_void,
     handle: NativeEngineDiagnosticLeaseHandle,
