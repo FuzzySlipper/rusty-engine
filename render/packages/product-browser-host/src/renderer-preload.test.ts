@@ -103,13 +103,18 @@ test('renderer preload admits texture and audio descriptors beyond retired byte,
 test('preload passes trusted metadata and response storage directly to the renderer', async () => {
   const body = new Uint8Array([1, 2, 3]).buffer;
   const resource = textureResource(1, 99);
-  const fetched: string[] = [];
-  const content = await loadProductBrowserRendererInitialContent(MODULE_URL, async (input) => {
-    fetched.push(String(input));
+  const fetched: { url: string; cache: RequestCache | undefined }[] = [];
+  const content = await loadProductBrowserRendererInitialContent(MODULE_URL, async (input, init) => {
+    fetched.push({ url: String(input), cache: init?.cache });
     if (String(input).endsWith('renderer-preload.json')) return descriptorResponse([resource]);
     return { ok: true, arrayBuffer: async () => body } as Response;
   });
   assert.equal(content.resources?.[0]?.bytes.buffer, body, 'no verification copy');
   assert.equal(content.resources?.[0]?.contentHash, resource['contentHash']);
   assert.equal(fetched.length, 2);
+  // The mutable descriptor bypasses caches; the body is named by its hash.
+  assert.equal(fetched[0]?.cache, 'no-store');
+  const bodyUrl = new URL(fetched[1]!.url);
+  assert.equal(bodyUrl.searchParams.get('content'), resource['contentHash']);
+  assert.equal(fetched[1]?.cache, undefined);
 });

@@ -35,7 +35,10 @@ pub struct ProductDevWorkerBundle {
 pub struct ProductDevWorkerBundleEntry {
     pub path: String,
     pub content_type: String,
+    #[serde(with = "crate::bundle::base64_bytes")]
     pub bytes: std::sync::Arc<[u8]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,6 +400,7 @@ mod tests {
                     path: entry.path().to_owned(),
                     content_type: entry.content_type().to_owned(),
                     bytes: entry.shared_bytes(),
+                    content_hash: None,
                 }],
             },
             outputs: Vec::new(),
@@ -412,6 +416,47 @@ mod tests {
             read_worker_frame::<ProductDevWorkerEvent>(&mut wire.as_slice()).unwrap(),
             event
         );
+    }
+
+    #[test]
+    fn ready_bundle_bytes_cross_as_base64_not_decimal_arrays() {
+        // A representative 256 KiB mesh/texture-like body: every byte value.
+        let body = (0..256 * 1024)
+            .map(|index| (index * 131 % 251) as u8)
+            .collect::<Vec<_>>();
+        let entry = ProductDevWorkerBundleEntry {
+            path: "content/renderer/body.rmesh".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            bytes: std::sync::Arc::from(body.as_slice()),
+            content_hash: Some("sha256:abc".to_owned()),
+        };
+        let event = ProductDevWorkerEvent::Ready {
+            bundle: ProductDevWorkerBundle {
+                entries: vec![entry],
+            },
+            outputs: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let mut wire = Vec::new();
+        write_worker_frame(&mut wire, &event).unwrap();
+        let ProductDevWorkerEvent::Ready { bundle, .. } =
+            read_worker_frame::<ProductDevWorkerEvent>(&mut wire.as_slice()).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(&*bundle.entries[0].bytes, body.as_slice());
+        assert_eq!(
+            bundle.entries[0].content_hash.as_deref(),
+            Some("sha256:abc")
+        );
+
+        let decimal = serde_json::to_vec(&body).unwrap().len();
+        let framed = wire.len();
+        assert!(
+            framed < body.len() * 4 / 3 + 512,
+            "{framed} bytes on the wire"
+        );
+        assert!(decimal > body.len() * 3, "decimal JSON was {decimal} bytes");
     }
 
     #[test]

@@ -105,7 +105,8 @@ async function loadResource(
 ): Promise<RustyApplicationResource> {
   const descriptor = resourceDescriptor(identity);
   const query = new URLSearchParams({ identity, generation });
-  const response = await fetcher(`${route}?${query.toString()}`, { cache: 'no-store' });
+  // Identities embed the body's SHA-256; the host marks them immutable.
+  const response = await fetcher(`${route}?${query.toString()}`);
   if (!response.ok) throw new Error(`renderer resource ${identity} is unavailable`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   const expectedHash = `sha256:${descriptor.hash}`;

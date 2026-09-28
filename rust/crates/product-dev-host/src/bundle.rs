@@ -336,7 +336,10 @@ impl ProductDevRendererResource {
     }
 
     fn bundle_entry(&self) -> Result<ProductDevBundleEntry, ProductDevHostError> {
-        ProductDevBundleEntry::new(self.path.clone(), self.media_type(), self.bytes.clone())
+        Ok(
+            ProductDevBundleEntry::new(self.path.clone(), self.media_type(), self.bytes.clone())?
+                .with_content_hash(self.content_hash.clone()),
+        )
     }
 }
 
@@ -387,8 +390,8 @@ fn base64_encode(bytes: &[u8]) -> String {
 fn base64_decode(value: &str) -> Result<Vec<u8>, ProductDevHostError> {
     if !value.len().is_multiple_of(4) {
         return Err(ProductDevHostError::new(
-            "DEV_HOST_WORKER_RENDERER_RESOURCE",
-            "worker renderer resource body is not base64 padded",
+            "DEV_HOST_WORKER_BYTES",
+            "worker byte body is not base64 padded",
         ));
     }
     let mut decoded = Vec::with_capacity(value.len() / 4 * 3);
@@ -407,8 +410,8 @@ fn base64_decode(value: &str) -> Result<Vec<u8>, ProductDevHostError> {
         };
         if third.is_none() && fourth.is_some() {
             return Err(ProductDevHostError::new(
-                "DEV_HOST_WORKER_RENDERER_RESOURCE",
-                "worker renderer resource base64 padding is invalid",
+                "DEV_HOST_WORKER_BYTES",
+                "worker byte body base64 padding is invalid",
             ));
         }
         decoded.push(first << 2 | second >> 4);
@@ -428,11 +431,27 @@ fn base64_value(value: u8) -> Result<u8, ProductDevHostError> {
         .position(|candidate| *candidate == value)
         .map(|index| index as u8)
         .ok_or_else(|| {
-            ProductDevHostError::new(
-                "DEV_HOST_WORKER_RENDERER_RESOURCE",
-                "worker renderer resource body is not base64",
-            )
+            ProductDevHostError::new("DEV_HOST_WORKER_BYTES", "worker byte body is not base64")
         })
+}
+
+/// Serde adapter carrying worker bundle bytes as one base64 string instead
+/// of serde_json's decimal integer array.
+pub(crate) mod base64_bytes {
+    use std::sync::Arc;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &Arc<[u8]>, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&super::base64_encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arc<[u8]>, D::Error> {
+        let encoded = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        super::base64_decode(&encoded)
+            .map(Arc::from)
+            .map_err(|error| serde::de::Error::custom(error.detail()))
+    }
 }
 
 /// Encode the fixed browser preload descriptor and its exact immutable resource bodies.
@@ -525,6 +544,9 @@ pub struct ProductDevBundleEntry {
     path: String,
     content_type: String,
     bytes: Arc<[u8]>,
+    /// Present for renderer preload bodies, whose descriptor names them by
+    /// this hash so the browser may cache them under a content URL.
+    content_hash: Option<String>,
 }
 
 impl ProductDevBundleEntry {
@@ -540,11 +562,21 @@ impl ProductDevBundleEntry {
             path,
             content_type,
             bytes,
+            content_hash: None,
         })
+    }
+
+    pub fn with_content_hash(mut self, content_hash: impl Into<String>) -> Self {
+        self.content_hash = Some(content_hash.into());
+        self
     }
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    pub fn content_hash(&self) -> Option<&str> {
+        self.content_hash.as_deref()
     }
 
     pub fn content_type(&self) -> &str {

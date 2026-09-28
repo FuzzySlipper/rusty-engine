@@ -25,6 +25,7 @@ export async function loadProductBrowserRendererInitialContent(
   fetcher: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<RustyApplicationContent> {
   const descriptorUrl = new URL('./renderer-preload.json', moduleUrl);
+  // The descriptor changes with every restage; the bodies it names do not.
   const descriptorResponse = await fetcher(descriptorUrl, { cache: 'no-store' });
   if (!descriptorResponse.ok) {
     throw new Error('Product renderer preload descriptor is unavailable');
@@ -45,8 +46,11 @@ async function loadRendererResource(
   descriptorUrl: URL,
   fetcher: typeof globalThis.fetch,
 ) {
+  // Naming the body by its content hash makes the URL immutable, so the
+  // browser may reuse it; changed bytes arrive under a new hash and URL.
   const url = new URL(`./${resource.path}`, descriptorUrl);
-  const response = await fetcher(url, { cache: 'no-store' });
+  url.searchParams.set('content', resource.contentHash);
+  const response = await fetcher(url);
   if (!response.ok) {
     throw new Error(`Product renderer resource ${resource.identity} is unavailable`);
   }

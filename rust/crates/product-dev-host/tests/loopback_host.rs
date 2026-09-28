@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use product_dev_host::product_dev_renderer_preload_entries;
 use product_dev_host::{
     CanonicalU64, ProductDevAudioFeedback, ProductDevAudioFeedbackResult, ProductDevBundle,
     ProductDevBundleEntry, ProductDevDebugCatalog, ProductDevDebugResult, ProductDevHost,
@@ -663,6 +664,7 @@ fn renderer_resource_route_serves_raw_bytes_and_fences_runtime_generation() {
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.contains("Content-Type: font/woff2\r\n"));
+    assert!(response.contains("Cache-Control: private, max-age=31536000, immutable\r\n"));
     assert!(response.ends_with("wOF2runtime-body"));
     let stale = request(
         &origin,
@@ -676,6 +678,72 @@ fn renderer_resource_route_serves_raw_bytes_and_fences_runtime_generation() {
         "GET /__rusty/product/runtime/resource?identity=font%2Fmissing&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
     );
     assert!(missing.starts_with("HTTP/1.1 404 Not Found\r\n"));
+}
+
+#[test]
+fn preload_bodies_are_immutable_only_under_their_content_hash() {
+    let serve = |body: &[u8]| {
+        let resource =
+            ProductDevRendererResource::admit_font("content/fonts/title.woff2", body.to_vec())
+                .unwrap();
+        let hash = resource.content_hash().replace(':', "%3A");
+        let mut entries = product_dev_renderer_preload_entries(&[resource]).unwrap();
+        entries.push(
+            ProductDevBundleEntry::new(
+                "index.html",
+                "text/html; charset=utf-8",
+                b"<!doctype html>".to_vec(),
+            )
+            .unwrap(),
+        );
+        let host = ProductDevHost::start(
+            FixtureRuntime::default(),
+            ProductDevHostConfig::new(0, ProductDevBundle::new(entries).unwrap()),
+        )
+        .unwrap();
+        (host, hash)
+    };
+    let get = |origin: &str, path: &str| {
+        request(
+            origin,
+            &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+        )
+    };
+    let (first, first_hash) = serve(b"wOF2first-body");
+    let origin = first.origin();
+    let content = get(
+        &origin,
+        &format!("/content/fonts/title.woff2?content={first_hash}"),
+    );
+    assert!(content.starts_with("HTTP/1.1 200 OK\r\n"), "{content}");
+    assert!(content.contains("Cache-Control: private, max-age=31536000, immutable\r\n"));
+    assert!(content.ends_with("wOF2first-body"));
+    // The mutable dev path and its descriptor stay uncached.
+    let mutable = get(&origin, "/content/fonts/title.woff2");
+    assert!(mutable.contains("Cache-Control: no-store\r\n"));
+    assert!(mutable.ends_with("wOF2first-body"));
+    let descriptor = get(&origin, "/renderer-preload.json");
+    assert!(descriptor.contains("Cache-Control: no-store\r\n"));
+    assert!(descriptor.contains(&first_hash.replace("%3A", ":")));
+    first.shutdown().unwrap();
+
+    // Replacing the bytes yields a new content URL; the old one is refused
+    // rather than caching the new body under a stale hash.
+    let (second, second_hash) = serve(b"wOF2second-body");
+    assert_ne!(first_hash, second_hash);
+    let origin = second.origin();
+    let stale = get(
+        &origin,
+        &format!("/content/fonts/title.woff2?content={first_hash}"),
+    );
+    assert!(stale.starts_with("HTTP/1.1 404 Not Found\r\n"), "{stale}");
+    let replaced = get(
+        &origin,
+        &format!("/content/fonts/title.woff2?content={second_hash}"),
+    );
+    assert!(replaced.contains("Cache-Control: private, max-age=31536000, immutable\r\n"));
+    assert!(replaced.ends_with("wOF2second-body"));
+    second.shutdown().unwrap();
 }
 
 #[test]

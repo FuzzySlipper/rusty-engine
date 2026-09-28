@@ -30017,7 +30017,7 @@ async function QD(e, t, n, r) {
 	let i = $D(n), a = await e(`${t}?${new URLSearchParams({
 		identity: n,
 		generation: r
-	}).toString()}`, { cache: "no-store" });
+	}).toString()}`);
 	if (!a.ok) throw Error(`renderer resource ${n} is unavailable`);
 	let o = new Uint8Array(await a.arrayBuffer()), s = `sha256:${i.hash}`;
 	return Object.freeze({
@@ -33352,14 +33352,16 @@ async function ij(e, t = globalThis.fetch) {
 	});
 }
 async function aj(e, t, n) {
-	let r = await n(new URL(`./${e.path}`, t), { cache: "no-store" });
-	if (!r.ok) throw Error(`Product renderer resource ${e.identity} is unavailable`);
-	let i = await r.arrayBuffer(), a = new Uint8Array(i);
+	let r = new URL(`./${e.path}`, t);
+	r.searchParams.set("content", e.contentHash);
+	let i = await n(r);
+	if (!i.ok) throw Error(`Product renderer resource ${e.identity} is unavailable`);
+	let a = await i.arrayBuffer(), o = new Uint8Array(a);
 	return Object.freeze({
 		identity: e.identity,
 		contentHash: e.contentHash,
 		mediaType: e.mediaType,
-		bytes: a
+		bytes: o
 	});
 }
 //#endregion

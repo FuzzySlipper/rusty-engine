@@ -1532,8 +1532,8 @@ fn dispatch_request<R: ProductDevRuntime>(
         }
         if request.body.is_empty() {
             if let Ok(bundle) = state.bundle.read() {
-                if let Some(entry) = bundle.get(&request.path) {
-                    return HttpResponse::bytes(200, entry.content_type(), entry.shared_bytes());
+                if let Some(response) = bundle_response(&bundle, &request.path) {
+                    return response;
                 }
             }
             return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
@@ -1651,7 +1651,41 @@ fn invoke_renderer_resource<R: ProductDevRuntime>(
             "renderer resource lookup returned a mismatched identity",
         );
     }
-    HttpResponse::bytes(200, resource.media_type(), resource.shared_bytes()).with_observation()
+    let response =
+        HttpResponse::bytes(200, resource.media_type(), resource.shared_bytes()).with_observation();
+    if content_addressed_identity(identity) {
+        response.immutable()
+    } else {
+        response
+    }
+}
+
+/// Engine renderer identities end in the SHA-256 of their bytes, so a
+/// response for one can never change.
+fn content_addressed_identity(identity: &str) -> bool {
+    identity.rsplit_once('/').is_some_and(|(_, hash)| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+/// Serve an exact bundle path. `?content=<hash>` names a renderer preload
+/// body by its content hash: a match is immutable, a mismatch is a stale
+/// descriptor and is refused so old URLs never cache new bytes.
+fn bundle_response(bundle: &ProductDevBundle, request_path: &str) -> Option<HttpResponse> {
+    let (path, query) = match request_path.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (request_path, None),
+    };
+    let entry = bundle.get(path)?;
+    let response = HttpResponse::bytes(200, entry.content_type(), entry.shared_bytes());
+    let Some(query) = query else {
+        return Some(response);
+    };
+    let requested = query.strip_prefix("content=").and_then(percent_decode)?;
+    (entry.content_hash() == Some(requested.as_str())).then(|| response.immutable())
 }
 
 fn renderer_resource_query(path: &str) -> Option<(String, u64)> {
@@ -4808,6 +4842,9 @@ struct HttpResponse {
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
     delivery_certainty: Option<ResponseDeliveryCertainty>,
+    /// Only a body named by its content hash may be cached; every other
+    /// response, including mutable dev files, stays `no-store`.
+    immutable: bool,
 }
 
 /// Preserve the runtime's mutation certainty even on a typed rejection.
@@ -4862,7 +4899,13 @@ impl HttpResponse {
             output_through: None,
             commit_disposition: None,
             delivery_certainty: None,
+            immutable: false,
         }
+    }
+
+    fn immutable(mut self) -> Self {
+        self.immutable = true;
+        self
     }
 
     fn with_runtime_mutation(mut self, mutation: crate::ProductDevMutationCertainty) -> Self {
@@ -4964,9 +5007,12 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
             stream.write_all(b"X-Rusty-Resync-Outputs: fresh\r\n")?;
         }
     }
-    stream.write_all(
-        b"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
-    )?;
+    stream.write_all(if response.immutable {
+        b"Cache-Control: private, max-age=31536000, immutable\r\n".as_slice()
+    } else {
+        b"Cache-Control: no-store\r\n".as_slice()
+    })?;
+    stream.write_all(b"X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n")?;
     stream.write_all(&response.body)?;
     stream.flush()
 }

@@ -1639,8 +1639,14 @@ fn worker_bundle(bundle: ProductDevWorkerBundle) -> Result<ProductDevBundle, Str
     let entries = bundle
         .entries
         .into_iter()
-        .map(|entry| ProductDevBundleEntry::new(entry.path, entry.content_type, entry.bytes))
-        .collect::<Result<Vec<_>, _>>()
+        .map(|entry| {
+            let admitted = ProductDevBundleEntry::new(entry.path, entry.content_type, entry.bytes)?;
+            Ok(match entry.content_hash {
+                Some(content_hash) => admitted.with_content_hash(content_hash),
+                None => admitted,
+            })
+        })
+        .collect::<Result<Vec<_>, product_dev_host::ProductDevHostError>>()
         .map_err(|error| error.to_string())?;
     ProductDevBundle::new(entries).map_err(|error| error.to_string())
 }
@@ -2035,6 +2041,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
                 path: entry.path().to_owned(),
                 content_type: entry.content_type().to_owned(),
                 bytes: entry.shared_bytes(),
+                content_hash: entry.content_hash().map(str::to_owned),
             })
             .collect(),
     };
