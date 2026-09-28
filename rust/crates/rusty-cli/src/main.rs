@@ -71,9 +71,10 @@ fn dev(options: DevOptions) -> Result<(), String> {
 
     let persistence_root = development_persistence_root(&options.project)?;
     let content_store_root = development_content_store_root(&options.project)?;
-    let mut staged = stage_product(&options)?;
+    let initial = stage_product(&options)?;
+    let mut staged = initial.directory;
     verify_staged_product(&staged)?;
-    let mut watches = query_watch_paths(&options.project)?;
+    let mut watches = initial.watches;
     let mut snapshot = FileSnapshot::capture(&watches)?;
     let mut child = Some(SupervisedHost::start(
         &runtime.host,
@@ -186,7 +187,10 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "change-detected",
             serde_json::json!({ "watchPaths": watches }),
         );
-        let next_staged = match stage_product(&options) {
+        let StagedProduct {
+            directory: next_staged,
+            watches: refreshed_watches,
+        } = match stage_product(&options) {
             Ok(staged) => staged,
             Err(error) => {
                 diagnostic(
@@ -210,19 +214,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
             );
             continue;
         }
-        let refreshed_watches = match query_watch_paths(&options.project) {
-            Ok(watches) => watches,
-            Err(error) => {
-                diagnostic(
-                    "restage-failed",
-                    serde_json::json!({
-                        "phase": "query-watch-paths",
-                        "error": error,
-                    }),
-                );
-                continue;
-            }
-        };
         let refreshed_snapshot = match FileSnapshot::capture(&refreshed_watches) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -602,7 +593,15 @@ fn runtime_beside_current_executable() -> Result<PathBuf, String> {
     }
 }
 
-fn stage_product(options: &DevOptions) -> Result<PathBuf, String> {
+struct StagedProduct {
+    directory: PathBuf,
+    watches: Vec<PathBuf>,
+}
+
+/// Build, stage and read the staged directory and watch declaration in one
+/// MSBuild invocation. Build output stays on the console; the evaluated
+/// properties are written to a result file.
+fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
     let project = absolute(&options.project)?;
     if !project.is_file() {
         return Err(format!(
@@ -614,22 +613,44 @@ fn stage_product(options: &DevOptions) -> Result<PathBuf, String> {
         .to_str()
         .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?
         .to_owned();
-    let properties = stage_properties(options)?;
-    let mut build_arguments = vec!["build".to_owned(), project_argument];
-    build_arguments.extend(properties.iter().cloned());
-    run_dotnet(&build_arguments)?;
-    let staged = query_msbuild_property(
-        &project,
-        Some(STAGE_TARGET),
-        STAGED_PRODUCT_PROPERTY,
-        &properties,
-    )?;
-    let staged = PathBuf::from(staged);
-    absolute(&staged)
+    let result_file = env::temp_dir().join(format!("rusty-dev-stage-{}.json", std::process::id()));
+    let result_argument = result_file
+        .to_str()
+        .ok_or("RUSTY_DEV_STAGE: temporary result path must be UTF-8")?
+        .to_owned();
+    let mut arguments = vec![
+        "msbuild".to_owned(),
+        project_argument,
+        "-nologo".to_owned(),
+        "-verbosity:minimal".to_owned(),
+        format!("-t:{STAGE_TARGET}"),
+    ];
+    arguments.extend(stage_properties(options)?);
+    arguments.push(format!("-getProperty:{STAGED_PRODUCT_PROPERTY}"));
+    arguments.push(format!("-getProperty:{WATCH_PATHS_PROPERTY}"));
+    arguments.push(format!("-getResultOutputFile:{result_argument}"));
+    let _ = fs::remove_file(&result_file);
+    run_dotnet(&arguments)?;
+    let result = fs::read(&result_file).map_err(|error| {
+        format!("RUSTY_DEV_MSBUILD: staging produced no property result: {error}")
+    });
+    let _ = fs::remove_file(&result_file);
+    let result: Value = serde_json::from_slice(&result?).map_err(|error| {
+        format!("RUSTY_DEV_MSBUILD: staging property result is not JSON: {error}")
+    })?;
+    let property = |name: &str| -> Result<&str, String> {
+        result["Properties"][name]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("RUSTY_DEV_MSBUILD: property {name} produced no value"))
+    };
+    Ok(StagedProduct {
+        directory: absolute(Path::new(property(STAGED_PRODUCT_PROPERTY)?.trim()))?,
+        watches: parse_watch_paths(property(WATCH_PATHS_PROPERTY)?)?,
+    })
 }
 
-fn query_watch_paths(project: &Path) -> Result<Vec<PathBuf>, String> {
-    let value = query_msbuild_property(project, None, WATCH_PATHS_PROPERTY, &[])?;
+fn parse_watch_paths(value: &str) -> Result<Vec<PathBuf>, String> {
     let paths = value
         .split(';')
         .filter(|value| !value.trim().is_empty())
@@ -647,45 +668,6 @@ fn query_watch_paths(project: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(paths)
-}
-
-fn query_msbuild_property(
-    project: &Path,
-    target: Option<&str>,
-    property: &str,
-    properties: &[String],
-) -> Result<String, String> {
-    let project = project
-        .to_str()
-        .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?;
-    let mut arguments = vec![
-        "msbuild".to_owned(),
-        project.to_owned(),
-        "-nologo".to_owned(),
-        "-verbosity:quiet".to_owned(),
-    ];
-    if let Some(target) = target {
-        arguments.push(format!("-t:{target}"));
-    }
-    arguments.extend(properties.iter().cloned());
-    arguments.push(format!("-getProperty:{property}"));
-    let output = Command::new("dotnet")
-        .args(&arguments)
-        .output()
-        .map_err(|error| format!("RUSTY_DEV_DOTNET: could not start dotnet msbuild: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "RUSTY_DEV_MSBUILD: property {property} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|_| format!("RUSTY_DEV_MSBUILD: property {property} output was not UTF-8"))?
-        .lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("RUSTY_DEV_MSBUILD: property {property} produced no value"))
 }
 
 fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {

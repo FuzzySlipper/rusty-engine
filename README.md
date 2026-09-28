@@ -43,7 +43,7 @@ the normal development command is:
   --runtime /path/to/runtime-pack
 ```
 
-`rusty dev` builds and atomically stages a loose Product bundle, starts it
+`rusty dev` builds and incrementally stages a loose Product bundle, starts it
 through CoreCLR, and restarts it when declared C#, UI, or content inputs change.
 The runtime pack supplies the Engine host and browser assets; a Product bundle
 contains only managed Product output, Product UI, Product content, and

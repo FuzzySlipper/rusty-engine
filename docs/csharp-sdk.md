@@ -330,9 +330,10 @@ runtime pack:
   --runtime /path/to/runtime-pack
 ```
 
-It builds the ordinary project, asks the SDK to atomically stage a loose
-Product directory, launches the packaged host through CoreCLR, and restarts it
-when declared C#, UI, or content inputs change. `--bind-host`, `--port`, and
+It builds the ordinary project and stages a loose Product directory in one
+MSBuild invocation, launches the packaged host through CoreCLR, and restarts it
+when declared C#, UI, or content inputs change. Staging copies only changed UI
+and content, removes deleted files, and writes `product.json` last. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
 session. Use `--debugger` for managed breakpoint sessions; see
 [CoreCLR diagnostics](coreclr-diagnostics.md) for worker discovery, profiling,

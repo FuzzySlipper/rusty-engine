@@ -30,10 +30,13 @@ fn termination_signals_close_supervision_and_wait_for_disposal() {
             (
                 "dotnet",
                 r#"#!/bin/sh
-case "$*" in
- *RustyEngineStagedProductDirectory*) echo "$SIGNAL_TEST_ROOT/product";;
- *RustyEngineWatchPaths*) echo "$SIGNAL_TEST_ROOT/product.csproj";;
-esac
+for argument in "$@"; do
+  case "$argument" in
+    -getResultOutputFile:*)
+      printf '{"Properties":{"RustyEngineStagedProductDirectory":"%s/product","RustyEngineWatchPaths":"%s/product.csproj"}}' \
+        "$SIGNAL_TEST_ROOT" "$SIGNAL_TEST_ROOT" > "${argument#-getResultOutputFile:}";;
+  esac
+done
 "#,
             ),
             (
