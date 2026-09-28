@@ -1925,7 +1925,10 @@ fn clip_against_planes(mut value: Vec3, planes: &[Vec3]) -> Vec3 {
             value = direction * value.dot(direction);
         }
     }
-    if planes.len() >= 3 {
+    // Three contacts can still leave a shared escape direction (for example,
+    // several side faces around a vertical seam). Stop only when the crease
+    // motion violates another plane, rather than counting contacts as axes.
+    if planes.len() >= 3 && planes.iter().any(|normal| value.dot(*normal) < -1.0e-6) {
         Vec3::ZERO
     } else {
         value
@@ -2747,6 +2750,31 @@ fn range(field: &'static str, value: f32, min: f32, max: f32) -> Result<(), Char
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn multiple_side_contacts_preserve_vertical_escape() {
+        let down = Vec3::new(0.0, -0.5, 0.0);
+        let sides = [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                std::f32::consts::FRAC_1_SQRT_2,
+            ),
+        ];
+        assert_eq!(
+            clip_against_planes(down, &sides),
+            down,
+            "a third side contact must not cancel the free vertical direction"
+        );
+        let enclosed = [sides[0], sides[1], Vec3::new(0.0, 1.0, 0.0)];
+        assert_eq!(
+            clip_against_planes(down, &enclosed),
+            Vec3::ZERO,
+            "a real floor constraint still blocks downward movement"
+        );
+    }
+
     use super::*;
 
     #[test]

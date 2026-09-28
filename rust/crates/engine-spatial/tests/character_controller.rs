@@ -1632,3 +1632,69 @@ fn noncollidable_material_layer_preserves_cells_but_rays_and_characters_reach_fl
         }
     }
 }
+
+#[test]
+fn airborne_character_landing_on_steep_ramp_keeps_sliding_down() {
+    let angle = -2.229_f64;
+    let (sin, cos) = angle.sin_cos();
+    let transform =
+        |x: f64, y: f64, z: f64| [52.0 + x * cos + z * sin, y, -15.0 - x * sin + z * cos];
+    let mut scene = floor_scene();
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(10),
+        vec![
+            transform(-2.0, 1.0, 0.0),
+            transform(2.0, 1.0, 0.0),
+            transform(-2.0, 85.0, -4.0),
+            transform(2.0, 85.0, -4.0),
+        ],
+        vec![[0, 1, 2], [1, 3, 2]],
+    )
+    .unwrap();
+    let hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(10),
+                asset: StaticMeshAssetId(10),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    let mut config = CharacterControllerConfig::default();
+    config.shape.radius = 0.25;
+    config.vertical.gravity = 24.0;
+    let p = transform(0.0, 6.2, -0.2);
+    let (entity, mut state) = character_at(Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32));
+    let mut service = CharacterControllerService::default();
+    let mut first_slope = None;
+    let mut end = Vec3::ZERO;
+    for sequence in 1..=180 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::ZERO),
+            )
+            .unwrap();
+        end = receipt.transform_after.translation;
+        if first_slope.is_none()
+            && receipt
+                .contacts
+                .iter()
+                .any(|c| c.kind == CharacterContactKind::SteepSlope)
+        {
+            first_slope = Some(end);
+        }
+    }
+    let start = first_slope.expect("fall should contact steep ramp");
+    assert!(
+        end.y < start.y - 0.5,
+        "steep contact must permit gravity-driven descent: first={start:?} final={end:?}"
+    );
+}

@@ -1,7 +1,7 @@
 import type { RustyApplicationRendererPort } from '@rusty-engine/application-host';
 type Camera = { position: readonly [number, number, number]; yawDegrees: number; pitchDegrees: number };
 export interface PlaytestInspectionRequest {
-  op: 'discover' | 'observe' | 'action' | 'look' | 'time' | 'advance' | 'drawing' | 'frame' | 'camera' | 'targets' | 'route' | 'flush' | 'focus' | 'interaction' | 'grid' | 'probe' | 'jump-plan';
+  op: 'discover' | 'observe' | 'action' | 'look' | 'time' | 'advance' | 'drawing' | 'frame' | 'camera' | 'targets' | 'route' | 'flush' | 'focus' | 'interaction' | 'grid' | 'probe' | 'jump-plan' | 'clearance';
   mode?: string; id?: string; ms?: number; yaw?: number; pitch?: number; camera?: Camera | null;
   x?: number; y?: number; z?: number; radius?: number; verticalRadius?: number; cellSize?: number; distance?: number;
   move?: readonly [number, number, number]; lookAt?: readonly [number, number, number]; orbit?: { target: readonly [number, number, number]; yaw: number };
@@ -25,7 +25,7 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
       case 'discover': {
         const catalog = await fetch('/__rusty/product/runtime/debug/catalog').then(r => r.json()) as { commands: { name: string }[] };
         const names = catalog.commands.map(c => c.name);
-        return { commands: names, nativeCommands: names, operations: ['discover','observe','action','look','time','advance','drawing','frame','camera','targets','route','focus', ...(names.includes('interaction.inspect') ? ['interaction'] : []), ...(names.includes('spatial.grid') ? ['grid'] : []), ...(names.includes('spatial.probe') ? ['probe'] : []), ...(names.includes('playtest.jump-plan') ? ['jump-plan'] : [])], commandNote: 'nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions', time: names.includes('engine.time'), timeModes: ['realtime', 'manual', 'action-driven'], drawingModes: ['continuous', 'on-demand'], observer: ['pose', 'move', 'lookAt', 'orbit', 'restore'], lookAdvancesTime: false, inspection: true, product: names.includes('playtest.help') ? await debug('playtest.help') : null };
+        return { commands: names, nativeCommands: names, operations: ['discover','observe','action','look','time','advance','drawing','frame','camera','targets','route','focus', ...(names.includes('interaction.inspect') ? ['interaction'] : []), ...(names.includes('spatial.grid') ? ['grid'] : []), ...(names.includes('spatial.probe') ? ['probe'] : []), ...(names.includes('spatial.clearance') ? ['clearance'] : []), ...(names.includes('playtest.jump-plan') ? ['jump-plan'] : [])], commandNote: 'nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions', time: names.includes('engine.time'), timeModes: ['realtime', 'manual', 'action-driven'], drawingModes: ['continuous', 'on-demand'], observer: ['pose', 'move', 'lookAt', 'orbit', 'restore'], lookAdvancesTime: false, inspection: true, product: names.includes('playtest.help') ? await debug('playtest.help') : null };
       }
       case 'focus': return { focused: document.activeElement?.tagName === 'CANVAS', pointerLocked: document.pointerLockElement !== null };
       case 'flush': await flushInput(); return { flushed: true };
@@ -41,14 +41,18 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
         if (!Number.isFinite(distance) || distance <= 0 || distance > 8) throw new Error('probe distance must be in (0,8]');
         return debug(`spatial.probe ${distance}`);
       }
+      case 'clearance':
       case 'jump-plan': {
-        if (![request.x, request.y, request.z].every(v => typeof v === 'number' && Number.isFinite(v))) throw new Error('jump target requires finite x/y/z feet coordinates');
-        return debug(`playtest.jump-plan ${request.x} ${request.y} ${request.z}`);
+        if (![request.x, request.y, request.z].every(v => typeof v === 'number' && Number.isFinite(v))) throw new Error(`${request.op} requires finite x/y/z target feet coordinates`);
+        return debug(`${request.op === 'clearance' ? 'spatial.clearance' : 'playtest.jump-plan'} ${request.x} ${request.y} ${request.z}`);
       }
 
       case 'action': return debug(`playtest.action ${id}`);
       case 'targets': return debug('navigation.targets');
-      case 'route': return debug(`navigation.route ${id}`);
+      case 'route': {
+        if (!id) throw new Error('route requires id from targets; example: {op:"route",id:"door-north-wing"}');
+        return debug(`navigation.route ${id}`);
+      }
       case 'look': {
         const yaw = request.yaw ?? 0, pitch = request.pitch ?? 0;
         if (![yaw, pitch].every(Number.isFinite) || Math.abs(yaw) > 360 || Math.abs(pitch) > 180) throw new Error('look degrees exceed bounds');

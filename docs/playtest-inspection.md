@@ -87,3 +87,18 @@ no second controller, teleport, rewind or successful-arrival promise.
 These support look adjustment while retaining reach, visibility and availability
 checks. The browser assist surface names this query `interaction`; the native
 debug command remains `interaction.inspect`.
+
+## Player-sized clearance
+
+`SpatialClearanceSnapshot.Capture` uses the current body height/radius and the
+existing native capsule overlap/cast queries. `SpatialClearanceDebugModule`
+exposes it as `spatial.clearance x y z`; the browser assist operation is
+`clearance`, with world XYZ target feet within eight units. Products supply their
+current body height, controller configuration and dynamic colliders.
+
+The result distinguishes current overlap, first contact along a straight sweep,
+target overlap and a short downward capsule support probe at the target. It
+reports contact normal, source, penetration and initial-contact state. A normal
+within the slope limit is a support fact, not a guarantee of a usable landing.
+A direct sweep does not run the character's step/jump solver or search a route.
+All of these queries are explicit and leave simulation time unchanged.

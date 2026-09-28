@@ -2527,6 +2527,7 @@ impl RuntimeSpatialBridge {
         let obstacles = records
             .iter()
             .copied()
+            .filter(|value| value.enabled && !value.trigger)
             .map(character_obstacle)
             .collect::<Result<Vec<_>, _>>()?;
         let capsule = CharacterCapsule {
@@ -5994,6 +5995,59 @@ fn native_character_tether_fact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capsule_queries_ignore_disabled_and_trigger_colliders() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        for (enabled, trigger) in [(true, false), (false, false), (true, true)] {
+            let collider = NativeSpatialEntityCollider {
+                entity: 42,
+                min: NativeVec3 {
+                    x: 1.0,
+                    y: -1.0,
+                    z: -1.0,
+                },
+                max: NativeVec3 {
+                    x: 2.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                enabled,
+                trigger,
+                ..Default::default()
+            };
+            let mut request = NativeSpatialCapsuleQueryRequest {
+                session,
+                center: NativeVec3::default(),
+                half_height: 0.5,
+                radius: 0.25,
+                translation: NativeVec3 {
+                    x: 3.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                contact_skin: 0.02,
+                filter: NativeSpatialQueryFilter::default(),
+                entities: &collider,
+                entities_len: 1,
+                ignored_entities: std::ptr::null(),
+                ignored_entities_len: 0,
+            };
+            assert_eq!(
+                bridge.cast_capsule(&request).unwrap().present,
+                enabled && !trigger,
+                "cast enabled={enabled} trigger={trigger}"
+            );
+            request.center.x = 1.5;
+            assert_eq!(
+                bridge.overlap_capsule(&request).unwrap().present,
+                enabled && !trigger,
+                "overlap enabled={enabled} trigger={trigger}"
+            );
+        }
+    }
 
     fn utf8(value: &str) -> NativeUtf8Slice {
         NativeUtf8Slice {

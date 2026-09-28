@@ -36,6 +36,7 @@ function e(e, t, n) {
 						...e.includes("interaction.inspect") ? ["interaction"] : [],
 						...e.includes("spatial.grid") ? ["grid"] : [],
 						...e.includes("spatial.probe") ? ["probe"] : [],
+						...e.includes("spatial.clearance") ? ["clearance"] : [],
 						...e.includes("playtest.jump-plan") ? ["jump-plan"] : []
 					],
 					commandNote: "nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions",
@@ -75,16 +76,19 @@ function e(e, t, n) {
 				if (!Number.isFinite(e) || e <= 0 || e > 8) throw Error("probe distance must be in (0,8]");
 				return i(`spatial.probe ${e}`);
 			}
+			case "clearance":
 			case "jump-plan":
 				if (![
 					r.x,
 					r.y,
 					r.z
-				].every((e) => typeof e == "number" && Number.isFinite(e))) throw Error("jump target requires finite x/y/z feet coordinates");
-				return i(`playtest.jump-plan ${r.x} ${r.y} ${r.z}`);
+				].every((e) => typeof e == "number" && Number.isFinite(e))) throw Error(`${r.op} requires finite x/y/z target feet coordinates`);
+				return i(`${r.op === "clearance" ? "spatial.clearance" : "playtest.jump-plan"} ${r.x} ${r.y} ${r.z}`);
 			case "action": return i(`playtest.action ${o}`);
 			case "targets": return i("navigation.targets");
-			case "route": return i(`navigation.route ${o}`);
+			case "route":
+				if (!o) throw Error("route requires id from targets; example: {op:\"route\",id:\"door-north-wing\"}");
+				return i(`navigation.route ${o}`);
 			case "look": {
 				let t = r.yaw ?? 0, a = r.pitch ?? 0;
 				if (![t, a].every(Number.isFinite) || Math.abs(t) > 360 || Math.abs(a) > 180) throw Error("look degrees exceed bounds");
