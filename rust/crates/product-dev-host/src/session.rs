@@ -164,6 +164,27 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.execute_debug(command))
     }
 
+    /// Bring already queued input into the same owner scope before a time command.
+    pub fn execute_debug_with_input<F>(
+        &self, command: &str, drain: F,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError>
+    where F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
+    {
+        self.with_runtime(|runtime| {
+            let (batches, overflowed) = drain();
+            let mut outputs = Vec::new();
+            if overflowed {
+                outputs.extend(runtime.recover_input_overflow()?.into_parts().1);
+            }
+            for batch in batches {
+                outputs.extend(runtime.input(batch)?.into_parts().1);
+            }
+            let (result, debug_outputs) = runtime.execute_debug(command)?.into_parts();
+            outputs.extend(debug_outputs);
+            ProductDevRuntimeReceipt::new(result, outputs).map_err(host_error_to_runtime)
+        })
+    }
+
     pub fn describe_debug(
         &self,
     ) -> Result<ProductDevRuntimeReceipt<crate::ProductDevDebugCatalog>, ProductDevRuntimeError>

@@ -433,3 +433,18 @@ fn repeated_token_validation_is_idempotent_correlation_evidence() {
     lifecycle.validate_simulation_token(token).unwrap();
     lifecycle.validate_simulation_token(token).unwrap();
 }
+
+#[test]
+fn explicit_forward_steps_keep_realtime_cadence_and_discard_pause_wall_time() {
+    let mut runtime = RuntimeLifecycle::new(
+        RuntimeInstanceId::new(71),
+        RuntimeLifecycleConfig::Realtime(RealtimeLifecycleConfig::new(60, 4).unwrap()),
+    );
+    runtime.start().unwrap();
+    runtime.advance_realtime(HostMonotonicTime::from_nanoseconds(100)).unwrap();
+    runtime.admit_manual_step().unwrap();
+    assert_eq!(runtime.readout().admitted_simulation_steps(), 1);
+    let resumed = runtime.advance_realtime(HostMonotonicTime::from_nanoseconds(60_000_000_100)).unwrap();
+    assert!(resumed.simulation().is_none());
+    assert_eq!(runtime.readout().admitted_simulation_steps(), 1);
+}

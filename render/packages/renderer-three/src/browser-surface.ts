@@ -259,6 +259,7 @@ export interface RendererBrowserSurfaceAutomaticSubmissionPacingSample
 }
 
 export interface RendererBrowserSurface {
+  readonly setObserver: (pose: RendererBrowserSurfaceCameraPose | null) => void;
   readonly kind: 'rusty_renderer_browser_surface.v1';
   readonly canvas: HTMLCanvasElement;
   readonly renderer: ThreeRenderer;
@@ -294,7 +295,7 @@ export interface RendererBrowserSurface {
   /** Immutable backend pacing state and latest completed admission decision. */
   readonly automaticSubmissionPacing:
     () => RendererBrowserSurfaceAutomaticSubmissionPacingSample;
-  readonly renderOnce: (timeMs?: number) => RendererBrowserSurfaceSubmissionStatistics;
+  readonly renderOnce: (timeMs?: number, elapsedSeconds?: number) => RendererBrowserSurfaceSubmissionStatistics;
   readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
   readonly setCameraPose: (
     pose: RendererBrowserSurfaceCameraPose,
@@ -525,15 +526,16 @@ export function mountRendererBrowserSurface(
 
   const renderOnce = (
     timeMs = globalThis.performance?.now() ?? 0,
+    elapsedSeconds?: number,
   ): RendererBrowserSurfaceSubmissionStatistics => {
     if (disposed) throw new Error('renderer browser surface is disposed');
     const submissionSourceTimeMs = automaticSubmissionSourceTimeMs;
     automaticSubmissionSourceTimeMs = null;
     resize();
-    const deltaSeconds =
+    const deltaSeconds = elapsedSeconds ?? (
       lastRenderTimeMs === null
         ? 0
-        : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
+        : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000)));
     lastRenderTimeMs = timeMs;
     webgl.info.reset();
     prepareGhostPlates(camera);
@@ -740,6 +742,7 @@ export function mountRendererBrowserSurface(
         ...(options.pose === null ? {} : { pose: options.pose }),
       });
     },
+    setObserver: (pose) => viewComposition.setObserver(pose),
     renderOnce,
     setCameraPose,
     start,

@@ -370,6 +370,7 @@ export interface RustyApplicationViewCompositionReceipt {
 }
 
 export interface RustyApplicationRendererPort {
+  readonly inspection?: RendererSurface['inspection'];
   readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
   readonly applyPresentation: (
     frame: RustyApplicationPresentationFrame,
@@ -1221,6 +1222,7 @@ export async function mountRustyApplicationWithEnvironment(
       }
     },
     executeRenderOutput: (job: RenderOutputJob) => requireActive().executeRenderOutput(job),
+    inspection: (options: Parameters<RendererSurface["inspection"]>[0]) => requireActive().inspection(options),
     renderOnce: (timeMs?: number) => {
       if (timeMs === undefined) requireActive().renderOnce();
       else requireActive().renderOnce(timeMs);

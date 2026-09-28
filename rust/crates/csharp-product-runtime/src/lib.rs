@@ -989,7 +989,10 @@ fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProd
 }
 
 /// A loaded trusted C# product adapted to the existing local browser host.
+mod playtest;
+
 pub struct CsharpProductRuntime {
+    playtest_time: playtest::TimeMode,
     api: LoadedProductApi,
     handle: *mut c_void,
     lifecycle: RuntimeLifecycle,
@@ -1241,6 +1244,7 @@ impl CsharpProductRuntime {
         let input_lane =
             RuntimeInputLane::new(input_mappings, initial_binding, standard_input_context());
         Ok(Self {
+            playtest_time: playtest::TimeMode::Realtime,
             api,
             handle,
             lifecycle,
@@ -2437,7 +2441,8 @@ impl CsharpProductRuntime {
     }
 
     fn readout(&self) -> ProductDevRuntimeReadout {
-        dev_readout(self.lifecycle.readout())
+        let hz = match self.lifecycle.configuration() { RuntimeLifecycleConfig::Realtime(config) => config.fixed_step_hz(), _ => 0 };
+        dev_readout(self.lifecycle.readout()).with_inspection_time(self.playtest_time.name().to_owned(), hz)
     }
 
     fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
@@ -2773,6 +2778,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
         if self.tainted {
             return ProductDevRuntimeScheduleState::Shutdown;
         }
+        if self.playtest_time != playtest::TimeMode::Realtime {
+            return ProductDevRuntimeScheduleState::Paused;
+        }
         if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
             return ProductDevRuntimeScheduleState::Unsupported;
         }
@@ -3046,6 +3054,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
         command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
         self.require_not_tainted()?;
+        if command.split_whitespace().next().is_some_and(|name| matches!(name, "engine.time" | "engine.time.mode" | "engine.time.advance")) {
+            return self.execute_time_debug(command);
+        }
         if let Some(action) = renderer_debug_command(command) {
             let result = self.execute_renderer_debug(action)?;
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
@@ -3130,6 +3141,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
         observed_time_ns: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         self.require_not_tainted()?;
+        if self.playtest_time != playtest::TimeMode::Realtime {
+            return self.receipt(ProductDevOperationKind::AdvanceRealtime, Vec::new());
+        }
         let admission = self
             .lifecycle
             .advance_realtime(HostMonotonicTime::from_nanoseconds(observed_time_ns.get()))

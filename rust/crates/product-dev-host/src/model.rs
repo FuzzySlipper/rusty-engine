@@ -1337,6 +1337,8 @@ impl ProductDevRendererDiagnosticsFeedbackResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevRuntimeReadout {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inspection_time: Option<(String, u32)>,
     artifact: String,
     runtime: ProductDevRuntimeBinding,
     mode: ProductDevRuntimeMode,
@@ -1351,12 +1353,16 @@ pub struct ProductDevRuntimeReadout {
 }
 
 impl ProductDevRuntimeReadout {
+    pub fn with_inspection_time(mut self, mode: String, hz: u32) -> Self {
+        self.inspection_time = Some((mode, hz)); self
+    }
     pub fn new(
         runtime: ProductDevRuntimeBinding,
         mode: ProductDevRuntimeMode,
         state: ProductDevRuntimeState,
     ) -> Self {
         Self {
+            inspection_time: None,
             artifact: "rusty.product.runtime-readout".to_owned(),
             runtime,
             mode,
@@ -1481,6 +1487,8 @@ pub struct ProductDevOperationResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevDebugResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    readout: Option<ProductDevRuntimeReadout>,
     succeeded: bool,
     message: String,
 }
@@ -1526,6 +1534,9 @@ impl ProductDevDebugCatalog {
     pub fn with_renderer_diagnostics(mut self) -> Self {
         self.available = true;
         for (name, description) in [
+            ("engine.time", "Read simulation time mode and current forward step"),
+            ("engine.time.mode", "Select realtime, manual or action-driven time; never rewind"),
+            ("engine.time.advance", "Advance held simulation by a bounded duration in milliseconds"),
             (
                 "engine.renderer",
                 "Show the latest compact browser renderer timing, pacing, canvas, and resource summary",
@@ -1614,6 +1625,8 @@ fn validate_debug_descriptor_text(value: &str) -> Result<(), ProductDevHostError
 }
 
 impl ProductDevDebugResult {
+    pub fn with_readout(mut self, readout: ProductDevRuntimeReadout) -> Self { self.readout = Some(readout); self }
+    pub fn readout(&self) -> Option<&ProductDevRuntimeReadout> { self.readout.as_ref() }
     pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
     pub fn new(succeeded: bool, message: String) -> Result<Self, ProductDevHostError> {
@@ -1623,7 +1636,7 @@ impl ProductDevDebugResult {
                 "debug result exceeds the host result bound",
             ));
         }
-        Ok(Self { succeeded, message })
+        Ok(Self { succeeded, message, readout: None })
     }
 
     pub const fn succeeded(&self) -> bool {

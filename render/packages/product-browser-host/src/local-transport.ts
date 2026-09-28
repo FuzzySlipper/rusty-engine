@@ -1145,10 +1145,13 @@ export function createProductBrowserLocalHttpAdapter(
             if (event.lastEventId !== '') {
               throw new TypeError('connection baseline completion must not carry a reconnect cursor');
             }
-            const result = decodeConnectionResult(parseBoundedJson(
-              event.data,
-              MAXIMUM_RUNTIME_RESPONSE_BYTES,
-            ));
+            const baseline = requireRecord(parseBoundedJson(event.data, MAXIMUM_RUNTIME_RESPONSE_BYTES), 'connection baseline');
+            const { outputThrough, ...connection } = baseline;
+            const result = decodeConnectionResult(connection);
+            if (outputThrough !== undefined) {
+              observedOutputSequence = decodeOutputSequence(String(outputThrough), 'baseline output boundary', 'output_decode_failed');
+              settleOutputSequenceWaiters();
+            }
             if (!result.accepted) {
               throw new ProductBrowserLocalTransportError(
                 'request_failed',
@@ -1431,6 +1434,7 @@ export function createProductBrowserLocalHttpAdapter(
     subscribeOutputs,
     subscribeOutputBatches,
     waitUntilOutputSubscriptionReady,
+    waitUntilOutputSequence: (through: string) => waitUntilOutputSequence(decodeOutputSequence(through, 'debug output through', 'response_decode_failed')),
     recoverOutputProjection: () => recoverFreshOutputsOrTerminal(ROUTES.freshOutputs),
     confirmOutputBaseline: (epoch: number) => attachment.confirm(epoch),
     dispose,
@@ -2809,6 +2813,7 @@ function decodeRuntimeReadout(value: unknown): ProductBrowserRuntimeReadout {
     'scaledRemainder',
     'lastObservedTimeNs',
     'fault',
+    'inspectionTime',
   ], 'runtime readout');
   if (record.artifact !== 'rusty.product.runtime-readout') throw new TypeError('runtime readout artifact is invalid');
   const mode = record.mode;
@@ -2827,7 +2832,12 @@ function decodeRuntimeReadout(value: unknown): ProductBrowserRuntimeReadout {
       || (record.scaledRemainder as number) > 4_294_967_295)) {
     throw new TypeError('runtime readout scaledRemainder must be a u32 or null');
   }
+  const inspectionTime = record['inspectionTime'];
+  if (inspectionTime !== undefined && (!Array.isArray(inspectionTime) || inspectionTime.length !== 2
+    || !['realtime', 'manual', 'action-driven'].includes(inspectionTime[0])
+    || !Number.isInteger(inspectionTime[1]) || inspectionTime[1] <= 0)) throw new TypeError('invalid inspection time');
   return {
+    ...(inspectionTime === undefined ? {} : { inspectionTime: inspectionTime as [string, number] }),
     artifact: 'rusty.product.runtime-readout',
     runtime: decodeRuntimeIdentity(record.runtime),
     mode,

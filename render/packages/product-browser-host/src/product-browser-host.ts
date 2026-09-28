@@ -1,3 +1,4 @@
+import { installPlaytestInspection } from './playtest-inspection.js';
 import type { RenderOutputJob, RenderOutputChunk } from "@rusty-engine/render-contracts";
 import {
   mountRustyApplication,
@@ -284,6 +285,7 @@ export interface ProductBrowserTimelineCompletionResult {
 /** A bounded semantic-neutral readout emitted by the Rust runtime owner. */
 export interface ProductBrowserRuntimeReadout {
   readonly artifact: 'rusty.product.runtime-readout';
+  readonly inspectionTime?: readonly [string, number];
   readonly runtime: RustyApplicationRuntimeIdentity;
   readonly mode: ProductBrowserRuntimeMode;
   readonly state: 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
@@ -515,6 +517,7 @@ export interface ProductBrowserRuntimeAdapter {
     listener: ProductBrowserRuntimeOutputBatchListener,
   ) => () => void;
   /** Resolves once an asynchronous output subscription can receive runtime publications. */
+  readonly waitUntilOutputSequence?: (through: string) => Promise<void>;
   readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
   /** Reattach through the local transport's existing single-flight fresh-baseline path. */
   readonly recoverOutputProjection?: () => Promise<void>;
@@ -543,6 +546,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
   readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
   readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
+  readonly waitUntilOutputSequence?: ProductBrowserRuntimeAdapter['waitUntilOutputSequence'];
   readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
   readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
   readonly confirmOutputBaseline?: NonNullable<ProductBrowserRuntimeAdapter['confirmOutputBaseline']>;
@@ -624,6 +628,7 @@ export function createProductBrowserRuntimeTransport(
     ...(adapter.subscribeOutputBatches === undefined
       ? {}
       : { subscribeOutputBatches: adapter.subscribeOutputBatches }),
+    ...(adapter.waitUntilOutputSequence === undefined ? {} : { waitUntilOutputSequence: adapter.waitUntilOutputSequence }),
     ...(adapter.waitUntilOutputSubscriptionReady === undefined
       ? {}
       : { waitUntilOutputSubscriptionReady: adapter.waitUntilOutputSubscriptionReady }),
@@ -2127,6 +2132,10 @@ export async function mountProductBrowserHostWithApplication(
           return;
         case 'runtime-readout':
           runtimeReadout = output.readout;
+          if (output.readout.inspectionTime !== undefined) {
+            const [mode, hz] = output.readout.inspectionTime;
+            host.renderer.inspection?.({ simulationMs: mode === 'realtime' ? null : Number(output.readout.admittedSimulationSteps) * 1000 / hz });
+          }
           return;
         default:
           assertNever(output);
@@ -2956,6 +2965,13 @@ export async function mountProductBrowserHostWithApplication(
     throw new ProductBrowserHostError('startup_failed', 'application host did not mount');
   }
 
+  const removePlaytestInspection = installPlaytestInspection(host.renderer,
+    () => queue.enqueue(async () => { const batch = host.input?.drain() ?? []; if (batch.length > 0) await sendInput(batch); }),
+    async (through) => {
+      if (through !== undefined) await transport.waitUntilOutputSequence?.(through);
+      await rendererOutputTail;
+    });
+
   const readout = (): ProductBrowserHostReadout => Object.freeze({
     artifact: PRODUCT_BROWSER_HOST_ARTIFACT,
     state,
@@ -3074,6 +3090,7 @@ export async function mountProductBrowserHostWithApplication(
       transportClosed = true;
       publishHealth();
       cadence?.dispose();
+      removePlaytestInspection();
       rendererObservationCadenceSampler?.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;

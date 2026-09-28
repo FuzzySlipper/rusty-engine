@@ -245,6 +245,14 @@ export class RendererViewCompositionBackend {
     }
   }
 
+  #observer: THREE.PerspectiveCamera | null = null;
+  setObserver(pose: { position: readonly [number, number, number]; yawDegrees: number; pitchDegrees: number } | null): void {
+    if (pose === null) { this.#observer = null; return; }
+    const source = [...this.#cameras.values()].find(camera => camera instanceof THREE.PerspectiveCamera) as THREE.PerspectiveCamera | undefined;
+    this.#observer = source?.clone() ?? new THREE.PerspectiveCamera(75, 1, 0.01, 10000);
+    applyRendererThreeCameraPose(this.#observer, pose);
+  }
+
   render(submission: number, primaryWidth: number, primaryHeight: number, timeMs = this.#now()): void {
     if (this.#disposed || this.#composition.views.length === 0) return;
 
@@ -434,7 +442,7 @@ export class RendererViewCompositionBackend {
     primaryWidth: number,
     primaryHeight: number,
   ): void {
-    const camera = this.#cameras.get(view.cameraId);
+    const camera = this.#observer ?? this.#cameras.get(view.cameraId);
     if (camera === undefined) return;
     const area = pixelViewport(view.viewport, primaryWidth, primaryHeight);
     updateCameraAspect(camera, area.width / area.height);

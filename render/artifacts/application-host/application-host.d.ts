@@ -281,6 +281,7 @@ export interface RustyApplicationViewCompositionReceipt {
     readonly revision: number;
 }
 export interface RustyApplicationRendererPort {
+    readonly inspection?: RendererSurface['inspection'];
     readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
     readonly applyPresentation: (frame: RustyApplicationPresentationFrame) => Promise<RustyApplicationPresentationReceipt>;
     /** Atomically replace marker definitions consumed by the existing animation host. */

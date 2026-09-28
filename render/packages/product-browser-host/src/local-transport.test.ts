@@ -22,6 +22,7 @@ const READOUT = {
   scaledRemainder: 0,
   lastObservedTimeNs: '100',
   fault: null,
+  inspectionTime: ['action-driven', 60],
 } as const;
 
 type TestJson =
@@ -1780,4 +1781,22 @@ test('runtime output batches admit video resources and reject duplicate identiti
     assert.equal(outputs.length, duplicate ? 0 : 1);
     adapter.dispose();
   }
+});
+
+
+test('held connection baseline satisfies response output fences without another simulation tick', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    eventSource: FakeEventSource,
+    fetch: async () => response(result('connect')),
+  });
+  const unsubscribe = adapter.subscribeOutputs(() => {});
+  const stream = FakeEventSource.instances[0]!;
+  stream.open();
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  stream.emitBaseline({ ...result('connect'), outputThrough: '42' }, '');
+  await adapter.connect!();
+  await adapter.waitUntilOutputSequence!('42');
+  unsubscribe();
+  adapter.dispose();
 });

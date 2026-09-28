@@ -290,6 +290,7 @@ export interface ProductBrowserTimelineCompletionResult {
 /** A bounded semantic-neutral readout emitted by the Rust runtime owner. */
 export interface ProductBrowserRuntimeReadout {
     readonly artifact: 'rusty.product.runtime-readout';
+    readonly inspectionTime?: readonly [string, number];
     readonly runtime: RustyApplicationRuntimeIdentity;
     readonly mode: ProductBrowserRuntimeMode;
     readonly state: 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
@@ -464,6 +465,7 @@ export interface ProductBrowserRuntimeAdapter {
     /** One callback per ordered host receipt or complete connection baseline. */
     readonly subscribeOutputBatches?: (listener: ProductBrowserRuntimeOutputBatchListener) => () => void;
     /** Resolves once an asynchronous output subscription can receive runtime publications. */
+    readonly waitUntilOutputSequence?: (through: string) => Promise<void>;
     readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
     /** Reattach through the local transport's existing single-flight fresh-baseline path. */
     readonly recoverOutputProjection?: () => Promise<void>;
@@ -491,6 +493,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
     readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
     readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
+    readonly waitUntilOutputSequence?: ProductBrowserRuntimeAdapter['waitUntilOutputSequence'];
     readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
     readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
     readonly confirmOutputBaseline?: NonNullable<ProductBrowserRuntimeAdapter['confirmOutputBaseline']>;

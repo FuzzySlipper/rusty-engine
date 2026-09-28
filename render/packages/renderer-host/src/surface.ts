@@ -641,6 +641,7 @@ export interface RendererSurface {
   readonly retainResources: (identities: ReadonlySet<string>) => void;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
+  readonly inspection: (options: { drawing?: 'continuous' | 'on-demand'; simulationMs?: number | null; camera?: RendererSurfaceCameraPose | null }) => { drawing: string; held: boolean; observer: boolean; camera: RendererSurfaceCameraPose };
   readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
   readonly resetCamera: () => void;
   /** Synchronize a caller-owned camera, such as an authoritative game player view. */
@@ -891,11 +892,12 @@ function mountPreparedRendererSurface(
     evictedFailureCount: evictedCadenceFailureCount,
     failures: Object.freeze(cadenceFailures.map((failure) => Object.freeze({ ...failure }))),
   });
+  let inspectionForceDrawing = false;
   const continuousDemand = () => ({
     controls: controls.requiresAnimationFrame(),
     presentation: (presentationHosts?.requiresAnimationFrame() ?? false)
       || backendSurface.cameraMotionRequiresAnimationFrame(),
-    retainedAnimation: hasRetainedAnimation(latestSubmission),
+    retainedAnimation: inspectionForceDrawing || hasRetainedAnimation(latestSubmission),
   });
   const requestAutomaticSubmission = (): void => {
     presentationSubmissionRequested = true;
@@ -936,6 +938,10 @@ function mountPreparedRendererSurface(
     readonly backendSubmittedAtMs: number;
   }
 
+  let inspectionDrawing: 'continuous' | 'on-demand' = 'continuous';
+  let inspectionSimulationMs: number | null = null;
+  let inspectionWorldTimeMs = 0;
+  let inspectionCamera: RendererSurfaceCameraPose | null = null;
   const renderFrame = (
     timeMs: number,
     source: RendererSurfaceTimingSource,
@@ -943,11 +949,12 @@ function mountPreparedRendererSurface(
     if (disposed) throw new Error('renderer surface is disposed');
     if (cadenceState !== 'ready') throw new RendererSurfaceCadenceError(cadenceState);
     assertRendererSurfaceSourceTime(timeMs);
+    const worldTimeMs = inspectionSimulationMs === null ? timeMs : inspectionWorldTimeMs;
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
-      : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1_000));
-    lastRenderTimeMs = timeMs;
-    controls.update(deltaSeconds);
+      : Math.min(inspectionSimulationMs === null ? 0.05 : Infinity, Math.max(0, (worldTimeMs - lastRenderTimeMs) / 1_000));
+    lastRenderTimeMs = worldTimeMs;
+    controls.update(inspectionSimulationMs === null ? deltaSeconds : 0);
     const controlsUpdatedAtMs = surfaceTimingNow();
     const camera = controls.cameraSnapshot();
     backendSurface.setCameraPose(camera.pose, camera.basis);
@@ -958,7 +965,8 @@ function mountPreparedRendererSurface(
     const backendSubmissionStartedMs = surfaceTimingNow();
     let backendStatistics: RendererBrowserSurfaceSubmissionStatistics;
     try {
-      backendStatistics = backendSurface.renderOnce(timeMs);
+      if (inspectionSimulationMs !== null) backendSurface.resetCameraMotion();
+      backendStatistics = backendSurface.renderOnce(worldTimeMs, deltaSeconds);
     } catch (cause) {
       throw new RendererSurfaceBackendRenderError(cause);
     }
@@ -1026,6 +1034,14 @@ function mountPreparedRendererSurface(
       } catch (cause) {
         // Callers may observe the Engine cadence, but cannot own or halt it.
         rememberCadenceFailure('animationCallback', cause);
+      }
+      if (inspectionDrawing === 'on-demand') {
+        const worldTimeMs = inspectionSimulationMs === null ? timeMs : inspectionWorldTimeMs;
+        const delta = lastRenderTimeMs === null ? 0 : Math.max(0, (worldTimeMs - lastRenderTimeMs) / 1000);
+        lastRenderTimeMs = worldTimeMs;
+        presentationHosts?.advance(delta);
+        backendSurface.renderer.advanceAnimation(delta);
+        return;
       }
       const demand = submissionDemand.consumeDecision(
         surfaceViewport(canvas),
@@ -1360,6 +1376,32 @@ function mountPreparedRendererSurface(
     },
     executeRenderOutput: (job: RenderOutputJob) => backendSurface.executeRenderOutput(job),
     renderOnce,
+    inspection: (options) => {
+      if (options.simulationMs !== undefined) {
+        if (options.simulationMs !== null && (!Number.isFinite(options.simulationMs) || options.simulationMs < 0)) throw new Error('simulation time must be finite and nonnegative');
+        if (options.simulationMs === null) {
+          if (inspectionSimulationMs !== null) lastRenderTimeMs = null;
+        } else if (inspectionSimulationMs === null) {
+          inspectionWorldTimeMs = lastRenderTimeMs ?? (globalThis.performance?.now() ?? 0);
+        } else {
+          inspectionWorldTimeMs += Math.max(0, options.simulationMs - inspectionSimulationMs);
+        }
+        inspectionSimulationMs = options.simulationMs;
+        backendSurface.resetCameraMotion();
+      }
+      if (options.camera !== undefined) {
+        inspectionCamera = options.camera;
+        backendSurface.setObserver(options.camera);
+      }
+      if (options.drawing !== undefined) {
+        inspectionDrawing = options.drawing;
+        inspectionForceDrawing = options.drawing === 'continuous';
+        start();
+      }
+      const composition = backendSurface.viewCompositionReadout();
+      return { drawing: inspectionDrawing, held: inspectionSimulationMs !== null, observer: inspectionCamera !== null,
+        camera: inspectionCamera ?? composition.cameras[0]?.pose ?? controls.cameraPose() };
+    },
     resetCamera: () => {
       controls.resetCamera();
       lastRenderTimeMs = null;

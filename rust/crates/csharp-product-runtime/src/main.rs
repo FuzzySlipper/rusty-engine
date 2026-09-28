@@ -198,6 +198,8 @@ fn main() -> Result<(), String> {
 }
 
 const WORKER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+// Cold managed products can spend longer loading content than one callback.
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_WORKER_INPUT_BATCHES: usize = 256;
 
 #[derive(Default)]
@@ -977,9 +979,7 @@ impl WorkerRuntime {
         if let Err(error) = listener.set_nonblocking(true) {
             return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_BIND: {error}"));
         }
-        let deadline = args
-            .worker_operation_timeout()
-            .map(|timeout| Instant::now() + timeout);
+        let deadline = (!args.debugger).then(|| Instant::now() + WORKER_STARTUP_TIMEOUT);
         let channel = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -2571,7 +2571,7 @@ fn worker_request(
                 .and_then(|batch| {
                     if matches!(
                         owner.realtime_schedule_state(),
-                        Ok(ProductDevRuntimeScheduleState::Unsupported)
+                        Ok(ProductDevRuntimeScheduleState::Unsupported | ProductDevRuntimeScheduleState::Paused)
                     ) {
                         return owner.input(batch);
                     }
@@ -2631,7 +2631,9 @@ fn worker_request(
         },
         ProductDevWorkerRequest::Debug { command, .. } => match command {
             Some(command) if command.len() <= product_dev_host::MAX_REQUEST_BODY_BYTES => {
-                worker_receipt(request_id, owner.execute_debug(&command), settle_request)?
+                worker_receipt(request_id, if matches!(command.split_whitespace().next(), Some("engine.time.mode" | "engine.time.advance")) {
+                    owner.execute_debug_with_input(&command, || mailbox.drain())
+                } else { owner.execute_debug(&command) }, settle_request)?
             }
             Some(_) => worker_fault_response(
                 request_id,
