@@ -880,7 +880,7 @@ export function createProductBrowserVideoFeedbackReporter(options: {
   let replaceOwner = false;
   let lastReportedEvictionCount = 0;
   const bindRuntime = (next: RustyApplicationRuntimeIdentity): void => {
-    if (binding === null || !sameRuntimeBinding(binding, next)) { options.renderer.resetVideoRealizationOwner(); replaceOwner = true; }
+    if (binding === null || !sameRuntimeIncarnation(binding, next)) { options.renderer.resetVideoRealizationOwner(); replaceOwner = true; }
     binding = next;
   };
   const flush = async (): Promise<void> => {
@@ -969,7 +969,7 @@ export function createProductBrowserAudioFeedbackReporter(options: {
   let lastReportedEvictionCount = 0;
 
   const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
+    if (currentBinding === null || !sameRuntimeIncarnation(currentBinding, runtime)) {
       options.renderer.resetAudioRealizationOwner();
       replaceOwnerPending = true;
     }
@@ -1043,7 +1043,7 @@ export function createProductBrowserAnimationFeedbackReporter(options: {
   let replaceOwnerPending = currentBinding !== null;
   let lastReportedEvictionCount = 0;
   const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
+    if (currentBinding === null || !sameRuntimeIncarnation(currentBinding, runtime)) {
       options.renderer.resetAnimationRealizationOwner();
       replaceOwnerPending = true;
     }
@@ -1090,7 +1090,7 @@ export function createProductBrowserGhostPlateFeedbackReporter(options: {
   let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
   let replaceOwnerPending = currentBinding !== null;
   const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) replaceOwnerPending = true;
+    if (currentBinding === null || !sameRuntimeIncarnation(currentBinding, runtime)) replaceOwnerPending = true;
     currentBinding = runtime;
   };
   const flush = async (): Promise<void> => {
@@ -3217,6 +3217,19 @@ function canonicalSafeU64(value: number, name: string): string {
     throw new ProductBrowserHostError('transport_failed', `${name} is outside the safe u64 bridge range`);
   }
   return String(value);
+}
+
+/**
+ * Realization owners (audio voices, video elements, animation and ghost-plate
+ * facts) live as long as the runtime incarnation. A control-revision fence
+ * (pause, resume, remap, control replace) rebinds reporting to the new
+ * binding but must not reset them; a new instance or generation does.
+ */
+function sameRuntimeIncarnation(
+  left: RustyApplicationRuntimeIdentity,
+  right: RustyApplicationRuntimeIdentity,
+): boolean {
+  return left.instanceId === right.instanceId && left.generation === right.generation;
 }
 
 function sameRuntimeBinding(

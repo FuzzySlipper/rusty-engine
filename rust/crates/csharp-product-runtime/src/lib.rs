@@ -2201,7 +2201,7 @@ impl CsharpProductRuntime {
         // RuntimeInputLane's control-fence contract uses this reason for any
         // same-generation rebind; the overflow code remains explicit in the
         // surrounding runtime diagnostic.
-        self.rebind_input(InputClearReason::ControlRevisionChange)
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
             .map_err(|error| self.runtime_error(error))?;
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         // A previous admission failure may already have staged a recovery
@@ -2668,14 +2668,28 @@ impl CsharpProductRuntime {
         ))
     }
 
+    /// Rebind input for a transition that replaces the browser's world (a
+    /// new generation or a complete baseline): the replacement renderer
+    /// starts fresh realization owners, so Rust forgets their facts too.
     fn rebind_input(&mut self, reason: InputClearReason) -> Result<(), CsharpProductRuntimeError> {
+        self.rebind_input_in_place(reason)?;
+        self.services.reset_audio_realization_owner();
+        self.services.reset_animation_realization_owner();
+        self.services.reset_ghost_plate_realization_owner();
+        Ok(())
+    }
+
+    /// Rebind input for a same-incarnation control fence. The browser keeps
+    /// its renderer, retained media and realization owners across it, so the
+    /// realized facts stay valid here as well.
+    fn rebind_input_in_place(
+        &mut self,
+        reason: InputClearReason,
+    ) -> Result<(), CsharpProductRuntimeError> {
         let binding = input_binding(&self.lifecycle);
         self.input_lane
             .rebind(binding, standard_input_context(), reason)
             .map_err(input_error)?;
-        self.services.reset_audio_realization_owner();
-        self.services.reset_animation_realization_owner();
-        self.services.reset_ghost_plate_realization_owner();
         self.pending_inputs.clear();
         self.pending_inputs.push(clear_input_owned(binding, reason));
         Ok(())
@@ -2695,7 +2709,7 @@ impl CsharpProductRuntime {
         self.lifecycle
             .change_control(RuntimeControlOperation::Replace)
             .map_err(lifecycle_error)?;
-        self.rebind_input(InputClearReason::ControlRevisionChange)
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
     }
 
     fn start_for_exercise(&mut self) -> Result<(), CsharpProductRuntimeError> {
@@ -2894,7 +2908,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                         |lifecycle| lifecycle.pause(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
-                self.rebind_input(InputClearReason::ControlRevisionChange)
+                self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Pause,
@@ -2909,7 +2923,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                         |lifecycle| lifecycle.resume(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
-                self.rebind_input(InputClearReason::ControlRevisionChange)
+                self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Resume,
@@ -2987,7 +3001,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         self.lifecycle
             .change_control(lifecycle_operation)
             .map_err(|error| self.lifecycle_runtime_error(error))?;
-        self.rebind_input(InputClearReason::ControlRevisionChange)
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
             .map_err(|error| self.runtime_error(error))?;
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         self.receipt(

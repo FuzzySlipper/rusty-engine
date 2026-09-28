@@ -8,6 +8,7 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../application-host" }
+    { "path": "../application-host" },
+    { "path": "../renderer-host" }
   ]
 }

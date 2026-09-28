@@ -11,7 +11,9 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc --build",
     "prepare": "pnpm run build",
@@ -25,6 +27,7 @@
   "devDependencies": {
     "@rusty-engine/application-host": "workspace:*",
     "@rusty-engine/render-contracts": "workspace:*",
+    "@rusty-engine/renderer-host": "workspace:*",
     "@types/node": "^24.0.0"
   }
 }
