@@ -1990,13 +1990,14 @@ export class ThreeRenderer {
    */
   #syncStaticInstanceBatches(): void {
     const changedGroups = new Set<string>();
+    const dynamicTransformRoots = this.#dynamicTransformRoots();
     for (const [handle, transformChanged] of this.#dirtyStaticInstances) {
       const previous = this.#staticGroupByHandle.get(handle);
       const entry = this.#handles.get(handle);
       let key: string | undefined;
       if (entry !== undefined) {
         entry.object.updateWorldMatrix(true, false);
-        key = this.#staticInstanceKey(entry);
+        key = this.#staticInstanceKey(entry, dynamicTransformRoots);
       }
       if (key !== previous) {
         if (previous !== undefined) {
@@ -2077,7 +2078,27 @@ export class ThreeRenderer {
     }
   }
 
-  #staticInstanceKey(entry: NodeEntry): string | undefined {
+  /**
+   * Objects whose world transforms change outside frame application: animated
+   * joint attachments move with animation, and camera-facing sprites reorient
+   * per camera pass. Their subtrees keep ordinary per-object matrices.
+   */
+  #dynamicTransformRoots(): ReadonlySet<THREE.Object3D> {
+    const roots = new Set<THREE.Object3D>();
+    for (const handle of [...this.#jointParents.keys(), ...this.#cameraSpriteHandles]) {
+      const entry = this.#handles.get(handle);
+      if (entry !== undefined) roots.add(entry.object);
+    }
+    return roots;
+  }
+
+  #staticInstanceKey(
+    entry: NodeEntry,
+    dynamicTransformRoots: ReadonlySet<THREE.Object3D>,
+  ): string | undefined {
+    for (let node: THREE.Object3D | null = entry.object; node !== null; node = node.parent) {
+      if (dynamicTransformRoots.has(node)) return undefined;
+    }
     if ((entry.kind !== 'staticMesh' && entry.kind !== 'voxelObject')
       || !(entry.object instanceof THREE.Mesh) || entry.object instanceof THREE.InstancedMesh
       || this.#layerForObject(entry.object) !== 'scene'

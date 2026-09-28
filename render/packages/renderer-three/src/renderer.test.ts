@@ -2175,6 +2175,73 @@ void test('an unchanged camera pass does not rewrite or re-upload a static batch
   renderer.dispose();
 });
 
+void test('static meshes attached to an animated joint follow animation instead of batching', () => {
+  const scene = rigScene(true);
+  const asset = animatedMeshAsset({
+    clips: [{ id: 'move', name: 'move', durationSeconds: 1 }],
+    defaultClip: null,
+    rig: {
+      joints: [{ id: 'Root', parent: null }],
+      bindRestHash: animationRigFingerprint(scene),
+      bindRestConvention: 'localMatrixV1',
+      rootConvention: 'authoredRootTranslation',
+      rootJointId: 'Root',
+      structuralRootIds: ['Root'],
+      designatedMotionRootIds: ['Root'],
+      authoredPoseTranslationJointIds: [],
+    },
+  });
+  const source = new MapAnimatedMeshAssetSource([{
+    asset: asset.asset,
+    contentHash: asset.contentHash,
+    scene,
+    clips: [new THREE.AnimationClip('move', 1, [
+      new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 2, 0, 0]),
+    ])],
+  }]);
+  const renderer = new ThreeRenderer({ animatedMeshSource: source });
+  const body = renderHandle(98_654);
+  renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
+  renderer.applyDiff({
+    op: 'createAnimatedMeshInstance', handle: body, parent: null,
+    instance: {
+      asset: asset.asset,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      materialOverrides: [], playback: null, visible: true,
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'body' },
+    },
+  });
+  renderer.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });
+  const children = [renderHandle(98_655), renderHandle(98_656)];
+  for (const child of children) {
+    renderer.applyDiff({ op: 'createStaticMeshInstance', handle: child, parent: body, instance: crateInstance() });
+    renderer.applyDiff({ op: 'setParentJoint', handle: child, joint: 'Root' });
+  }
+  renderer.applyDiff({
+    op: 'setAnimatedMeshPlayback', handle: body,
+    playback: { kind: 'play', clip: 'move', loop: 'repeat', speed: 1, weight: 1, restart: true, fadeSeconds: null },
+  });
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  camera.position.set(1, 0, 8);
+  camera.lookAt(1, 0, 0);
+  renderer.prepareStaticInstanceBatches(camera);
+  renderer.advanceAnimation(0.25);
+  renderer.prepareStaticInstanceBatches(camera);
+  renderer.scene.updateMatrixWorld();
+
+  const batches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh && object.visible && object.count > 0) batches.push(object);
+  });
+  assert.deepEqual(batches, [], 'dynamically parented statics are not submitted from a batch');
+  for (const child of children) {
+    const object = renderer.objectFor(child)!;
+    assert.ok(object.layers.isEnabled(0), 'the attachment renders as its own mesh');
+    assert.ok(object.getWorldPosition(new THREE.Vector3()).x > 0, 'the attachment follows the joint');
+  }
+  renderer.dispose();
+});
+
 void test('batch admission excludes invisible, overridden, reflected, and non-world instances', () => {
   const renderer = new ThreeRenderer();
   renderer.applyFrame({
