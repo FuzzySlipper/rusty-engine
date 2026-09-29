@@ -201,6 +201,8 @@ pub struct VoxelMeshChunk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelChunkMeshUpdate {
     pub source_revision: VoxelSourceRevision,
+    /// The `mesh_state` this update was applied to, or `None` for a build.
+    pub previous_mesh_state: Option<u64>,
     pub surface_mode: SurfaceMode,
     pub dirty_chunks: Vec<[i64; 3]>,
     pub rebuilt_chunks: usize,
@@ -225,10 +227,10 @@ pub struct VoxelCollisionScene {
     mesh_chunks: BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>,
     mesh_options: SurfaceMeshOptions,
     mesh_update: VoxelChunkMeshUpdate,
-    /// Process-unique identity of this scene's chunk-mesh history. A build
-    /// (including a world-origin rebase) starts a new lineage; local changes
-    /// and clones continue it.
-    mesh_lineage: u64,
+    /// Process-unique identity of this scene's chunk meshes. Every build
+    /// (including a world-origin rebase) and every local change takes a new
+    /// one; a clone shares it until either copy changes.
+    mesh_state: u64,
     source_revision: VoxelSourceRevision,
     /// Order-independent sum of every solid voxel's hash, maintained by each
     /// local change.
@@ -261,7 +263,7 @@ impl SceneBuildRevision {
     }
 }
 
-fn next_mesh_lineage() -> u64 {
+fn next_mesh_state() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
@@ -581,13 +583,14 @@ impl VoxelCollisionScene {
             mesh_options,
             mesh_update: VoxelChunkMeshUpdate {
                 source_revision: revisions.source,
+                previous_mesh_state: None,
                 surface_mode: mesh_options.mode,
                 dirty_chunks,
                 rebuilt_chunks,
                 reused_chunks: 0,
                 removed_chunks: 0,
             },
-            mesh_lineage: next_mesh_lineage(),
+            mesh_state: next_mesh_state(),
             source_revision: revisions.source,
             authority_hash,
             world_origin: revisions.world_origin,
@@ -663,12 +666,12 @@ impl VoxelCollisionScene {
         &self.mesh_update
     }
 
-    /// Identity of the chunk-mesh history. While it is unchanged, each source
-    /// revision's `mesh_update().dirty_chunks` names every chunk mesh that
-    /// changed since the previous revision, so a consumer that saw revision
-    /// `n` can catch up to `n + 1` from that list alone.
-    pub const fn mesh_lineage(&self) -> u64 {
-        self.mesh_lineage
+    /// Identity of the current chunk meshes. Two scenes with the same state
+    /// have the same meshes. When `mesh_update().previous_mesh_state` is the
+    /// state a consumer last saw, `mesh_update().dirty_chunks` names every
+    /// chunk mesh that changed since then.
+    pub const fn mesh_state(&self) -> u64 {
+        self.mesh_state
     }
 
     pub const fn source_revision(&self) -> VoxelSourceRevision {
@@ -1222,8 +1225,10 @@ impl VoxelCollisionScene {
                 collision_solid(world, noncollidable, cell)
             });
         self.source_revision = self.source_revision.next();
+        let previous_mesh_state = std::mem::replace(&mut self.mesh_state, next_mesh_state());
         self.mesh_update = VoxelChunkMeshUpdate {
             source_revision: self.source_revision,
+            previous_mesh_state: Some(previous_mesh_state),
             surface_mode: self.mesh_options.mode,
             dirty_chunks: dirty
                 .iter()

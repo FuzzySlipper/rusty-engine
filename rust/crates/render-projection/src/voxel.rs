@@ -55,7 +55,7 @@ struct ChunkSnapshot {
 struct InstanceSnapshot {
     asset_id: String,
     transform: Transform,
-    mesh_lineage: u64,
+    mesh_state: u64,
     source_revision: u64,
     material_slots: VoxelMaterialSlotMapping,
     chunks: BTreeMap<[i64; 3], ChunkSnapshot>,
@@ -69,13 +69,13 @@ enum VoxelRenderKey {
 
 /// Which of an instance's chunks a projection visits.
 enum ChunkVisit<'a> {
-    /// The scene is at the revision last projected.
+    /// The scene has the mesh state last projected.
     None,
-    /// The scene is one revision past the one last projected, in the same
-    /// mesh lineage, so its dirty list names every changed chunk.
+    /// The scene's last change was applied to the mesh state last projected,
+    /// so its dirty list names every changed chunk.
     Dirty(&'a [[i64; 3]]),
-    /// Compare every chunk: a new or rebound instance, a new mesh lineage, a
-    /// skipped revision, or a changed slot mapping.
+    /// Compare every chunk: a new or rebound instance, a rebuilt or
+    /// diverged scene, a skipped change, or a changed slot mapping.
     All,
 }
 
@@ -175,21 +175,20 @@ impl VoxelRenderProjector {
                 .get(&instance.instance_id)
                 .unwrap_or(&empty_mapping);
             let scene = instance.scene;
-            let revision = scene.source_revision().raw();
             let previous = self
                 .last_instances
                 .get(&instance.instance_id)
                 .filter(|previous| previous.asset_id == instance.asset_id);
             let replace_all = previous.is_some_and(|previous| previous.material_slots != *slots);
             let visit = match previous {
-                Some(previous) if !replace_all && previous.mesh_lineage == scene.mesh_lineage() => {
-                    if previous.source_revision == revision {
-                        ChunkVisit::None
-                    } else if previous.source_revision.checked_add(1) == Some(revision) {
-                        ChunkVisit::Dirty(&scene.mesh_update().dirty_chunks)
-                    } else {
-                        ChunkVisit::All
-                    }
+                Some(previous) if !replace_all && previous.mesh_state == scene.mesh_state() => {
+                    ChunkVisit::None
+                }
+                Some(previous)
+                    if !replace_all
+                        && scene.mesh_update().previous_mesh_state == Some(previous.mesh_state) =>
+                {
+                    ChunkVisit::Dirty(&scene.mesh_update().dirty_chunks)
                 }
                 _ => ChunkVisit::All,
             };
@@ -299,7 +298,7 @@ impl VoxelRenderProjector {
                     let snapshot = entry.insert(InstanceSnapshot {
                         asset_id: instance.asset_id.clone(),
                         transform: instance.transform,
-                        mesh_lineage: scene.mesh_lineage(),
+                        mesh_state: scene.mesh_state(),
                         source_revision: scene.source_revision().raw(),
                         material_slots: plan.slots.clone(),
                         chunks: BTreeMap::new(),
@@ -338,7 +337,7 @@ impl VoxelRenderProjector {
                     }
                 }
             }
-            snapshot.mesh_lineage = scene.mesh_lineage();
+            snapshot.mesh_state = scene.mesh_state();
             snapshot.source_revision = scene.source_revision().raw();
         }
 
@@ -1109,6 +1108,41 @@ mod tests {
     }
 
     #[test]
+    fn independently_edited_clones_at_the_same_revision_are_projected_in_full() {
+        let mut first = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[0, 0, 0]]).unwrap();
+        let mut second = first.clone();
+        VoxelEditService::apply(
+            &mut first,
+            &[VoxelEdit::Set {
+                address: [5, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        VoxelEditService::apply(
+            &mut second,
+            &[VoxelEdit::Set {
+                address: [9, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        assert_eq!(first.source_revision(), second.source_revision());
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        let instance = |scene| VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene,
+        };
+        projector.project(&[instance(&first)], &materials).unwrap();
+        projector.project(&[instance(&second)], &materials).unwrap();
+        assert!(projector.chunk_handle("room", [2, 0, 0]).is_some());
+        assert_eq!(projector.chunk_handle("room", [1, 0, 0]), None);
+    }
+
+    #[test]
     fn transform_only_update_does_not_require_a_voxel_revision() {
         let scene = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[0, 0, 0]]).unwrap();
         let materials = BTreeMap::from([(1, material(1))]);
@@ -1391,6 +1425,8 @@ mod tests {
             directional: BTreeMap::new(),
         };
         let mut mapped = false;
+        // A clone of the third scene, edited on its own and swapped in.
+        let mut fork: Option<VoxelCollisionScene> = None;
         let mut origin = WorldOriginState::default();
         let mut projector = VoxelRenderProjector::new();
         let mut renderer = Renderer::default();
@@ -1412,13 +1448,23 @@ mod tests {
                 })
                 .collect();
             let _ = VoxelEditService::apply(&mut placed[target].scene, &edits);
+            if let Some(fork) = &mut fork {
+                let address = rng.address();
+                let _ = VoxelEditService::apply(
+                    fork,
+                    &[VoxelEdit::Set {
+                        address,
+                        material_slot: 1,
+                    }],
+                );
+            }
             match rng.below(40) {
                 0..=3 => {
                     placed[target].transform.translation = [rng.below(5) as f32, 0.0, 0.0];
                 }
                 4..=6 => mapped = !mapped,
                 7..=9 => placed[2].present = !placed[2].present,
-                // A replacement scene starts a new lineage at revision zero.
+                // A replacement scene starts a new mesh state at revision zero.
                 10 | 11 => {
                     let scene = &placed[1].scene;
                     let mut voxels = scene.material_voxels();
@@ -1442,6 +1488,10 @@ mod tests {
                         .commit(&mut origin, scene, &prepared)
                         .unwrap();
                 }
+                13 | 14 => match &mut fork {
+                    None => fork = Some(placed[2].scene.clone()),
+                    Some(fork) => std::mem::swap(fork, &mut placed[2].scene),
+                },
                 _ => {}
             }
             // Some steps let several revisions pass before projecting.

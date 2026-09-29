@@ -52,18 +52,21 @@ retained state.
 
 - **Scene side (`engine-spatial`).** This is a small addition to a file owned
   by the main lane:
-  - `VoxelCollisionScene::mesh_lineage()`, a process-unique id. A build,
-    including a world-origin rebase, gets a new one. Local changes and clones
-    keep it.
+  - `VoxelCollisionScene::mesh_state()`, a process-unique id for the
+    current chunk meshes. Every build (including a world-origin rebase) and
+    every local change takes a new one. A clone shares it until either copy
+    changes.
+  - `mesh_update().previous_mesh_state`, the state the last local change was
+    applied to (`None` after a build).
   - `mesh_chunk(coord)`, a lookup by chunk coordinate.
-- **Projector.** For each instance it keeps the lineage and source revision it
-  last projected, then:
+- **Projector.** For each instance it keeps the mesh state it last
+  projected, then:
 
   | Scene compared with the last projection | Chunks visited |
   |---|---|
-  | same lineage, same revision | none |
-  | same lineage, next revision | `mesh_update().dirty_chunks` only |
-  | new lineage, skipped revisions, a new or rebound instance, or a changed slot mapping | every chunk; each one's mesh hash and translation is compared with what was retained |
+  | same mesh state | none |
+  | `previous_mesh_state` is the state last projected | `mesh_update().dirty_chunks` only |
+  | anything else: a rebuild, a diverged clone, skipped changes, a new or rebound instance, or a changed slot mapping | every chunk; each one's mesh hash and translation is compared with what was retained |
 
   The dirty list comes straight from the scene. The projector has no
   neighbourhood rule of its own, so the Dual Contouring fix in `0fb137ec`
@@ -93,7 +96,8 @@ Marching Cubes, with 4³ chunks. Over 300 steps it applies:
 - transform moves;
 - slot-mapping toggles;
 - removing and re-adding an instance;
-- scene replacement (a new lineage at revision 0);
+- scene replacement (a new mesh state at revision 0);
+- swapping in an independently edited clone of a scene;
 - world-origin rebases;
 - skipped projections, so several revisions pass between calls.
 
@@ -143,3 +147,40 @@ renderer attachment gets the same baseline as before.
   Nothing matched on the removed variants.
 - The C# API does not change. `RefreshScene` has the same semantics and is
   cheaper.
+
+## Review fix: independently edited clones
+
+**Finding.** The first version keyed the fast path on a lineage id plus the
+source revision, and clones kept the lineage. Two clones edited separately
+can reach the same revision with different chunks. Projecting one and then
+the other visited nothing and left the first clone's geometry on screen.
+With `+1`, it applied the wrong clone's dirty list.
+
+**Fix.** Scene clones are how the services edit (clone, edit, swap), so a
+clone cannot simply start a new history. Instead, every build and every local
+change takes a new process-unique `mesh_state`, and the change records the
+state it was applied to (`previous_mesh_state`). The projector:
+- skips the scene when the states are equal, which now means equal meshes;
+- uses the dirty list when `previous_mesh_state` is the state it last
+  projected;
+- otherwise compares every chunk.
+
+A clone-then-edit still takes the fast path, because its predecessor is the
+original's state. Two diverged clones never share a state. The source
+revision no longer decides anything here; it is still reported in the
+projection readout.
+
+**Evidence.**
+- `independently_edited_clones_at_the_same_revision_are_projected_in_full`
+  is the reviewer's reproduction. It fails on `fdcd6242` ("new clone's chunk
+  must appear") and passes now.
+- The randomized realization test now also swaps in an independently edited
+  clone of one scene. It passes, but it rarely reaches the equal-revision
+  case, so the focused test is the one that catches this bug.
+- `engine-spatial`, `render-projection`, `csharp-engine-services` and
+  `csharp-product-runtime` pass (421 tests); clippy is clean for the two
+  changed crates.
+
+**Migration.** `VoxelCollisionScene::mesh_lineage()` is replaced by
+`mesh_state()`, and `VoxelChunkMeshUpdate` gains `previous_mesh_state`. Rust
+code that builds `VoxelChunkMeshUpdate` literally must add the field.
