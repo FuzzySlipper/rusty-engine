@@ -100,3 +100,25 @@ and restore argument changes), #8754 triggers, the dynamics step-and-read
 receipt changes, #8763's `ContentStore` removal and #8736's
 `PublishAttachedSnapshot` to `PublishChanges`. `rusty update --check` lists the
 notes.
+
+## Review fix: readiness of the selected product
+
+Review found that `rusty status` in asset-pipeline `96a972a` reported
+`needs changes` (exit 1), even with `--project src/AssetWorkbench.App/…`.
+The only finding was the unrelated obsolete
+`legacy/tools/micro-voxel-studio` `MicroVoxel.Host`: the #8828 shape check
+scanned the whole repository whatever project was selected.
+
+The check now covers only the selected project when a `.csproj` is given,
+which `rusty build` and `rusty dev` always pass. That scope is the project,
+its `ProjectReference` closure, and the `.props`/`.targets` files in their
+directories up to the pin. Without `--project` it still covers the whole
+repository. Separately, asset-pipeline `4ab29c9` made the prototype's
+reference exact.
+
+Rerun on git archives, with the CLI from this change:
+
+| asset-pipeline | repository | `--project` App | `--project` Bake |
+|---|---|---|---|
+| `96a972a` (reviewed) | needs changes, exit 1 (names only the legacy prototype) | ready, exit 0 | ready, exit 0 |
+| `main` (`4ab29c9`) | ready, exit 0 | ready, exit 0 | ready, exit 0 |

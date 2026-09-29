@@ -105,7 +105,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             pinned_pair_if_installed(&options.project)?
         };
         if let Some((pin, pair)) = pinned {
-            warn_shape(&pin);
+            warn_shape(&pin, &absolute(&options.project)?);
             if options.runtime.is_none() {
                 let runtime = pair.runtime_pack();
                 diagnostic(
@@ -838,6 +838,9 @@ Shows the product's pinned pair and where its pin lives, whether that pair is in
 runtime pack and SDK feed paths, the pairs in the shared cache, and missing or mismatched
 prerequisites. Exits 1 when the product cannot run yet. Works offline.
 
+The project-shape check covers the whole repository, or with --project <product.csproj> only that
+project, the projects it references and the .props/.targets files above them.
+
 Examples:
   rusty status
   rusty status --project src/Game/Game.csproj"
@@ -982,8 +985,8 @@ fn require_pin(start: &Path) -> Result<Pin, String> {
 
 /// Tells `build` and `dev` users about project files that let plain dotnet
 /// restore a different SDK; the rusty command itself still proceeds.
-fn warn_shape(pin: &Pin) {
-    match pair::shape_problems(pin) {
+fn warn_shape(pin: &Pin, project: &Path) {
+    match pair::shape_problems(pin, Some(project)) {
         Ok(problems) => problems
             .iter()
             .for_each(|problem| eprintln!("RUSTY_PROJECT_SHAPE: {problem}")),
@@ -1097,7 +1100,7 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
     if options.engine_source.is_none() {
         if let Some(pin) = Pin::find(&product_start(Some(&project))?)? {
             pair::installed(&pin.version)?.ok_or_else(|| not_installed(&pin))?;
-            warn_shape(&pin);
+            warn_shape(&pin, &project);
         }
     }
     let mut arguments = vec![
@@ -1244,7 +1247,17 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
                     ));
                 }
             }
-            let shape = pair::shape_problems(&pin)?;
+            let selected = match &options.project {
+                Some(project)
+                    if project
+                        .extension()
+                        .is_some_and(|extension| extension == "csproj") =>
+                {
+                    Some(absolute(project)?)
+                }
+                _ => None,
+            };
+            let shape = pair::shape_problems(&pin, selected.as_deref())?;
             println!(
                 "project shape  {}",
                 if shape.is_empty() {

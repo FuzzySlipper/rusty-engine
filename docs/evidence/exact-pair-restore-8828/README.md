@@ -156,3 +156,12 @@ exactly (asset-pipeline `4ab29c9`). It does not compile on current pairs
 (`IEngineContext.Appearance` is gone), but it now fails there instead of
 restoring an arbitrary cached SDK. Nothing builds it; the recipe job uses
 `MicroVoxel.Cli`.
+
+## Scope of the shape check (from #8822 review)
+
+With `--project <product.csproj>`, and always in `rusty build` and `rusty dev`,
+the check covers the project, its `ProjectReference` closure, and the
+`.props`/`.targets` files between them and the pin. An unrelated project in
+the same repository no longer makes the product unready. Without `--project`
+it scans the repository. A unit test covers a referenced library that is
+checked and an unrelated legacy project that is not.

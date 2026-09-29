@@ -158,8 +158,11 @@ const SHAPE_SKIPPED_DIRECTORIES: &[&str] = &[
 
 /// Ways the product's project files let a restore pick the wrong SDK: the pair
 /// feed is not declared beside the pin, or a `Rusty.Engine` reference is a
-/// NuGet minimum rather than exactly the pin.
-pub fn shape_problems(pin: &Pin) -> Result<Vec<String>, String> {
+/// NuGet minimum rather than exactly the pin. With a selected project, only
+/// that project, its `ProjectReference` closure, and the `.props`/`.targets`
+/// files in their directories up to the pin are checked, so an unrelated
+/// project in the same repository does not make the product unready.
+pub fn shape_problems(pin: &Pin, project: Option<&Path>) -> Result<Vec<String>, String> {
     let mut problems = Vec::new();
     let props = fs::read_to_string(&pin.file).map_err(|error| {
         format!(
@@ -175,7 +178,14 @@ pub fn shape_problems(pin: &Pin) -> Result<Vec<String>, String> {
     }
     let root = pin.file.parent().unwrap_or(Path::new("."));
     let mut loose = Vec::new();
-    collect_loose_references(root, &mut loose)?;
+    match project {
+        Some(project) => {
+            for file in project_scope(project, root) {
+                loose_references_in(&file, &mut loose);
+            }
+        }
+        None => collect_loose_references(root, &mut loose)?,
+    }
     for (file, version) in loose {
         problems.push(format!(
             "`{}` references Rusty.Engine as `{version}`, which NuGet treats as a minimum; use Version=\"{EXACT_VERSION}\"",
@@ -205,16 +215,77 @@ fn collect_loose_references(
         if !(name.ends_with(".csproj") || name.ends_with(".props") || name.ends_with(".targets")) {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&path) else {
+        loose_references_in(&path, loose);
+    }
+    Ok(())
+}
+
+fn loose_references_in(path: &Path, loose: &mut Vec<(PathBuf, String)>) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    for version in rusty_engine_reference_versions(&text) {
+        if version != EXACT_VERSION {
+            loose.push((path.to_owned(), version));
+        }
+    }
+}
+
+/// The project, the projects it references (transitively), and every
+/// `.props`/`.targets` file in their directories from the project up to `root`.
+fn project_scope(project: &Path, root: &Path) -> Vec<PathBuf> {
+    let mut projects: Vec<PathBuf> = Vec::new();
+    let mut pending = vec![project.to_owned()];
+    while let Some(next) = pending.pop() {
+        let next = fs::canonicalize(&next).unwrap_or(next);
+        if projects.contains(&next) {
             continue;
-        };
-        for version in rusty_engine_reference_versions(&text) {
-            if version != EXACT_VERSION {
-                loose.push((path.clone(), version));
+        }
+        if let (Ok(text), Some(directory)) = (fs::read_to_string(&next), next.parent()) {
+            for reference in project_references(&text) {
+                pending.push(directory.join(reference.replace('\\', "/")));
+            }
+        }
+        projects.push(next);
+    }
+    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let mut files = projects.clone();
+    for project in &projects {
+        for directory in project.ancestors().skip(1) {
+            if let Ok(entries) = fs::read_dir(directory) {
+                for entry in entries.filter_map(Result::ok) {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if path.is_file()
+                        && (name.ends_with(".props") || name.ends_with(".targets"))
+                        && !files.contains(&path)
+                    {
+                        files.push(path);
+                    }
+                }
+            }
+            if directory == root {
+                break;
             }
         }
     }
-    Ok(())
+    files
+}
+
+/// The `Include` path of each `<ProjectReference>`.
+fn project_references(text: &str) -> Vec<String> {
+    let mut references = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("<ProjectReference") {
+        rest = &rest[at + "<ProjectReference".len()..];
+        let Some(end) = rest.find('>') else {
+            break;
+        };
+        if let Some(include) = xml_attribute(&rest[..end], "Include") {
+            references.push(include);
+        }
+    }
+    references
 }
 
 /// The version each `PackageReference` or `PackageVersion` element names for
@@ -707,7 +778,7 @@ mod tests {
         )
         .unwrap();
         let pin = Pin::find(&root).unwrap().unwrap();
-        let problems = shape_problems(&pin).unwrap();
+        let problems = shape_problems(&pin, None).unwrap();
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems[0].contains("RestoreAdditionalProjectSources"));
         assert!(problems[1].contains("minimum"));
@@ -725,7 +796,7 @@ mod tests {
             r#"<PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]">"#,
         )
         .unwrap();
-        assert!(shape_problems(&pin).unwrap().is_empty());
+        assert!(shape_problems(&pin, None).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -751,6 +822,61 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(rusty_engine_reference_versions(text), expected, "{text}");
         }
+    }
+
+    #[test]
+    fn a_selected_project_is_checked_with_its_references_only() {
+        let root = env::temp_dir().join(format!("rusty-scope-{}", std::process::id()));
+        for directory in ["src/App", "src/Lib", "legacy/Old"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        fs::write(
+            root.join(PIN_FILE),
+            PROPS.replace(
+                "    <Other>kept</Other>\n",
+                &format!("{FEED_DECLARATION}\n  <PropertyGroup>\n"),
+            ),
+        )
+        .unwrap();
+        let exact = r#"<PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]" />"#;
+        let minimum =
+            r#"<PackageReference Include="Rusty.Engine" Version="$(RustyEnginePackageVersion)" />"#;
+        fs::write(
+            root.join("src/App/App.csproj"),
+            format!(
+                r#"<Project>{exact}<ProjectReference Include="..\Lib\Lib.csproj" /></Project>"#
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/Lib/Lib.csproj"),
+            format!("<Project>{exact}</Project>"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("legacy/Old/Old.csproj"),
+            format!("<Project>{minimum}</Project>"),
+        )
+        .unwrap();
+        let pin = Pin::find(&root).unwrap().unwrap();
+        let app = root.join("src/App/App.csproj");
+
+        assert!(shape_problems(&pin, Some(&app)).unwrap().is_empty());
+        assert_eq!(
+            shape_problems(&pin, None).unwrap().len(),
+            1,
+            "repository scan sees legacy"
+        );
+
+        fs::write(
+            root.join("src/Lib/Lib.csproj"),
+            format!("<Project>{minimum}</Project>"),
+        )
+        .unwrap();
+        let problems = shape_problems(&pin, Some(&app)).unwrap();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("Lib.csproj"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
