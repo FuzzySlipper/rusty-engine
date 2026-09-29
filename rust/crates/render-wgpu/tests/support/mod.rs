@@ -74,9 +74,18 @@ pub struct Harness {
     pub resources: Resources,
 }
 
+/// One device per test binary, as `common::gpu` does: the Vulkan loader can
+/// crash when test threads create devices at the same time (seen on RADV in
+/// the animated fixtures).
+pub fn gpu() -> Gpu {
+    static GPU: std::sync::OnceLock<Gpu> = std::sync::OnceLock::new();
+    GPU.get_or_init(|| Gpu::headless().expect("screenshot tests need a wgpu adapter"))
+        .clone()
+}
+
 impl Harness {
     pub fn new(options: RendererOptions) -> Self {
-        let gpu = Gpu::headless().expect("screenshot tests need a wgpu adapter");
+        let gpu = gpu();
         Self {
             renderer: Renderer::new(&gpu, options),
             target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT),

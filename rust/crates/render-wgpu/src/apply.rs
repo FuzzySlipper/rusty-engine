@@ -75,28 +75,30 @@ impl Renderer {
             }
             RenderDiff::DefineMaterial { material } => self.define_material(material.clone()),
             RenderDiff::ReleaseMaterial { id } => {
-                self.tables.materials.remove(id);
+                if let Some(id) = self.tables.names.get(id) {
+                    self.tables.materials.remove(id);
+                }
             }
             RenderDiff::DefineStaticMesh { asset } => self.define_static_mesh(asset, resources)?,
             RenderDiff::ReleaseStaticMesh { asset } => {
-                self.tables.static_meshes.remove(asset);
+                if let Some(id) = self.tables.names.get(asset) {
+                    self.tables.static_meshes.remove(id);
+                }
             }
             RenderDiff::DefineSpriteAtlas { atlas } => {
-                let id = self.tables.names.id(&atlas.id) as usize;
+                let id = self.tables.names.id(&atlas.id);
                 let texture = self.tables.names.id(&atlas.texture);
-                if self.tables.atlases.len() <= id {
-                    self.tables.atlases.resize_with(id + 1, || None);
-                }
-                self.tables.atlases[id] = Some(crate::tables::AtlasRow {
-                    descriptor: atlas.clone(),
-                    texture,
-                });
+                self.tables.atlases.insert(
+                    id,
+                    crate::tables::AtlasRow {
+                        descriptor: atlas.clone(),
+                        texture,
+                    },
+                );
             }
             RenderDiff::ReleaseSpriteAtlas { id } => {
                 if let Some(id) = self.tables.names.get(id) {
-                    if let Some(row) = self.tables.atlases.get_mut(id as usize) {
-                        *row = None;
-                    }
+                    self.tables.atlases.remove(id);
                 }
             }
             RenderDiff::SetBackgroundColor { color } => {
@@ -272,6 +274,11 @@ impl Renderer {
             RenderDiff::SetParentJoint { handle, joint } => {
                 // The child follows the named joint of its animated parent.
                 self.node_mut(*handle)?.parent_joint = joint.clone();
+                let parent = self.tables.nodes[handle].parent;
+                let resolved = parent
+                    .zip(joint.as_deref())
+                    .and_then(|(parent, joint)| self.joint_node(parent, joint));
+                self.node_mut(*handle)?.parent_joint_node = resolved;
                 self.tables.dirty_nodes.insert(*handle);
                 if let Some(joint) = joint {
                     let parent = self.tables.nodes[handle].parent;
@@ -443,6 +450,7 @@ impl Renderer {
             NodeRow {
                 parent,
                 parent_joint: None,
+                parent_joint_node: None,
                 children: Vec::new(),
                 local,
                 world: local,
@@ -542,18 +550,21 @@ impl Renderer {
                     if let Some(mesh) = self.tables.payload_meshes.get(&handle) {
                         for (slot, start, count) in &mesh.groups {
                             let slot_material = format!("{PAYLOAD_SLOT_MATERIAL_PREFIX}{slot}");
-                            let (material_ref, color, emission) =
-                                match self.tables.materials.get(&slot_material) {
-                                    Some(row) => (
-                                        MaterialRef::Retained(slot_material),
-                                        mul(row.descriptor.color, row.descriptor.texture_tint),
-                                        emission(
-                                            row.descriptor.emission_color,
-                                            row.descriptor.emission_intensity,
-                                        ),
+                            let (material_ref, color, emission) = match crate::tables::named(
+                                &self.tables.names,
+                                &self.tables.materials,
+                                &slot_material,
+                            ) {
+                                Some((id, row)) => (
+                                    MaterialRef::Retained(id),
+                                    mul(row.descriptor.color, row.descriptor.texture_tint),
+                                    emission(
+                                        row.descriptor.emission_color,
+                                        row.descriptor.emission_intensity,
                                     ),
-                                    None => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
-                                };
+                                ),
+                                None => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
+                            };
                             parts.push((
                                 Part {
                                     node: handle,
@@ -599,12 +610,15 @@ impl Renderer {
                 overrides,
                 parameters,
             } => {
-                if let Some(mesh) = self.tables.static_meshes.get(asset) {
+                if let Some((mesh_id, mesh)) =
+                    crate::tables::named(&self.tables.names, &self.tables.static_meshes, asset)
+                {
                     for (slot, start, count) in &mesh.groups {
                         let material_id = overrides.get(slot).or_else(|| mesh.slots.get(slot));
-                        let row = material_id.and_then(|id| self.tables.materials.get(id));
-                        let (material_ref, color, emission) = match (material_id, row) {
-                            (Some(id), Some(row)) => {
+                        let (material_ref, color, emission) = match material_id.and_then(|id| {
+                            crate::tables::named(&self.tables.names, &self.tables.materials, id)
+                        }) {
+                            Some((id, row)) => {
                                 let descriptor = &row.descriptor;
                                 let override_ = parameters.get(slot);
                                 let tint =
@@ -614,17 +628,17 @@ impl Renderer {
                                     |p| (p.emission_color, p.emission_intensity),
                                 );
                                 (
-                                    MaterialRef::Retained(id.clone()),
+                                    MaterialRef::Retained(id),
                                     mul(descriptor.color, tint),
                                     emission(emission_color, intensity),
                                 )
                             }
-                            _ => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
+                            None => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
                         };
                         parts.push((
                             Part {
                                 node: handle,
-                                mesh: MeshRef::Static(asset.clone()),
+                                mesh: MeshRef::Static(mesh_id),
                                 first_index: *start,
                                 index_count: *count,
                                 material: material_ref,
@@ -636,7 +650,11 @@ impl Renderer {
                 }
             }
             NodeKind::VoxelObject(instance) => {
-                if let Some(object) = self.tables.voxel_objects.get(&instance.asset) {
+                if let Some((object_id, object)) = crate::tables::named(
+                    &self.tables.names,
+                    &self.tables.voxel_objects,
+                    &instance.asset,
+                ) {
                     let index = object.frame_mesh(instance.frame);
                     if let Some(mesh) = object.meshes.get(index as usize) {
                         for (slot, start, count) in &mesh.groups {
@@ -646,11 +664,11 @@ impl Renderer {
                                 .find(|binding| binding.slot == *slot)
                                 .map(|binding| &binding.material)
                                 .or_else(|| object.slots.get(slot));
-                            let (material_ref, color, emission) = match material_id
-                                .and_then(|id| Some((id, self.tables.materials.get(id)?)))
-                            {
+                            let (material_ref, color, emission) = match material_id.and_then(|id| {
+                                crate::tables::named(&self.tables.names, &self.tables.materials, id)
+                            }) {
                                 Some((id, row)) => (
-                                    MaterialRef::Retained(id.clone()),
+                                    MaterialRef::Retained(id),
                                     mul(row.descriptor.color, row.descriptor.texture_tint),
                                     emission(
                                         row.descriptor.emission_color,
@@ -662,7 +680,7 @@ impl Renderer {
                             parts.push((
                                 Part {
                                     node: handle,
-                                    mesh: MeshRef::Voxel(instance.asset.clone(), index),
+                                    mesh: MeshRef::Voxel(object_id, index),
                                     first_index: *start,
                                     index_count: *count,
                                     material: material_ref,
@@ -684,7 +702,7 @@ impl Renderer {
                     .is_some_and(|instance| instance.inspection.wireframe);
                 for (mesh, index_count, material) in animated_parts {
                     let (color, emission) = match &material {
-                        MaterialRef::Retained(id) => match self.tables.materials.get(id) {
+                        MaterialRef::Retained(id) => match self.tables.materials.get(*id) {
                             Some(row) => (
                                 mul(row.descriptor.color, row.descriptor.texture_tint),
                                 emission(
@@ -725,7 +743,7 @@ impl Renderer {
             }
             let descriptor = match &part.material {
                 MaterialRef::Retained(id) => {
-                    self.tables.materials.get(id).map(|row| &row.descriptor)
+                    self.tables.materials.get(*id).map(|row| &row.descriptor)
                 }
                 _ => None,
             };
@@ -750,13 +768,13 @@ impl Renderer {
     /// The uploaded mesh a part draws, if it is (still) defined.
     pub(crate) fn mesh(&self, mesh: &MeshRef) -> Option<&GpuMesh> {
         match mesh {
-            MeshRef::Static(asset) => self.tables.static_meshes.get(asset),
+            MeshRef::Static(asset) => self.tables.static_meshes.get(*asset),
             MeshRef::Payload(handle) => self.tables.payload_meshes.get(handle),
             MeshRef::Builtin(kind) => self.builtins.get(kind),
             MeshRef::Voxel(asset, index) => self
                 .tables
                 .voxel_objects
-                .get(asset)
+                .get(*asset)
                 .and_then(|object| object.meshes.get(*index as usize)),
             MeshRef::AnimatedRigid(..) | MeshRef::AnimatedSkinned(..) => self.animated_mesh(mesh),
         }
@@ -843,9 +861,9 @@ impl Renderer {
             .and_then(|id| self.tables.textures.get(id));
         let bind_group =
             self.material_bind_group(&descriptor.id, params, texture.unwrap_or(&self.white));
-        let id = descriptor.id.clone();
+        let id = self.tables.names.id(&descriptor.id);
         self.tables.materials.insert(
-            id.clone(),
+            id,
             MaterialRow {
                 descriptor,
                 bind_group,
@@ -860,7 +878,7 @@ impl Renderer {
             .iter()
             .flatten()
             .filter(|part| {
-                part.material == MaterialRef::Retained(id.clone())
+                part.material == MaterialRef::Retained(id)
                     || matches!(part.material, MaterialRef::LitFallback)
             })
             .map(|part| part.node)
@@ -907,11 +925,8 @@ impl Renderer {
                 .map(|slot| (slot.slot, slot.material.clone()))
                 .collect(),
         );
-        let redefined = self
-            .tables
-            .static_meshes
-            .insert(asset.asset.clone(), mesh)
-            .is_some();
+        let id = self.tables.names.id(&asset.asset);
+        let redefined = self.tables.static_meshes.insert(id, mesh).is_some();
         if redefined {
             let instances: Vec<RenderHandle> = self
                 .tables

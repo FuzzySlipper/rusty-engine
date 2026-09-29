@@ -126,8 +126,9 @@ impl Renderer {
                 ),
             );
         }
+        let id = self.tables.names.id(&asset.asset);
         self.tables.voxel_objects.insert(
-            asset.asset.clone(),
+            id,
             VoxelObjectRow {
                 meshes,
                 frames: asset.frames.iter().map(|frame| frame.mesh).collect(),
@@ -147,7 +148,9 @@ impl Renderer {
     }
 
     pub(crate) fn release_voxel_object(&mut self, asset: &str) {
-        self.tables.voxel_objects.remove(asset);
+        if let Some(id) = self.tables.names.get(asset) {
+            self.tables.voxel_objects.remove(id);
+        }
         for handle in self.voxel_object_instances(asset) {
             self.rebuild_parts(handle);
         }

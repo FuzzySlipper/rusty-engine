@@ -125,16 +125,17 @@ impl Aabb {
     }
 }
 
-/// Which mesh a part draws.
+/// Which mesh a part draws. Asset names are resolved to their `names` ids
+/// when the part is built, so drawing indexes tables and hashes no string.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum MeshRef {
-    Static(String),
+    Static(u32),
     Payload(RenderHandle),
     Builtin(Builtin),
     /// A voxel object asset's mesh (by index).
-    Voxel(String, u32),
+    Voxel(u32, u32),
     /// An animated asset's unskinned primitive: (asset, mesh, primitive).
-    AnimatedRigid(String, u32, u32),
+    AnimatedRigid(u32, u32, u32),
     /// An instance's CPU-skinned primitive: (instance, GLB node, primitive).
     AnimatedSkinned(RenderHandle, u32, u32),
 }
@@ -147,10 +148,11 @@ pub(crate) enum Builtin {
     Point,
 }
 
-/// Which material bind group a part uses.
+/// Which material bind group a part uses (a retained material by its
+/// `names` id).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum MaterialRef {
-    Retained(String),
+    Retained(u32),
     /// Primitive nodes: flat colour, no lighting (Three `MeshBasicMaterial`).
     Unlit,
     /// Payload groups with no `voxel-material/<slot>` descriptor: lit, untextured.
@@ -214,6 +216,52 @@ impl Names {
     }
 }
 
+/// Rows by `Names` id. A name keeps its slot across redefinition and a
+/// release empties it, so frame paths index instead of hashing names.
+pub(crate) struct Slots<T> {
+    rows: Vec<Option<T>>,
+}
+
+impl<T> Default for Slots<T> {
+    fn default() -> Self {
+        Self { rows: Vec::new() }
+    }
+}
+
+impl<T> Slots<T> {
+    pub fn get(&self, id: u32) -> Option<&T> {
+        self.rows.get(id as usize)?.as_ref()
+    }
+
+    /// Insert or replace the row, returning the one it replaced.
+    pub fn insert(&mut self, id: u32, row: T) -> Option<T> {
+        let index = id as usize;
+        if self.rows.len() <= index {
+            self.rows.resize_with(index + 1, || None);
+        }
+        self.rows[index].replace(row)
+    }
+
+    pub fn remove(&mut self, id: u32) -> Option<T> {
+        self.rows.get_mut(id as usize)?.take()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.rows.iter().flatten()
+    }
+
+    pub fn len(&self) -> usize {
+        self.values().count()
+    }
+}
+
+/// A row by name, with its id: apply-time lookups. A free function, so
+/// callers holding another table mutably keep the borrows disjoint.
+pub(crate) fn named<'a, T>(names: &Names, rows: &'a Slots<T>, name: &str) -> Option<(u32, &'a T)> {
+    let id = names.get(name)?;
+    Some((id, rows.get(id)?))
+}
+
 pub(crate) struct AtlasRow {
     pub descriptor: SpriteAtlasDescriptor,
     /// Name id of the atlas texture.
@@ -232,6 +280,10 @@ pub(crate) struct SpriteRow {
 pub(crate) struct NodeRow {
     pub parent: Option<RenderHandle>,
     pub parent_joint: Option<String>,
+    /// `parent_joint` resolved to its node in the parent's animated asset,
+    /// when the joint is set or the parent's asset changes; the frame reads
+    /// the parent's pose by this index.
+    pub parent_joint_node: Option<usize>,
     pub children: Vec<RenderHandle>,
     pub local: Mat4,
     pub world: Mat4,
@@ -449,18 +501,18 @@ pub(crate) enum Environment {
 
 pub(crate) struct Tables {
     pub textures: HashMap<String, GpuTexture>,
-    pub materials: HashMap<String, MaterialRow>,
-    pub static_meshes: HashMap<String, GpuMesh>,
+    pub materials: Slots<MaterialRow>,
+    pub static_meshes: Slots<GpuMesh>,
     pub payload_meshes: HashMap<RenderHandle, GpuMesh>,
     pub nodes: HashMap<RenderHandle, NodeRow>,
     /// The sprite nodes, so sprite preparation visits sprites, not the scene.
     pub sprites: BTreeSet<RenderHandle>,
     pub parts: Parts,
     /// Indexed by the atlas name's id in `names`.
-    pub atlases: Vec<Option<AtlasRow>>,
+    pub atlases: Slots<AtlasRow>,
     pub names: Names,
-    pub voxel_objects: HashMap<String, VoxelObjectRow>,
-    pub animated_assets: HashMap<String, AnimatedAssetRow>,
+    pub voxel_objects: Slots<VoxelObjectRow>,
+    pub animated_assets: Slots<AnimatedAssetRow>,
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
     /// Animation controllers by projection handle.
     pub controllers: HashMap<u64, ControllerRow>,
@@ -479,16 +531,16 @@ impl Tables {
     pub fn new() -> Self {
         Self {
             textures: HashMap::new(),
-            materials: HashMap::new(),
-            static_meshes: HashMap::new(),
+            materials: Slots::default(),
+            static_meshes: Slots::default(),
             payload_meshes: HashMap::new(),
             nodes: HashMap::new(),
             sprites: BTreeSet::new(),
             parts: Parts::default(),
-            atlases: Vec::new(),
+            atlases: Slots::default(),
             names: Names::default(),
-            voxel_objects: HashMap::new(),
-            animated_assets: HashMap::new(),
+            voxel_objects: Slots::default(),
+            animated_assets: Slots::default(),
             animated: HashMap::new(),
             controllers: HashMap::new(),
             metadata: HashMap::new(),

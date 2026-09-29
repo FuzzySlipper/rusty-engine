@@ -559,6 +559,62 @@ fn redefining_a_live_animated_asset_keeps_its_resources_and_image() {
     );
 }
 
+#[test]
+fn clip_and_joint_indices_are_resolved_again_when_the_asset_changes() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(BODY),
+        playback: play("run", AnimationLoopMode::Repeat),
+    }]);
+    harness.renderer.set_animation_time(0.3);
+    let view = character_view();
+    let (_, playing) = harness.render(&view);
+    // Each definition resolves its clips afresh (their index order is not
+    // stable across definitions); the playing clip and the weapon's joint
+    // follow by identity. (The retained model refuses to release an asset a
+    // live instance uses, so redefinition is the change to follow.)
+    for _ in 0..3 {
+        let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+        harness.apply(vec![RenderDiff::DefineAnimatedMesh { asset: body }]);
+        assert_eq!(harness.render(&view).1, playing);
+    }
+}
+
+#[test]
+fn a_held_attachment_follows_its_moved_parent_by_the_resolved_joint() {
+    // The sampled pose holds; only the body moves.
+    let moved = Transform {
+        translation: [0.4, 0.0, -0.3],
+        rotation: [0.0, 0.3826834, 0.0, 0.9238795],
+        scale: [1.0; 3],
+    };
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let view = character_view();
+    harness.render(&view);
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(BODY),
+        transform: Some(moved),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    let (_, after_move) = harness.render(&view);
+
+    // The same scene built at the moved transform from the start.
+    let mut reference = Harness::new(RendererOptions::default());
+    character_scene(&mut reference);
+    reference.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(BODY),
+        transform: Some(moved),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    assert_eq!(reference.render(&view).1, after_move);
+}
+
 fn requested_bounds(harness: &mut Harness, handle: u64, request: u32) -> ([f32; 3], [f32; 3]) {
     let facts = harness.renderer.take_animation_facts();
     match facts.as_slice() {

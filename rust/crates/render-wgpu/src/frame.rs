@@ -258,9 +258,8 @@ impl Renderer {
                 let parent_handle = node.parent?;
                 let parent = self.tables.nodes.get(&parent_handle)?;
                 let joint = node
-                    .parent_joint
-                    .as_deref()
-                    .and_then(|joint| self.joint_pose(parent_handle, joint))
+                    .parent_joint_node
+                    .and_then(|joint| self.joint_pose_at(parent_handle, joint))
                     .unwrap_or(glam::Mat4::IDENTITY);
                 Some((
                     parent.world * joint,
@@ -565,7 +564,7 @@ impl Renderer {
                 MaterialRef::Retained(id) => self
                     .tables
                     .materials
-                    .get(id)
+                    .get(*id)
                     .map_or(&self.lit_fallback_material, |row| &row.bind_group),
                 MaterialRef::Unlit => &self.unlit_material,
                 MaterialRef::LitFallback => &self.lit_fallback_material,

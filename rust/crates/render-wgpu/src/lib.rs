@@ -297,7 +297,7 @@ impl Renderer {
             nodes: self.tables.nodes.len(),
             parts: self.tables.parts.meta.iter().flatten().count(),
             lights: self.tables.lights.len(),
-            atlases: self.tables.atlases.iter().flatten().count(),
+            atlases: self.tables.atlases.len(),
             voxel_objects: self.tables.voxel_objects.len(),
             animated_meshes: self.tables.animated_assets.len(),
             animated_instances: self.tables.animated.len(),

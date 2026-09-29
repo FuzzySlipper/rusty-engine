@@ -70,9 +70,44 @@ pub(crate) struct ControllerRow {
     state: AnimationControllerProjectionState,
     /// The Engine time this state was received at.
     received_at: f64,
+    /// The clips this state names, resolved to the target asset's clip
+    /// indices when the state or the target's asset changes. The frame
+    /// matches the few clips the state samples against this table.
+    clips: Vec<(String, usize)>,
 }
 
 impl ControllerRow {
+    fn resolve(&mut self, asset: Option<&AnimatedAssetRow>) {
+        self.clips.clear();
+        let Some(asset) = asset else {
+            return;
+        };
+        let motions = std::iter::once(&self.state.motion).chain(
+            self.state
+                .transition
+                .iter()
+                .map(|transition| &transition.target_motion),
+        );
+        let names = motions
+            .flat_map(|motion| std::iter::once(&motion.clip_a).chain(motion.clip_b.as_ref()))
+            .chain(self.state.clip_phases.iter().map(|phase| &phase.clip));
+        for name in names {
+            if self.clips.iter().any(|(known, _)| known == name) {
+                continue;
+            }
+            if let Some(index) = asset.clip_ids.get(name) {
+                self.clips.push((name.clone(), *index));
+            }
+        }
+    }
+
+    fn clip(&self, name: &str) -> Option<usize> {
+        self.clips
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, index)| *index)
+    }
+
     /// The weighted clip times at `now`: the published phases advanced by
     /// each clip's speed since the update.
     fn pose(&self, now: f64) -> Vec<AnimatedMeshClipPose> {
@@ -102,7 +137,9 @@ impl ControllerRow {
 /// One admitted animated-mesh asset.
 pub(crate) struct AnimatedAssetRow {
     model: GlbModel,
-    clips: HashMap<String, GlbClip>,
+    /// Clips by index; `clip_ids` maps descriptor clip ids to them.
+    clips: Vec<GlbClip>,
+    clip_ids: HashMap<String, usize>,
     /// Uploaded unskinned primitives, by (mesh, primitive).
     rigid: HashMap<(u32, u32), GpuMesh>,
     /// Retained material id per GLB material.
@@ -120,6 +157,32 @@ struct Playback {
     timeline: AnimatedMeshPlaybackTimeline,
     /// A frozen `SamplePose`: clips with their times and weights.
     pose: Option<Vec<AnimatedMeshClipPose>>,
+    /// The timeline's clip and the pose's clips as asset clip indices,
+    /// resolved when the playback or the asset changes (`resolve`).
+    timeline_clip: Option<usize>,
+    pose_clips: Vec<Option<usize>>,
+}
+
+impl Playback {
+    fn unset() -> Self {
+        Self {
+            timeline: AnimatedMeshPlaybackTimeline::Unset,
+            pose: None,
+            timeline_clip: None,
+            pose_clips: Vec::new(),
+        }
+    }
+
+    fn resolve(&mut self, asset: Option<&AnimatedAssetRow>) {
+        let index = |name: &str| asset.and_then(|asset| asset.clip_ids.get(name).copied());
+        self.timeline_clip = current_clip(self).and_then(|clip| index(&clip));
+        self.pose_clips = self
+            .pose
+            .iter()
+            .flatten()
+            .map(|clip| index(&clip.clip))
+            .collect();
+    }
 }
 
 struct Fade {
@@ -132,6 +195,8 @@ struct Fade {
 
 pub(crate) struct AnimatedInstance {
     asset: String,
+    /// The asset's slot in `animated_assets` (its `names` id).
+    slot: u32,
     object_id: Option<u64>,
     generation: u64,
     playback: Playback,
@@ -248,8 +313,10 @@ impl Renderer {
                         target: descriptor.target,
                         state: descriptor.controller.clone(),
                         received_at: now,
+                        clips: Vec::new(),
                     },
                 );
+                self.resolve_controllers_of(descriptor.target);
                 descriptor.target
             }
             AnimationProjectionOp::Update { handle, controller } => {
@@ -260,7 +327,9 @@ impl Renderer {
                     .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
                 row.state = controller.clone();
                 row.received_at = now;
-                row.target
+                let target = row.target;
+                self.resolve_controllers_of(target);
+                target
             }
             AnimationProjectionOp::Destroy { handle } => {
                 let row = self
@@ -275,6 +344,24 @@ impl Renderer {
             instance.pose_dirty = true;
         }
         Ok(())
+    }
+
+    /// Resolve the clip tables of every controller driving `target` against
+    /// its current asset: when a controller's state or the asset changes.
+    fn resolve_controllers_of(&mut self, target: RenderHandle) {
+        let asset = self
+            .tables
+            .animated
+            .get(&target)
+            .and_then(|instance| self.tables.animated_assets.get(instance.slot));
+        for row in self
+            .tables
+            .controllers
+            .values_mut()
+            .filter(|row| row.target == target)
+        {
+            row.resolve(asset);
+        }
     }
 
     /// Facts gathered since the last call, oldest first.
@@ -367,11 +454,22 @@ impl Renderer {
             .iter()
             .map(|slot| (slot.slot, usize::from(slot.source_material_slot)))
             .collect();
+        let mut clip_ids = HashMap::with_capacity(clips.len());
+        let clips: Vec<GlbClip> = clips
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, clip))| {
+                clip_ids.insert(id, index);
+                clip
+            })
+            .collect();
+        let slot = self.tables.names.id(&asset.asset);
         self.tables.animated_assets.insert(
-            asset.asset.clone(),
+            slot,
             AnimatedAssetRow {
                 model,
                 clips,
+                clip_ids,
                 rigid,
                 materials,
                 textures,
@@ -408,9 +506,12 @@ impl Renderer {
     }
 
     fn release_animated_mesh_resources(&mut self, asset: &str) {
-        if let Some(row) = self.tables.animated_assets.remove(asset) {
+        let slot = self.tables.names.get(asset);
+        if let Some(row) = slot.and_then(|slot| self.tables.animated_assets.remove(slot)) {
             for id in row.materials {
-                self.tables.materials.remove(&id);
+                if let Some(id) = self.tables.names.get(&id) {
+                    self.tables.materials.remove(id);
+                }
             }
             for id in row.textures {
                 self.tables.textures.remove(&id);
@@ -436,16 +537,15 @@ impl Renderer {
             }
             None => 0,
         };
+        let slot = self.tables.names.id(&descriptor.asset);
         self.tables.animated.insert(
             handle,
             AnimatedInstance {
                 asset: descriptor.asset.clone(),
+                slot,
                 object_id,
                 generation,
-                playback: Playback {
-                    timeline: AnimatedMeshPlaybackTimeline::Unset,
-                    pose: None,
-                },
+                playback: Playback::unset(),
                 fade: None,
                 completion: None,
                 inspection: AnimatedMeshInspection::default(),
@@ -465,15 +565,56 @@ impl Renderer {
     }
 
     /// Re-derive an instance's pose buffers and parts from its asset.
+    /// The instance's asset may have changed (created, redefined, released):
+    /// its playback clips, its controllers' clips and its joint-attached
+    /// children's joints are resolved again against it.
     fn reset_animated_instance(&mut self, handle: RenderHandle) {
         let Some(instance) = self.tables.animated.get_mut(&handle) else {
             return;
         };
+        let asset = self.tables.animated_assets.get(instance.slot);
+        instance.playback.resolve(asset);
+        if let Some(fade) = &mut instance.fade {
+            fade.prior.resolve(asset);
+        }
         instance.skinned.clear();
         instance.pose.clear();
         instance.pose_dirty = true;
+        self.resolve_controllers_of(handle);
+        self.resolve_attached_joints(handle);
         self.pose_animated_instance(handle);
         self.rebuild_parts(handle);
+    }
+
+    /// Resolve each joint-attached child of `parent` to its joint's node in
+    /// the parent's asset.
+    pub(crate) fn resolve_attached_joints(&mut self, parent: RenderHandle) {
+        let Some(children) = self
+            .tables
+            .nodes
+            .get(&parent)
+            .map(|node| node.children.clone())
+        else {
+            return;
+        };
+        for child in children {
+            let joint = self
+                .tables
+                .nodes
+                .get(&child)
+                .and_then(|node| node.parent_joint.as_deref())
+                .and_then(|name| self.joint_node(parent, name));
+            if let Some(node) = self.tables.nodes.get_mut(&child) {
+                node.parent_joint_node = joint;
+            }
+        }
+    }
+
+    /// A unique joint's node index in `parent`'s animated asset.
+    pub(crate) fn joint_node(&self, parent: RenderHandle, joint: &str) -> Option<usize> {
+        let instance = self.tables.animated.get(&parent)?;
+        let asset = self.tables.animated_assets.get(instance.slot)?;
+        asset.joints.get(joint).copied()
     }
 
     pub(crate) fn set_animated_playback(
@@ -549,6 +690,8 @@ impl Renderer {
             }
             _ => {}
         }
+        let asset = self.tables.animated_assets.get(instance.slot);
+        instance.playback.resolve(asset);
         instance.pose_dirty = true;
         Ok(())
     }
@@ -593,12 +736,12 @@ impl Renderer {
         self.tables
             .animated
             .get(&handle)
-            .and_then(|instance| self.tables.animated_assets.get(&instance.asset))
+            .and_then(|instance| self.tables.animated_assets.get(instance.slot))
             .map(|asset| {
                 asset
-                    .clips
+                    .clip_ids
                     .iter()
-                    .map(|(id, clip)| (id.clone(), clip.duration))
+                    .map(|(id, index)| (id.clone(), asset.clips[*index].duration))
                     .collect()
             })
             .unwrap_or_default()
@@ -635,7 +778,7 @@ impl Renderer {
         let Some(instance) = self.tables.animated.get_mut(&handle) else {
             return;
         };
-        let Some(asset) = self.tables.animated_assets.get(&instance.asset) else {
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
             instance.pose_dirty = false;
             return;
         };
@@ -664,15 +807,19 @@ impl Renderer {
         let (current, finished) = match controller {
             // A controller replaces direct playback on its target.
             Some(controller) => (
-                actions_of(
-                    asset,
-                    &Playback {
-                        timeline: AnimatedMeshPlaybackTimeline::Unset,
-                        pose: Some(controller.pose(now)),
-                    },
-                    now,
-                )
-                .0,
+                controller
+                    .pose(now)
+                    .into_iter()
+                    .filter_map(|clip| {
+                        let index = controller.clip(&clip.clip)?;
+                        let time = wrap(
+                            clip.time_seconds,
+                            asset.clips[index].duration,
+                            AnimationLoopMode::Repeat,
+                        );
+                        Some((index, time, clip.weight))
+                    })
+                    .collect(),
                 false,
             ),
             None => actions_of(asset, &instance.playback, now),
@@ -748,7 +895,7 @@ impl Renderer {
         let Some(instance) = self.tables.animated.get(&handle) else {
             return;
         };
-        let Some(asset) = self.tables.animated_assets.get(&instance.asset) else {
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
             return;
         };
         let mut updates = Vec::new();
@@ -821,7 +968,12 @@ impl Renderer {
                     });
                 }
             } else {
-                let asset = &self.tables.animated_assets[&self.tables.animated[&handle].asset];
+                let slot = self.tables.animated[&handle].slot;
+                let asset = self
+                    .tables
+                    .animated_assets
+                    .get(slot)
+                    .expect("a skinned instance's asset is defined");
                 let node = &asset.model.nodes[key.0 as usize];
                 let primitive = &asset.model.meshes[node.mesh.expect("skinned node has a mesh")]
                     [key.1 as usize];
@@ -850,7 +1002,7 @@ impl Renderer {
         if node.parts.len() != instance.part_nodes.len() {
             return;
         }
-        let asset = self.tables.animated_assets.get(&instance.asset);
+        let asset = self.tables.animated_assets.get(instance.slot);
         for (part, glb_node) in node.parts.iter().zip(&instance.part_nodes) {
             let skinned = asset.is_some_and(|asset| asset.model.nodes[*glb_node].skin.is_some());
             let local = if skinned {
@@ -913,7 +1065,7 @@ impl Renderer {
     /// Exact posed world bounds: every vertex at its current pose.
     pub(crate) fn animated_world_bounds(&self, handle: RenderHandle) -> Option<Aabb> {
         let instance = self.tables.animated.get(&handle)?;
-        let asset = self.tables.animated_assets.get(&instance.asset)?;
+        let asset = self.tables.animated_assets.get(instance.slot)?;
         let world = self.tables.nodes.get(&handle)?.world;
         let mut bounds = Aabb::EMPTY;
         for &node_index in &asset.model.order {
@@ -953,9 +1105,15 @@ impl Renderer {
         }
     }
 
+    /// The posed transform of a node of `handle`'s asset, by index: what a
+    /// joint-attached child hangs from each frame.
+    pub(crate) fn joint_pose_at(&self, handle: RenderHandle, node: usize) -> Option<Mat4> {
+        self.tables.animated.get(&handle)?.pose.get(node).copied()
+    }
+
     pub(crate) fn joint_pose(&self, handle: RenderHandle, joint: &str) -> Option<Mat4> {
         let instance = self.tables.animated.get(&handle)?;
-        let asset = self.tables.animated_assets.get(&instance.asset)?;
+        let asset = self.tables.animated_assets.get(instance.slot)?;
         let node = *asset.joints.get(joint)?;
         instance.pose.get(node).copied()
     }
@@ -969,7 +1127,7 @@ impl Renderer {
         let Some(instance) = self.tables.animated.get(&handle) else {
             return Vec::new();
         };
-        let Some(asset) = self.tables.animated_assets.get(&instance.asset) else {
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
             return Vec::new();
         };
         let overrides: BTreeMap<u16, String> = match self.tables.nodes.get(&handle).map(|n| &n.kind)
@@ -997,7 +1155,7 @@ impl Renderer {
                     )
                 } else {
                     crate::tables::MeshRef::AnimatedRigid(
-                        instance.asset.clone(),
+                        instance.slot,
                         mesh as u32,
                         primitive_index as u32,
                     )
@@ -1013,10 +1171,11 @@ impl Renderer {
                             .cloned()
                             .unwrap_or_else(|| asset.materials[glb_material].clone());
                         if matte {
-                            mattes.push(id.clone());
-                            MaterialRef::Retained(format!("{id}#matte"))
+                            let matte_id = self.tables.names.id(&format!("{id}#matte"));
+                            mattes.push(id);
+                            MaterialRef::Retained(matte_id)
                         } else {
-                            MaterialRef::Retained(id)
+                            MaterialRef::Retained(self.tables.names.id(&id))
                         }
                     }
                     None => MaterialRef::LitFallback,
@@ -1032,10 +1191,13 @@ impl Renderer {
         // materials, as Three's inspection material did.
         for id in mattes {
             let matte_id = format!("{id}#matte");
-            if self.tables.materials.contains_key(&matte_id) {
+            if crate::tables::named(&self.tables.names, &self.tables.materials, &matte_id).is_some()
+            {
                 continue;
             }
-            if let Some(row) = self.tables.materials.get(&id) {
+            if let Some((_, row)) =
+                crate::tables::named(&self.tables.names, &self.tables.materials, &id)
+            {
                 let mut descriptor = row.descriptor.clone();
                 descriptor.id = matte_id;
                 descriptor.roughness = 1.0;
@@ -1078,7 +1240,7 @@ impl Renderer {
             crate::tables::MeshRef::AnimatedRigid(asset, mesh, primitive) => self
                 .tables
                 .animated_assets
-                .get(asset)
+                .get(*asset)
                 .and_then(|asset| asset.rigid.get(&(*mesh, *primitive))),
             crate::tables::MeshRef::AnimatedSkinned(handle, node, primitive) => self
                 .tables
@@ -1139,63 +1301,67 @@ fn current_clip(playback: &Playback) -> Option<String> {
 }
 
 /// Clip times for a playback state at `now`, each wrapped by its loop mode,
-/// and whether a `once` clip has reached its end.
+/// and whether a `once` clip has reached its end. Clips are the playback's
+/// resolved asset clip indices; an unknown clip draws nothing.
 fn actions_of(
     asset: &AnimatedAssetRow,
     playback: &Playback,
     now: f64,
-) -> (Vec<(String, f32, f32)>, bool) {
-    let duration = |clip: &str| asset.clips.get(clip).map_or(0.0, |clip| clip.duration);
+) -> (Vec<(usize, f32, f32)>, bool) {
+    let duration = |clip: Option<usize>| clip.map_or(0.0, |index| asset.clips[index].duration);
     if let Some(pose) = &playback.pose {
         let actions = pose
             .iter()
-            .map(|clip| {
+            .zip(&playback.pose_clips)
+            .filter_map(|(clip, index)| {
                 let time = wrap(
                     clip.time_seconds,
-                    duration(&clip.clip),
+                    duration(*index),
                     AnimationLoopMode::Repeat,
                 );
-                (clip.clip.clone(), time, clip.weight)
+                index.map(|index| (index, time, clip.weight))
             })
             .collect();
         return (actions, false);
     }
+    let clip = playback.timeline_clip;
+    let action = |time: f32, weight: f32| clip.map(|index| (index, time, weight));
     match &playback.timeline {
         AnimatedMeshPlaybackTimeline::Playing {
-            clip,
             r#loop,
             speed,
             weight,
             base_offset_seconds,
             anchor_seconds,
+            ..
         } => {
             let raw = base_offset_seconds + (now - anchor_seconds) * f64::from(*speed);
             let length = duration(clip);
             let finished = *r#loop == AnimationLoopMode::Once && raw >= f64::from(length);
             (
-                vec![(clip.clone(), wrap(raw, length, *r#loop), *weight)],
+                action(wrap(raw, length, *r#loop), *weight)
+                    .into_iter()
+                    .collect(),
                 finished,
             )
         }
         AnimatedMeshPlaybackTimeline::Paused {
-            clip,
             r#loop,
             weight,
             offset_seconds,
             ..
         } => (
-            vec![(
-                clip.clone(),
-                wrap(*offset_seconds, duration(clip), *r#loop),
-                *weight,
-            )],
+            action(wrap(*offset_seconds, duration(clip), *r#loop), *weight)
+                .into_iter()
+                .collect(),
             false,
         ),
         AnimatedMeshPlaybackTimeline::Sampled {
-            clip,
-            normalized_time,
+            normalized_time, ..
         } => (
-            vec![(clip.clone(), duration(clip) * normalized_time, 1.0)],
+            action(duration(clip) * normalized_time, 1.0)
+                .into_iter()
+                .collect(),
             false,
         ),
         AnimatedMeshPlaybackTimeline::Unset | AnimatedMeshPlaybackTimeline::Stopped => {
@@ -1229,11 +1395,7 @@ fn wrap(time: f64, duration: f32, mode: AnimationLoopMode) -> f32 {
 
 /// Local TRS per node after blending the weighted clips over the rest pose,
 /// composed into instance-space node transforms.
-fn evaluate_pose(
-    model: &GlbModel,
-    clips: &HashMap<String, GlbClip>,
-    actions: &[(String, f32, f32)],
-) -> Vec<Mat4> {
+fn evaluate_pose(model: &GlbModel, clips: &[GlbClip], actions: &[(usize, f32, f32)]) -> Vec<Mat4> {
     #[derive(Clone, Copy)]
     struct Mix<T> {
         value: T,
@@ -1247,7 +1409,7 @@ fn evaluate_pose(
         if *weight <= 0.0 {
             continue;
         }
-        let Some(clip) = clips.get(clip) else {
+        let Some(clip) = clips.get(*clip) else {
             continue;
         };
         for channel in &clip.channels {

@@ -931,11 +931,7 @@ impl Renderer {
                 continue;
             }
             let sprite = &resolved.descriptor;
-            let atlas = self
-                .tables
-                .atlases
-                .get(resolved.atlas as usize)
-                .and_then(Option::as_ref);
+            let atlas = self.tables.atlases.get(resolved.atlas);
             let rect = atlas.and_then(|atlas| atlas.descriptor.frame_rect(sprite.frame));
             let uv = rect.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
                 [

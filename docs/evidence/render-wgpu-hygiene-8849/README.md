@@ -80,3 +80,54 @@ the root `Cargo.toml`. glam carries a comment that it is private to
   `sprites-lit` and blended-order screenshots.
 - Clippy `-D warnings` is clean.
 - `render-stream` and `csharp-product-runtime` build.
+
+## Review fix: no name lookups on frame paths
+
+**Finding.** The review asked for the rest of item 2 to be done: the
+animated asset, clip and joint lookups and the composition lookups, resolved
+at apply time instead of argued away. Rechecking the frame paths also turned
+up a miss in the first version of this README. `frame.rs::draw_batches`
+looked up every draw's mesh (`MeshRef::Static(String)`) and material
+(`MaterialRef::Retained(String)`) by name, in every pass. That was the
+hottest string hashing in the crate, and the first check did not catch it
+because each lookup was split across lines.
+
+**Change: every name a frame path uses is resolved when it changes.**
+
+| Frame path | Before | Now | Resolved at |
+|---|---|---|---|
+| Draw batches (`draw_batches`), shadows, ghosts, picking | `static_meshes.get(name)`, `voxel_objects.get(name)`, `animated_assets.get(name)`, `materials.get(id)` | `MeshRef::{Static, Voxel, AnimatedRigid}` and `MaterialRef::Retained` carry `Tables.names` ids; the tables are `Slots` indexed by them | Part build (`rebuild_parts`), which runs on definition, binding and release |
+| Animated pose, skin, part writes, bounds | `animated_assets.get(&instance.asset)` | `animated_assets.get(instance.slot)` | Instance creation (a name keeps its slot across redefinition) |
+| Direct playback (`actions_of`, `evaluate_pose`) | `clips.get(name)`, plus a cloned `String` per action per frame | `Playback.timeline_clip` / `pose_clips` indices into `AnimatedAssetRow.clips` | `set_animated_playback`, and `reset_animated_instance` (create, redefinition, release) |
+| Controller-driven poses | a name-keyed temporary playback, then `clips.get(name)` | the controller's clip table (`ControllerRow.clips`) matches the few clips its state samples | Controller create/update, and the target's reset |
+| Joint attachments (`frame.rs::update_subtree`) | `joint_pose(parent, name)`: two lookups per attached child | `NodeRow.parent_joint_node`, `joint_pose_at(parent, index)` | `SetParentJoint`, and the parent's reset |
+| Composition (`render_composition`) | `motions.get_mut(&camera.id)`, a `&str`-keyed pose map, `targets.get(id)`, and an id-string sort of the passes | a `Plan` of camera, target, view and presentation indices in (order, id) order; targets and motions aligned with the composition | `set_view_composition` |
+
+- **Redefinition and release.** A name keeps its slot across redefinition,
+  and a release empties the slot, so resource lifetime still follows Engine
+  release. Parts and instances re-resolve at the points the table names.
+- **Remaining name work.** Controller sampling itself is name-based inside
+  `render-presentation`: `frozen_pose` builds a name-keyed map per call. The
+  renderer resolves the controller's clip set once and compares the handful
+  of names it returns. It does not hash them.
+- **Not on frame paths.** Label fonts and icons (resolved when a label is
+  created), GLB export (an output job) and asset admission still use names.
+
+**Evidence.**
+- `tests/animated.rs` `clip_and_joint_indices_are_resolved_again_when_the_asset_changes`:
+  a repeating clip with a weapon on the hand is redefined three times. Clip
+  index order is not stable across definitions, and the image is identical
+  each time.
+- `a_held_attachment_follows_its_moved_parent_by_the_resolved_joint`: a held
+  pose whose parent moves renders identically to the same scene built at the
+  moved position. This is the `update_subtree` joint path the review named.
+- The composition half landed with #8841 (`4ad84170d`), with
+  `tests/views.rs` `drawn_cameras_report_the_sampled_and_observer_poses_each_view_drew_from`.
+- `cargo test -p render-wgpu` passes all 82 tests, including every screenshot
+  suite and the controller blend test. Clippy `-D warnings` is clean.
+- **Test harness.** `tests/support` now shares one device per binary, as
+  `tests/common` already did. The animated fixtures crashed the Vulkan
+  loader (SIGSEGV on RADV) about one run in four when test threads created
+  devices at once. After the change, five parallel runs of the four
+  support-harness binaries were clean.
+
