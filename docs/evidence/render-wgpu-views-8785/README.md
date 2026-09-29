@@ -93,7 +93,10 @@ that pose.
 frame. That frame is the source subtree with ancestor transforms, from
 `PresentationWorld::capture_output_scene`. The steps:
 1. **Render.** The world, then the viewmodel, into an `Rgba16Float` target
-   cleared to the job's linear background. With `use_camera_background` and
+   cleared to the job's linear background, premultiplied so it agrees with
+   the conversion's un-premultiply. A half-transparent coloured background
+   keeps its RGB; review fix, covered by
+   `a_partly_transparent_capture_background_keeps_its_colour`. With `use_camera_background` and
    a retained background, the environment clear and sky are drawn instead.
 2. **Convert.** A pass resolves, un-premultiplies, applies exposure or ACES
    filmic (Three's curve) and writes straight alpha to sRGB RGBA8.

@@ -30,7 +30,8 @@ const LINEAR_CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Fl
 /// What a capture clears to.
 #[derive(Clone, Copy)]
 pub(crate) enum CaptureBackground {
-    /// A linear RGBA colour; alpha 0 leaves uncovered pixels transparent.
+    /// A straight-alpha linear RGBA colour; alpha 0 leaves uncovered pixels
+    /// transparent.
     Clear([f32; 4]),
     /// The retained background colour or sky.
     Environment,
@@ -104,8 +105,10 @@ impl Renderer {
         };
         self.prepare();
         let area = PixelRect::whole(request.width, request.height);
+        // The capture holds premultiplied colour: blending over the clear then
+        // yields premultiplied pixels, which the conversion un-premultiplies.
         let (clear, sky) = match request.background {
-            CaptureBackground::Clear(color) => (color, false),
+            CaptureBackground::Clear([r, g, b, a]) => ([r * a, g * a, b * a, a], false),
             CaptureBackground::Environment => (self.environment_clear(), true),
         };
         self.encode_view(ViewPass {

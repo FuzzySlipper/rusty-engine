@@ -284,3 +284,32 @@ fn capture_image_writes_a_straight_alpha_png_of_the_frozen_subtree() {
     );
     assert!(glb.unwrap_err().contains("GLB"));
 }
+
+#[test]
+fn a_partly_transparent_capture_background_keeps_its_colour() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(room());
+    let corner = |alpha: f32, harness: &Harness| {
+        let mut operation = image(1, None);
+        if let RenderOutputOperation::Image { background, .. } = &mut operation {
+            *background = [0.25, 0.1, 0.05, alpha];
+        }
+        let png = harness
+            .renderer
+            .capture_image(&capture_job(&harness.world, operation), &NoResources)
+            .expect("capture");
+        let (width, _, rgba) = decode_png_rgba(&png).expect("a PNG");
+        pixel(&rgba, width, 2, 2)
+    };
+    let opaque = corner(1.0, &harness);
+    let half = corner(0.5, &harness);
+    // Straight alpha: only alpha changes with the background's opacity.
+    assert_eq!(opaque[3], 255);
+    assert!(half[3].abs_diff(128) <= 1, "{half:?}");
+    for channel in 0..3 {
+        assert!(
+            opaque[channel].abs_diff(half[channel]) <= 1,
+            "{opaque:?} vs {half:?}"
+        );
+    }
+}
