@@ -820,7 +820,7 @@ public sealed class Product : IEngineProduct
         ExpectCharacterValidationFailure(
             () => _engine.Spatial.ValidateCharacterControllerCommand(new CharacterControllerValidationRequest(
                 config,
-                firstCommand with { StepSeconds = 0.5f })),
+                firstCommand with { StepSeconds = 1.5f })),
             "invalid-character-controller-command",
             "command");
         Require(!_engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial)).Present,
