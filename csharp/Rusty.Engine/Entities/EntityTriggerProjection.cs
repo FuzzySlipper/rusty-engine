@@ -21,9 +21,12 @@ public readonly record struct SpatialCollider(
 /// A copied result from one trigger reconciliation, with every fact it produced.
 /// </summary>
 public readonly record struct EntityTriggerProjectionReconcileReceipt(
-    SpatialTriggerReceipt Trigger,
-    ReadOnlyMemory<SpatialEntityCollider> Entities,
-    ReadOnlyMemory<SpatialTriggerFactAtReceipt> Facts);
+    SpatialTriggerReconcileResult Trigger,
+    ReadOnlyMemory<SpatialEntityCollider> Entities)
+{
+    /// <summary>Every enter and exit edge the reconciliation produced.</summary>
+    public ReadOnlyMemory<SpatialTriggerFact> Facts => Trigger.Facts;
+}
 
 /// <summary>
 /// Explicitly projects the managed Transform and SpatialCollider built-ins into one generated
@@ -65,14 +68,9 @@ public sealed class EntityTriggerProjection
             projected[index] = Project(row.Entity, row.First, row.Second);
         }
 
-        SpatialTriggerReceipt trigger = _spatial.ReconcileTriggers(
+        SpatialTriggerReconcileResult trigger = _spatial.ReconcileTriggers(
             new SpatialTriggerReconcileRequest(_session, tick, cause, projected));
-        var facts = new SpatialTriggerFactAtReceipt[trigger.FactCount];
-        for (uint index = 0; index < (uint)facts.Length; index++)
-        {
-            facts[index] = _spatial.ReadTriggerFactAt(new SpatialTriggerFactAtRequest(_session, index));
-        }
-        return new EntityTriggerProjectionReconcileReceipt(trigger, projected, facts);
+        return new EntityTriggerProjectionReconcileReceipt(trigger, projected);
     }
 
     private static SpatialEntityCollider Project(EntityId entity, Transform transform, SpatialCollider collider)

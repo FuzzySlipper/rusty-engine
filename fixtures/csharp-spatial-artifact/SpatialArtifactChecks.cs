@@ -63,7 +63,7 @@ internal static class SpatialArtifactChecks
             ReadOnlyMemory<SpatialEntityCollider>.Empty, ReadOnlyMemory<ulong>.Empty,
             ReadOnlyMemory<SpatialEntityCollider>.Empty));
         Require(hit.Present && hit.Kind == SpatialHitKind.StaticMesh, "admitted floor is absent from collision");
-        NavigationStepReceipt step = engine.Spatial.EvaluateNavigationStep(new(session,
+        NavigationStepResult step = engine.Spatial.EvaluateNavigationStep(new(session,
             new Vector3(0.5f, 0, 0.5f), new Vector3(2.5f, 0, 0.5f), 0.5f, 16));
         Require(step.Outcome == NavigationPathOutcome.Reached, "admitted floor is absent from navigation");
     }

@@ -448,13 +448,12 @@ rejections followed by successful refreshes.
 
 
 `Spatial.EvaluateNavigationStep` evaluates one bounded planar-navigation step
-against the retained session projection and returns the same typed outcome,
-next-waypoint, path-cell, and path facts as `ProposeNavigationStep`. Evaluation
-does not update the retained navigation path, revisions, projections, or other
-session state, so product code can use its facts before deciding whether to
-issue a separate stateful operation. `ProposeNavigationStep` remains the
-stateful path proposal and updates the retained path on success or clears it
-for its existing failure outcomes.
+against the retained session projection and returns the typed outcome, next
+waypoint and path cell, and the whole path it follows in `Path`. It does not
+change revisions, projections or other session state. The path requests
+(`RequestNavigationPath`, `RequestWeightedNavigationPath` and their volumetric
+forms) also return their cells in `Path`; the session keeps no path of its own,
+so a product that needs a path later keeps the one it was given.
 
 `Spatial.ReplaceCollisionNavigation` derives and retains a planar projection
 from the session's current Engine collision scene. The request supplies a
@@ -527,8 +526,7 @@ world-space movement proposal bounded by `maximumStepDistance`. Use that
 proposal with ordinary character collision. For an intermediate path cell, its
 X/Z center is `((X + 0.5) * s, (Z + 0.5) * s)`, but its level only identifies a
 height interval: the retained support can be sloped or fractional. The Engine
-uses that support height when constructing its proposal. Evaluate is read-only;
-`ProposeNavigationStep` also retains the resulting path for indexed inspection.
+uses that support height when constructing its proposal.
 
 The [packaged mapping fixture](../fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs)
 checks positive and negative coordinates, non-unit cells, unaligned publication
@@ -541,17 +539,17 @@ active state can change. `ReconcileTriggers` and `RestoreTriggers` read the
 product's collider rows for that call only: a row whose entity is a registered
 trigger is that trigger's world-space AABB, and every other row with enabled
 collision is a candidate subject. `SetTriggerActive` deactivation removes
-current overlaps and publishes bounded exit facts, while reactivation
-publishes no synthetic enter—the next ordinary `ReconcileTriggers` observes
-real geometry and produces any new edge. `RestoreTriggers` accepts the complete
+current overlaps and returns their exit facts, while reactivation returns no
+synthetic enter—the next ordinary `ReconcileTriggers` observes real geometry
+and produces any new edge. `ReconcileTriggers` and `SetTriggerActive` return
+their enter/exit edges in `Facts`. `RestoreTriggers` accepts the complete
 active trigger ID set plus current projected colliders and replaces the active
-and overlap baseline without producing gameplay facts. Use `ReadTrigger` for
-the current active flag, revision, and overlap count, and consume facts only up
-to the count returned by the operation receipt. The trigger revision counts
-changes to the active and overlap sets; overlap pages use it to fence
-continuations. Unknown IDs, duplicate state changes, and duplicate restore IDs
-reject without changing the session. Disposing the Spatial session destroys the
-definitions, active set, overlaps, and fact history together.
+and overlap baseline without producing gameplay facts. `ReadTrigger` returns
+the current active flag, revision and every overlap subject. The trigger
+revision counts changes to the active and overlap sets. Unknown IDs, duplicate
+state changes, and duplicate restore IDs reject without changing the session.
+Disposing the Spatial session destroys the definitions, active set and
+overlaps together.
 
 ### Generated level artifact admission
 

@@ -54,7 +54,6 @@ use crate::composition::{
 
 const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
 const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
-const MAX_TRIGGER_OVERLAP_PAGE_ITEMS: usize = 1_024;
 const MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN: usize = 8;
 const COLLISION_NAVIGATION_EPSILON: f64 = 0.001;
 const COLLISION_NAVIGATION_CLEARANCE_EPSILON: f64 = 0.02;
@@ -157,7 +156,6 @@ pub(crate) struct SpatialSession {
     last_character_content_authority_hash: Option<u64>,
     last_character_mesh_entities: BTreeMap<u64, u64>,
     triggers: TriggerVolumeSystem,
-    last_trigger_facts: Vec<TriggerOverlapFact>,
 }
 
 /// Facts returned after an admitted asset becomes the canonical scene for a
@@ -237,7 +235,6 @@ struct NavigationState {
     volumetric_traversal: VolumetricNavTraversalOverlay,
     vertical_mapping: Option<NavigationVerticalMapping>,
     revision: u64,
-    last_path: Vec<VoxelCoord>,
 }
 
 struct NavigationVerticalMapping {
@@ -567,7 +564,6 @@ impl RuntimeSpatialBridge {
                 last_character_content_authority_hash: None,
                 last_character_mesh_entities: BTreeMap::new(),
                 triggers: TriggerVolumeSystem::default(),
-                last_trigger_facts: Vec::new(),
             },
         );
         self.collision_source
@@ -610,7 +606,6 @@ impl RuntimeSpatialBridge {
                 || session.last_character_receipt.is_some()
                 || session.triggers.definitions().next().is_some()
                 || session.triggers.active_overlaps().next().is_some()
-                || !session.last_trigger_facts.is_empty()
                 || session.world_origin.origin() != core_space::WorldOrigin::ZERO
                 || session.world_origin.revision() != 0
             {
@@ -949,7 +944,6 @@ impl RuntimeSpatialBridge {
                 volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
                 vertical_mapping: Some(navigation_vertical_mapping),
                 revision: navigation_revision,
-                last_path: Vec::new(),
             };
             let identity = SpatialContentIdentity {
                 content_reference: request.content,
@@ -1066,7 +1060,6 @@ impl RuntimeSpatialBridge {
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             vertical_mapping: None,
             revision: navigation_revision,
-            last_path: Vec::new(),
         });
         session.content_artifact = None;
         Ok(receipt)
@@ -1135,7 +1128,6 @@ impl RuntimeSpatialBridge {
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             vertical_mapping: None,
             revision: navigation_revision,
-            last_path: Vec::new(),
         });
         session.content_artifact = None;
         Ok(receipt)
@@ -1290,7 +1282,6 @@ impl RuntimeSpatialBridge {
                 ),
             }),
             revision: navigation_revision,
-            last_path: Vec::new(),
         });
         session.content_artifact = None;
         Ok(receipt)
@@ -1336,7 +1327,6 @@ impl RuntimeSpatialBridge {
             .expect("navigation checked above");
         navigation.traversal = traversal;
         navigation.revision = navigation_revision;
-        navigation.last_path.clear();
         Ok(NativeNavigationTraversalReplaceReceipt {
             traversal_cell_count: navigation.traversal.len() as u64,
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
@@ -1360,7 +1350,6 @@ impl RuntimeSpatialBridge {
         let navigation_revision = session.navigation_revision;
         navigation.traversal = traversal;
         navigation.revision = navigation_revision;
-        navigation.last_path.clear();
         Ok(NativeNavigationTraversalReplaceReceipt {
             traversal_cell_count: 0,
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
@@ -1415,7 +1404,6 @@ impl RuntimeSpatialBridge {
             .expect("navigation checked above");
         navigation.volumetric_traversal = traversal;
         navigation.revision = navigation_revision;
-        navigation.last_path.clear();
         Ok(NativeNavigationVolumetricTraversalReplaceReceipt {
             traversal_cell_count: navigation.volumetric_traversal.len() as u64,
             traversal_overlay_hash: navigation.volumetric_traversal.overlay_hash(),
@@ -1454,7 +1442,6 @@ impl RuntimeSpatialBridge {
             .expect("navigation checked above");
         navigation.volumetric_traversal = VolumetricNavTraversalOverlay::empty();
         navigation.revision = navigation_revision;
-        navigation.last_path.clear();
         Ok(NativeNavigationVolumetricTraversalReplaceReceipt {
             traversal_cell_count: 0,
             traversal_overlay_hash: navigation.volumetric_traversal.overlay_hash(),
@@ -1491,10 +1478,10 @@ impl RuntimeSpatialBridge {
     fn request_navigation_path(
         &mut self,
         request: NativeNavigationPathRequest,
-    ) -> Result<NativeNavigationPathReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeNavigationPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let Some(navigation) = session.navigation.as_mut() else {
-            return Ok(NativeNavigationPathReadout {
+            return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
             });
@@ -1527,25 +1514,28 @@ impl RuntimeSpatialBridge {
             ),
             Err(error) => (navigation_outcome(error), 0, Vec::new(), 0),
         };
-        navigation.last_path = path;
-        Ok(NativeNavigationPathReadout {
+        let path = native_path(&path);
+        let result = NativeNavigationPathResult {
+            path: path.as_ptr(),
+            path_len: path.len(),
             outcome,
             kind: navigation.kind(),
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
-            path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
             navigation_revision: navigation.revision,
             projection_hash: navigation.projection_hash(),
             path_hash,
-        })
+        };
+        self.borrowed.hold(path);
+        Ok(result)
     }
 
     fn request_weighted_navigation_path(
         &mut self,
         request: NativeNavigationWeightedPathRequest,
-    ) -> Result<NativeNavigationWeightedPathReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeNavigationWeightedPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let Some(navigation) = session.navigation.as_mut() else {
-            return Ok(NativeNavigationWeightedPathReadout {
+            return Ok(NativeNavigationWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
             });
@@ -1590,27 +1580,30 @@ impl RuntimeSpatialBridge {
             ),
             Err(error) => (weighted_navigation_outcome(error), 0, 0, Vec::new(), 0),
         };
-        navigation.last_path = path;
-        Ok(NativeNavigationWeightedPathReadout {
+        let path = native_path(&path);
+        let result = NativeNavigationWeightedPathResult {
+            path: path.as_ptr(),
+            path_len: path.len(),
             outcome,
             kind: navigation.kind(),
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
-            path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
             total_traversal_cost,
             navigation_revision: navigation.revision,
             projection_hash: navigation.projection_hash(),
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
             path_hash,
-        })
+        };
+        self.borrowed.hold(path);
+        Ok(result)
     }
 
     fn request_volumetric_navigation_path(
         &mut self,
         request: NativeNavigationVolumetricPathRequest,
-    ) -> Result<NativeNavigationPathReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeNavigationPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let Some(navigation) = session.navigation.as_mut() else {
-            return Ok(NativeNavigationPathReadout {
+            return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
             });
@@ -1619,8 +1612,7 @@ impl RuntimeSpatialBridge {
         let revision = navigation.revision;
         let projection_hash = navigation.projection_hash();
         let Some(world) = navigation.voxel_world() else {
-            navigation.last_path.clear();
-            return Ok(NativeNavigationPathReadout {
+            return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 kind,
                 navigation_revision: revision,
@@ -1652,25 +1644,28 @@ impl RuntimeSpatialBridge {
             ),
             Err(error) => (volumetric_navigation_outcome(error), 0, Vec::new(), 0),
         };
-        navigation.last_path = path;
-        Ok(NativeNavigationPathReadout {
+        let path = native_path(&path);
+        let result = NativeNavigationPathResult {
+            path: path.as_ptr(),
+            path_len: path.len(),
             outcome,
             kind,
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
-            path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
             navigation_revision: revision,
             projection_hash,
             path_hash,
-        })
+        };
+        self.borrowed.hold(path);
+        Ok(result)
     }
 
     fn request_weighted_volumetric_navigation_path(
         &mut self,
         request: NativeNavigationVolumetricWeightedPathRequest,
-    ) -> Result<NativeNavigationVolumetricWeightedPathReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeNavigationVolumetricWeightedPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let Some(navigation) = session.navigation.as_mut() else {
-            return Ok(NativeNavigationVolumetricWeightedPathReadout {
+            return Ok(NativeNavigationVolumetricWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
             });
@@ -1679,8 +1674,7 @@ impl RuntimeSpatialBridge {
         let revision = navigation.revision;
         let overlay_hash = navigation.volumetric_traversal.overlay_hash();
         let Some(world) = navigation.voxel_world() else {
-            navigation.last_path.clear();
-            return Ok(NativeNavigationVolumetricWeightedPathReadout {
+            return Ok(NativeNavigationVolumetricWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 kind,
                 navigation_revision: revision,
@@ -1721,37 +1715,21 @@ impl RuntimeSpatialBridge {
                 0,
             ),
         };
-        navigation.last_path = path;
-        Ok(NativeNavigationVolumetricWeightedPathReadout {
+        let path = native_path(&path);
+        let result = NativeNavigationVolumetricWeightedPathResult {
+            path: path.as_ptr(),
+            path_len: path.len(),
             outcome,
             kind,
             visited: u32::try_from(visited).unwrap_or(u32::MAX),
-            path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
             total_traversal_cost,
             navigation_revision: revision,
             volumetric_source_hash: source_hash,
             traversal_overlay_hash: overlay_hash,
             path_hash,
-        })
-    }
-
-    fn read_navigation_path_cell_at(
-        &mut self,
-        request: NativeNavigationPathCellAtRequest,
-    ) -> Result<NativeNavigationPathCellAtReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        let Some(cell) = session
-            .navigation
-            .as_ref()
-            .and_then(|navigation| navigation.last_path.get(request.index as usize))
-            .copied()
-        else {
-            return Ok(NativeNavigationPathCellAtReceipt::default());
         };
-        Ok(NativeNavigationPathCellAtReceipt {
-            present: true,
-            cell: native_nav_cell(cell),
-        })
+        self.borrowed.hold(path);
+        Ok(result)
     }
 
     fn clear_navigation(
@@ -1765,41 +1743,30 @@ impl RuntimeSpatialBridge {
         Ok(())
     }
 
-    fn propose_navigation(
-        &mut self,
-        request: NativeNavigationStepRequest,
-    ) -> Result<NativeNavigationStepReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_mut() else {
-            return Ok(NativeNavigationStepReceipt {
-                outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
-                ..Default::default()
-            });
-        };
-        let (receipt, path) = evaluate_navigation_step_facts(navigation, request);
-        navigation.last_path = path;
-        Ok(receipt)
-    }
-
     fn evaluate_navigation(
         &mut self,
         request: NativeNavigationStepRequest,
-    ) -> Result<NativeNavigationStepReceipt, CsharpEngineServicesError> {
+    ) -> Result<NativeNavigationStepResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let Some(navigation) = session.navigation.as_ref() else {
-            return Ok(NativeNavigationStepReceipt {
+            return Ok(NativeNavigationStepResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
             });
         };
-        Ok(evaluate_navigation_step_facts(navigation, request).0)
+        let (mut result, path) = evaluate_navigation_step_facts(navigation, request);
+        let path = native_path(&path);
+        result.path = path.as_ptr();
+        result.path_len = path.len();
+        self.borrowed.hold(path);
+        Ok(result)
     }
 }
 
 fn evaluate_navigation_step_facts(
     navigation: &NavigationState,
     request: NativeNavigationStepRequest,
-) -> (NativeNavigationStepReceipt, Vec<VoxelCoord>) {
+) -> (NativeNavigationStepResult, Vec<VoxelCoord>) {
     let from = native_vec3_value(request.from);
     let target = native_vec3_value(request.target);
     if !finite_vec3(from) || !finite_vec3(target) {
@@ -1873,18 +1840,17 @@ fn evaluate_navigation_step_facts(
             return (navigation_step_failure(navigation, outcome), Vec::new());
         }
     };
-    let path_len = u32::try_from(path.path.len()).unwrap_or(u32::MAX);
     (
-        NativeNavigationStepReceipt {
+        NativeNavigationStepResult {
             outcome: NativeNavigationPathOutcome::Reached,
             next_waypoint: native_vec3(movement.next_waypoint),
             next_path_cell: native_nav_cell(next_cell),
             reached: u32::from(next_cell == goal && movement.reached),
             visited: path.visited as u32,
-            path_len,
             navigation_revision: navigation.revision,
             projection_hash: navigation.projection_hash(),
             path_hash: path.path_hash,
+            ..Default::default()
         },
         path.path,
     )
@@ -2501,7 +2467,7 @@ impl RuntimeSpatialBridge {
     fn reconcile_triggers(
         &mut self,
         request: &NativeSpatialTriggerReconcileRequest,
-    ) -> Result<NativeSpatialTriggerReceipt, SpatialTriggerOperationError> {
+    ) -> Result<NativeSpatialTriggerReconcileResult, SpatialTriggerOperationError> {
         let entities =
             unsafe { borrowed_slice(request.entities, request.entities_len, "trigger entities") }
                 .map_err(SpatialTriggerOperationError::Service)?;
@@ -2513,13 +2479,13 @@ impl RuntimeSpatialBridge {
             .triggers
             .reconcile(trigger_colliders(entities), request.tick, cause)
             .map_err(SpatialTriggerOperationError::Trigger)?;
-        session.last_trigger_facts = receipt.facts.clone();
-        Ok(NativeSpatialTriggerReceipt {
+        let facts = native_trigger_facts(&receipt.facts);
+        let result = NativeSpatialTriggerReconcileResult {
+            facts: facts.as_ptr(),
+            facts_len: facts.len(),
             tick: receipt.tick,
             cause: request.cause,
             revision: receipt.revision,
-            fact_count: checked_u32(receipt.facts.len(), "trigger fact count")
-                .map_err(SpatialTriggerOperationError::Service)?,
             continued_count: checked_u32(receipt.continued.len(), "trigger continued count")
                 .map_err(SpatialTriggerOperationError::Service)?,
             active_overlap_count: checked_u32(
@@ -2529,13 +2495,15 @@ impl RuntimeSpatialBridge {
             .map_err(SpatialTriggerOperationError::Service)?,
             diagnostic_count: checked_u32(receipt.diagnostics.len(), "trigger diagnostic count")
                 .map_err(SpatialTriggerOperationError::Service)?,
-        })
+        };
+        self.borrowed.hold(facts);
+        Ok(result)
     }
 
     fn set_trigger_active(
         &mut self,
         request: &NativeSpatialTriggerSetActiveRequest,
-    ) -> Result<NativeSpatialTriggerLifecycleReceipt, SpatialTriggerOperationError> {
+    ) -> Result<NativeSpatialTriggerLifecycleResult, SpatialTriggerOperationError> {
         let session = self
             .session_mut(request.session)
             .map_err(SpatialTriggerOperationError::Service)?;
@@ -2543,8 +2511,10 @@ impl RuntimeSpatialBridge {
             .triggers
             .set_active(EntityId::new(request.trigger), request.active, request.tick)
             .map_err(SpatialTriggerOperationError::Trigger)?;
-        session.last_trigger_facts = receipt.facts.clone();
-        Ok(NativeSpatialTriggerLifecycleReceipt {
+        let facts = native_trigger_facts(&receipt.facts);
+        let result = NativeSpatialTriggerLifecycleResult {
+            facts: facts.as_ptr(),
+            facts_len: facts.len(),
             trigger: receipt.trigger.raw(),
             active: receipt.active,
             revision_before: receipt.revision_before,
@@ -2554,9 +2524,9 @@ impl RuntimeSpatialBridge {
                 "retired trigger overlap count",
             )
             .map_err(SpatialTriggerOperationError::Service)?,
-            fact_count: checked_u32(receipt.facts.len(), "trigger lifecycle fact count")
-                .map_err(SpatialTriggerOperationError::Service)?,
-        })
+        };
+        self.borrowed.hold(facts);
+        Ok(result)
     }
 
     fn restore_triggers(
@@ -2591,9 +2561,8 @@ impl RuntimeSpatialBridge {
             .triggers
             .restore(&active_triggers, trigger_colliders(entities))
             .map_err(SpatialTriggerOperationError::Trigger)?;
-        // Restore establishes a baseline. Enter/exit edges become observable
-        // only after subsequent product-driven reconciliation.
-        session.last_trigger_facts.clear();
+        // Restore establishes a baseline and produces no enter or exit edges;
+        // they come from later product-driven reconciliation.
         Ok(NativeSpatialTriggerRestoreReceipt {
             revision_before: receipt.revision_before,
             revision_after: receipt.revision_after,
@@ -2606,7 +2575,6 @@ impl RuntimeSpatialBridge {
                 "restored trigger overlap count",
             )
             .map_err(SpatialTriggerOperationError::Service)?,
-            fact_count: 0,
             diagnostic_count: checked_u32(
                 receipt.diagnostics.len(),
                 "trigger restore diagnostic count",
@@ -2687,124 +2655,48 @@ impl RuntimeSpatialBridge {
     fn read_trigger(
         &mut self,
         request: NativeSpatialTriggerReadRequest,
-    ) -> Result<NativeSpatialTriggerReadReceipt, CsharpEngineServicesError> {
+    ) -> Result<NativeSpatialTriggerReadResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
+        let trigger = EntityId::new(request.trigger);
         let readout = session
             .triggers
-            .current_overlaps(EntityId::new(request.trigger), u32::MAX as usize)
+            .current_overlaps(trigger)
             .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
         let active = session
             .triggers
-            .is_active(EntityId::new(request.trigger))
+            .is_active(trigger)
             .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
-        Ok(NativeSpatialTriggerReadReceipt {
-            trigger: readout.trigger.raw(),
-            active,
-            revision: readout.revision,
-            overlap_count: checked_u32(readout.subjects.len(), "trigger overlap count")?,
-        })
-    }
-
-    fn read_trigger_overlap_at(
-        &mut self,
-        request: NativeSpatialTriggerOverlapAtRequest,
-    ) -> Result<NativeSpatialTriggerOverlapAtReceipt, CsharpEngineServicesError> {
-        let readout = self
-            .session_mut(request.session)?
-            .triggers
-            .current_overlaps(EntityId::new(request.trigger), u32::MAX as usize)
-            .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
-        let Some(subject) = readout.subjects.get(request.index as usize) else {
-            return Ok(NativeSpatialTriggerOverlapAtReceipt {
-                trigger: request.trigger,
-                revision: readout.revision,
-                ..Default::default()
-            });
-        };
-        Ok(NativeSpatialTriggerOverlapAtReceipt {
-            present: true,
-            trigger: request.trigger,
-            subject: subject.raw(),
-            revision: readout.revision,
-        })
-    }
-
-    fn read_trigger_overlap_page(
-        &mut self,
-        request: NativeSpatialTriggerOverlapPageRequest,
-    ) -> Result<NativeSpatialTriggerOverlapPageResult, CsharpEngineServicesError> {
-        let page_size = usize::try_from(request.page_size).map_err(|_| {
-            spatial_error(
-                "CSHARP_SPATIAL_TRIGGER",
-                "trigger overlap page size overflow",
-            )
-        })?;
-        if page_size > MAX_TRIGGER_OVERLAP_PAGE_ITEMS {
-            return Err(spatial_error(
-                "CSHARP_SPATIAL_TRIGGER",
-                "trigger overlap page size exceeds the C# service bound",
-            ));
-        }
-        let page = self
-            .session_mut(request.session)?
-            .triggers
-            .current_overlaps_page(
-                EntityId::new(request.trigger),
-                (request.expected_revision != 0).then_some(request.expected_revision),
-                request.cursor as usize,
-                page_size,
-            )
-            .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
-        let subjects = page
+        let subjects = readout
             .subjects
-            .into_iter()
+            .iter()
             .map(|subject| NativeSpatialTriggerOverlapSubject {
                 subject: subject.raw(),
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let result = NativeSpatialTriggerOverlapPageResult {
-            subjects: if subjects.is_empty() {
-                std::ptr::null()
-            } else {
-                subjects.as_ptr()
-            },
+        let result = NativeSpatialTriggerReadResult {
+            subjects: subjects.as_ptr(),
             subjects_len: subjects.len(),
-            trigger: page.trigger.raw(),
-            revision: page.revision,
-            total: checked_u32(page.total, "trigger overlap total")?,
-            has_next_cursor: page.next_cursor.is_some(),
-            next_cursor: page
-                .next_cursor
-                .map(|cursor| checked_u32(cursor, "trigger overlap cursor"))
-                .transpose()?
-                .unwrap_or_default(),
+            trigger: request.trigger,
+            active,
+            revision: readout.revision,
         };
         self.borrowed.hold(subjects);
         Ok(result)
     }
+}
 
-    fn read_trigger_fact_at(
-        &mut self,
-        request: NativeSpatialTriggerFactAtRequest,
-    ) -> Result<NativeSpatialTriggerFactAtReceipt, CsharpEngineServicesError> {
-        let fact = self
-            .session_mut(request.session)?
-            .last_trigger_facts
-            .get(request.index as usize)
-            .cloned();
-        let Some(fact) = fact else {
-            return Ok(NativeSpatialTriggerFactAtReceipt::default());
-        };
-        Ok(NativeSpatialTriggerFactAtReceipt {
-            present: true,
+fn native_trigger_facts(facts: &[TriggerOverlapFact]) -> Box<[NativeSpatialTriggerFact]> {
+    facts
+        .iter()
+        .map(|fact| NativeSpatialTriggerFact {
             enter: fact.kind == TriggerOverlapFactKind::Enter,
             trigger: fact.pair.trigger,
             subject: fact.pair.subject,
             tick: fact.tick,
             cause: native_trigger_cause_value(fact.cause),
         })
-    }
+        .collect()
 }
 
 fn surface_mode(mode: NativeVoxelSurfaceMode) -> SurfaceMode {
@@ -3728,7 +3620,6 @@ fn native_character_receipt(
         platform,
         block_flags: native_character_block_flags(block_mask),
         contact_count: receipt.contacts.len() as u32,
-        dynamic_impulse_count: receipt.dynamic_impulses.len() as u32,
         cast_count: receipt.cast_count as u32,
         recovery_passes: receipt.recovery_passes as u32,
         recovery_distance: receipt.recovery_distance,
@@ -4024,7 +3915,7 @@ unsafe extern "C" fn read_navigation_projection(
 unsafe extern "C" fn request_navigation_path(
     context: *mut c_void,
     request: NativeNavigationPathRequest,
-    readout: *mut NativeNavigationPathReadout,
+    readout: *mut NativeNavigationPathResult,
 ) -> i32 {
     if context.is_null() || readout.is_null() {
         return 0;
@@ -4041,7 +3932,7 @@ unsafe extern "C" fn request_navigation_path(
 unsafe extern "C" fn request_weighted_navigation_path(
     context: *mut c_void,
     request: NativeNavigationWeightedPathRequest,
-    readout: *mut NativeNavigationWeightedPathReadout,
+    readout: *mut NativeNavigationWeightedPathResult,
 ) -> i32 {
     if context.is_null() || readout.is_null() {
         return 0;
@@ -4057,29 +3948,10 @@ unsafe extern "C" fn request_weighted_navigation_path(
     }
 }
 
-unsafe extern "C" fn read_navigation_path_cell_at(
-    context: *mut c_void,
-    request: NativeNavigationPathCellAtRequest,
-    receipt: *mut NativeNavigationPathCellAtReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .read_navigation_path_cell_at(request)
-    {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
 unsafe extern "C" fn request_volumetric_navigation_path(
     context: *mut c_void,
     request: NativeNavigationVolumetricPathRequest,
-    readout: *mut NativeNavigationPathReadout,
+    readout: *mut NativeNavigationPathResult,
 ) -> i32 {
     if context.is_null() || readout.is_null() {
         return 0;
@@ -4098,7 +3970,7 @@ unsafe extern "C" fn request_volumetric_navigation_path(
 unsafe extern "C" fn request_weighted_volumetric_navigation_path(
     context: *mut c_void,
     request: NativeNavigationVolumetricWeightedPathRequest,
-    readout: *mut NativeNavigationVolumetricWeightedPathReadout,
+    readout: *mut NativeNavigationVolumetricWeightedPathResult,
 ) -> i32 {
     if context.is_null() || readout.is_null() {
         return 0;
@@ -4292,28 +4164,10 @@ unsafe extern "C" fn read_character_controller(
     }
 }
 
-unsafe extern "C" fn propose_navigation_step(
-    context: *mut c_void,
-    request: NativeNavigationStepRequest,
-    receipt: *mut NativeNavigationStepReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    match bridge.propose_navigation(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
 unsafe extern "C" fn evaluate_navigation_step(
     context: *mut c_void,
     request: NativeNavigationStepRequest,
-    receipt: *mut NativeNavigationStepReceipt,
+    receipt: *mut NativeNavigationStepResult,
 ) -> i32 {
     if context.is_null() || receipt.is_null() {
         return 0;
@@ -4466,7 +4320,7 @@ unsafe extern "C" fn register_trigger(
 unsafe extern "C" fn reconcile_triggers(
     context: *mut c_void,
     request: *const NativeSpatialTriggerReconcileRequest,
-    output: *mut NativeSpatialTriggerReceipt,
+    output: *mut NativeSpatialTriggerReconcileResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt.is_null() {
@@ -4495,7 +4349,7 @@ unsafe extern "C" fn reconcile_triggers(
 unsafe extern "C" fn set_trigger_active(
     context: *mut c_void,
     request: *const NativeSpatialTriggerSetActiveRequest,
-    output: *mut NativeSpatialTriggerLifecycleReceipt,
+    output: *mut NativeSpatialTriggerLifecycleResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt.is_null() {
@@ -4555,66 +4409,14 @@ fn retain_trigger_operation_error(
 unsafe extern "C" fn read_trigger(
     context: *mut c_void,
     request: NativeSpatialTriggerReadRequest,
-    receipt: *mut NativeSpatialTriggerReadReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_trigger(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_trigger_overlap_at(
-    context: *mut c_void,
-    request: NativeSpatialTriggerOverlapAtRequest,
-    receipt: *mut NativeSpatialTriggerOverlapAtReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_trigger_overlap_at(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_trigger_overlap_page(
-    context: *mut c_void,
-    request: NativeSpatialTriggerOverlapPageRequest,
-    result: *mut NativeSpatialTriggerOverlapPageResult,
+    result: *mut NativeSpatialTriggerReadResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
     }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_trigger_overlap_page(request)
-    {
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_trigger(request) {
         Ok(value) => {
             unsafe { *result = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_trigger_fact_at(
-    context: *mut c_void,
-    request: NativeSpatialTriggerFactAtRequest,
-    receipt: *mut NativeSpatialTriggerFactAtReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_trigger_fact_at(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
             ABI_OK
         }
         Err(_) => 0,
@@ -4642,7 +4444,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         request_navigation_path,
         request_weighted_navigation_path,
         request_weighted_volumetric_navigation_path,
-        read_navigation_path_cell_at,
         request_volumetric_navigation_path,
         clear_navigation,
         default_character_controller_config,
@@ -4652,7 +4453,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         capture_character_continuation,
         restore_character_continuation,
         read_character_controller,
-        propose_navigation_step,
         evaluate_navigation_step,
         read_projection,
         contains_point,
@@ -4668,9 +4468,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         set_trigger_active,
         restore_triggers,
         read_trigger,
-        read_trigger_overlap_at,
-        read_trigger_overlap_page,
-        read_trigger_fact_at,
     }
 }
 
@@ -5117,11 +4914,15 @@ fn volumetric_config(value: NativeNavigationVolumetricConfig) -> VolumetricNavCo
     }
 }
 
+fn native_path(path: &[VoxelCoord]) -> Box<[NativePlanarNavCell]> {
+    path.iter().copied().map(native_nav_cell).collect()
+}
+
 fn navigation_step_failure(
     navigation: &NavigationState,
     outcome: NativeNavigationPathOutcome,
-) -> NativeNavigationStepReceipt {
-    NativeNavigationStepReceipt {
+) -> NativeNavigationStepResult {
+    NativeNavigationStepResult {
         outcome,
         navigation_revision: navigation.revision,
         projection_hash: navigation.projection_hash(),
@@ -6075,7 +5876,7 @@ mod tests {
         let mut step = navigation_step_request(session, 32);
         step.from.y = 1.02;
         step.target.y = 1.02;
-        let mut evaluated = NativeNavigationStepReceipt::default();
+        let mut evaluated = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
             ABI_OK
@@ -6486,7 +6287,7 @@ mod tests {
         let mut low_step = navigation_step_request(session, 32);
         low_step.from.y = 0.02;
         low_step.target.y = 0.02;
-        let mut low_receipt = NativeNavigationStepReceipt::default();
+        let mut low_receipt = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe { (api.evaluate_navigation_step)(api.context, low_step, &mut low_receipt) },
             ABI_OK
@@ -6537,7 +6338,7 @@ mod tests {
         let mut step = navigation_step_request(session, 32);
         step.from.y = 0.02;
         step.target.y = 0.02;
-        let mut evaluated = NativeNavigationStepReceipt::default();
+        let mut evaluated = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
             ABI_OK
@@ -6570,7 +6371,7 @@ mod tests {
     fn navigation_state_fingerprint(
         bridge: &RuntimeSpatialBridge,
         session: NativeSpatialSessionHandle,
-    ) -> (u64, u64, u64, u64, u64, u64, Vec<VoxelCoord>) {
+    ) -> (u64, u64, u64, u64, u64, u64) {
         let session = bridge.sessions.get(&session.value).expect("live session");
         let navigation = session.navigation.as_ref().expect("installed navigation");
         (
@@ -6580,7 +6381,6 @@ mod tests {
             navigation.traversal.overlay_hash(),
             navigation.volumetric_traversal.overlay_hash(),
             session.scene.static_mesh_collision_revision(),
-            navigation.last_path.clone(),
         )
     }
 
@@ -6596,33 +6396,34 @@ mod tests {
         ];
         replace_navigation(&api, session, &cells);
 
-        let mut proposal = NativeNavigationStepReceipt::default();
+        let retained = navigation_state_fingerprint(&bridge, session);
+        let mut step = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe {
-                (api.propose_navigation_step)(
+                (api.evaluate_navigation_step)(
                     api.context,
                     navigation_step_request(session, 32),
-                    &mut proposal,
+                    &mut step,
                 )
             },
             ABI_OK
         );
-        assert_eq!(proposal.outcome, NativeNavigationPathOutcome::Reached);
-        assert_eq!(proposal.path_len, 3);
-        let retained = navigation_state_fingerprint(&bridge, session);
+        assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
+        // The step returns its whole path; copy it before the next call.
+        let path = unsafe { std::slice::from_raw_parts(step.path, step.path_len) }.to_vec();
         assert_eq!(
-            retained.6.len(),
-            3,
-            "proposal establishes the path sentinel"
+            path.iter().map(|cell| cell.x).collect::<Vec<_>>(),
+            vec![0, 1, 2]
         );
+        assert_eq!(step.next_path_cell.x, 1);
 
         let assert_unchanged =
-            |receipt: NativeNavigationStepReceipt, expected: NativeNavigationPathOutcome| {
+            |receipt: NativeNavigationStepResult, expected: NativeNavigationPathOutcome| {
                 assert_eq!(receipt.outcome, expected);
                 assert_eq!(navigation_state_fingerprint(&bridge, session), retained);
             };
 
-        let mut receipt = NativeNavigationStepReceipt::default();
+        let mut receipt = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe {
                 (api.evaluate_navigation_step)(
@@ -6702,7 +6503,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_navigation_step_retains_a_path_sentinel_for_unreachable_and_missing_projection() {
+    fn evaluate_navigation_step_reports_no_path_and_missing_projection_without_state_changes() {
         let mut bridge = RuntimeSpatialBridge::new();
         let api = api(&mut bridge);
         let session = create_session(&api);
@@ -6711,17 +6512,9 @@ mod tests {
             NativePlanarNavCell { x: 2, y: 0, z: 0 },
         ];
         replace_navigation(&api, session, &cells);
-        bridge
-            .sessions
-            .get_mut(&session.value)
-            .expect("live session")
-            .navigation
-            .as_mut()
-            .expect("installed navigation")
-            .last_path = vec![VoxelCoord::new(0, 0, 0), VoxelCoord::new(2, 0, 0)];
         let retained = navigation_state_fingerprint(&bridge, session);
 
-        let mut receipt = NativeNavigationStepReceipt::default();
+        let mut receipt = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe {
                 (api.evaluate_navigation_step)(
@@ -6761,42 +6554,6 @@ mod tests {
             .expect("live session");
         assert!(missing.navigation.is_none());
         assert_eq!(missing.navigation_revision, no_navigation_revision);
-    }
-
-    #[test]
-    fn propose_navigation_step_still_updates_the_retained_path() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let api = api(&mut bridge);
-        let session = create_session(&api);
-        let cells = [
-            NativePlanarNavCell { x: 0, y: 0, z: 0 },
-            NativePlanarNavCell { x: 1, y: 0, z: 0 },
-            NativePlanarNavCell { x: 2, y: 0, z: 0 },
-        ];
-        replace_navigation(&api, session, &cells);
-
-        let mut receipt = NativeNavigationStepReceipt::default();
-        assert_eq!(
-            unsafe {
-                (api.propose_navigation_step)(
-                    api.context,
-                    navigation_step_request(session, 32),
-                    &mut receipt,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(receipt.outcome, NativeNavigationPathOutcome::Reached);
-        assert_eq!(navigation_state_fingerprint(&bridge, session).6.len(), 3);
-
-        let mut invalid_step = navigation_step_request(session, 32);
-        invalid_step.max_step_units = 0.0;
-        assert_eq!(
-            unsafe { (api.propose_navigation_step)(api.context, invalid_step, &mut receipt) },
-            ABI_OK
-        );
-        assert_eq!(receipt.outcome, NativeNavigationPathOutcome::InvalidStep);
-        assert!(navigation_state_fingerprint(&bridge, session).6.is_empty());
     }
 
     #[test]
@@ -6941,7 +6698,7 @@ mod tests {
         assert_ne!(overlay_receipt.traversal_overlay_hash, 0);
         assert_ne!(overlay_receipt.volumetric_source_hash, 0);
 
-        let mut readout = NativeNavigationVolumetricWeightedPathReadout::default();
+        let mut readout = NativeNavigationVolumetricWeightedPathResult::default();
         assert_eq!(
             unsafe {
                 (api.request_weighted_volumetric_navigation_path)(
@@ -8466,7 +8223,7 @@ mod tests {
         );
         assert_eq!(copied_utf8(diagnostic.source), "entity:41");
 
-        let mut read = NativeSpatialTriggerReadReceipt::default();
+        let mut read: NativeSpatialTriggerReadResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (api.read_trigger)(
@@ -8482,7 +8239,7 @@ mod tests {
         );
         assert_eq!(read.trigger, 41);
 
-        let mut reconcile = NativeSpatialTriggerReceipt::default();
+        let mut reconcile: NativeSpatialTriggerReconcileResult = unsafe { std::mem::zeroed() };
         receipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
@@ -8506,7 +8263,7 @@ mod tests {
         assert_eq!(copied_utf8(diagnostic.code), "CSHARP_SPATIAL_POINTER");
         assert!(!copied_utf8(diagnostic.message).is_empty());
 
-        let mut unchanged = NativeSpatialTriggerReadReceipt::default();
+        let mut unchanged: NativeSpatialTriggerReadResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (api.read_trigger)(
@@ -8522,7 +8279,18 @@ mod tests {
         );
         assert_eq!(unchanged.trigger, read.trigger);
         assert_eq!(unchanged.revision, read.revision);
-        assert_eq!(unchanged.overlap_count, read.overlap_count);
+        assert_eq!(unchanged.subjects_len, read.subjects_len);
+    }
+
+    /// Copies borrowed trigger facts before the next call, as generated C# does.
+    fn trigger_facts(
+        facts: *const NativeSpatialTriggerFact,
+        len: usize,
+    ) -> Vec<NativeSpatialTriggerFact> {
+        if len == 0 {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(facts, len) }.to_vec()
     }
 
     #[test]
@@ -8565,7 +8333,7 @@ mod tests {
         let mut reconcile = |tick, subject_x: Option<f32>| {
             let mut rows = vec![cube(41, 0.0, 0.5)];
             rows.extend(subject_x.map(|x| cube(50, x, 0.25)));
-            let mut receipt = NativeSpatialTriggerReceipt::default();
+            let mut receipt: NativeSpatialTriggerReconcileResult = unsafe { std::mem::zeroed() };
             assert_eq!(
                 unsafe {
                     (api.reconcile_triggers)(
@@ -8583,50 +8351,31 @@ mod tests {
                 },
                 ABI_OK
             );
-            let mut fact = NativeSpatialTriggerFactAtReceipt::default();
-            let first = (receipt.fact_count == 1).then(|| {
-                assert_eq!(
-                    unsafe {
-                        (api.read_trigger_fact_at)(
-                            api.context,
-                            NativeSpatialTriggerFactAtRequest { session, index: 0 },
-                            &mut fact,
-                        )
-                    },
-                    ABI_OK
-                );
-                assert!(fact.present && fact.trigger == 41 && fact.subject == 50);
+            let facts = trigger_facts(receipt.facts, receipt.facts_len);
+            let first = facts.first().map(|fact| {
+                assert!(fact.trigger == 41 && fact.subject == 50 && fact.tick == tick);
                 fact.enter
             });
-            (receipt, first)
+            (receipt, facts.len(), first)
         };
 
-        let (outside, fact) = reconcile(1, Some(2.0));
-        assert_eq!((outside.fact_count, outside.revision, fact), (0, 0, None));
-        let (entered, fact) = reconcile(2, Some(0.5));
-        assert_eq!(
-            (entered.fact_count, entered.revision, fact),
-            (1, 1, Some(true))
-        );
-        let (stayed, fact) = reconcile(3, Some(-0.5));
-        assert_eq!(
-            (stayed.fact_count, stayed.continued_count, fact),
-            (0, 1, None)
-        );
+        let (outside, count, fact) = reconcile(1, Some(2.0));
+        assert_eq!((count, outside.revision, fact), (0, 0, None));
+        let (entered, count, fact) = reconcile(2, Some(0.5));
+        assert_eq!((count, entered.revision, fact), (1, 1, Some(true)));
+        let (stayed, count, fact) = reconcile(3, Some(-0.5));
+        assert_eq!((count, stayed.continued_count, fact), (0, 1, None));
         assert_eq!(stayed.revision, 1);
-        let (exited, fact) = reconcile(4, Some(-2.0));
-        assert_eq!(
-            (exited.fact_count, exited.revision, fact),
-            (1, 2, Some(false))
-        );
+        let (exited, count, fact) = reconcile(4, Some(-2.0));
+        assert_eq!((count, exited.revision, fact), (1, 2, Some(false)));
         assert_eq!(exited.active_overlap_count, 0);
 
         // A removed subject row exits like any other departure; a trigger
         // without a row senses nothing and reports why.
         reconcile(5, Some(0.0));
-        let (removed, fact) = reconcile(6, None);
-        assert_eq!((removed.fact_count, fact), (1, Some(false)));
-        let mut receipt = NativeSpatialTriggerReceipt::default();
+        let (_, count, fact) = reconcile(6, None);
+        assert_eq!((count, fact), (1, Some(false)));
+        let mut receipt: NativeSpatialTriggerReconcileResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (api.reconcile_triggers)(
@@ -8644,7 +8393,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!((receipt.fact_count, receipt.diagnostic_count), (0, 1));
+        assert_eq!((receipt.facts_len, receipt.diagnostic_count), (0, 1));
     }
 
     #[test]
@@ -8705,7 +8454,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let mut reconcile = NativeSpatialTriggerReceipt::default();
+        let mut reconcile: NativeSpatialTriggerReconcileResult = unsafe { std::mem::zeroed() };
         let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
@@ -8724,9 +8473,9 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!((reconcile.revision, reconcile.fact_count), (1, 2));
+        assert_eq!((reconcile.revision, reconcile.facts_len), (1, 2));
 
-        let mut lifecycle = NativeSpatialTriggerLifecycleReceipt::default();
+        let mut lifecycle: NativeSpatialTriggerLifecycleResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (api.set_trigger_active)(
@@ -8747,37 +8496,11 @@ mod tests {
             (lifecycle.revision_before, lifecycle.revision_after),
             (1, 2)
         );
-        assert_eq!(
-            (lifecycle.removed_overlap_count, lifecycle.fact_count),
-            (1, 1)
-        );
-        let mut fact = NativeSpatialTriggerFactAtReceipt::default();
-        assert_eq!(
-            unsafe {
-                (api.read_trigger_fact_at)(
-                    api.context,
-                    NativeSpatialTriggerFactAtRequest { session, index: 0 },
-                    &mut fact,
-                )
-            },
-            ABI_OK
-        );
-        assert!(fact.present && !fact.enter && fact.trigger == 41 && fact.subject == 50);
-        assert_eq!(
-            unsafe {
-                (api.read_trigger_fact_at)(
-                    api.context,
-                    NativeSpatialTriggerFactAtRequest { session, index: 1 },
-                    &mut fact,
-                )
-            },
-            ABI_OK
-        );
-        assert!(
-            !fact.present,
-            "fact readback is bounded by the receipt count"
-        );
-        let mut read = NativeSpatialTriggerReadReceipt::default();
+        assert_eq!(lifecycle.removed_overlap_count, 1);
+        let exits = trigger_facts(lifecycle.facts, lifecycle.facts_len);
+        assert_eq!(exits.len(), 1);
+        assert!(!exits[0].enter && exits[0].trigger == 41 && exits[0].subject == 50);
+        let mut read: NativeSpatialTriggerReadResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (api.read_trigger)(
@@ -8791,7 +8514,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert!(!read.active && read.revision == 2 && read.overlap_count == 0);
+        assert!(!read.active && read.revision == 2 && read.subjects_len == 0);
 
         for (trigger, active, code) in [
             (41, false, "duplicate-trigger-lifecycle"),
@@ -8832,7 +8555,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!((lifecycle.revision_after, lifecycle.fact_count), (3, 0));
+        assert_eq!((lifecycle.revision_after, lifecycle.facts_len), (3, 0));
 
         let active = [42_u64];
         let mut restored = NativeSpatialTriggerRestoreReceipt::default();
@@ -8859,21 +8582,25 @@ mod tests {
                 restored.registered_count,
                 restored.active_count,
                 restored.active_overlap_count,
-                restored.fact_count,
             ),
-            (2, 1, 1, 0)
+            (2, 1, 1)
         );
+        // Trigger 42 still overlaps subject 50 after restore.
         assert_eq!(
             unsafe {
-                (api.read_trigger_fact_at)(
+                (api.read_trigger)(
                     api.context,
-                    NativeSpatialTriggerFactAtRequest { session, index: 0 },
-                    &mut fact,
+                    NativeSpatialTriggerReadRequest {
+                        session,
+                        trigger: 42,
+                    },
+                    &mut read,
                 )
             },
             ABI_OK
         );
-        assert!(!fact.present, "restore must not fabricate gameplay edges");
+        let subjects = unsafe { std::slice::from_raw_parts(read.subjects, read.subjects_len) };
+        assert!(read.active && subjects.len() == 1 && subjects[0].subject == 50);
 
         let duplicate_active = [42_u64, 42_u64];
         error = unsafe { std::mem::zeroed() };

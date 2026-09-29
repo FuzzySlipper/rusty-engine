@@ -45,8 +45,8 @@ internal static class NavigationMappingChecks
             Vector3 support = firstSupport + new Vector3((float)(index * CellSize), 0, 0);
             PlanarNavCell cell = CellAtSupport(support);
             Require(cell == new PlanarNavCell(first.X + index, first.Y + 1, first.Z), "world mapping lost signed coordinates");
-            NavigationPathReadout self = engine.Spatial.RequestNavigationPath(new(session, cell, cell, MaximumVisited));
-            Require(self.Outcome == NavigationPathOutcome.Reached && self.PathLen == 1,
+            NavigationPathResult self = engine.Spatial.RequestNavigationPath(new(session, cell, cell, MaximumVisited));
+            Require(self.Outcome == NavigationPathOutcome.Reached && self.Path.Length == 1,
                 "reported walkable cell cannot be queried using world-aligned coordinates");
             accepted++;
         }
@@ -54,23 +54,23 @@ internal static class NavigationMappingChecks
 
         PlanarNavCell start = CellAtSupport(firstSupport);
         PlanarNavCell goal = CellAtSupport(lastSupport);
-        NavigationPathReadout route = engine.Spatial.RequestNavigationPath(new(session, start, goal, MaximumVisited));
-        Require(route.Outcome == NavigationPathOutcome.Reached && route.PathLen == FloorCells,
+        NavigationPathResult route = engine.Spatial.RequestNavigationPath(new(session, start, goal, MaximumVisited));
+        Require(route.Outcome == NavigationPathOutcome.Reached && route.Path.Length == FloorCells,
             "world-aligned endpoints did not produce a multi-cell path");
-        NavigationPathCellAtReceipt middle = engine.Spatial.ReadNavigationPathCellAt(new(session, 1));
-        Require(middle.Present && middle.Cell == new PlanarNavCell(first.X + 1, first.Y + 1, first.Z),
+        PlanarNavCell middle = route.Path.Span[1];
+        Require(middle == new PlanarNavCell(first.X + 1, first.Y + 1, first.Z),
             "returned path cell changed coordinate space");
 
         PlanarNavCell relative = CellAtSupport(firstSupport - worldMin);
-        NavigationPathReadout wrongOrigin = engine.Spatial.RequestNavigationPath(new(session, relative, relative, MaximumVisited));
+        NavigationPathResult wrongOrigin = engine.Spatial.RequestNavigationPath(new(session, relative, relative, MaximumVisited));
         Require(wrongOrigin.Outcome == NavigationPathOutcome.StartNotWalkable,
             "fixture did not reproduce the publication-box-relative mapping error");
 
         Vector3 clearance = new(0, FootClearance, 0);
-        NavigationStepReceipt step = engine.Spatial.EvaluateNavigationStep(new(session,
+        NavigationStepResult step = engine.Spatial.EvaluateNavigationStep(new(session,
             firstSupport + clearance, lastSupport + clearance, (float)CellSize, MaximumVisited));
-        Require(step.Outcome == NavigationPathOutcome.Reached && step.PathLen == FloorCells
-            && step.NextPathCell == middle.Cell && step.NextWaypoint.X > firstSupport.X,
+        Require(step.Outcome == NavigationPathOutcome.Reached && step.Path.Length == FloorCells
+            && step.NextPathCell == middle && step.NextWaypoint.X > firstSupport.X,
             "world-position query failed to resolve support and advance toward the next cell");
     }
 

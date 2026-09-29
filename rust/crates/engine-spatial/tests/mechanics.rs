@@ -237,7 +237,7 @@ fn trigger_snapshot_restore_preserves_pairs_without_duplicate_enter() {
     let mut restored = decode_trigger_snapshot(&encoded).unwrap();
 
     assert_eq!(
-        restored.current_overlaps(trigger, 1).unwrap().subjects,
+        restored.current_overlaps(trigger).unwrap().subjects,
         vec![subject]
     );
     let receipt = restored
@@ -280,7 +280,7 @@ fn trigger_lifecycle_retirement_and_reactivation_are_deliberate() {
     assert_eq!(retired.facts.len(), 1);
     assert_eq!(retired.facts[0].kind, TriggerOverlapFactKind::Exit);
     assert!(triggers
-        .current_overlaps(trigger, 1)
+        .current_overlaps(trigger)
         .unwrap()
         .subjects
         .is_empty());
@@ -368,7 +368,7 @@ fn trigger_restore_rebases_active_set_and_overlaps_without_edges() {
 }
 
 #[test]
-fn malformed_definitions_stale_entities_and_read_quotas_are_typed() {
+fn malformed_definitions_stale_entities_and_unknown_reads_are_typed() {
     let invalid = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
         EntityId::new(1),
         "bad scope",
@@ -394,49 +394,27 @@ fn malformed_definitions_stale_entities_and_read_quotas_are_typed() {
         TriggerVolumeDiagnosticCode::StaleEntity
     );
 
-    let (mut colliders, mut triggers, trigger, subject) = trigger_fixture();
-    move_collider(&mut colliders, subject, Vec3::ZERO);
-    triggers
-        .reconcile(colliders, 1, TriggerReconcileCause::Teleport)
-        .unwrap();
     assert_eq!(
-        triggers
-            .current_overlaps(trigger, 0)
+        stale
+            .current_overlaps(EntityId::new(98))
             .unwrap_err()
             .diagnostics[0]
             .code,
-        TriggerVolumeDiagnosticCode::QuotaExceeded
+        TriggerVolumeDiagnosticCode::MissingDefinition
     );
 }
 
 #[test]
-fn trigger_overlap_pages_report_total_empty_final_page_and_stale_revision() {
+fn current_overlaps_report_every_subject_and_the_revision() {
     let (mut colliders, mut triggers, trigger, subject) = trigger_fixture();
     move_collider(&mut colliders, subject, Vec3::ZERO);
     let reconcile = triggers
-        .reconcile(colliders.clone(), 1, TriggerReconcileCause::Teleport)
+        .reconcile(colliders, 1, TriggerReconcileCause::Teleport)
         .unwrap();
 
-    let first = triggers.current_overlaps_page(trigger, None, 0, 1).unwrap();
-    assert_eq!(first.revision, reconcile.revision);
-    assert_eq!(first.total, 1);
-    assert_eq!(first.subjects, vec![subject]);
-    assert_eq!(first.next_cursor, None);
-
-    let final_empty = triggers
-        .current_overlaps_page(trigger, Some(first.revision), 1, 1)
-        .unwrap();
-    assert!(final_empty.subjects.is_empty());
-    assert_eq!(final_empty.total, 1);
-    assert_eq!(final_empty.next_cursor, None);
-    assert_eq!(
-        triggers
-            .current_overlaps_page(trigger, Some(first.revision + 1), 1, 1)
-            .unwrap_err()
-            .diagnostics[0]
-            .code,
-        TriggerVolumeDiagnosticCode::StaleRevision
-    );
+    let readout = triggers.current_overlaps(trigger).unwrap();
+    assert_eq!(readout.revision, reconcile.revision);
+    assert_eq!(readout.subjects, vec![subject]);
 }
 
 #[test]

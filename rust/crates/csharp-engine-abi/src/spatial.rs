@@ -275,15 +275,31 @@ pub struct NativeSpatialTriggerSetActiveRequest {
     pub tick: u64,
 }
 
+/// One enter or exit edge between a trigger and a subject.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeSpatialTriggerLifecycleReceipt {
+pub struct NativeSpatialTriggerFact {
+    pub enter: bool,
+    pub trigger: u64,
+    pub subject: u64,
+    pub tick: u64,
+    pub cause: NativeSpatialTriggerCause,
+}
+
+/// Borrowed result of one activation change. `facts` holds the exit edges of
+/// a deactivation, points into Spatial bridge storage and stays valid until
+/// the next call on the same context; the generated managed binding copies
+/// it before returning.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerLifecycleResult {
+    pub facts: *const NativeSpatialTriggerFact,
+    pub facts_len: usize,
     pub trigger: u64,
     pub active: bool,
     pub revision_before: u64,
     pub revision_after: u64,
     pub removed_overlap_count: u32,
-    pub fact_count: u32,
 }
 
 /// Replaces the active-trigger and current-overlap baseline after product
@@ -307,17 +323,20 @@ pub struct NativeSpatialTriggerRestoreReceipt {
     pub registered_count: u32,
     pub active_count: u32,
     pub active_overlap_count: u32,
-    pub fact_count: u32,
     pub diagnostic_count: u32,
 }
 
+/// Borrowed result of one reconcile: the enter and exit edges it produced.
+/// `facts` points into Spatial bridge storage and stays valid until the next
+/// call on the same context.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeSpatialTriggerReceipt {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerReconcileResult {
+    pub facts: *const NativeSpatialTriggerFact,
+    pub facts_len: usize,
     pub tick: u64,
     pub cause: NativeSpatialTriggerCause,
     pub revision: u64,
-    pub fact_count: u32,
     pub continued_count: u32,
     pub active_overlap_count: u32,
     pub diagnostic_count: u32,
@@ -332,78 +351,21 @@ pub struct NativeSpatialTriggerReadRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeSpatialTriggerReadReceipt {
-    pub trigger: u64,
-    pub active: bool,
-    pub revision: u64,
-    pub overlap_count: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeSpatialTriggerOverlapAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub trigger: u64,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeSpatialTriggerOverlapAtReceipt {
-    pub present: bool,
-    pub trigger: u64,
-    pub subject: u64,
-    pub revision: u64,
-}
-
-/// Continuation-aware, bounded trigger-overlap read. A zero expected revision starts a read;
-/// continuations must echo the revision returned by their prior page.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeSpatialTriggerOverlapPageRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub trigger: u64,
-    pub expected_revision: u64,
-    pub cursor: u32,
-    pub page_size: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSpatialTriggerOverlapSubject {
     pub subject: u64,
 }
 
-/// Copied page of current overlap subjects. `total` is the complete observed count and the
-/// next cursor is present only when another page is available.
+/// Borrowed readout of one trigger: its active flag and every current
+/// overlap subject. `subjects` points into Spatial bridge storage and stays
+/// valid until the next call on the same context.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeSpatialTriggerOverlapPageResult {
+pub struct NativeSpatialTriggerReadResult {
     pub subjects: *const NativeSpatialTriggerOverlapSubject,
     pub subjects_len: usize,
     pub trigger: u64,
+    pub active: bool,
     pub revision: u64,
-    pub total: u32,
-    pub has_next_cursor: bool,
-    pub next_cursor: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeSpatialTriggerFactAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeSpatialTriggerFactAtReceipt {
-    pub present: bool,
-    pub enter: bool,
-    pub trigger: u64,
-    pub subject: u64,
-    pub tick: u64,
-    pub cause: NativeSpatialTriggerCause,
 }
 
 #[repr(C)]
@@ -751,16 +713,36 @@ pub struct NativeNavigationPathRequest {
     pub max_visited: u32,
 }
 
+/// Borrowed result of one path request. `path` lists the path cells from
+/// start to goal, points into Spatial bridge storage and stays valid until
+/// the next call on the same context; the generated managed binding copies
+/// it before returning.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeNavigationPathReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationPathResult {
+    pub path: *const NativePlanarNavCell,
+    pub path_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub kind: NativeNavigationProjectionKind,
     pub visited: u32,
-    pub path_len: u32,
     pub navigation_revision: u64,
     pub projection_hash: u64,
     pub path_hash: u64,
+}
+
+impl Default for NativeNavigationPathResult {
+    fn default() -> Self {
+        Self {
+            path: std::ptr::null(),
+            path_len: 0,
+            outcome: Default::default(),
+            kind: Default::default(),
+            visited: 0,
+            navigation_revision: 0,
+            projection_hash: 0,
+            path_hash: 0,
+        }
+    }
 }
 
 /// A bounded full planar minimum-cost path request over the session's
@@ -774,18 +756,38 @@ pub struct NativeNavigationWeightedPathRequest {
     pub max_visited: u32,
 }
 
+/// Borrowed result of one weighted planar path request; `path` is borrowed
+/// like [`NativeNavigationPathResult::path`].
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeNavigationWeightedPathReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationWeightedPathResult {
+    pub path: *const NativePlanarNavCell,
+    pub path_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub kind: NativeNavigationProjectionKind,
     pub visited: u32,
-    pub path_len: u32,
     pub total_traversal_cost: u64,
     pub navigation_revision: u64,
     pub projection_hash: u64,
     pub traversal_overlay_hash: u64,
     pub path_hash: u64,
+}
+
+impl Default for NativeNavigationWeightedPathResult {
+    fn default() -> Self {
+        Self {
+            path: std::ptr::null(),
+            path_len: 0,
+            outcome: Default::default(),
+            kind: Default::default(),
+            visited: 0,
+            total_traversal_cost: 0,
+            navigation_revision: 0,
+            projection_hash: 0,
+            traversal_overlay_hash: 0,
+            path_hash: 0,
+        }
+    }
 }
 
 /// A bounded full 3D minimum-cost path request over the session's retained
@@ -800,13 +802,16 @@ pub struct NativeNavigationVolumetricWeightedPathRequest {
     pub config: NativeNavigationVolumetricConfig,
 }
 
+/// Borrowed result of one weighted volumetric path request; `path` is
+/// borrowed like [`NativeNavigationPathResult::path`].
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeNavigationVolumetricWeightedPathReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationVolumetricWeightedPathResult {
+    pub path: *const NativePlanarNavCell,
+    pub path_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub kind: NativeNavigationProjectionKind,
     pub visited: u32,
-    pub path_len: u32,
     pub total_traversal_cost: u64,
     pub navigation_revision: u64,
     pub volumetric_source_hash: u64,
@@ -814,18 +819,21 @@ pub struct NativeNavigationVolumetricWeightedPathReadout {
     pub path_hash: u64,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeNavigationPathCellAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeNavigationPathCellAtReceipt {
-    pub present: bool,
-    pub cell: NativePlanarNavCell,
+impl Default for NativeNavigationVolumetricWeightedPathResult {
+    fn default() -> Self {
+        Self {
+            path: std::ptr::null(),
+            path_len: 0,
+            outcome: Default::default(),
+            kind: Default::default(),
+            visited: 0,
+            total_traversal_cost: 0,
+            navigation_revision: 0,
+            volumetric_source_hash: 0,
+            traversal_overlay_hash: 0,
+            path_hash: 0,
+        }
+    }
 }
 
 #[repr(u32)]
@@ -1402,7 +1410,6 @@ pub struct NativeCharacterStepReceipt {
     pub platform: NativeCharacterPlatform,
     pub block_flags: NativeCharacterBlockFlags,
     pub contact_count: u32,
-    pub dynamic_impulse_count: u32,
     pub cast_count: u32,
     pub recovery_passes: u32,
     pub recovery_distance: f32,
@@ -1418,18 +1425,39 @@ pub struct NativeNavigationStepRequest {
     pub max_visited: u32,
 }
 
+/// Borrowed result of one navigation step evaluation. `path` is the full
+/// path the step follows and is borrowed like
+/// [`NativeNavigationPathResult::path`].
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeNavigationStepReceipt {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationStepResult {
+    pub path: *const NativePlanarNavCell,
+    pub path_len: usize,
     pub outcome: NativeNavigationPathOutcome,
     pub next_waypoint: NativeVec3,
     pub next_path_cell: NativePlanarNavCell,
     pub reached: u32,
     pub visited: u32,
-    pub path_len: u32,
     pub navigation_revision: u64,
     pub projection_hash: u64,
     pub path_hash: u64,
+}
+
+impl Default for NativeNavigationStepResult {
+    fn default() -> Self {
+        Self {
+            path: std::ptr::null(),
+            path_len: 0,
+            outcome: Default::default(),
+            next_waypoint: Default::default(),
+            next_path_cell: Default::default(),
+            reached: 0,
+            visited: 0,
+            navigation_revision: 0,
+            projection_hash: 0,
+            path_hash: 0,
+        }
+    }
 }
 
 /// Bounded world-aligned X/Z observation. Collision is sampled over each cell's

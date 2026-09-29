@@ -564,7 +564,7 @@ static void ExerciseSpatialEntityProjection()
         "spatial projection did not inject the canonical entity identity and transformed bounds");
     Require(receipt.Trigger.Tick == 7
         && receipt.Facts.Length == 1
-        && receipt.Facts.Span[0].Present
+        && receipt.Facts.Span[0].Enter
         && receipt.Facts.Span[0].Subject == actor.Value,
         "spatial reconciliation did not copy its generated readback");
 }
@@ -673,11 +673,10 @@ sealed class SpatialServiceFake : ISpatialService
     public NavigationVolumetricTraversalReplaceReceipt ClearVolumetricNavigationTraversal(NavigationVolumetricTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationProjectionReadout ReadNavigationProjection(NavigationProjectionReadRequest arg0) => throw new NotSupportedException();
     public SpatialMapResult ReadMap(SpatialMapRequest arg0) => throw new NotSupportedException();
-    public NavigationPathReadout RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
-    public NavigationWeightedPathReadout RequestWeightedNavigationPath(NavigationWeightedPathRequest arg0) => throw new NotSupportedException();
-    public NavigationPathCellAtReceipt ReadNavigationPathCellAt(NavigationPathCellAtRequest arg0) => throw new NotSupportedException();
-    public NavigationPathReadout RequestVolumetricNavigationPath(NavigationVolumetricPathRequest arg0) => throw new NotSupportedException();
-    public NavigationVolumetricWeightedPathReadout RequestWeightedVolumetricNavigationPath(NavigationVolumetricWeightedPathRequest arg0) => throw new NotSupportedException();
+    public NavigationPathResult RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
+    public NavigationWeightedPathResult RequestWeightedNavigationPath(NavigationWeightedPathRequest arg0) => throw new NotSupportedException();
+    public NavigationPathResult RequestVolumetricNavigationPath(NavigationVolumetricPathRequest arg0) => throw new NotSupportedException();
+    public NavigationVolumetricWeightedPathResult RequestWeightedVolumetricNavigationPath(NavigationVolumetricWeightedPathRequest arg0) => throw new NotSupportedException();
     public void ClearNavigation(NavigationClearRequest arg0) => throw new NotSupportedException();
     public CharacterControllerConfig DefaultCharacterControllerConfig() => default;
     public void ValidateCharacterControllerConfig(CharacterControllerConfig arg0) => throw new NotSupportedException();
@@ -710,12 +709,10 @@ sealed class SpatialServiceFake : ISpatialService
             0,
             0,
             0,
-            0,
             0);
     }
     public CharacterControllerResult ReadCharacterController(CharacterControllerReadRequest arg0) => throw new NotSupportedException();
-    public NavigationStepReceipt ProposeNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
-    public NavigationStepReceipt EvaluateNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
+    public NavigationStepResult EvaluateNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
     public SpatialProjectionReadout ReadProjection(SpatialProjectionReadRequest arg0) => throw new NotSupportedException();
     public SpatialQueryReceipt ContainsPoint(SpatialContainsPointRequest arg0) => throw new NotSupportedException();
     public SpatialHit CastRay(SpatialRaycastRequest arg0) => throw new NotSupportedException();
@@ -727,54 +724,30 @@ sealed class SpatialServiceFake : ISpatialService
     public SpatialHit PickVoxel(SpatialPickRequest arg0) => throw new NotSupportedException();
     public void RegisterTrigger(SpatialTriggerRegisterRequest arg0) => throw new NotSupportedException();
 
-    public SpatialTriggerReceipt ReconcileTriggers(SpatialTriggerReconcileRequest request)
+    public SpatialTriggerReconcileResult ReconcileTriggers(SpatialTriggerReconcileRequest request)
     {
         ReconcileCalls++;
         _entities = request.Entities.ToArray();
-        return new SpatialTriggerReceipt(
+        SpatialTriggerFact[] facts = _entities.Length == 0
+            ? []
+            : [new SpatialTriggerFact(true, _entities[0].Entity, _entities[0].Entity, 7, SpatialTriggerCause.Movement)];
+        return new SpatialTriggerReconcileResult(
+            facts,
             request.Tick,
             request.Cause,
             (ulong)ReconcileCalls,
-            _entities.Length == 0 ? 0u : 1u,
             0,
             0,
             0);
     }
 
-    public SpatialTriggerLifecycleReceipt SetTriggerActive(SpatialTriggerSetActiveRequest request) =>
+    public SpatialTriggerLifecycleResult SetTriggerActive(SpatialTriggerSetActiveRequest request) =>
         throw new NotSupportedException();
 
     public SpatialTriggerRestoreReceipt RestoreTriggers(SpatialTriggerRestoreRequest request) =>
         throw new NotSupportedException();
 
-    public SpatialTriggerReadReceipt ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
-    public SpatialTriggerOverlapAtReceipt ReadTriggerOverlapAt(SpatialTriggerOverlapAtRequest arg0) => throw new NotSupportedException();
-    public SpatialTriggerOverlapPageResult ReadTriggerOverlapPage(SpatialTriggerOverlapPageRequest request)
-    {
-        if (request.PageSize == 0 || request.Cursor != 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request));
-        }
-
-        ulong revision = (ulong)ReconcileCalls;
-        if (request.ExpectedRevision != 0 && request.ExpectedRevision != revision)
-        {
-            throw new InvalidOperationException("trigger overlap continuation revision is stale");
-        }
-
-        return new SpatialTriggerOverlapPageResult(
-            ReadOnlyMemory<SpatialTriggerOverlapSubject>.Empty,
-            request.Trigger,
-            revision,
-            0,
-            false,
-            0);
-    }
-
-    public SpatialTriggerFactAtReceipt ReadTriggerFactAt(SpatialTriggerFactAtRequest request)
-        => request.Index == 0 && _entities.Length != 0
-            ? new SpatialTriggerFactAtReceipt(true, true, _entities[0].Entity, _entities[0].Entity, 7, SpatialTriggerCause.Movement)
-            : default;
+    public SpatialTriggerReadResult ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
 }
 
 sealed class GraphicsServiceFake : IGraphicsService

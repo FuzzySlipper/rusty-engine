@@ -316,13 +316,11 @@ public sealed class Product : IEngineProduct
             new NavigationProjectionReadRequest(_spatial));
         Require(hostProjection.Present && hostProjection.Kind == NavigationProjectionKind.HostWalkableCells && hostProjection.NavigationRevision == hostNavigation.NavigationRevision,
             "host navigation projection facts did not reach C#");
-        NavigationPathReadout hostPath = _engine.Spatial.RequestNavigationPath(new NavigationPathRequest(
+        NavigationPathResult hostPath = _engine.Spatial.RequestNavigationPath(new NavigationPathRequest(
             _spatial, new PlanarNavCell(0, 0, 0), new PlanarNavCell(1, 0, 0), 16));
-        NavigationPathCellAtReceipt hostPathCell = _engine.Spatial.ReadNavigationPathCellAt(
-            new NavigationPathCellAtRequest(_spatial, 1));
-        Require(hostPath.Outcome == NavigationPathOutcome.Reached && hostPath.PathLen == 2 && hostPathCell.Present && hostPathCell.Cell == new PlanarNavCell(1, 0, 0),
-            "bounded indexed host navigation path did not reach C#");
-        NavigationStepReceipt hostStep = _engine.Spatial.ProposeNavigationStep(new NavigationStepRequest(
+        Require(hostPath.Outcome == NavigationPathOutcome.Reached && hostPath.Path.Length == 2 && hostPath.Path.Span[1] == new PlanarNavCell(1, 0, 0),
+            "host navigation path cells did not reach C#");
+        NavigationStepResult hostStep = _engine.Spatial.EvaluateNavigationStep(new NavigationStepRequest(
             _spatial,
             new Vector3(0.5f),
             new Vector3(1.5f, 0.5f, 0.5f),
@@ -339,17 +337,17 @@ public sealed class Product : IEngineProduct
             new NavigationProjectionReadRequest(_spatial));
         Require(voxelProjection.Present && voxelProjection.Kind == NavigationProjectionKind.VoxelDerived && voxelProjection.NavigationRevision == voxelNavigation.NavigationRevision,
             "voxel-derived navigation projection facts did not reach C#");
-        NavigationPathReadout voxelPath = _engine.Spatial.RequestNavigationPath(new NavigationPathRequest(
+        NavigationPathResult voxelPath = _engine.Spatial.RequestNavigationPath(new NavigationPathRequest(
             _spatial, new PlanarNavCell(0, 1, 0), new PlanarNavCell(2, 1, 0), 16));
-        Require(voxelPath.Outcome == NavigationPathOutcome.Reached && voxelPath.PathLen == 3,
+        Require(voxelPath.Outcome == NavigationPathOutcome.Reached && voxelPath.Path.Length == 3,
             "voxel-derived planar navigation path did not reach C#");
-        NavigationPathReadout volumetricPath = _engine.Spatial.RequestVolumetricNavigationPath(new NavigationVolumetricPathRequest(
+        NavigationPathResult volumetricPath = _engine.Spatial.RequestVolumetricNavigationPath(new NavigationVolumetricPathRequest(
             _spatial,
             new PlanarNavCell(0, 1, 0),
             new PlanarNavCell(2, 1, 0),
             16,
             new NavigationVolumetricConfig(1, 1, 1, NavigationVolumetricNeighborSet.Planar4, NavigationVolumetricVerticalPolicy.DisallowVertical, NavigationVolumetricTraversalRule.EmptyCells)));
-        Require(volumetricPath.Outcome == NavigationPathOutcome.Reached && volumetricPath.PathLen == 3,
+        Require(volumetricPath.Outcome == NavigationPathOutcome.Reached && volumetricPath.Path.Length == 3,
             "bounded volumetric navigation path did not reach C#");
         _engine.Spatial.ClearNavigation(new NavigationClearRequest(_spatial));
         NavigationProjectionReadout clearedNavigation = _engine.Spatial.ReadNavigationProjection(

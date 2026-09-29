@@ -1488,10 +1488,10 @@ mod tests {
         assert_eq!(receipt.collision_triangle_count, 1);
         assert_eq!(receipt.navigation_cell_count, 3);
 
-        let mut step = NativeNavigationStepReceipt::default();
+        let mut step = NativeNavigationStepResult::default();
         assert_eq!(
             unsafe {
-                (api.spatial.propose_navigation_step)(
+                (api.spatial.evaluate_navigation_step)(
                     api.spatial.context,
                     NativeNavigationStepRequest {
                         session,

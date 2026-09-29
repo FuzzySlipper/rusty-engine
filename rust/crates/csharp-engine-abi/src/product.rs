@@ -222,27 +222,22 @@ pub type NativeReadNavigationProjection = unsafe extern "C" fn(
 pub type NativeRequestNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationPathRequest,
-    *mut NativeNavigationPathReadout,
+    *mut NativeNavigationPathResult,
 ) -> i32;
 pub type NativeRequestWeightedNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationWeightedPathRequest,
-    *mut NativeNavigationWeightedPathReadout,
+    *mut NativeNavigationWeightedPathResult,
 ) -> i32;
 pub type NativeRequestWeightedVolumetricNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationVolumetricWeightedPathRequest,
-    *mut NativeNavigationVolumetricWeightedPathReadout,
-) -> i32;
-pub type NativeReadNavigationPathCellAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeNavigationPathCellAtRequest,
-    *mut NativeNavigationPathCellAtReceipt,
+    *mut NativeNavigationVolumetricWeightedPathResult,
 ) -> i32;
 pub type NativeRequestVolumetricNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationVolumetricPathRequest,
-    *mut NativeNavigationPathReadout,
+    *mut NativeNavigationPathResult,
 ) -> i32;
 pub type NativeClearNavigation =
     unsafe extern "C" fn(*mut c_void, NativeNavigationClearRequest) -> i32;
@@ -279,15 +274,10 @@ pub type NativeReadCharacterController = unsafe extern "C" fn(
     NativeCharacterControllerReadRequest,
     *mut NativeCharacterControllerResult,
 ) -> i32;
-pub type NativeProposeNavigationStep = unsafe extern "C" fn(
-    *mut c_void,
-    NativeNavigationStepRequest,
-    *mut NativeNavigationStepReceipt,
-) -> i32;
 pub type NativeEvaluateNavigationStep = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationStepRequest,
-    *mut NativeNavigationStepReceipt,
+    *mut NativeNavigationStepResult,
 ) -> i32;
 pub type NativeReadSpatialProjection = unsafe extern "C" fn(
     *mut c_void,
@@ -344,13 +334,13 @@ pub type NativeSpatialRegisterTrigger = unsafe extern "C" fn(
 pub type NativeSpatialReconcileTriggers = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialTriggerReconcileRequest,
-    *mut NativeSpatialTriggerReceipt,
+    *mut NativeSpatialTriggerReconcileResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSpatialSetTriggerActive = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialTriggerSetActiveRequest,
-    *mut NativeSpatialTriggerLifecycleReceipt,
+    *mut NativeSpatialTriggerLifecycleResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSpatialRestoreTriggers = unsafe extern "C" fn(
@@ -362,22 +352,7 @@ pub type NativeSpatialRestoreTriggers = unsafe extern "C" fn(
 pub type NativeSpatialReadTrigger = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerReadRequest,
-    *mut NativeSpatialTriggerReadReceipt,
-) -> i32;
-pub type NativeSpatialReadTriggerOverlapAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeSpatialTriggerOverlapAtRequest,
-    *mut NativeSpatialTriggerOverlapAtReceipt,
-) -> i32;
-pub type NativeSpatialReadTriggerOverlapPage = unsafe extern "C" fn(
-    *mut c_void,
-    NativeSpatialTriggerOverlapPageRequest,
-    *mut NativeSpatialTriggerOverlapPageResult,
-) -> i32;
-pub type NativeSpatialReadTriggerFactAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeSpatialTriggerFactAtRequest,
-    *mut NativeSpatialTriggerFactAtReceipt,
+    *mut NativeSpatialTriggerReadResult,
 ) -> i32;
 pub type NativeWorldOriginPrepare = unsafe extern "C" fn(
     *mut c_void,
@@ -1260,7 +1235,6 @@ pub struct NativeSpatialApi {
     pub request_navigation_path: NativeRequestNavigationPath,
     pub request_weighted_navigation_path: NativeRequestWeightedNavigationPath,
     pub request_weighted_volumetric_navigation_path: NativeRequestWeightedVolumetricNavigationPath,
-    pub read_navigation_path_cell_at: NativeReadNavigationPathCellAt,
     pub request_volumetric_navigation_path: NativeRequestVolumetricNavigationPath,
     pub clear_navigation: NativeClearNavigation,
     pub default_character_controller_config: NativeDefaultCharacterControllerConfig,
@@ -1270,7 +1244,6 @@ pub struct NativeSpatialApi {
     pub capture_character_continuation: NativeCaptureCharacterContinuation,
     pub restore_character_continuation: NativeRestoreCharacterContinuation,
     pub read_character_controller: NativeReadCharacterController,
-    pub propose_navigation_step: NativeProposeNavigationStep,
     pub evaluate_navigation_step: NativeEvaluateNavigationStep,
     pub read_projection: NativeReadSpatialProjection,
     pub contains_point: NativeSpatialContainsPoint,
@@ -1286,9 +1259,6 @@ pub struct NativeSpatialApi {
     pub set_trigger_active: NativeSpatialSetTriggerActive,
     pub restore_triggers: NativeSpatialRestoreTriggers,
     pub read_trigger: NativeSpatialReadTrigger,
-    pub read_trigger_overlap_at: NativeSpatialReadTriggerOverlapAt,
-    pub read_trigger_overlap_page: NativeSpatialReadTriggerOverlapPage,
-    pub read_trigger_fact_at: NativeSpatialReadTriggerFactAt,
 }
 
 /// Origin rebasing is a distinct named service family, but shares the Spatial
