@@ -255,6 +255,9 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     clips: HashMap<String, ClipData>,
     voices: BTreeMap<AudioHandle, Voice>,
     one_shots: Vec<OneShot>,
+    /// One-shots of a replaced owner: still playing out after a reset, no
+    /// longer reported, but stoppable at shutdown.
+    released_one_shots: Vec<Playback>,
     facts: Vec<RealizedAudioFact>,
 }
 
@@ -304,6 +307,7 @@ impl<B: Backend> AudioRealizer<B> {
             clips: HashMap::new(),
             voices: BTreeMap::new(),
             one_shots: Vec::new(),
+            released_one_shots: Vec::new(),
             facts: Vec::new(),
         })
     }
@@ -358,7 +362,10 @@ impl<B: Backend> AudioRealizer<B> {
             }
         }
         self.voices.clear();
-        self.one_shots.clear();
+        self.released_one_shots
+            .extend(self.one_shots.drain(..).map(|one_shot| one_shot.playback));
+        self.released_one_shots
+            .retain(|playback| !playback.finished());
         self.facts.clear();
         for bus in BUSES {
             self.bus_states[bus_index(bus)] = BusState::DEFAULT;
@@ -369,10 +376,11 @@ impl<B: Backend> AudioRealizer<B> {
     /// Stops every sound, one-shots included, for a runtime that has shut
     /// down. Unlike [`Self::reset`], nothing keeps playing.
     pub fn stop_all(&mut self) {
-        for one_shot in &mut self.one_shots {
-            one_shot.playback.stop();
-        }
         self.reset();
+        for playback in &mut self.released_one_shots {
+            playback.stop();
+        }
+        self.released_one_shots.clear();
     }
 
     /// Follows the runtime lifecycle: a paused runtime advances no Engine
@@ -415,6 +423,8 @@ impl<B: Backend> AudioRealizer<B> {
     /// emitters. Call between Engine calls; then [`Self::take_facts`].
     pub fn refresh(&mut self, entities: &impl AudioEntityPositions) {
         let facts = &mut self.facts;
+        self.released_one_shots
+            .retain(|playback| !playback.finished());
         self.one_shots.retain_mut(|one_shot| {
             if let Some(message) = one_shot.playback.take_error() {
                 facts.push(decode_failure(

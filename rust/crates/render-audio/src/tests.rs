@@ -615,3 +615,26 @@ fn an_entity_attached_voice_follows_its_entity() {
     let [left, right] = settled_peaks(&mut realizer);
     assert!(left > 2.0 * right, "entity moved left: {left} {right}");
 }
+
+#[test]
+fn stop_all_also_stops_one_shots_released_by_an_earlier_reset() {
+    let mut realizer = capture_realizer();
+    realizer.apply(
+        &[emit(1, 1, descriptor("sha256:wav", false))],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    assert!(realizer.backend_mut().render_peak(0.1) > 0.01);
+    // A baseline reset lets the one-shot play out without reporting it.
+    realizer.reset();
+    assert!(
+        realizer.backend_mut().render_peak(0.05) > 0.01,
+        "reset keeps it playing"
+    );
+    realizer.stop_all();
+    realizer.backend_mut().render_peak(0.05);
+    let after = realizer.backend_mut().render_peak(0.1);
+    assert!(after < 1e-5, "shutdown after a reset still emits {after}");
+    realizer.refresh(&NoEntityPositions);
+    assert_eq!(realizer.take_facts(), []);
+}
