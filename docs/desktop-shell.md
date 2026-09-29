@@ -63,7 +63,10 @@ feature.
 ## Platforms
 
 - **Linux:** X11 and Wayland, measured. The device is created with the
-  DMA-BUF extensions Chromium's frames need.
+  DMA-BUF extensions Chromium's frames need. Pointer lock turns at the
+  browser's rate on both ([evidence #8859](evidence/desktop-input-8859/README.md)).
+  Wayland locks the pointer. X11 hides the cursor and recentres it rather than
+  grabbing it, because during a grab XInput delivers every raw motion twice.
 - **Windows:** the device prefers DX12, which Chromium's shared textures
   require. Not run here; `welding` records it working on hardware.
 - **macOS:** not built.
