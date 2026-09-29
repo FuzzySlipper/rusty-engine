@@ -67,7 +67,7 @@ diagnostics become the same realization facts the browser reports.
 WAV decodes once per clip; Vorbis, MP3 and FLAC stream from their encoded bytes
 per voice (symphonia). Opus streams the same way: symphonia demuxes the Ogg
 stream and seeks, and the pure-Rust `opus-decoder` (MIT/Apache-2.0, no FFI)
-decodes it. Its output matches libopus for the fixture, and seeks decode 80 ms of
+decodes it, applying the OpusHead output gain. Its output matches libopus for the fixtures, and seeks decode 80 ms of
 pre-roll. The listener follows the camera of the lowest-ordered primary view
 in the committed view composition, and an entity-attached voice follows the
 committed graphics node published for its entity (`source_entity`, as

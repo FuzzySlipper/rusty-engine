@@ -21,6 +21,10 @@ const OPUS_SAMPLE_RATE: u32 = 48_000;
 /// RFC 7845 §4.6: decode at least 80 ms before a seek target so the decoder
 /// state has converged by the first kept sample.
 const SEEK_PREROLL_FRAMES: i64 = 3_840;
+/// RFC 7845 §5.1: OpusHead carries a signed Q7.8 dB output gain at byte 16,
+/// which a decoder applies to its output. The Opus packets do not carry it.
+const OPUS_HEAD_GAIN_OFFSET: usize = 16;
+const Q7_8_ONE: f32 = 256.0;
 
 pub(crate) struct OggOpusDecoder {
     reader: OggReader<'static>,
@@ -29,6 +33,8 @@ pub(crate) struct OggOpusDecoder {
     channels: usize,
     /// Pre-skip frames at the start of the stream, never output.
     delay: i64,
+    /// Linear factor for the OpusHead output gain.
+    gain: f32,
     num_frames: usize,
     pcm: Vec<f32>,
     /// Stream timestamp of the next frame to output. Earlier frames are
@@ -60,6 +66,7 @@ impl OggOpusDecoder {
             .try_into()
             .map_err(|_| FromFileError::UnknownDuration)?;
         let delay = i64::try_from(delay).map_err(|_| FromFileError::UnknownDuration)?;
+        let gain = output_gain(params.extra_data.as_deref())?;
         let track_id = track.id;
         let decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, channels).map_err(opus_error)?;
         let pcm = vec![0.0; decoder.max_frame_size_per_channel() * channels];
@@ -69,6 +76,7 @@ impl OggOpusDecoder {
             track_id,
             channels,
             delay,
+            gain,
             num_frames,
             pcm,
             keep_from: delay,
@@ -110,12 +118,16 @@ impl Decoder for OggOpusDecoder {
                 continue;
             }
             let samples = &self.pcm[start * self.channels..end * self.channels];
+            let gain = self.gain;
             let frames = if self.channels == 1 {
-                samples.iter().copied().map(Frame::from_mono).collect()
+                samples
+                    .iter()
+                    .map(|&sample| Frame::from_mono(sample * gain))
+                    .collect()
             } else {
                 samples
                     .chunks_exact(2)
-                    .map(|pair| Frame::new(pair[0], pair[1]))
+                    .map(|pair| Frame::new(pair[0] * gain, pair[1] * gain))
                     .collect()
             };
             return Ok(frames);
@@ -136,6 +148,19 @@ impl Decoder for OggOpusDecoder {
         self.keep_from = target;
         Ok(index)
     }
+}
+
+/// The linear output gain from the OpusHead packet symphonia keeps as the
+/// track's extra data.
+fn output_gain(head: Option<&[u8]>) -> Result<f32, FromFileError> {
+    let head = head
+        .filter(|head| head.starts_with(b"OpusHead"))
+        .ok_or(FromFileError::NoDefaultTrack)?;
+    let bytes = head
+        .get(OPUS_HEAD_GAIN_OFFSET..OPUS_HEAD_GAIN_OFFSET + 2)
+        .ok_or(FromFileError::NoDefaultTrack)?;
+    let decibels = f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / Q7_8_ONE;
+    Ok(10_f32.powf(decibels / 20.0))
 }
 
 fn to_frames(duration: u64) -> usize {
@@ -172,6 +197,29 @@ mod tests {
         // One second at 48 kHz, as libopus (ffmpeg) decodes this fixture.
         assert_eq!(decoder.num_frames(), 48_000);
         assert_eq!(decode_all(&mut decoder).len(), 48_000);
+    }
+
+    fn peak(bytes: &[u8]) -> f32 {
+        let mut decoder = OggOpusDecoder::new(Arc::from(bytes)).expect("opens");
+        decode_all(&mut decoder)
+            .iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+    }
+
+    #[test]
+    fn the_opus_head_output_gain_is_applied() {
+        // tone-gain6.opus is tone.opus with its OpusHead gain set to +6 dB;
+        // libopus (ffmpeg) decodes it at peak 0.2438 against 0.1222.
+        let gained = include_bytes!("../../../../fixtures/audio-containers/tone-gain6.opus");
+        let ratio = peak(gained) / peak(TONE);
+        assert!((ratio - 1.995_262_3).abs() < 0.01, "+6 dB ratio {ratio}");
+        assert!((peak(TONE) - 0.122_210_4).abs() < 0.002, "{}", peak(TONE));
+        // The gain applies after a seek as well.
+        let mut decoder = OggOpusDecoder::new(Arc::from(&gained[..])).expect("opens");
+        let continuous = decode_all(&mut decoder);
+        decoder.seek(24_000).expect("seeks");
+        let resumed = decoder.decode().expect("decodes");
+        assert!((resumed[0].left - continuous[24_000]).abs() < 0.02);
     }
 
     #[test]

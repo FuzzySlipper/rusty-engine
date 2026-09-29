@@ -10,3 +10,8 @@ Rust admission tests consume these exact bodies. The browser test
 one-shot completion, retained looping, nonzero analyser samples and cleanup for
 all five containers through `RendererAudioHost`. This proves sink behavior,
 not physical speakers or product music policy.
+
+`tone-gain6.opus` is `tone.opus` with its OpusHead output gain set to +6 dB
+(Q7.8 value 1536) and the first Ogg page CRC recomputed; nothing else changes.
+The Rust device decoder test checks that the gain is applied as libopus applies
+it (review of #8812).

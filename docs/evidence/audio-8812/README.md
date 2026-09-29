@@ -48,3 +48,17 @@ for the Ogg reader).
   one-shot through `AudioRealizer::open_default_device` into the null sink. The
   recording has 440 Hz audible for about 1 s, and the realizer reported
   `OneShotCompleted`.
+
+## Review fix: OpusHead output gain
+
+Review found that the decoder ignored the OpusHead output gain (a signed Q7.8
+dB value at byte 16, applied by the decoder rather than carried in packets).
+`OggOpusDecoder` now reads it from the header symphonia keeps as the track's
+extra data and scales every decoded sample, seeks included.
+
+`fixtures/audio-containers/tone-gain6.opus` is the reviewer's +6 dB variant.
+Against ffmpeg libopus it decodes 48,000/48,000 frames, correlation
+0.9999999933, max difference 4.8e-5, peak 0.24387 against libopus's 0.24384.
+`opus::tests::the_opus_head_output_gain_is_applied` checks the ratio against the
+zero-gain clip (1.995), the zero-gain peak against libopus's 0.1222, and the
+gain after a seek. render-audio: 18 passed.
