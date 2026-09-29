@@ -2,16 +2,13 @@ use std::fmt;
 
 use runtime_lifecycle::{
     validate_runtime_identity, RuntimeControlRevision, RuntimeGeneration, RuntimeIdentityError,
-    RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleError, RuntimePhase, RuntimeState,
+    RuntimeInstanceId, RuntimeLifecycle,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The current immutable UI projection artifact identity.
 pub const RUNTIME_UI_PROJECTION_ARTIFACT: &str = "rusty.product.ui-projection";
-
-/// Maximum number of distinct UI streams retained in one bound lane.
-pub const MAX_RUNTIME_UI_PROJECTION_STREAMS: usize = 256;
 
 /// Largest integer-valued JSON number that crosses the JavaScript host
 /// boundary without losing precision.
@@ -143,118 +140,22 @@ impl RuntimeUiProjectionEnvelope {
         self.encoded_bytes()
     }
 
-    pub fn encode_json_string(&self) -> Result<String, RuntimeUiProjectionError> {
-        String::from_utf8(self.encode_json()?).map_err(|_| RuntimeUiProjectionError::WireEncoding)
-    }
-
-    /// Strictly decodes the current wire shape, rejecting unknown fields and
-    /// any non-whitespace trailing bytes.
-    pub fn decode_json(bytes: &[u8]) -> Result<Self, RuntimeUiProjectionError> {
-        let mut decoder = serde_json::Deserializer::from_slice(bytes);
-        let wire = WireEnvelope::deserialize(&mut decoder)
-            .map_err(|_| RuntimeUiProjectionError::WireMalformed)?;
-        decoder
-            .end()
-            .map_err(|_| RuntimeUiProjectionError::WireMalformed)?;
-        wire.into_envelope()
-    }
-
     fn encoded_bytes(&self) -> Result<Vec<u8>, RuntimeUiProjectionError> {
         serde_json::to_vec(self).map_err(|_| RuntimeUiProjectionError::WireEncoding)
     }
 }
 
-/// Encodes one validated UI projection envelope to its strict wire bytes.
-pub fn encode_runtime_ui_projection_json(
-    envelope: &RuntimeUiProjectionEnvelope,
-) -> Result<Vec<u8>, RuntimeUiProjectionError> {
-    envelope.encode_json()
-}
-
-/// Decodes one strict UI projection envelope from host wire bytes.
-pub fn decode_runtime_ui_projection_json(
-    bytes: &[u8],
-) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
-    RuntimeUiProjectionEnvelope::decode_json(bytes)
-}
-
-/// Read-only facts about a bound UI projection lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeUiProjectionReadout {
-    pub(crate) runtime: RuntimeUiRuntimeBinding,
-    pub(crate) stream_count: usize,
-    pub(crate) disposed: bool,
-}
-
-impl RuntimeUiProjectionReadout {
-    pub const fn runtime(self) -> RuntimeUiRuntimeBinding {
-        self.runtime
-    }
-
-    pub const fn stream_count(self) -> usize {
-        self.stream_count
-    }
-
-    pub const fn is_disposed(self) -> bool {
-        self.disposed
-    }
-}
-
-/// Rejections from context, lifecycle, wire, identity, and bounded transport
-/// validation.
+/// Rejections from identity, JSON number and wire validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeUiProjectionError {
-    Disposed,
-    LifecycleNotRunning {
-        state: RuntimeState,
-    },
-    RebindNotRunning {
-        state: RuntimeState,
-    },
-    RebindForeignInstance {
-        expected: RuntimeInstanceId,
-        received: RuntimeInstanceId,
-    },
-    RebindRegression {
-        expected: RuntimeUiRuntimeBinding,
-        received: RuntimeUiRuntimeBinding,
-    },
-    RebindRequired {
-        expected: RuntimeUiRuntimeBinding,
-        received: RuntimeUiRuntimeBinding,
-    },
-    LifecycleBindingChanged,
-    WrongPhase {
-        expected: RuntimePhase,
-        received: RuntimePhase,
-    },
-    Lifecycle(RuntimeLifecycleError),
     InvalidIdentity {
         field: &'static str,
         value: String,
         diagnostic: Box<RuntimeIdentityError>,
     },
-    StreamLimit {
-        maximum: usize,
-    },
-    ContractChanged {
-        stream: String,
-        previous: String,
-        received: String,
-    },
-    DuplicateSequence {
-        stream: String,
-        sequence: u64,
-    },
-    SequenceRegression {
-        stream: String,
-        previous: u64,
-        received: u64,
-    },
     ValueUnsafeInteger {
         value: String,
     },
-    WireMalformed,
     WireUnknownArtifact {
         received: String,
     },
@@ -320,7 +221,7 @@ fn validate_number(number: &serde_json::Number) -> Result<(), RuntimeUiProjectio
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireEnvelope {
     artifact: String,
@@ -331,7 +232,7 @@ struct WireEnvelope {
     value: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireRuntime {
     instance_id: String,

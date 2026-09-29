@@ -1,25 +1,14 @@
-//! Host-neutral downstream UI projection transport.
-//!
-//! `runtime-ui` owns the narrow boundary between a typed, downstream-owned
-//! projection DTO and a transport envelope that an application host may later
-//! realize as DOM or another UI surface. It does not render, schedule, read a
-//! clock, invoke callbacks, inspect a browser, or retain product state.
-//!
-//! A caller supplies an already-owned JSON value with the exact
-//! `RuntimePhase::Projection` token. The lane copies the value before retaining
-//! or emitting it, so the resulting envelope cannot alias mutable source data.
+//! The UI projection envelope: one product-owned JSON value with its stream,
+//! contract, sequence and runtime binding, in the wire shape the browser host
+//! realizes as DOM. It does not render, schedule or retain product state.
 
 #![forbid(unsafe_code)]
 
-mod channel;
 mod model;
 
-pub use channel::{PreparedRuntimeUiProjection, RuntimeUiProjection};
 pub use model::{
-    decode_runtime_ui_projection_json, encode_runtime_ui_projection_json,
-    RuntimeUiProjectionEnvelope, RuntimeUiProjectionError, RuntimeUiProjectionReadout,
-    RuntimeUiRuntimeBinding, MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER,
-    MAX_RUNTIME_UI_PROJECTION_STREAMS, RUNTIME_UI_PROJECTION_ARTIFACT,
+    RuntimeUiProjectionEnvelope, RuntimeUiProjectionError, RuntimeUiRuntimeBinding,
+    MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER, RUNTIME_UI_PROJECTION_ARTIFACT,
 };
 
 #[cfg(test)]

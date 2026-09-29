@@ -124,10 +124,9 @@ class DependencyBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
 
-    def test_inspector_and_render_authority_paths_are_rejected(self) -> None:
+    def test_render_authority_paths_are_rejected(self) -> None:
         metadata = metadata_fixture(
             [
-                "engine-inspector",
                 "content-store",
                 "entity-state",
                 "renderer-host",
@@ -137,14 +136,12 @@ class DependencyBoundaryTests(unittest.TestCase):
             ],
             [
                 ("entity-state", "render-projection", None, "projection"),
-                ("content-store", "engine-inspector", None, "inspection"),
                 ("render-model", "renderer-host", None, "browser_host"),
                 ("render-presentation", "render-projection", None, "projection"),
             ],
         )
         rendered = "\n".join(dependency_boundary_check.find_violations(metadata))
         self.assertIn("authoritative owner reverse-depends on render-projection", rendered)
-        self.assertIn("ordinary workspace package reaches the engine-inspector leaf", rendered)
         self.assertIn("renderer-neutral model reaches authority", rendered)
 
     def test_dev_edges_are_ignored_but_build_edges_are_enforced(self) -> None:

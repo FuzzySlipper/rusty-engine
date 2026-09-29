@@ -33,12 +33,12 @@ RENDER_HOST_BACKEND_PACKAGES = frozenset({"renderer-host", "renderer-three"})
 RENDER_MODEL_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
     | RENDER_HOST_BACKEND_PACKAGES
-    | {"engine-inspector", "render-presentation", "render-projection"}
+    | {"render-presentation", "render-projection"}
 )
 RENDER_PRESENTATION_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
     | RENDER_HOST_BACKEND_PACKAGES
-    | {"engine-inspector", "render-projection"}
+    | {"render-projection"}
 )
 
 
@@ -152,14 +152,6 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                 if not target_name.startswith(("core-", "svc-")):
                     violations.add(
                         "service mechanism reaches an upper-layer workspace owner: "
-                        + render_path(source, target, parents, names)
-                    )
-
-        if source_name != "engine-inspector":
-            for target in reachable:
-                if names[target] == "engine-inspector":
-                    violations.add(
-                        "ordinary workspace package reaches the engine-inspector leaf: "
                         + render_path(source, target, parents, names)
                     )
 
