@@ -446,3 +446,99 @@ fn a_controller_drives_its_target_on_the_engine_timeline_and_blends_a_transition
     let (_, released) = harness.render(&view);
     assert_eq!(released, sampled, "back to the sampled direct playback");
 }
+
+/// Redefining a live animated asset keeps its textures and materials: the
+/// previous definition is retired before the replacement's ids are reused
+/// (#8788 review).
+#[test]
+fn redefining_a_live_animated_asset_keeps_its_resources_and_image() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let view = character_view();
+    let (before, pixels_before) = harness.render(&view);
+    let counts_before = harness.renderer.table_counts();
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    harness.apply(vec![RenderDiff::DefineAnimatedMesh { asset: body }]);
+    let (after, pixels_after) = harness.render(&view);
+    assert_eq!(harness.renderer.table_counts(), counts_before);
+    assert_eq!(before.draws, after.draws);
+    assert!(
+        pixels_before == pixels_after,
+        "an identical redefinition changed {} bytes",
+        pixels_before
+            .iter()
+            .zip(&pixels_after)
+            .filter(|(a, b)| a != b)
+            .count()
+    );
+}
+
+fn requested_bounds(harness: &mut Harness, handle: u64, request: u32) -> ([f32; 3], [f32; 3]) {
+    let facts = harness.renderer.take_animation_facts();
+    match facts.as_slice() {
+        [AnimationFact::MeshInspection {
+            object_id,
+            request: answered,
+            bounds: Some(bounds),
+            ..
+        }] if *object_id == handle && *answered == request => *bounds,
+        other => panic!("expected bounds for {handle} request {request}, got {other:?}"),
+    }
+}
+
+fn inspect(handle: u64, request: u32) -> RenderDiff {
+    RenderDiff::SetAnimatedMeshInspection {
+        handle: RenderHandle::new(handle),
+        inspection: AnimatedMeshInspection {
+            bounds_request: request,
+            ..AnimatedMeshInspection::default()
+        },
+    }
+}
+
+fn move_body(x: f32) -> RenderDiff {
+    RenderDiff::Update {
+        handle: RenderHandle::new(BODY),
+        transform: Some(Transform {
+            translation: [x, 0.0, 0.0],
+            ..Transform::IDENTITY
+        }),
+        material: None,
+        visible: None,
+        metadata: None,
+    }
+}
+
+/// A transform and a bounds request in the same delta report the new
+/// placement, for the instance itself and for a child on its joint
+/// (#8788 review).
+#[test]
+fn bounds_requested_with_a_move_report_the_moved_world_state() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let view = character_view();
+    harness.render(&view);
+    harness.apply(vec![inspect(BODY, 1)]);
+    harness.render(&view);
+    let (body_min, _) = requested_bounds(&mut harness, BODY, 1);
+
+    harness.apply(vec![move_body(20.0), inspect(BODY, 2)]);
+    harness.render(&view);
+    let (moved_min, _) = requested_bounds(&mut harness, BODY, 2);
+    assert!(
+        (moved_min[0] - body_min[0] - 20.0).abs() < 1e-3,
+        "same-delta bounds {moved_min:?} must include the move from {body_min:?}"
+    );
+
+    // The weapon hangs from the body's hand joint: its bounds follow both.
+    harness.apply(vec![move_body(-5.0), inspect(WEAPON, 1)]);
+    harness.render(&view);
+    let same_delta = requested_bounds(&mut harness, WEAPON, 1);
+    harness.apply(vec![inspect(WEAPON, 2)]);
+    harness.render(&view);
+    let next_frame = requested_bounds(&mut harness, WEAPON, 2);
+    assert_eq!(
+        same_delta, next_frame,
+        "the joint child reported a stale placement"
+    );
+}

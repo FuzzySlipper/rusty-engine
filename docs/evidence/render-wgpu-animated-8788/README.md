@@ -283,6 +283,25 @@ tasks have the wiring notes.
   and inspection surfaces' own API; the posed bounds fact carries the
   product-visible part.
 
+## Review fixes
+
+Two review findings, each with a fixture in `tests/animated.rs` that fails
+without its fix:
+
+- **Live redefinition kept its resources.** `DefineAnimatedMesh` for a live
+  asset retired the previous definition after registering the new one. The
+  two share asset-derived texture and material ids, so the cleanup removed
+  the replacements, and live instances drew with the fallback material. The
+  old definition is now retired after decoding and before registration.
+  `redefining_a_live_animated_asset_keeps_its_resources_and_image`: identical
+  table counts and pixels after redefining the body.
+- **Bounds see the current placement.** A bounds request was answered while
+  posing, before transforms propagated, so a move in the same delta reported
+  the previous world position. Requests are now answered in a step after
+  `propagate_transforms`. `bounds_requested_with_a_move_report_the_moved_world_state`:
+  the body's bounds shift by exactly the move, and a child on its hand joint
+  reports the same bounds in the moving frame as on the next one.
+
 ## Reproduce
 
 ```bash

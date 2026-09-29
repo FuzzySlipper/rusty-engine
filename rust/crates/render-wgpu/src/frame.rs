@@ -189,6 +189,7 @@ impl Renderer {
     pub(crate) fn prepare(&mut self) -> u32 {
         self.advance_animations();
         self.propagate_transforms();
+        self.report_pending_bounds();
         if self.tables.lights_dirty {
             self.upload_lights();
             self.tables.lights_dirty = false;

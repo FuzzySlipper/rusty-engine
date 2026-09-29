@@ -284,6 +284,10 @@ impl Renderer {
             }
         }
 
+        // Decoding is done and nothing below fails: retire the previous
+        // definition now, before its asset-derived texture and material ids
+        // are reused, so its cleanup cannot remove the replacements.
+        self.release_animated_mesh_resources(&asset.asset);
         let label = asset.asset.clone();
         let textures: Vec<String> = (0..model.textures.len())
             .map(|index| format!("{label}#texture/{index}"))
@@ -372,7 +376,6 @@ impl Renderer {
             .iter()
             .map(|slot| (slot.slot, usize::from(slot.source_material_slot)))
             .collect();
-        self.release_animated_mesh_resources(&asset.asset);
         self.tables.animated_assets.insert(
             asset.asset.clone(),
             AnimatedAssetRow {
@@ -726,7 +729,22 @@ impl Renderer {
                 }
             }
         }
-        self.report_animated_bounds(handle);
+    }
+
+    /// Answer pending bounds requests from the posed, propagated world
+    /// state. Runs after `propagate_transforms`, so a transform and a
+    /// request in the same delta report the new placement (#8788 review).
+    pub(crate) fn report_pending_bounds(&mut self) {
+        let pending: Vec<RenderHandle> = self
+            .tables
+            .animated
+            .iter()
+            .filter(|(_, instance)| instance.bounds_pending)
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in pending {
+            self.report_animated_bounds(handle);
+        }
     }
 
     /// CPU-skin every skinned primitive into the instance's vertex buffers.
