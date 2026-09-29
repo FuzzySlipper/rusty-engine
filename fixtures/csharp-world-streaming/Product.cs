@@ -136,7 +136,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Inspect() => JsonSerializer.Serialize(new StreamingProof(streaming, modeProof, stateProof, scenario, steps, new[] {position.X,position.Y,position.Z}, lastStep.Movement.Mode.ToString(), lastStep.Movement.HeadSubmerged, lastStep.Movement.ClimbAttached), ProofJsonContext.Default.StreamingProof);
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     private static void Require(bool condition,string message) { if (!condition) throw new InvalidOperationException(message); }
-    public void Attach() { if (presentation is not null) engine.VoxelScenePresentation.RefreshScene(presentation); Publish(); }
     public void Pause() { }
     public void Resume() { }
     public void Restart() => StartMovement("swim");

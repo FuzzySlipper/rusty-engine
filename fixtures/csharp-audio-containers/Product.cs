@@ -87,7 +87,6 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         context.Engine.Graphics.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
     }
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
-    public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
     public void Pause() { }
     public void Resume() { }

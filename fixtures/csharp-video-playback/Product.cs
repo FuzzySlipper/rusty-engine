@@ -58,7 +58,6 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     }
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     public void Start() { }
-    public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
     public void Pause() { }
     public void Resume() { }

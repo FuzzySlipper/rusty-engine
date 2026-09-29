@@ -87,7 +87,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Inspect() => JsonSerializer.Serialize(new LightingProof(roundTrip,litValue,blockedValue,darkValue,Sample(InsideSample),descriptor.Enabled,clock),ProofJsonContext.Default.LightingProof);
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
-    public void Attach() { if(presentation is not null)engine.VoxelScenePresentation.RefreshScene(presentation); }
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
     public void Dispose(){engine.CameraView.ClearSkyBackground(default); presentation?.Dispose(); torch.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }

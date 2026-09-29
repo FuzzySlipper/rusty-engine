@@ -15,7 +15,6 @@ public sealed class FixtureProduct : IEngineProduct
 
     public void Start() { }
 
-    public void Attach() { }
 
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
 

@@ -107,7 +107,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     [DebugCommand("atlases.inspect")] public string Inspect() => $"{proof}; mode={mode}; caughtRejections={caughtRejections}";
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
-    public void Attach() { if (presentation is not null) engine.VoxelScenePresentation.RefreshScene(presentation); }
     public void Pause() { }
     public void Resume() { }
     public void Restart() { }
