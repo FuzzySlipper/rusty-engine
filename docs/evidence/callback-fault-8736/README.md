@@ -117,3 +117,16 @@ publish of 1,000 objects, which #8737 owns.
   pause.
 - **Timeline completion** that throws reports a rejected ticket and faults;
   the product decides what to do on resume.
+
+## Review fix
+
+An escaping exception moved the runtime to a new binding and published only
+that binding and the baseline marker. The browser clears UI projections on a
+binding change, so the HUD went blank while simulation was stopped.
+`fault_after_call` now republishes each UI stream's latest projection under
+the fault binding, the same way an in-place control rebind does. It also drops
+the call's own UI deltas, which the binding would clear anyway.
+`escaped_update_faults_keeps_the_product_and_resume_continues` publishes a HUD
+projection in an ordinary update, then throws. It checks that a
+`ui-projection` output follows the fault binding. Before the fix that output
+was missing.

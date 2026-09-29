@@ -2130,10 +2130,19 @@ impl CsharpProductRuntime {
             self.rebind_input(InputClearReason::ControlRevisionChange)?;
         }
         let binding = self.binding();
+        // The browser clears UI when the binding changes, so each stream's
+        // latest projection follows the fault binding, as in an in-place rebind.
+        outputs.retain(|output| !matches!(output, RuntimePublication::UiProjection(_)));
         outputs.push(RuntimePublication::binding(
             input_binding(&self.lifecycle),
             self.next_input_sequence().get(),
         ));
+        outputs.extend(
+            self.services
+                .snapshot_ui_projections(ui_binding(&self.lifecycle))
+                .into_iter()
+                .map(RuntimePublication::UiProjection),
+        );
         outputs.push(self.complete_baseline_output(binding)?);
         Ok(())
     }
@@ -5440,6 +5449,10 @@ mod tests {
     static UPDATE_CALLBACK_CALLS: AtomicUsize = AtomicUsize::new(0);
     static UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC: AtomicBool = AtomicBool::new(false);
     static UPDATE_CALLBACK_DIAGNOSTIC_STATUS: AtomicI32 = AtomicI32::new(0);
+    static UPDATE_CALLBACK_PUBLISH_UI: AtomicBool = AtomicBool::new(false);
+    static FIXTURE_UI_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static FIXTURE_UI_OPEN: AtomicUsize = AtomicUsize::new(0);
+    static FIXTURE_UI_PUBLISH: AtomicUsize = AtomicUsize::new(0);
     static VOXEL_FAILURE_ENABLED: AtomicBool = AtomicBool::new(false);
     static VOXEL_FAILURE_SESSION: AtomicU64 = AtomicU64::new(0);
     static VOXEL_FAILURE_PRESENTATION: AtomicU64 = AtomicU64::new(0);
@@ -5835,6 +5848,10 @@ mod tests {
         let diagnostics = unsafe { (*args).engine.diagnostics };
         FIXTURE_DIAGNOSTICS_CONTEXT.store(diagnostics.context as usize, Ordering::SeqCst);
         FIXTURE_DIAGNOSTICS_PUBLISH.store(diagnostics.publish as usize, Ordering::SeqCst);
+        let ui = unsafe { (*args).engine.ui };
+        FIXTURE_UI_CONTEXT.store(ui.context as usize, Ordering::SeqCst);
+        FIXTURE_UI_OPEN.store(ui.open_stream as usize, Ordering::SeqCst);
+        FIXTURE_UI_PUBLISH.store(ui.publish_projection as usize, Ordering::SeqCst);
         // SAFETY: the fixture provides a non-null opaque value which is never
         // dereferenced by its callbacks.
         unsafe { *handle = std::ptr::NonNull::<u8>::dangling().as_ptr().cast() };
@@ -5874,9 +5891,61 @@ mod tests {
             let status = unsafe { publish(context as *mut c_void, &request) };
             UPDATE_CALLBACK_DIAGNOSTIC_STATUS.store(status, Ordering::SeqCst);
         }
+        if UPDATE_CALLBACK_PUBLISH_UI.swap(false, Ordering::SeqCst) {
+            publish_fixture_ui_projection();
+        }
         // SAFETY: the fixture owns the provided writable result pointer.
         unsafe { *result = NativeProductUpdateResult::None };
         UPDATE_CALLBACK_STATUS.load(Ordering::SeqCst)
+    }
+
+    /// Opens one UI stream and publishes `true` on it, as a product HUD would.
+    fn publish_fixture_ui_projection() {
+        let context = FIXTURE_UI_CONTEXT.load(Ordering::SeqCst) as *mut c_void;
+        // SAFETY: `drop_fixture_create` captured these functions from the
+        // loaded runtime; this runs synchronously inside its update callback.
+        let open: NativeOpenUiStream =
+            unsafe { std::mem::transmute(FIXTURE_UI_OPEN.load(Ordering::SeqCst)) };
+        let publish: NativePublishUiProjection =
+            unsafe { std::mem::transmute(FIXTURE_UI_PUBLISH.load(Ordering::SeqCst)) };
+        let request = NativeUiStreamRequest {
+            stream: fixture_utf8(b"fixture.hud"),
+            contract: fixture_utf8(b"fixture.hud.v1"),
+        };
+        let mut stream = NativeUiStreamHandle::default();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe { open(context, &request, &mut stream, &mut receipt) },
+            ABI_OK
+        );
+        let node = NativeStructuredValueNode {
+            kind: NativeStructuredValueKind::Bool,
+            bool_value: 1,
+            number_value: 0.0,
+            key_offset: 0,
+            key_len: 0,
+            text_offset: 0,
+            text_len: 0,
+            first_edge: 0,
+            child_count: 0,
+        };
+        let projection = NativeUiProjection {
+            stream,
+            sequence: 1,
+            value: NativeStructuredValue {
+                nodes: &node,
+                node_count: 1,
+                edges: std::ptr::null(),
+                edge_count: 0,
+                root: 0,
+                utf8: std::ptr::null(),
+                utf8_len: 0,
+            },
+        };
+        assert_eq!(
+            unsafe { publish(context, &projection, &mut receipt) },
+            ABI_OK
+        );
     }
 
     unsafe extern "C" fn voxel_failure_fixture_create(
@@ -6588,12 +6657,26 @@ mod tests {
         UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
         UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(true, Ordering::SeqCst);
         UPDATE_CALLBACK_DIAGNOSTIC_STATUS.store(0, Ordering::SeqCst);
-        UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(false, Ordering::SeqCst);
+        UPDATE_CALLBACK_PUBLISH_UI.store(true, Ordering::SeqCst);
         let (mut runtime, root) =
             drop_fixture_runtime_with_diagnostics("faulted-update", diagnostics.clone());
         runtime
             .lifecycle(ProductDevLifecycleOperation::Start)
             .expect("fixture start");
+        // An ordinary update publishes the HUD before the throwing one.
+        runtime.admit_demand_step().expect("ordinary update");
+        assert_eq!(
+            runtime
+                .services
+                .snapshot_ui_projections(ui_binding(&runtime.lifecycle))
+                .len(),
+            1
+        );
+        UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
+        UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(true, Ordering::SeqCst);
+        UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
         let (_, outputs) = runtime
             .admit_demand_step()
             .expect("an escaped exception faults instead of failing the operation")
@@ -6604,6 +6687,22 @@ mod tests {
                 .iter()
                 .any(|output| publication_value(output)["kind"] == "complete-baseline"),
             "renderers get a fresh baseline after the fault"
+        );
+        // The browser clears UI when the binding changes, so the fault
+        // binding carries the retained HUD projection with it.
+        let kinds: Vec<_> = outputs
+            .iter()
+            .map(|output| {
+                publication_value(output)["kind"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned()
+            })
+            .collect();
+        let binding = kinds.iter().rposition(|kind| kind == "binding").unwrap();
+        assert!(
+            kinds[binding..].iter().any(|kind| kind == "ui-projection"),
+            "fault outputs after the binding: {kinds:?}"
         );
         assert_eq!(
             UPDATE_CALLBACK_DIAGNOSTIC_STATUS.load(Ordering::SeqCst),
