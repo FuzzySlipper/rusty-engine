@@ -46,6 +46,9 @@ pub struct FrameStats {
     /// Offscreen composition views drawn this frame; a target that is not
     /// stale is presented as it is.
     pub offscreen_views: u32,
+    /// Sprite nodes sprite preparation examined, across view passes. It
+    /// follows the sprite count, not the scene's node count.
+    pub sprite_candidates: u32,
 }
 
 /// What one view pass drew.
@@ -55,6 +58,7 @@ pub(crate) struct ViewStats {
     pub instances: u32,
     pub instances_uploaded: u32,
     pub shadow_draws: u32,
+    pub sprite_candidates: u32,
 }
 
 impl Add for ViewStats {
@@ -66,6 +70,7 @@ impl Add for ViewStats {
             instances: self.instances + other.instances,
             instances_uploaded: self.instances_uploaded + other.instances_uploaded,
             shadow_draws: self.shadow_draws + other.shadow_draws,
+            sprite_candidates: self.sprite_candidates + other.sprite_candidates,
         }
     }
 }
@@ -76,6 +81,7 @@ impl AddAssign<ViewStats> for FrameStats {
         self.instances += view.instances;
         self.instances_uploaded += view.instances_uploaded;
         self.shadow_draws += view.shadow_draws;
+        self.sprite_candidates += view.sprite_candidates;
     }
 }
 
@@ -720,6 +726,7 @@ impl Renderer {
         {
             return ViewStats {
                 instances_uploaded,
+                sprite_candidates: effects.sprite_candidates,
                 ..ViewStats::default()
             };
         }
@@ -869,6 +876,7 @@ impl Renderer {
             instances: list.instances(),
             instances_uploaded,
             shadow_draws,
+            sprite_candidates: effects.sprite_candidates,
         }
     }
 }

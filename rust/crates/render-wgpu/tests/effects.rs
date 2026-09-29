@@ -182,6 +182,67 @@ fn sprites_face_the_camera_by_mode_and_place_in_the_viewport() {
 }
 
 #[test]
+fn sprite_discovery_follows_the_sprites_not_the_scene() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let eye = camera("eye", [0.0, 0.6, 1.0], 0.0, -4.0);
+    let render = |harness: &mut Harness| {
+        let stats = harness.renderer.render_offscreen(&eye, &harness.target);
+        (stats, harness.target.read_rgba(&harness.gpu))
+    };
+    harness.apply(scene());
+    let (empty, _) = render(&mut harness);
+    assert_eq!(empty.sprite_candidates, 0, "no sprites, nothing examined");
+
+    let mut ops = atlas_ops(&mut harness.resources);
+    ops.push(create(
+        10,
+        sprite(0, [-1.2, 0.4, -4.0], BillboardMode::Spherical),
+    ));
+    // A sprite under a group-like parent, removed with its subtree below.
+    ops.push(instance(
+        20,
+        None,
+        "floor",
+        transform([0.0, -5.0, -40.0], 0.0, 0.1),
+    ));
+    ops.push(RenderDiff::CreateSprite {
+        handle: RenderHandle::new(21),
+        parent: Some(RenderHandle::new(20)),
+        sprite: sprite(1, [12.0, 5.4, 36.0], BillboardMode::Spherical),
+    });
+    harness.apply(ops);
+    let (few, few_pixels) = render(&mut harness);
+    assert!(few.sprite_candidates > 0);
+
+    // 500 unrelated static nodes behind the camera: the image and the sprite
+    // work stay the same.
+    let mut crowd = coloured_mesh("crowd", cube(), [0.8, 0.2, 0.2, 1.0]);
+    crowd.extend((0..500).map(|index| {
+        instance(
+            1_000 + index,
+            None,
+            "crowd",
+            transform(
+                [index as f32 % 25.0, 0.0, 20.0 + (index / 25) as f32],
+                0.0,
+                0.2,
+            ),
+        )
+    }));
+    harness.apply(crowd);
+    let (many, many_pixels) = render(&mut harness);
+    assert_eq!(many.sprite_candidates, few.sprite_candidates);
+    assert_eq!(many_pixels, few_pixels);
+
+    // Destroying the parent removes its sprite from discovery.
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(20),
+    }]);
+    let (fewer, _) = render(&mut harness);
+    assert_eq!(fewer.sprite_candidates * 2, few.sprite_candidates);
+}
+
+#[test]
 fn lit_sprites_shade_with_synthetic_normal_and_height_maps() {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,

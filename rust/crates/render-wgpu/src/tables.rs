@@ -14,6 +14,8 @@
 //! | `animated` | `RenderHandle` | playback, pose, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetAnimatedMeshPlayback`, `SetAnimatedMeshInspection` |
 //! | `environment` | (single) | background colour or equirectangular sky (with blend) | `SetBackgroundColor` / `SetSkyBackground` |
 //!
+//! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
+//!
 //! Animated meshes, voxel objects and sprites are nodes (they take part in the
 //! hierarchy, transforms and visibility) whose kind a family module realizes;
 //! their descriptors wait in the node row until then. Voxel objects are
@@ -26,7 +28,7 @@
 //! marks its node; `prepare` recomputes that subtree's world rows and uploads
 //! only those `PartRow`s. Nothing is re-derived for unchanged nodes.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use glam::{Mat4, Vec3};
 use render_model::{
@@ -396,6 +398,8 @@ pub(crate) struct Tables {
     pub static_meshes: HashMap<String, GpuMesh>,
     pub payload_meshes: HashMap<RenderHandle, GpuMesh>,
     pub nodes: HashMap<RenderHandle, NodeRow>,
+    /// The sprite nodes, so sprite preparation visits sprites, not the scene.
+    pub sprites: BTreeSet<RenderHandle>,
     pub parts: Parts,
     pub atlases: HashMap<String, SpriteAtlasDescriptor>,
     pub voxel_objects: HashMap<String, VoxelObjectRow>,
@@ -422,6 +426,7 @@ impl Tables {
             static_meshes: HashMap::new(),
             payload_meshes: HashMap::new(),
             nodes: HashMap::new(),
+            sprites: BTreeSet::new(),
             parts: Parts::default(),
             atlases: HashMap::new(),
             voxel_objects: HashMap::new(),

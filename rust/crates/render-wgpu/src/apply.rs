@@ -196,6 +196,7 @@ impl Renderer {
             RenderDiff::UpdateLight { handle, light } => {
                 let node = self.node_mut(*handle)?;
                 node.kind = NodeKind::Light(light.clone());
+                self.tables.sprites.remove(handle);
                 self.tables.lights_dirty = true;
             }
             RenderDiff::Update {
@@ -409,6 +410,11 @@ impl Renderer {
         if let Some(parent) = parent.and_then(|parent| self.tables.nodes.get_mut(&parent)) {
             parent.children.push(handle);
         }
+        if matches!(kind, NodeKind::Sprite(_)) {
+            self.tables.sprites.insert(handle);
+        } else {
+            self.tables.sprites.remove(&handle);
+        }
         self.tables.nodes.insert(
             handle,
             NodeRow {
@@ -461,6 +467,7 @@ impl Renderer {
             self.tables.metadata.remove(&handle);
             self.tables.payload_meshes.remove(&handle);
             self.tables.lights.remove(&handle);
+            self.tables.sprites.remove(&handle);
             self.tables.dirty_nodes.remove(&handle);
         }
     }

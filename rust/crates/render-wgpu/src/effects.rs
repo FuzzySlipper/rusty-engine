@@ -74,6 +74,8 @@ pub(crate) struct EffectsPass {
     cubes: u32,
     /// (particle texture, first row, count) into the particle rows.
     billboards: Vec<(u32, u32, u32)>,
+    /// Sprite nodes examined for this pass.
+    pub sprite_candidates: u32,
 }
 
 /// A blended sprite with the keys the world pass merges it by: Three sorts
@@ -907,7 +909,11 @@ impl Renderer {
         let viewmodel = view.layer == ViewLayer::Viewmodel;
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
-        for node in self.tables.nodes.values() {
+        for handle in &self.tables.sprites {
+            pass.sprite_candidates += 1;
+            let Some(node) = self.tables.nodes.get(handle) else {
+                continue;
+            };
             let NodeKind::Sprite(sprite) = &node.kind else {
                 continue;
             };
