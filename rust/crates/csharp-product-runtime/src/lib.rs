@@ -2674,10 +2674,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         batch: ProductDevInputBatch,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError> {
-        if self.lifecycle.state() != RuntimeState::Running {
+        // A page keeps sending input while the product is paused (a menu's
+        // clears, say). It is admitted for the page's cursor and dropped:
+        // resume rebinds input, so the product never sees the paused interval.
+        let paused = self.lifecycle.state() == RuntimeState::Paused;
+        if !paused && self.lifecycle.state() != RuntimeState::Running {
             return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_INPUT_STATE",
-                "input is admitted only while the standard runtime is running",
+                "input is admitted only while the standard runtime is running or paused",
             ));
         }
         // RuntimeInputLane owns the checkpoint. This keeps a valid prefix from
@@ -2703,12 +2707,16 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 .with_runtime(self.binding()),
             );
         }
-        let native = receipt
-            .accepted_indices()
-            .iter()
-            .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
-            .map(|index| native_event(&batch.events()[*index]))
-            .collect::<Vec<_>>();
+        let native = if paused {
+            Vec::new()
+        } else {
+            receipt
+                .accepted_indices()
+                .iter()
+                .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
+                .map(|index| native_event(&batch.events()[*index]))
+                .collect::<Vec<_>>()
+        };
         if self
             .append_pending_inputs(native)
             .map_err(|error| self.runtime_error(error))?
@@ -7283,6 +7291,46 @@ mod tests {
             "complete-baseline"
         );
         runtime.admit_demand_step().expect("owner remains usable");
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn input_while_paused_is_admitted_and_never_reaches_the_product() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = drop_fixture_runtime("paused-input");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Pause)
+            .unwrap();
+        let binding = runtime.binding();
+        let events = [serde_json::json!({
+            "runtime": binding, "sequence": "1", "context": "gameplay.default",
+            "fact": {"kind": "key", "code": "digit-1", "edge": "pressed"},
+        })];
+        let batch =
+            ProductDevInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap();
+        let pending_before = runtime.pending_inputs.len();
+        let receipt = runtime.input(batch).expect("paused input is admitted");
+        assert!(receipt.result().is_accepted());
+        assert_eq!(
+            runtime.pending_inputs.len(),
+            pending_before,
+            "nothing queued"
+        );
+        // Resume rebinds: the product's next update sees only the clear.
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .unwrap();
+        assert_eq!(runtime.pending_inputs.len(), 1);
+        assert_eq!(
+            runtime.pending_inputs[0].clear_reason,
+            NativeInputClearReason::ControlRevisionChange
+        );
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }
