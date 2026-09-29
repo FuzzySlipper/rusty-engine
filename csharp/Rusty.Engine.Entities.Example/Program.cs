@@ -399,11 +399,20 @@ static void ExerciseWorldOriginEntityComposition()
     const uint GlobalPositionLocalComponentId = 40;
     var globalPositions = ComponentType<WorldOriginGlobalPosition>.Create(
         ProductComponentKeys.Create(GlobalPositionLocalComponentId));
-    using var world = new EntityStore([EngineComponentTypes.Transform, globalPositions]);
+    using var world = new EntityStore([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion, globalPositions]);
     EntityId entity = world.Create();
     world.Set(entity, EngineComponentTypes.Transform, new Transform(
         new Vector3(100.0f, 2.0f, -3.0f), Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
     world.Set(entity, globalPositions, new WorldOriginGlobalPosition(100, 2, -3, 0.0, 0.0, 0.0));
+    world.Set(entity, EngineComponentTypes.CharacterMotion, default(CharacterMotion) with
+    {
+        SupportEntityPresent = true,
+        SupportEntity = 9,
+        SupportPreviousTranslation = new Vector3(100.0f, 1.0f, 0.0f),
+        SupportPreviousRotation = Quaternion.Identity,
+        FallOriginY = 2.0f,
+        PeakY = 2.0f,
+    });
     var service = new WorldOriginServiceFake();
     var adapter = new EntityOriginRebaser(world, service, service.Session, globalPositions);
 
@@ -415,6 +424,9 @@ static void ExerciseWorldOriginEntityComposition()
     Require(committed.Native.OriginAfterCellX == 100
         && world.Get(entity, EngineComponentTypes.Transform).Translation.X == 0.0f,
         "world-origin commit did not pair the native receipt with one managed transform batch");
+    Require(committed.Native.LocalDelta == new Vector3(-100.0f, 0.0f, 0.0f)
+        && world.Get(entity, EngineComponentTypes.CharacterMotion).SupportPreviousTranslation == new Vector3(0.0f, 1.0f, 0.0f),
+        "world-origin commit left stored character motion in the old frame");
 }
 
 static void ExerciseMotionEntityComposition()

@@ -65,7 +65,14 @@ store. `EntityOriginRebaser.Prepare` computes each root's local transform in
 the target frame from its global position; `Commit` moves the origin and
 rebases the live collision scene. Voxel or collision edits made between the
 two are kept, and several prepared rebases may commit in any order: the last
-commit decides the origin. The Rust spatial implementation's internal physics type is unchanged.
+commit decides the origin. `Commit` also rebases every stored `CharacterMotion`,
+whose support anchor, fixed tether anchor and fall/peak heights are local-frame
+values. A product that holds character motion itself applies
+`motion.Rebased(receipt.LocalDelta)` after the commit. Without it, the next step
+on a support carries the character back by the whole origin delta, a fixed
+tether re-attaches at full length, and a landing measures its fall from the old
+peak. Local-frame values the product passes in each step (a fixed tether
+anchor, support and obstacle transforms) move by the same `LocalDelta`. The Rust spatial implementation's internal physics type is unchanged.
 
 `EntityStore` now accepts ordinary classes and value components in the same
 store. Unused whole-store snapshot/restore, callback mutation batches, component

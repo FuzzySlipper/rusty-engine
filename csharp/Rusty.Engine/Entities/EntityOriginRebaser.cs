@@ -1,3 +1,4 @@
+using System.Numerics;
 using Rusty.Engine;
 
 namespace Rusty.Engine.Entities;
@@ -89,6 +90,13 @@ public sealed class EntityOriginRebaser
         {
             batch.Set(new EntityId(fact.EntityId), EngineComponentTypes.Transform, fact.LocalTransform);
         }
+        // Stored character motion holds local-frame anchors and heights; without
+        // this the next step carries the character back by the whole delta.
+        Vector3 delta = nativeReceipt.LocalDelta;
+        foreach ((EntityId entity, CharacterMotion motion) in _entities.Query<CharacterMotion>(includeDisabled: true))
+        {
+            batch.Set(entity, EngineComponentTypes.CharacterMotion, motion.Rebased(delta));
+        }
         return new EntityOriginRebaserCommitReceipt(nativeReceipt, _entities.Commit(batch));
     }
 }
@@ -116,7 +124,8 @@ public sealed class EntityOriginRebaserPrepared : IDisposable
     public EntityOriginRebaserPrepareReceipt Receipt { get; }
 
     /// <summary>
-    /// Commits Engine's prepared origin/scene, then writes the rebased transforms.
+    /// Commits Engine's prepared origin/scene, then writes the rebased transforms
+    /// and the rebased stored character motion.
     /// </summary>
     public EntityOriginRebaserCommitReceipt Commit()
     {

@@ -8046,6 +8046,278 @@ mod tests {
         assert!(!departed.motion.support_entity_present);
     }
 
+    /// What product-held character motion needs after a far world-origin
+    /// rebase (#8806). The product shifts its own positions by the commit
+    /// receipt's cell delta; each case steps once with the motion left as it
+    /// was and once with the frame-dependent values that C#
+    /// `CharacterMotion.Rebased` moves shifted too.
+    #[test]
+    fn rebased_character_motion_needs_the_origin_delta() {
+        const FAR: f32 = 4096.0;
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .unwrap();
+        let config = bridge.default_character_controller_config();
+        let v = |x, y, z| NativeVec3 { x, y, z };
+        let command = |sequence| NativeCharacterControllerCommand {
+            movement: Default::default(),
+            planar_intent: NativeVec2::default(),
+            heading_yaw_radians: 0.0,
+            jump_pressed: false,
+            jump_held: false,
+            crouch_requested: false,
+            external_velocity: NativeVec3::default(),
+            external_impulse: NativeVec3::default(),
+            step_seconds: 1.0 / 60.0,
+            sequence,
+        };
+        let platform = |x: f32, y: f32| NativeCharacterObstacle {
+            entity: 2,
+            transform: NativeTransform {
+                translation: v(x, y, 0.0),
+                rotation: NativeQuat {
+                    w: 1.0,
+                    ..Default::default()
+                },
+                scale: v(1.0, 1.0, 1.0),
+            },
+            bounds_min: v(-1.0, -0.25, -1.0),
+            bounds_max: v(1.0, 0.25, 1.0),
+            collision_enabled: true,
+            linear_velocity: v(12.0, 0.0, 0.0),
+            angular_velocity: NativeVec3::default(),
+        };
+        let step = |bridge: &mut RuntimeSpatialBridge,
+                    position: NativeVec3,
+                    motion: NativeCharacterMotion,
+                    obstacle: Option<NativeCharacterObstacle>,
+                    tether: NativeCharacterTetherRequest,
+                    sequence| {
+            let obstacles: Vec<_> = obstacle.into_iter().collect();
+            bridge.propose_character(NativeCharacterStepRequest {
+                tether,
+                session,
+                position,
+                motion,
+                support: obstacle
+                    .filter(|_| motion.support_entity_present)
+                    .map(|value| NativeCharacterSupport {
+                        present: true,
+                        lifecycle: NativeCharacterSupportLifecycle::Active,
+                        entity: value.entity,
+                        transform: value.transform,
+                    })
+                    .unwrap_or_default(),
+                obstacles: obstacles.as_ptr(),
+                obstacles_len: obstacles.len(),
+                mesh_instances: std::ptr::null(),
+                mesh_instances_len: 0,
+                config,
+                command: command(sequence),
+            })
+        };
+        let add = |a: NativeVec3, b: NativeVec3| v(a.x + b.x, a.y + b.y, a.z + b.z);
+        let shift_motion = |mut motion: NativeCharacterMotion, delta: NativeVec3| {
+            motion.support_previous_translation = add(motion.support_previous_translation, delta);
+            motion.tether_anchor_point = add(motion.tether_anchor_point, delta);
+            motion.fall_origin_y += delta.y;
+            motion.peak_y += delta.y;
+            motion
+        };
+        let rebase = |bridge: &mut RuntimeSpatialBridge, target: [i64; 3]| {
+            let world_origin = crate::world_origin::api(bridge);
+            let request = NativeWorldOriginPrepareRequest {
+                session,
+                target_cell_x: target[0],
+                target_cell_y: target[1],
+                target_cell_z: target[2],
+                entities: std::ptr::null(),
+                entities_len: 0,
+            };
+            let mut prepared = NativeWorldOriginPreparedHandle::default();
+            assert_eq!(
+                unsafe { (world_origin.prepare)(world_origin.context, &request, &mut prepared) },
+                ABI_OK
+            );
+            let mut receipt = NativeWorldOriginCommitReceipt::default();
+            assert_eq!(
+                unsafe {
+                    (world_origin.commit)(
+                        world_origin.context,
+                        NativeWorldOriginCommitRequest { prepared },
+                        &mut receipt,
+                    )
+                },
+                ABI_OK
+            );
+            // The same delta rusty-dagger derives: before cell minus after cell.
+            v(
+                (receipt.origin_before_cell_x - receipt.origin_after_cell_x) as f32,
+                (receipt.origin_before_cell_y - receipt.origin_after_cell_y) as f32,
+                (receipt.origin_before_cell_z - receipt.origin_after_cell_z) as f32,
+            )
+        };
+
+        // Support carry: stand on a platform far out, rebase, then the
+        // platform moves 0.2 in the new frame.
+        let landed = step(
+            &mut bridge,
+            v(FAR, 1.9, 0.0),
+            NativeCharacterMotion {
+                stance: NativeCharacterStance::Standing,
+                fall_origin_y: 1.9,
+                peak_y: 1.9,
+                ..Default::default()
+            },
+            Some(platform(FAR, 0.75)),
+            NativeCharacterTetherRequest::default(),
+            1,
+        )
+        .unwrap();
+        assert!(landed.motion.support_entity_present);
+        let delta = rebase(&mut bridge, [FAR as i64, 0, 0]);
+        assert_eq!((delta.x, delta.y, delta.z), (-FAR, 0.0, 0.0));
+        let moved = Some(platform(0.2, 0.75));
+        let position = add(landed.transform.translation, delta);
+        let unshifted = step(
+            &mut bridge,
+            position,
+            landed.motion,
+            moved,
+            Default::default(),
+            2,
+        )
+        .unwrap();
+        let shifted = step(
+            &mut bridge,
+            position,
+            shift_motion(landed.motion, delta),
+            moved,
+            Default::default(),
+            2,
+        )
+        .unwrap();
+        eprintln!(
+            "support: world hash {} -> {}; unshifted carry {:?} displacement {:?}; shifted carry {:?} displacement {:?}",
+            landed.motion.collision_world_hash,
+            unshifted.motion.collision_world_hash,
+            unshifted.platform.carried_displacement,
+            unshifted.displacement,
+            shifted.platform.carried_displacement,
+            shifted.displacement,
+        );
+        assert!((shifted.platform.carried_displacement.x - 0.2).abs() < 1.0e-3);
+        assert!(
+            unshifted.displacement.x.abs() > 1_000.0,
+            "an unshifted support anchor carries the character by the whole origin delta"
+        );
+
+        // Fixed tether with no support: reel in, rebase another FAR, keep reeling.
+        let anchor = |x| NativeCharacterTetherRequest {
+            enabled: true,
+            id: 7,
+            fixed_anchor: v(x, 4.0, 0.0),
+            maximum_length: 3.0,
+            target_length: 2.0,
+            reel_speed: 6.0,
+            ..Default::default()
+        };
+        let hanging = NativeCharacterMotion {
+            stance: NativeCharacterStance::Standing,
+            fall_origin_y: 1.9,
+            peak_y: 1.9,
+            ..Default::default()
+        };
+        let mut reeled =
+            step(&mut bridge, v(0.0, 1.9, 0.0), hanging, None, anchor(0.0), 3).unwrap();
+        for sequence in 4..8 {
+            let (position, motion) = (reeled.transform.translation, reeled.motion);
+            reeled = step(&mut bridge, position, motion, None, anchor(0.0), sequence).unwrap();
+        }
+        assert!(reeled.motion.tether_length < 2.6);
+        let delta = rebase(&mut bridge, [2 * FAR as i64, 0, 0]);
+        let position = add(reeled.transform.translation, delta);
+        let unshifted = step(
+            &mut bridge,
+            position,
+            reeled.motion,
+            None,
+            anchor(delta.x),
+            8,
+        )
+        .unwrap();
+        let shifted = step(
+            &mut bridge,
+            position,
+            shift_motion(reeled.motion, delta),
+            None,
+            anchor(delta.x),
+            8,
+        )
+        .unwrap();
+        eprintln!(
+            "tether: reeled {} -> unshifted {} shifted {}",
+            reeled.motion.tether_length,
+            unshifted.motion.tether_length,
+            shifted.motion.tether_length,
+        );
+        assert!(shifted.motion.tether_length < reeled.motion.tether_length);
+        assert!(
+            unshifted.motion.tether_length > reeled.motion.tether_length,
+            "an unshifted anchor reattaches the rope at full length"
+        );
+
+        // Falling: airborne 8 above the old frame, rebase one cell up in Y.
+        let falling = step(
+            &mut bridge,
+            v(0.0, 12.0, 0.0),
+            NativeCharacterMotion {
+                stance: NativeCharacterStance::Standing,
+                fall_origin_y: 12.0,
+                peak_y: 12.0,
+                ..Default::default()
+            },
+            None,
+            Default::default(),
+            9,
+        )
+        .unwrap();
+        let delta = rebase(&mut bridge, [2 * FAR as i64, 8, 0]);
+        let position = add(falling.transform.translation, delta);
+        let unshifted = step(
+            &mut bridge,
+            position,
+            falling.motion,
+            None,
+            Default::default(),
+            10,
+        )
+        .unwrap();
+        let shifted = step(
+            &mut bridge,
+            position,
+            shift_motion(falling.motion, delta),
+            None,
+            Default::default(),
+            10,
+        )
+        .unwrap();
+        eprintln!(
+            "fall: y {} peak unshifted {} shifted {}",
+            unshifted.transform.translation.y, unshifted.motion.peak_y, shifted.motion.peak_y,
+        );
+        assert!((shifted.motion.peak_y - 4.0).abs() < 1.0e-3);
+        assert!(
+            (unshifted.motion.peak_y - 12.0).abs() < 1.0e-3,
+            "an unshifted peak overstates the landing fall by the Y delta"
+        );
+    }
+
     #[test]
     fn character_continuation_checkpoint_restores_airborne_motion_and_rejects_drift() {
         let mut bridge = RuntimeSpatialBridge::new();
