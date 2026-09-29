@@ -2962,17 +2962,6 @@ mod tests {
             })
             .unwrap();
 
-        let mut origin = NativeWorldOriginReadout::default();
-        assert_eq!(
-            unsafe {
-                (world_origin_api.read)(
-                    world_origin_api.context,
-                    NativeWorldOriginReadRequest { session },
-                    &mut origin,
-                )
-            },
-            ABI_OK
-        );
         let prepare = NativeWorldOriginPrepareRequest {
             session,
             target_cell_x: 5,

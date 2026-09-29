@@ -2,12 +2,12 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use core_space::{GlobalPosition, WorldOrigin};
 use engine_spatial::{
-    decode_world_origin_state, encode_world_origin_state, KinematicTriggerDefinition,
-    MaterialVoxel, PreparedWorldOriginRebase, SpatialCollisionHit, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    TriggerCollider, TriggerReconcileCause, TriggerVolumeSystem, VoxelCollisionScene, VoxelEdit,
-    VoxelEditService, WorldOriginAffectedTransform, WorldOriginEntity, WorldOriginRebaseError,
-    WorldOriginRebaseReceipt, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
+    KinematicTriggerDefinition, MaterialVoxel, PreparedWorldOriginRebase, SpatialCollisionHit,
+    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
+    StaticMeshTransform, TriggerCollider, TriggerReconcileCause, TriggerVolumeSystem,
+    VoxelCollisionScene, VoxelEdit, VoxelEditService, WorldOriginAffectedTransform,
+    WorldOriginEntity, WorldOriginRebaseError, WorldOriginRebaseReceipt, WorldOriginRebaseRequest,
+    WorldOriginRebaseService, WorldOriginState,
 };
 use entity_state::{EntityTransform, Quat};
 
@@ -127,16 +127,14 @@ fn rebase_keeps_voxel_nav_trigger_and_static_mesh_continuous() {
         ["test"],
     )])
     .unwrap();
-    let entered = triggers
-        .reconcile(
-            [
-                collider(TRIGGER, Vec3::new(FAR_X as f32 + 4.0, 1.0, 0.0), 0.5),
-                collider(SUBJECT, Vec3::new(FAR_X as f32 + 4.25, 1.0, 0.0), 0.25),
-            ],
-            1,
-            TriggerReconcileCause::Spawn,
-        )
-        .unwrap();
+    let entered = triggers.reconcile(
+        [
+            collider(TRIGGER, Vec3::new(FAR_X as f32 + 4.0, 1.0, 0.0), 0.5),
+            collider(SUBJECT, Vec3::new(FAR_X as f32 + 4.25, 1.0, 0.0), 0.25),
+        ],
+        1,
+        TriggerReconcileCause::Spawn,
+    );
     assert_eq!(entered.active_overlaps.len(), 1);
 
     let prepared = WorldOriginRebaseService
@@ -164,16 +162,14 @@ fn rebase_keeps_voxel_nav_trigger_and_static_mesh_continuous() {
     assert_eq!(affected[0].transform.scale, Vec3::splat(2.0));
     assert_eq!(affected[1].transform.translation, Vec3::new(4.25, 1.0, 0.0));
 
-    let continued = triggers
-        .reconcile(
-            [
-                collider(TRIGGER, affected[0].transform.translation, 0.5),
-                collider(SUBJECT, affected[1].transform.translation, 0.25),
-            ],
-            2,
-            TriggerReconcileCause::Movement,
-        )
-        .unwrap();
+    let continued = triggers.reconcile(
+        [
+            collider(TRIGGER, affected[0].transform.translation, 0.5),
+            collider(SUBJECT, affected[1].transform.translation, 0.25),
+        ],
+        2,
+        TriggerReconcileCause::Movement,
+    );
     assert!(continued.facts.is_empty());
     assert_eq!(continued.continued, entered.active_overlaps);
 
@@ -241,7 +237,7 @@ fn repeated_positive_and_negative_rebases_do_not_accumulate_or_alias() {
             );
             transform = affected[0].transform;
             assert_eq!(
-                origin.global_from_local(transform.translation.to_array()),
+                GlobalPosition::from_local(origin.origin(), transform.translation.to_array()),
                 Ok(global_position)
             );
             let local_voxel_x = (far_x - target) as f64 + 0.5;
@@ -257,7 +253,7 @@ fn repeated_positive_and_negative_rebases_do_not_accumulate_or_alias() {
 }
 
 #[test]
-fn failed_prepare_publishes_nothing_edits_after_prepare_survive_and_snapshots_are_typed() {
+fn failed_prepare_publishes_nothing_and_edits_after_prepare_survive() {
     let (mut origin, mut scene) = fixture();
     let origin_before = origin.readout();
     let scene_origin_before = scene.world_origin();
@@ -301,17 +297,4 @@ fn failed_prepare_publishes_nothing_edits_after_prepare_survive_and_snapshots_ar
     assert!(scene
         .raycast([1.5, 3.0, 0.5], [0.0, -1.0, 0.0], 4.0)
         .is_some());
-
-    let encoded = encode_world_origin_state(origin).unwrap();
-    assert_eq!(decode_world_origin_state(&encoded).unwrap(), origin);
-    assert!(matches!(
-        decode_world_origin_state(
-            br#"{"schemaVersion":2,"origin":[0,0,0],"revision":0,"localEnvelope":16384.0}"#
-        ),
-        Err(WorldOriginRebaseError::UnsupportedSnapshotSchema { actual: 2 })
-    ));
-    assert!(matches!(
-        decode_world_origin_state(b"not json"),
-        Err(WorldOriginRebaseError::SnapshotDecode)
-    ));
 }

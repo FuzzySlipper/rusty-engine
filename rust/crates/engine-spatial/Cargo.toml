@@ -20,10 +20,9 @@ svc-spatial.workspace = true
 svc-volume.workspace = true
 entity-state = { path = "../entity-state" }
 serde.workspace = true
-serde_json.workspace = true
-serde_path_to_error.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 environment-authoring.workspace = true
 svc-implicit.workspace = true

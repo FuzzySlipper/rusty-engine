@@ -2475,15 +2475,13 @@ impl RuntimeSpatialBridge {
             .map_err(SpatialTriggerOperationError::Service)?;
         let receipt = session
             .triggers
-            .reconcile(trigger_colliders(entities), request.tick, cause)
-            .map_err(SpatialTriggerOperationError::Trigger)?;
+            .reconcile(trigger_colliders(entities), request.tick, cause);
         let facts = native_trigger_facts(&receipt.facts);
         let result = NativeSpatialTriggerReconcileResult {
             facts: facts.as_ptr(),
             facts_len: facts.len(),
             tick: receipt.tick,
             cause: request.cause,
-            revision: receipt.revision,
             continued_count: checked_u32(receipt.continued.len(), "trigger continued count")
                 .map_err(SpatialTriggerOperationError::Service)?,
             active_overlap_count: checked_u32(
@@ -2515,8 +2513,6 @@ impl RuntimeSpatialBridge {
             facts_len: facts.len(),
             trigger: receipt.trigger.raw(),
             active: receipt.active,
-            revision_before: receipt.revision_before,
-            revision_after: receipt.revision_after,
             removed_overlap_count: checked_u32(
                 receipt.removed_overlaps.len(),
                 "retired trigger overlap count",
@@ -2562,8 +2558,6 @@ impl RuntimeSpatialBridge {
         // Restore establishes a baseline and produces no enter or exit edges;
         // they come from later product-driven reconciliation.
         Ok(NativeSpatialTriggerRestoreReceipt {
-            revision_before: receipt.revision_before,
-            revision_after: receipt.revision_after,
             registered_count: checked_u32(receipt.registered_count, "registered trigger count")
                 .map_err(SpatialTriggerOperationError::Service)?,
             active_count: checked_u32(receipt.active_count, "active trigger count")
@@ -2677,7 +2671,6 @@ impl RuntimeSpatialBridge {
             subjects_len: subjects.len(),
             trigger: request.trigger,
             active,
-            revision: readout.revision,
         };
         self.borrowed.hold(subjects);
         Ok(result)
@@ -8276,7 +8269,6 @@ mod tests {
             ABI_OK
         );
         assert_eq!(unchanged.trigger, read.trigger);
-        assert_eq!(unchanged.revision, read.revision);
         assert_eq!(unchanged.subjects_len, read.subjects_len);
     }
 
@@ -8357,15 +8349,14 @@ mod tests {
             (receipt, facts.len(), first)
         };
 
-        let (outside, count, fact) = reconcile(1, Some(2.0));
-        assert_eq!((count, outside.revision, fact), (0, 0, None));
-        let (entered, count, fact) = reconcile(2, Some(0.5));
-        assert_eq!((count, entered.revision, fact), (1, 1, Some(true)));
+        let (_, count, fact) = reconcile(1, Some(2.0));
+        assert_eq!((count, fact), (0, None));
+        let (_, count, fact) = reconcile(2, Some(0.5));
+        assert_eq!((count, fact), (1, Some(true)));
         let (stayed, count, fact) = reconcile(3, Some(-0.5));
         assert_eq!((count, stayed.continued_count, fact), (0, 1, None));
-        assert_eq!(stayed.revision, 1);
         let (exited, count, fact) = reconcile(4, Some(-2.0));
-        assert_eq!((count, exited.revision, fact), (1, 2, Some(false)));
+        assert_eq!((count, fact), (1, Some(false)));
         assert_eq!(exited.active_overlap_count, 0);
 
         // A removed subject row exits like any other departure; a trigger
@@ -8471,7 +8462,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!((reconcile.revision, reconcile.facts_len), (1, 2));
+        assert_eq!(reconcile.facts_len, 2);
 
         let mut lifecycle: NativeSpatialTriggerLifecycleResult = unsafe { std::mem::zeroed() };
         assert_eq!(
@@ -8489,10 +8480,6 @@ mod tests {
                 )
             },
             ABI_OK
-        );
-        assert_eq!(
-            (lifecycle.revision_before, lifecycle.revision_after),
-            (1, 2)
         );
         assert_eq!(lifecycle.removed_overlap_count, 1);
         let exits = trigger_facts(lifecycle.facts, lifecycle.facts_len);
@@ -8512,7 +8499,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert!(!read.active && read.revision == 2 && read.subjects_len == 0);
+        assert!(!read.active && read.subjects_len == 0);
 
         for (trigger, active, code) in [
             (41, false, "duplicate-trigger-lifecycle"),
@@ -8553,7 +8540,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!((lifecycle.revision_after, lifecycle.facts_len), (3, 0));
+        assert_eq!(lifecycle.facts_len, 0);
 
         let active = [42_u64];
         let mut restored = NativeSpatialTriggerRestoreReceipt::default();
@@ -8574,7 +8561,6 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!((restored.revision_before, restored.revision_after), (3, 4));
         assert_eq!(
             (
                 restored.registered_count,

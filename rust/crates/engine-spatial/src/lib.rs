@@ -20,7 +20,6 @@ mod perception;
 mod physics;
 mod rigid_body;
 mod trigger;
-mod trigger_codec;
 mod voxel_edit;
 mod voxel_picking;
 mod voxel_primitive;
@@ -79,9 +78,7 @@ pub use trigger::{
     TriggerOverlapFact, TriggerOverlapFactKind, TriggerOverlapPair, TriggerOverlapReadout,
     TriggerReconcileCause, TriggerReconcileReceipt, TriggerRestoreReceipt, TriggerVolumeDiagnostic,
     TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
-    TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
 };
-pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};
 
 pub use svc_collision::{
     cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
@@ -115,10 +112,9 @@ pub use voxel_template::{
     VOXEL_HOUSE_TEMPLATE_BOUNDS,
 };
 pub use world_origin::{
-    decode_world_origin_state, encode_world_origin_state, PreparedWorldOriginRebase,
-    WorldOriginAffectedTransform, WorldOriginEntity, WorldOriginReadout, WorldOriginRebaseError,
-    WorldOriginRebaseReceipt, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
-    DEFAULT_LOCAL_COORDINATE_ENVELOPE, WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
+    PreparedWorldOriginRebase, WorldOriginAffectedTransform, WorldOriginEntity, WorldOriginReadout,
+    WorldOriginRebaseError, WorldOriginRebaseReceipt, WorldOriginRebaseRequest,
+    WorldOriginRebaseService, WorldOriginState, DEFAULT_LOCAL_COORDINATE_ENVELOPE,
 };
 
 use std::borrow::Cow;

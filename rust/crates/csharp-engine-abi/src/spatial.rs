@@ -297,8 +297,6 @@ pub struct NativeSpatialTriggerLifecycleResult {
     pub facts_len: usize,
     pub trigger: u64,
     pub active: bool,
-    pub revision_before: u64,
-    pub revision_after: u64,
     pub removed_overlap_count: u32,
 }
 
@@ -318,8 +316,6 @@ pub struct NativeSpatialTriggerRestoreRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSpatialTriggerRestoreReceipt {
-    pub revision_before: u64,
-    pub revision_after: u64,
     pub registered_count: u32,
     pub active_count: u32,
     pub active_overlap_count: u32,
@@ -336,7 +332,6 @@ pub struct NativeSpatialTriggerReconcileResult {
     pub facts_len: usize,
     pub tick: u64,
     pub cause: NativeSpatialTriggerCause,
-    pub revision: u64,
     pub continued_count: u32,
     pub active_overlap_count: u32,
     pub diagnostic_count: u32,
@@ -365,7 +360,6 @@ pub struct NativeSpatialTriggerReadResult {
     pub subjects_len: usize,
     pub trigger: u64,
     pub active: bool,
-    pub revision: u64,
 }
 
 #[repr(C)]

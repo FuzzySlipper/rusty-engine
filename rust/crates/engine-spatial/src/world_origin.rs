@@ -2,12 +2,10 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use core_space::{GlobalPosition, GlobalPositionError, WorldOrigin};
 use entity_state::EntityTransform;
-use serde::{Deserialize, Serialize};
 
 use crate::VoxelCollisionScene;
 
 pub const DEFAULT_LOCAL_COORDINATE_ENVELOPE: f32 = 16_384.0;
-pub const WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const MAX_WORLD_ORIGIN_CELL_ABS: u64 = 9_000_000_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,20 +43,6 @@ impl WorldOriginState {
             revision: self.revision,
             local_envelope: self.local_envelope,
         }
-    }
-
-    pub fn global_from_local(
-        &self,
-        local: [f32; 3],
-    ) -> Result<GlobalPosition, GlobalPositionError> {
-        GlobalPosition::from_local(self.origin, local)
-    }
-
-    pub fn local_from_global(
-        &self,
-        global: GlobalPosition,
-    ) -> Result<[f32; 3], GlobalPositionError> {
-        global.local(self.origin, self.local_envelope)
     }
 }
 
@@ -139,11 +123,6 @@ pub enum WorldOriginRebaseError {
         reason: GlobalPositionError,
     },
     SpatialCandidate(crate::CollisionSceneError),
-    SnapshotEncode,
-    SnapshotDecode,
-    UnsupportedSnapshotSchema {
-        actual: u32,
-    },
 }
 
 impl std::fmt::Display for WorldOriginRebaseError {
@@ -242,42 +221,4 @@ fn validate_envelope(envelope: f32) -> Result<(), WorldOriginRebaseError> {
         return Err(WorldOriginRebaseError::InvalidEnvelope);
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct WorldOriginSnapshotV1 {
-    schema_version: u32,
-    origin: WorldOrigin,
-    revision: u64,
-    local_envelope: f32,
-}
-
-pub fn encode_world_origin_state(
-    state: WorldOriginState,
-) -> Result<Vec<u8>, WorldOriginRebaseError> {
-    serde_json::to_vec_pretty(&WorldOriginSnapshotV1 {
-        schema_version: WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
-        origin: state.origin,
-        revision: state.revision,
-        local_envelope: state.local_envelope,
-    })
-    .map_err(|_| WorldOriginRebaseError::SnapshotEncode)
-}
-
-pub fn decode_world_origin_state(bytes: &[u8]) -> Result<WorldOriginState, WorldOriginRebaseError> {
-    let snapshot: WorldOriginSnapshotV1 =
-        serde_json::from_slice(bytes).map_err(|_| WorldOriginRebaseError::SnapshotDecode)?;
-    if snapshot.schema_version != WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION {
-        return Err(WorldOriginRebaseError::UnsupportedSnapshotSchema {
-            actual: snapshot.schema_version,
-        });
-    }
-    validate_origin(snapshot.origin)?;
-    validate_envelope(snapshot.local_envelope)?;
-    Ok(WorldOriginState {
-        origin: snapshot.origin,
-        revision: snapshot.revision,
-        local_envelope: snapshot.local_envelope,
-    })
 }

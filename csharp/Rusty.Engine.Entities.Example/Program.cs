@@ -735,7 +735,6 @@ sealed class SpatialServiceFake : ISpatialService
             facts,
             request.Tick,
             request.Cause,
-            (ulong)ReconcileCalls,
             0,
             0,
             0);

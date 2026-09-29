@@ -545,8 +545,7 @@ and produces any new edge. `ReconcileTriggers` and `SetTriggerActive` return
 their enter/exit edges in `Facts`. `RestoreTriggers` accepts the complete
 active trigger ID set plus current projected colliders and replaces the active
 and overlap baseline without producing gameplay facts. `ReadTrigger` returns
-the current active flag, revision and every overlap subject. The trigger
-revision counts changes to the active and overlap sets. Unknown IDs, duplicate
+the current active flag and every overlap subject. Unknown IDs, duplicate
 state changes, and duplicate restore IDs reject without changing the session.
 Disposing the Spatial session destroys the definitions, active set and
 overlaps together.
