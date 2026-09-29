@@ -1,4 +1,5 @@
 use super::*;
+use kira::backend::Backend;
 use render_presentation::PresentationOpMeta;
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -414,4 +415,132 @@ fn released_clips_are_dropped_unless_a_voice_still_plays_them() {
     assert_eq!(realizer.readout().decoded_clips, 2);
     realizer.retain_clips(|_| false);
     assert_eq!(realizer.readout().decoded_clips, 1);
+}
+
+/// Renders through kira's real mixer so tests can measure the samples a
+/// device would receive, per stereo channel.
+struct CaptureBackend {
+    renderer: Option<kira::backend::Renderer>,
+    frames: Vec<f32>,
+}
+
+impl Backend for CaptureBackend {
+    type Settings = ();
+    type Error = ();
+
+    fn setup(_: (), internal_buffer_size: usize) -> Result<(Self, u32), ()> {
+        Ok((
+            Self {
+                renderer: None,
+                frames: vec![0.0; internal_buffer_size * 2],
+            },
+            SAMPLE_RATE,
+        ))
+    }
+
+    fn start(&mut self, renderer: kira::backend::Renderer) -> Result<(), ()> {
+        self.renderer = Some(renderer);
+        Ok(())
+    }
+}
+
+impl CaptureBackend {
+    /// Peak absolute sample of the left and right channels over `seconds`.
+    fn render_peaks(&mut self, seconds: f64) -> [f32; 2] {
+        let mut peaks = [0.0_f32; 2];
+        for _ in 0..(seconds / SECONDS_PER_PROCESS).ceil() as usize {
+            let renderer = self.renderer.as_mut().expect("started");
+            renderer.on_start_processing();
+            renderer.process(&mut self.frames, 2);
+            for frame in self.frames.chunks_exact(2) {
+                peaks[0] = peaks[0].max(frame[0].abs());
+                peaks[1] = peaks[1].max(frame[1].abs());
+            }
+        }
+        peaks
+    }
+
+    fn render_peak(&mut self, seconds: f64) -> f32 {
+        let [left, right] = self.render_peaks(seconds);
+        left.max(right)
+    }
+}
+
+fn capture_realizer() -> AudioRealizer<CaptureBackend> {
+    AudioRealizer::with_backend_settings(()).expect("capture backend opens")
+}
+
+#[test]
+fn rebuilding_a_paused_voice_keeps_it_paused_at_its_cursor() {
+    let mut realizer = realizer();
+    apply(
+        &mut realizer,
+        &[restore(
+            1,
+            descriptor("sha256:wav", true),
+            AudioVoiceDesiredState::Playing,
+            0.0,
+        )],
+    );
+    run(&mut realizer, 0.1);
+    apply(&mut realizer, &[control(1, AudioVoiceControl::Pause)]);
+    run(&mut realizer, 0.05);
+    let paused = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    apply(
+        &mut realizer,
+        &[op(
+            3,
+            AudioProjectionOp::Update {
+                handle: AudioHandle::new(1),
+                patch: AudioSourcePatch {
+                    attenuation: Some(2.0),
+                    ..Default::default()
+                },
+            },
+        )],
+    );
+    run(&mut realizer, 0.2);
+    let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    assert!(
+        (held - paused).abs() < 0.01,
+        "paused cursor advanced {paused} -> {held}"
+    );
+    assert_eq!(
+        realizer.voice_state(AudioHandle::new(1)),
+        Some(RealizedVoiceState::Paused)
+    );
+    apply(&mut realizer, &[control(1, AudioVoiceControl::Resume)]);
+    run(&mut realizer, 0.1);
+    let resumed = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    assert!((resumed - held - 0.1).abs() < 0.02, "resumed at {resumed}");
+}
+
+#[test]
+fn stop_all_silences_one_shots_and_voices() {
+    let mut realizer = capture_realizer();
+    realizer.apply(
+        &[
+            emit(1, 1, descriptor("sha256:wav", false)),
+            restore(
+                2,
+                descriptor("sha256:wav", true),
+                AudioVoiceDesiredState::Playing,
+                0.0,
+            ),
+        ],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    let before = realizer.backend_mut().render_peak(0.1);
+    assert!(before > 0.01, "fixture plays: {before}");
+    realizer.stop_all();
+    realizer.backend_mut().render_peak(0.05);
+    let after = realizer.backend_mut().render_peak(0.1);
+    assert!(after < 1e-5, "stopped runtime still emits {after}");
+    realizer.refresh(&NoEntityPositions);
+    assert_eq!(
+        realizer.take_facts(),
+        [],
+        "a stop is not a natural completion"
+    );
 }

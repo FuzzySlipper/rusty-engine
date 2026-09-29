@@ -106,7 +106,7 @@ impl AudioOutput {
     }
 
     pub(crate) fn silence(&mut self) {
-        self.realizer.reset();
+        self.realizer.stop_all();
     }
 
     fn engine_fact(&mut self, fact: RealizedAudioFact) -> AudioRealizationFact {

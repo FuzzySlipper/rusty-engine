@@ -348,6 +348,15 @@ impl<B: Backend> AudioRealizer<B> {
         }
     }
 
+    /// Stops every sound, one-shots included, for a runtime that has shut
+    /// down. Unlike [`Self::reset`], nothing keeps playing.
+    pub fn stop_all(&mut self) {
+        for one_shot in &mut self.one_shots {
+            one_shot.playback.stop();
+        }
+        self.reset();
+    }
+
     /// Follows the runtime lifecycle: a paused runtime advances no Engine
     /// cursor, so the device holds every sound where it is.
     pub fn set_suspended(&mut self, suspended: bool) {
@@ -602,6 +611,11 @@ impl<B: Backend> AudioRealizer<B> {
         let cursor = playback.cursor(previous.looping);
         playback.stop();
         voice.playback = None;
+        if voice.state != RealizedVoiceState::Playing {
+            // A paused voice keeps its cursor; Resume builds the new track.
+            voice.cursor = cursor;
+            return Ok(());
+        }
         let descriptor = voice.descriptor.clone();
         let playback = self.play(&descriptor, cursor, clips, entities)?;
         if let Some(voice) = self.voices.get_mut(&handle) {
