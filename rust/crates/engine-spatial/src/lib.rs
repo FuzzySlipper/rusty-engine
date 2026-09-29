@@ -71,16 +71,15 @@ pub use physics::{
     PhysicsStep, PhysicsWorld,
 };
 pub use rigid_body::{
-    cuboid_mass_properties, observe_rigid_body_anchor, rigid_body_component_mass_properties,
-    rigid_body_mass_properties, PreparedRigidBodyStep, RigidBodyAction, RigidBodyAnchorObservation,
-    RigidBodyContactReadout, RigidBodyMassProperties, RigidBodyMotionFact, RigidBodyRopeSnapshot,
-    RigidBodyService, RigidBodyStepError, RigidBodyStepReceipt, RigidBodyStepRequest,
-    RigidBodyWorldReadout,
+    cuboid_mass_properties, rigid_body_component_mass_properties, rigid_body_mass_properties,
+    RigidBodyMassProperties,
 };
 pub use svc_collision::{
-    DynamicsBodyId, DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherEndpoint,
-    DynamicsTetherReadout, MAX_DYNAMICS_ACTIONS, MAX_DYNAMICS_BODIES, MAX_DYNAMICS_TETHERS,
-    MAX_TETHER_REEL_SPEED,
+    DynamicsAction, DynamicsAnchorObservation, DynamicsBodyId, DynamicsBodyInput,
+    DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError,
+    DynamicsMassProperties, DynamicsRopeSolverConfig, DynamicsShape, DynamicsSolver,
+    DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,
+    DynamicsTetherReadout, MAX_TETHER_REEL_SPEED,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerLifecycleReceipt, TriggerOverlapFact,
@@ -789,6 +788,14 @@ impl VoxelCollisionScene {
 
     pub fn projection_version(&self) -> u64 {
         self.projection.version()
+    }
+
+    /// The collision shapes a Dynamics world binds as its static environment.
+    pub fn bind_dynamics_environment(
+        &self,
+        solver: &mut DynamicsSolver,
+    ) -> DynamicsEnvironmentReceipt {
+        solver.bind_environment(&self.projection)
     }
 
     pub fn collider_chunk_count(&self) -> usize {

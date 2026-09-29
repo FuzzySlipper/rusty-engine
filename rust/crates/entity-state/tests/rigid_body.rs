@@ -4,8 +4,7 @@ use entity_state::{
     decode_snapshot, encode_snapshot, validate_rigid_body, ComponentPersistence,
     EntityAuthoringError, EntityAuthoringService, EntityDefinition, EntityState,
     EntityStateSnapshotError, KinematicComponent, KinematicSnapshot, Quat, RigidBodyComponent,
-    RigidBodyInertiaPolicy, RigidBodyShape, RigidBodyStatePublicationError,
-    RigidBodyStateReplacement, RigidBodyValidationError, TransformComponent, MAX_RIGID_BODY_MASS,
+    RigidBodyInertiaPolicy, RigidBodyShape, RigidBodyValidationError, MAX_RIGID_BODY_MASS,
     RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
 };
 use serde_json::json;
@@ -279,104 +278,4 @@ fn snapshot_restore_rejects_kinematic_and_dynamic_rigid_body_conflict() {
     assert_eq!(encode_snapshot(&source).unwrap(), source_bytes);
     assert!(source.kinematic(entity).is_none());
     assert_eq!(source.rigid_body(entity), Some(&body));
-}
-
-#[test]
-fn rigid_body_state_publication_is_atomic_across_component_slots() {
-    let first = EntityId::new(81);
-    let second = EntityId::new(82);
-    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
-    let mut state = EntityState::from_definitions([
-        EntityDefinition::new(first, "first").with_transform(Vec3::ZERO),
-        EntityDefinition::new(second, "second").with_transform(Vec3::new(2.0, 0.0, 0.0)),
-    ])
-    .unwrap();
-    for entity in [first, second] {
-        let slot = state
-            .component_revision::<RigidBodyComponent>(entity)
-            .unwrap();
-        EntityAuthoringService
-            .attach_component(&mut state, slot, entity, body)
-            .unwrap();
-    }
-    let revision_before = state.revision();
-    let replacements = [first, second].map(|entity| RigidBodyStateReplacement {
-        entity,
-        expected_transform_revision: state
-            .component_revision::<TransformComponent>(entity)
-            .unwrap(),
-        expected_rigid_body_revision: state
-            .component_revision::<RigidBodyComponent>(entity)
-            .unwrap(),
-        transform: TransformComponent::from_transform(entity_state::EntityTransform::at(
-            Vec3::new(entity.raw() as f32, 1.0, 0.0),
-        )),
-        rigid_body: RigidBodyComponent {
-            linear_velocity: Vec3::new(1.0, 0.0, 0.0),
-            ..body
-        },
-    });
-
-    let receipt = entity_state::replace_rigid_body_states(&mut state, replacements.to_vec())
-        .expect("all slots publish together");
-    assert_eq!(receipt.revision_before, revision_before);
-    assert_eq!(receipt.revision_after, revision_before + 1);
-    assert_eq!(receipt.entities_changed, vec![first, second]);
-    assert_eq!(state.transform(first).unwrap().translation.x, 81.0);
-    assert_eq!(state.rigid_body(second).unwrap().linear_velocity.x, 1.0);
-}
-
-#[test]
-fn stale_rigid_body_publication_preserves_every_candidate_entity() {
-    let first = EntityId::new(91);
-    let second = EntityId::new(92);
-    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
-    let mut state = EntityState::from_definitions([
-        EntityDefinition::new(first, "first").with_transform(Vec3::ZERO),
-        EntityDefinition::new(second, "second").with_transform(Vec3::new(2.0, 0.0, 0.0)),
-    ])
-    .unwrap();
-    for entity in [first, second] {
-        let slot = state
-            .component_revision::<RigidBodyComponent>(entity)
-            .unwrap();
-        EntityAuthoringService
-            .attach_component(&mut state, slot, entity, body)
-            .unwrap();
-    }
-    let replacements = [first, second].map(|entity| RigidBodyStateReplacement {
-        entity,
-        expected_transform_revision: state
-            .component_revision::<TransformComponent>(entity)
-            .unwrap(),
-        expected_rigid_body_revision: state
-            .component_revision::<RigidBodyComponent>(entity)
-            .unwrap(),
-        transform: TransformComponent::from_transform(entity_state::EntityTransform::at(
-            Vec3::new(9.0, 9.0, 9.0),
-        )),
-        rigid_body: body,
-    });
-    let second_slot = state
-        .component_revision::<TransformComponent>(second)
-        .unwrap();
-    EntityAuthoringService
-        .replace_component(
-            &mut state,
-            second_slot,
-            second,
-            TransformComponent::from_transform(entity_state::EntityTransform::at(Vec3::new(
-                3.0, 0.0, 0.0,
-            ))),
-        )
-        .unwrap();
-    let bytes_before = encode_snapshot(&state).unwrap();
-
-    assert!(matches!(
-        entity_state::replace_rigid_body_states(&mut state, replacements.to_vec()),
-        Err(RigidBodyStatePublicationError::StaleTransform { entity, .. }) if entity == second
-    ));
-    assert_eq!(encode_snapshot(&state).unwrap(), bytes_before);
-    assert_eq!(state.transform(first).unwrap().translation, Vec3::ZERO);
-    assert_eq!(state.transform(second).unwrap().translation.x, 3.0);
 }

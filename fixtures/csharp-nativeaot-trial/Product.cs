@@ -930,8 +930,7 @@ public sealed class Product : IEngineProduct
         CharacterStepReceipt second = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             _spatial, first.Transform.Translation, first.Motion, noSupport,
             ReadOnlyMemory<CharacterObstacle>.Empty, ReadOnlyMemory<CharacterMeshInstance>.Empty, config, secondCommand));
-        Require(second.Generation > first.Generation && second.RevisionAfter > second.RevisionBefore,
-            "character proposal did not return Engine publication revisions");
+        Require(second.Generation > first.Generation, "character proposal did not advance its generation");
         Require(second.Motion.LastCommandSequence == 2 && second.Motion.CollisionWorldHash != 0,
             "character continuity did not remain product-held across proposals");
         using SpatialSession checkpointSource = _engine.Spatial.CreateSession(
@@ -1141,14 +1140,12 @@ public sealed class Product : IEngineProduct
             "generated character reaction exceeded its bound");
         DynamicsStepWithReactionsRequest update = new(world, stepSeconds, 1, ReadOnlyMemory<DynamicsAction>.Empty,
             new[] { caught.Tether.Reaction });
-        DynamicsStepReceipt applied = _engine.Dynamics.StepWithReactions(update);
+        _engine.Dynamics.StepWithReactions(update);
         Vector3 bodyVelocity = _engine.Dynamics.Read(new(body)).LinearVelocity;
         Vector3 characterChange = caught.Motion.ControlledVelocity + caught.Motion.ExternalVelocity - initialVelocity;
         Require((bodyVelocity * mass + characterChange * mass).Length() < 0.001f, "generated reaction lost opposite momentum");
-        ExpectEngineFailure(() => _engine.Dynamics.StepWithReactions(update));
-        Require(_engine.Dynamics.ReadWorld(new(world)).Generation == applied.Generation, "stale reaction changed the world");
-        Require(_engine.Dynamics.RefreshAnchor(new(world, anchor)).SolverGeneration == applied.Generation,
-            "dynamic anchor refresh retained old motion facts");
+        Require((_engine.Dynamics.ObserveAnchor(new(world, body, Vector3.Zero)).PointVelocity - bodyVelocity).Length() < 1e-5f,
+            "dynamic anchor observation retained old motion facts");
         CharacterStepReceipt released = _engine.Spatial.ProposeCharacterStep(request with
         {
             Tether = default, Position = caught.Transform.Translation, Motion = caught.Motion,
@@ -1185,16 +1182,6 @@ public sealed class Product : IEngineProduct
         _engine.Dynamics.ConfigureRopes(new(world, 8, 16));
         ExpectRopeDiagnostic(() => _engine.Dynamics.ConfigureRopes(new(world, 0, 16)),
             "invalid-dynamics-rope-solver-configuration");
-        DynamicsWorldReadout beforeBudget = _engine.Dynamics.ReadWorld(new(world));
-        for (ulong id = 100; id < 164; id++)
-            _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero, new(id, length, length, 0, true)));
-        ExpectRopeDiagnostic(() => _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero,
-            new(164, length, length, 0, true))), "dynamics-tether-budget-exceeded");
-        Require(!_engine.Dynamics.ReadTether(new(world, 164)).Present,
-            "rejected rope budget call mutated the world");
-        Require(_engine.Dynamics.ReadWorld(new(world)).BodyCount == beforeBudget.BodyCount,
-            "rejected rope call mutated body membership");
-        for (ulong id = 100; id < 164; id++) _engine.Dynamics.RemoveTether(new(world, id));
 
         DynamicsTetherRequest query = new(world, tetherId);
         _engine.Dynamics.SetFixedTether(new(world, body, Vector3.Zero, Vector3.Zero,
@@ -1233,7 +1220,7 @@ public sealed class Product : IEngineProduct
     private void ExerciseDynamics()
     {
         const uint oneStep = 1;
-        const uint rejectedStepCount = 256;
+        const float rejectedStepSeconds = 0.0f;
         const float oneSixtiethSecond = 1.0f / 60.0f;
         DynamicsWorld world = _engine.Dynamics.CreateWorld(new DynamicsWorldConfig(Vector3.Zero));
         DynamicsBody body = _engine.Dynamics.CreateBody(new DynamicsCreateBodyRequest(
@@ -1254,7 +1241,7 @@ public sealed class Product : IEngineProduct
             new[] { new DynamicsAction(body, new Vector3(2.0f, 0.0f, 0.0f), new Vector3(0.0f, 0.0f, 1.0f), Vector3.Zero, Vector3.Zero, true) }));
         DynamicsReadout driven = _engine.Dynamics.Read(new DynamicsReadRequest(body));
         Require(driven.LinearVelocity.X > 0.0f && driven.AngularVelocity.Z > 0.0f, "force and torque did not reach Engine dynamics");
-        ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(world, oneSixtiethSecond, rejectedStepCount, ReadOnlyMemory<DynamicsAction>.Empty)));
+        ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(world, rejectedStepSeconds, oneStep, ReadOnlyMemory<DynamicsAction>.Empty)));
         Require(_engine.Dynamics.Read(new DynamicsReadRequest(body)).Equals(driven), "rejected step partially published dynamics state");
         _engine.Dynamics.Reset(new DynamicsResetRequest(
             body,
@@ -1302,7 +1289,7 @@ public sealed class Product : IEngineProduct
             "generic body creation did not apply CCD and initial velocity");
         DynamicsBody genericReplacement = _engine.Dynamics.ReplaceBody(new DynamicsReplaceBodyRequest(
             genericBody, genericConfig with { Properties = genericConfig.Properties with { ContinuousCollision = false } }));
-        ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(world, oneSixtiethSecond, oneStep, ReadOnlyMemory<DynamicsAction>.Empty)));
+        _engine.Dynamics.Step(new DynamicsStepRequest(world, oneSixtiethSecond, oneStep, ReadOnlyMemory<DynamicsAction>.Empty));
         genericBody.Dispose();
         genericReplacement.Dispose();
 
@@ -1315,7 +1302,7 @@ public sealed class Product : IEngineProduct
         _engine.Dynamics.UpdateBody(new DynamicsUpdateBodyRequest(configuredBody, configured with { Sleeping = true }));
         Require(_engine.Dynamics.Read(new DynamicsReadRequest(configuredBody)).Sleeping, "full body properties did not preserve sleep state");
         DynamicsWorldReadout configuredWorld = _engine.Dynamics.ReadWorld(new DynamicsWorldReadRequest(world));
-        Require(configuredWorld.BodyCount == 1 && configuredWorld.EntityRevision > 0, "world receipt did not report retained-body revision");
+        Require(configuredWorld.BodyCount == 1, "world receipt did not report the retained body");
         DynamicsBodyAtReceipt configuredAt = _engine.Dynamics.ReadBodyAt(new DynamicsBodyAtRequest(world, 0));
         Require(configuredAt.Present && configuredAt.Body.Value != 0 && configuredAt.Readout.MassProperties.Mass == 4.0f, "bounded body enumeration lost Engine-owned readout");
         DynamicsBody capsule = _engine.Dynamics.CreateCapsuleBody(new DynamicsCreateCapsuleBodyRequest(
@@ -1436,7 +1423,7 @@ public sealed class Product : IEngineProduct
             "sphere contact was not projected from Engine dynamics");
         DynamicsContactAtReceipt indexedContact = _engine.Dynamics.ReadContactAt(new DynamicsContactAtRequest(sphereWorld, 0));
         Require(indexedContact.Present && indexedContact.Environment && indexedContact.First.Value != 0 && indexedContact.Second.Value == 0, "bounded world contact receipt lost Engine ownership facts");
-        ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(sphereWorld, oneSixtiethSecond, rejectedStepCount, ReadOnlyMemory<DynamicsAction>.Empty)));
+        ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(sphereWorld, rejectedStepSeconds, oneStep, ReadOnlyMemory<DynamicsAction>.Empty)));
         Require(_engine.Dynamics.Read(new DynamicsReadRequest(sphere)).Equals(sphereContact), "rejected step partially published contact facts");
         sphere.Dispose();
         sphereWorld.Dispose();

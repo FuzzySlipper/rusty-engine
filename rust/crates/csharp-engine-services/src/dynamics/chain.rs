@@ -1,13 +1,9 @@
 use super::*;
 
-pub(super) const MAX_ROPES: usize = 64;
-const MAX_BEADS: u32 = 8;
-const MAX_WORLD_BODIES: usize = engine_spatial::MAX_DYNAMICS_BODIES;
-
-/// Bodies and links are owned by the world, never exposed as disposable product bodies.
+/// A chain's bead bodies and links belong to the world, never to the product.
 pub(super) struct DynamicsChain {
-    pub links: Vec<u64>,
-    pub(super) bodies: Vec<(u64, EntityId)>,
+    pub(super) links: Vec<u64>,
+    pub(super) bodies: Vec<u64>,
     pub(super) anchor: DynamicsTetherEndpoint,
 }
 
@@ -15,44 +11,24 @@ pub(super) fn error(code: &'static str, message: &str) -> CsharpEngineServicesEr
     CsharpEngineServicesError::new(code, message)
 }
 
-pub(super) fn authored_count(world: &DynamicsWorld) -> usize {
-    world.service.tether_count()
-        - world
-            .chains
-            .values()
-            .map(|chain| chain.links.len())
-            .sum::<usize>()
-        + world.chains.len()
-        + world.invalidated_tethers.len()
-        + world.invalidated_chains.len()
+fn endpoint_point(world: &DynamicsWorld, endpoint: DynamicsTetherEndpoint) -> Vec3 {
+    match endpoint {
+        DynamicsTetherEndpoint::Fixed(point) => vec3_f32(point),
+        DynamicsTetherEndpoint::Body { body, local_anchor } => {
+            output_transform(&world.body_output(body.0)).transform_point(vec3_f32(local_anchor))
+        }
+    }
 }
 
-fn endpoint_point(
-    world: &DynamicsWorld,
-    endpoint: DynamicsTetherEndpoint,
-) -> Result<Vec3, CsharpEngineServicesError> {
-    match endpoint {
-        DynamicsTetherEndpoint::Fixed(point) => {
-            Ok(Vec3::new(point[0] as f32, point[1] as f32, point[2] as f32))
+impl DynamicsWorld {
+    /// Remove a chain's beads, and with them its links. Returns the bead handles.
+    pub(super) fn remove_chain_bodies(&mut self, chain: &DynamicsChain) -> Vec<u64> {
+        for bead in &chain.bodies {
+            self.solver.remove_body(DynamicsBodyId(*bead));
+            self.bodies.remove(bead);
+            self.contacts.remove(bead);
         }
-        DynamicsTetherEndpoint::Body { body, local_anchor } => {
-            let transform = world
-                .entities
-                .view(EntityId::new(body.0))
-                .map_err(|_| error("dynamics-chain-invalid-anchor", "missing chain anchor"))?
-                .transform
-                .ok_or_else(|| {
-                    error(
-                        "dynamics-chain-invalid-anchor",
-                        "missing chain anchor transform",
-                    )
-                })?;
-            Ok(transform.transform().transform_point(Vec3::new(
-                local_anchor[0] as f32,
-                local_anchor[1] as f32,
-                local_anchor[2] as f32,
-            )))
-        }
+        chain.bodies.clone()
     }
 }
 
@@ -61,11 +37,10 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsChainLengthRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        const MAX_TOTAL_REEL_SPEED: f32 = engine_spatial::MAX_TETHER_REEL_SPEED as f32;
         if !request.target_length.is_finite()
             || request.target_length <= 0.0
             || !request.reel_speed.is_finite()
-            || !(0.0..=MAX_TOTAL_REEL_SPEED).contains(&request.reel_speed)
+            || request.reel_speed < 0.0
         {
             return Err(error(
                 "invalid-dynamics-chain-length",
@@ -77,21 +52,16 @@ impl RuntimeDynamicsBridge {
             .chains
             .get(&request.id)
             .ok_or_else(|| error("dynamics-chain-not-found", "missing chain"))?;
-        let mut definitions = world.service.capture_tethers();
-        for definition in &mut definitions {
-            if chain.links.contains(&definition.id) {
-                definition.target_length =
-                    f64::from(request.target_length) / chain.links.len() as f64;
-                definition.reel_speed = f64::from(request.reel_speed) / chain.links.len() as f64;
-            }
+        let links = chain.links.len() as f64;
+        for link in &chain.links {
+            let mut definition = world.solver.tether(*link).expect("chain link");
+            definition.target_length = f64::from(request.target_length) / links;
+            definition.reel_speed = f64::from(request.reel_speed) / links;
+            world
+                .solver
+                .set_tether(definition)
+                .map_err(|failure| error(failure.code(), failure.code()))?;
         }
-        world
-            .service
-            .replace_tethers(&world.entities, definitions)
-            .map_err(|failure| error(failure.code(), failure.code()))?;
-        world
-            .last_tethers
-            .retain(|readout| !chain.links.contains(&readout.id));
         Ok(())
     }
 
@@ -101,11 +71,7 @@ impl RuntimeDynamicsBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         self.create_chain(
             request.world.value,
-            DynamicsTetherEndpoint::Fixed([
-                f64::from(request.anchor.x),
-                f64::from(request.anchor.y),
-                f64::from(request.anchor.z),
-            ]),
+            DynamicsTetherEndpoint::Fixed(vec3_f64(native_vec3_value(request.anchor))),
             request.end,
             request.config,
         )
@@ -134,32 +100,21 @@ impl RuntimeDynamicsBridge {
                 "chain identity already exists; remove before recreation",
             ));
         }
-        if !(1..=MAX_BEADS).contains(&config.bead_count)
+        if config.bead_count == 0
             || !config.link_length.is_finite()
             || config.link_length <= 0.0
-            || !(config.link_length * config.bead_count as f32).is_finite()
             || !config.radius.is_finite()
             || config.radius <= 0.0
-            || !config.properties.enabled
         {
             return Err(error(
                 "invalid-dynamics-chain-configuration",
                 "invalid chain configuration",
             ));
         }
-        if (!world.invalidated_chains.contains(&config.id) && authored_count(world) >= MAX_ROPES)
-            || world.bodies.len() + config.bead_count as usize > MAX_WORLD_BODIES
-        {
-            return Err(error(
-                "dynamics-chain-budget-exceeded",
-                "chain or body budget exceeded",
-            ));
-        }
-        let start = endpoint_point(world, anchor)?;
+        let start = endpoint_point(world, anchor);
         let end = native_vec3_value(end);
         let separation = (end - start).length();
-        if !finite_vec3(start)
-            || !finite_vec3(end)
+        if !finite_vec3(end)
             || !separation.is_finite()
             || separation > config.link_length * config.bead_count as f32 + 0.001
         {
@@ -168,25 +123,40 @@ impl RuntimeDynamicsBridge {
                 "chain endpoints are nonfinite or out of reach",
             ));
         }
-        let mut entities = world.entities.clone();
-        let mut service = world.service.clone();
-        let mut definitions = service.capture_tethers();
-        let mut next_entity = self.next_entity;
-        let mut next_body = self.next_body;
-        // Internal link identities are allocated from the available namespace,
-        // not derived from a product ID. Public tether edits cannot address them.
-        let mut next_link = u64::MAX;
         let mut chain = DynamicsChain {
             links: Vec::new(),
             bodies: Vec::new(),
             anchor,
         };
-        let mut previous = anchor;
+        let built = self.build_chain(world_handle, &mut chain, start, end, config);
+        let world = self.active_world_mut(world_handle)?;
+        if let Err(failure) = built {
+            let released = world.remove_chain_bodies(&chain);
+            for handle in released {
+                self.bodies.insert(handle, BodySlot::Tombstoned);
+            }
+            return Err(failure);
+        }
+        world.invalidated_chains.remove(&config.id);
+        world.chains.insert(config.id, chain);
+        Ok(())
+    }
+
+    fn build_chain(
+        &mut self,
+        world_handle: u64,
+        chain: &mut DynamicsChain,
+        start: Vec3,
+        end: Vec3,
+        config: NativeDynamicsChainConfig,
+    ) -> Result<(), CsharpEngineServicesError> {
+        // Link identities count down from the top of the namespace, clear of
+        // product tether identities in ordinary use.
+        let mut next_link = u64::MAX;
+        let mut previous = chain.anchor;
         for index in 0..config.bead_count {
-            let entity = EntityId::new(Self::allocate(&mut next_entity, "chain entity")?);
-            let handle = Self::allocate(&mut next_body, "chain body")?;
             let position = start + (end - start) * ((index + 1) as f32 / config.bead_count as f32);
-            let body = body_config_with_properties(
+            let bead = body_config_with_properties(
                 EntityTransform {
                     translation: position,
                     rotation: Quat::IDENTITY,
@@ -197,59 +167,33 @@ impl RuntimeDynamicsBridge {
                 },
                 config.properties,
             )?;
-            insert_body(&mut entities, entity, body)?;
-            while definitions
-                .iter()
-                .any(|definition| definition.id == next_link)
+            let handle = self.create_body_with_config(world_handle, bead)?.value;
+            chain.bodies.push(handle);
+            let world = self.active_world_mut(world_handle)?;
+            while world.solver.tether(next_link).is_some()
                 || world.invalidated_tethers.contains(&next_link)
             {
-                next_link = next_link.checked_sub(1).ok_or_else(|| {
-                    error("dynamics-chain-budget-exceeded", "link identity exhausted")
-                })?;
+                next_link -= 1;
             }
             let endpoint = DynamicsTetherEndpoint::Body {
-                body: DynamicsBodyId(entity.raw()),
+                body: DynamicsBodyId(handle),
                 local_anchor: [0.0; 3],
             };
-            definitions.push(DynamicsTether {
-                id: next_link,
-                first: previous,
-                second: endpoint,
-                maximum_length: f64::from(config.link_length),
-                target_length: f64::from(config.link_length),
-                reel_speed: 0.0,
-                was_taut: false,
-                wake: true,
-                contacts_enabled: false,
-            });
+            world
+                .solver
+                .set_tether(DynamicsTether {
+                    id: next_link,
+                    first: previous,
+                    second: endpoint,
+                    maximum_length: f64::from(config.link_length),
+                    target_length: f64::from(config.link_length),
+                    reel_speed: 0.0,
+                    contacts_enabled: false,
+                })
+                .map_err(|failure| error(failure.code(), failure.code()))?;
             chain.links.push(next_link);
-            chain.bodies.push((handle, entity));
             previous = endpoint;
         }
-        service
-            .replace_tethers(&entities, definitions)
-            .map_err(|failure| error(failure.code(), failure.code()))?;
-        // No canonical mutation precedes full body/link validation.
-        let world = self.active_world_mut(world_handle)?;
-        world.entities = entities;
-        world.service = service;
-        for (handle, entity) in &chain.bodies {
-            world.bodies.insert(*handle, *entity);
-        }
-        world.invalidated_chains.remove(&config.id);
-        let slots = chain.bodies.clone();
-        world.chains.insert(config.id, chain);
-        for (handle, entity) in slots {
-            self.bodies.insert(
-                handle,
-                BodySlot::Active {
-                    world: world_handle,
-                    entity,
-                },
-            );
-        }
-        self.next_entity = next_entity;
-        self.next_body = next_body;
         Ok(())
     }
 
@@ -271,14 +215,12 @@ impl RuntimeDynamicsBridge {
             ..Default::default()
         };
         for link in &chain.links {
-            let definition = world
-                .service
-                .tether(*link)
-                .ok_or_else(|| error("dynamics-chain-not-found", "missing chain link"))?;
+            let definition = world.solver.tether(*link).expect("chain link");
             result.effective_length += definition.maximum_length as f32;
             result.target_length += definition.target_length as f32;
             if let Some(readout) = world
-                .last_tethers
+                .solver
+                .tether_readouts()
                 .iter()
                 .find(|readout| readout.id == *link)
             {
@@ -301,15 +243,15 @@ impl RuntimeDynamicsBridge {
             return Ok(NativeDynamicsChainPointReadout::default());
         };
         let endpoint = if request.index == 0 {
-            // Fixed endpoints are canonically rebased in the service.
+            // The solver keeps fixed anchors rebased.
             world
-                .service
+                .solver
                 .tether(chain.links[0])
-                .ok_or_else(|| error("dynamics-chain-not-found", "missing chain link"))?
+                .expect("chain link")
                 .first
-        } else if let Some((_, entity)) = chain.bodies.get(request.index as usize - 1) {
+        } else if let Some(bead) = chain.bodies.get(request.index as usize - 1) {
             DynamicsTetherEndpoint::Body {
-                body: DynamicsBodyId(entity.raw()),
+                body: DynamicsBodyId(*bead),
                 local_anchor: [0.0; 3],
             }
         } else {
@@ -317,7 +259,7 @@ impl RuntimeDynamicsBridge {
         };
         Ok(NativeDynamicsChainPointReadout {
             present: true,
-            position: native_vec3(endpoint_point(world, endpoint)?),
+            position: native_vec3(endpoint_point(world, endpoint)),
         })
     }
 
@@ -326,45 +268,18 @@ impl RuntimeDynamicsBridge {
         request: NativeDynamicsChainRequest,
     ) -> Result<NativeDynamicsChainReleaseReceipt, CsharpEngineServicesError> {
         let world = self.active_world_mut(request.world.value)?;
-        let Some(chain) = world.chains.get(&request.id) else {
-            world.invalidated_chains.remove(&request.id);
+        world.invalidated_chains.remove(&request.id);
+        let Some(chain) = world.chains.remove(&request.id) else {
             return Ok(NativeDynamicsChainReleaseReceipt::default());
         };
-        let mut entities = world.entities.clone();
-        for (_, entity) in &chain.bodies {
-            let revision = entities.revision();
-            EntityAuthoringService
-                .destroy(&mut entities, revision, *entity)
-                .map_err(|failure| error("dynamics-chain-release-failed", &failure.to_string()))?;
-        }
-        let mut service = world.service.clone();
-        let definitions = service
-            .capture_tethers()
-            .into_iter()
-            .filter(|definition| !chain.links.contains(&definition.id))
-            .collect();
-        service
-            .replace_tethers(&entities, definitions)
-            .map_err(|failure| error(failure.code(), failure.code()))?;
-        let chain = world.chains.remove(&request.id).expect("validated chain");
-        world.entities = entities;
-        world.service = service;
-        world
-            .last_tethers
-            .retain(|readout| !chain.links.contains(&readout.id));
-        for (handle, entity) in &chain.bodies {
-            world.bodies.remove(handle);
-            world.last_contacts.remove(entity);
-            world
-                .last_contact_receipts
-                .retain(|contact| contact.first != *entity && contact.second != Some(*entity));
-        }
-        for (handle, _) in &chain.bodies {
-            self.bodies.insert(*handle, BodySlot::Tombstoned);
+        let released = world.remove_chain_bodies(&chain);
+        let removed_bodies = released.len() as u32;
+        for handle in released {
+            self.bodies.insert(handle, BodySlot::Tombstoned);
         }
         Ok(NativeDynamicsChainReleaseReceipt {
             released: true,
-            removed_bodies: chain.bodies.len() as u32,
+            removed_bodies,
         })
     }
 }
@@ -544,7 +459,7 @@ pub(super) unsafe extern "C" fn configure_ropes(
         .active_world_mut(request.world.value)
         .and_then(|world| {
             world
-                .service
+                .solver
                 .configure_rope_solver(engine_spatial::DynamicsRopeSolverConfig {
                     substeps: request.substeps as usize,
                     iterations: request.iterations as usize,

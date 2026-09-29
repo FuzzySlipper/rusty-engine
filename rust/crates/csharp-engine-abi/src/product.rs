@@ -76,7 +76,6 @@ pub type NativeBindDynamicsWorldCollision = unsafe extern "C" fn(
 pub type NativeRebaseDynamicsWorldOrigin = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsRebaseWorldOriginRequest,
-    *mut NativeDynamicsRebaseWorldOriginReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyDynamicsBody = unsafe extern "C" fn(
@@ -1279,7 +1278,6 @@ pub struct NativeDynamicsApi {
     pub destroy_operation_diagnostic_lease: NativeDestroyDynamicsOperationDiagnosticLease,
     pub context: *mut c_void,
     pub observe_anchor: NativeObserveDynamicsAnchor,
-    pub refresh_anchor: NativeRefreshDynamicsAnchor,
     pub step_with_reactions: NativeStepDynamicsWithReactions,
     pub configure_ropes: NativeConfigureDynamicsRopes,
     pub set_chain_length: NativeSetDynamicsChainLength,
@@ -2007,12 +2005,6 @@ pub type NativeDestroyRenderResource = unsafe extern "C" fn(
 pub type NativeObserveDynamicsAnchor = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsObserveAnchorRequest,
-    *mut NativeDynamicsAnchorObservation,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeRefreshDynamicsAnchor = unsafe extern "C" fn(
-    *mut c_void,
-    NativeDynamicsRefreshAnchorRequest,
     *mut NativeDynamicsAnchorObservation,
     *mut NativeOperationErrorReceipt,
 ) -> i32;

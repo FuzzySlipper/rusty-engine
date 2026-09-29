@@ -1,0 +1,33 @@
+{
+  "verdict": "DYNAMICS_EXERCISE_FAILED only 0 bodies slept before the edit",
+  "facts": {
+    "updates": 600,
+    "stepUsP50": 724.2,
+    "stepUsP95": 1196.3,
+    "meanUsSettling": 711.3,
+    "meanUsSettled": 741.7,
+    "meanUsAfterDig": 793.6,
+    "sleepingBeforeEdit": 0,
+    "sleepingAtEnd": 0,
+    "bodies": 42,
+    "contacts": 37,
+    "undugTowerTopY": 4.384,
+    "dugTowerTopY": -50.604,
+    "teleportedY": 0.299,
+    "addedCrateY": 0.399,
+    "ropeDistance": 3.0,
+    "ropeCatches": 1,
+    "characterReactions": 94,
+    "characterTravel": "<-0.07652092, -0.2800001, 13.277493>",
+    "sledTravel": "<-0.11741638, -0.011038721, 12.825623>"
+  },
+  "hostUpdates": {
+    "samples": "625",
+    "callbackUsP50": "803",
+    "callbackUsP95": "1292"
+  },
+  "log": [
+    "DYNAMICS_FACTS {\"updates\":600,\"stepUsP50\":724.2,\"stepUsP95\":1196.3,\"meanUsSettling\":711.3,\"meanUsSettled\":741.7,\"meanUsAfterDig\":793.6,\"sleepingBeforeEdit\":0,\"sleepingAtEnd\":0,\"bodies\":42,\"contacts\":37,\"undugTowerTopY\":4.384,\"dugTowerTopY\":-50.604,\"teleportedY\":0.299,\"addedCrateY\":0.399,\"ropeDistance\":3.0000,\"ropeCatches\":1,\"characterReactions\":94,\"characterTravel\":\"<-0.07652092, -0.2800001, 13.277493>\",\"sledTravel\":\"<-0.11741638, -0.011038721, 12.825623>\"}",
+    "DYNAMICS_EXERCISE_FAILED only 0 bodies slept before the edit"
+  ]
+}

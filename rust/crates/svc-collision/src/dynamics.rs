@@ -1,27 +1,20 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rapier3d_f64::prelude::{
-    ColliderBuilder, Group, IntegrationParameters, InteractionGroups, InteractionTestMode,
-    MassProperties, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation,
-    SharedShape, Vector,
+    ColliderBuilder, ColliderHandle, Group, IntegrationParameters, InteractionGroups,
+    InteractionTestMode, LockedAxes, MassProperties, PhysicsWorld, RigidBodyBuilder,
+    RigidBodyHandle, RigidBodyType, Rotation, SharedShape, Vector,
 };
 
 use crate::tether::{
-    self, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout, SolverTether,
+    DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout,
+    SolverTether,
 };
 use crate::CollisionProjection;
 
-pub const MAX_DYNAMICS_BODIES: usize = 1_024;
-pub const MAX_DYNAMICS_ACTIONS: usize = 4_096;
-pub const MAX_DYNAMICS_CONTACTS: usize = 4_096;
-pub const MAX_DYNAMICS_STEPS: u8 = 8;
-// The owning Engine request uses f32 seconds. Use those exact promoted boundary
-// values so a nominal public-limit request is not rejected by f32 rounding.
-pub const MIN_DYNAMICS_STEP_SECONDS: f64 = (1.0_f32 / 1_000.0) as f64;
-pub const MAX_DYNAMICS_STEP_SECONDS: f64 = (1.0_f32 / 15.0) as f64;
-pub const MAX_DISCRETE_TRANSLATION_PER_STEP: f64 = 1.0;
-pub const MAX_CCD_TRANSLATION_PER_STEP: f64 = 100.0;
 const MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE: f64 = 1.0e-3;
+const ROTATION_NORMALIZATION_TOLERANCE: f64 = 1.0e-4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DynamicsBodyId(pub u64);
@@ -93,15 +86,15 @@ impl DynamicsAction {
             wake: true,
         }
     }
-}
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct DynamicsStepInput {
-    pub step_seconds: f64,
-    pub steps: u8,
-    pub gravity: [f64; 3],
-    pub bodies: Vec<DynamicsBodyInput>,
-    pub actions: Vec<DynamicsAction>,
+    fn is_finite(&self) -> bool {
+        self.force
+            .into_iter()
+            .chain(self.torque)
+            .chain(self.impulse)
+            .chain(self.torque_impulse)
+            .all(f64::is_finite)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -122,61 +115,33 @@ pub struct DynamicsContact {
     pub impulse_magnitude: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct DynamicsStepOutput {
-    pub bodies: Vec<DynamicsBodyOutput>,
-    pub contacts: Vec<DynamicsContact>,
-    pub tethers: Vec<DynamicsTetherReadout>,
+/// Counts from one [`DynamicsSolver::step`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DynamicsStepReceipt {
+    pub generation: u64,
+    pub body_count: usize,
+    pub contact_count: usize,
+    pub rope_link_count: usize,
+    pub rope_substeps: usize,
+    pub rope_iterations: usize,
+}
+
+/// What a static-environment rebind changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DynamicsEnvironmentReceipt {
+    pub retained: usize,
+    pub inserted: usize,
+    pub removed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DynamicsError {
     Tether(DynamicsTetherError),
-    InvalidStep {
-        actual: f64,
-    },
-    InvalidStepCount {
-        actual: u8,
-        maximum: u8,
-    },
-    TooManyBodies {
-        actual: usize,
-        maximum: usize,
-    },
-    TooManyActions {
-        actual: usize,
-        maximum: usize,
-    },
-    TooManyContacts {
-        maximum: usize,
-    },
-    DuplicateBody {
-        body: DynamicsBodyId,
-    },
-    UnknownActionBody {
-        body: DynamicsBodyId,
-    },
-    InvalidBody {
-        body: DynamicsBodyId,
-    },
-    LockedTranslationAxisVelocity {
-        body: DynamicsBodyId,
-    },
-    LockedRotationAxisVelocity {
-        body: DynamicsBodyId,
-    },
-    InvalidAction {
-        body: DynamicsBodyId,
-    },
-    MotionLimitExceeded {
-        body: DynamicsBodyId,
-        continuous_collision: bool,
-        estimated_translation: f64,
-        maximum: f64,
-    },
-    OutputNotFinite {
-        body: DynamicsBodyId,
-    },
+    InvalidStep { actual: f64 },
+    DuplicateBody { body: DynamicsBodyId },
+    UnknownBody { body: DynamicsBodyId },
+    InvalidBody { body: DynamicsBodyId },
+    InvalidAction { body: DynamicsBodyId },
 }
 
 impl DynamicsError {
@@ -184,20 +149,10 @@ impl DynamicsError {
         match self {
             Self::Tether(error) => error.code(),
             Self::InvalidStep { .. } => "invalid-dynamics-step",
-            Self::InvalidStepCount { .. } => "invalid-dynamics-step-count",
-            Self::TooManyBodies { .. } => "dynamics-body-quota-exceeded",
-            Self::TooManyActions { .. } => "dynamics-action-quota-exceeded",
-            Self::TooManyContacts { .. } => "dynamics-contact-quota-exceeded",
             Self::DuplicateBody { .. } => "duplicate-dynamics-body",
-            Self::UnknownActionBody { .. } => "unknown-dynamics-action-body",
+            Self::UnknownBody { .. } => "unknown-dynamics-body",
             Self::InvalidBody { .. } => "invalid-dynamics-body",
-            Self::LockedTranslationAxisVelocity { .. } => {
-                "locked-dynamics-translation-axis-velocity"
-            }
-            Self::LockedRotationAxisVelocity { .. } => "locked-dynamics-rotation-axis-velocity",
             Self::InvalidAction { .. } => "invalid-dynamics-action",
-            Self::MotionLimitExceeded { .. } => "dynamics-motion-limit-exceeded",
-            Self::OutputNotFinite { .. } => "non-finite-dynamics-output",
         }
     }
 }
@@ -210,23 +165,14 @@ impl std::fmt::Display for DynamicsError {
 
 impl std::error::Error for DynamicsError {}
 
-#[derive(Debug, Clone, Copy, Default)]
-struct AggregatedAction {
-    force: Vector,
-    torque: Vector,
-    impulse: Vector,
-    torque_impulse: Vector,
-    wake: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AxisLocks {
-    translation: [bool; 3],
-    rotation: [bool; 3],
+impl From<DynamicsTetherError> for DynamicsError {
+    fn from(value: DynamicsTetherError) -> Self {
+        Self::Tether(value)
+    }
 }
 
 /// Linear point-velocity response to unit world impulses, including locked
-/// axes and rotational inertia. No solver world or step is created.
+/// axes and rotational inertia.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DynamicsAnchorObservation {
     pub point: [f64; 3],
@@ -235,217 +181,476 @@ pub struct DynamicsAnchorObservation {
     pub response: [[f64; 3]; 3],
 }
 
-pub fn observe_dynamics_anchor(
-    body: DynamicsBodyInput,
-    local_anchor: [f64; 3],
-) -> Result<DynamicsAnchorObservation, DynamicsError> {
-    validate_body(&body)?;
-    if !body.enabled || !local_anchor.into_iter().all(f64::is_finite) {
-        return Err(DynamicsError::InvalidBody { body: body.id });
+/// One live Rapier world. Bodies, static environment colliders and rope
+/// joints persist between steps, so contacts, sleeping and solver warm starts
+/// carry over. Changes apply directly; nothing is staged or rolled back.
+pub struct DynamicsSolver {
+    world: PhysicsWorld,
+    bodies: BTreeMap<DynamicsBodyId, RigidBodyHandle>,
+    /// Static colliders keyed by the address of their shared shape, so a
+    /// rebind replaces only the chunks and mesh instances that changed.
+    environment: BTreeMap<usize, (SharedShape, ColliderHandle)>,
+    tethers: BTreeMap<u64, SolverTether>,
+    rope_solver: DynamicsRopeSolverConfig,
+    contacts: Vec<DynamicsContact>,
+    tether_readouts: Vec<DynamicsTetherReadout>,
+    generation: u64,
+}
+
+impl DynamicsSolver {
+    pub fn new(gravity: [f64; 3]) -> Self {
+        Self {
+            world: PhysicsWorld {
+                gravity: vector(gravity),
+                ..PhysicsWorld::default()
+            },
+            bodies: BTreeMap::new(),
+            environment: BTreeMap::new(),
+            tethers: BTreeMap::new(),
+            rope_solver: DynamicsRopeSolverConfig::default(),
+            contacts: Vec::new(),
+            tether_readouts: Vec::new(),
+            generation: 0,
+        }
     }
-    let (builder, collider) = body_builders(&body);
-    let rigid_body = builder.build();
-    let mut properties = rigid_body.mass_properties().clone();
-    properties.local_mprops = collider.build().mass_properties();
-    properties.update_world_mass_properties(RigidBodyType::Dynamic, rigid_body.position());
-    let point = rigid_body.position().transform_point(vector(local_anchor));
-    let lever = point - properties.world_com;
-    let point_velocity = vector(body.linear_velocity) + vector(body.angular_velocity).cross(lever);
-    let response = [Vector::X, Vector::Y, Vector::Z].map(|impulse| {
-        let angular = properties.effective_world_inv_inertia * lever.cross(impulse);
-        (impulse * properties.effective_inv_mass + angular.cross(lever)).to_array()
-    });
-    if !point.is_finite()
-        || !point_velocity.is_finite()
-        || !properties.world_com.is_finite()
-        || !response.iter().flatten().all(|value| value.is_finite())
-    {
-        return Err(DynamicsError::OutputNotFinite { body: body.id });
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
-    Ok(DynamicsAnchorObservation {
-        point: point.to_array(),
-        point_velocity: point_velocity.to_array(),
-        center_of_mass: properties.world_com.to_array(),
-        response,
-    })
-}
 
-/// Run one bounded candidate simulation from canonical inputs.
-///
-/// The Rapier world is rebuilt off-side for every call. It is a derived cache,
-/// not persistent authority; callers publish [`DynamicsStepOutput`] only after
-/// their own exact-revision transaction succeeds.
-pub fn simulate_dynamics(
-    projection: &CollisionProjection,
-    input: DynamicsStepInput,
-) -> Result<DynamicsStepOutput, DynamicsError> {
-    simulate_dynamics_with_tethers(projection, input, Vec::new())
-}
+    pub fn body_count(&self) -> usize {
+        self.bodies.len()
+    }
 
-/// Simulate admitted bodies and maximum-distance tethers in the same derived world.
-pub fn simulate_dynamics_with_tethers(
-    projection: &CollisionProjection,
-    input: DynamicsStepInput,
-    tethers: Vec<DynamicsTether>,
-) -> Result<DynamicsStepOutput, DynamicsError> {
-    simulate_dynamics_with_rope_solver(
-        projection,
-        input,
-        tethers,
-        tether::DynamicsRopeSolverConfig::default(),
-    )
-}
+    /// Contacts from the latest step, ordered by body identity.
+    pub fn contacts(&self) -> &[DynamicsContact] {
+        &self.contacts
+    }
 
-pub fn simulate_dynamics_with_rope_solver(
-    projection: &CollisionProjection,
-    mut input: DynamicsStepInput,
-    mut tethers: Vec<DynamicsTether>,
-    solver: tether::DynamicsRopeSolverConfig,
-) -> Result<DynamicsStepOutput, DynamicsError> {
-    solver.validate().map_err(DynamicsError::Tether)?;
-    validate_header(&input)?;
-    input.bodies.sort_by_key(|body| body.id);
-    let mut seen = BTreeSet::new();
-    let mut body_locks = BTreeMap::new();
-    for body in &input.bodies {
-        if !seen.insert(body.id) {
+    /// Rope readouts from the latest step.
+    pub fn tether_readouts(&self) -> &[DynamicsTetherReadout] {
+        &self.tether_readouts
+    }
+
+    /// Make `projection` the static environment. Colliders whose shape is
+    /// unchanged stay in the world; bodies touching a removed collider wake.
+    pub fn bind_environment(
+        &mut self,
+        projection: &CollisionProjection,
+    ) -> DynamicsEnvironmentReceipt {
+        let mut receipt = DynamicsEnvironmentReceipt::default();
+        let mut next = BTreeMap::new();
+        for shape in projection.dynamics_shapes() {
+            let key = shape_key(&shape);
+            if next.contains_key(&key) {
+                continue;
+            }
+            let entry = match self.environment.remove(&key) {
+                Some(entry) => {
+                    receipt.retained += 1;
+                    entry
+                }
+                None => {
+                    receipt.inserted += 1;
+                    let collider = self.world.insert_collider(
+                        ColliderBuilder::new(shape.clone())
+                            // Fixed terrain contributes no dynamic mass. Avoid
+                            // walking every voxel child to derive its inertia.
+                            .mass_properties(MassProperties::default())
+                            .collision_groups(InteractionGroups::all())
+                            .user_data(0),
+                        None,
+                    );
+                    (shape, collider)
+                }
+            };
+            next.insert(key, entry);
+        }
+        for (_, (_, collider)) in std::mem::replace(&mut self.environment, next) {
+            receipt.removed += 1;
+            let touching = self
+                .world
+                .contact_pairs_with(collider)
+                .flat_map(|pair| [pair.collider1, pair.collider2])
+                .filter_map(|handle| self.world.colliders.get(handle)?.parent())
+                .collect::<Vec<_>>();
+            for body in touching {
+                self.world.wake_up(body, true);
+            }
+            self.world.remove_collider(collider);
+        }
+        receipt
+    }
+
+    pub fn insert_body(&mut self, body: DynamicsBodyInput) -> Result<(), DynamicsError> {
+        if self.bodies.contains_key(&body.id) {
             return Err(DynamicsError::DuplicateBody { body: body.id });
         }
-        validate_body(body)?;
-        body_locks.insert(
-            body.id,
-            AxisLocks {
-                translation: body.locked_translation_axes,
-                rotation: body.locked_rotation_axes,
-            },
-        );
-    }
-    let actions = aggregate_actions(&input.actions, &body_locks)?;
-    validate_motion(&input, &actions)?;
-    tether::validate_dynamics_tethers(&mut tethers, &input.bodies)
-        .map_err(DynamicsError::Tether)?;
-    let subdivisions = if tethers.is_empty() {
-        1
-    } else {
-        solver.substeps
-    };
-
-    let mut world = PhysicsWorld {
-        gravity: vector(input.gravity),
-        integration_parameters: IntegrationParameters {
-            dt: input.step_seconds / subdivisions as f64,
-            num_solver_iterations: if tethers.is_empty() {
-                IntegrationParameters::default().num_solver_iterations
-            } else {
-                solver.iterations
-            },
-            ..IntegrationParameters::default()
-        },
-        ..PhysicsWorld::default()
-    };
-    insert_static_environment(&mut world, projection);
-
-    let mut handles = BTreeMap::<DynamicsBodyId, RigidBodyHandle>::new();
-    for body in &input.bodies {
-        let (builder, collider) = body_builders(body);
-        let (handle, _) = world.insert(builder, collider);
-        handles.insert(body.id, handle);
+        validate_body(&body)?;
+        let (builder, collider) = body_builders(&body);
+        let (handle, _) = self.world.insert(builder, collider);
+        self.bodies.insert(body.id, handle);
+        Ok(())
     }
 
-    for (body, action) in &actions {
-        let target = &mut world.bodies[handles[body]];
-        target.apply_impulse(action.impulse, action.wake);
-        target.apply_torque_impulse(action.torque_impulse, action.wake);
-        target.add_force(action.force, action.wake);
-        target.add_torque(action.torque, action.wake);
-        if action.wake {
-            target.wake_up(true);
+    /// Remove a body and every rope attached to it. Returns the removed rope
+    /// identities.
+    pub fn remove_body(&mut self, id: DynamicsBodyId) -> Vec<u64> {
+        let Some(body) = self.bodies.remove(&id) else {
+            return Vec::new();
+        };
+        let attached = self.tethers_attached_to(id);
+        for tether in &attached {
+            if let Some(tether) = self.tethers.remove(tether) {
+                tether.remove(&mut self.world);
+            }
         }
-    }
-    let mut solver_tethers: Vec<_> = tethers
-        .into_iter()
-        .map(|definition| SolverTether::insert(definition, &mut world, &handles))
-        .collect();
-    for _ in 0..usize::from(input.steps) * subdivisions {
-        for tether in &mut solver_tethers {
-            tether.reel(&mut world, input.step_seconds / subdivisions as f64);
-        }
-        world.step();
-        for tether in &mut solver_tethers {
-            tether.accumulate(&world);
-        }
+        self.world.remove_body(body);
+        self.contacts
+            .retain(|contact| contact.first != id && contact.second != Some(id));
+        self.tether_readouts
+            .retain(|readout| !attached.contains(&readout.id));
+        attached
     }
 
-    let mut bodies = Vec::with_capacity(handles.len());
-    for (id, handle) in &handles {
-        let body = &world.bodies[*handle];
-        let translation = body.translation().to_array();
-        let rotation = body.rotation().to_array();
-        let linear_velocity = body.linvel().to_array();
-        let angular_velocity = body.angvel().to_array();
+    /// Replace a body's shape, mass and material in place. Attached ropes
+    /// stay attached; `body.translation` and `body.rotation` become its pose.
+    pub fn replace_body(&mut self, body: DynamicsBodyInput) -> Result<(), DynamicsError> {
+        let Some(previous) = self.bodies.get(&body.id).copied() else {
+            return Err(DynamicsError::UnknownBody { body: body.id });
+        };
+        validate_body(&body)?;
+        let attached = self
+            .tethers_attached_to(body.id)
+            .into_iter()
+            .filter_map(|id| self.tethers.remove(&id))
+            .map(|tether| tether.remove(&mut self.world))
+            .collect::<Vec<_>>();
+        self.world.remove_body(previous);
+        let (builder, collider) = body_builders(&body);
+        let (handle, _) = self.world.insert(builder, collider);
+        self.bodies.insert(body.id, handle);
+        for (definition, was_taut) in attached {
+            let tether = SolverTether::insert(definition, was_taut, &mut self.world, |id| {
+                self.bodies.get(&id).copied()
+            })?;
+            self.tethers.insert(definition.id, tether);
+        }
+        Ok(())
+    }
+
+    /// Teleport a body and set its velocity and sleep state.
+    pub fn set_body_motion(
+        &mut self,
+        id: DynamicsBodyId,
+        translation: [f64; 3],
+        rotation: [f64; 4],
+        linear_velocity: [f64; 3],
+        angular_velocity: [f64; 3],
+        sleeping: bool,
+    ) -> Result<(), DynamicsError> {
+        let handle = self.handle(id)?;
         if !translation
             .into_iter()
             .chain(rotation)
             .chain(linear_velocity)
             .chain(angular_velocity)
             .all(f64::is_finite)
+            || !unit_rotation(rotation)
         {
-            return Err(DynamicsError::OutputNotFinite { body: *id });
+            return Err(DynamicsError::InvalidBody { body: id });
         }
-        bodies.push(DynamicsBodyOutput {
-            id: *id,
-            translation,
-            rotation,
-            linear_velocity,
-            angular_velocity,
-            sleeping: body.is_sleeping(),
-        });
+        let body = &mut self.world.bodies[handle];
+        let locks = body.locked_axes();
+        body.set_translation(vector(translation), false);
+        body.set_rotation(self::rotation(rotation), false);
+        body.set_linvel(
+            mask_locked_axes(
+                linear_velocity,
+                [
+                    locks.contains(LockedAxes::TRANSLATION_LOCKED_X),
+                    locks.contains(LockedAxes::TRANSLATION_LOCKED_Y),
+                    locks.contains(LockedAxes::TRANSLATION_LOCKED_Z),
+                ],
+            ),
+            false,
+        );
+        body.set_angvel(
+            mask_locked_axes(
+                angular_velocity,
+                [
+                    locks.contains(LockedAxes::ROTATION_LOCKED_X),
+                    locks.contains(LockedAxes::ROTATION_LOCKED_Y),
+                    locks.contains(LockedAxes::ROTATION_LOCKED_Z),
+                ],
+            ),
+            false,
+        );
+        if sleeping {
+            body.sleep();
+        } else {
+            self.world.wake_up(handle, true);
+        }
+        Ok(())
     }
 
-    let mut contacts = Vec::new();
-    for pair in world
-        .contact_pairs()
-        .filter(|pair| pair.has_any_active_contact())
-    {
-        let first = dynamic_id(world.colliders[pair.collider1].user_data);
-        let second = dynamic_id(world.colliders[pair.collider2].user_data);
-        let (first, second) = match (first, second) {
-            (Some(first), second) => (first, second),
-            (None, Some(second)) => (second, None),
-            (None, None) => continue,
-        };
-        if contacts.len() >= MAX_DYNAMICS_CONTACTS {
-            return Err(DynamicsError::TooManyContacts {
-                maximum: MAX_DYNAMICS_CONTACTS,
+    pub fn body(&self, id: DynamicsBodyId) -> Option<DynamicsBodyOutput> {
+        let body = &self.world.bodies[*self.bodies.get(&id)?];
+        Some(DynamicsBodyOutput {
+            id,
+            translation: body.translation().to_array(),
+            rotation: body.rotation().to_array(),
+            linear_velocity: body.linvel().to_array(),
+            angular_velocity: body.angvel().to_array(),
+            sleeping: body.is_sleeping(),
+        })
+    }
+
+    /// Point, point velocity and impulse response of an enabled body at a
+    /// body-local anchor. `None` for an absent or disabled body.
+    pub fn observe_anchor(
+        &self,
+        id: DynamicsBodyId,
+        local_anchor: [f64; 3],
+    ) -> Option<DynamicsAnchorObservation> {
+        let body = &self.world.bodies[*self.bodies.get(&id)?];
+        if !body.is_enabled() {
+            return None;
+        }
+        let mut properties = body.mass_properties().clone();
+        properties.update_world_mass_properties(RigidBodyType::Dynamic, body.position());
+        let point = body.position().transform_point(vector(local_anchor));
+        let lever = point - properties.world_com;
+        let point_velocity = body.linvel() + body.angvel().cross(lever);
+        let response = [Vector::X, Vector::Y, Vector::Z].map(|impulse| {
+            let angular = properties.effective_world_inv_inertia * lever.cross(impulse);
+            (impulse * properties.effective_inv_mass + angular.cross(lever)).to_array()
+        });
+        Some(DynamicsAnchorObservation {
+            point: point.to_array(),
+            point_velocity: point_velocity.to_array(),
+            center_of_mass: properties.world_com.to_array(),
+            response,
+        })
+    }
+
+    pub fn rope_solver(&self) -> DynamicsRopeSolverConfig {
+        self.rope_solver
+    }
+
+    pub fn configure_rope_solver(
+        &mut self,
+        config: DynamicsRopeSolverConfig,
+    ) -> Result<(), DynamicsError> {
+        config.validate()?;
+        self.rope_solver = config;
+        Ok(())
+    }
+
+    pub fn tether_count(&self) -> usize {
+        self.tethers.len()
+    }
+
+    pub fn tether(&self, id: u64) -> Option<DynamicsTether> {
+        self.tethers.get(&id).map(|tether| tether.definition)
+    }
+
+    /// Create a rope, or edit one. An edit with the same endpoints keeps the
+    /// current effective length and reels it toward the new target; different
+    /// endpoints make a new attachment, which must be within reach.
+    pub fn set_tether(&mut self, definition: DynamicsTether) -> Result<(), DynamicsError> {
+        SolverTether::validate(&definition)?;
+        if let Some(existing) = self.tethers.get_mut(&definition.id) {
+            if existing.definition.first == definition.first
+                && existing.definition.second == definition.second
+            {
+                existing.edit(&mut self.world, definition);
+                return Ok(());
+            }
+        }
+        let bodies = &self.bodies;
+        let resolve = |id: DynamicsBodyId| bodies.get(&id).copied();
+        let distance = SolverTether::endpoint_distance(&definition, &self.world, resolve)?;
+        if SolverTether::reach_exceeded(&definition, distance) {
+            return Err(DynamicsTetherError::OutOfReach { id: definition.id }.into());
+        }
+        if let Some(previous) = self.tethers.remove(&definition.id) {
+            previous.remove(&mut self.world);
+        }
+        let tether = SolverTether::insert(definition, false, &mut self.world, resolve)?;
+        self.tethers.insert(definition.id, tether);
+        self.tether_readouts
+            .retain(|readout| readout.id != definition.id);
+        Ok(())
+    }
+
+    pub fn remove_tether(&mut self, id: u64) -> bool {
+        self.tether_readouts.retain(|readout| readout.id != id);
+        match self.tethers.remove(&id) {
+            Some(tether) => {
+                tether.remove(&mut self.world);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Move every body and fixed rope anchor by `delta`, for a world-origin
+    /// rebase. Velocities, contacts and rope state are unchanged.
+    pub fn translate(&mut self, delta: [f64; 3]) {
+        let delta = vector(delta);
+        for handle in self.bodies.values() {
+            let body = &mut self.world.bodies[*handle];
+            let translation = body.translation() + delta;
+            body.set_translation(translation, false);
+        }
+        for tether in self.tethers.values_mut() {
+            tether.translate(&mut self.world, delta);
+        }
+        for readout in &mut self.tether_readouts {
+            readout.first = (vector(readout.first) + delta).to_array();
+            readout.second = (vector(readout.second) + delta).to_array();
+        }
+    }
+
+    pub fn step(
+        &mut self,
+        step_seconds: f64,
+        steps: u32,
+        actions: &[DynamicsAction],
+    ) -> Result<DynamicsStepReceipt, DynamicsError> {
+        if !step_seconds.is_finite() || step_seconds <= 0.0 {
+            return Err(DynamicsError::InvalidStep {
+                actual: step_seconds,
             });
         }
-        let impulse = pair.total_impulse();
-        contacts.push(DynamicsContact {
-            first,
-            second,
-            impulse: impulse.to_array(),
-            impulse_magnitude: pair.total_impulse_magnitude(),
-        });
+        for action in actions {
+            self.handle(action.body)?;
+            if !action.is_finite() {
+                return Err(DynamicsError::InvalidAction { body: action.body });
+            }
+        }
+        let mut forced = Vec::new();
+        for action in actions {
+            let handle = self.bodies[&action.body];
+            let body = &mut self.world.bodies[handle];
+            body.apply_impulse(vector(action.impulse), action.wake);
+            body.apply_torque_impulse(vector(action.torque_impulse), action.wake);
+            if action.force != [0.0; 3] || action.torque != [0.0; 3] {
+                body.add_force(vector(action.force), action.wake);
+                body.add_torque(vector(action.torque), action.wake);
+                forced.push(handle);
+            }
+            if action.wake {
+                self.world.wake_up(handle, true);
+            }
+        }
+
+        let roped = !self.tethers.is_empty();
+        let subdivisions = if roped { self.rope_solver.substeps } else { 1 };
+        let dt = step_seconds / subdivisions as f64;
+        self.world.integration_parameters = IntegrationParameters {
+            dt,
+            num_solver_iterations: if roped {
+                self.rope_solver.iterations
+            } else {
+                IntegrationParameters::default().num_solver_iterations
+            },
+            ..IntegrationParameters::default()
+        };
+        for tether in self.tethers.values_mut() {
+            tether.begin_step();
+        }
+        for _ in 0..steps as usize * subdivisions {
+            for tether in self.tethers.values_mut() {
+                tether.reel(&mut self.world, dt);
+            }
+            self.world.step();
+            for tether in self.tethers.values_mut() {
+                tether.accumulate(&self.world);
+            }
+        }
+        // Rapier keeps user forces until reset; an action's force lasts one call.
+        for handle in forced {
+            let body = &mut self.world.bodies[handle];
+            body.reset_forces(false);
+            body.reset_torques(false);
+        }
+
+        self.contacts.clear();
+        for pair in self
+            .world
+            .contact_pairs()
+            .filter(|pair| pair.has_any_active_contact())
+        {
+            let first = dynamic_id(self.world.colliders[pair.collider1].user_data);
+            let second = dynamic_id(self.world.colliders[pair.collider2].user_data);
+            let (first, second) = match (first, second) {
+                (Some(first), second) => (first, second),
+                (None, Some(second)) => (second, None),
+                (None, None) => continue,
+            };
+            self.contacts.push(DynamicsContact {
+                first,
+                second,
+                impulse: pair.total_impulse().to_array(),
+                impulse_magnitude: pair.total_impulse_magnitude(),
+            });
+        }
+        self.contacts
+            .sort_by_key(|contact| (contact.first, contact.second));
+        self.tether_readouts = self
+            .tethers
+            .values_mut()
+            .map(|tether| tether.readout(&self.world))
+            .collect();
+        self.generation += 1;
+        Ok(DynamicsStepReceipt {
+            generation: self.generation,
+            body_count: self.bodies.len(),
+            contact_count: self.contacts.len(),
+            rope_link_count: self.tethers.len(),
+            rope_substeps: if roped { self.rope_solver.substeps } else { 0 },
+            rope_iterations: if roped {
+                self.rope_solver.iterations
+            } else {
+                0
+            },
+        })
     }
-    contacts.sort_by_key(|contact| (contact.first, contact.second));
-    let tethers = solver_tethers
-        .iter()
-        .map(|tether| tether.readout(&world))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(DynamicsError::Tether)?;
-    Ok(DynamicsStepOutput {
-        bodies,
-        contacts,
-        tethers,
-    })
+
+    fn handle(&self, id: DynamicsBodyId) -> Result<RigidBodyHandle, DynamicsError> {
+        self.bodies
+            .get(&id)
+            .copied()
+            .ok_or(DynamicsError::UnknownBody { body: id })
+    }
+
+    fn tethers_attached_to(&self, id: DynamicsBodyId) -> Vec<u64> {
+        self.tethers
+            .values()
+            .filter(|tether| {
+                tether.definition.first.body() == Some(id)
+                    || tether.definition.second.body() == Some(id)
+            })
+            .map(|tether| tether.definition.id)
+            .collect()
+    }
 }
 
 fn body_builders(body: &DynamicsBodyInput) -> (RigidBodyBuilder, ColliderBuilder) {
-    let mut builder = RigidBodyBuilder::dynamic()
+    let builder = RigidBodyBuilder::dynamic()
         .translation(vector(body.translation))
         .rotation(vector3(body.rotation))
-        .linvel(vector(body.linear_velocity))
-        .angvel(vector(body.angular_velocity))
+        // A locked axis cannot carry initial velocity.
+        .linvel(mask_locked_axes(
+            body.linear_velocity,
+            body.locked_translation_axes,
+        ))
+        .angvel(mask_locked_axes(
+            body.angular_velocity,
+            body.locked_rotation_axes,
+        ))
         .enabled_translations(
             !body.locked_translation_axes[0],
             !body.locked_translation_axes[1],
@@ -463,9 +668,6 @@ fn body_builders(body: &DynamicsBodyInput) -> (RigidBodyBuilder, ColliderBuilder
         .sleeping(body.sleeping)
         .enabled(body.enabled)
         .user_data(u128::from(body.id.0) + 1);
-    if !body.sleeping {
-        builder = builder.can_sleep(true);
-    }
     let collider = ColliderBuilder::new(shared_shape(body.shape));
     let collider = if let Some(properties) = body.mass_properties {
         collider.mass_properties(MassProperties::with_principal_inertia_frame(
@@ -486,36 +688,6 @@ fn body_builders(body: &DynamicsBodyInput) -> (RigidBodyBuilder, ColliderBuilder
     ))
     .user_data(u128::from(body.id.0) + 1);
     (builder, collider)
-}
-
-fn validate_header(input: &DynamicsStepInput) -> Result<(), DynamicsError> {
-    if !input.step_seconds.is_finite()
-        || !(MIN_DYNAMICS_STEP_SECONDS..=MAX_DYNAMICS_STEP_SECONDS).contains(&input.step_seconds)
-        || !input.gravity.into_iter().all(f64::is_finite)
-    {
-        return Err(DynamicsError::InvalidStep {
-            actual: input.step_seconds,
-        });
-    }
-    if input.steps == 0 || input.steps > MAX_DYNAMICS_STEPS {
-        return Err(DynamicsError::InvalidStepCount {
-            actual: input.steps,
-            maximum: MAX_DYNAMICS_STEPS,
-        });
-    }
-    if input.bodies.len() > MAX_DYNAMICS_BODIES {
-        return Err(DynamicsError::TooManyBodies {
-            actual: input.bodies.len(),
-            maximum: MAX_DYNAMICS_BODIES,
-        });
-    }
-    if input.actions.len() > MAX_DYNAMICS_ACTIONS {
-        return Err(DynamicsError::TooManyActions {
-            actual: input.actions.len(),
-            maximum: MAX_DYNAMICS_ACTIONS,
-        });
-    }
-    Ok(())
 }
 
 fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
@@ -542,151 +714,46 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
             radius,
         } => positive(half_height) && positive(radius),
     };
-    let mass_properties_valid = body.mass_properties.is_none_or(valid_mass_properties);
-    let rotation_norm = body
-        .rotation
-        .into_iter()
-        .map(|value| value * value)
-        .sum::<f64>();
     if !finite
         || !shape_valid
-        || !mass_properties_valid
-        || body.mass <= 0.0
-        || body.linear_damping < 0.0
-        || body.angular_damping < 0.0
-        || body.friction < 0.0
-        || !(0.0..=1.0).contains(&body.restitution)
-        || body.collision_groups == 0
-        || (rotation_norm - 1.0).abs() > 1.0e-4
+        || !positive(body.mass)
+        || !body.mass_properties.is_none_or(valid_mass_properties)
+        || !unit_rotation(body.rotation)
     {
         return Err(DynamicsError::InvalidBody { body: body.id });
-    }
-    if has_velocity_on_locked_axis(body.linear_velocity, body.locked_translation_axes) {
-        return Err(DynamicsError::LockedTranslationAxisVelocity { body: body.id });
-    }
-    if has_velocity_on_locked_axis(body.angular_velocity, body.locked_rotation_axes) {
-        return Err(DynamicsError::LockedRotationAxisVelocity { body: body.id });
     }
     Ok(())
 }
 
 fn valid_mass_properties(properties: DynamicsMassProperties) -> bool {
-    let center_of_mass_valid = properties.center_of_mass.into_iter().all(f64::is_finite);
-    let principal_inertia_valid = properties.principal_inertia.into_iter().all(positive);
-    let frame_norm = properties
-        .principal_inertia_local_frame
-        .into_iter()
-        .map(|value| value * value)
-        .sum::<f64>();
-    center_of_mass_valid
-        && principal_inertia_valid
+    properties.center_of_mass.into_iter().all(f64::is_finite)
+        && properties.principal_inertia.into_iter().all(positive)
         && properties
             .principal_inertia_local_frame
             .into_iter()
             .all(f64::is_finite)
-        && (frame_norm - 1.0).abs() <= MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE
+        && (norm_squared(properties.principal_inertia_local_frame) - 1.0).abs()
+            <= MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE
 }
 
-fn has_velocity_on_locked_axis(velocity: [f64; 3], locked_axes: [bool; 3]) -> bool {
-    locked_axes
-        .into_iter()
-        .zip(velocity)
-        .any(|(locked, component)| locked && component != 0.0)
+fn unit_rotation(value: [f64; 4]) -> bool {
+    (norm_squared(value) - 1.0).abs() <= ROTATION_NORMALIZATION_TOLERANCE
 }
 
-fn aggregate_actions(
-    actions: &[DynamicsAction],
-    bodies: &BTreeMap<DynamicsBodyId, AxisLocks>,
-) -> Result<BTreeMap<DynamicsBodyId, AggregatedAction>, DynamicsError> {
-    let mut aggregated = BTreeMap::<DynamicsBodyId, AggregatedAction>::new();
-    for action in actions {
-        let Some(locks) = bodies.get(&action.body) else {
-            return Err(DynamicsError::UnknownActionBody { body: action.body });
-        };
-        if !action
-            .force
-            .into_iter()
-            .chain(action.torque)
-            .chain(action.impulse)
-            .chain(action.torque_impulse)
-            .all(f64::is_finite)
-        {
-            return Err(DynamicsError::InvalidAction { body: action.body });
-        }
-        let entry = aggregated.entry(action.body).or_default();
-        entry.force += mask_locked_axes(vector(action.force), locks.translation);
-        entry.torque += mask_locked_axes(vector(action.torque), locks.rotation);
-        entry.impulse += mask_locked_axes(vector(action.impulse), locks.translation);
-        entry.torque_impulse += mask_locked_axes(vector(action.torque_impulse), locks.rotation);
-        entry.wake |= action.wake;
-        if !entry
-            .force
-            .to_array()
-            .into_iter()
-            .chain(entry.torque.to_array())
-            .chain(entry.impulse.to_array())
-            .chain(entry.torque_impulse.to_array())
-            .all(f64::is_finite)
-        {
-            return Err(DynamicsError::InvalidAction { body: action.body });
-        }
-    }
-    Ok(aggregated)
+fn norm_squared(value: [f64; 4]) -> f64 {
+    value.into_iter().map(|value| value * value).sum()
 }
 
-fn validate_motion(
-    input: &DynamicsStepInput,
-    actions: &BTreeMap<DynamicsBodyId, AggregatedAction>,
-) -> Result<(), DynamicsError> {
-    let gravity = vector(input.gravity);
-    for body in &input.bodies {
-        let action = actions.get(&body.id).copied().unwrap_or_default();
-        let acceleration = mask_locked_axes(
-            action.force / body.mass + gravity * body.gravity_scale,
-            body.locked_translation_axes,
-        );
-        let estimated_velocity = mask_locked_axes(
-            vector(body.linear_velocity) + action.impulse / body.mass,
-            body.locked_translation_axes,
-        ) + acceleration * input.step_seconds * f64::from(input.steps);
-        let estimated_translation = estimated_velocity.length() * input.step_seconds;
-        let maximum = if body.continuous_collision {
-            MAX_CCD_TRANSLATION_PER_STEP
-        } else {
-            MAX_DISCRETE_TRANSLATION_PER_STEP
-        };
-        if !estimated_translation.is_finite() || estimated_translation > maximum {
-            return Err(DynamicsError::MotionLimitExceeded {
-                body: body.id,
-                continuous_collision: body.continuous_collision,
-                estimated_translation,
-                maximum,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn mask_locked_axes(value: Vector, locked_axes: [bool; 3]) -> Vector {
+fn mask_locked_axes(value: [f64; 3], locked_axes: [bool; 3]) -> Vector {
     Vector::new(
-        if locked_axes[0] { 0.0 } else { value.x },
-        if locked_axes[1] { 0.0 } else { value.y },
-        if locked_axes[2] { 0.0 } else { value.z },
+        if locked_axes[0] { 0.0 } else { value[0] },
+        if locked_axes[1] { 0.0 } else { value[1] },
+        if locked_axes[2] { 0.0 } else { value[2] },
     )
 }
 
-fn insert_static_environment(world: &mut PhysicsWorld, projection: &CollisionProjection) {
-    for shape in projection.dynamics_shapes() {
-        world.insert(
-            RigidBodyBuilder::fixed(),
-            ColliderBuilder::new(shape)
-                // Fixed terrain contributes no dynamic mass. Avoid walking every
-                // voxel child to derive unused compound inertia on each step.
-                .mass_properties(MassProperties::default())
-                .collision_groups(InteractionGroups::all())
-                .user_data(0),
-        );
-    }
+fn shape_key(shape: &SharedShape) -> usize {
+    Arc::as_ptr(&shape.0).cast::<()>() as usize
 }
 
 fn shared_shape(shape: DynamicsShape) -> SharedShape {
@@ -739,16 +806,16 @@ impl CollisionProjection {
 
 #[cfg(test)]
 mod tests {
-    use core_space::{ChunkDims, GridId, VoxelGridSpec};
+    use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
+    use core_voxel::VoxelValue;
     use svc_spatial::VoxelWorld;
+    use svc_volume::VoxelChunk;
 
     use super::*;
+    use crate::DynamicsTetherEndpoint;
 
-    fn empty_projection() -> CollisionProjection {
-        let grid = VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(8).unwrap())
-            .expect("valid empty test grid");
-        CollisionProjection::build(&VoxelWorld::new(grid))
-    }
+    const TICK: f64 = 1.0 / 60.0;
+    const GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
 
     fn body() -> DynamicsBodyInput {
         DynamicsBodyInput {
@@ -786,30 +853,58 @@ mod tests {
         body
     }
 
-    fn input(body: DynamicsBodyInput) -> DynamicsStepInput {
-        DynamicsStepInput {
-            step_seconds: 1.0 / 60.0,
-            steps: 1,
-            gravity: [0.0; 3],
-            bodies: vec![body],
-            actions: Vec::new(),
-        }
-    }
-
     fn tether() -> DynamicsTether {
         DynamicsTether {
             id: 7,
-            first: crate::DynamicsTetherEndpoint::Fixed([0.0; 3]),
-            second: crate::DynamicsTetherEndpoint::Body {
+            first: DynamicsTetherEndpoint::Fixed([0.0; 3]),
+            second: DynamicsTetherEndpoint::Body {
                 body: DynamicsBodyId(1),
                 local_anchor: [0.0; 3],
             },
             maximum_length: 3.0,
             target_length: 3.0,
             reel_speed: 0.25,
-            was_taut: false,
-            wake: true,
             contacts_enabled: true,
+        }
+    }
+
+    fn solver(gravity: [f64; 3], bodies: &[DynamicsBodyInput]) -> DynamicsSolver {
+        let mut solver = DynamicsSolver::new(gravity);
+        for body in bodies {
+            solver.insert_body(*body).unwrap();
+        }
+        solver
+    }
+
+    fn output(solver: &DynamicsSolver, id: u64) -> DynamicsBodyOutput {
+        solver.body(DynamicsBodyId(id)).unwrap()
+    }
+
+    fn spec() -> VoxelGridSpec {
+        VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(8).unwrap()).unwrap()
+    }
+
+    /// A one-voxel-thick floor at y = -1..0 across each listed chunk column.
+    fn floor_world(columns: &[i64]) -> VoxelWorld {
+        let mut world = VoxelWorld::new(spec());
+        for &column in columns {
+            let mut chunk = VoxelChunk::from_spec(&spec());
+            for x in 0..8 {
+                for z in 0..8 {
+                    chunk
+                        .set(LocalVoxelCoord::new(x, 7, z), VoxelValue::solid_raw(1))
+                        .unwrap();
+                }
+            }
+            world.insert(ChunkCoord::new(column, -1, 0), chunk);
+        }
+        world.drain_dirty();
+        world
+    }
+
+    fn settle(solver: &mut DynamicsSolver, ticks: usize) {
+        for _ in 0..ticks {
+            solver.step(TICK, 1, &[]).unwrap();
         }
     }
 
@@ -820,19 +915,19 @@ mod tests {
             body.rotation = [0.0, 0.0, (0.3_f64).sin(), (0.3_f64).cos()];
             body.locked_translation_axes = [locked, false, false];
             body.locked_rotation_axes = [false, locked, false];
-            let anchor = observe_dynamics_anchor(body, [0.7, 0.4, -0.3]).unwrap();
+            let mut solver = solver([0.0; 3], &[body]);
+            let anchor = solver.observe_anchor(body.id, [0.7, 0.4, -0.3]).unwrap();
             let lever = vector(anchor.point) - vector(anchor.center_of_mass);
             let impulse = Vector::new(0.2, -0.1, 0.3);
             let expected = vector(anchor.response[0]) * impulse.x
                 + vector(anchor.response[1]) * impulse.y
                 + vector(anchor.response[2]) * impulse.z;
-            let mut request = input(body);
             let mut action = DynamicsAction::impulse(body.id, impulse.to_array());
             action.torque_impulse = lever.cross(impulse).to_array();
-            request.actions.push(action);
-            let result = simulate_dynamics(&empty_projection(), request).unwrap();
-            let actual = vector(result.bodies[0].linear_velocity)
-                + vector(result.bodies[0].angular_velocity).cross(lever);
+            solver.step(TICK, 1, &[action]).unwrap();
+            let after = output(&solver, 1);
+            let actual =
+                vector(after.linear_velocity) + vector(after.angular_velocity).cross(lever);
             assert!(
                 (actual - expected).length() < 0.0001,
                 "{actual:?} vs {expected:?}"
@@ -841,30 +936,24 @@ mod tests {
     }
 
     #[test]
-    fn tether_hanging_mass_reports_weight_impulse_and_rebuilds() {
+    fn hanging_mass_keeps_one_catch_and_reports_its_weight() {
         let mut body = body();
         body.translation = [0.0, -3.0, 0.0];
         body.gravity_scale = 1.0;
-        let mut tether = tether();
+        let mut solver = solver(GRAVITY, &[body]);
+        solver.set_tether(tether()).unwrap();
         for tick in 0..60 {
-            let mut request = input(body);
-            request.gravity = [0.0, -9.81, 0.0];
-            let result =
-                simulate_dynamics_with_tethers(&empty_projection(), request, vec![tether]).unwrap();
-            let readout = result.tethers[0];
+            solver.step(TICK, 1, &[]).unwrap();
+            let readout = solver.tether_readouts()[0];
             assert!(readout.taut);
             assert_eq!(readout.caught, tick == 0);
             assert!((readout.distance - 3.0).abs() < 0.001);
             assert!((readout.force_proxy - 9.81).abs() < 0.005, "{readout:?}");
-            body.translation = result.bodies[0].translation;
-            body.linear_velocity = result.bodies[0].linear_velocity;
-            tether.was_taut = readout.taut;
-            tether.wake = false;
         }
     }
 
     #[test]
-    fn tether_two_dynamic_bodies_exchange_momentum_and_preserve_local_anchor() {
+    fn two_roped_bodies_exchange_momentum_deterministically() {
         let mut first = body();
         first.translation = [-1.5, 0.0, 0.0];
         first.linear_velocity = [-3.0, 0.0, 0.0];
@@ -873,39 +962,38 @@ mod tests {
         second.translation = [1.5, 0.0, 0.0];
         second.linear_velocity = [3.0, 0.0, 0.0];
         let mut rope = tether();
-        rope.first = crate::DynamicsTetherEndpoint::Body {
+        rope.first = DynamicsTetherEndpoint::Body {
             body: first.id,
             local_anchor: [0.5, 0.0, 0.0],
         };
-        rope.second = crate::DynamicsTetherEndpoint::Body {
+        rope.second = DynamicsTetherEndpoint::Body {
             body: second.id,
             local_anchor: [-0.5, 0.0, 0.0],
         };
         rope.maximum_length = 2.0;
         rope.target_length = 2.0;
-        let mut request = input(first);
-        request.bodies.push(second);
-        let result =
-            simulate_dynamics_with_tethers(&empty_projection(), request.clone(), vec![rope])
-                .unwrap();
-        assert_eq!(
-            result,
-            simulate_dynamics_with_tethers(&empty_projection(), request, vec![rope]).unwrap()
-        );
-        assert!(
-            (result.bodies[0].linear_velocity[0] + result.bodies[1].linear_velocity[0]).abs()
-                < 1e-9
-        );
-        assert!((result.tethers[0].first[0] - result.bodies[0].translation[0] - 0.5).abs() < 1e-9);
-        assert!(result.tethers[0].distance < 2.01);
-        assert!(result
-            .bodies
+        let run = || {
+            let mut solver = solver([0.0; 3], &[first, second]);
+            solver.set_tether(rope).unwrap();
+            solver.step(TICK, 1, &[]).unwrap();
+            (
+                output(&solver, 1),
+                output(&solver, 2),
+                solver.tether_readouts()[0],
+            )
+        };
+        let (a, b, readout) = run();
+        assert_eq!((a, b, readout), run());
+        assert!((a.linear_velocity[0] + b.linear_velocity[0]).abs() < 1e-9);
+        assert!((readout.first[0] - a.translation[0] - 0.5).abs() < 1e-9);
+        assert!(readout.distance < 2.01);
+        assert!([a, b]
             .iter()
             .all(|body| body.linear_velocity[0].abs() < 0.01));
     }
 
     #[test]
-    fn tether_slack_catch_swing_and_release_do_not_create_energy() {
+    fn slack_catch_swing_and_release_do_not_create_energy() {
         let mut body = body();
         body.translation = [1.0, -1.0, 0.0];
         body.linear_velocity = [8.0, -15.0, 0.0];
@@ -913,37 +1001,33 @@ mod tests {
         body.continuous_collision = true;
         let initial_energy =
             0.5 * vector(body.linear_velocity).length_squared() + 9.81 * body.translation[1];
-        let mut rope = tether();
+        let mut solver = solver(GRAVITY, &[body]);
+        solver.set_tether(tether()).unwrap();
         let mut caught = false;
         let mut crossed = false;
         for _ in 0..600 {
-            let mut request = input(body);
-            request.gravity = [0.0, -9.81, 0.0];
-            let result =
-                simulate_dynamics_with_tethers(&empty_projection(), request, vec![rope]).unwrap();
-            let after = result.bodies[0];
+            solver.step(TICK, 1, &[]).unwrap();
+            let after = output(&solver, 1);
             let energy =
                 0.5 * vector(after.linear_velocity).length_squared() + 9.81 * after.translation[1];
             assert!(energy <= initial_energy + 0.01, "energy grew: {energy}");
-            assert!(result.tethers[0].distance < 3.01);
-            caught |= result.tethers[0].caught;
+            let readout = solver.tether_readouts()[0];
+            assert!(readout.distance < 3.01);
+            caught |= readout.caught;
             crossed |= after.translation[0] < -0.5;
-            body.translation = after.translation;
-            body.linear_velocity = after.linear_velocity;
-            body.rotation = after.rotation;
-            body.angular_velocity = after.angular_velocity;
-            rope.was_taut = result.tethers[0].taut;
-            rope.wake = false;
         }
         assert!(caught && crossed);
-        let released = simulate_dynamics(&empty_projection(), input(body)).unwrap();
-        assert_eq!(released.bodies[0].linear_velocity, body.linear_velocity);
+        assert!(solver.remove_tether(7));
+        let before = output(&solver, 1);
+        solver.step(TICK, 1, &[]).unwrap();
+        let released = output(&solver, 1);
+        let expected = before.linear_velocity[1] - 9.81 * TICK;
+        assert!((released.linear_velocity[1] - expected).abs() < 1e-9);
     }
 
     #[test]
-    fn tether_off_center_anchor_rotates_body_and_unequal_masses_conserve_momentum() {
+    fn off_center_rope_rotates_body_and_unequal_masses_conserve_momentum() {
         let mut first = body();
-        first.mass = 1.0;
         first.translation = [-1.0, 0.0, 0.0];
         first.linear_velocity = [-2.0, 0.0, 0.0];
         let mut second = first;
@@ -952,239 +1036,304 @@ mod tests {
         second.translation = [1.0, 0.0, 0.0];
         second.linear_velocity = [0.5, 0.0, 0.0];
         let mut rope = tether();
-        rope.first = crate::DynamicsTetherEndpoint::Body {
+        rope.first = DynamicsTetherEndpoint::Body {
             body: first.id,
             local_anchor: [0.0, 0.5, 0.0],
         };
-        rope.second = crate::DynamicsTetherEndpoint::Body {
+        rope.second = DynamicsTetherEndpoint::Body {
             body: second.id,
             local_anchor: [0.0, 0.5, 0.0],
         };
         rope.maximum_length = 2.0;
         rope.target_length = 2.0;
-        let mut request = input(first);
-        request.bodies.push(second);
-        let result =
-            simulate_dynamics_with_tethers(&empty_projection(), request, vec![rope]).unwrap();
-        assert!(result.bodies[0].angular_velocity[2].abs() > 0.01);
-        assert!(
-            (result.bodies[0].linear_velocity[0] + 4.0 * result.bodies[1].linear_velocity[0]).abs()
-                < 1e-8
-        );
-        assert!(result.tethers[0].distance < 2.001);
-        let rotation = Rotation::from_xyzw(
-            result.bodies[0].rotation[0],
-            result.bodies[0].rotation[1],
-            result.bodies[0].rotation[2],
-            result.bodies[0].rotation[3],
-        );
-        let anchor = vector(result.bodies[0].translation) + rotation * Vector::new(0.0, 0.5, 0.0);
-        assert!((anchor - vector(result.tethers[0].first)).length() < 1e-9);
+        let mut solver = solver([0.0; 3], &[first, second]);
+        solver.set_tether(rope).unwrap();
+        solver.step(TICK, 1, &[]).unwrap();
+        let (a, b) = (output(&solver, 1), output(&solver, 2));
+        let readout = solver.tether_readouts()[0];
+        assert!(a.angular_velocity[2].abs() > 0.01);
+        assert!((a.linear_velocity[0] + 4.0 * b.linear_velocity[0]).abs() < 1e-8);
+        assert!(readout.distance < 2.001);
+        let anchor = vector(a.translation) + rotation(a.rotation) * Vector::new(0.0, 0.5, 0.0);
+        assert!((anchor - vector(readout.first)).length() < 1e-9);
     }
 
     #[test]
-    fn tether_rebuild_preserves_sleep_until_reel_or_attachment_wakes() {
-        let mut body = body();
-        body.translation = [0.0, -2.0, 0.0];
-        body.sleeping = true;
-        let mut rope = tether();
-        rope.wake = false;
-        let sleeping =
-            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
-        assert!(sleeping.bodies[0].sleeping);
-        assert_eq!(sleeping.bodies[0].translation, body.translation);
-        rope.target_length = 1.0;
-        let reeled =
-            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
-        assert!(!reeled.bodies[0].sleeping);
-        rope.target_length = rope.maximum_length;
-        rope.wake = true;
-        let attached =
-            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
-        assert!(!attached.bodies[0].sleeping);
-    }
-
-    #[test]
-    fn tether_reeling_changes_effective_length_at_bounded_rate() {
+    fn reeling_moves_effective_length_at_the_rope_speed_and_edits_keep_it() {
         let mut body = body();
         body.translation = [0.0, -3.0, 0.0];
+        let mut solver = solver([0.0; 3], &[body]);
         let mut rope = tether();
         rope.target_length = 1.0;
-        let result =
-            simulate_dynamics_with_tethers(&empty_projection(), input(body), vec![rope]).unwrap();
-        assert!((result.tethers[0].maximum_length - (3.0 - 0.25 / 60.0)).abs() < 1e-9);
-        assert!(result.bodies[0].linear_velocity[1] < 0.3);
+        solver.set_tether(rope).unwrap();
+        solver.step(TICK, 1, &[]).unwrap();
+        let reeled = 3.0 - 0.25 * TICK;
+        assert!((solver.tether_readouts()[0].maximum_length - reeled).abs() < 1e-9);
+        assert!(output(&solver, 1).linear_velocity[1] < 0.3);
+        // Re-authoring the same attachment changes the target, not the length.
+        rope.maximum_length = 3.0;
+        rope.target_length = 2.0;
+        solver.set_tether(rope).unwrap();
+        let current = solver.tether(7).unwrap();
+        assert!((current.maximum_length - reeled).abs() < 1e-9);
+        assert_eq!(current.target_length, 2.0);
     }
 
     #[test]
-    fn tether_invalid_anchors_duplicates_and_budgets_reject_before_simulation() {
+    fn new_attachments_need_a_known_body_and_reach() {
+        let mut solver = solver([0.0; 3], &[body()]);
         let mut rope = tether();
-        rope.second = crate::DynamicsTetherEndpoint::Body {
+        rope.second = DynamicsTetherEndpoint::Body {
             body: DynamicsBodyId(99),
             local_anchor: [0.0; 3],
         };
-        assert!(matches!(
-            simulate_dynamics_with_tethers(&empty_projection(), input(body()), vec![rope]),
-            Err(DynamicsError::Tether(DynamicsTetherError::InvalidAnchor {
-                id: 7
-            }))
-        ));
-        assert!(matches!(
-            simulate_dynamics_with_tethers(&empty_projection(), input(body()), vec![tether(); 2]),
-            Err(DynamicsError::Tether(DynamicsTetherError::DuplicateId {
-                id: 7
-            }))
-        ));
-        assert!(matches!(
-            simulate_dynamics_with_tethers(
-                &empty_projection(),
-                input(body()),
-                vec![tether(); crate::MAX_DYNAMICS_TETHERS + 1]
-            ),
-            Err(DynamicsError::Tether(DynamicsTetherError::BudgetExceeded))
-        ));
+        assert_eq!(
+            solver.set_tether(rope),
+            Err(DynamicsTetherError::InvalidAnchor { id: 7 }.into())
+        );
+        let mut rope = tether();
+        rope.first = DynamicsTetherEndpoint::Fixed([10.0, 0.0, 0.0]);
+        assert_eq!(
+            solver.set_tether(rope),
+            Err(DynamicsTetherError::OutOfReach { id: 7 }.into())
+        );
+        assert_eq!(solver.tether_count(), 0);
     }
 
     #[test]
     fn explicit_mass_properties_use_authored_total_once_and_preserve_asymmetry() {
-        let mut step = input(explicit_body());
-        step.actions = vec![DynamicsAction {
-            body: DynamicsBodyId(1),
-            force: [2.0, 0.0, 0.0],
-            torque: [0.0, 1.0, 0.0],
-            impulse: [0.0; 3],
-            torque_impulse: [0.0; 3],
-            wake: true,
-        }];
-
-        let output = simulate_dynamics(&empty_projection(), step)
-            .expect("explicit mass properties are a valid dynamics body");
-        let body = output.bodies[0];
-
+        let mut solver = solver([0.0; 3], &[explicit_body()]);
+        solver
+            .step(
+                TICK,
+                1,
+                &[DynamicsAction {
+                    body: DynamicsBodyId(1),
+                    force: [2.0, 0.0, 0.0],
+                    torque: [0.0, 1.0, 0.0],
+                    impulse: [0.0; 3],
+                    torque_impulse: [0.0; 3],
+                    wake: true,
+                }],
+            )
+            .unwrap();
+        let body = output(&solver, 1);
         // Force / authored total mass, not force / (collider mass + authored mass).
         assert!((body.linear_velocity[0] - (1.0 / 60.0)).abs() < 1.0e-6);
-        // The Y principal inertia is 2, so the unit torque produces half the
-        // angular velocity of a unit inertia axis.
+        // The Y principal inertia is 2, so unit torque gives half the angular
+        // velocity of a unit inertia axis.
         assert!((body.angular_velocity[1] - (1.0 / 120.0)).abs() < 1.0e-6);
     }
 
     #[test]
-    fn explicit_mass_properties_reject_nonfinite_or_nonpositive_values() {
+    fn invalid_mass_properties_and_nonfinite_actions_are_refused() {
+        let mut solver = DynamicsSolver::new([0.0; 3]);
         let mut body = explicit_body();
         body.mass_properties.as_mut().unwrap().principal_inertia[0] = 0.0;
         assert_eq!(
-            simulate_dynamics(&empty_projection(), input(body)),
+            solver.insert_body(body),
             Err(DynamicsError::InvalidBody {
                 body: DynamicsBodyId(1)
             })
         );
-
-        let mut body = explicit_body();
-        body.mass_properties.as_mut().unwrap().center_of_mass[0] = f64::NAN;
+        solver.insert_body(explicit_body()).unwrap();
+        let mut action = DynamicsAction::impulse(DynamicsBodyId(1), [1.0, 0.0, 0.0]);
+        action.force[0] = f64::NAN;
+        let good = DynamicsAction::impulse(DynamicsBodyId(1), [1.0, 0.0, 0.0]);
         assert_eq!(
-            simulate_dynamics(&empty_projection(), input(body)),
-            Err(DynamicsError::InvalidBody {
+            solver.step(TICK, 1, &[good, action]),
+            Err(DynamicsError::InvalidAction {
                 body: DynamicsBodyId(1)
             })
         );
-    }
-
-    fn action(body: DynamicsBodyId, value: f64) -> DynamicsAction {
-        DynamicsAction {
-            body,
-            force: [value; 3],
-            torque: [value; 3],
-            impulse: [value; 3],
-            torque_impulse: [value; 3],
-            wake: true,
-        }
+        // Nothing from the refused call was applied.
+        assert_eq!(output(&solver, 1).linear_velocity, [0.0; 3]);
     }
 
     #[test]
-    fn locked_translation_velocity_is_rejected_before_solver_construction() {
+    fn locked_axes_ignore_initial_velocity_and_influences() {
         let mut body = body();
-        body.locked_translation_axes = [false, true, false];
-        body.linear_velocity = [0.0, 1.0, 0.0];
-
-        assert_eq!(
-            simulate_dynamics(&empty_projection(), input(body)),
-            Err(DynamicsError::LockedTranslationAxisVelocity {
-                body: DynamicsBodyId(1)
-            })
-        );
-    }
-
-    #[test]
-    fn locked_rotation_velocity_is_rejected_before_solver_construction() {
-        let mut body = body();
-        body.locked_rotation_axes = [true, false, true];
+        body.locked_translation_axes = [true; 3];
+        body.locked_rotation_axes = [true; 3];
+        body.linear_velocity = [1.0, 2.0, 3.0];
         body.angular_velocity = [1.0, 0.0, 0.0];
+        let mut solver = solver(GRAVITY, &[body]);
+        let mut action = DynamicsAction::impulse(body.id, [5.0; 3]);
+        action.force = [5.0; 3];
+        action.torque_impulse = [5.0; 3];
+        solver.step(TICK, 1, &[action]).unwrap();
+        let after = output(&solver, 1);
+        assert_eq!(after.translation, [0.0; 3]);
+        assert_eq!(after.linear_velocity, [0.0; 3]);
+        assert_eq!(after.angular_velocity, [0.0; 3]);
+    }
 
+    #[test]
+    fn an_action_force_lasts_for_its_own_call() {
+        let mut solver = solver([0.0; 3], &[body()]);
+        let mut push = DynamicsAction::impulse(DynamicsBodyId(1), [0.0; 3]);
+        push.force = [6.0, 0.0, 0.0];
+        solver.step(TICK, 2, &[push]).unwrap();
+        let pushed = output(&solver, 1).linear_velocity[0];
+        assert!((pushed - 6.0 * 2.0 * TICK).abs() < 1e-9);
+        solver.step(TICK, 2, &[]).unwrap();
+        assert!((output(&solver, 1).linear_velocity[0] - pushed).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_retained_stack_settles_sleeps_and_keeps_its_contacts() {
+        let world = floor_world(&[0]);
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        let receipt = solver.bind_environment(&CollisionProjection::build(&world));
+        assert_eq!(receipt.inserted, 1);
+        for level in 0..4 {
+            let mut crate_body = body();
+            crate_body.id = DynamicsBodyId(level + 1);
+            crate_body.shape = DynamicsShape::Cuboid {
+                half_extents: [0.4; 3],
+            };
+            crate_body.translation = [4.0, 0.41 + 0.82 * level as f64, 4.0];
+            crate_body.gravity_scale = 1.0;
+            solver.insert_body(crate_body).unwrap();
+        }
+        settle(&mut solver, 240);
+        for level in 0..4 {
+            let settled = output(&solver, level + 1);
+            assert!(settled.sleeping, "crate {level} is still awake");
+            assert!(
+                (settled.translation[1] - (0.4 + 0.8 * level as f64)).abs() < 0.05,
+                "crate {level} at {:?}",
+                settled.translation
+            );
+        }
+        // One floor contact and three stacked contacts.
+        assert_eq!(solver.contacts().len(), 4);
         assert_eq!(
-            simulate_dynamics(&empty_projection(), input(body)),
-            Err(DynamicsError::LockedRotationAxisVelocity {
-                body: DynamicsBodyId(1)
-            })
+            solver
+                .contacts()
+                .iter()
+                .filter(|contact| contact.second.is_none())
+                .count(),
+            1
         );
     }
 
     #[test]
-    fn all_locked_axes_admit_zero_initial_velocities() {
-        let mut body = body();
-        body.locked_translation_axes = [true; 3];
-        body.locked_rotation_axes = [true; 3];
+    fn environment_rebind_changes_only_edited_chunks_and_wakes_what_they_held() {
+        let mut world = floor_world(&[0, 1]);
+        let mut projection = CollisionProjection::build(&world);
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        assert_eq!(solver.bind_environment(&projection).inserted, 2);
+        for (id, x) in [(1, 4.0), (2, 12.0)] {
+            let mut ball = body();
+            ball.id = DynamicsBodyId(id);
+            ball.translation = [x, 0.5, 4.0];
+            ball.gravity_scale = 1.0;
+            solver.insert_body(ball).unwrap();
+        }
+        settle(&mut solver, 180);
+        assert!(output(&solver, 1).sleeping && output(&solver, 2).sleeping);
 
-        let output = simulate_dynamics(&empty_projection(), input(body))
-            .expect("zero velocity is compatible with every locked axis");
-        assert_eq!(output.bodies.len(), 1);
-        assert_eq!(output.bodies[0].translation, [0.0; 3]);
-        assert_eq!(output.bodies[0].linear_velocity, [0.0; 3]);
-        assert_eq!(output.bodies[0].angular_velocity, [0.0; 3]);
-    }
-
-    #[test]
-    fn finite_locked_influences_are_masked_before_aggregation() {
-        let mut body = body();
-        body.locked_translation_axes = [true; 3];
-        body.locked_rotation_axes = [true; 3];
-        let mut step = input(body);
-        step.actions = vec![action(DynamicsBodyId(1), f64::MAX); 2];
-
-        let output = simulate_dynamics(&empty_projection(), step)
-            .expect("suppressed locked axes never overflow the action accumulator");
-        assert_eq!(output.bodies[0].translation, [0.0; 3]);
-        assert_eq!(output.bodies[0].linear_velocity, [0.0; 3]);
-        assert_eq!(output.bodies[0].angular_velocity, [0.0; 3]);
-    }
-
-    #[test]
-    fn finite_unlocked_influence_overflow_still_rejects() {
-        let mut step = input(body());
-        step.actions = vec![action(DynamicsBodyId(1), f64::MAX); 2];
-
+        // Rebinding an unchanged projection leaves the world alone.
+        let unchanged = solver.bind_environment(&projection.clone());
         assert_eq!(
-            simulate_dynamics(&empty_projection(), step),
-            Err(DynamicsError::InvalidAction {
-                body: DynamicsBodyId(1)
-            })
+            (unchanged.retained, unchanged.inserted, unchanged.removed),
+            (2, 0, 0)
         );
+
+        // Dig out the floor under the second ball.
+        let coord = ChunkCoord::new(1, -1, 0);
+        world.insert(coord, VoxelChunk::from_spec(&spec()));
+        projection.rebuild_chunk(&world, coord);
+        let edited = solver.bind_environment(&projection);
+        assert_eq!(
+            (edited.retained, edited.inserted, edited.removed),
+            (1, 0, 1)
+        );
+        settle(&mut solver, 30);
+        assert!(output(&solver, 1).sleeping);
+        assert!(output(&solver, 2).translation[1] < -0.5);
     }
 
     #[test]
-    fn nonfinite_locked_influence_still_rejects_before_masking() {
-        let mut body = body();
-        body.locked_translation_axes = [true; 3];
-        body.locked_rotation_axes = [true; 3];
-        let mut step = input(body);
-        let mut invalid = action(DynamicsBodyId(1), 0.0);
-        invalid.force[0] = f64::NAN;
-        step.actions.push(invalid);
+    fn removing_a_body_drops_its_ropes_and_replacing_one_keeps_them() {
+        let mut first = body();
+        first.translation = [0.0, -2.0, 0.0];
+        let mut second = first;
+        second.id = DynamicsBodyId(2);
+        second.translation = [0.0, -4.0, 0.0];
+        let mut solver = solver([0.0; 3], &[first, second]);
+        solver.set_tether(tether()).unwrap();
+        let mut link = tether();
+        link.id = 8;
+        link.first = DynamicsTetherEndpoint::Body {
+            body: first.id,
+            local_anchor: [0.0; 3],
+        };
+        link.second = DynamicsTetherEndpoint::Body {
+            body: second.id,
+            local_anchor: [0.0; 3],
+        };
+        solver.set_tether(link).unwrap();
 
+        let mut heavier = first;
+        heavier.mass = 5.0;
+        heavier.shape = DynamicsShape::Cuboid {
+            half_extents: [0.3; 3],
+        };
+        solver.replace_body(heavier).unwrap();
+        assert_eq!(solver.tether_count(), 2);
+        solver.step(TICK, 1, &[]).unwrap();
+        assert_eq!(solver.tether_readouts().len(), 2);
+
+        assert_eq!(solver.remove_body(first.id), vec![7, 8]);
+        assert_eq!(solver.tether_count(), 0);
+        assert!(solver.tether_readouts().is_empty());
+        solver.step(TICK, 1, &[]).unwrap();
+        assert!(solver.body(first.id).is_none());
+        assert!(solver.body(second.id).is_some());
+    }
+
+    #[test]
+    fn translate_moves_bodies_and_fixed_rope_anchors_together() {
+        let mut body = body();
+        body.translation = [0.0, -3.0, 0.0];
+        body.gravity_scale = 1.0;
+        let mut solver = solver(GRAVITY, &[body]);
+        solver.set_tether(tether()).unwrap();
+        settle(&mut solver, 10);
+        let before = output(&solver, 1);
+        solver.translate([-16.0, 0.0, 8.0]);
+        let after = output(&solver, 1);
+        assert_eq!(after.translation[0], before.translation[0] - 16.0);
+        assert_eq!(after.translation[2], before.translation[2] + 8.0);
+        assert_eq!(after.linear_velocity, before.linear_velocity);
         assert_eq!(
-            simulate_dynamics(&empty_projection(), step),
-            Err(DynamicsError::InvalidAction {
-                body: DynamicsBodyId(1)
-            })
+            solver.tether(7).unwrap().first,
+            DynamicsTetherEndpoint::Fixed([-16.0, 0.0, 8.0])
         );
+        solver.step(TICK, 1, &[]).unwrap();
+        let readout = solver.tether_readouts()[0];
+        assert!(readout.taut && !readout.caught);
+        assert!((readout.distance - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_sleeping_body_stays_asleep_until_woken() {
+        let mut sleeper = body();
+        sleeper.sleeping = true;
+        sleeper.gravity_scale = 1.0;
+        let mut solver = solver(GRAVITY, &[sleeper]);
+        settle(&mut solver, 5);
+        assert!(output(&solver, 1).sleeping);
+        assert_eq!(output(&solver, 1).translation, [0.0; 3]);
+        solver
+            .step(
+                TICK,
+                1,
+                &[DynamicsAction::impulse(sleeper.id, [0.0, 1.0, 0.0])],
+            )
+            .unwrap();
+        assert!(!output(&solver, 1).sleeping);
     }
 }

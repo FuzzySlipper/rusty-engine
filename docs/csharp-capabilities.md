@@ -69,10 +69,10 @@ selection. The six-argument constructor retains the standard defaults: zero
 velocities/damping/restitution, friction 0.5, all collision groups/masks, enabled,
 awake, and discrete collision.
 
-Products select `ContinuousCollision` in these properties. Engine owns the CCD
-solver and motion limits; enabling CCD selects the Engine CCD limit rather than
-the discrete-body limit. Products do not need to subdivide motion or replace
-the generic creation path to enable it.
+Products select `ContinuousCollision` in these properties; Engine owns the CCD
+solver. There is no per-step motion limit: a fast discrete body can pass through
+thin geometry, and CCD is the remedy. `UpdateBody` keeps the body's handle,
+pose and attached ropes.
 
 
 ### Sprite viewport placement

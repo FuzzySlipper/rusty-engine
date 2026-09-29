@@ -331,31 +331,15 @@ pub struct NativeDynamicsWorldCollisionBindingRequest {
     pub spatial_session: NativeSpatialSessionHandle,
 }
 
-/// Applies one already-committed Spatial world-origin rebase to a Dynamics
-/// world explicitly bound to that Spatial session. The receipt is copied in
-/// full so the bridge can verify the before/after collision snapshots rather
-/// than infer product rebase policy.
+/// Applies one committed Spatial world-origin rebase to a Dynamics world: its
+/// bodies and fixed rope anchors move with the origin, and the world binds the
+/// session's rebased collision scene.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsRebaseWorldOriginRequest {
     pub world: NativeDynamicsWorldHandle,
     pub spatial_session: NativeSpatialSessionHandle,
     pub receipt: NativeWorldOriginCommitReceipt,
-    pub expected_entity_revision: u64,
-    pub expected_solver_generation: u64,
-}
-
-/// Exact Dynamics facts after one successful explicit world-origin rebase.
-/// This supplies the next guards without requiring C# to issue a speculative
-/// read immediately after a committed rebase.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeDynamicsRebaseWorldOriginReceipt {
-    pub entity_revision_before: u64,
-    pub entity_revision_after: u64,
-    pub solver_generation: u64,
-    pub body_count: u32,
-    pub contact_count: u32,
 }
 
 #[repr(C)]
@@ -502,7 +486,6 @@ pub struct NativeDynamicsWorldReadRequest {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeDynamicsWorldReadout {
     pub generation: u64,
-    pub entity_revision: u64,
     pub body_count: u32,
     pub contact_count: u32,
 }
@@ -601,10 +584,7 @@ pub struct NativeDynamicsObserveAnchorRequest {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeDynamicsAnchorObservation {
     pub valid: bool,
-    pub world_identity: u64,
     pub body: NativeDynamicsBodyReference,
-    pub entity_revision: u64,
-    pub solver_generation: u64,
     pub local_anchor: NativeVec3,
     pub point: NativeVec3,
     pub point_velocity: NativeVec3,
@@ -616,24 +596,15 @@ pub struct NativeDynamicsAnchorObservation {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeDynamicsRefreshAnchorRequest {
-    pub world: NativeDynamicsWorldHandle,
-    pub anchor: NativeDynamicsAnchorObservation,
-}
-
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeDynamicsAnchorReaction {
-    pub source_identity: u64,
-    pub source_generation: u64,
     pub present: bool,
     pub anchor: NativeDynamicsAnchorObservation,
     pub impulse: NativeVec3,
-    pub maximum_impulse: f32,
 }
 
-/// Explicit caller-owned Dynamics update, with revision-checked point reactions.
+/// One Dynamics update that also applies point reactions, such as a
+/// character's pull on a rope anchor, at their observed points.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsStepWithReactionsRequest {

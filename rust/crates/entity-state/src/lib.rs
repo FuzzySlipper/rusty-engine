@@ -21,7 +21,6 @@ mod definition;
 mod model;
 mod relationship;
 mod rigid_body;
-mod rigid_body_publication;
 mod snapshot;
 mod transform;
 mod value;
@@ -78,10 +77,6 @@ pub use rigid_body::{
     MAX_RIGID_BODY_SHAPE_EXTENT, MAX_RIGID_BODY_SPEED, RIGID_BODY_CODEC_ID,
     RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
     RIGID_BODY_INERTIA_FRAME_NORMALIZATION_TOLERANCE,
-};
-pub use rigid_body_publication::{
-    replace_rigid_body_states, RigidBodyStatePublicationError, RigidBodyStateReceipt,
-    RigidBodyStateReplacement, MAX_RIGID_BODY_STATE_REPLACEMENTS,
 };
 pub use snapshot::{
     decode_snapshot, decode_snapshot_with_registry, encode_durable_snapshot, encode_snapshot,

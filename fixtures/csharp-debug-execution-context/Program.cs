@@ -27,11 +27,8 @@ internal static class Program
 
         FixtureProduct.FailNext("start");
         Expect(api.start(handle) == 99, "failed start did not cross the generated error path");
-        api.complete_call(handle, 0, 0);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Created, HasObservedUpdate: false }, "failed start changed retained facts");
         Expect(api.start(handle) == 1, "successful start failed");
-        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Created, HasObservedUpdate: false }, "successful start published before completion");
-        api.complete_call(handle, 1, 0);
         Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 17, controlRevision: 1);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false }, "start did not retain running/no-update state");
 
@@ -54,22 +51,16 @@ internal static class Program
         NativeProductUpdateResult updateResult = default;
         FixtureProduct.FailNext("update");
         Expect(api.update(handle, &update, &updateResult) == 99, "failed update did not cross the generated error path");
-        api.complete_call(handle, 0, 0);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false }, "failed update changed retained facts");
         Expect(api.update(handle, &update, &updateResult) == 1, "successful update failed");
-        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false }, "successful update published before completion");
-        api.complete_call(handle, 0, 0);
-        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false }, "uncommitted update changed retained facts");
-        Expect(api.update(handle, &update, &updateResult) == 1, "committed update callback failed");
-        api.complete_call(handle, 1, 0);
         Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 17, controlRevision: 23);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: true, Generation: 17, ControlRevision: 23, LatestUpdateFacts: var copied }
             && copied == new ProductUpdateFacts(ProductUpdateMode.Realtime, ProductLifecycleState.Running, 17, 23, 29, 31, 60, 1, 0, 1.0 / 60.0), "successful update facts were not copied");
 
-        AssertLifecycleFailureThenSuccess("pause", api.pause, api.complete_call, handle, ProductLifecycleState.Paused, expectUpdate: true);
+        AssertLifecycleFailureThenSuccess("pause", api.pause, handle, ProductLifecycleState.Paused, expectUpdate: true);
         Observe(api.observe_runtime, handle, ProductLifecycleState.Paused, generation: 17, controlRevision: 24);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Paused, Generation: 17, ControlRevision: 24 }, "committed pause binding was not retained");
-        AssertLifecycleFailureThenSuccess("resume", api.resume, api.complete_call, handle, ProductLifecycleState.Running, expectUpdate: true);
+        AssertLifecycleFailureThenSuccess("resume", api.resume, handle, ProductLifecycleState.Running, expectUpdate: true);
         Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 17, controlRevision: 25);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, Generation: 17, ControlRevision: 25 }, "committed resume binding was not retained");
 
@@ -78,10 +69,10 @@ internal static class Program
         Observe(api.observe_runtime, handle, ProductLifecycleState.Faulted, generation: 17, controlRevision: 26);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Faulted, Generation: 17, ControlRevision: 26 }, "host-only fault was not retained");
 
-        AssertLifecycleFailureThenSuccess("restart", api.restart, api.complete_call, handle, ProductLifecycleState.Running, expectUpdate: false);
+        AssertLifecycleFailureThenSuccess("restart", api.restart, handle, ProductLifecycleState.Running, expectUpdate: false);
         Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 18, controlRevision: 27);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false, Generation: 18, ControlRevision: 27 }, "restart retained stale generation facts");
-        AssertLifecycleFailureThenSuccess("shutdown", api.shutdown, api.complete_call, handle, ProductLifecycleState.Shutdown, expectUpdate: false);
+        AssertLifecycleFailureThenSuccess("shutdown", api.shutdown, handle, ProductLifecycleState.Shutdown, expectUpdate: false);
         Observe(api.observe_runtime, handle, ProductLifecycleState.Shutdown, generation: 18, controlRevision: 28);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Shutdown, Generation: 18, ControlRevision: 28 }, "committed shutdown binding was not retained");
 
@@ -92,7 +83,6 @@ internal static class Program
     private static unsafe void AssertLifecycleFailureThenSuccess(
         string callback,
         delegate* unmanaged[Cdecl]<void*, int> invoke,
-        delegate* unmanaged[Cdecl]<void*, byte, byte, void> complete,
         void* handle,
         ProductLifecycleState expectedState,
         bool expectUpdate)
@@ -100,14 +90,9 @@ internal static class Program
         DebugExecutionSnapshot before = Snapshot;
         FixtureProduct.FailNext(callback);
         Expect(invoke(handle) == 99, $"failed {callback} did not cross the generated error path");
-        complete(handle, 0, 0);
         Expect(Snapshot == before, $"failed {callback} changed retained facts");
+        // A successful callback's transition is visible as soon as it returns.
         Expect(invoke(handle) == 1, $"successful {callback} failed");
-        Expect(Snapshot == before, $"successful {callback} published before completion");
-        complete(handle, 0, 0);
-        Expect(Snapshot == before, $"uncommitted {callback} changed retained facts");
-        Expect(invoke(handle) == 1, $"committed {callback} failed");
-        complete(handle, 1, 0);
         Expect(Snapshot is { LifecycleState: var state, HasObservedUpdate: var observed } && state == expectedState && observed == expectUpdate, $"successful {callback} retained the wrong facts");
     }
 

@@ -2031,12 +2031,9 @@ impl RuntimeSpatialBridge {
         let mut native_receipt =
             native_character_receipt(&receipt, &session.last_character_mesh_entities);
         native_receipt.tether.reaction = NativeDynamicsAnchorReaction {
-            source_identity: request.session.value,
-            source_generation: receipt.generation,
             present: request.tether.dynamic && receipt.tether.reaction_impulse != Vec3::ZERO,
             anchor: request.tether.dynamic_anchor,
             impulse: native_vec3(receipt.tether.reaction_impulse),
-            maximum_impulse: request.config.external_motion.maximum_dynamic_impulse,
         };
         self.last_character_query_stats = query_stats;
         Ok(native_receipt)

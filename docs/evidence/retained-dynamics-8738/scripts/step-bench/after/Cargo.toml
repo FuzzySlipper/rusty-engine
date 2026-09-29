@@ -1,0 +1,16 @@
+[package]
+name = "dynamics-step-bench-after"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+core-ids = { path = "../../../../../../rust/crates/core-ids" }
+core-math = { path = "../../../../../../rust/crates/core-math" }
+engine-spatial = { path = "../../../../../../rust/crates/engine-spatial" }
+entity-state = { path = "../../../../../../rust/crates/entity-state" }
+
+[profile.release]
+debug = false

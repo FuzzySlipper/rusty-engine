@@ -52,7 +52,7 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | --- | --- | --- |
 | ABI declarations | Rust | [`csharp-engine-abi`](../rust/crates/csharp-engine-abi) defines the C ABI and named function tables. |
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
-| Rigid-body ropes | Rust | `svc-collision` currently solves maximum-distance links in a derived Rapier world; `engine-spatial::RigidBodyService` publishes body and rope facts. The Dynamics bridge owns chain creation/removal and generated C# access. Persistent solver state and simpler mutation APIs are campaign experiments. |
+| Dynamics bodies and ropes | Rust | `svc-collision::DynamicsSolver` keeps one live Rapier world per Dynamics world (bodies, static colliders, rope joints) and changes it in place. The Dynamics bridge maps generated handles onto it, owns chains, and binds Spatial collision scenes. See [rope physics](rope-physics.md). |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
 | Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
 | Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser DTOs and applies delivery byte limits. Input acknowledgements and the runtime readout remain host observations. |
@@ -302,14 +302,12 @@ Stopping there is preferable to a local substitute.
 ## Character tether ownership
 
 The existing `CharacterControllerService` owns optional tether projection,
-collision-swept correction and canonical motion continuation. Dynamics resolves
-body-local anchor observations and effective impulse response, including mass,
-inertia and locked axes. The character returns bounded equal-and-opposite
-reaction proposals; the product explicitly applies them through
-`Dynamics.StepWithReactions` at its chosen update order. The current API checks
-exact revisions before the Dynamics step. Task #8741 may remove those checks
-and redesign observe/apply composition; exercise stale observations to discover
-the smallest behavior actually needed. Attachment selection, reel controls,
-consequences and presentation remain product policy.
+collision-swept correction and canonical motion continuation. Dynamics observes
+body-local anchors on the live solver body, including mass, inertia and locked
+axes. The character returns bounded equal-and-opposite reaction proposals; the
+product applies them through `Dynamics.StepWithReactions` at its chosen update
+order. A reaction is an ordinary impulse at the observed point, with no revision
+check. Attachment selection, reel controls, consequences and presentation remain
+product policy.
 See [character tether use](csharp-sdk.md#character-tethers) and the
 [bounded rope contract](rope-physics.md#kinematic-character-coupling).

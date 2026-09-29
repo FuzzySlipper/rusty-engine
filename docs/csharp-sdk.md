@@ -537,15 +537,14 @@ is callable from C# simply because its crate is public.
 `Dynamics.SetFixedTether` and `SetBodyTether` attach a caller-selected ID to
 world/body-local endpoints in one `DynamicsWorld`. Initial attachments outside
 the maximum distance reject. Updating the same attachment changes its target;
-its effective length approaches that target at the supplied rate, capped at
-0.25 m/s. `ReadTether` reports effective/target length, distance/slack, caught/taut
+its effective length approaches that target at the supplied rate. `ReadTether` reports effective/target length, distance/slack, caught/taut
 state and a sampled force proxy in N. `RemoveTether` returns a released receipt
 and preserves body velocity. A removed body invalidates its attached tethers.
 
-`CreateFixedChain` and `CreateBodyChain` own one anchored end and up to eight
+`CreateFixedChain` and `CreateBodyChain` own one anchored end and a series of
 sphere beads; the final bead is free. Supply ordinary body properties and an
 initial end position. Engine spaces the initial beads along that segment and
-creates all bodies/links atomically. `ReadChainPoint` returns the anchor at index
+creates all bodies and links; a refused chain leaves none behind. `ReadChainPoint` returns the anchor at index
 zero followed by bead centers in order. `SetChainLength` distributes total
 length and reel rate evenly across links. `RemoveChain` removes all its bodies
 and links; destroying a body anchor invalidates and removes the chain. Adjacent
@@ -553,11 +552,9 @@ bead contacts are suppressed. Ordinary collision groups select nonadjacent
 self-collision; terrain collision uses the same dynamics scene as other bodies.
 The segments between beads have no collision geometry.
 
-The world admits 64 tethers/chains in total and chain beads consume its existing
-body budget. Remove invalidated identities when no longer needed. Defaults are
-four subdivisions and eight solver iterations per supplied tick;
-`ConfigureRopes` selects 1–8 subdivisions and 1–16 iterations. `Dynamics.Step`
-reports actual rope link/subdivision/iteration work over the requested ticks.
+Defaults are four subdivisions and eight solver iterations per supplied tick;
+`ConfigureRopes` selects others (each at least one). `Dynamics.Step` reports
+actual rope link/subdivision/iteration work over the requested ticks.
 Higher counts cost more work; they do not create a new update clock. Preserve
 ordinary body CCD/sleep policies. Fixed endpoints follow `WorldOrigin` rebasing.
 Force readouts sample terminal solver-substep impulses, so they are not peak
@@ -1064,9 +1061,8 @@ the request each step, or omit it to release while retaining accepted momentum.
 the existing controlled/external velocity, with no separate swing state.
 
 For a dynamic anchor, call `Dynamics.ObserveAnchor` with its body and local
-point. On subsequent steps use `RefreshAnchor` to obtain current copied facts;
-a removed or disabled body returns an invalid observation and the character
-receipt reports invalidation. Engine resolves point velocity, center of mass,
+point before each character step; a disabled body returns an invalid
+observation and the character receipt reports invalidation. Engine resolves point velocity, center of mass,
 and impulse response including inertia and locked axes. Product code need not
 calculate these. The character uses effective mass and this response to share
 the velocity correction, capped by `MaximumDynamicImpulse` on both sides.
@@ -1076,11 +1072,10 @@ effective maximum length, separation, taut/caught/released/invalidated state,
 radial and tangential velocity, swept correction, saturation and unresolved
 separation. A dynamic receipt also contains `Reaction`. Apply the chosen
 reactions explicitly through `Dynamics.StepWithReactions` together with ordinary
-actions; this performs one normal Dynamics step. Observations and reactions are
-bound to the exact world, entity revision and solver generation. Stale or
-duplicate proposals reject the entire batch before mutation. Observe anchors,
-propose character steps, then apply reactions before other Dynamics mutations.
-There is no hidden Dynamics step inside the character controller.
+actions; this performs one normal Dynamics step, applying each reaction as an
+impulse at its observed point. A reaction carries no revision, so applying it
+twice applies it twice. Observe anchors, propose character steps, then apply
+the reactions. There is no hidden Dynamics step inside the character controller.
 
 Terrain can prevent a length correction, and the impulse cap can leave the rope
 extended; inspect `Unresolved` rather than assuming an exact rigid constraint.

@@ -1049,7 +1049,6 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();
     public DynamicsAnchorObservation ObserveAnchor(DynamicsObserveAnchorRequest request) => throw new NotSupportedException();
-    public DynamicsAnchorObservation RefreshAnchor(DynamicsRefreshAnchorRequest request) => throw new NotSupportedException();
     public DynamicsStepReceipt StepWithReactions(DynamicsStepWithReactionsRequest request) => throw new NotSupportedException();
     public void ConfigureRopes(DynamicsRopeSolverRequest request) => throw new NotSupportedException();
     public void SetChainLength(DynamicsChainLengthRequest request) => throw new NotSupportedException();
@@ -1065,7 +1064,7 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsBody CreateSphereBodyWithProperties(DynamicsCreateSphereBodyPropertiesRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCapsuleBody(DynamicsCreateCapsuleBodyRequest request) => throw new NotSupportedException();
     public void BindWorldCollision(DynamicsWorldCollisionBindingRequest request) => throw new NotSupportedException();
-    public DynamicsRebaseWorldOriginReceipt RebaseWorldOrigin(DynamicsRebaseWorldOriginRequest request) => throw new NotSupportedException();
+    public void RebaseWorldOrigin(DynamicsRebaseWorldOriginRequest request) => throw new NotSupportedException();
     public DynamicsStepReceipt Step(DynamicsStepRequest request) => throw new NotSupportedException();
     public DynamicsReadout Read(DynamicsReadRequest request) => throw new NotSupportedException();
     public void Reset(DynamicsResetRequest request) => throw new NotSupportedException();

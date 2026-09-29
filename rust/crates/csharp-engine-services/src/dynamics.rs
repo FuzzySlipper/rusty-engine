@@ -9,19 +9,15 @@ use std::{
     sync::Arc,
 };
 
-use core_ids::EntityId;
 use core_math::Vec3;
-use core_space::{GlobalPosition, WorldOrigin};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    rigid_body_component_mass_properties, DynamicsBodyId, DynamicsTether, DynamicsTetherEndpoint,
-    DynamicsTetherReadout, RigidBodyAction, RigidBodyContactReadout, RigidBodyService,
-    RigidBodyStepRequest, VoxelCollisionScene,
+    rigid_body_component_mass_properties, DynamicsAction, DynamicsBodyId, DynamicsBodyInput,
+    DynamicsBodyOutput, DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsSolver,
+    DynamicsTether, DynamicsTetherEndpoint, VoxelCollisionScene,
 };
 use entity_state::{
-    replace_rigid_body_states, EntityAuthoringService, EntityDefinition, EntityLifecycle,
-    EntityState, EntityTransform, Quat, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyShape,
-    RigidBodyStateReplacement, TransformComponent,
+    EntityTransform, Quat, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyShape,
 };
 
 use crate::composition::{
@@ -30,19 +26,14 @@ use crate::composition::{
 };
 use crate::spatial::SpatialCollisionSource;
 
-const MAX_DYNAMICS_STEP_AND_READ_ACTIONS: usize = 1_024;
-const MAX_DYNAMICS_STEP_AND_READ_BODIES: usize = 1_024;
-
-/// A retained Engine dynamics world. The EntityState, collision scene and
-/// RigidBodyService remain one Engine-owned aggregate; C# receives only typed
-/// handles and stable readouts.
+/// Engine-owned Dynamics worlds. Each world keeps one live solver; C# holds
+/// typed world and body handles, and a body handle is also its solver identity.
 pub(crate) struct RuntimeDynamicsBridge {
     worlds: BTreeMap<u64, WorldSlot>,
     bodies: BTreeMap<u64, BodySlot>,
     collision_source: SpatialCollisionSource,
     next_world: u64,
     next_body: u64,
-    next_entity: u64,
     step_and_read_leases: BTreeMap<u64, DynamicsStepAndReadLeaseBacking>,
     next_step_and_read_lease: u64,
     diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
@@ -59,27 +50,17 @@ enum WorldSlot {
 }
 
 struct DynamicsWorld {
-    entities: EntityState,
-    scene: Arc<VoxelCollisionScene>,
-    bound_spatial_session: Option<NativeSpatialSessionHandle>,
-    bodies: BTreeMap<u64, EntityId>,
-    service: RigidBodyService,
-    gravity: Vec3,
-    last_contacts: BTreeMap<EntityId, BodyContactSummary>,
-    last_contact_receipts: Vec<RigidBodyContactReadout>,
-    last_tethers: Vec<DynamicsTetherReadout>,
+    solver: DynamicsSolver,
+    /// The collision scene last bound as the static environment.
+    scene: Option<Arc<VoxelCollisionScene>>,
+    /// Authored shape, mass and material per body; pose and velocity live in
+    /// the solver.
+    bodies: BTreeMap<u64, RigidBodyComponent>,
+    contacts: BTreeMap<u64, BodyContactSummary>,
     invalidated_tethers: BTreeSet<u64>,
     chains: BTreeMap<u64, chain::DynamicsChain>,
     invalidated_chains: BTreeSet<u64>,
 }
-
-type DynamicsRebaseSnapshot = (
-    Option<NativeSpatialSessionHandle>,
-    Arc<VoxelCollisionScene>,
-    BTreeMap<u64, EntityId>,
-    u64,
-    u64,
-);
 
 #[derive(Clone, Copy, Default)]
 struct BodyContactSummary {
@@ -92,8 +73,12 @@ struct DynamicsStepAndReadLeaseBacking {
 }
 
 enum BodySlot {
-    Active { world: u64, entity: EntityId },
+    Active { world: u64 },
     Tombstoned,
+}
+
+fn solver_error(code: &'static str) -> impl Fn(DynamicsError) -> CsharpEngineServicesError {
+    move |error| CsharpEngineServicesError::new(code, error.code())
 }
 
 impl RuntimeDynamicsBridge {
@@ -103,16 +88,10 @@ impl RuntimeDynamicsBridge {
         body: NativeDynamicsBodyHandle,
         local: NativeVec3,
     ) -> Result<DynamicsTetherEndpoint, CsharpEngineServicesError> {
-        let (owner, entity) = self.active_body(body.value)?;
-        if owner != world {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_TETHER",
-                "anchor belongs to another world",
-            ));
-        }
+        self.world_body(world, body.value, "CSHARP_DYNAMICS_TETHER")?;
         Ok(DynamicsTetherEndpoint::Body {
-            body: DynamicsBodyId(entity.raw()),
-            local_anchor: [f64::from(local.x), f64::from(local.y), f64::from(local.z)],
+            body: DynamicsBodyId(body.value),
+            local_anchor: vec3_f64(native_vec3_value(local)),
         })
     }
 
@@ -124,43 +103,18 @@ impl RuntimeDynamicsBridge {
         second: DynamicsTetherEndpoint,
     ) -> Result<(), CsharpEngineServicesError> {
         let world = self.active_world_mut(world)?;
-        if world
-            .chains
-            .values()
-            .any(|chain| chain.links.contains(&config.id))
-        {
-            return Err(chain::error(
-                "dynamics-tether-duplicate-id",
-                "identity belongs to a chain link",
-            ));
-        }
-        if world.service.tether(config.id).is_none()
-            && !world.invalidated_tethers.contains(&config.id)
-            && chain::authored_count(world) >= chain::MAX_ROPES
-        {
-            return Err(CsharpEngineServicesError::new(
-                "dynamics-tether-budget-exceeded",
-                "retained tether budget exhausted; remove unused tether identities",
-            ));
-        }
-        let mut definitions = world.service.capture_tethers();
-        definitions.retain(|definition| definition.id != config.id);
-        definitions.push(DynamicsTether {
-            id: config.id,
-            first,
-            second,
-            maximum_length: f64::from(config.maximum_length),
-            target_length: f64::from(config.target_length),
-            reel_speed: f64::from(config.reel_speed),
-            was_taut: false,
-            wake: true,
-            contacts_enabled: config.contacts_enabled,
-        });
         world
-            .service
-            .replace_tethers(&world.entities, definitions)
+            .solver
+            .set_tether(DynamicsTether {
+                id: config.id,
+                first,
+                second,
+                maximum_length: f64::from(config.maximum_length),
+                target_length: f64::from(config.target_length),
+                reel_speed: f64::from(config.reel_speed),
+                contacts_enabled: config.contacts_enabled,
+            })
             .map_err(|error| CsharpEngineServicesError::new(error.code(), error.code()))?;
-        world.last_tethers.retain(|readout| readout.id != config.id);
         world.invalidated_tethers.remove(&config.id);
         Ok(())
     }
@@ -171,15 +125,10 @@ impl RuntimeDynamicsBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let endpoint =
             self.tether_endpoint(request.world.value, request.body, request.local_anchor)?;
-        let point = request.world_anchor;
         self.set_tether(
             request.world.value,
             request.config,
-            DynamicsTetherEndpoint::Fixed([
-                f64::from(point.x),
-                f64::from(point.y),
-                f64::from(point.z),
-            ]),
+            DynamicsTetherEndpoint::Fixed(vec3_f64(native_vec3_value(request.world_anchor))),
             endpoint,
         )
     }
@@ -200,28 +149,10 @@ impl RuntimeDynamicsBridge {
         request: NativeDynamicsTetherRequest,
     ) -> Result<NativeDynamicsTetherReleaseReceipt, CsharpEngineServicesError> {
         let world = self.active_world_mut(request.world.value)?;
-        if world
-            .chains
-            .values()
-            .any(|chain| chain.links.contains(&request.id))
-        {
-            return Err(chain::error(
-                "dynamics-tether-owned-chain-link",
-                "remove the owning chain instead of an internal link",
-            ));
-        }
-        let released = world.service.tether(request.id).is_some();
-        let mut definitions = world.service.capture_tethers();
-        definitions.retain(|definition| definition.id != request.id);
-        world
-            .service
-            .replace_tethers(&world.entities, definitions)
-            .map_err(|error| CsharpEngineServicesError::new(error.code(), error.code()))?;
-        world
-            .last_tethers
-            .retain(|readout| readout.id != request.id);
         world.invalidated_tethers.remove(&request.id);
-        Ok(NativeDynamicsTetherReleaseReceipt { released })
+        Ok(NativeDynamicsTetherReleaseReceipt {
+            released: world.solver.remove_tether(request.id),
+        })
     }
 
     fn read_tether(
@@ -229,7 +160,7 @@ impl RuntimeDynamicsBridge {
         request: NativeDynamicsTetherRequest,
     ) -> Result<NativeDynamicsTetherReadout, CsharpEngineServicesError> {
         let world = self.active_world(request.world.value)?;
-        let Some(definition) = world.service.tether(request.id) else {
+        let Some(definition) = world.solver.tether(request.id) else {
             return Ok(NativeDynamicsTetherReadout {
                 invalidated: world.invalidated_tethers.contains(&request.id),
                 ..Default::default()
@@ -242,18 +173,14 @@ impl RuntimeDynamicsBridge {
             ..Default::default()
         };
         if let Some(readout) = world
-            .last_tethers
+            .solver
+            .tether_readouts()
             .iter()
             .find(|readout| readout.id == request.id)
         {
-            let point = |v: [f64; 3]| NativeVec3 {
-                x: v[0] as f32,
-                y: v[1] as f32,
-                z: v[2] as f32,
-            };
             result.simulated = true;
-            result.first = point(readout.first);
-            result.second = point(readout.second);
+            result.first = native_vec3(vec3_f32(readout.first));
+            result.second = native_vec3(vec3_f32(readout.second));
             result.distance = readout.distance as f32;
             result.slack_distance = (result.maximum_length - result.distance).max(0.0);
             result.taut = readout.taut;
@@ -270,7 +197,6 @@ impl RuntimeDynamicsBridge {
             collision_source,
             next_world: 1,
             next_body: 1,
-            next_entity: 1,
             step_and_read_leases: BTreeMap::new(),
             next_step_and_read_lease: 1,
             diagnostic_leases: BTreeMap::new(),
@@ -301,28 +227,14 @@ impl RuntimeDynamicsBridge {
                 "gravity was not finite",
             ));
         }
-        let scene = Arc::new(
-            VoxelCollisionScene::from_solid_voxels(1.0, 8, std::iter::empty::<[i64; 3]>())
-                .map_err(|error| {
-                    CsharpEngineServicesError::new("CSHARP_DYNAMICS_WORLD", error.to_string())
-                })?,
-        );
         let value = Self::allocate(&mut self.next_world, "world")?;
         self.worlds.insert(
             value,
             WorldSlot::Active(DynamicsWorld {
-                entities: EntityState::from_definitions(std::iter::empty::<EntityDefinition>())
-                    .map_err(|error| {
-                        CsharpEngineServicesError::new("CSHARP_DYNAMICS_WORLD", error.to_string())
-                    })?,
-                scene,
-                bound_spatial_session: None,
+                solver: DynamicsSolver::new(vec3_f64(gravity)),
+                scene: None,
                 bodies: BTreeMap::new(),
-                service: RigidBodyService::default(),
-                gravity,
-                last_contacts: BTreeMap::new(),
-                last_contact_receipts: Vec::new(),
-                last_tethers: Vec::new(),
+                contacts: BTreeMap::new(),
                 invalidated_tethers: BTreeSet::new(),
                 chains: BTreeMap::new(),
                 invalidated_chains: BTreeSet::new(),
@@ -335,291 +247,157 @@ impl RuntimeDynamicsBridge {
         &mut self,
         handle: NativeDynamicsWorldHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        match self.worlds.get(&handle.value) {
-            Some(WorldSlot::Active(_)) => {}
+        let bodies = match self.worlds.get(&handle.value) {
+            Some(WorldSlot::Active(world)) => world.bodies.keys().copied().collect::<Vec<_>>(),
             Some(WorldSlot::Tombstoned) => return Ok(()),
             None => return Err(unknown("world", handle.value)),
+        };
+        self.worlds.insert(handle.value, WorldSlot::Tombstoned);
+        for body in bodies {
+            self.bodies.insert(body, BodySlot::Tombstoned);
         }
-        self.destroy_world_committed(handle.value);
         Ok(())
     }
 
-    /// Bind an immutable Engine-owned collision projection snapshot at an
-    /// explicit product update boundary. Spatial replacement publishes a new
-    /// snapshot; a world therefore changes environment only after another
-    /// successful bind, never during solver publication.
+    /// Bind the Spatial session's current collision scene as the world's
+    /// static environment. Only the chunks and mesh instances that changed
+    /// since the last bind are replaced in the solver.
     fn bind_world_collision(
         &mut self,
         request: NativeDynamicsWorldCollisionBindingRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         let scene = self.collision_source.scene(request.spatial_session)?;
         let world = self.active_world_mut(request.world.value)?;
-        world.scene = scene;
-        world.bound_spatial_session = Some(request.spatial_session);
-        world.last_contacts.clear();
-        world.last_contact_receipts.clear();
+        world.bind_scene(scene);
         Ok(())
     }
 
     fn rebase_world_origin(
         &mut self,
         request: NativeDynamicsRebaseWorldOriginRequest,
-    ) -> Result<NativeDynamicsRebaseWorldOriginReceipt, CsharpEngineServicesError> {
-        let latest_scene = self.collision_source.scene(request.spatial_session)?;
-        let (bound_session, current_scene, body_members, entity_revision, solver_generation) =
-            self.rebase_snapshot(request.world.value)?;
-        if bound_session != Some(request.spatial_session) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_REBASE",
-                "world was not bound to the supplied spatial session",
-            ));
-        }
-        if entity_revision != request.expected_entity_revision {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_REBASE",
-                "dynamics entity revision was stale",
-            ));
-        }
-        if solver_generation != request.expected_solver_generation {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_REBASE",
-                "dynamics solver generation was stale",
-            ));
-        }
-        validate_rebase_receipt(&request.receipt)?;
-        validate_scene_before(current_scene.as_ref(), &request.receipt)?;
-        validate_scene_after(latest_scene.as_ref(), &request.receipt)?;
-        self.validate_body_handles(request.world.value, &body_members)?;
-
-        let candidate = {
-            let world = self.active_world(request.world.value)?;
-            let body_entities = body_members.values().copied().collect::<BTreeSet<_>>();
-            let state_entities = world
-                .entities
-                .rigid_bodies()
-                .map(|(entity, _)| entity)
-                .collect::<BTreeSet<_>>();
-            if body_entities != state_entities {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_REBASE",
-                    "dynamics body mapping did not match active rigid-body state",
-                ));
-            }
-            let replacements = body_entities
-                .iter()
-                .copied()
-                .map(|entity| rebase_body_replacement(&world.entities, entity, &request.receipt))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut candidate = world.entities.clone();
-            replace_rigid_body_states(&mut candidate, replacements).map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.code())
-            })?;
-            candidate
-        };
-        let receipt = NativeDynamicsRebaseWorldOriginReceipt {
-            entity_revision_before: entity_revision,
-            entity_revision_after: candidate.revision(),
-            solver_generation,
-            body_count: u32::try_from(body_members.len()).map_err(|_| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", "body count exceeded u32")
-            })?,
-            contact_count: u32::try_from(
-                self.active_world(request.world.value)?
-                    .last_contact_receipts
-                    .len(),
-            )
-            .map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_REBASE",
-                    "contact count exceeded u32",
-                )
-            })?,
-        };
-
-        let mut candidate_service = self.active_world(request.world.value)?.service.clone();
-        candidate_service
-            .rebase_tethers(
-                WorldOrigin::new([
-                    request.receipt.origin_before_cell_x,
-                    request.receipt.origin_before_cell_y,
-                    request.receipt.origin_before_cell_z,
-                ]),
-                WorldOrigin::new([
-                    request.receipt.origin_after_cell_x,
-                    request.receipt.origin_after_cell_y,
-                    request.receipt.origin_after_cell_z,
-                ]),
-                request.receipt.local_envelope,
-            )
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.code())
-            })?;
-        // There are no fallible operations after this point. The body owners,
-        // solver generation, and last contact facts remain intact while the
-        // state and scene change as one committed Dynamics-world snapshot.
+    ) -> Result<(), CsharpEngineServicesError> {
+        let scene = self.collision_source.scene(request.spatial_session)?;
+        let receipt = request.receipt;
+        let delta = [
+            receipt.origin_before_cell_x,
+            receipt.origin_before_cell_y,
+            receipt.origin_before_cell_z,
+        ]
+        .into_iter()
+        .zip([
+            receipt.origin_after_cell_x,
+            receipt.origin_after_cell_y,
+            receipt.origin_after_cell_z,
+        ])
+        .map(|(before, after)| (i128::from(before) - i128::from(after)) as f64);
+        let delta = <[f64; 3]>::try_from(delta.collect::<Vec<_>>()).expect("three axes");
         let world = self.active_world_mut(request.world.value)?;
-        world.entities = candidate;
-        world.scene = latest_scene;
-        world.service = candidate_service;
-        world.last_tethers.clear();
-        Ok(receipt)
+        world.solver.translate(delta);
+        world.bind_scene(scene);
+        Ok(())
     }
 
     fn create_body(
         &mut self,
         request: &NativeDynamicsCreateBodyRequest,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        self.create_body_with_config(request.world, cuboid_body_config(request.body)?)
+        self.create_body_with_config(request.world.value, cuboid_body_config(request.body)?)
     }
 
     fn create_sphere_body(
         &mut self,
         request: &NativeDynamicsCreateSphereBodyRequest,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        self.create_body_with_config(request.world, sphere_body_config(request.body)?)
+        self.create_body_with_config(request.world.value, sphere_body_config(request.body)?)
     }
 
     fn create_cuboid_body(
         &mut self,
         request: &NativeDynamicsCreateCuboidBodyRequest,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        self.create_body_with_config(request.world, cuboid_body_properties_config(request.body)?)
+        self.create_body_with_config(
+            request.world.value,
+            cuboid_body_properties_config(request.body)?,
+        )
     }
 
     fn create_sphere_body_with_properties(
         &mut self,
         request: &NativeDynamicsCreateSphereBodyPropertiesRequest,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        self.create_body_with_config(request.world, sphere_body_properties_config(request.body)?)
+        self.create_body_with_config(
+            request.world.value,
+            sphere_body_properties_config(request.body)?,
+        )
     }
 
     fn create_capsule_body(
         &mut self,
         request: &NativeDynamicsCreateCapsuleBodyRequest,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        self.create_body_with_config(request.world, capsule_body_config(request.body)?)
+        self.create_body_with_config(request.world.value, capsule_body_config(request.body)?)
     }
 
     fn create_body_with_config(
         &mut self,
-        world_handle: NativeDynamicsWorldHandle,
+        world_handle: u64,
         config: BodyConfig,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        let entity_value = Self::allocate(&mut self.next_entity, "entity")?;
-        let body_handle = Self::allocate(&mut self.next_body, "body")?;
-        let entity = EntityId::new(entity_value);
-        let world = self.active_world_mut(world_handle.value)?;
-        let mut candidate = world.entities.clone();
-        insert_body(&mut candidate, entity, config)?;
-        world.entities = candidate;
-        world.bodies.insert(body_handle, entity);
+        self.active_world(world_handle)?;
+        let handle = Self::allocate(&mut self.next_body, "body")?;
+        let world = self.active_world_mut(world_handle)?;
+        world
+            .solver
+            .insert_body(body_input(handle, config.transform, &config.body))
+            .map_err(solver_error("CSHARP_DYNAMICS_BODY"))?;
+        world.bodies.insert(handle, config.body);
         self.bodies.insert(
-            body_handle,
+            handle,
             BodySlot::Active {
-                world: world_handle.value,
-                entity,
+                world: world_handle,
             },
         );
-        Ok(NativeDynamicsBodyHandle { value: body_handle })
+        Ok(NativeDynamicsBodyHandle { value: handle })
     }
 
     fn destroy_body(
         &mut self,
         handle: NativeDynamicsBodyHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        let (world_handle, entity) = match self.bodies.get(&handle.value) {
-            Some(BodySlot::Active { world, entity }) => (*world, *entity),
+        let world = match self.bodies.get(&handle.value) {
+            Some(BodySlot::Active { world }) => *world,
             Some(BodySlot::Tombstoned) => return Ok(()),
             None => return Err(unknown("body", handle.value)),
         };
-        self.destroy_body_with_entity(handle.value, world_handle, entity)
+        self.remove_body(world, handle.value)
     }
 
-    fn destroy_world_committed(&mut self, handle: u64) {
-        let body_handles = match self.worlds.get(&handle) {
-            Some(WorldSlot::Active(world)) => world.bodies.keys().copied().collect::<Vec<_>>(),
-            Some(WorldSlot::Tombstoned) | None => return,
-        };
-        self.worlds.insert(handle, WorldSlot::Tombstoned);
-        for body in body_handles {
-            self.bodies.insert(body, BodySlot::Tombstoned);
-        }
-    }
-
-    fn destroy_body_with_entity(
+    /// Remove a body, the ropes attached to it and any chain anchored on it.
+    /// Product-authored ropes and chains it held report as invalidated.
+    fn remove_body(
         &mut self,
-        handle: u64,
         world_handle: u64,
-        entity: EntityId,
+        handle: u64,
     ) -> Result<(), CsharpEngineServicesError> {
         let world = self.active_world_mut(world_handle)?;
-        let mut candidate = world.entities.clone();
-        let revision = candidate.revision();
-        EntityAuthoringService
-            .destroy(&mut candidate, revision, entity)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_DESTROY", error.to_string())
-            })?;
-        let invalidated_chains: Vec<_> = world.chains.iter().filter_map(|(id, chain)| {
-            matches!(chain.anchor, DynamicsTetherEndpoint::Body { body, .. } if body.0 == entity.raw()).then_some(*id)
-        }).collect();
-        let mut removed_chain_bodies = Vec::new();
-        let mut removed_links = BTreeSet::new();
-        for id in &invalidated_chains {
-            let chain = &world.chains[id];
-            removed_links.extend(chain.links.iter().copied());
-            for (handle, bead) in &chain.bodies {
-                let revision = candidate.revision();
-                EntityAuthoringService
-                    .destroy(&mut candidate, revision, *bead)
-                    .map_err(|error| {
-                        chain::error("dynamics-chain-release-failed", &error.to_string())
-                    })?;
-                removed_chain_bodies.push((*handle, *bead));
-            }
-        }
-        let mut candidate_service = world.service.clone();
-        let mut tethers = candidate_service.capture_tethers();
-        tethers.retain(|tether| !removed_links.contains(&tether.id));
-        let attached = |tether: &DynamicsTether| {
-            [tether.first, tether.second].into_iter().any(|endpoint|
-            matches!(endpoint, DynamicsTetherEndpoint::Body { body, .. } if body.0 == entity.raw()))
-        };
-        let invalidated: Vec<_> = tethers
+        let anchored = world
+            .chains
             .iter()
-            .filter(|tether| attached(tether))
-            .map(|tether| tether.id)
-            .collect();
-        tethers.retain(|tether| !attached(tether));
-        candidate_service
-            .replace_tethers(&candidate, tethers)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_DESTROY", error.code())
-            })?;
-        world.service = candidate_service;
-        world.invalidated_tethers.extend(invalidated);
-        world
-            .last_tethers
-            .retain(|readout| !removed_links.contains(&readout.id));
-        for id in invalidated_chains {
-            world.chains.remove(&id);
+            .filter(|(_, chain)| chain.anchor.body() == Some(DynamicsBodyId(handle)))
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let mut released = Vec::new();
+        for id in anchored {
+            let chain = world.chains.remove(&id).expect("listed chain");
+            released.extend(world.remove_chain_bodies(&chain));
             world.invalidated_chains.insert(id);
         }
-        for (handle, bead) in &removed_chain_bodies {
-            world.bodies.remove(handle);
-            world.last_contacts.remove(bead);
-            world
-                .last_contact_receipts
-                .retain(|contact| contact.first != *bead && contact.second != Some(*bead));
-        }
-        world.entities = candidate;
+        let ropes = world.solver.remove_body(DynamicsBodyId(handle));
+        world.invalidated_tethers.extend(ropes);
         world.bodies.remove(&handle);
-        world.last_contacts.remove(&entity);
-        world
-            .last_contact_receipts
-            .retain(|contact| contact.first != entity && contact.second != Some(entity));
-        self.bodies.insert(handle, BodySlot::Tombstoned);
-        for (handle, _) in removed_chain_bodies {
+        world.contacts.remove(&handle);
+        released.push(handle);
+        for handle in released {
             self.bodies.insert(handle, BodySlot::Tombstoned);
         }
         Ok(())
@@ -631,18 +409,17 @@ impl RuntimeDynamicsBridge {
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
         let actions =
             unsafe { borrowed_slice(request.actions, request.actions_len, "dynamics actions") }?;
-        let active = self.validate_step_actions(request.world.value, request.steps, actions)?;
+        let actions = self.step_actions(request.world.value, actions)?;
         self.execute_step(
             request.world.value,
             request.step_seconds,
             request.steps,
-            active,
+            &actions,
         )
     }
 
-    /// Performs exactly one existing Dynamics step and returns copied facts in
-    /// the caller's explicit retained-body order. Every fallible request and
-    /// body validation happens before mutating the retained world.
+    /// Performs one step and copies the listed bodies' facts, in the caller's
+    /// order.
     fn step_and_read(
         &mut self,
         request: &NativeDynamicsStepAndReadRequest,
@@ -654,12 +431,6 @@ impl RuntimeDynamicsBridge {
                 "dynamics step/read actions",
             )
         }?;
-        if actions.len() > MAX_DYNAMICS_STEP_AND_READ_ACTIONS {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_STEP",
-                "step/read actions exceeded explicit Engine bound",
-            ));
-        }
         let bodies = unsafe {
             borrowed_slice(
                 request.bodies,
@@ -667,55 +438,25 @@ impl RuntimeDynamicsBridge {
                 "dynamics step/read bodies",
             )
         }?;
-        if bodies.len() > MAX_DYNAMICS_STEP_AND_READ_BODIES {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_READ",
-                "step/read bodies exceeded explicit Engine bound",
-            ));
-        }
-        let active = self.validate_step_actions(request.world.value, request.steps, actions)?;
-        let mut seen = BTreeSet::new();
-        let mut selected = Vec::with_capacity(bodies.len());
+        let actions = self.step_actions(request.world.value, actions)?;
         for body in bodies {
-            if !seen.insert(body.value) {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_READ",
-                    "step/read bodies contained a duplicate retained body",
-                ));
-            }
-            let (world, entity) = self.active_body(body.value)?;
-            if world != request.world.value {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_BODY",
-                    "step/read body belonged to another world",
-                ));
-            }
-            selected.push((body.value, entity));
-        }
-        {
-            let world = self.active_world(request.world.value)?;
-            for (_, entity) in &selected {
-                // Validate that each selected body has a complete readable
-                // Dynamics state before the step commits.
-                read_entity(world, *entity)?;
-            }
+            self.world_body(request.world.value, body.value, "CSHARP_DYNAMICS_BODY")?;
         }
         let lease_handle = Self::allocate(&mut self.next_step_and_read_lease, "step/read lease")?;
         let receipt = self.execute_step(
             request.world.value,
             request.step_seconds,
             request.steps,
-            active,
+            &actions,
         )?;
         let world = self.active_world(request.world.value)?;
-        let mut copied = Vec::with_capacity(selected.len());
-        for (body, entity) in selected {
-            copied.push(NativeDynamicsStepAndReadBody {
-                body: NativeDynamicsBodyReference { value: body },
-                readout: read_entity(world, entity)?,
-            });
-        }
-        let copied = copied.into_boxed_slice();
+        let copied = bodies
+            .iter()
+            .map(|body| NativeDynamicsStepAndReadBody {
+                body: NativeDynamicsBodyReference { value: body.value },
+                readout: world.readout(body.value),
+            })
+            .collect::<Box<[_]>>();
         let lease = NativeDynamicsStepAndReadLease {
             handle: NativeDynamicsStepAndReadLeaseHandle {
                 value: lease_handle,
@@ -743,47 +484,25 @@ impl RuntimeDynamicsBridge {
         Ok(())
     }
 
-    fn validate_step_actions(
+    fn step_actions(
         &self,
-        world_handle: u64,
-        steps: u32,
+        world: u64,
         actions: &[NativeDynamicsAction],
-    ) -> Result<Vec<RigidBodyAction>, CsharpEngineServicesError> {
-        u8::try_from(steps).map_err(|_| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "steps exceeded Engine u8 limit")
-        })?;
-        let active = actions
+    ) -> Result<Vec<DynamicsAction>, CsharpEngineServicesError> {
+        actions
             .iter()
             .map(|action| {
-                let (world, entity) = self.active_body(action.body.value)?;
-                if world != world_handle {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_DYNAMICS_BODY",
-                        "action body belonged to another world",
-                    ));
-                }
-                Ok(RigidBodyAction {
-                    entity,
-                    force: native_vec3_value(action.force),
-                    torque: native_vec3_value(action.torque),
-                    impulse: native_vec3_value(action.impulse),
-                    torque_impulse: native_vec3_value(action.torque_impulse),
+                self.world_body(world, action.body.value, "CSHARP_DYNAMICS_BODY")?;
+                Ok(DynamicsAction {
+                    body: DynamicsBodyId(action.body.value),
+                    force: vec3_f64(native_vec3_value(action.force)),
+                    torque: vec3_f64(native_vec3_value(action.torque)),
+                    impulse: vec3_f64(native_vec3_value(action.impulse)),
+                    torque_impulse: vec3_f64(native_vec3_value(action.torque_impulse)),
                     wake: action.wake,
                 })
             })
-            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
-        if active.iter().any(|action| {
-            !finite_vec3(action.force)
-                || !finite_vec3(action.torque)
-                || !finite_vec3(action.impulse)
-                || !finite_vec3(action.torque_impulse)
-        }) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_STEP",
-                "action contained a non-finite vector",
-            ));
-        }
-        Ok(active)
+            .collect()
     }
 
     fn execute_step(
@@ -791,53 +510,25 @@ impl RuntimeDynamicsBridge {
         world_handle: u64,
         step_seconds: f32,
         steps: u32,
-        actions: Vec<RigidBodyAction>,
+        actions: &[DynamicsAction],
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
-        let steps = u8::try_from(steps).expect("validated Dynamics step count");
         let world = self.active_world_mut(world_handle)?;
         let receipt = world
-            .service
-            .step(
-                &mut world.entities,
-                world.scene.as_ref(),
-                RigidBodyStepRequest {
-                    step_seconds,
-                    steps,
-                    gravity: world.gravity,
-                    actions,
-                },
-            )
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", error.code())
-            })?;
-        world.last_contacts = contacts_by_body(&receipt);
-        world.last_contact_receipts = receipt.contacts.clone();
-        world.last_tethers = receipt.tethers;
-        let solver = world.service.rope_solver();
-        let links = world.service.tether_count() as u32;
+            .solver
+            .step(f64::from(step_seconds), steps, actions)
+            .map_err(solver_error("CSHARP_DYNAMICS_STEP"))?;
+        world.contacts = contacts_by_body(world.solver.contacts());
+        let links = receipt.rope_link_count as u32;
+        let substeps = receipt.rope_substeps as u32;
+        let iterations = receipt.rope_iterations as u32;
         Ok(NativeDynamicsStepReceipt {
-            rope_substeps: if links == 0 {
-                0
-            } else {
-                solver.substeps as u32
-            },
-            rope_iterations: if links == 0 {
-                0
-            } else {
-                solver.iterations as u32
-            },
+            rope_substeps: substeps,
+            rope_iterations: iterations,
             rope_link_count: links,
-            rope_solver_link_steps: u32::from(steps)
-                * solver.substeps as u32
-                * solver.iterations as u32
-                * links,
+            rope_solver_link_steps: steps * substeps * iterations * links,
             generation: receipt.generation,
-            body_count: u32::try_from(receipt.bodies_considered).map_err(|_| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "body count exceeded u32")
-            })?,
-            contact_count: u32::try_from(receipt.contacts.len()).map_err(|_| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "contact count exceeded u32")
-            })?,
+            body_count: receipt.body_count as u32,
+            contact_count: receipt.contact_count as u32,
         })
     }
 
@@ -845,72 +536,42 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsReadRequest,
     ) -> Result<NativeDynamicsReadout, CsharpEngineServicesError> {
-        let (world_handle, entity) = self.active_body(request.body.value)?;
-        let world = self.active_world_mut(world_handle)?;
-        read_entity(world, entity)
+        let world = self.active_body(request.body.value)?;
+        Ok(self.active_world(world)?.readout(request.body.value))
     }
 
     fn reset(
         &mut self,
         request: NativeDynamicsResetRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        let (world_handle, entity) = self.active_body(request.body.value)?;
+        let world = self.active_body(request.body.value)?;
         let transform = checked_transform(request.transform)?;
-        let world = self.active_world_mut(world_handle)?;
-        let before = world.entities.rigid_body(entity).copied().ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_RESET", "body lacked dynamics state")
-        })?;
-        let mut body = before;
-        body.linear_velocity = native_vec3_value(request.linear_velocity);
-        body.angular_velocity = native_vec3_value(request.angular_velocity);
-        body.sleeping = request.sleeping;
-        entity_state::validate_rigid_body(&body).map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_RESET", error.code())
-        })?;
-        let replacement = RigidBodyStateReplacement {
-            entity,
-            expected_transform_revision: world
-                .entities
-                .component_revision::<TransformComponent>(entity)
-                .map_err(|error| {
-                    CsharpEngineServicesError::new("CSHARP_DYNAMICS_RESET", error.to_string())
-                })?,
-            expected_rigid_body_revision: world
-                .entities
-                .component_revision::<RigidBodyComponent>(entity)
-                .map_err(|error| {
-                    CsharpEngineServicesError::new("CSHARP_DYNAMICS_RESET", error.to_string())
-                })?,
-            transform: TransformComponent::from_transform(transform),
-            rigid_body: body,
-        };
-        replace_rigid_body_states(&mut world.entities, vec![replacement]).map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_RESET", error.code())
-        })?;
-        world.last_contacts.remove(&entity);
+        let world = self.active_world_mut(world)?;
         world
-            .last_contact_receipts
-            .retain(|contact| contact.first != entity && contact.second != Some(entity));
-        Ok(())
+            .solver
+            .set_body_motion(
+                DynamicsBodyId(request.body.value),
+                vec3_f64(transform.translation),
+                quat_f64(transform.rotation),
+                vec3_f64(native_vec3_value(request.linear_velocity)),
+                vec3_f64(native_vec3_value(request.angular_velocity)),
+                request.sleeping,
+            )
+            .map_err(solver_error("CSHARP_DYNAMICS_RESET"))
     }
 
     fn read_body_at(
         &mut self,
         request: NativeDynamicsBodyAtRequest,
     ) -> Result<NativeDynamicsBodyAtReceipt, CsharpEngineServicesError> {
-        let world = self.active_world_mut(request.world.value)?;
-        let body = world
-            .bodies
-            .iter()
-            .nth(request.index as usize)
-            .map(|(handle, entity)| (*handle, *entity));
-        let Some((handle, entity)) = body else {
+        let world = self.active_world(request.world.value)?;
+        let Some(handle) = world.bodies.keys().nth(request.index as usize).copied() else {
             return Ok(NativeDynamicsBodyAtReceipt::default());
         };
         Ok(NativeDynamicsBodyAtReceipt {
             present: true,
             body: NativeDynamicsBodyReference { value: handle },
-            readout: read_entity(world, entity)?,
+            readout: world.readout(handle),
         })
     }
 
@@ -918,32 +579,21 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsContactAtRequest,
     ) -> Result<NativeDynamicsContactAtReceipt, CsharpEngineServicesError> {
-        let world = self.active_world_mut(request.world.value)?;
-        let Some(contact) = world
-            .last_contact_receipts
-            .get(request.index as usize)
-            .copied()
-        else {
+        let world = self.active_world(request.world.value)?;
+        let Some(contact) = world.solver.contacts().get(request.index as usize) else {
             return Ok(NativeDynamicsContactAtReceipt::default());
-        };
-        let body_for = |entity| {
-            world
-                .bodies
-                .iter()
-                .find_map(|(handle, current)| (*current == entity).then_some(*handle))
-                .unwrap_or(0)
         };
         Ok(NativeDynamicsContactAtReceipt {
             present: true,
             environment: contact.second.is_none(),
             first: NativeDynamicsBodyReference {
-                value: body_for(contact.first),
+                value: contact.first.0,
             },
             second: NativeDynamicsBodyReference {
-                value: contact.second.map_or(0, body_for),
+                value: contact.second.map_or(0, |body| body.0),
             },
-            impulse: native_vec3(contact.impulse),
-            impulse_magnitude: contact.impulse_magnitude,
+            impulse: native_vec3(vec3_f32(contact.impulse)),
+            impulse_magnitude: contact.impulse_magnitude as f32,
         })
     }
 
@@ -981,65 +631,41 @@ impl RuntimeDynamicsBridge {
         self.replace_body_with_config(request.body, capsule_body_config(request.replacement)?)
     }
 
+    /// Destroy a body and create its replacement under a new handle. Ropes
+    /// attached to the old body are invalidated like any other destroy.
     fn replace_body_with_config(
         &mut self,
-        body_handle: NativeDynamicsBodyHandle,
+        body: NativeDynamicsBodyHandle,
         config: BodyConfig,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
-        let (world_handle, old_entity) = self.active_body(body_handle.value)?;
-        let entity_value = Self::allocate(&mut self.next_entity, "entity")?;
-        let new_handle = Self::allocate(&mut self.next_body, "body")?;
-        let new_entity = EntityId::new(entity_value);
-        let world = self.active_world_mut(world_handle)?;
-        let mut candidate = world.entities.clone();
-        let revision = candidate.revision();
-        EntityAuthoringService
-            .destroy(&mut candidate, revision, old_entity)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REPLACE", error.to_string())
-            })?;
-        insert_body(&mut candidate, new_entity, config)?;
-        world.entities = candidate;
-        world.bodies.remove(&body_handle.value);
-        world.bodies.insert(new_handle, new_entity);
-        world.last_contacts.remove(&old_entity);
-        world
-            .last_contact_receipts
-            .retain(|contact| contact.first != old_entity && contact.second != Some(old_entity));
-        self.bodies.insert(body_handle.value, BodySlot::Tombstoned);
-        self.bodies.insert(
-            new_handle,
-            BodySlot::Active {
-                world: world_handle,
-                entity: new_entity,
-            },
-        );
-        Ok(NativeDynamicsBodyHandle { value: new_handle })
+        let world = self.active_body(body.value)?;
+        let replacement = self.create_body_with_config(world, config)?;
+        self.remove_body(world, body.value)?;
+        Ok(replacement)
     }
 
     fn update_body(
         &mut self,
         request: NativeDynamicsUpdateBodyRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        let (world_handle, entity) = self.active_body(request.body.value)?;
-        let world = self.active_world_mut(world_handle)?;
-        let shape = world
-            .entities
-            .rigid_body(entity)
-            .copied()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_UPDATE",
-                    "body lacked dynamics state",
-                )
-            })?
-            .shape;
+        let world = self.active_body(request.body.value)?;
+        let world = self.active_world_mut(world)?;
+        let handle = request.body.value;
+        let shape = world.bodies[&handle].shape;
         let body = body_with_properties(shape, request.properties)?;
-        replace_body_component(&mut world.entities, entity, body, "CSHARP_DYNAMICS_UPDATE")?;
-        world.last_contacts.remove(&entity);
+        let pose = world
+            .solver
+            .body(DynamicsBodyId(handle))
+            .expect("admitted body");
+        let mut input = body_input(handle, EntityTransform::IDENTITY, &body);
+        input.translation = pose.translation;
+        input.rotation = pose.rotation;
         world
-            .last_contact_receipts
-            .retain(|contact| contact.first != entity && contact.second != Some(entity));
+            .solver
+            .replace_body(input)
+            .map_err(solver_error("CSHARP_DYNAMICS_UPDATE"))?;
+        world.bodies.insert(handle, body);
+        world.contacts.remove(&handle);
         Ok(())
     }
 
@@ -1047,20 +673,11 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsWorldReadRequest,
     ) -> Result<NativeDynamicsWorldReadout, CsharpEngineServicesError> {
-        let world = self.active_world_mut(request.world.value)?;
-        let readout = world.service.readout();
+        let world = self.active_world(request.world.value)?;
         Ok(NativeDynamicsWorldReadout {
-            generation: readout.map_or(0, |value| value.generation),
-            entity_revision: world.entities.revision(),
-            body_count: u32::try_from(world.bodies.len()).map_err(|_| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_WORLD", "body count exceeded u32")
-            })?,
-            contact_count: u32::try_from(world.last_contact_receipts.len()).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_DYNAMICS_WORLD",
-                    "contact count exceeded u32",
-                )
-            })?,
+            generation: world.solver.generation(),
+            body_count: world.bodies.len() as u32,
+            contact_count: world.solver.contacts().len() as u32,
         })
     }
 
@@ -1070,10 +687,7 @@ impl RuntimeDynamicsBridge {
     ) -> Result<&mut DynamicsWorld, CsharpEngineServicesError> {
         match self.worlds.get_mut(&handle) {
             Some(WorldSlot::Active(world)) => Ok(world),
-            Some(WorldSlot::Tombstoned) => Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_WORLD",
-                "world handle was tombstoned",
-            )),
+            Some(WorldSlot::Tombstoned) => Err(tombstoned("world")),
             None => Err(unknown("world", handle)),
         }
     }
@@ -1081,267 +695,183 @@ impl RuntimeDynamicsBridge {
     fn active_world(&self, handle: u64) -> Result<&DynamicsWorld, CsharpEngineServicesError> {
         match self.worlds.get(&handle) {
             Some(WorldSlot::Active(world)) => Ok(world),
-            Some(WorldSlot::Tombstoned) => Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_WORLD",
-                "world handle was tombstoned",
-            )),
+            Some(WorldSlot::Tombstoned) => Err(tombstoned("world")),
             None => Err(unknown("world", handle)),
         }
     }
 
-    fn rebase_snapshot(
-        &self,
-        handle: u64,
-    ) -> Result<DynamicsRebaseSnapshot, CsharpEngineServicesError> {
-        let world = self.active_world(handle)?;
-        Ok((
-            world.bound_spatial_session,
-            Arc::clone(&world.scene),
-            world.bodies.clone(),
-            world.entities.revision(),
-            world
-                .service
-                .readout()
-                .map_or(0, |readout| readout.generation),
-        ))
-    }
-
-    fn validate_body_handles(
-        &self,
-        world: u64,
-        body_members: &BTreeMap<u64, EntityId>,
-    ) -> Result<(), CsharpEngineServicesError> {
-        for (handle, entity) in body_members {
-            match self.bodies.get(handle) {
-                Some(BodySlot::Active {
-                    world: active_world,
-                    entity: active_entity,
-                }) if *active_world == world && *active_entity == *entity => {}
-                _ => {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_DYNAMICS_REBASE",
-                        "dynamics body handle mapping was stale",
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn active_body(&self, handle: u64) -> Result<(u64, EntityId), CsharpEngineServicesError> {
+    /// The world owning a live body handle.
+    fn active_body(&self, handle: u64) -> Result<u64, CsharpEngineServicesError> {
         match self.bodies.get(&handle) {
-            Some(BodySlot::Active { world, entity }) => Ok((*world, *entity)),
-            Some(BodySlot::Tombstoned) => Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_BODY",
-                "body handle was tombstoned",
-            )),
+            Some(BodySlot::Active { world }) => Ok(*world),
+            Some(BodySlot::Tombstoned) => Err(tombstoned("body")),
             None => Err(unknown("body", handle)),
         }
     }
+
+    /// Require a live body in `world`.
+    fn world_body(
+        &self,
+        world: u64,
+        handle: u64,
+        code: &'static str,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if self.active_body(handle)? != world {
+            return Err(CsharpEngineServicesError::new(
+                code,
+                "body belonged to another world",
+            ));
+        }
+        Ok(())
+    }
 }
 
-fn read_entity(
-    world: &DynamicsWorld,
-    entity: EntityId,
-) -> Result<NativeDynamicsReadout, CsharpEngineServicesError> {
-    let view = world.entities.view(entity).map_err(|error| {
-        CsharpEngineServicesError::new("CSHARP_DYNAMICS_READ", error.to_string())
-    })?;
-    let transform = view.transform.ok_or_else(|| {
-        CsharpEngineServicesError::new("CSHARP_DYNAMICS_READ", "body lacked a transform")
-    })?;
-    let body = world.entities.rigid_body(entity).ok_or_else(|| {
-        CsharpEngineServicesError::new("CSHARP_DYNAMICS_READ", "body lacked dynamics state")
-    })?;
-    let properties = rigid_body_component_mass_properties(*body);
-    let policy = match body.inertia {
-        RigidBodyInertiaPolicy::DeriveFromShapeAndMass => {
-            NativeDynamicsMassPolicyKind::DeriveFromShapeAndMass
+impl DynamicsWorld {
+    fn bind_scene(&mut self, scene: Arc<VoxelCollisionScene>) {
+        if self
+            .scene
+            .as_ref()
+            .is_some_and(|bound| Arc::ptr_eq(bound, &scene))
+        {
+            return;
         }
-        RigidBodyInertiaPolicy::Explicit { .. } => NativeDynamicsMassPolicyKind::Explicit,
-    };
-    let contact = world
-        .last_contacts
-        .get(&entity)
-        .copied()
-        .unwrap_or_default();
-    Ok(NativeDynamicsReadout {
-        transform: native_transform(transform.transform()),
-        linear_velocity: native_vec3(body.linear_velocity),
-        angular_velocity: native_vec3(body.angular_velocity),
-        sleeping: body.sleeping,
-        mass_properties: NativeMassProperties {
-            available: properties.is_some(),
-            mass: body.mass,
-            principal_inertia: properties.map_or(NativeVec3::default(), |value| {
-                native_vec3(value.principal_inertia)
-            }),
-            policy,
-            center_of_mass: properties.map_or(NativeVec3::default(), |value| {
-                native_vec3(value.center_of_mass)
-            }),
-            principal_inertia_local_frame: properties.map_or(NativeQuat::default(), |value| {
-                native_quat(value.principal_inertia_local_frame)
+        scene.bind_dynamics_environment(&mut self.solver);
+        self.scene = Some(scene);
+    }
+
+    fn body_output(&self, handle: u64) -> DynamicsBodyOutput {
+        self.solver
+            .body(DynamicsBodyId(handle))
+            .expect("a live body handle has a solver body")
+    }
+
+    fn readout(&self, handle: u64) -> NativeDynamicsReadout {
+        let output = self.body_output(handle);
+        let body = &self.bodies[&handle];
+        let properties = rigid_body_component_mass_properties(*body);
+        let policy = match body.inertia {
+            RigidBodyInertiaPolicy::DeriveFromShapeAndMass => {
+                NativeDynamicsMassPolicyKind::DeriveFromShapeAndMass
+            }
+            RigidBodyInertiaPolicy::Explicit { .. } => NativeDynamicsMassPolicyKind::Explicit,
+        };
+        let contact = self.contacts.get(&handle).copied().unwrap_or_default();
+        NativeDynamicsReadout {
+            transform: native_transform(output_transform(&output)),
+            linear_velocity: native_vec3(vec3_f32(output.linear_velocity)),
+            angular_velocity: native_vec3(vec3_f32(output.angular_velocity)),
+            sleeping: output.sleeping,
+            mass_properties: NativeMassProperties {
+                available: properties.is_some(),
+                mass: body.mass,
+                principal_inertia: properties.map_or(NativeVec3::default(), |value| {
+                    native_vec3(value.principal_inertia)
+                }),
+                policy,
+                center_of_mass: properties.map_or(NativeVec3::default(), |value| {
+                    native_vec3(value.center_of_mass)
+                }),
+                principal_inertia_local_frame: properties.map_or(NativeQuat::default(), |value| {
+                    native_quat(value.principal_inertia_local_frame)
+                }),
+            },
+            contact_count: contact.count,
+            first_contact: contact.latest,
+        }
+    }
+}
+
+fn output_transform(output: &DynamicsBodyOutput) -> EntityTransform {
+    EntityTransform {
+        translation: vec3_f32(output.translation),
+        rotation: Quat::new(
+            output.rotation[0] as f32,
+            output.rotation[1] as f32,
+            output.rotation[2] as f32,
+            output.rotation[3] as f32,
+        ),
+        scale: Vec3::ONE,
+    }
+}
+
+fn body_input(id: u64, transform: EntityTransform, body: &RigidBodyComponent) -> DynamicsBodyInput {
+    DynamicsBodyInput {
+        id: DynamicsBodyId(id),
+        translation: vec3_f64(transform.translation),
+        rotation: quat_f64(transform.rotation),
+        shape: match body.shape {
+            RigidBodyShape::Sphere { radius } => DynamicsShape::Sphere {
+                radius: f64::from(radius),
+            },
+            RigidBodyShape::Cuboid { half_extents } => DynamicsShape::Cuboid {
+                half_extents: vec3_f64(half_extents),
+            },
+            RigidBodyShape::CapsuleY {
+                half_height,
+                radius,
+            } => DynamicsShape::CapsuleY {
+                half_height: f64::from(half_height),
+                radius: f64::from(radius),
+            },
+        },
+        mass: f64::from(body.mass),
+        mass_properties: match body.inertia {
+            RigidBodyInertiaPolicy::DeriveFromShapeAndMass => None,
+            RigidBodyInertiaPolicy::Explicit {
+                center_of_mass,
+                principal_inertia,
+                principal_inertia_local_frame,
+            } => Some(DynamicsMassProperties {
+                center_of_mass: vec3_f64(center_of_mass),
+                principal_inertia: vec3_f64(principal_inertia),
+                principal_inertia_local_frame: quat_f64(principal_inertia_local_frame),
             }),
         },
-        contact_count: contact.count,
-        first_contact: contact.latest,
-    })
+        linear_velocity: vec3_f64(body.linear_velocity),
+        angular_velocity: vec3_f64(body.angular_velocity),
+        locked_translation_axes: body.locked_translation_axes,
+        locked_rotation_axes: body.locked_rotation_axes,
+        linear_damping: f64::from(body.linear_damping),
+        angular_damping: f64::from(body.angular_damping),
+        gravity_scale: f64::from(body.gravity_scale),
+        friction: f64::from(body.friction),
+        restitution: f64::from(body.restitution),
+        collision_groups: body.collision_groups,
+        collision_mask: body.collision_mask,
+        enabled: body.enabled,
+        sleeping: body.sleeping,
+        continuous_collision: body.continuous_collision,
+    }
 }
 
-fn validate_rebase_receipt(
-    receipt: &NativeWorldOriginCommitReceipt,
-) -> Result<(), CsharpEngineServicesError> {
-    let expected_after = receipt.revision_before.checked_add(1).ok_or_else(|| {
-        CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            "world-origin receipt revision was exhausted",
-        )
-    })?;
-    if receipt.revision_after != expected_after {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            "world-origin receipt did not advance exactly one revision",
-        ));
-    }
-    if !receipt.local_envelope.is_finite() || receipt.local_envelope <= 0.0 {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            "world-origin receipt local envelope was invalid",
-        ));
-    }
-    Ok(())
+fn vec3_f64(value: Vec3) -> [f64; 3] {
+    [f64::from(value.x), f64::from(value.y), f64::from(value.z)]
 }
 
-fn validate_scene_before(
-    scene: &VoxelCollisionScene,
-    receipt: &NativeWorldOriginCommitReceipt,
-) -> Result<(), CsharpEngineServicesError> {
-    validate_scene(
-        scene,
-        WorldOrigin::new([
-            receipt.origin_before_cell_x,
-            receipt.origin_before_cell_y,
-            receipt.origin_before_cell_z,
-        ]),
-        receipt.revision_before,
-        receipt,
-        "before",
-    )
+fn vec3_f32(value: [f64; 3]) -> Vec3 {
+    Vec3::new(value[0] as f32, value[1] as f32, value[2] as f32)
 }
 
-fn validate_scene_after(
-    scene: &VoxelCollisionScene,
-    receipt: &NativeWorldOriginCommitReceipt,
-) -> Result<(), CsharpEngineServicesError> {
-    validate_scene(
-        scene,
-        WorldOrigin::new([
-            receipt.origin_after_cell_x,
-            receipt.origin_after_cell_y,
-            receipt.origin_after_cell_z,
-        ]),
-        receipt.revision_after,
-        receipt,
-        "after",
-    )
-}
-
-fn validate_scene(
-    scene: &VoxelCollisionScene,
-    expected_origin: WorldOrigin,
-    expected_rebase_revision: u64,
-    receipt: &NativeWorldOriginCommitReceipt,
-    phase: &'static str,
-) -> Result<(), CsharpEngineServicesError> {
-    if scene.world_origin() != expected_origin
-        || scene.rebase_revision() != expected_rebase_revision
-        || scene.source_revision().raw() != receipt.voxel_source_revision
-        || scene.static_mesh_collision_revision() != receipt.static_mesh_revision
-    {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            format!("world-origin receipt did not match the {phase} collision scene"),
-        ));
-    }
-    Ok(())
-}
-
-fn rebase_body_replacement(
-    state: &EntityState,
-    entity: EntityId,
-    receipt: &NativeWorldOriginCommitReceipt,
-) -> Result<RigidBodyStateReplacement, CsharpEngineServicesError> {
-    if state.lifecycle(entity) != Some(EntityLifecycle::Active) {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            "dynamics body was not active",
-        ));
-    }
-    if state.transform_parent(entity).is_some() {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            "dynamics body was parented",
-        ));
-    }
-    let transform = state.transform(entity).copied().ok_or_else(|| {
-        CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", "dynamics body lacked a transform")
-    })?;
-    if transform.scale != Vec3::ONE {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_DYNAMICS_REBASE",
-            "dynamics body transform scale was not unit",
-        ));
-    }
-    let rigid_body = state.rigid_body(entity).copied().ok_or_else(|| {
-        CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", "dynamics body lacked rigid state")
-    })?;
-    let global = GlobalPosition::from_local(
-        WorldOrigin::new([
-            receipt.origin_before_cell_x,
-            receipt.origin_before_cell_y,
-            receipt.origin_before_cell_z,
-        ]),
-        transform.translation.to_array(),
-    )
-    .map_err(|error| CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.to_string()))?;
-    let local = global
-        .local(
-            WorldOrigin::new([
-                receipt.origin_after_cell_x,
-                receipt.origin_after_cell_y,
-                receipt.origin_after_cell_z,
-            ]),
-            receipt.local_envelope,
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.to_string())
-        })?;
-    Ok(RigidBodyStateReplacement {
-        entity,
-        expected_transform_revision: state
-            .component_revision::<TransformComponent>(entity)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.to_string())
-            })?,
-        expected_rigid_body_revision: state
-            .component_revision::<RigidBodyComponent>(entity)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_REBASE", error.to_string())
-            })?,
-        transform: TransformComponent::from_transform(EntityTransform {
-            translation: Vec3::new(local[0], local[1], local[2]),
-            rotation: transform.rotation,
-            scale: transform.scale,
-        }),
-        rigid_body,
-    })
+fn quat_f64(value: Quat) -> [f64; 4] {
+    [
+        f64::from(value.x),
+        f64::from(value.y),
+        f64::from(value.z),
+        f64::from(value.w),
+    ]
 }
 
 fn unknown(kind: &str, value: u64) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new(
         "CSHARP_DYNAMICS_HANDLE",
         format!("unknown {kind} handle {value}"),
+    )
+}
+
+fn tombstoned(kind: &str) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(
+        "CSHARP_DYNAMICS_HANDLE",
+        format!("{kind} handle was destroyed"),
     )
 }
 
@@ -1454,8 +984,6 @@ fn body_config(
         axis_locks.rotation_z,
     ];
     body.gravity_scale = gravity_scale;
-    entity_state::validate_rigid_body(&body)
-        .map_err(|error| CsharpEngineServicesError::new("CSHARP_DYNAMICS_BODY", error.code()))?;
     Ok(BodyConfig { transform, body })
 }
 
@@ -1498,71 +1026,44 @@ fn body_with_properties(
     body.enabled = properties.enabled;
     body.sleeping = properties.sleeping;
     body.continuous_collision = properties.continuous_collision;
-    entity_state::validate_rigid_body(&body)
-        .map_err(|error| CsharpEngineServicesError::new("CSHARP_DYNAMICS_BODY", error.code()))?;
     Ok(body)
 }
 
-fn replace_body_component(
-    entities: &mut EntityState,
-    entity: EntityId,
-    body: RigidBodyComponent,
-    code: &'static str,
-) -> Result<(), CsharpEngineServicesError> {
-    let transform = entities
-        .view(entity)
-        .map_err(|error| CsharpEngineServicesError::new(code, error.to_string()))?
-        .transform
-        .ok_or_else(|| CsharpEngineServicesError::new(code, "body lacked a transform"))?;
-    let replacement = RigidBodyStateReplacement {
-        entity,
-        expected_transform_revision: entities
-            .component_revision::<TransformComponent>(entity)
-            .map_err(|error| CsharpEngineServicesError::new(code, error.to_string()))?,
-        expected_rigid_body_revision: entities
-            .component_revision::<RigidBodyComponent>(entity)
-            .map_err(|error| CsharpEngineServicesError::new(code, error.to_string()))?,
-        transform,
-        rigid_body: body,
-    };
-    replace_rigid_body_states(entities, vec![replacement])
-        .map(|_| ())
-        .map_err(|error| CsharpEngineServicesError::new(code, error.code()))
-}
-
 fn contacts_by_body(
-    receipt: &engine_spatial::RigidBodyStepReceipt,
-) -> BTreeMap<EntityId, BodyContactSummary> {
-    let mut contacts = BTreeMap::new();
-    for contact in &receipt.contacts {
+    contacts: &[engine_spatial::DynamicsContact],
+) -> BTreeMap<u64, BodyContactSummary> {
+    let mut summary = BTreeMap::new();
+    for contact in contacts {
+        let impulse = vec3_f32(contact.impulse);
+        let magnitude = contact.impulse_magnitude as f32;
         record_contact(
-            &mut contacts,
-            contact.first,
+            &mut summary,
+            contact.first.0,
             contact.second.is_none(),
-            contact.impulse,
-            contact.impulse_magnitude,
+            impulse,
+            magnitude,
         );
         if let Some(second) = contact.second {
             record_contact(
-                &mut contacts,
-                second,
+                &mut summary,
+                second.0,
                 false,
-                Vec3::new(-contact.impulse.x, -contact.impulse.y, -contact.impulse.z),
-                contact.impulse_magnitude,
+                Vec3::new(-impulse.x, -impulse.y, -impulse.z),
+                magnitude,
             );
         }
     }
-    contacts
+    summary
 }
 
 fn record_contact(
-    contacts: &mut BTreeMap<EntityId, BodyContactSummary>,
-    entity: EntityId,
+    contacts: &mut BTreeMap<u64, BodyContactSummary>,
+    body: u64,
     environment: bool,
     impulse: Vec3,
     impulse_magnitude: f32,
 ) {
-    let entry = contacts.entry(entity).or_default();
+    let entry = contacts.entry(body).or_default();
     if entry.count == 0 {
         entry.latest = NativeDynamicsContactFact {
             present: true,
@@ -1572,36 +1073,6 @@ fn record_contact(
         };
     }
     entry.count = entry.count.saturating_add(1);
-}
-
-fn insert_body(
-    state: &mut EntityState,
-    entity: EntityId,
-    config: BodyConfig,
-) -> Result<(), CsharpEngineServicesError> {
-    EntityAuthoringService
-        .admit(
-            state,
-            state.revision(),
-            [
-                EntityDefinition::new(entity, format!("dynamics-body-{}", entity.raw()))
-                    .with_full_transform(config.transform),
-            ],
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_BODY", error.to_string())
-        })?;
-    let revision = state
-        .component_revision::<RigidBodyComponent>(entity)
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_BODY", error.to_string())
-        })?;
-    EntityAuthoringService
-        .attach_component(state, revision, entity, config.body)
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_BODY", error.to_string())
-        })?;
-    Ok(())
 }
 
 fn checked_transform(value: NativeTransform) -> Result<EntityTransform, CsharpEngineServicesError> {
@@ -1801,18 +1272,14 @@ unsafe extern "C" fn bind_world_collision(
 unsafe extern "C" fn rebase_world_origin(
     context: *mut c_void,
     request: NativeDynamicsRebaseWorldOriginRequest,
-    receipt: *mut NativeDynamicsRebaseWorldOriginReceipt,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     clear_receipt(operation_error);
-    if context.is_null() || receipt.is_null() {
+    if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.rebase_world_origin(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
+        Ok(()) => ABI_OK,
         Err(error) => refuse(context, &error, operation_error, b"RebaseWorldOrigin"),
     }
 }
@@ -2073,7 +1540,6 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
     NativeDynamicsApi {
         context: (bridge as *mut RuntimeDynamicsBridge).cast(),
         observe_anchor: anchor::observe_anchor,
-        refresh_anchor: anchor::refresh_anchor,
         step_with_reactions: anchor::step_with_reactions,
         configure_ropes: chain::configure_ropes,
         destroy_operation_diagnostic_lease: errors::destroy_operation_diagnostic_lease,
@@ -2222,6 +1688,9 @@ unsafe extern "C" fn read_tether(
 
 #[cfg(test)]
 mod tests {
+    use core_ids::EntityId;
+    use entity_state::{EntityDefinition, EntityState};
+
     use super::*;
 
     const ONE_SIXTIETH_SECOND: f32 = 1.0 / 60.0;
@@ -2286,7 +1755,7 @@ mod tests {
     }
 
     #[test]
-    fn chain_creation_removal_and_anchor_invalidation_are_atomic() {
+    fn chain_creation_removal_and_anchor_invalidation() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -2311,26 +1780,22 @@ mod tests {
             },
             config: chain_config(8, 4),
         };
-        let before = bridge
-            .active_world(world.value)
-            .unwrap()
-            .entities
-            .revision();
         let mut invalid = request;
-        invalid.config.bead_count = 9;
+        invalid.config.bead_count = 0;
         assert!(bridge.create_body_chain(invalid).is_err());
         invalid = request;
         invalid.config.properties.mass = -1.0;
         assert!(bridge.create_body_chain(invalid).is_err());
+        // A refused chain leaves no beads behind.
+        assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 1);
         assert_eq!(
             bridge
                 .active_world(world.value)
                 .unwrap()
-                .entities
-                .revision(),
-            before
+                .solver
+                .tether_count(),
+            0
         );
-        assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 1);
         bridge.create_body_chain(request).unwrap();
         assert!(bridge.create_body_chain(request).is_err());
         let query = NativeDynamicsChainRequest { world, id: 8 };
@@ -2348,12 +1813,14 @@ mod tests {
         bridge.destroy_body(body).unwrap();
         assert!(bridge.read_chain(query).unwrap().invalidated);
         assert_eq!(bridge.active_world(world.value).unwrap().bodies.len(), 0);
-        assert!(bridge
-            .active_world(world.value)
-            .unwrap()
-            .service
-            .capture_tethers()
-            .is_empty());
+        assert_eq!(
+            bridge
+                .active_world(world.value)
+                .unwrap()
+                .solver
+                .tether_count(),
+            0
+        );
         bridge.remove_chain(query).unwrap();
         assert!(!bridge.read_chain(query).unwrap().invalidated);
         bridge
@@ -2373,7 +1840,7 @@ mod tests {
 
     #[test]
     fn short_chain_collides_with_terrain_and_repeats_exactly() {
-        let run = |restore: bool| {
+        let run = || {
             let spatial = crate::spatial::RuntimeSpatialBridge::new();
             let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
             let world = bridge
@@ -2386,8 +1853,12 @@ mod tests {
                 })
                 .unwrap();
             let ground = (-6..7).flat_map(|x| (-2..3).map(move |z| [x, -1, z]));
-            bridge.active_world_mut(world.value).unwrap().scene =
-                Arc::new(VoxelCollisionScene::from_solid_voxels(1.0, 8, ground).unwrap());
+            bridge
+                .active_world_mut(world.value)
+                .unwrap()
+                .bind_scene(Arc::new(
+                    VoxelCollisionScene::from_solid_voxels(1.0, 8, ground).unwrap(),
+                ));
             bridge
                 .create_fixed_chain(NativeDynamicsFixedChainRequest {
                     world,
@@ -2405,20 +1876,7 @@ mod tests {
                 })
                 .unwrap();
             let mut touched_ground = false;
-            for tick in 0..300 {
-                if restore && tick == 150 {
-                    let state = bridge.active_world_mut(world.value).unwrap();
-                    let snapshot = state.service.capture_ropes();
-                    state.entities = entity_state::decode_snapshot(
-                        &entity_state::encode_snapshot(&state.entities).unwrap(),
-                    )
-                    .unwrap();
-                    state.service = RigidBodyService::default();
-                    state
-                        .service
-                        .restore_ropes(&state.entities, snapshot)
-                        .unwrap();
-                }
+            for _ in 0..300 {
                 bridge
                     .step(&NativeDynamicsStepRequest {
                         world,
@@ -2431,7 +1889,8 @@ mod tests {
                 touched_ground |= bridge
                     .active_world(world.value)
                     .unwrap()
-                    .last_contact_receipts
+                    .solver
+                    .contacts()
                     .iter()
                     .any(|contact| contact.second.is_none());
                 for index in 1..=8 {
@@ -2470,13 +1929,11 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let baseline = run(false);
-        assert_eq!(baseline, run(false));
-        assert_eq!(baseline, run(true));
+        assert_eq!(run(), run());
     }
 
     #[test]
-    fn chain_quotas_and_length_controls_do_not_partially_publish() {
+    fn chain_length_controls_reel_the_links() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -2484,45 +1941,18 @@ mod tests {
                 gravity: NativeVec3::default(),
             })
             .unwrap();
-        for id in 0..64 {
-            bridge
-                .create_fixed_chain(NativeDynamicsFixedChainRequest {
-                    world,
-                    anchor: NativeVec3 {
-                        x: id as f32,
-                        y: 0.0,
-                        z: 0.0,
-                    },
-                    end: NativeVec3 {
-                        x: id as f32,
-                        y: -0.5,
-                        z: 0.0,
-                    },
-                    config: chain_config(id, 1),
-                })
-                .unwrap();
-        }
-        let before = bridge
-            .active_world(world.value)
-            .unwrap()
-            .entities
-            .revision();
-        assert!(bridge
+        bridge
             .create_fixed_chain(NativeDynamicsFixedChainRequest {
                 world,
                 anchor: NativeVec3::default(),
-                end: NativeVec3::default(),
-                config: chain_config(64, 1)
+                end: NativeVec3 {
+                    x: 0.0,
+                    y: -0.5,
+                    z: 0.0,
+                },
+                config: chain_config(0, 1),
             })
-            .is_err());
-        assert_eq!(
-            bridge
-                .active_world(world.value)
-                .unwrap()
-                .entities
-                .revision(),
-            before
-        );
+            .unwrap();
         let control = NativeDynamicsChainLengthRequest {
             world,
             id: 0,
@@ -2531,7 +1961,7 @@ mod tests {
         };
         assert!(bridge
             .set_chain_length(NativeDynamicsChainLengthRequest {
-                reel_speed: 1.0,
+                reel_speed: -1.0,
                 ..control
             })
             .is_err());
@@ -2602,28 +2032,28 @@ mod tests {
                 })
                 .unwrap();
             let state = bridge.active_world(world.value).unwrap();
-            let beads = &state.chains[&1].bodies;
-            for contact in &state.last_contact_receipts {
-                assert_ne!(
-                    (contact.first, contact.second),
-                    (beads[0].1, Some(beads[1].1))
-                );
-                assert_ne!(
-                    (contact.first, contact.second),
-                    (beads[1].1, Some(beads[2].1))
-                );
+            let beads = state.chains[&1]
+                .bodies
+                .iter()
+                .map(|bead| DynamicsBodyId(*bead))
+                .collect::<Vec<_>>();
+            for contact in state.solver.contacts() {
+                assert_ne!((contact.first, contact.second), (beads[0], Some(beads[1])));
+                assert_ne!((contact.first, contact.second), (beads[1], Some(beads[2])));
             }
             assert_eq!(
-                state.last_contact_receipts.iter().any(
-                    |contact| contact.first == beads[0].1 && contact.second == Some(beads[2].1)
-                ),
+                state
+                    .solver
+                    .contacts()
+                    .iter()
+                    .any(|contact| contact.first == beads[0] && contact.second == Some(beads[2])),
                 self_collision
             );
         }
     }
 
     #[test]
-    fn anchor_observation_resolves_angular_velocity_and_reactions_reject_replay() {
+    fn anchor_observation_resolves_angular_velocity_and_reactions_apply_at_the_point() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -2660,8 +2090,6 @@ mod tests {
         assert_eq!(anchor.point.y, 1.0);
         assert_eq!(anchor.point_velocity.x, -1.0);
         let reaction = NativeDynamicsAnchorReaction {
-            source_identity: 10,
-            source_generation: 1,
             present: true,
             anchor,
             impulse: NativeVec3 {
@@ -2669,66 +2097,26 @@ mod tests {
                 y: 0.0,
                 z: 0.0,
             },
-            maximum_impulse: 2.0,
         };
-        let duplicates = [reaction; 2];
         let request = NativeDynamicsStepWithReactionsRequest {
             world,
             step_seconds: ONE_SIXTIETH_SECOND,
             steps: 1,
             actions: std::ptr::null(),
             actions_len: 0,
-            reactions: duplicates.as_ptr(),
-            reactions_len: duplicates.len(),
-        };
-        let before = bridge
-            .active_world(world.value)
-            .unwrap()
-            .entities
-            .revision();
-        assert!(bridge.step_with_reactions(&request).is_err());
-        assert_eq!(
-            bridge
-                .active_world(world.value)
-                .unwrap()
-                .entities
-                .revision(),
-            before
-        );
-        let request = NativeDynamicsStepWithReactionsRequest {
             reactions: &reaction,
             reactions_len: 1,
-            ..request
         };
         bridge.step_with_reactions(&request).unwrap();
         let after = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
         assert!((after.linear_velocity.x - 2.0).abs() < 1e-5);
         assert!((after.angular_velocity.z + 4.0).abs() < 1e-4);
-        let revision = bridge
-            .active_world(world.value)
-            .unwrap()
-            .entities
-            .revision();
-        assert!(bridge.step_with_reactions(&request).is_err());
-        assert_eq!(
-            bridge
-                .active_world(world.value)
-                .unwrap()
-                .entities
-                .revision(),
-            revision
-        );
-        let refreshed = bridge
-            .refresh_anchor(NativeDynamicsRefreshAnchorRequest { world, anchor })
-            .unwrap();
-        assert!(refreshed.valid && refreshed.entity_revision > anchor.entity_revision);
+        // A reaction is an ordinary impulse: repeating it applies it again.
+        bridge.step_with_reactions(&request).unwrap();
+        let again = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!((again.linear_velocity.x - 3.0).abs() < 1e-5);
         bridge.destroy_body(body).unwrap();
-        assert!(
-            !bridge
-                .refresh_anchor(NativeDynamicsRefreshAnchorRequest { world, anchor })
-                .unwrap()
-                .valid
-        );
+        assert!(bridge.step_with_reactions(&request).is_err());
     }
 
     #[test]
@@ -2799,12 +2187,9 @@ mod tests {
             )
             .unwrap();
         let reaction = NativeDynamicsAnchorReaction {
-            source_identity: 1,
-            source_generation: receipt.generation,
             present: true,
             anchor,
             impulse: native_vec3(receipt.tether.reaction_impulse),
-            maximum_impulse: controller.external_motion.maximum_dynamic_impulse,
         };
         bridge
             .step_with_reactions(&NativeDynamicsStepWithReactionsRequest {
@@ -2899,12 +2284,9 @@ mod tests {
                 )
                 .unwrap();
             let reaction = NativeDynamicsAnchorReaction {
-                source_identity: 1,
-                source_generation: receipt.generation,
                 present: true,
                 anchor,
                 impulse: native_vec3(receipt.tether.reaction_impulse),
-                maximum_impulse: controller.external_motion.maximum_dynamic_impulse,
             };
             bridge
                 .step_with_reactions(&NativeDynamicsStepWithReactionsRequest {
@@ -2972,7 +2354,7 @@ mod tests {
         let query = NativeDynamicsTetherRequest { world, id: 7 };
         assert!(!bridge.read_tether(query).unwrap().simulated);
         bridge
-            .execute_step(world.value, ONE_SIXTIETH_SECOND, 1, Vec::new())
+            .execute_step(world.value, ONE_SIXTIETH_SECOND, 1, &[])
             .unwrap();
         let readout = bridge.read_tether(query).unwrap();
         assert!(readout.present && readout.simulated && readout.caught && !readout.invalidated);
@@ -2981,14 +2363,14 @@ mod tests {
         let invalid = bridge.read_tether(query).unwrap();
         assert!(!invalid.present && invalid.invalidated);
         bridge
-            .execute_step(world.value, ONE_SIXTIETH_SECOND, 1, Vec::new())
+            .execute_step(world.value, ONE_SIXTIETH_SECOND, 1, &[])
             .unwrap();
         bridge.remove_tether(query).unwrap();
         assert!(!bridge.read_tether(query).unwrap().invalidated);
     }
 
     #[test]
-    fn generic_body_properties_share_shape_validation_and_select_ccd_on_create_and_replace() {
+    fn fast_bodies_step_without_a_motion_cap_and_shapes_share_validation() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -2997,13 +2379,7 @@ mod tests {
             })
             .unwrap();
         let mut config = body_config(NativeVec3::default());
-        config.properties.linear_velocity.x = 120.0; // Two units per step, above discrete's one.
-        let mut body = bridge
-            .create_body(&NativeDynamicsCreateBodyRequest {
-                world,
-                body: config,
-            })
-            .unwrap();
+        config.properties.linear_velocity.x = 120.0; // Two units per step.
         let step = NativeDynamicsStepRequest {
             world,
             step_seconds: ONE_SIXTIETH_SECOND,
@@ -3011,57 +2387,27 @@ mod tests {
             actions: std::ptr::null(),
             actions_len: 0,
         };
-        assert_eq!(
-            bridge.step(&step).unwrap_err().detail(),
-            "dynamics-motion-limit-exceeded"
-        );
-        assert_eq!(
-            bridge
-                .read(NativeDynamicsReadRequest { body })
-                .unwrap()
-                .transform
-                .translation
-                .x,
-            0.0
-        );
-        config.properties.continuous_collision = true;
-        body = bridge
-            .replace_body(NativeDynamicsReplaceBodyRequest {
-                body,
-                replacement: config,
-            })
-            .unwrap();
-        bridge.step(&step).unwrap();
-        assert!(
-            bridge
-                .read(NativeDynamicsReadRequest { body })
-                .unwrap()
-                .transform
-                .translation
-                .x
-                > 1.0
-        );
-        bridge.destroy_body(body).unwrap();
-        body = bridge
+        for continuous in [false, true] {
+            config.properties.continuous_collision = continuous;
+            let body = bridge
+                .create_body(&NativeDynamicsCreateBodyRequest {
+                    world,
+                    body: config,
+                })
+                .unwrap();
+            bridge.step(&step).unwrap();
+            let moved = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+            assert!((moved.transform.translation.x - 2.0).abs() < 1e-4);
+            bridge.destroy_body(body).unwrap();
+        }
+
+        let body = bridge
             .create_body(&NativeDynamicsCreateBodyRequest {
                 world,
                 body: config,
             })
             .unwrap();
-        bridge.step(&step).unwrap();
-        config.properties.continuous_collision = false;
-        body = bridge
-            .replace_body(NativeDynamicsReplaceBodyRequest {
-                body,
-                replacement: config,
-            })
-            .unwrap();
-        assert_eq!(
-            bridge.step(&step).unwrap_err().detail(),
-            "dynamics-motion-limit-exceeded"
-        );
-
-        config.properties.friction = -1.0;
+        config.properties.mass = -1.0;
         let generic_error = bridge
             .replace_body(NativeDynamicsReplaceBodyRequest {
                 body,
@@ -3080,11 +2426,12 @@ mod tests {
             .unwrap_err();
         assert_eq!(generic_error.code(), shape_error.code());
         assert_eq!(generic_error.to_string(), shape_error.to_string());
+        // A refused replacement leaves the original body in place.
         assert!(bridge.read(NativeDynamicsReadRequest { body }).is_ok());
     }
 
     #[test]
-    fn bridge_preserves_step_atomicity_replacement_tombstones_and_disposal_orders() {
+    fn bridge_steps_resets_replaces_and_disposes_in_either_order() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -3131,57 +2478,6 @@ mod tests {
             .unwrap();
         let driven = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
         assert!(driven.linear_velocity.x > 0.0 && driven.angular_velocity.z > 0.0);
-        assert!(bridge
-            .step(&NativeDynamicsStepRequest {
-                world,
-                step_seconds: ONE_SIXTIETH_SECOND,
-                steps: 256,
-                actions: std::ptr::null(),
-                actions_len: 0
-            })
-            .is_err());
-        let unchanged = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
-        assert_eq!(unchanged.sleeping, driven.sleeping);
-        assert_eq!(
-            [
-                unchanged.transform.translation.x,
-                unchanged.transform.translation.y,
-                unchanged.transform.translation.z,
-                unchanged.transform.rotation.x,
-                unchanged.transform.rotation.y,
-                unchanged.transform.rotation.z,
-                unchanged.transform.rotation.w,
-                unchanged.linear_velocity.x,
-                unchanged.linear_velocity.y,
-                unchanged.linear_velocity.z,
-                unchanged.angular_velocity.x,
-                unchanged.angular_velocity.y,
-                unchanged.angular_velocity.z,
-                unchanged.mass_properties.mass,
-                unchanged.mass_properties.principal_inertia.x,
-                unchanged.mass_properties.principal_inertia.y,
-                unchanged.mass_properties.principal_inertia.z
-            ],
-            [
-                driven.transform.translation.x,
-                driven.transform.translation.y,
-                driven.transform.translation.z,
-                driven.transform.rotation.x,
-                driven.transform.rotation.y,
-                driven.transform.rotation.z,
-                driven.transform.rotation.w,
-                driven.linear_velocity.x,
-                driven.linear_velocity.y,
-                driven.linear_velocity.z,
-                driven.angular_velocity.x,
-                driven.angular_velocity.y,
-                driven.angular_velocity.z,
-                driven.mass_properties.mass,
-                driven.mass_properties.principal_inertia.x,
-                driven.mass_properties.principal_inertia.y,
-                driven.mass_properties.principal_inertia.z
-            ],
-        );
         bridge
             .reset(NativeDynamicsResetRequest {
                 body,
@@ -3231,7 +2527,7 @@ mod tests {
     }
 
     #[test]
-    fn step_and_read_preserves_explicit_body_order_releases_exactly_and_prevalidates() {
+    fn step_and_read_preserves_explicit_body_order_and_releases_exactly() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -3287,11 +2583,8 @@ mod tests {
         bridge.destroy_step_and_read_lease(lease.handle).unwrap();
         assert!(bridge.destroy_step_and_read_lease(lease.handle).is_err());
 
-        let before = bridge
-            .read(NativeDynamicsReadRequest { body: first })
-            .unwrap();
         let duplicate = [first, first];
-        assert!(bridge
+        let lease = bridge
             .step_and_read(&NativeDynamicsStepAndReadRequest {
                 world,
                 step_seconds: ONE_SIXTIETH_SECOND,
@@ -3301,28 +2594,10 @@ mod tests {
                 bodies: duplicate.as_ptr(),
                 bodies_len: duplicate.len(),
             })
-            .is_err());
-        let unchanged = bridge
-            .read(NativeDynamicsReadRequest { body: first })
             .unwrap();
-        assert_eq!(
-            [
-                unchanged.transform.translation.x,
-                unchanged.transform.translation.y,
-                unchanged.transform.translation.z,
-                unchanged.linear_velocity.x,
-                unchanged.linear_velocity.y,
-                unchanged.linear_velocity.z,
-            ],
-            [
-                before.transform.translation.x,
-                before.transform.translation.y,
-                before.transform.translation.z,
-                before.linear_velocity.x,
-                before.linear_velocity.y,
-                before.linear_velocity.z,
-            ],
-        );
+        let copied = unsafe { std::slice::from_raw_parts(lease.bodies, lease.bodies_len) };
+        assert_eq!(copied[0].body.value, copied[1].body.value);
+        bridge.destroy_step_and_read_lease(lease.handle).unwrap();
     }
 
     #[test]
@@ -3464,7 +2739,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_world_collision_uses_spatial_projection_snapshots_atomically() {
+    fn bind_world_collision_uses_the_spatial_scene() {
         let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let spatial_api = crate::spatial::api(&mut spatial);
@@ -3638,7 +2913,7 @@ mod tests {
     }
 
     #[test]
-    fn rebase_world_origin_updates_bound_dynamics_atomically() {
+    fn rebase_world_origin_moves_bodies_ropes_and_environment_together() {
         let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let spatial_api = crate::spatial::api(&mut spatial);
@@ -3819,18 +3094,17 @@ mod tests {
         let before_contact = bridge
             .read_contact_at(NativeDynamicsContactAtRequest { world, index: 0 })
             .unwrap();
-        let request = NativeDynamicsRebaseWorldOriginRequest {
-            world,
-            spatial_session: session,
-            receipt,
-            expected_entity_revision: before_world.entity_revision,
-            expected_solver_generation: before_world.generation,
-        };
-        let rebase = bridge.rebase_world_origin(request).unwrap();
+        bridge
+            .rebase_world_origin(NativeDynamicsRebaseWorldOriginRequest {
+                world,
+                spatial_session: session,
+                receipt,
+            })
+            .unwrap();
         let rebased_tether = bridge
             .active_world(world.value)
             .unwrap()
-            .service
+            .solver
             .tether(71)
             .unwrap();
         assert_eq!(
@@ -3841,7 +3115,7 @@ mod tests {
         assert_eq!(
             rebased_tether.second,
             DynamicsTetherEndpoint::Body {
-                body: DynamicsBodyId(bridge.active_body(body.value).unwrap().1.raw()),
+                body: DynamicsBodyId(body.value),
                 local_anchor: [0.0; 3]
             }
         );
@@ -3853,15 +3127,6 @@ mod tests {
             .read_contact_at(NativeDynamicsContactAtRequest { world, index: 0 })
             .unwrap();
         assert_eq!(after_world.generation, before_world.generation);
-        assert_eq!(
-            after_world.entity_revision,
-            before_world.entity_revision + 1
-        );
-        assert_eq!(rebase.entity_revision_before, before_world.entity_revision);
-        assert_eq!(rebase.entity_revision_after, after_world.entity_revision);
-        assert_eq!(rebase.solver_generation, after_world.generation);
-        assert_eq!(rebase.body_count, after_world.body_count);
-        assert_eq!(rebase.contact_count, after_world.contact_count);
         assert_eq!(
             after_body.transform.translation.x,
             before_body.transform.translation.x - 5.0
@@ -3887,62 +3152,27 @@ mod tests {
             before_contact.impulse_magnitude
         );
 
-        let preserved = |bridge: &mut RuntimeDynamicsBridge| {
-            let world_readout = bridge
-                .read_world(NativeDynamicsWorldReadRequest { world })
-                .unwrap();
-            let body_readout = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
-            let contact = bridge
-                .read_contact_at(NativeDynamicsContactAtRequest { world, index: 0 })
-                .unwrap();
-            (
-                world_readout.entity_revision,
-                world_readout.generation,
-                body_readout.transform.translation.x,
-                body_readout.linear_velocity.x,
-                body_readout.angular_velocity.y,
-                body_readout.sleeping,
-                contact.present,
-                contact.first.value,
-                contact.impulse_magnitude,
-            )
-        };
-        let expected = preserved(&mut bridge);
-        let current = NativeDynamicsRebaseWorldOriginRequest {
-            expected_entity_revision: after_world.entity_revision,
-            expected_solver_generation: after_world.generation,
-            ..request
-        };
+        // The rebased floor is still under the body.
+        let step = bridge
+            .step(&NativeDynamicsStepRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: std::ptr::null(),
+                actions_len: 0,
+            })
+            .unwrap();
+        assert!(step.contact_count > 0);
+        let stepped = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!(
+            (stepped.transform.translation.x - after_body.transform.translation.x).abs() < 0.01
+        );
         assert!(bridge
             .rebase_world_origin(NativeDynamicsRebaseWorldOriginRequest {
+                world,
                 spatial_session: NativeSpatialSessionHandle { value: u64::MAX },
-                ..current
+                receipt,
             })
             .is_err());
-        assert_eq!(preserved(&mut bridge), expected);
-        assert!(bridge
-            .rebase_world_origin(NativeDynamicsRebaseWorldOriginRequest {
-                receipt: NativeWorldOriginCommitReceipt {
-                    revision_after: receipt.revision_before,
-                    ..receipt
-                },
-                ..current
-            })
-            .is_err());
-        assert_eq!(preserved(&mut bridge), expected);
-        assert!(bridge
-            .rebase_world_origin(NativeDynamicsRebaseWorldOriginRequest {
-                expected_entity_revision: current.expected_entity_revision - 1,
-                ..current
-            })
-            .is_err());
-        assert_eq!(preserved(&mut bridge), expected);
-        assert!(bridge
-            .rebase_world_origin(NativeDynamicsRebaseWorldOriginRequest {
-                expected_solver_generation: current.expected_solver_generation + 1,
-                ..current
-            })
-            .is_err());
-        assert_eq!(preserved(&mut bridge), expected);
     }
 }
