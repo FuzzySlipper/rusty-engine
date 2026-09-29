@@ -227,8 +227,7 @@ Products pin their SDK version, so nothing breaks until they move.
 ## Reproduce
 
 ```sh
-# Rust bench; the before side expects a sibling worktree of d3c179ca.
-git worktree add ../rusty-engine-d3c179ca d3c179ca
+# Rust bench; the before side depends on this repository at d3c179ca (git rev).
 (cd scripts/step-bench/before && cargo run --release)
 (cd scripts/step-bench/after && cargo run --release)
 

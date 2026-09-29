@@ -7,10 +7,10 @@ publish = false
 [workspace]
 
 [dependencies]
-core-ids = { path = "../../../../../../../rusty-engine-d3c179ca/rust/crates/core-ids" }
-core-math = { path = "../../../../../../../rusty-engine-d3c179ca/rust/crates/core-math" }
-engine-spatial = { path = "../../../../../../../rusty-engine-d3c179ca/rust/crates/engine-spatial" }
-entity-state = { path = "../../../../../../../rusty-engine-d3c179ca/rust/crates/entity-state" }
+core-ids = { git = "https://github.com/FuzzySlipper/rusty-engine.git", rev = "d3c179ca7bf61f8686d8015fe0a6a778d662e96f" }
+core-math = { git = "https://github.com/FuzzySlipper/rusty-engine.git", rev = "d3c179ca7bf61f8686d8015fe0a6a778d662e96f" }
+engine-spatial = { git = "https://github.com/FuzzySlipper/rusty-engine.git", rev = "d3c179ca7bf61f8686d8015fe0a6a778d662e96f" }
+entity-state = { git = "https://github.com/FuzzySlipper/rusty-engine.git", rev = "d3c179ca7bf61f8686d8015fe0a6a778d662e96f" }
 
 [profile.release]
 debug = false

@@ -7,8 +7,8 @@ publish = false
 [workspace]
 
 [dependencies]
-render-model = { path = "../../../../../../../rusty-engine-64a9b164/rust/crates/render-model" }
-render-projection = { path = "../../../../../../../rusty-engine-64a9b164/rust/crates/render-projection" }
+render-model = { git = "https://github.com/FuzzySlipper/rusty-engine.git", rev = "64a9b164b2013bfc1d558c397005e837552a5ef3" }
+render-projection = { git = "https://github.com/FuzzySlipper/rusty-engine.git", rev = "64a9b164b2013bfc1d558c397005e837552a5ef3" }
 
 [profile.release]
 debug = false

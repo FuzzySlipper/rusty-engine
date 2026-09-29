@@ -16,7 +16,7 @@ while IFS=: read -r manifest _ path_declaration; do
       failed=1
       ;;
   esac
-done < <(rg -n --no-heading -o 'path[[:space:]]*=[[:space:]]*"[^"]+"' --glob Cargo.toml)
+done < <(rg -n --no-heading -o 'path[[:space:]]*=[[:space:]]*"[^"]+"' --glob Cargo.toml .)
 
 while IFS= read -r link; do
   resolved="$(readlink -f "$link" || true)"

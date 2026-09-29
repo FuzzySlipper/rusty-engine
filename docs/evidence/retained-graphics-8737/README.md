@@ -244,8 +244,7 @@ Without the detach step, the test fails with the reviewer's error.
 ## Reproduction
 
 ```sh
-# Projector probe; the before side expects a sibling worktree of 64a9b164.
-git worktree add ../rusty-engine-64a9b164 64a9b164
+# Projector probe; the before side depends on this repository at 64a9b164 (git rev).
 (cd scripts/projector-probe/before && cargo run --release)
 (cd scripts/projector-probe/after && cargo run --release)
 
