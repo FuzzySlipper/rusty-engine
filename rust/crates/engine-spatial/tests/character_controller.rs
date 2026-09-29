@@ -1091,13 +1091,137 @@ fn fixed_step_partitions_are_repeatable_and_near_equivalent() {
     };
     let sixty_a = simulate(1.0 / 60.0, 60);
     let sixty_b = simulate(1.0 / 60.0, 60);
-    let thirty = simulate(1.0 / 30.0, 30);
     assert_eq!(sixty_a, sixty_b);
-    assert!((sixty_a.translation.z - thirty.translation.z).abs() < 0.2);
+    // Slower than the solver integrates at once (1/15 s), a step is solved
+    // as sub-steps, so every fixed rate the runtime admits walks alike.
+    for (hz, count) in [(30.0, 30), (10.0, 10), (4.0, 4), (1.0, 1)] {
+        let slower = simulate(1.0 / hz, count);
+        assert!(
+            (sixty_a.translation.z - slower.translation.z).abs() < 0.2,
+            "60 Hz {sixty_a:?}, {hz} Hz {slower:?}"
+        );
+        assert!(
+            (sixty_a.translation.y - slower.translation.y).abs() < 0.05,
+            "60 Hz {sixty_a:?}, {hz} Hz {slower:?}"
+        );
+    }
+}
+
+#[test]
+fn a_long_step_matches_the_same_interval_in_solver_steps() {
+    let scene = floor_scene();
+    let config = CharacterControllerConfig::default();
+    let run = |steps: &[f32]| {
+        let (entity, mut state) = character(1.9);
+        let mut service = CharacterControllerService::default();
+        let mut receipts = Vec::new();
+        for (index, seconds) in steps.iter().enumerate() {
+            let mut input = command(index as u64 + 1, Vec2::new(0.3, 1.0));
+            input.step_seconds = *seconds;
+            input.jump_pressed = index == 0;
+            receipts.push(
+                service
+                    .step(&mut state, &scene, entity, &config, input)
+                    .unwrap(),
+            );
+        }
+        receipts
+    };
+    let long = run(&[0.2]);
+    let short = run(&[0.2 / 3.0; 3]);
+    let (long, last) = (&long[0], short.last().unwrap());
     assert!(
-        (sixty_a.translation.y - thirty.translation.y).abs() < 0.05,
-        "60 Hz {sixty_a:?}, 30 Hz {thirty:?}"
+        (long.transform_after.translation - last.transform_after.translation).length() < 1.0e-4
     );
+    assert!(
+        (long.motion_after.controlled_velocity - last.motion_after.controlled_velocity).length()
+            < 1.0e-4
+    );
+    // The receipt covers the whole command: from before its first sub-step
+    // to after its last, with the work of all of them.
+    assert_eq!(long.transform_before, short[0].transform_before);
+    assert_eq!(long.motion_before, short[0].motion_before);
+    assert_eq!(
+        long.displacement,
+        long.transform_after.translation - long.transform_before.translation
+    );
+    assert_eq!(
+        long.cast_count,
+        short.iter().map(|receipt| receipt.cast_count).sum::<u16>()
+    );
+    assert_eq!(long.motion_after.last_command_sequence, 1);
+}
+
+#[test]
+fn one_hertz_steps_fall_land_and_jump_within_the_solver_envelope() {
+    let scene = floor_scene();
+    let config = CharacterControllerConfig::default();
+    let mut service = CharacterControllerService::default();
+    // Falling for a second reaches 20 m/s, so one unsplit second would ask
+    // for 20 m, beyond the 10 m displacement envelope.
+    let (entity, mut state) = character(60.0);
+    let mut sequence = 0;
+    let landed = loop {
+        sequence += 1;
+        let mut input = command(sequence, Vec2::ZERO);
+        input.step_seconds = 1.0;
+        let receipt = service
+            .step(&mut state, &scene, entity, &config, input)
+            .unwrap();
+        if receipt.motion_after.grounded || sequence == 5 {
+            break receipt;
+        }
+    };
+    assert!(landed.motion_after.grounded, "{landed:?}");
+    assert_eq!(sequence, 3, "58 m takes about 2.4 s at 20 m/s²");
+    assert!((landed.transform_after.translation.y - 1.9).abs() < 0.05);
+    // A jump over a slow step follows its arc: an unsplit half second would
+    // rise at the full jump speed (7 m/s) for all of it, 3.5 m.
+    let mut jump = command(sequence + 1, Vec2::ZERO);
+    jump.step_seconds = 0.5;
+    jump.jump_pressed = true;
+    let rising = service
+        .step(&mut state, &scene, entity, &config, jump)
+        .unwrap();
+    let rise = rising.transform_after.translation.y - 1.92;
+    assert!(!rising.motion_after.grounded);
+    assert!((0.8..1.6).contains(&rise), "{rise} m");
+    assert!(
+        rising.motion_after.controlled_velocity.y < 0.0,
+        "past the peak"
+    );
+    let mut fall = command(sequence + 2, Vec2::ZERO);
+    fall.step_seconds = 1.0;
+    let landed = service
+        .step(&mut state, &scene, entity, &config, fall)
+        .unwrap();
+    assert!(landed.motion_after.grounded);
+}
+
+#[test]
+fn steps_are_admitted_from_a_millisecond_to_a_second() {
+    let scene = floor_scene();
+    let config = CharacterControllerConfig::default();
+    for (seconds, admitted) in [
+        (0.0005, false),
+        (0.001, true),
+        (1.0 / 15.0 + 0.01, true),
+        (1.0, true),
+        (1.01, false),
+    ] {
+        let (entity, mut state) = character(1.9);
+        let mut service = CharacterControllerService::default();
+        let mut input = command(1, Vec2::ZERO);
+        input.step_seconds = seconds;
+        let result = service.step(&mut state, &scene, entity, &config, input);
+        assert_eq!(result.is_ok(), admitted, "{seconds} s: {result:?}");
+        if !admitted {
+            assert!(matches!(
+                result,
+                Err(CharacterControllerError::InvalidCommand)
+            ));
+        }
+    }
 }
 
 #[test]

@@ -20,6 +20,13 @@ use crate::character_tether::CharacterTetherSolve;
 use crate::{CharacterTetherFact, CharacterTetherRequest, VoxelCollisionScene};
 
 const PITCH_EPSILON: f32 = 0.001;
+/// The longest interval the solver integrates at once. A longer step is
+/// solved as equal sub-steps no longer than this, so jump arcs, friction and
+/// the displacement envelope behave as they do at ordinary rates.
+const SOLVER_STEP_SECONDS: f32 = 1.0 / 15.0;
+/// The longest step a command may ask for: the runtime's slowest fixed step
+/// (1 Hz), fifteen sub-steps.
+const MAXIMUM_STEP_SECONDS: f32 = 1.0;
 
 macro_rules! defaulted_config {
     ($name:ident { $($field:ident : $ty:ty = $value:expr),+ $(,)? }) => {
@@ -332,6 +339,9 @@ pub struct CharacterControllerCommand {
     pub crouch_requested: bool,
     pub external_velocity: Vec3,
     pub external_impulse: Vec3,
+    /// The interval this command covers, from 1 ms to 1 s, so any fixed step
+    /// the runtime admits. A step longer than 1/15 s is solved as equal
+    /// sub-steps; the receipt reports the whole command.
     pub step_seconds: f32,
     pub sequence: u64,
 }
@@ -654,6 +664,89 @@ struct CharacterStepSolution {
     environment: CharacterEnvironmentIdentity,
 }
 
+impl CharacterStepSolution {
+    /// Folds the next sub-step of the same command into this solution. The
+    /// state is the later sub-step's; events, work and pushes accumulate.
+    fn then(self, next: Self, config: &CharacterControllerConfig) -> Self {
+        let mut contacts = self.contacts;
+        contacts.extend(next.contacts);
+        contacts.truncate(usize::from(config.solver.maximum_contacts));
+        let mut blocks = self.blocks;
+        blocks.extend(next.blocks);
+        let mut dynamic_impulses = self.dynamic_impulses;
+        dynamic_impulses.extend(next.dynamic_impulses);
+        let stats = |a: CharacterCollisionQueryStats, b: CharacterCollisionQueryStats| {
+            CharacterCollisionQueryStats {
+                voxel_candidates: a.voxel_candidates.saturating_add(b.voxel_candidates),
+                voxel_narrow_phase_queries: a
+                    .voxel_narrow_phase_queries
+                    .saturating_add(b.voxel_narrow_phase_queries),
+                static_mesh_candidates: a
+                    .static_mesh_candidates
+                    .saturating_add(b.static_mesh_candidates),
+                static_mesh_narrow_phase_queries: a
+                    .static_mesh_narrow_phase_queries
+                    .saturating_add(b.static_mesh_narrow_phase_queries),
+                active_obstacle_candidates: a
+                    .active_obstacle_candidates
+                    .saturating_add(b.active_obstacle_candidates),
+                active_obstacle_narrow_phase_queries: a
+                    .active_obstacle_narrow_phase_queries
+                    .saturating_add(b.active_obstacle_narrow_phase_queries),
+            }
+        };
+        Self {
+            movement: next.movement,
+            tether: CharacterTetherFact {
+                released: self.tether.released || next.tether.released,
+                invalidated: self.tether.invalidated || next.tether.invalidated,
+                caught: self.tether.caught || next.tether.caught,
+                saturated: self.tether.saturated || next.tether.saturated,
+                unresolved: self.tether.unresolved || next.tether.unresolved,
+                correction: self.tether.correction + next.tether.correction,
+                reaction_impulse: self.tether.reaction_impulse + next.tether.reaction_impulse,
+                ..next.tether
+            },
+            entity: self.entity,
+            transform_before: self.transform_before,
+            transform_after: next.transform_after,
+            motion_before: self.motion_before,
+            motion_after: next.motion_after,
+            wish_velocity: next.wish_velocity,
+            contacts,
+            blocks,
+            ground: next.ground,
+            floor_probe: next.floor_probe,
+            stance: next.stance,
+            // An accepted climb stays reported when a later sub-step's
+            // attempt is refused.
+            step: match (self.step, next.step) {
+                (Some(earlier), Some(later)) if earlier.accepted && !later.accepted => {
+                    Some(earlier)
+                }
+                (earlier, later) => later.or(earlier),
+            },
+            platform: match (self.platform, next.platform) {
+                (Some(earlier), Some(later)) if earlier.entity == later.entity => {
+                    Some(CharacterPlatformFact {
+                        carried_displacement: earlier.carried_displacement
+                            + later.carried_displacement,
+                        departed: earlier.departed || later.departed,
+                        ..later
+                    })
+                }
+                (earlier, later) => later.or(earlier),
+            },
+            dynamic_impulses,
+            cast_count: self.cast_count.saturating_add(next.cast_count),
+            collision_query_stats: stats(self.collision_query_stats, next.collision_query_stats),
+            recovery_passes: self.recovery_passes.saturating_add(next.recovery_passes),
+            recovery_distance: self.recovery_distance + next.recovery_distance,
+            environment: next.environment,
+        }
+    }
+}
+
 /// The controlled character's own transform and motion for one step. A host
 /// that owns these values between steps submits them directly instead of
 /// staging them in an [`EntityState`].
@@ -944,6 +1037,8 @@ impl CharacterControllerService {
         })
     }
 
+    /// Solves one command, as sub-steps when it is longer than the solver
+    /// integrates at once.
     fn solve(
         &self,
         entities: &dyn CharacterStepWorld,
@@ -953,21 +1048,68 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         colliders: CharacterStepColliders<'_>,
     ) -> Result<CharacterStepSolution, CharacterControllerError> {
+        command.validate_against(config)?;
+        if command.sequence <= subject.motion.last_command_sequence {
+            return Err(CharacterControllerError::DuplicateOrOldCommand {
+                previous: subject.motion.last_command_sequence,
+                requested: command.sequence,
+            });
+        }
+        let (count, seconds) = solver_steps(command.step_seconds);
+        let first = CharacterControllerCommand {
+            step_seconds: seconds,
+            ..command
+        };
+        let mut solution = self.solve_step(
+            entities,
+            scene,
+            subject,
+            config,
+            first,
+            Some(command.step_seconds),
+            colliders,
+        )?;
+        // A jump press and an impulse happen once per command, so only the
+        // first sub-step takes them.
+        let rest = CharacterControllerCommand {
+            jump_pressed: false,
+            external_impulse: Vec3::ZERO,
+            ..first
+        };
+        for _ in 1..count {
+            let subject = CharacterStepSubject {
+                entity: subject.entity,
+                transform: solution.transform_after,
+                motion: solution.motion_after,
+            };
+            let next = self.solve_step(entities, scene, subject, config, rest, None, colliders)?;
+            solution = solution.then(next, config);
+        }
+        Ok(solution)
+    }
+
+    /// Solves one sub-step. `carry_seconds` is the whole command's length on
+    /// its first sub-step, which carries the character with a moving support
+    /// over that interval; later sub-steps see a support that has not moved.
+    #[allow(clippy::too_many_arguments)]
+    fn solve_step(
+        &self,
+        entities: &dyn CharacterStepWorld,
+        scene: &VoxelCollisionScene,
+        subject: CharacterStepSubject,
+        config: &CharacterControllerConfig,
+        command: CharacterControllerCommand,
+        carry_seconds: Option<f32>,
+        colliders: CharacterStepColliders<'_>,
+    ) -> Result<CharacterStepSolution, CharacterControllerError> {
         let obstacle_overrides = colliders.obstacles;
         let mesh_instances = colliders.mesh_instances;
-        command.validate_against(config)?;
         let entity = subject.entity;
         let transform_before = subject.transform;
         if transform_before.scale != Vec3::ONE {
             return Err(CharacterControllerError::NonUnitScale { entity });
         }
         let motion_before = subject.motion;
-        if command.sequence <= motion_before.last_command_sequence {
-            return Err(CharacterControllerError::DuplicateOrOldCommand {
-                previous: motion_before.last_command_sequence,
-                requested: command.sequence,
-            });
-        }
         validate_mesh_instances(entities, scene, entity, mesh_instances)?;
         let obstacles = character_obstacles_with_mesh_instances(
             entities,
@@ -997,7 +1139,12 @@ impl CharacterControllerService {
             CharacterStance::Standing
         };
         let mut center = vec3_f64(transform_before.translation);
-        let mut platform = apply_platform_carry(entities, &mut motion, &mut center, dt, config)?;
+        let mut platform = match carry_seconds {
+            Some(seconds) => {
+                apply_platform_carry(entities, &mut motion, &mut center, seconds, config)?
+            }
+            None => None,
+        };
         let mut query_stats = CharacterCollisionQueryStats::default();
         let mut stance_blocked = false;
         let old_height = stance_height(config, motion.stance);
@@ -2104,14 +2251,20 @@ fn validate_command(
     if !vectors.into_iter().all(f32::is_finite)
         || command.planar_intent.x.abs() > 1.0
         || command.planar_intent.y.abs() > 1.0
-        || !(0.001..=1.0 / 15.0).contains(&command.step_seconds)
+        || !(0.001..=MAXIMUM_STEP_SECONDS).contains(&command.step_seconds)
         || (command.external_velocity + command.external_impulse).length()
-            > config.solver.maximum_displacement_per_step / command.step_seconds
+            > config.solver.maximum_displacement_per_step / solver_steps(command.step_seconds).1
     {
         Err(CharacterControllerError::InvalidCommand)
     } else {
         Ok(())
     }
+}
+
+/// How a step is solved: the number of sub-steps and the length of each.
+fn solver_steps(step_seconds: f32) -> (u32, f32) {
+    let count = (step_seconds / SOLVER_STEP_SECONDS).ceil().max(1.0) as u32;
+    (count, step_seconds / count as f32)
 }
 
 fn character_environment(

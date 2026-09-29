@@ -6620,8 +6620,17 @@ mod tests {
             "command",
         );
 
+        // A slow fixed step is solved as sub-steps; past the slowest the
+        // runtime admits (1 s), a step is refused.
         request.command.planar_intent.x = 0.0;
         request.command.step_seconds = 0.5;
+        assert_eq!(
+            unsafe {
+                (api.validate_character_controller_command)(api.context, &request, &mut receipt)
+            },
+            ABI_OK
+        );
+        request.command.step_seconds = 1.5;
         let status = unsafe {
             (api.validate_character_controller_command)(api.context, &request, &mut receipt)
         };
