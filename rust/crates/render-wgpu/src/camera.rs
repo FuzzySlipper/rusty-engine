@@ -11,6 +11,8 @@
 use std::collections::VecDeque;
 
 use glam::{Mat3, Mat4, Quat, Vec3};
+
+use crate::convert::world_vec3;
 use render_host_contracts::{
     RendererCameraInterpolation, RendererCameraMotion, RendererCameraProjection,
     RendererCompositionCamera,
@@ -34,17 +36,13 @@ pub(crate) struct CameraPose {
     pub orientation: Quat,
 }
 
-fn vec3(value: [f64; 3]) -> Vec3 {
-    Vec3::new(value[0] as f32, value[1] as f32, value[2] as f32)
-}
-
 /// The descriptor's published pose. Engine yaw zero faces -Z and positive yaw
 /// turns toward +X; an explicit basis overrides yaw and pitch.
 pub(crate) fn descriptor_pose(camera: &RendererCompositionCamera) -> CameraPose {
     let orientation = match &camera.basis {
         Some(basis) => {
-            let forward = vec3(basis.forward).normalize_or(Vec3::NEG_Z);
-            let right = forward.cross(vec3(basis.up)).normalize_or(Vec3::X);
+            let forward = world_vec3(basis.forward).normalize_or(Vec3::NEG_Z);
+            let right = forward.cross(world_vec3(basis.up)).normalize_or(Vec3::X);
             let up = right.cross(forward);
             Quat::from_mat3(&Mat3::from_cols(right, up, -forward))
         }
@@ -54,7 +52,7 @@ pub(crate) fn descriptor_pose(camera: &RendererCompositionCamera) -> CameraPose 
         }
     };
     CameraPose {
-        position: vec3(camera.pose.position),
+        position: world_vec3(camera.pose.position),
         orientation,
     }
 }

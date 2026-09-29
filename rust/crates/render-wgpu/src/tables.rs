@@ -28,24 +28,16 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Vec3};
 use render_model::{
     AnimatedMeshInstanceDescriptor, Geometry, LightDescriptor, Material,
     MaterialInstanceParameters, RenderHandle, RenderLayer, RenderMaterialDescriptor,
     RenderMetadata, SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
-    Transform, VoxelObjectInstanceDescriptor,
+    VoxelObjectInstanceDescriptor,
 };
 
 use crate::animated::{AnimatedAssetRow, AnimatedInstance, ControllerRow};
 use crate::voxel::VoxelObjectRow;
-
-pub(crate) fn transform_matrix(transform: &Transform) -> Mat4 {
-    Mat4::from_scale_rotation_translation(
-        Vec3::from(transform.scale),
-        Quat::from_array(transform.rotation).normalize(),
-        Vec3::from(transform.translation),
-    )
-}
 
 pub(crate) struct GpuTexture {
     pub view: wgpu::TextureView,

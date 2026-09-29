@@ -783,9 +783,13 @@ impl Renderer {
                             }
                         }
                     }
-                    positions.push(matrix.transform_point3(Vec3::from(*position)).to_array());
+                    positions.push(
+                        matrix
+                            .transform_point3(crate::convert::vec3(*position))
+                            .to_array(),
+                    );
                     let normal = matrix
-                        .transform_vector3(Vec3::from(primitive.normals[vertex]))
+                        .transform_vector3(crate::convert::vec3(primitive.normals[vertex]))
                         .normalize_or(Vec3::Y);
                     normals.push(normal.to_array());
                 }
@@ -899,7 +903,12 @@ impl Renderer {
             object_id,
             generation,
             request,
-            bounds: bounds.map(|bounds| (bounds.min.to_array(), bounds.max.to_array())),
+            bounds: bounds.map(|bounds| {
+                (
+                    crate::convert::array(bounds.min),
+                    crate::convert::array(bounds.max),
+                )
+            }),
         });
     }
 
@@ -926,7 +935,7 @@ impl Renderer {
                 }
                 let matrix = world * instance.pose.get(node_index).copied().unwrap_or_default();
                 for position in &primitive.positions {
-                    bounds.include(matrix.transform_point3(Vec3::from(*position)));
+                    bounds.include(matrix.transform_point3(crate::convert::vec3(*position)));
                 }
             }
         }

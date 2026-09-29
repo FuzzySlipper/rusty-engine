@@ -47,8 +47,9 @@ pub(crate) fn light_views(light: &LightDescriptor, world: &Mat4) -> Vec<Mat4> {
         | LightDescriptor::Spot { enabled: false, .. } => Vec::new(),
         LightDescriptor::Directional { direction, .. } => {
             let position = world.transform_point3(DIRECTIONAL_POSITION);
-            let target =
-                world.transform_point3(DIRECTIONAL_POSITION + Vec3::from(*direction).normalize());
+            let target = world.transform_point3(
+                DIRECTIONAL_POSITION + crate::convert::vec3(*direction).normalize(),
+            );
             let projection = Mat4::orthographic_rh(
                 -DIRECTIONAL_HALF_EXTENT,
                 DIRECTIONAL_HALF_EXTENT,
@@ -66,10 +67,10 @@ pub(crate) fn light_views(light: &LightDescriptor, world: &Mat4) -> Vec<Mat4> {
             outer_angle_radians,
             ..
         } => {
-            let position_local = Vec3::from(*position);
+            let position_local = crate::convert::vec3(*position);
             let eye = world.transform_point3(position_local);
-            let target =
-                world.transform_point3(position_local + Vec3::from(*direction).normalize());
+            let target = world
+                .transform_point3(position_local + crate::convert::vec3(*direction).normalize());
             let projection = Mat4::perspective_rh(
                 (outer_angle_radians * 2.0).min(std::f32::consts::PI - 1e-3),
                 1.0,
@@ -81,7 +82,7 @@ pub(crate) fn light_views(light: &LightDescriptor, world: &Mat4) -> Vec<Mat4> {
         LightDescriptor::Point {
             position, range, ..
         } => {
-            let eye = world.transform_point3(Vec3::from(*position));
+            let eye = world.transform_point3(crate::convert::vec3(*position));
             let projection =
                 Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, SHADOW_NEAR, far(range));
             CUBE_FACES

@@ -976,7 +976,7 @@ fn neutral_rig(rows: &mut Vec<f32>, key_position: [f32; 3]) {
         sky[0], sky[1], sky[2], 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, ground[0], ground[1],
         ground[2], 0.0,
     ]);
-    let travel = -Vec3::from(key_position).normalize();
+    let travel = -crate::convert::vec3(key_position).normalize();
     rows.extend_from_slice(&[
         NEUTRAL_KEY_INTENSITY,
         NEUTRAL_KEY_INTENSITY,

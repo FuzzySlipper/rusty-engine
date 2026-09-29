@@ -29,8 +29,9 @@ use render_presentation::{
 
 use crate::camera::{self, CameraPose};
 use crate::capture::{CaptureBackground, CaptureRequest};
+use crate::convert;
 use crate::pipelines::VERTEX_FLOATS;
-use crate::tables::{transform_matrix, Aabb};
+use crate::tables::Aabb;
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{Renderer, RendererOptions, ResourceSource};
 
@@ -519,8 +520,8 @@ impl Renderer {
         self.ghost_pipelines.ensure(&self.gpu.device, format);
         for plate in self.ghosts.values_mut() {
             let placement = &plate.descriptor.placement.transform;
-            let rotation = Quat::from_array(placement.rotation).normalize();
-            let relative = rotation.inverse() * (eye - Vec3::from(placement.translation));
+            let rotation = convert::rotation(placement.rotation);
+            let relative = rotation.inverse() * (eye - convert::vec3(placement.translation));
             if relative.length_squared() < 1e-10 {
                 // The viewer is at the plate: keep the current sector.
                 plate.drawing = plate.selection.get(&view).copied().unwrap_or(0);
@@ -588,7 +589,7 @@ impl GhostPlate {
         let placement = &self.descriptor.placement;
         let config = &self.descriptor.config;
         let capture = &self.descriptor.capture;
-        let plate_world = transform_matrix(&placement.transform);
+        let plate_world = convert::transform_matrix(&placement.transform);
         let (near, far) = (capture.near, capture.far);
         // Three's 8-bit linear depth quantization, kept for shell parity.
         let half_step = (far - near) / 510.0;
@@ -640,7 +641,8 @@ fn unpublished(ops: Vec<RenderDiff>) -> RenderFrameDiff {
 /// capture camera's frame (`orientation`), as the Three lane placed them.
 fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [LightDescriptor; 3] {
     let lighting = &settings.lighting;
-    let travel = |toward: [f32; 3]| (-(orientation * Vec3::from(toward).normalize())).to_array();
+    let travel =
+        |toward: [f32; 3]| convert::array(-(orientation * convert::vec3(toward).normalize()));
     [
         LightDescriptor::Ambient {
             color: lighting.ambient_color,

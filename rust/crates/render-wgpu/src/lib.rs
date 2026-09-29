@@ -26,6 +26,7 @@ mod camera;
 mod capture;
 mod compose;
 mod composition;
+mod convert;
 mod effects;
 mod frame;
 mod ghost;

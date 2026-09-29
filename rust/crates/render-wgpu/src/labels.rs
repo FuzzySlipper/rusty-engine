@@ -299,10 +299,9 @@ fn same_image(a: &BillboardDescriptor, b: &BillboardDescriptor) -> bool {
 
 fn resolve_anchor(anchor: &BillboardAnchor, entities: EntityPositions<'_>) -> Option<Vec3> {
     match anchor {
-        BillboardAnchor::World { position } => Some(Vec3::from(*position)),
-        BillboardAnchor::EntityAttached { entity, offset } => {
-            entities(*entity).map(|position| Vec3::from(position) + Vec3::from(*offset))
-        }
+        BillboardAnchor::World { position } => Some(crate::convert::vec3(*position)),
+        BillboardAnchor::EntityAttached { entity, offset } => entities(*entity)
+            .map(|position| crate::convert::vec3(position) + crate::convert::vec3(*offset)),
     }
 }
 

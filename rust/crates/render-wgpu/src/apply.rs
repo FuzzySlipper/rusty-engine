@@ -15,8 +15,8 @@ use wgpu::util::DeviceExt;
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
 use crate::tables::{
-    transform_matrix, Aabb, Builtin, Environment, GpuMesh, GpuTexture, MaterialRef, MaterialRow,
-    MeshRef, NodeKind, NodeRow, Part, PartClass, PartRow, Topology,
+    Aabb, Builtin, Environment, GpuMesh, GpuTexture, MaterialRef, MaterialRow, MeshRef, NodeKind,
+    NodeRow, Part, PartClass, PartRow, Topology,
 };
 use crate::voxel::VoxelSurfaceUniform;
 use crate::Renderer;
@@ -112,7 +112,7 @@ impl Renderer {
                 self.insert_node(
                     *handle,
                     *parent,
-                    transform_matrix(&node.transform),
+                    crate::convert::transform_matrix(&node.transform),
                     node.visible,
                     node.layer,
                     kind,
@@ -125,7 +125,7 @@ impl Renderer {
             } => self.insert_node(
                 *handle,
                 *parent,
-                transform_matrix(&instance.transform),
+                crate::convert::transform_matrix(&instance.transform),
                 instance.visible,
                 RenderLayer::Scene,
                 NodeKind::StaticMesh {
@@ -146,7 +146,7 @@ impl Renderer {
                 self.insert_node(
                     *handle,
                     *parent,
-                    transform_matrix(&instance.transform),
+                    crate::convert::transform_matrix(&instance.transform),
                     instance.visible,
                     RenderLayer::Scene,
                     NodeKind::AnimatedMesh(Box::new(instance.clone())),
@@ -160,7 +160,7 @@ impl Renderer {
             } => self.insert_node(
                 *handle,
                 *parent,
-                transform_matrix(&instance.transform),
+                crate::convert::transform_matrix(&instance.transform),
                 instance.visible,
                 RenderLayer::Scene,
                 NodeKind::VoxelObject(Box::new(instance.clone())),
@@ -172,7 +172,7 @@ impl Renderer {
             } => self.insert_node(
                 *handle,
                 *parent,
-                transform_matrix(&sprite.transform),
+                crate::convert::transform_matrix(&sprite.transform),
                 sprite.visible,
                 sprite.layer,
                 NodeKind::Sprite(Box::new(sprite.clone())),
@@ -207,7 +207,7 @@ impl Renderer {
             } => {
                 let node = self.node_mut(*handle)?;
                 if let Some(transform) = transform {
-                    node.local = transform_matrix(transform);
+                    node.local = crate::convert::transform_matrix(transform);
                 }
                 if let Some(visible) = visible {
                     node.visible = *visible;
@@ -1161,10 +1161,10 @@ pub(crate) fn light_row(light: &LightDescriptor, world: &Mat4) -> Option<[f32; 1
     let scaled = |color: [f32; 3], intensity: f32| color.map(|c| c * intensity);
     let rotate = |direction: [f32; 3]| {
         world
-            .transform_vector3(Vec3::from(direction))
+            .transform_vector3(crate::convert::vec3(direction))
             .normalize_or_zero()
     };
-    let place = |position: [f32; 3]| world.transform_point3(Vec3::from(position));
+    let place = |position: [f32; 3]| world.transform_point3(crate::convert::vec3(position));
     let row = |kind: f32,
                color: [f32; 3],
                position: Vec3,

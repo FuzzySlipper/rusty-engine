@@ -49,6 +49,7 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "opus-decoder": "render-audio",
     "symphonia": "render-audio",
     "fontdue": "render-wgpu",
+    "glam": "render-wgpu",
     "naga": "render-wgpu",
     "wgpu": "render-wgpu",
     "wgpu-core": "render-wgpu",

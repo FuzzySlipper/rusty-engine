@@ -6,7 +6,7 @@
 //! Single-sided parts are hit from their front only, as Three's raycaster
 //! respected `FrontSide`. Lines are not picked; sprites belong to #8787.
 
-use glam::{DVec3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 use render_host_contracts::{
     RendererCompositionCamera, RendererPickHint, RendererPickRay, RendererPickReceipt,
     RendererPickRequest, RendererPickSourceTrace, RendererPickSourceTraceKind,
@@ -37,8 +37,8 @@ impl Renderer {
     ) -> RendererPickReceipt {
         let (origin, direction) = match request.ray {
             RendererPickRay::WorldRay { origin, direction } => (
-                DVec3::from(origin).as_vec3(),
-                DVec3::from(direction).as_vec3().normalize_or_zero(),
+                crate::convert::world_vec3(origin),
+                crate::convert::world_vec3(direction).normalize_or_zero(),
             ),
             RendererPickRay::Viewport { point } => {
                 let aspect = width.max(1) as f32 / height.max(1) as f32;
@@ -134,8 +134,8 @@ impl Renderer {
                 handle: part.node,
                 label: metadata.and_then(|metadata| metadata.label.clone()),
                 layer: parts.state[hit.part].layer,
-                normal: hit.normal.as_dvec3().to_array(),
-                position: hit.position.as_dvec3().to_array(),
+                normal: crate::convert::world_array(hit.normal),
+                position: crate::convert::world_array(hit.position),
                 source_trace: metadata
                     .and_then(|metadata| metadata.source_entity)
                     .map(|entity| RendererPickSourceTrace {

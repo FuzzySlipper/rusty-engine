@@ -212,10 +212,10 @@ impl Particles {
             return Ok(());
         }
         let anchor = match &emitter.descriptor.anchor {
-            ParticleAnchor::World { position } => Vec3::from(*position),
+            ParticleAnchor::World { position } => crate::convert::vec3(*position),
             ParticleAnchor::EntityAttached { entity, offset } => {
                 let base = entities(*entity).ok_or(ParticleIssue::AnchorMissing)?;
-                Vec3::from(base) + Vec3::from(*offset)
+                crate::convert::vec3(base) + crate::convert::vec3(*offset)
             }
         };
         let room = emitter
@@ -228,7 +228,7 @@ impl Particles {
             let descriptor = emitter.descriptor.clone();
             let [low, high] = descriptor.lifetime_seconds;
             let lifetime = random_range(&mut emitter.random, low, high);
-            let velocity = Vec3::from_array(std::array::from_fn(|axis| {
+            let velocity = crate::convert::vec3(std::array::from_fn(|axis| {
                 random_range(
                     &mut emitter.random,
                     descriptor.velocity_min[axis],
@@ -258,7 +258,7 @@ impl Particles {
 impl Particle {
     /// Integrate one step. Returns true when a collision limit kills it.
     fn step(&mut self, seconds: f32) -> bool {
-        self.velocity += Vec3::from(self.descriptor.acceleration) * seconds;
+        self.velocity += crate::convert::vec3(self.descriptor.acceleration) * seconds;
         let descriptor = self.descriptor.clone();
         match &descriptor.collision {
             None => {
@@ -326,7 +326,7 @@ fn sweep(
 ) -> Option<(f32, Vec3)> {
     match volume {
         ParticleCollisionVolume::Plane { normal, offset } => {
-            let normal = Vec3::from(*normal);
+            let normal = crate::convert::vec3(*normal);
             let start_distance = normal.dot(start) - offset - radius;
             let end_distance = normal.dot(end) - offset - radius;
             if start_distance < 0.0 {
@@ -338,8 +338,8 @@ fn sweep(
             Some((start_distance / (start_distance - end_distance), normal))
         }
         ParticleCollisionVolume::Aabb { minimum, maximum } => {
-            let minimum = Vec3::from(*minimum) - Vec3::splat(radius);
-            let maximum = Vec3::from(*maximum) + Vec3::splat(radius);
+            let minimum = crate::convert::vec3(*minimum) - Vec3::splat(radius);
+            let maximum = crate::convert::vec3(*maximum) + Vec3::splat(radius);
             sweep_aabb(start, end, minimum, maximum)
         }
     }
