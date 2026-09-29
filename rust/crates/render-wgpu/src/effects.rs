@@ -32,7 +32,7 @@ use crate::frame::{PixelRect, ViewLayer, ViewPass};
 use crate::particles::{EntityPositions, ParticleIssue};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
-use crate::tables::{GpuMesh, GpuTexture, NodeKind};
+use crate::tables::{GpuMesh, GpuTexture, NodeKind, SpriteRow};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{srgb_to_linear, ApplyIssue, Gpu, Renderer};
 
@@ -54,7 +54,8 @@ struct SpriteState {
 
 /// Colour texture id and detail (normal or height) texture id; `None` is the
 /// 1×1 white texture, or the colour texture again for the detail slot.
-type SpriteTextures = (Option<String>, Option<String>);
+/// (color, detail) texture name ids (`Tables::names`).
+type SpriteTextures = (Option<u32>, Option<u32>);
 
 struct SpriteDraw {
     state: SpriteState,
@@ -267,10 +268,9 @@ impl Effects {
     }
 
     /// Drop cached sprite bindings of a texture that was redefined or released.
-    pub fn forget_texture(&mut self, id: &str) {
-        self.sprite_bind_groups.retain(|(color, detail), _| {
-            color.as_deref() != Some(id) && detail.as_deref() != Some(id)
-        });
+    pub fn forget_texture(&mut self, id: u32) {
+        self.sprite_bind_groups
+            .retain(|(color, detail), _| *color != Some(id) && *detail != Some(id));
     }
 
     fn format_index(&mut self, device: &wgpu::Device, format: ColorTarget) -> usize {
@@ -546,24 +546,28 @@ fn sprite_state(sprite: &SpriteInstanceDescriptor) -> (SpriteState, f32) {
 
 /// Lighting mode, strength and bias as `effects.wgsl` reads them, and the
 /// detail texture it samples.
-fn sprite_lighting(
-    sprite: &SpriteInstanceDescriptor,
-    color: &Option<String>,
-) -> ([f32; 3], Option<String>) {
-    let material = &sprite.material;
+fn sprite_lighting(sprite: &SpriteRow, color: Option<u32>) -> ([f32; 3], Option<u32>) {
+    let material = &sprite.descriptor.material;
     let effective = material.normal_strength * (1.0 - material.normal_bias * 0.5).clamp(0.5, 1.5);
     match material.lighting {
         SpriteLightingMode::Unlit => ([0.0, 0.0, 0.0], None),
         SpriteLightingMode::Synthetic => {
             ([1.0, material.normal_strength, material.normal_bias], None)
         }
-        SpriteLightingMode::AuthoredNormal => {
-            ([2.0, effective, 0.0], material.normal_texture.clone())
-        }
-        SpriteLightingMode::AuthoredDepth => {
-            ([3.0, effective, 0.0], material.depth_texture.clone())
-        }
-        SpriteLightingMode::DerivedGradient => ([3.0, effective, 0.0], color.clone()),
+        SpriteLightingMode::AuthoredNormal => ([2.0, effective, 0.0], sprite.detail),
+        SpriteLightingMode::AuthoredDepth => ([3.0, effective, 0.0], sprite.detail),
+        SpriteLightingMode::DerivedGradient => ([3.0, effective, 0.0], color),
+    }
+}
+
+/// The authored detail texture a sprite's lighting mode samples, resolved to
+/// a name id when the sprite is created.
+pub(crate) fn sprite_detail_texture(sprite: &SpriteInstanceDescriptor) -> Option<&str> {
+    let material = &sprite.material;
+    match material.lighting {
+        SpriteLightingMode::AuthoredNormal => material.normal_texture.as_deref(),
+        SpriteLightingMode::AuthoredDepth => material.depth_texture.as_deref(),
+        _ => None,
     }
 }
 
@@ -896,9 +900,10 @@ impl Renderer {
             .create_view(&Default::default())
     }
 
-    fn sprite_texture(&self, id: &Option<String>) -> &GpuTexture {
-        id.as_ref()
-            .and_then(|id| self.tables.textures.get(id))
+    /// A sprite texture by name id. Only a bind-group cache miss asks, so the
+    /// name lookup stays off the per-sprite path.
+    fn sprite_texture(&self, id: Option<u32>) -> &GpuTexture {
+        id.and_then(|id| self.tables.textures.get(self.tables.names.name(id)))
             .unwrap_or(&self.white)
     }
 
@@ -914,14 +919,19 @@ impl Renderer {
             let Some(node) = self.tables.nodes.get(handle) else {
                 continue;
             };
-            let NodeKind::Sprite(sprite) = &node.kind else {
+            let NodeKind::Sprite(resolved) = &node.kind else {
                 continue;
             };
             if !node.world_visible || (node.world_layer == RenderLayer::Viewmodel) != viewmodel {
                 continue;
             }
-            let atlas = self.tables.atlases.get(&sprite.asset);
-            let rect = atlas.and_then(|atlas| atlas.frame_rect(sprite.frame));
+            let sprite = &resolved.descriptor;
+            let atlas = self
+                .tables
+                .atlases
+                .get(resolved.atlas as usize)
+                .and_then(Option::as_ref);
+            let rect = atlas.and_then(|atlas| atlas.descriptor.frame_rect(sprite.frame));
             let uv = rect.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
                 [
                     rect.uv_min[0],
@@ -936,8 +946,8 @@ impl Renderer {
             else {
                 continue;
             };
-            let color = atlas.map(|atlas| atlas.texture.clone());
-            let ([mode, strength, bias], detail) = sprite_lighting(sprite, &color);
+            let color = atlas.map(|atlas| atlas.texture);
+            let ([mode, strength, bias], detail) = sprite_lighting(resolved, color);
             let (state, cutoff) = sprite_state(sprite);
             let mut row = [0.0; SPRITE_ROW_FLOATS];
             row[..16].copy_from_slice(&model.to_cols_array());
@@ -972,9 +982,9 @@ impl Renderer {
             self.effects
                 .ensure_sprite_pipeline(&self.gpu.device, format, draw.state);
             if !self.effects.sprite_bind_groups.contains_key(&draw.textures) {
-                let color = self.sprite_texture(&draw.textures.0);
-                let detail = match &draw.textures.1 {
-                    Some(_) => self.sprite_texture(&draw.textures.1),
+                let color = self.sprite_texture(draw.textures.0);
+                let detail = match draw.textures.1 {
+                    Some(_) => self.sprite_texture(draw.textures.1),
                     None => color,
                 };
                 let bind_group = self
@@ -1004,18 +1014,18 @@ impl Renderer {
                     });
                 self.effects
                     .sprite_bind_groups
-                    .insert(draw.textures.clone(), bind_group);
+                    .insert(draw.textures, bind_group);
             }
             rows.extend_from_slice(&draw.row);
             if draw.state.blend {
                 pass.blended.push(BlendedSprite {
                     state: draw.state,
-                    textures: draw.textures.clone(),
+                    textures: draw.textures,
                     render_order: draw.render_order,
                     depth: draw.depth,
                 });
             } else {
-                pass.solid.push((draw.state, draw.textures.clone()));
+                pass.solid.push((draw.state, draw.textures));
             }
         }
         self.effects.sprite_rows.write(&self.gpu, &rows);

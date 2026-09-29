@@ -103,6 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     renderer.set_view_composition(&view, 0.0);
     let stats = renderer.render_view_composition(&target, 0.0);
     eprintln!("frame: {stats:?}");
+    eprintln!("mesh memory: {:?}", renderer.mesh_memory());
     fs::write(&out, encode_png(width, height, &target.read_rgba(&gpu))?)?;
     eprintln!("wrote {}", out.display());
     if timed_frames > 0 {

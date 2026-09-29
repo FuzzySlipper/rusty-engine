@@ -107,6 +107,11 @@ gltf = { version = "1.4", default-features = false, features = ["utils", "names"
 cap-std = "3"
 tempfile = "3"
 fs2 = "0.4"
+bytemuck = "1"
+# Private to render-wgpu (scripts/dependency_boundary_check.py, #8846).
+glam = "0.30"
+png = "0.18"
+pollster = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

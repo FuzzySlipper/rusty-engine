@@ -8,7 +8,8 @@
 //! | `payload_meshes` | node handle | vertex/index buffers of a primitive's replaced payload or line | `ReplaceMeshPayload`, `Create` (line) |
 //! | `nodes` | `RenderHandle` | parent, children, local and world transform, visibility, layer, kind, owned parts | `Create*`, `Update`, `Destroy`, `SetParentJoint`, `UpdateLight`, `SetMaterialInstanceParameters` |
 //! | `parts` | `PartId` (dense) | one drawable (node, mesh group, material), its GPU `PartRow`, and its draw state (class, batch key, bounds, visibility, layer) | derived from nodes |
-//! | `atlases` | atlas id | retained descriptor | `DefineSpriteAtlas` / `ReleaseSpriteAtlas` |
+//! | `atlases` | atlas name id (`names`) | retained descriptor and its texture's name id | `DefineSpriteAtlas` / `ReleaseSpriteAtlas` |
+//! | `names` | asset or texture id | dense name id, assigned at apply | any op naming an atlas or sprite texture |
 //! | `voxel_objects` | voxel object asset id | uploaded meshes, frame-to-mesh table, slot materials | `DefineVoxelObject` / `ReleaseVoxelObject` |
 //! | `animated_assets` | animated mesh asset id | decoded GLB (nodes, skins, clips), uploaded unskinned primitives, GLB materials and textures | `DefineAnimatedMesh` / `ReleaseAnimatedMesh` |
 //! | `animated` | `RenderHandle` | playback, pose, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetAnimatedMeshPlayback`, `SetAnimatedMeshInspection` |
@@ -171,7 +172,7 @@ pub(crate) enum NodeKind {
     Light(LightDescriptor),
     AnimatedMesh(Box<AnimatedMeshInstanceDescriptor>),
     VoxelObject(Box<VoxelObjectInstanceDescriptor>),
-    Sprite(Box<SpriteInstanceDescriptor>),
+    Sprite(Box<SpriteRow>),
 }
 
 /// One node's GPU-side row: a derived twin of `PresentationWorld`'s node,
@@ -184,6 +185,50 @@ pub(crate) enum NodeKind {
 /// World matrices are propagated here each frame (dirty subtrees only)
 /// because joint attachments follow poses only this crate evaluates; other
 /// consumers ask `PresentationWorld` for positions instead (#8848).
+/// Dense ids for atlas and texture names, assigned at apply time so frame
+/// paths index and compare integers instead of hashing strings. An id stays
+/// bound to its name; the table grows with the distinct names seen.
+#[derive(Default)]
+pub(crate) struct Names {
+    ids: HashMap<String, u32>,
+    names: Vec<String>,
+}
+
+impl Names {
+    pub fn id(&mut self, name: &str) -> u32 {
+        if let Some(id) = self.ids.get(name) {
+            return *id;
+        }
+        let id = self.names.len() as u32;
+        self.ids.insert(name.to_owned(), id);
+        self.names.push(name.to_owned());
+        id
+    }
+
+    pub fn get(&self, name: &str) -> Option<u32> {
+        self.ids.get(name).copied()
+    }
+
+    pub fn name(&self, id: u32) -> &str {
+        &self.names[id as usize]
+    }
+}
+
+pub(crate) struct AtlasRow {
+    pub descriptor: SpriteAtlasDescriptor,
+    /// Name id of the atlas texture.
+    pub texture: u32,
+}
+
+/// A sprite node's descriptor with its names resolved at apply.
+pub(crate) struct SpriteRow {
+    pub descriptor: SpriteInstanceDescriptor,
+    /// Name id of the sprite's atlas.
+    pub atlas: u32,
+    /// Name id of an authored normal or depth texture, by lighting mode.
+    pub detail: Option<u32>,
+}
+
 pub(crate) struct NodeRow {
     pub parent: Option<RenderHandle>,
     pub parent_joint: Option<String>,
@@ -411,7 +456,9 @@ pub(crate) struct Tables {
     /// The sprite nodes, so sprite preparation visits sprites, not the scene.
     pub sprites: BTreeSet<RenderHandle>,
     pub parts: Parts,
-    pub atlases: HashMap<String, SpriteAtlasDescriptor>,
+    /// Indexed by the atlas name's id in `names`.
+    pub atlases: Vec<Option<AtlasRow>>,
+    pub names: Names,
     pub voxel_objects: HashMap<String, VoxelObjectRow>,
     pub animated_assets: HashMap<String, AnimatedAssetRow>,
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
@@ -438,7 +485,8 @@ impl Tables {
             nodes: HashMap::new(),
             sprites: BTreeSet::new(),
             parts: Parts::default(),
-            atlases: HashMap::new(),
+            atlases: Vec::new(),
+            names: Names::default(),
             voxel_objects: HashMap::new(),
             animated_assets: HashMap::new(),
             animated: HashMap::new(),

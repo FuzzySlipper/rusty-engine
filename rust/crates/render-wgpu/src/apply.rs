@@ -69,7 +69,9 @@ impl Renderer {
             RenderDiff::DefineTexture { texture } => self.define_texture(texture, resources)?,
             RenderDiff::ReleaseTexture { id } => {
                 self.tables.textures.remove(id);
-                self.effects.forget_texture(id);
+                if let Some(id) = self.tables.names.get(id) {
+                    self.effects.forget_texture(id);
+                }
             }
             RenderDiff::DefineMaterial { material } => self.define_material(material.clone()),
             RenderDiff::ReleaseMaterial { id } => {
@@ -80,10 +82,22 @@ impl Renderer {
                 self.tables.static_meshes.remove(asset);
             }
             RenderDiff::DefineSpriteAtlas { atlas } => {
-                self.tables.atlases.insert(atlas.id.clone(), atlas.clone());
+                let id = self.tables.names.id(&atlas.id) as usize;
+                let texture = self.tables.names.id(&atlas.texture);
+                if self.tables.atlases.len() <= id {
+                    self.tables.atlases.resize_with(id + 1, || None);
+                }
+                self.tables.atlases[id] = Some(crate::tables::AtlasRow {
+                    descriptor: atlas.clone(),
+                    texture,
+                });
             }
             RenderDiff::ReleaseSpriteAtlas { id } => {
-                self.tables.atlases.remove(id);
+                if let Some(id) = self.tables.names.get(id) {
+                    if let Some(row) = self.tables.atlases.get_mut(id as usize) {
+                        *row = None;
+                    }
+                }
             }
             RenderDiff::SetBackgroundColor { color } => {
                 self.tables.environment = Environment::Color(*color);
@@ -169,14 +183,22 @@ impl Renderer {
                 handle,
                 parent,
                 sprite,
-            } => self.insert_node(
-                *handle,
-                *parent,
-                crate::convert::transform_matrix(&sprite.transform),
-                sprite.visible,
-                sprite.layer,
-                NodeKind::Sprite(Box::new(sprite.clone())),
-            ),
+            } => {
+                let row = crate::tables::SpriteRow {
+                    atlas: self.tables.names.id(&sprite.asset),
+                    detail: crate::effects::sprite_detail_texture(sprite)
+                        .map(|name| self.tables.names.id(name)),
+                    descriptor: sprite.clone(),
+                };
+                self.insert_node(
+                    *handle,
+                    *parent,
+                    crate::convert::transform_matrix(&sprite.transform),
+                    sprite.visible,
+                    sprite.layer,
+                    NodeKind::Sprite(Box::new(row)),
+                )
+            }
             RenderDiff::CreateLight {
                 handle,
                 parent,
@@ -308,7 +330,8 @@ impl Renderer {
                 visible,
             } => {
                 let node = self.node_mut(*handle)?;
-                if let NodeKind::Sprite(sprite) = &mut node.kind {
+                if let NodeKind::Sprite(row) = &mut node.kind {
+                    let sprite = &mut row.descriptor;
                     if let Some(frame) = frame {
                         sprite.frame = *frame;
                     }
@@ -747,7 +770,9 @@ impl Renderer {
         let image = resources::texture_image(texture, resources)?;
         let uploaded = self.upload_texture(texture, image.as_ref());
         self.tables.textures.insert(texture.id.clone(), uploaded);
-        self.effects.forget_texture(&texture.id);
+        if let Some(id) = self.tables.names.get(&texture.id) {
+            self.effects.forget_texture(id);
+        }
         // Materials sampling this texture and a sky showing it bind the new view.
         let dependents: Vec<RenderMaterialDescriptor> = self
             .tables

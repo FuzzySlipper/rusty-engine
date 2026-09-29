@@ -946,6 +946,17 @@ impl Renderer {
     }
 
     /// A joint's current transform in its instance's space.
+    /// Every uploaded animated mesh: assets' rigid primitives and instances'
+    /// skinned buffers.
+    pub(crate) fn for_each_animated_mesh(&self, visit: &mut dyn FnMut(&GpuMesh)) {
+        for asset in self.tables.animated_assets.values() {
+            asset.rigid.values().for_each(&mut *visit);
+        }
+        for instance in self.tables.animated.values() {
+            instance.skinned.values().for_each(&mut *visit);
+        }
+    }
+
     pub(crate) fn joint_pose(&self, handle: RenderHandle, joint: &str) -> Option<Mat4> {
         let instance = self.tables.animated.get(&handle)?;
         let asset = self.tables.animated_assets.get(&instance.asset)?;

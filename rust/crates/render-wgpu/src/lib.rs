@@ -254,6 +254,28 @@ impl Renderer {
     }
 
     /// Retained table sizes, for diagnostics and tests.
+    pub fn mesh_memory(&self) -> MeshMemory {
+        let mut memory = MeshMemory::default();
+        let mut seen = std::collections::HashSet::new();
+        let mut count = |mesh: &tables::GpuMesh| {
+            memory.meshes += 1;
+            memory.gpu_bytes += mesh.vertices.size() + mesh.indices.size();
+            if seen.insert(std::sync::Arc::as_ptr(&mesh.cpu)) {
+                memory.cpu_geometry_bytes +=
+                    (mesh.cpu.positions.len() * 12 + mesh.cpu.indices.len() * 4) as u64;
+            }
+        };
+        self.tables.static_meshes.values().for_each(&mut count);
+        self.tables.payload_meshes.values().for_each(&mut count);
+        self.tables
+            .voxel_objects
+            .values()
+            .flat_map(|row| row.meshes.iter())
+            .for_each(&mut count);
+        self.for_each_animated_mesh(&mut count);
+        memory
+    }
+
     pub fn table_counts(&self) -> TableCounts {
         TableCounts {
             textures: self.tables.textures.len(),
@@ -262,13 +284,22 @@ impl Renderer {
             nodes: self.tables.nodes.len(),
             parts: self.tables.parts.meta.iter().flatten().count(),
             lights: self.tables.lights.len(),
-            atlases: self.tables.atlases.len(),
+            atlases: self.tables.atlases.iter().flatten().count(),
             voxel_objects: self.tables.voxel_objects.len(),
             animated_meshes: self.tables.animated_assets.len(),
             animated_instances: self.tables.animated.len(),
             shadow_layers: self.shadows.layers as usize,
         }
     }
+}
+
+/// Mesh memory: the CPU geometry copies kept for picking and bounds, beside
+/// the GPU vertex and index bytes of the same meshes (#8849).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MeshMemory {
+    pub meshes: usize,
+    pub cpu_geometry_bytes: u64,
+    pub gpu_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

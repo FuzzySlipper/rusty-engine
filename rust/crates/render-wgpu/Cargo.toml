@@ -12,12 +12,12 @@ render-host-contracts.workspace = true
 render-presentation.workspace = true
 # Only this crate may depend on wgpu (scripts/dependency_boundary_check.py).
 wgpu = "30.0.1"
-glam = "0.30"
-png = "0.18"
+glam.workspace = true
+png.workspace = true
 # Animated mesh GLBs (the runtime admits them; this crate only reads them).
 gltf.workspace = true
-bytemuck = "1"
-pollster = "0.4"
+bytemuck.workspace = true
+pollster.workspace = true
 # Billboard labels (#8827): glyph rasterizing and WOFF2 font decoding.
 fontdue = "0.9.4"
 wuff = "0.2.9"
