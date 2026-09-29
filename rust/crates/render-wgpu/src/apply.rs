@@ -990,7 +990,7 @@ impl Renderer {
         let device = &self.gpu.device;
         let mut bounds = Aabb::EMPTY;
         let mut positions = Vec::with_capacity(vertices.len() / VERTEX_FLOATS);
-        for vertex in vertices.chunks_exact(VERTEX_FLOATS) {
+        for vertex in vertices.as_chunks::<VERTEX_FLOATS>().0 {
             let position = Vec3::new(vertex[0], vertex[1], vertex[2]);
             bounds.include(position);
             positions.push(position);
@@ -1316,7 +1316,7 @@ pub(crate) fn light_row(light: &LightDescriptor, world: &Mat4) -> Option<[f32; 1
 /// `[start * 2, (start + count) * 2)`.
 pub(crate) fn edge_buffer(device: &wgpu::Device, indices: &[u32]) -> wgpu::Buffer {
     let mut edges = Vec::with_capacity(indices.len() * 2);
-    for triangle in indices.chunks_exact(3) {
+    for triangle in indices.as_chunks::<3>().0 {
         edges.extend_from_slice(&[
             triangle[0],
             triangle[1],

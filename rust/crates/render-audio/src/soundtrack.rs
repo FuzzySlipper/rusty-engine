@@ -102,7 +102,9 @@ impl Decoder for SoundtrackDecoder {
                     .collect()
             } else {
                 samples
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| Frame::new(pair[0], pair[1]))
                     .collect()
             });

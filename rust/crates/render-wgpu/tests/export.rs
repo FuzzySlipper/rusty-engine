@@ -396,7 +396,9 @@ fn a_reopened_character_renders_the_sampled_pose_as_the_original_did() {
     let (_, original) = harness.render(&view);
     let background = &original[..4];
     let character = original
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel != &background)
         .count();
     assert!(character > 1_000, "the character covers {character} pixels");
@@ -432,8 +434,10 @@ fn a_reopened_character_renders_the_sampled_pose_as_the_original_did() {
     // The weapon is a node of the export: the whole pose matches within
     // the screenshot tolerance on all but 2% of the character's pixels.
     let differing = original
-        .chunks_exact(4)
-        .zip(again.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(again.as_chunks::<4>().0)
         .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 12))
         .count();
     assert!(

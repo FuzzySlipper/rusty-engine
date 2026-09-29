@@ -431,7 +431,7 @@ impl CaptureBackend {
             let renderer = self.renderer.as_mut().expect("started");
             renderer.on_start_processing();
             renderer.process(&mut self.frames, 2);
-            for frame in self.frames.chunks_exact(2) {
+            for frame in self.frames.as_chunks::<2>().0 {
                 peaks[0] = peaks[0].max(frame[0].abs());
                 peaks[1] = peaks[1].max(frame[1].abs());
             }

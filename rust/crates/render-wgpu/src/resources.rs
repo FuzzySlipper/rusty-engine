@@ -146,14 +146,18 @@ fn stream(bytes: &[u8], offset: u32, count: usize) -> Result<&[u8], String> {
 
 fn f32_stream(bytes: &[u8], offset: u32, count: usize) -> Result<Vec<f32>, String> {
     Ok(stream(bytes, offset, count)?
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|value| f32::from_le_bytes([value[0], value[1], value[2], value[3]]))
         .collect())
 }
 
 fn u32_stream(bytes: &[u8], offset: u32, count: usize) -> Result<Vec<u32>, String> {
     Ok(stream(bytes, offset, count)?
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|value| u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
         .collect())
 }

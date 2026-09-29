@@ -185,7 +185,7 @@ pub fn transform(translation: [f32; 3], yaw_degrees: f32, scale: f32) -> Transfo
 
 pub fn payload(positions: Vec<f32>, normals: Vec<f32>, indices: Vec<u32>) -> MeshPayloadDescriptor {
     let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for point in positions.chunks_exact(3) {
+    for point in positions.as_chunks::<3>().0 {
         for axis in 0..3 {
             min[axis] = min[axis].min(point[axis]);
             max[axis] = max[axis].max(point[axis]);
@@ -345,8 +345,10 @@ pub fn assert_screenshot(name: &str, width: u32, height: u32, rgba: &[u8]) {
         "{name}: reference size"
     );
     let differing = expected
-        .chunks_exact(4)
-        .zip(rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(rgba.as_chunks::<4>().0)
         .filter(|(a, b)| {
             a.iter()
                 .zip(b.iter())

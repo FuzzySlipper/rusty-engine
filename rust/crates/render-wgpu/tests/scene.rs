@@ -574,7 +574,9 @@ fn with_colors(
     };
     *colors = Some(
         positions
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| color([p[0], p[1], p[2]]))
             .collect(),
     );

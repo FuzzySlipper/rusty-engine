@@ -1527,14 +1527,16 @@ fn interleave(
 
 fn vertex_positions(vertices: &[f32]) -> Vec<Vec3> {
     vertices
-        .chunks_exact(VERTEX_FLOATS)
+        .as_chunks::<VERTEX_FLOATS>()
+        .0
+        .iter()
         .map(|vertex| Vec3::new(vertex[0], vertex[1], vertex[2]))
         .collect()
 }
 
 fn vertex_bounds(vertices: &[f32]) -> Aabb {
     let mut bounds = Aabb::EMPTY;
-    for vertex in vertices.chunks_exact(VERTEX_FLOATS) {
+    for vertex in vertices.as_chunks::<VERTEX_FLOATS>().0 {
         bounds.include(Vec3::new(vertex[0], vertex[1], vertex[2]));
     }
     bounds

@@ -126,7 +126,9 @@ impl Decoder for OggOpusDecoder {
                     .collect()
             } else {
                 samples
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| Frame::new(pair[0] * gain, pair[1] * gain))
                     .collect()
             };

@@ -702,8 +702,10 @@ fn inspection_wireframe_outlines_the_posed_character() {
     }]);
     let (_, outlined) = harness.render(&view);
     let changed = solid
-        .chunks_exact(4)
-        .zip(outlined.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(outlined.as_chunks::<4>().0)
         .filter(|(a, b)| a != b)
         .count();
     assert!(changed > 1000, "wireframe changed only {changed} pixels");

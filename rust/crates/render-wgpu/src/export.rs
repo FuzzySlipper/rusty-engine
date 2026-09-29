@@ -726,7 +726,9 @@ impl<'a> Writer<'a> {
     fn interleaved(&mut self, vertices: &[f32], indices: &[u32]) -> Streams {
         let stream = |offset: usize, width: usize| -> Vec<f32> {
             vertices
-                .chunks_exact(VERTEX_FLOATS)
+                .as_chunks::<VERTEX_FLOATS>()
+                .0
+                .iter()
                 .flat_map(|vertex| vertex[offset..offset + width].to_vec())
                 .collect()
         };

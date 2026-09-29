@@ -97,7 +97,7 @@ impl Renderer {
             let world = self.part_world(index);
             let first = part.first_index as usize;
             let last = (first + part.index_count as usize).min(geometry.indices.len());
-            for triangle in geometry.indices[first..last].chunks_exact(3) {
+            for triangle in geometry.indices[first..last].as_chunks::<3>().0 {
                 let [a, b, c] = [triangle[0], triangle[1], triangle[2]]
                     .map(|vertex| world.transform_point3(geometry.positions[vertex as usize]));
                 let Some(distance) = intersect(

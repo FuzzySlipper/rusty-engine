@@ -167,7 +167,7 @@ fn payload(
     indices: Vec<u32>,
 ) -> MeshPayloadDescriptor {
     let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for point in positions.chunks_exact(3) {
+    for point in positions.as_chunks::<3>().0 {
         for axis in 0..3 {
             min[axis] = min[axis].min(point[axis]);
             max[axis] = max[axis].max(point[axis]);
@@ -348,8 +348,10 @@ fn assert_screenshot_within(name: &str, rgba: &[u8], limit: f64) {
     let (width, height, expected) = decode_png_rgba(&expected).expect("decode reference");
     assert_eq!((width, height), (WIDTH, HEIGHT), "{name}: reference size");
     let differing = expected
-        .chunks_exact(4)
-        .zip(rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(rgba.as_chunks::<4>().0)
         .filter(|(a, b)| {
             a.iter()
                 .zip(b.iter())
@@ -765,7 +767,9 @@ fn primary_targets_antialias_triangle_edges() {
     ]);
     let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
     let partial = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 8 && pixel[0] < 247)
         .count();
     assert!(
@@ -798,7 +802,9 @@ fn wireframe_primitives_draw_their_triangle_edges() {
         ]);
         let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 15.0));
         let lit = pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[0] > 128)
             .count();
         (lit, pixels)

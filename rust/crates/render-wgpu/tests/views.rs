@@ -109,7 +109,7 @@ fn a_frame_without_a_primary_view_is_only_the_clear() {
     let (stats, pixels) = harness.composition(0.0);
     assert_eq!(stats.draws, 0, "there is no fallback world pass");
     let background = pixel(&pixels, WIDTH, WIDTH / 2, HEIGHT / 2);
-    assert!(pixels.chunks_exact(4).all(|p| p == background));
+    assert!(pixels.as_chunks::<4>().0.iter().all(|p| *p == background));
 }
 
 #[test]
