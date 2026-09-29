@@ -42,7 +42,7 @@ mod tether;
 
 pub use tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,
-    DynamicsTetherReadout, MAX_TETHER_REEL_SPEED, TETHER_SOLVER_ITERATIONS, TETHER_SUBSTEPS,
+    DynamicsTetherReadout, TETHER_SOLVER_ITERATIONS, TETHER_SUBSTEPS,
 };
 
 pub use dynamics::{
@@ -54,9 +54,7 @@ pub use dynamics::{
 pub use static_mesh::{
     StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
     StaticMeshCollisionError, StaticMeshCollisionProjection, StaticMeshCollisionReceipt,
-    StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform, MAX_STATIC_MESH_ASSETS,
-    MAX_STATIC_MESH_INSTANCES, MAX_STATIC_MESH_TRIANGLES, MAX_STATIC_MESH_TRIANGLES_PER_ASSET,
-    MAX_STATIC_MESH_VERTICES, MAX_STATIC_MESH_VERTICES_PER_ASSET,
+    StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform,
 };
 
 use std::collections::BTreeMap;

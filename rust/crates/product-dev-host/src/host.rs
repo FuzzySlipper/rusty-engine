@@ -1439,9 +1439,6 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
 }
 
 fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    if body.len() > crate::ProductDevDebugResult::MAX_MESSAGE_BYTES {
-        return debug_text_error(413, "debug command exceeds host bound");
-    }
     let command = match std::str::from_utf8(body) {
         Ok(command) => command,
         Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),

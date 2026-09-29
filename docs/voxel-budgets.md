@@ -30,11 +30,10 @@ A failed edit changes nothing:
 | Voxel coordinate | ±1,000,000 per axis | `engine-spatial/src/voxel_edit.rs` |
 | Solid material slot | 1–4,095 | same |
 | Chunk edge | 1–64 cells | `engine-spatial/src/lib.rs` |
-| Solid cells in a freshly built scene | 1,000,000 | same |
-| Cells from one box or line primitive | 4,096 | `engine-spatial/src/voxel_primitive.rs` |
 
-Edit and residency calls have no per-call operation, payload or resident-chunk
-caps; #8742 reviews the remaining builder and primitive limits.
+Edit, residency, scene-building and primitive calls have no count caps; #8742
+removed the fresh-scene solid-cell cap and the primitive expansion and radius
+caps.
 
 ## Reproduction
 

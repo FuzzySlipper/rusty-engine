@@ -10,16 +10,7 @@ use crate::value::Quat;
 pub const RIGID_BODY_COMPONENT_TYPE_ID: &str = "rusty.entity.rigid-body";
 pub const RIGID_BODY_CODEC_ID: &str = "rusty.entity.rigid-body.json";
 pub const RIGID_BODY_CODEC_VERSION: u32 = 2;
-pub const MAX_RIGID_BODY_MASS: f32 = 1_000_000.0;
-pub const MAX_RIGID_BODY_SHAPE_EXTENT: f32 = 10_000.0;
-pub const MAX_RIGID_BODY_CENTER_OF_MASS: f32 = MAX_RIGID_BODY_SHAPE_EXTENT;
-pub const MAX_RIGID_BODY_PRINCIPAL_INERTIA: f32 = f32::MAX;
 pub const RIGID_BODY_INERTIA_FRAME_NORMALIZATION_TOLERANCE: f32 = 0.001;
-pub const MAX_RIGID_BODY_DAMPING: f32 = 1_000.0;
-pub const MAX_RIGID_BODY_GRAVITY_SCALE: f32 = 100.0;
-pub const MAX_RIGID_BODY_FRICTION: f32 = 10.0;
-pub const MAX_RIGID_BODY_RESTITUTION: f32 = 1.0;
-pub const MAX_RIGID_BODY_SPEED: f32 = 10_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RigidBodyValidationError {
@@ -81,7 +72,7 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     if !shape_is_valid(value.shape) {
         return Err(RigidBodyValidationError::InvalidShape);
     }
-    if !value.mass.is_finite() || value.mass <= 0.0 || value.mass > MAX_RIGID_BODY_MASS {
+    if !value.mass.is_finite() || value.mass <= 0.0 {
         return Err(RigidBodyValidationError::InvalidMass);
     }
     match value.inertia {
@@ -91,10 +82,10 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
             principal_inertia,
             principal_inertia_local_frame,
         } => {
-            if !bounded_vector(center_of_mass, MAX_RIGID_BODY_CENTER_OF_MASS) {
+            if !finite_vector(center_of_mass) {
                 return Err(RigidBodyValidationError::InvalidCenterOfMass);
             }
-            if !bounded_positive_vector(principal_inertia, MAX_RIGID_BODY_PRINCIPAL_INERTIA) {
+            if !positive_vector(principal_inertia) {
                 return Err(RigidBodyValidationError::InvalidPrincipalInertia);
             }
             if !normalized_quaternion(principal_inertia_local_frame) {
@@ -102,10 +93,10 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
             }
         }
     }
-    if !bounded_vector(value.linear_velocity, MAX_RIGID_BODY_SPEED) {
+    if !finite_vector(value.linear_velocity) {
         return Err(RigidBodyValidationError::InvalidLinearVelocity);
     }
-    if !bounded_vector(value.angular_velocity, MAX_RIGID_BODY_SPEED) {
+    if !finite_vector(value.angular_velocity) {
         return Err(RigidBodyValidationError::InvalidAngularVelocity);
     }
     if has_velocity_on_locked_axis(value.linear_velocity, value.locked_translation_axes) {
@@ -114,20 +105,19 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     if has_velocity_on_locked_axis(value.angular_velocity, value.locked_rotation_axes) {
         return Err(RigidBodyValidationError::LockedRotationAxisVelocity);
     }
-    if !bounded_nonnegative(value.linear_damping, MAX_RIGID_BODY_DAMPING) {
+    if !nonnegative(value.linear_damping) {
         return Err(RigidBodyValidationError::InvalidLinearDamping);
     }
-    if !bounded_nonnegative(value.angular_damping, MAX_RIGID_BODY_DAMPING) {
+    if !nonnegative(value.angular_damping) {
         return Err(RigidBodyValidationError::InvalidAngularDamping);
     }
-    if !value.gravity_scale.is_finite() || value.gravity_scale.abs() > MAX_RIGID_BODY_GRAVITY_SCALE
-    {
+    if !value.gravity_scale.is_finite() {
         return Err(RigidBodyValidationError::InvalidGravityScale);
     }
-    if !bounded_nonnegative(value.friction, MAX_RIGID_BODY_FRICTION) {
+    if !nonnegative(value.friction) {
         return Err(RigidBodyValidationError::InvalidFriction);
     }
-    if !bounded_nonnegative(value.restitution, MAX_RIGID_BODY_RESTITUTION) {
+    if !nonnegative(value.restitution) {
         return Err(RigidBodyValidationError::InvalidRestitution);
     }
     if value.collision_groups == 0 {
@@ -152,23 +142,21 @@ fn shape_is_valid(shape: RigidBodyShape) -> bool {
 }
 
 fn positive_extent(value: f32) -> bool {
-    value.is_finite() && value > 0.0 && value <= MAX_RIGID_BODY_SHAPE_EXTENT
+    value.is_finite() && value > 0.0
 }
 
-fn bounded_nonnegative(value: f32, maximum: f32) -> bool {
-    value.is_finite() && (0.0..=maximum).contains(&value)
+fn nonnegative(value: f32) -> bool {
+    value.is_finite() && value >= 0.0
 }
 
-fn bounded_vector(value: Vec3, maximum: f32) -> bool {
+fn finite_vector(value: Vec3) -> bool {
+    [value.x, value.y, value.z].into_iter().all(f32::is_finite)
+}
+
+fn positive_vector(value: Vec3) -> bool {
     [value.x, value.y, value.z]
         .into_iter()
-        .all(|component| component.is_finite() && component.abs() <= maximum)
-}
-
-fn bounded_positive_vector(value: Vec3, maximum: f32) -> bool {
-    [value.x, value.y, value.z]
-        .into_iter()
-        .all(|component| component.is_finite() && component > 0.0 && component <= maximum)
+        .all(|component| component.is_finite() && component > 0.0)
 }
 
 fn normalized_quaternion(value: Quat) -> bool {

@@ -18,12 +18,10 @@ pub struct ProductDevHostError {
 
 impl ProductDevHostError {
     pub(crate) fn new(code: &'static str, detail: impl Into<String>) -> Self {
-        let mut detail = detail.into();
-        const MAX_DETAIL_BYTES: usize = 512;
-        if detail.len() > MAX_DETAIL_BYTES {
-            detail.truncate(MAX_DETAIL_BYTES);
+        Self {
+            code,
+            detail: detail.into(),
         }
-        Self { code, detail }
     }
 
     pub const fn code(&self) -> &'static str {

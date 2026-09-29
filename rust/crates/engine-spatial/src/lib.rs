@@ -52,14 +52,12 @@ pub use entity_motion::{
 pub use occlusion::{
     SpatialOcclusionCollider, SpatialOcclusionError, SpatialOcclusionHit,
     SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
-    MAX_OCCLUSION_HITBOX_OVERRIDES, MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
 };
 pub use perception::{
     SpatialPerceptionAggregate, SpatialPerceptionError, SpatialPerceptionObserver,
     SpatialPerceptionPage, SpatialPerceptionPair, SpatialPerceptionPairKind,
     SpatialPerceptionQuery, SpatialPerceptionReadout, SpatialPerceptionService,
-    SpatialPerceptionTarget, MAX_PERCEPTION_AGGREGATES, MAX_PERCEPTION_OBSERVERS,
-    MAX_PERCEPTION_PAIRS, MAX_PERCEPTION_TARGETS,
+    SpatialPerceptionTarget,
 };
 pub use physics::{
     integrate_kinematic, integrate_kinematic_with_query, CollisionMode, CollisionResolution,
@@ -75,14 +73,14 @@ pub use svc_collision::{
     DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError,
     DynamicsMassProperties, DynamicsRopeSolverConfig, DynamicsShape, DynamicsSolver,
     DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,
-    DynamicsTetherReadout, MAX_TETHER_REEL_SPEED,
+    DynamicsTetherReadout,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerLifecycleReceipt, TriggerOverlapFact,
     TriggerOverlapFactKind, TriggerOverlapPage, TriggerOverlapPair, TriggerOverlapReadout,
     TriggerReconcileCause, TriggerReconcileReceipt, TriggerRestoreReceipt, TriggerVolumeDiagnostic,
     TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
-    MAX_ACTIVE_TRIGGER_OVERLAPS, MAX_TRIGGER_DEFINITIONS, TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
+    TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
 };
 pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};
 
@@ -106,8 +104,7 @@ pub use voxel_picking::{
 };
 pub use voxel_primitive::{
     VoxelBoxFill, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
-    VoxelPrimitiveMaterial, VoxelPrimitiveRequest, MAX_VOXEL_EDITS_PER_TRANSACTION,
-    MAX_VOXEL_LINE_RADIUS,
+    VoxelPrimitiveMaterial, VoxelPrimitiveRequest,
 };
 pub use voxel_residency::{
     ResidentVoxelChunk, VoxelChunkContentHash, VoxelChunkIdentity, VoxelChunkPayload,
@@ -123,8 +120,7 @@ pub use world_origin::{
     PreparedWorldOriginSpatialRebase, WorldOriginAffectedTransform, WorldOriginEntity,
     WorldOriginReadout, WorldOriginRebaseError, WorldOriginRebaseReceipt, WorldOriginRebaseRequest,
     WorldOriginRebaseService, WorldOriginSpatialRebaseReceipt, WorldOriginState,
-    DEFAULT_LOCAL_COORDINATE_ENVELOPE, MAX_WORLD_ORIGIN_ENTITIES,
-    WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
+    DEFAULT_LOCAL_COORDINATE_ENVELOPE, WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
 };
 
 use std::borrow::Cow;
@@ -155,7 +151,6 @@ use svc_volume::{VolumeError, VoxelChunk};
 /// a single accidental multi-second step cannot become an unbounded entity-state edit.
 pub const MAX_MOTION_DELTA_SECONDS: f32 = 1.0;
 pub const MAX_CHUNK_SIZE: u32 = 64;
-pub const MAX_SOLID_VOXELS: usize = 1_000_000;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
@@ -291,9 +286,6 @@ impl std::fmt::Debug for VoxelCollisionScene {
 pub enum CollisionSceneError {
     InvalidVoxelSize,
     InvalidChunkSize,
-    TooManySolidVoxels {
-        limit: usize,
-    },
     Volume {
         voxel: [i64; 3],
         source: VolumeError,
@@ -498,11 +490,6 @@ impl VoxelCollisionScene {
                     });
                 }
             }
-            if unique_voxels.len() > MAX_SOLID_VOXELS {
-                return Err(CollisionSceneError::TooManySolidVoxels {
-                    limit: MAX_SOLID_VOXELS,
-                });
-            }
         }
         let material_voxels: Vec<_> = unique_voxels
             .into_iter()
@@ -566,11 +553,6 @@ impl VoxelCollisionScene {
                 validate_material_voxel(voxel)
                     .map_err(CollisionSceneError::InvalidMaterialVoxel)?;
                 solid_voxel_count += 1;
-                if solid_voxel_count > MAX_SOLID_VOXELS {
-                    return Err(CollisionSceneError::TooManySolidVoxels {
-                        limit: MAX_SOLID_VOXELS,
-                    });
-                }
                 authority_hash = authority_hash.wrapping_add(voxel_hash(voxel));
             }
         }

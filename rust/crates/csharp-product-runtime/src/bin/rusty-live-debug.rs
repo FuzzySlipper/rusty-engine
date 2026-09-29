@@ -14,7 +14,6 @@ use std::{
 use serde::Deserialize;
 
 const MAX_SCROLLBACK: usize = 128;
-const MAX_COMMAND_BYTES: usize = 64 * 1024;
 
 fn main() {
     match Arguments::parse().and_then(run) {
@@ -143,10 +142,6 @@ fn run_repl(transport: &impl LiveDebugTransport) -> Result<i32, String> {
             let response = transport.diagnostics(after)?;
             diagnostics_cursor = Some(response.next_cursor);
             writeln!(stdout, "{}", response.body).map_err(|error| error.to_string())?;
-            continue;
-        }
-        if command.len() > MAX_COMMAND_BYTES {
-            eprintln!("command exceeds {MAX_COMMAND_BYTES} byte bound");
             continue;
         }
         let response = transport.execute(command)?;

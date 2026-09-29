@@ -43,7 +43,7 @@ impl CharacterTetherRequest {
             .all(f32::is_finite)
             || self.maximum_length <= 0.0
             || self.target_length <= 0.0
-            || !(0.0..=crate::MAX_TETHER_REEL_SPEED as f32).contains(&self.reel_speed)
+            || self.reel_speed < 0.0
             || ![self.local_anchor, self.anchor_point, self.anchor_velocity]
                 .into_iter()
                 .all(|point| point.to_array().into_iter().all(f32::is_finite))

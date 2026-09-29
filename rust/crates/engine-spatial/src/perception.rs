@@ -7,15 +7,6 @@ use crate::{
     SpatialOcclusionError, SpatialOcclusionQuery, SpatialOcclusionService, VoxelCollisionScene,
 };
 
-/// Maximum number of observer facts accepted by one perception query.
-pub const MAX_PERCEPTION_OBSERVERS: usize = 64;
-/// Maximum number of target facts accepted by one perception query.
-pub const MAX_PERCEPTION_TARGETS: usize = 256;
-/// Maximum number of distance-qualified observer/target pairs retained by one query.
-pub const MAX_PERCEPTION_PAIRS: usize = 1_024;
-/// Maximum number of targets retained in the deterministic reduction.
-pub const MAX_PERCEPTION_AGGREGATES: usize = 256;
-
 /// A caller-owned world-space sensing origin and policy-independent observation fact.
 ///
 /// `maximum_distance`, `minimum_facing_cosine`, and `evidence` are facts supplied by the
@@ -121,13 +112,7 @@ impl SpatialPerceptionService {
         self,
         query: SpatialPerceptionQuery<'_>,
     ) -> Result<SpatialPerceptionReadout, SpatialPerceptionError> {
-        let page = self.evaluate_page(query, 0, MAX_PERCEPTION_PAIRS)?;
-        if page.next_pair_cursor.is_some() {
-            return Err(SpatialPerceptionError::TooManyPairs {
-                actual: page.pair_total,
-                limit: MAX_PERCEPTION_PAIRS,
-            });
-        }
+        let page = self.evaluate_page(query, 0, usize::MAX)?;
         Ok(SpatialPerceptionReadout {
             pairs: page.pairs,
             aggregates: page.aggregates,
@@ -149,23 +134,8 @@ impl SpatialPerceptionService {
         pair_cursor: usize,
         page_size: usize,
     ) -> Result<SpatialPerceptionPage, SpatialPerceptionError> {
-        if page_size == 0 || page_size > MAX_PERCEPTION_PAIRS {
-            return Err(SpatialPerceptionError::InvalidPageSize {
-                actual: page_size,
-                limit: MAX_PERCEPTION_PAIRS,
-            });
-        }
-        if query.observers.len() > MAX_PERCEPTION_OBSERVERS {
-            return Err(SpatialPerceptionError::TooManyObservers {
-                actual: query.observers.len(),
-                limit: MAX_PERCEPTION_OBSERVERS,
-            });
-        }
-        if query.targets.len() > MAX_PERCEPTION_TARGETS {
-            return Err(SpatialPerceptionError::TooManyTargets {
-                actual: query.targets.len(),
-                limit: MAX_PERCEPTION_TARGETS,
-            });
+        if page_size == 0 {
+            return Err(SpatialPerceptionError::InvalidPageSize);
         }
 
         let mut observers = query.observers.to_vec();
@@ -278,12 +248,6 @@ impl SpatialPerceptionService {
             }
         }
 
-        if reductions.len() > MAX_PERCEPTION_AGGREGATES {
-            return Err(SpatialPerceptionError::TooManyAggregates {
-                actual: reductions.len(),
-                limit: MAX_PERCEPTION_AGGREGATES,
-            });
-        }
         let aggregates = reductions
             .into_iter()
             .map(
@@ -319,11 +283,7 @@ impl SpatialPerceptionService {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpatialPerceptionError {
-    TooManyObservers { actual: usize, limit: usize },
-    TooManyTargets { actual: usize, limit: usize },
-    TooManyPairs { actual: usize, limit: usize },
-    TooManyAggregates { actual: usize, limit: usize },
-    InvalidPageSize { actual: usize, limit: usize },
+    InvalidPageSize,
     InvalidPairCursor { cursor: usize, total: usize },
     DuplicateObserver(EntityId),
     DuplicateTarget(EntityId),

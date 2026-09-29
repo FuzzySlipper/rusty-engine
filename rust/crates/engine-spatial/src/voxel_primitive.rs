@@ -1,8 +1,7 @@
-//! Bounded semantic voxel-edit generation for authoring tools.
+//! Semantic voxel-edit generation for authoring tools.
 //!
-//! Primitive requests remain proposals. This service validates coordinates,
-//! materials, radii, and expansion size before returning the same [`VoxelEdit`]
-//! values consumed by [`crate::VoxelEditService`] and durable edit history.
+//! This service validates coordinates and materials, then expands a primitive
+//! into the same [`VoxelEdit`] values consumed by [`crate::VoxelEditService`].
 
 use std::collections::BTreeSet;
 
@@ -11,12 +10,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     validate_voxel_address, validate_voxel_material_slot, VoxelAuthorityValidationError, VoxelEdit,
 };
-
-/// Bounds how many edits one primitive may expand into before allocating.
-pub const MAX_VOXEL_EDITS_PER_TRANSACTION: usize = 4_096;
-
-/// Donor-compatible line thickness remains deliberately small and reviewable.
-pub const MAX_VOXEL_LINE_RADIUS: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,8 +63,6 @@ pub struct VoxelPrimitiveRequest {
 pub enum VoxelPrimitiveError {
     InvalidAddress(VoxelAuthorityValidationError),
     InvalidMaterial(VoxelAuthorityValidationError),
-    RadiusTooLarge { maximum: u32, actual: u32 },
-    TooManyEdits { limit: usize, actual: u128 },
 }
 
 impl std::fmt::Display for VoxelPrimitiveError {
@@ -140,7 +131,6 @@ fn box_addresses(
                 + boundary.into_iter().product::<u128>()
         }
     };
-    enforce_count(actual)?;
 
     let mut output = BTreeSet::new();
     for z in minimum[2]..=maximum[2] {
@@ -175,19 +165,12 @@ fn line_addresses(
 ) -> Result<BTreeSet<[i64; 3]>, VoxelPrimitiveError> {
     validate_address(start)?;
     validate_address(end)?;
-    if radius > MAX_VOXEL_LINE_RADIUS {
-        return Err(VoxelPrimitiveError::RadiusTooLarge {
-            maximum: MAX_VOXEL_LINE_RADIUS,
-            actual: radius,
-        });
-    }
     let delta = [0, 1, 2].map(|axis| end[axis] - start[axis]);
     let steps = delta
         .into_iter()
         .map(i64::unsigned_abs)
         .max()
         .expect("three axes are present");
-    enforce_count(u128::from(steps) + 1)?;
     let radius = i64::from(radius);
     let mut output = BTreeSet::new();
     for step in 0..=steps {
@@ -206,12 +189,6 @@ fn line_addresses(
                     let address = [center[0] + x, center[1] + y, center[2] + z];
                     validate_address(address)?;
                     output.insert(address);
-                    if output.len() > MAX_VOXEL_EDITS_PER_TRANSACTION {
-                        return Err(VoxelPrimitiveError::TooManyEdits {
-                            limit: MAX_VOXEL_EDITS_PER_TRANSACTION,
-                            actual: output.len() as u128,
-                        });
-                    }
                 }
             }
         }
@@ -229,14 +206,4 @@ fn validate_material(material: VoxelPrimitiveMaterial) -> Result<(), VoxelPrimit
 
 fn validate_address(address: [i64; 3]) -> Result<(), VoxelPrimitiveError> {
     validate_voxel_address(address).map_err(VoxelPrimitiveError::InvalidAddress)
-}
-
-fn enforce_count(actual: u128) -> Result<(), VoxelPrimitiveError> {
-    if actual > MAX_VOXEL_EDITS_PER_TRANSACTION as u128 {
-        return Err(VoxelPrimitiveError::TooManyEdits {
-            limit: MAX_VOXEL_EDITS_PER_TRANSACTION,
-            actual,
-        });
-    }
-    Ok(())
 }

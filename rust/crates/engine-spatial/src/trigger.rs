@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::trigger_geometry::live_aabb;
 
 pub const TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
-pub const MAX_TRIGGER_DEFINITIONS: usize = 4_096;
-pub const MAX_ACTIVE_TRIGGER_OVERLAPS: usize = 1_000_000;
 const MAX_TRIGGER_READ_ITEMS: usize = 100_000;
 
 /// Selects where a registered trigger derives its live AABB during reconciliation.
@@ -271,13 +269,6 @@ impl TriggerVolumeSystem {
                 "trigger entity already has a registered definition",
             ));
         }
-        if self.definitions.len() >= MAX_TRIGGER_DEFINITIONS {
-            diagnostics.push(diagnostic(
-                TriggerVolumeDiagnosticCode::QuotaExceeded,
-                Some(trigger),
-                format!("trigger definition limit is {MAX_TRIGGER_DEFINITIONS}"),
-            ));
-        }
         if !diagnostics.is_empty() {
             return Err(TriggerVolumeError { diagnostics });
         }
@@ -376,15 +367,6 @@ impl TriggerVolumeSystem {
         expected_revision: u64,
     ) -> Result<TriggerRestoreReceipt, TriggerVolumeError> {
         self.require_revision(expected_revision)?;
-        if active_triggers.len() > MAX_TRIGGER_DEFINITIONS {
-            return Err(TriggerVolumeError {
-                diagnostics: vec![diagnostic(
-                    TriggerVolumeDiagnosticCode::QuotaExceeded,
-                    None,
-                    format!("active trigger limit is {MAX_TRIGGER_DEFINITIONS}"),
-                )],
-            });
-        }
         let active = active_triggers.iter().copied().collect::<BTreeSet<_>>();
         if active.len() != active_triggers.len() {
             return Err(TriggerVolumeError {
@@ -621,15 +603,6 @@ impl TriggerVolumeSystem {
                 format!("unsupported schema version {}", snapshot.schema_version),
             ));
         }
-        if snapshot.definitions.len() > MAX_TRIGGER_DEFINITIONS
-            || snapshot.active_overlaps.len() > MAX_ACTIVE_TRIGGER_OVERLAPS
-        {
-            diagnostics.push(diagnostic(
-                TriggerVolumeDiagnosticCode::QuotaExceeded,
-                None,
-                "snapshot exceeds trigger definition or overlap limits",
-            ));
-        }
         let mut definitions = BTreeMap::new();
         for definition in &snapshot.definitions {
             diagnostics.extend(validate_definition(definition));
@@ -747,15 +720,6 @@ impl TriggerVolumeSystem {
                 };
                 if trigger_bounds.overlaps(subject_bounds) {
                     next.insert(TriggerOverlapPair::new(trigger, entity.id));
-                    if next.len() > MAX_ACTIVE_TRIGGER_OVERLAPS {
-                        return Err(TriggerVolumeError {
-                            diagnostics: vec![diagnostic(
-                                TriggerVolumeDiagnosticCode::QuotaExceeded,
-                                None,
-                                format!("active overlap limit is {MAX_ACTIVE_TRIGGER_OVERLAPS}"),
-                            )],
-                        });
-                    }
                 }
             }
         }

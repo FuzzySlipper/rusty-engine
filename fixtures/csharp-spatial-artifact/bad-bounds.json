@@ -3,12 +3,12 @@
   "staticMeshArtifactId": "mesh/generated-floor",
   "bounds": {
     "min": [
-      0,
+      2,
       0,
       0
     ],
     "max": [
-      10000001,
+      1,
       1,
       1
     ]

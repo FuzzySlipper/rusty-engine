@@ -730,3 +730,14 @@ fn move_entity(entities: &mut EntityState, entity: EntityId, translation: Vec3) 
         }]))
         .unwrap();
 }
+
+#[test]
+fn registers_more_triggers_than_the_former_cap() {
+    // 5,000 definitions: past the former 4,096 cap.
+    let system = TriggerVolumeSystem::new(
+        (1..=5_000)
+            .map(|raw| KinematicTriggerDefinition::new(EntityId::new(raw), "zone", ["zone"])),
+    )
+    .unwrap();
+    assert_eq!(system.definitions().count(), 5_000);
+}

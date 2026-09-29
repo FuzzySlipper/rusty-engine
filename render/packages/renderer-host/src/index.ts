@@ -158,7 +158,7 @@ export type {
   RendererAnimationSampledCue,
 } from './animation-host.js';
 
-export { RendererPresentationFrameValidationError, RendererPresentationHostSet } from './presentation-host-set.js';
+export { RendererPresentationHostSet } from './presentation-host-set.js';
 export type {
   RendererPresentationAdvanceReceipt,
   RendererPresentationDomainReceipt,

@@ -80,9 +80,7 @@ impl CsharpProductRuntime {
         })
         .to_string();
         ProductDevRuntimeReceipt::new(
-            ProductDevDebugResult::new(true, message)
-                .map_err(host_runtime_error)?
-                .with_readout(self.readout()),
+            ProductDevDebugResult::new(true, message).with_readout(self.readout()),
             outputs,
         )
         .map_err(host_runtime_error)
@@ -93,7 +91,7 @@ fn time_error(
     message: &str,
 ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
     ProductDevRuntimeReceipt::new(
-        ProductDevDebugResult::new(false, message.to_owned()).map_err(host_runtime_error)?,
+        ProductDevDebugResult::new(false, message.to_owned()),
         Vec::new(),
     )
     .map_err(host_runtime_error)

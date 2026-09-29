@@ -509,3 +509,30 @@ async function sha256(bytes: ArrayBuffer): Promise<string> {
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
 }
+
+void test('the host accepts more billboards than the former 500', async () => {
+  const container = new FakeContainer();
+  const host = new RendererBillboardHost({
+    container,
+    createElement: () => new FakeElement(),
+    localize: (_key, fallback) => fallback,
+    resolveEntityPosition: () => [0, 0, 5],
+    projectWorld: (position) => ({
+      xPixels: 400,
+      yPixels: 220,
+      depth: position[2] / 10,
+      distance: position[2],
+      insideViewport: true,
+      occluded: false,
+    }),
+  });
+  const ops = Array.from({ length: 600 }, (_, index) => operation(index, {
+    op: 'create',
+    handle: billboardHandle(index + 1),
+    descriptor: descriptor(index + 1),
+  }));
+  const receipt = await host.applyPresentation(presentation(ops));
+  assert.equal(receipt.diagnostics.length, 0);
+  assert.equal(receipt.applied, 600);
+  assert.equal(receipt.readout.activeBillboards, 600);
+});

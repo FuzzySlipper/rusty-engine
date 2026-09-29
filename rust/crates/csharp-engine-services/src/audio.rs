@@ -23,10 +23,6 @@ use crate::{
     CsharpEngineServicesError,
 };
 
-const MAX_AUDIO_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_AUDIO_RESOURCE_COUNT: usize = 64;
-const MAX_AUDIO_RESOURCE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
-
 #[derive(Clone)]
 struct AudioClip {
     asset: String,
@@ -372,6 +368,7 @@ impl RuntimeAudioBridge {
         })
     }
 
+    #[cfg(test)]
     fn staged_ref(&self) -> Result<&RuntimeAudioCall, CsharpEngineServicesError> {
         self.staged.as_ref().ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -382,24 +379,10 @@ impl RuntimeAudioBridge {
     }
 
     fn optional_preload_receipt(
-        &self,
         outcome: NativeAudioOptionalPreloadOutcome,
         clip: NativeAudioClipHandle,
     ) -> Result<NativeAudioOptionalPreloadReceipt, CsharpEngineServicesError> {
-        let state = &self.staged_ref()?.state;
-        let admitted_bytes = state
-            .clips
-            .values()
-            .map(|clip| clip.resource.bytes().len() as u64)
-            .sum();
-        Ok(NativeAudioOptionalPreloadReceipt {
-            outcome,
-            clip,
-            admitted_clip_count: state.clips.len() as u32,
-            admitted_bytes,
-            max_clip_count: MAX_AUDIO_RESOURCE_COUNT as u32,
-            max_total_bytes: MAX_AUDIO_RESOURCE_TOTAL_BYTES as u64,
-        })
+        Ok(NativeAudioOptionalPreloadReceipt { outcome, clip })
     }
 
     fn report_optional_preload_skip(&mut self, code: &'static str, message: &'static str) {
@@ -509,31 +492,6 @@ impl RuntimeAudioBridge {
         if let Some(handle) = self.acquire_existing_clip(resource.identity())? {
             return Ok(handle);
         }
-        if bytes.len() > MAX_AUDIO_RESOURCE_BYTES {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_SIZE",
-                "audio resource exceeds the Engine audio preload limit",
-            ));
-        }
-        let staged = self.staged_mut()?;
-        if staged.state.clips.len() == MAX_AUDIO_RESOURCE_COUNT {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_COUNT",
-                "audio resource count exceeds the Engine browser-host limit",
-            ));
-        }
-        let total_bytes = staged
-            .state
-            .clips
-            .values()
-            .map(|clip| clip.resource.bytes().len())
-            .sum::<usize>();
-        if total_bytes.saturating_add(bytes.len()) > MAX_AUDIO_RESOURCE_TOTAL_BYTES {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_TOTAL_SIZE",
-                "audio resources exceed the Engine browser-host total preload limit",
-            ));
-        }
         let duration_seconds = wav_duration_seconds(resource.bytes());
         let content_hash = resource.content_hash().to_owned();
         let asset = format!(
@@ -542,6 +500,7 @@ impl RuntimeAudioBridge {
                 .strip_prefix("sha256:")
                 .expect("audio resource identity has a SHA-256 hash")
         );
+        let staged = self.staged_mut()?;
         let handle = staged.state.next_clip;
         staged.state.next_clip = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -599,7 +558,7 @@ impl RuntimeAudioBridge {
         let (relative_path, bytes) = match self.clip_source_from_path(&requested_path) {
             Ok(source) => source,
             Err(error) if error.code() == "CSHARP_AUDIO_RESOURCE_UNKNOWN" => {
-                let receipt = self.optional_preload_receipt(
+                let receipt = Self::optional_preload_receipt(
                     NativeAudioOptionalPreloadOutcome::SkippedMissing,
                     NativeAudioClipHandle::default(),
                 )?;
@@ -612,40 +571,14 @@ impl RuntimeAudioBridge {
             Err(error) => return Err(error),
         };
         let browser_path = format!("content/{relative_path}");
-        // A present resource must be structurally admitted before an optional
-        // capacity receipt is allowed. Otherwise a corrupt oversized body
-        // could masquerade as routine budget pressure.
         let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
         if let Some(handle) = self.acquire_existing_clip(resource.identity())? {
-            return self
-                .optional_preload_receipt(NativeAudioOptionalPreloadOutcome::Admitted, handle);
+            return Self::optional_preload_receipt(
+                NativeAudioOptionalPreloadOutcome::Admitted,
+                handle,
+            );
         }
         let duration_seconds = wav_duration_seconds(resource.bytes());
-        let (admitted_clip_count, admitted_bytes) = {
-            let state = &self.staged_ref()?.state;
-            (
-                state.clips.len(),
-                state
-                    .clips
-                    .values()
-                    .map(|clip| clip.resource.bytes().len())
-                    .sum::<usize>(),
-            )
-        };
-        if bytes.len() > MAX_AUDIO_RESOURCE_BYTES
-            || admitted_clip_count == MAX_AUDIO_RESOURCE_COUNT
-            || admitted_bytes.saturating_add(bytes.len()) > MAX_AUDIO_RESOURCE_TOTAL_BYTES
-        {
-            let receipt = self.optional_preload_receipt(
-                NativeAudioOptionalPreloadOutcome::SkippedCapacity,
-                NativeAudioClipHandle::default(),
-            )?;
-            self.report_optional_preload_skip(
-                "CSHARP_AUDIO_PRELOAD_SKIPPED_CAPACITY",
-                "optional audio preload was skipped because the Engine preload budget is exhausted",
-            );
-            return Ok(receipt);
-        }
         let content_hash = resource.content_hash().to_owned();
         let asset = format!(
             "audio/{}",
@@ -683,7 +616,7 @@ impl RuntimeAudioBridge {
             );
             handle
         };
-        self.optional_preload_receipt(
+        Self::optional_preload_receipt(
             NativeAudioOptionalPreloadOutcome::Admitted,
             NativeAudioClipHandle { value: handle },
         )
@@ -1775,7 +1708,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_containers_share_encoded_byte_count_and_owner_budgets() {
+    fn mixed_containers_share_owners_and_admit_past_former_budgets() {
         let samples: &[(&str, &[u8])] = &[
             (
                 "wav",
@@ -1818,52 +1751,22 @@ mod tests {
                 .sum::<usize>(),
             samples.iter().map(|(_, b)| b.len()).sum::<usize>()
         );
-        for n in 5..MAX_AUDIO_RESOURCE_COUNT {
+        // Past the former 64-clip, 8 MiB-per-clip and 32 MiB-total budgets.
+        for n in 5..70_u64 {
             let mut bytes = samples[3].1.to_vec();
-            bytes.extend_from_slice(&(n as u64).to_le_bytes());
+            bytes.extend_from_slice(&n.to_le_bytes());
             bridge
                 .admit_clip(format!("audio/{n}.mp3"), Arc::from(bytes))
                 .unwrap();
         }
-        let mut extra = samples[3].1.to_vec();
-        extra.push(255);
-        assert_eq!(
-            bridge
-                .admit_clip("audio/extra.mp3".into(), Arc::from(extra))
-                .unwrap_err()
-                .code(),
-            "CSHARP_AUDIO_RESOURCE_COUNT"
-        );
-        assert_eq!(
-            bridge.staged_ref().unwrap().state.clips.len(),
-            MAX_AUDIO_RESOURCE_COUNT
-        );
-
-        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
-        bridge.begin_call();
         for (index, (extension, source)) in samples.iter().take(4).enumerate() {
             let mut bytes = source.to_vec();
-            bytes.resize(MAX_AUDIO_RESOURCE_BYTES, index as u8);
+            bytes.resize(9 * 1024 * 1024, index as u8);
             bridge
-                .admit_clip(format!("audio/full.{extension}"), Arc::from(bytes))
+                .admit_clip(format!("audio/large.{extension}"), Arc::from(bytes))
                 .unwrap();
         }
-        assert_eq!(
-            bridge
-                .admit_clip("audio/extra.flac".into(), Arc::from(samples[4].1))
-                .unwrap_err()
-                .code(),
-            "CSHARP_AUDIO_RESOURCE_TOTAL_SIZE"
-        );
-        let mut oversized = samples[4].1.to_vec();
-        oversized.resize(MAX_AUDIO_RESOURCE_BYTES + 1, 0);
-        assert_eq!(
-            bridge
-                .admit_clip("audio/large.flac".into(), Arc::from(oversized))
-                .unwrap_err()
-                .code(),
-            "CSHARP_AUDIO_RESOURCE_SIZE"
-        );
+        assert_eq!(bridge.staged_ref().unwrap().state.clips.len(), 74);
         assert_eq!(
             bridge
                 .admit_clip(
@@ -1962,16 +1865,13 @@ mod tests {
     }
 
     #[test]
-    fn optional_preload_skips_missing_and_capacity_without_faulting_the_call_then_admits() {
+    fn optional_preload_skips_missing_without_faulting_the_call_then_admits() {
         let mut content = BTreeMap::new();
         content.insert("audio/valid.wav".to_owned(), wav());
-        let mut valid_oversized = wav().to_vec();
-        valid_oversized.resize(MAX_AUDIO_RESOURCE_BYTES + 1, 0);
-        content.insert("audio/too-large.wav".to_owned(), Arc::from(valid_oversized));
-        content.insert(
-            "audio/corrupt.wav".to_owned(),
-            Arc::from(vec![0_u8; MAX_AUDIO_RESOURCE_BYTES + 1]),
-        );
+        let mut large = wav().to_vec();
+        large.resize(9 * 1024 * 1024, 0);
+        content.insert("audio/large.wav".to_owned(), Arc::from(large));
+        content.insert("audio/corrupt.wav".to_owned(), Arc::from(vec![0_u8; 1024]));
         let sink =
             RuntimeDiagnosticsSink::new(Default::default()).expect("bounded diagnostics sink");
         let mut bridge = RuntimeAudioBridge::new(content);
@@ -1998,13 +1898,10 @@ mod tests {
                 .is_err(),
             "a present corrupt optional resource remains a strict admission failure"
         );
-        let capacity = bridge
-            .preload_optional(&request(b"content/audio/too-large.wav"))
-            .expect("capacity pressure is a receipt");
-        assert_eq!(
-            capacity.outcome,
-            NativeAudioOptionalPreloadOutcome::SkippedCapacity
-        );
+        let large = bridge
+            .preload_optional(&request(b"content/audio/large.wav"))
+            .expect("a clip past the former 8 MiB budget is admitted");
+        assert_eq!(large.outcome, NativeAudioOptionalPreloadOutcome::Admitted);
         let admitted = bridge
             .preload_optional(&request(b"content/audio/valid.wav"))
             .expect("later valid preload continues the same product call");
@@ -2013,7 +1910,6 @@ mod tests {
             NativeAudioOptionalPreloadOutcome::Admitted
         );
         assert_ne!(admitted.clip.value, 0);
-        assert_eq!(admitted.admitted_clip_count, 1);
         bridge
             .take_staged_call()
             .expect("recoverable preload outcomes do not abort the callback");
@@ -2023,13 +1919,7 @@ mod tests {
             .into_iter()
             .map(|event| event.code().to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(
-            codes,
-            vec![
-                "CSHARP_AUDIO_PRELOAD_SKIPPED_MISSING",
-                "CSHARP_AUDIO_PRELOAD_SKIPPED_CAPACITY",
-            ]
-        );
+        assert_eq!(codes, vec!["CSHARP_AUDIO_PRELOAD_SKIPPED_MISSING"]);
 
         let mut required = RuntimeAudioBridge::new(BTreeMap::new());
         required.begin_call();

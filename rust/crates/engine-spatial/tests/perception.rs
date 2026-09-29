@@ -195,3 +195,22 @@ fn qualified_pairs_page_deterministically_without_silent_cap_loss() {
         })
     ));
 }
+
+#[test]
+fn evaluates_more_observers_targets_and_pairs_than_the_former_caps() {
+    // 80 observers and 300 targets, all mutually visible: 24,000 pairs and 300
+    // aggregates, past the former 64, 256, 1,024 and 256 caps.
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let entities = EntityState::default();
+    let observers: Vec<_> = (1..=80)
+        .map(|id| observer(id, [0.0, 0.0, 0.0], 1.0))
+        .collect();
+    let targets: Vec<_> = (1_000..1_300)
+        .map(|id| target(id, [4.0, 0.0, 0.0]))
+        .collect();
+    let readout = SpatialPerceptionService
+        .evaluate(query(&scene, &entities, &observers, &targets))
+        .unwrap();
+    assert_eq!(readout.pairs.len(), 80 * 300);
+    assert_eq!(readout.aggregates.len(), 300);
+}

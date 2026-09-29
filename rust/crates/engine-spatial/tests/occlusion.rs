@@ -3,7 +3,6 @@ use core_math::Vec3;
 use engine_spatial::{
     EntityMotionCommand, EntityMotionOutcome, EntityMotionService, SpatialOcclusionError,
     SpatialOcclusionHit, SpatialOcclusionQuery, SpatialOcclusionService, VoxelCollisionScene,
-    MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
 };
 use entity_state::{EntityCommand, EntityCommandBatch, EntityDefinition, EntityState};
 
@@ -184,46 +183,31 @@ fn exact_ties_prefer_lowest_entity_identity_before_voxel() {
 }
 
 #[test]
-fn invalid_and_over_quota_queries_are_typed_and_leave_authority_unchanged() {
+fn large_queries_run_and_invalid_queries_are_typed_without_changing_authority() {
+    // 5,000 entities and 16 ignored identities: past the former 4,096 and 8 caps.
+    const ENTITIES: u64 = 5_000;
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[2, 0, 0]]).unwrap();
-    let definitions = (1..=MAX_OCCLUSION_QUERY_ENTITIES + 1)
-        .map(|raw| EntityDefinition::new(EntityId::new(raw as u64), format!("quota-entity-{raw}")));
+    let definitions = (1..=ENTITIES)
+        .map(|raw| EntityDefinition::new(EntityId::new(raw), format!("entity-{raw}")));
     let entities = EntityState::from_definitions(definitions).unwrap();
     let entity_revision = entities.revision();
     let scene_hash = scene.authority_hash();
+    let ignored: Vec<EntityId> = (1..=16).map(EntityId::new).collect();
     let query = SpatialOcclusionQuery {
         origin: [0.5, 0.5, 0.5],
         direction: [1.0, 0.0, 0.0],
         max_distance: 10.0,
-        ignored_entities: &[],
+        ignored_entities: &ignored,
     };
 
-    assert_eq!(
-        SpatialOcclusionService.cast_ray(&scene, &entities, query),
-        Err(SpatialOcclusionError::TooManyEntities {
-            actual: MAX_OCCLUSION_QUERY_ENTITIES + 1,
-            limit: MAX_OCCLUSION_QUERY_ENTITIES,
-        })
-    );
-    let ignored = vec![EntityId::new(1); MAX_OCCLUSION_IGNORED_ENTITIES + 1];
+    assert!(matches!(
+        SpatialOcclusionService.cast_ray(&scene, &entities, query).unwrap(),
+        Some(SpatialOcclusionHit::Voxel(hit)) if hit.voxel == [2, 0, 0]
+    ));
     assert_eq!(
         SpatialOcclusionService.cast_ray(
             &scene,
-            &EntityState::from_definitions(Vec::<EntityDefinition>::new()).unwrap(),
-            SpatialOcclusionQuery {
-                ignored_entities: &ignored,
-                ..query
-            },
-        ),
-        Err(SpatialOcclusionError::TooManyIgnoredEntities {
-            actual: MAX_OCCLUSION_IGNORED_ENTITIES + 1,
-            limit: MAX_OCCLUSION_IGNORED_ENTITIES,
-        })
-    );
-    assert_eq!(
-        SpatialOcclusionService.cast_ray(
-            &scene,
-            &EntityState::from_definitions(Vec::<EntityDefinition>::new()).unwrap(),
+            &entities,
             SpatialOcclusionQuery {
                 direction: [0.0, 0.0, 0.0],
                 ..query
@@ -232,7 +216,6 @@ fn invalid_and_over_quota_queries_are_typed_and_leave_authority_unchanged() {
         Err(SpatialOcclusionError::InvalidDirection)
     );
     assert_eq!(entities.revision(), entity_revision);
-    assert_eq!(entities.total_count(), MAX_OCCLUSION_QUERY_ENTITIES + 1);
     assert_eq!(scene.authority_hash(), scene_hash);
 }
 

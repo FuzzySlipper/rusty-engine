@@ -4,8 +4,7 @@ use engine_spatial::{
     MaterialVoxel, VoxelBoxFill, VoxelCollisionScene, VoxelEdit, VoxelPickError, VoxelPickHint,
     VoxelPickService, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
     VoxelPrimitiveMaterial, VoxelPrimitiveRequest, VoxelTemplate, VoxelTemplateEditService,
-    VoxelTemplateError, VoxelTemplateRequest, MAX_VOXEL_EDITS_PER_TRANSACTION,
-    VOXEL_HOUSE_TEMPLATE_BOUNDS,
+    VoxelTemplateError, VoxelTemplateRequest, VOXEL_HOUSE_TEMPLATE_BOUNDS,
 };
 use entity_state::{EntityTransform, Quat};
 
@@ -186,29 +185,30 @@ fn primitive_lines_round_half_away_from_zero_and_deduplicate_radius() {
 }
 
 #[test]
-fn primitive_generation_rejects_invalid_or_unbounded_requests_before_authority() {
-    assert!(matches!(
-        VoxelPrimitiveEditService.generate(VoxelPrimitiveRequest {
+fn primitives_expand_past_former_caps_and_reject_invalid_materials() {
+    // Radius 5 and 5,000 cells: past the former radius-4 and 4,096-edit caps.
+    let thick = VoxelPrimitiveEditService
+        .generate(VoxelPrimitiveRequest {
             primitive: VoxelPrimitive::Line {
                 start: [0, 0, 0],
-                end: [1, 1, 1],
+                end: [0, 0, 0],
                 radius: 5,
             },
             material: VoxelPrimitiveMaterial::Set { material_slot: 1 },
-        }),
-        Err(VoxelPrimitiveError::RadiusTooLarge { .. })
-    ));
-    assert!(matches!(
-        VoxelPrimitiveEditService.generate(VoxelPrimitiveRequest {
+        })
+        .unwrap();
+    assert_eq!(thick.len(), 11 * 11 * 11);
+    let long = VoxelPrimitiveEditService
+        .generate(VoxelPrimitiveRequest {
             primitive: VoxelPrimitive::Box {
                 start: [0, 0, 0],
-                end: [MAX_VOXEL_EDITS_PER_TRANSACTION as i64, 0, 0],
+                end: [4_999, 0, 0],
                 fill: VoxelBoxFill::Filled,
             },
             material: VoxelPrimitiveMaterial::Clear,
-        }),
-        Err(VoxelPrimitiveError::TooManyEdits { .. })
-    ));
+        })
+        .unwrap();
+    assert_eq!(long.len(), 5_000);
     assert!(matches!(
         VoxelPrimitiveEditService.generate(VoxelPrimitiveRequest {
             primitive: VoxelPrimitive::Block { address: [0, 0, 0] },

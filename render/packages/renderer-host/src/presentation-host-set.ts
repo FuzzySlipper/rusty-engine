@@ -3,7 +3,6 @@ import type {
   PresentationHostDiagnostic,
   PresentationOp,
 } from '@rusty-engine/render-contracts';
-import { ContractDecodeError, decodePresentationFrameDiff } from '@rusty-engine/render-contracts';
 import type {
   RendererAudioListenerPose,
   RendererAudioRealizedFactsReadout,
@@ -146,15 +145,8 @@ export class RendererPresentationHostSet {
   }
 
   async apply(frame: PresentationFrameDiff): Promise<RendererPresentationFrameReceipt> {
-    try {
-      decodePresentationFrameDiff(frame);
-    } catch (cause) {
-      if (cause instanceof ContractDecodeError) {
-        throw new RendererPresentationFrameValidationError(cause);
-      }
-      throw cause;
-    }
-
+    // Frames come from the paired Engine; the deep decoder is exercised by
+    // the contract tests, not on every frame.
     const domains: RendererPresentationDomainReceipt[] = [];
     for (const domain of PRESENTATION_DOMAIN_ORDER) {
       const operations = frame.ops.filter((operation) => operation.domain === domain);
@@ -383,14 +375,6 @@ export class RendererPresentationHostSet {
       this.#evictedFailureCount += 1;
     }
     this.#failures.push({ domain, stage, message, occurrences: 1 });
-  }
-}
-
-/** A malformed frame was rejected before any optional presentation host ran. */
-export class RendererPresentationFrameValidationError extends Error {
-  constructor(override readonly cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause));
-    this.name = 'RendererPresentationFrameValidationError';
   }
 }
 

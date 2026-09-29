@@ -79,7 +79,6 @@ export type RendererParticleBillboard = RendererParticleInstance;
 export type RendererParticleBillboardSink = RendererParticleSink;
 
 export interface RendererParticleHostOptions {
-  readonly maxActiveEmitters?: number;
   readonly maxParticles?: number;
   readonly resolveEntityPosition: RendererParticleEntityPositionResolver;
   readonly resolveResource: RendererParticleResourceResolver;
@@ -137,7 +136,6 @@ interface PreparedParticleVisual {
 }
 
 export class RendererParticleHost {
-  readonly #maxActiveEmitters: number;
   readonly #maxParticles: number;
   readonly #resolveEntityPosition: RendererParticleEntityPositionResolver;
   readonly #resolveResource: RendererParticleResourceResolver;
@@ -158,7 +156,6 @@ export class RendererParticleHost {
   #highWaterMark = 0;
 
   constructor(options: RendererParticleHostOptions) {
-    this.#maxActiveEmitters = options.maxActiveEmitters ?? 64;
     this.#maxParticles = options.maxParticles ?? 4_096;
     this.#resolveEntityPosition = options.resolveEntityPosition;
     this.#resolveResource = options.resolveResource;
@@ -370,11 +367,6 @@ export class RendererParticleHost {
     if (this.#emitters.has(rawHandle)) {
       return operationDiagnostic(
         'duplicateHandle', meta, op.handle, 'particle emitter handle is already active',
-      );
-    }
-    if (this.#emitters.size >= this.#maxActiveEmitters) {
-      return operationDiagnostic(
-        'budgetExceeded', meta, op.handle, 'particle emitter budget is exhausted',
       );
     }
     const generation = this.#generation;

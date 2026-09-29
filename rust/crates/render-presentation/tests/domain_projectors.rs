@@ -531,8 +531,6 @@ fn billboard_assets_bounds_and_retained_lifecycle_are_checked() {
 fn particle_curves_repeated_labels_and_reservation_budget() {
     let assets = assets();
     let limits = ParticleProjectionLimits {
-        max_active_emitters: 1,
-        max_particles_per_emitter: 64,
         max_reserved_particles: 64,
     };
     let mut projector = ParticleProjector::new(limits);
@@ -617,8 +615,6 @@ fn particle_curves_repeated_labels_and_reservation_budget() {
 fn optional_particle_emission_reports_budget_pressure() {
     let assets = assets();
     let limits = ParticleProjectionLimits {
-        max_active_emitters: 2,
-        max_particles_per_emitter: 64,
         max_reserved_particles: 64,
     };
     let mut projector = ParticleProjector::new(limits);
@@ -917,4 +913,28 @@ fn particle_billboards_accept_admitted_textures_and_verify_their_hash() {
             ParticleProjectionDiagnosticCode::ContentHashMismatch
         );
     }
+}
+
+#[test]
+fn particle_emitter_count_is_bounded_only_by_the_particle_budget() {
+    // 100 emitters of 16 particles: past the former 64-emitter cap, inside
+    // the 4,096-particle simulation budget.
+    let assets = assets();
+    let mut projector = ParticleProjector::new(ParticleProjectionLimits::default());
+    for raw in 1..=100 {
+        let mut descriptor = particle_descriptor();
+        descriptor.max_particles = 16;
+        descriptor.burst_count = 0;
+        projector
+            .project(
+                &assets,
+                PresentationOpMeta::new(raw),
+                ParticleProjectionOp::Create {
+                    handle: ParticleEmitterHandle::new(u64::from(raw)),
+                    descriptor,
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(projector.readout().active_emitters, 100);
 }

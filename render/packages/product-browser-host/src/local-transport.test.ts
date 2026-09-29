@@ -641,7 +641,7 @@ test('one runtime output batch is decoded and delivered through one batch callba
   adapter.dispose();
 });
 
-test('runtime output UI snapshots retain empty strings and large deep data as detached immutable values', () => {
+test('runtime output UI projections pass empty strings and large deep data through unchanged', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response({}),
@@ -655,46 +655,29 @@ test('runtime output UI snapshots retain empty strings and large deep data as de
 
   let deep: TestJson = null;
   for (let depth = 0; depth < 128; depth += 1) deep = [deep];
-  const originalJsonParse = JSON.parse;
-  let decodedWireValue: { nested: { state: string } } | null = null;
-  JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
-    const parsed = originalJsonParse(...args) as {
-      readonly kind?: string;
-      readonly outputs?: readonly { readonly envelope?: { readonly value?: unknown } }[];
-    };
-    if (parsed.kind === 'runtime-output-batch') {
-      decodedWireValue = parsed.outputs?.[0]?.envelope?.value as { nested: { state: string } };
-    }
-    return parsed;
-  }) as typeof JSON.parse;
-  try {
-    stream.emit({
-      kind: 'runtime-output-batch',
-      outputs: [{
-        kind: 'ui-projection',
-        envelope: {
-          artifact: 'rusty.product.ui-projection',
-          runtime: RUNTIME,
-          sequence: '1',
-          stream: 'product.ui',
-          contract: 'product.ui.v1',
-          value: {
-            nested: { state: 'before' },
-            empty: '',
-            emptyArray: ['', { text: '' }],
-            magnitude: 1e20,
-            deep,
-            entries: Array.from({ length: 1_025 }, (_, index) => index),
-            text: 'x'.repeat(64 * 1024 + 1),
-          },
+  stream.emit({
+    kind: 'runtime-output-batch',
+    outputs: [{
+      kind: 'ui-projection',
+      envelope: {
+        artifact: 'rusty.product.ui-projection',
+        runtime: RUNTIME,
+        sequence: '1',
+        stream: 'product.ui',
+        contract: 'product.ui.v1',
+        value: {
+          nested: { state: 'before' },
+          empty: '',
+          emptyArray: ['', { text: '' }],
+          magnitude: 1e20,
+          deep,
+          entries: Array.from({ length: 1_025 }, (_, index) => index),
+          text: 'x'.repeat(64 * 1024 + 1),
         },
-      }],
-    }, '1');
-  } finally {
-    JSON.parse = originalJsonParse;
-  }
+      },
+    }],
+  }, '1');
 
-  decodedWireValue!.nested.state = 'after';
   const output = received.at(-1) as {
     readonly kind: string;
     readonly envelope: { readonly value: Record<string, unknown> };
@@ -709,9 +692,6 @@ test('runtime output UI snapshots retain empty strings and large deep data as de
   assert.equal((value['entries'] as readonly unknown[]).length, 1_025);
   assert.equal((value['text'] as string).length, 64 * 1024 + 1);
   assertNestedArrayDepth(value['deep'], 128);
-  assert.equal(Object.isFrozen(value), true);
-  assert.equal(Object.isFrozen(value['nested'] as object), true);
-  assert.throws(() => Object.defineProperty(value, 'text', { value: 'changed' }), TypeError);
   unsubscribe();
   adapter.dispose();
 });

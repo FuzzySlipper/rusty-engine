@@ -16,8 +16,6 @@ use crate::{
     spatial::RuntimeSpatialBridge,
 };
 
-const MAX_PREPARED_WORLD_ORIGINS: usize = 64;
-
 /// Disposable native ownership retained between the product's explicit
 /// prepare/read/commit calls. It contains no product entity state: only the
 /// validated Engine candidate and copied local-transform facts.
@@ -31,12 +29,6 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeWorldOriginPrepareRequest,
     ) -> Result<NativeWorldOriginPreparedHandle, CsharpEngineServicesError> {
-        if self.prepared_world_origins.len() >= MAX_PREPARED_WORLD_ORIGINS {
-            return Err(world_origin_error(
-                "CSHARP_WORLD_ORIGIN_PREPARE",
-                "too many prepared world-origin candidates",
-            ));
-        }
         let rows = unsafe {
             borrowed_slice(
                 request.entities,

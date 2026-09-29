@@ -87,8 +87,6 @@ const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::E
 // These are host admission bounds, before the immutable Content service owns
 // references. The per-file limit matches the Engine renderer resource limit;
 // the aggregate limit matches the existing product persistence payload limit.
-const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
-const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
 const MAX_PRODUCT_ABI_IDENTITY_BYTES: usize = 128;
 const HOST_ABI_BUILD_IDENTITY: &[u8] = b"rusty-engine-host/v1";
 
@@ -2677,7 +2675,7 @@ impl CsharpProductRuntime {
             | RendererDebugCommand::Status
             | RendererDebugCommand::Presentation => true,
         };
-        ProductDevDebugResult::new(succeeded, message).map_err(host_runtime_error)
+        Ok(ProductDevDebugResult::new(succeeded, message))
     }
 }
 
@@ -2987,12 +2985,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
         if let Some(action) = renderer_debug_command(command) {
             let result = self.execute_renderer_debug(action)?;
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
-        }
-        if command.len() > MAX_DEBUG_COMMAND_BYTES {
-            return Err(ProductDevRuntimeError::new_not_applied(
-                "CSHARP_DEBUG_INPUT_BOUNDS",
-                "debug command exceeds the generated callback input bound",
-            ));
         }
         let Some((execute, release)) = self.api.debug else {
             return Err(ProductDevRuntimeError::new_not_applied(
@@ -4331,12 +4323,6 @@ fn copy_debug_result(
             ));
         }
     };
-    if native.message.len > MAX_DEBUG_RESULT_BYTES {
-        return Err(CsharpProductRuntimeError::new(
-            "CSHARP_DEBUG_RESULT_BOUNDS",
-            "generated debug callback result exceeds the host result bound",
-        ));
-    }
     if native.message.len != 0 && native.message.bytes.is_null() {
         return Err(CsharpProductRuntimeError::new(
             "CSHARP_DEBUG_RESULT_POINTER",
@@ -4357,8 +4343,7 @@ fn copy_debug_result(
             format!("generated debug callback returned invalid UTF-8: {error}"),
         )
     })?;
-    ProductDevDebugResult::new(succeeded, message.to_owned())
-        .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail().to_owned()))
+    Ok(ProductDevDebugResult::new(succeeded, message.to_owned()))
 }
 
 fn call_complete_timeline(
@@ -5579,7 +5564,7 @@ mod tests {
 
         let detail = renderer_diagnostics_detail(Some(&encoded), true, Some(9));
         let detail_encoded = serde_json::to_vec(&detail).expect("detail encodes");
-        assert!(detail_encoded.len() < ProductDevDebugResult::MAX_MESSAGE_BYTES);
+        assert!(!detail_encoded.is_empty());
         assert_eq!(detail["detail"]["snapshotAgeMs"], 9);
         assert_eq!(
             detail["detail"]["admission"]["window"]["outcomes"]["admitted"],
@@ -7448,19 +7433,17 @@ mod tests {
                 .code(),
             "CSHARP_DEBUG_RESULT_UTF8"
         );
-        let oversized = NativeProductDebugResult {
+        // Past the former 64 KiB result bound.
+        let large = vec![b'x'; 100 * 1024];
+        let copied = copy_debug_result(NativeProductDebugResult {
             succeeded: 1,
             message: NativeUtf8Slice {
-                bytes: b"x".as_ptr(),
-                len: MAX_DEBUG_RESULT_BYTES + 1,
+                bytes: large.as_ptr(),
+                len: large.len(),
             },
-        };
-        assert_eq!(
-            copy_debug_result(oversized)
-                .expect_err("oversized result")
-                .code(),
-            "CSHARP_DEBUG_RESULT_BOUNDS"
-        );
+        })
+        .expect("large result");
+        assert_eq!(copied.message().len(), large.len());
         assert!(
             optional_callback_pair::<NativeProductExecuteDebug, NativeProductReleaseDebugResult>(
                 None,

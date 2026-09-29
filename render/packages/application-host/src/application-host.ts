@@ -9,7 +9,6 @@ import {
   RendererParticleHost,
   RendererGhostPlateHost,
   RendererPresentationHostSet,
-  RendererPresentationFrameValidationError,
   createRendererDefaultSurfaceFrame,
   mountRendererSurface,
   type RendererSurface,
@@ -1160,9 +1159,7 @@ export async function mountRustyApplicationWithEnvironment(
       } catch (cause) {
         const result = Object.freeze({
           applied: 0,
-          outcome: cause instanceof RendererPresentationFrameValidationError
-            ? 'rejected_atomic'
-            : 'terminal',
+          outcome: 'terminal',
           diagnostics: Object.freeze([Object.freeze({
             code: 'presentation_frame_rejected',
             domain: 'application',

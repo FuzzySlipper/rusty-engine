@@ -4,8 +4,8 @@ use entity_state::{
     decode_snapshot, encode_snapshot, validate_rigid_body, ComponentPersistence,
     EntityAuthoringError, EntityAuthoringService, EntityDefinition, EntityState,
     EntityStateSnapshotError, KinematicComponent, KinematicSnapshot, Quat, RigidBodyComponent,
-    RigidBodyInertiaPolicy, RigidBodyShape, RigidBodyValidationError, MAX_RIGID_BODY_MASS,
-    RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
+    RigidBodyInertiaPolicy, RigidBodyShape, RigidBodyValidationError, RIGID_BODY_CODEC_VERSION,
+    RIGID_BODY_COMPONENT_TYPE_ID,
 };
 use serde_json::json;
 
@@ -145,7 +145,7 @@ fn invalid_rigid_body_rejects_without_mutation() {
 }
 
 #[test]
-fn rigid_body_mass_is_strictly_positive_and_bounded() {
+fn rigid_body_mass_is_strictly_positive_and_finite() {
     let shape = RigidBodyShape::Sphere { radius: 1.0 };
     for mass in [0.0, -1.0, f32::INFINITY, f32::NAN] {
         assert_eq!(
@@ -153,14 +153,8 @@ fn rigid_body_mass_is_strictly_positive_and_bounded() {
             Err(RigidBodyValidationError::InvalidMass)
         );
     }
-    assert!(validate_rigid_body(&RigidBodyComponent::dynamic(shape, MAX_RIGID_BODY_MASS)).is_ok());
-    assert_eq!(
-        validate_rigid_body(&RigidBodyComponent::dynamic(
-            shape,
-            MAX_RIGID_BODY_MASS + 1.0
-        )),
-        Err(RigidBodyValidationError::InvalidMass)
-    );
+    // No arbitrary ceiling: a 10-kilotonne body is ordinary input.
+    assert!(validate_rigid_body(&RigidBodyComponent::dynamic(shape, 1.0e7)).is_ok());
 
     let entity = EntityId::new(73);
     let mut state =

@@ -10,10 +10,6 @@ use render_model::{RenderHandle, RenderLayer, JSON_SAFE_U64_MAX};
 use serde::{Deserialize, Serialize};
 
 pub const RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION: u32 = 1;
-pub const MAX_RENDERER_COMPOSITION_CAMERAS: usize = 4;
-pub const MAX_RENDERER_COMPOSITION_TARGETS: usize = 4;
-pub const MAX_RENDERER_COMPOSITION_VIEWS: usize = 8;
-pub const MAX_RENDERER_COMPOSITION_PRESENTATIONS: usize = 4;
 pub const MAX_RENDERER_TARGET_DIMENSION: u32 = 2_048;
 pub const MAX_RENDERER_TARGET_PIXELS: u64 = 8_388_608;
 
@@ -182,13 +178,6 @@ impl RendererViewComposition {
     pub fn validate(&self) -> Result<(), RendererHostContractError> {
         if self.schema_version != RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION {
             return Err(RendererHostContractError::UnsupportedSchemaVersion);
-        }
-        if self.cameras.len() > MAX_RENDERER_COMPOSITION_CAMERAS
-            || self.targets.len() > MAX_RENDERER_COMPOSITION_TARGETS
-            || self.views.len() > MAX_RENDERER_COMPOSITION_VIEWS
-            || self.presentations.len() > MAX_RENDERER_COMPOSITION_PRESENTATIONS
-        {
-            return Err(RendererHostContractError::LimitExceeded);
         }
         for camera in &self.cameras {
             validate_identifier(&camera.id)?;

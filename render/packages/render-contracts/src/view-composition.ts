@@ -1,10 +1,6 @@
 import type { PerspectiveProjection } from './render.js';
 
 export const RUSTY_RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION = 1;
-export const MAX_RENDERER_COMPOSITION_CAMERAS = 4;
-export const MAX_RENDERER_COMPOSITION_TARGETS = 4;
-export const MAX_RENDERER_COMPOSITION_VIEWS = 8;
-export const MAX_RENDERER_COMPOSITION_PRESENTATIONS = 4;
 export const MAX_RENDERER_TARGET_DIMENSION = 2_048;
 export const MAX_RENDERER_TARGET_PIXELS = 8_388_608;
 
@@ -119,14 +115,10 @@ export function validateRendererViewComposition(
   if (input.schemaVersion !== RUSTY_RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION) {
     fail('composition.schemaVersion', 'must equal 1');
   }
-  boundedList(input.cameras, 'composition.cameras', MAX_RENDERER_COMPOSITION_CAMERAS);
-  boundedList(input.targets, 'composition.targets', MAX_RENDERER_COMPOSITION_TARGETS);
-  boundedList(input.views, 'composition.views', MAX_RENDERER_COMPOSITION_VIEWS);
-  boundedList(
-    input.presentations,
-    'composition.presentations',
-    MAX_RENDERER_COMPOSITION_PRESENTATIONS,
-  );
+  list(input.cameras, 'composition.cameras');
+  list(input.targets, 'composition.targets');
+  list(input.views, 'composition.views');
+  list(input.presentations, 'composition.presentations');
 
   const cameras = new Map<string, RendererCompositionCamera>();
   for (const [index, camera] of input.cameras.entries()) {
@@ -292,9 +284,8 @@ function identifier(value: string, path: string): void {
   }
 }
 
-function boundedList(value: readonly unknown[], path: string, maximum: number): void {
+function list(value: readonly unknown[], path: string): void {
   if (!Array.isArray(value)) fail(path, 'must be an array');
-  if (value.length > maximum) fail(path, `must contain at most ${String(maximum)} entries`);
 }
 
 function finiteVec3(value: readonly number[], path: string): void {

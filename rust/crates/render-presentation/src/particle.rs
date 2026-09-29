@@ -314,16 +314,14 @@ pub enum ParticleEmissionAdmissionOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParticleProjectionLimits {
-    pub max_active_emitters: u32,
-    pub max_particles_per_emitter: u32,
+    /// Particles the browser host simulates at once. Optional bursts are
+    /// clamped or dropped at this budget; retained emitters must fit in it.
     pub max_reserved_particles: u32,
 }
 
 impl Default for ParticleProjectionLimits {
     fn default() -> Self {
         Self {
-            max_active_emitters: 64,
-            max_particles_per_emitter: 1_024,
             max_reserved_particles: 4_096,
         }
     }
@@ -521,7 +519,6 @@ impl ParticleProjector {
                 }
                 self.validate_descriptor(assets, descriptor)?;
                 if descriptor.rate_per_second <= 0.0
-                    || self.active.len() as u32 >= self.limits.max_active_emitters
                     || self
                         .reserved_particles()
                         .saturating_add(descriptor.max_particles)
@@ -571,9 +568,7 @@ impl ParticleProjector {
     ) -> Result<(), ParticleProjectionDiagnosticCode> {
         if !anchor_is_finite(&descriptor.anchor)
             || !in_range(descriptor.rate_per_second, 0.0, 10_000.0)
-            || descriptor.burst_count > self.limits.max_particles_per_emitter
             || descriptor.max_particles == 0
-            || descriptor.max_particles > self.limits.max_particles_per_emitter
             || !ordered_positive_range(descriptor.lifetime_seconds, 0.01, 60.0)
             || !ordered_vec3(descriptor.velocity_min, descriptor.velocity_max)
             || !finite_vec3(descriptor.acceleration)

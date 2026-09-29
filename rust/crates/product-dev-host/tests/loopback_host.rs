@@ -316,7 +316,7 @@ impl ProductDevRuntime for FixtureRuntime {
     > {
         let result = match command {
             "fixture.fail" => {
-                ProductDevDebugResult::new(false, "fixture semantic failure".to_owned()).unwrap()
+                ProductDevDebugResult::new(false, "fixture semantic failure".to_owned())
             }
             "fixture.runtime" => {
                 return Err(product_dev_host::ProductDevRuntimeError::new(
@@ -324,7 +324,7 @@ impl ProductDevRuntime for FixtureRuntime {
                     "fixture runtime failure",
                 ))
             }
-            _ => ProductDevDebugResult::new(true, format!("executed {command}")).unwrap(),
+            _ => ProductDevDebugResult::new(true, format!("executed {command}")),
         };
         Ok(ProductDevRuntimeReceipt::new(result, Vec::new()).unwrap())
     }

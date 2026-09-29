@@ -2,8 +2,8 @@
 
 `valid.json` is a three-cell floor in the Engine's existing spatial content
 format. It contains a two-triangle collision mesh and precomputed navigation.
-`bad-bounds.json` differs only in an extent exceeding the Engine coordinate
-limit, producing `CSHARP_SPATIAL_CONTENT_BOUNDS`.
+`bad-bounds.json` differs only in bounds whose minimum exceeds their maximum,
+producing `CSHARP_SPATIAL_CONTENT_BOUNDS`.
 
 Run `scripts/test-csharp-sdk-package.sh --coreclr-smoke` from the Engine root.
 The packaged consumer runs `fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs` through

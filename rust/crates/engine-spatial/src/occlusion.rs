@@ -6,16 +6,6 @@ use entity_state::{BoundsComponent, EntityState};
 use crate::active_collision::active_entity_colliders;
 use crate::{CollisionRayHit, SpatialCollisionHit, StaticMeshHit, VoxelCollisionScene};
 
-/// Maximum number of entity records one combined occlusion query will inspect.
-pub const MAX_OCCLUSION_QUERY_ENTITIES: usize = 4_096;
-/// Maximum number of caller-owned endpoint or source identities omitted by one query.
-pub const MAX_OCCLUSION_IGNORED_ENTITIES: usize = 8;
-/// Maximum number of caller-owned world-space hitboxes that one combined
-/// query may override. The list is deliberately bounded like the ignored set;
-/// ownership of hitbox policy remains with the product while hit testing and
-/// ordering remain Engine-owned.
-pub const MAX_OCCLUSION_HITBOX_OVERRIDES: usize = MAX_OCCLUSION_QUERY_ENTITIES;
-
 /// A caller-owned world-space AABB used for one occlusion query. The entity
 /// must also be an active collider in the supplied [`EntityState`]; this value
 /// only replaces that entity's ordinary bounds for this call.
@@ -81,9 +71,6 @@ pub enum SpatialOcclusionError {
     InvalidOrigin,
     InvalidDirection,
     InvalidMaxDistance,
-    TooManyIgnoredEntities { actual: usize, limit: usize },
-    TooManyEntities { actual: usize, limit: usize },
-    TooManyHitboxOverrides { actual: usize, limit: usize },
     InvalidHitboxOverride { entity: EntityId },
 }
 
@@ -110,19 +97,6 @@ impl SpatialOcclusionService {
         query: SpatialOcclusionQuery<'_>,
     ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
         let _direction = validate_and_normalize(query)?;
-        if query.ignored_entities.len() > MAX_OCCLUSION_IGNORED_ENTITIES {
-            return Err(SpatialOcclusionError::TooManyIgnoredEntities {
-                actual: query.ignored_entities.len(),
-                limit: MAX_OCCLUSION_IGNORED_ENTITIES,
-            });
-        }
-        let entity_count = entities.total_count();
-        if entity_count > MAX_OCCLUSION_QUERY_ENTITIES {
-            return Err(SpatialOcclusionError::TooManyEntities {
-                actual: entity_count,
-                limit: MAX_OCCLUSION_QUERY_ENTITIES,
-            });
-        }
 
         Self::cast_ray_with_overrides(scene, entities, query, &[])
     }
@@ -139,25 +113,6 @@ impl SpatialOcclusionService {
         overrides: &[SpatialOcclusionHitboxOverride],
     ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
         let direction = validate_and_normalize(query)?;
-        if query.ignored_entities.len() > MAX_OCCLUSION_IGNORED_ENTITIES {
-            return Err(SpatialOcclusionError::TooManyIgnoredEntities {
-                actual: query.ignored_entities.len(),
-                limit: MAX_OCCLUSION_IGNORED_ENTITIES,
-            });
-        }
-        let entity_count = entities.total_count();
-        if entity_count > MAX_OCCLUSION_QUERY_ENTITIES {
-            return Err(SpatialOcclusionError::TooManyEntities {
-                actual: entity_count,
-                limit: MAX_OCCLUSION_QUERY_ENTITIES,
-            });
-        }
-        if overrides.len() > MAX_OCCLUSION_HITBOX_OVERRIDES {
-            return Err(SpatialOcclusionError::TooManyHitboxOverrides {
-                actual: overrides.len(),
-                limit: MAX_OCCLUSION_HITBOX_OVERRIDES,
-            });
-        }
         for value in overrides {
             if !value.min.into_iter().chain(value.max).all(f64::is_finite)
                 || value.min.iter().zip(value.max).any(|(min, max)| min > &max)

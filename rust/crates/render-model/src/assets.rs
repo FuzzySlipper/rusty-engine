@@ -502,9 +502,6 @@ pub enum TextureWrap {
 
 /// Texture payload descriptors store encoded byte lengths as u32.
 pub const MAX_TEXTURE_ENCODED_BYTES: u32 = u32::MAX;
-pub const MAX_RETAINED_TEXTURES: usize = 256;
-pub const MAX_AGGREGATE_TEXTURE_ENCODED_BYTES: u64 = 128 * 1024 * 1024;
-pub const MAX_AGGREGATE_TEXTURE_DECODED_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

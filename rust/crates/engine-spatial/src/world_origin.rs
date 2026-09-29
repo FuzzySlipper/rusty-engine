@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use crate::{character_controller::character_collision_world_hash, VoxelCollisionScene};
 
 pub const DEFAULT_LOCAL_COORDINATE_ENVELOPE: f32 = 16_384.0;
-pub const MAX_WORLD_ORIGIN_ENTITIES: usize = 1_024;
 pub const WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const MAX_WORLD_ORIGIN_CELL_ABS: u64 = 9_000_000_000_000_000;
 
@@ -248,10 +247,6 @@ pub enum WorldOriginRebaseError {
         actual: u64,
     },
     SceneOriginMismatch,
-    TooManyEntities {
-        actual: usize,
-        maximum: usize,
-    },
     DuplicateEntity {
         entity: EntityId,
     },
@@ -304,12 +299,6 @@ impl WorldOriginRebaseService {
     ) -> Result<PreparedWorldOriginRebase, WorldOriginRebaseError> {
         validate_guards(origin, entities, scene, &request)?;
         validate_origin(request.target_origin)?;
-        if request.entities.len() > MAX_WORLD_ORIGIN_ENTITIES {
-            return Err(WorldOriginRebaseError::TooManyEntities {
-                actual: request.entities.len(),
-                maximum: MAX_WORLD_ORIGIN_ENTITIES,
-            });
-        }
         let mut supplied = BTreeMap::new();
         for binding in request.entities {
             if supplied

@@ -144,7 +144,6 @@ interface ScreenRect {
   readonly bottom: number;
 }
 
-const MAX_SUBMITTED_BILLBOARDS = 500;
 const MAX_VISIBLE_BILLBOARDS = 256;
 const MAX_DIAGNOSTICS = 256;
 
@@ -419,14 +418,6 @@ export class RendererBillboardHost {
         meta.sequence,
         op.handle,
         'billboard handle is already active',
-      );
-    }
-    if (this.#active.size >= MAX_SUBMITTED_BILLBOARDS) {
-      return this.#diagnostic(
-        'hostFailure',
-        meta.sequence,
-        op.handle,
-        `billboard host accepts at most ${MAX_SUBMITTED_BILLBOARDS} active descriptors`,
       );
     }
     validateBillboardDescriptorInvariant(op.descriptor);

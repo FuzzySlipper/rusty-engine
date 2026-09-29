@@ -6,8 +6,6 @@ use crate::dynamics::DynamicsBodyId;
 
 pub const TETHER_SUBSTEPS: usize = 4;
 pub const TETHER_SOLVER_ITERATIONS: usize = 8;
-/// Character-tether reel limit. Dynamics tethers take the product's reel speed.
-pub const MAX_TETHER_REEL_SPEED: f64 = 0.25;
 const TAUT_TOLERANCE: f64 = 0.001;
 /// A new attachment may start this much beyond its length. Further than that,
 /// the rope joint would yank the bodies together in one step.

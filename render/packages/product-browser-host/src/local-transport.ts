@@ -19,7 +19,6 @@ import type {
 } from '@rusty-engine/application-host';
 import {
   decodeRenderPublicationFrontiers,
-  validateRendererViewComposition,
   type RendererViewComposition,
 } from '@rusty-engine/render-contracts';
 import type {
@@ -2538,8 +2537,9 @@ function decodeAnimationCueDefinitions(
   }));
 }
 
+// The renderer validates a composition when it configures it.
 function decodeViewComposition(value: unknown): RendererViewComposition {
-  return validateRendererViewComposition(value as RendererViewComposition);
+  return requireRecord(value, 'view composition') as unknown as RendererViewComposition;
 }
 
 function decodeFrame(value: unknown, name: string): RustyApplicationFrame | RustyApplicationPresentationFrame {
@@ -2547,18 +2547,9 @@ function decodeFrame(value: unknown, name: string): RustyApplicationFrame | Rust
   return record as RustyApplicationFrame;
 }
 
+// The application host validates the envelope when it ingests it.
 function decodeUiProjection(value: unknown): RustyApplicationUiProjectionEnvelope {
-  const record = requireRecord(value, 'UI projection');
-  requireKnownFields(record, ['artifact', 'runtime', 'sequence', 'stream', 'contract', 'value'], 'UI projection');
-  if (record.artifact !== 'rusty.product.ui-projection') throw new TypeError('UI projection artifact is invalid');
-  return {
-    artifact: 'rusty.product.ui-projection',
-    runtime: decodeRuntimeIdentity(record.runtime),
-    sequence: requireU64Text(record.sequence, 'sequence'),
-    stream: requireIdentity(record.stream, 'stream'),
-    contract: requireIdentity(record.contract, 'contract'),
-    value: snapshotJsonValue(record.value) as RustyApplicationUiProjectionEnvelope['value'],
-  };
+  return requireRecord(value, 'UI projection') as unknown as RustyApplicationUiProjectionEnvelope;
 }
 
 function decodeRuntimeIdentity(value: unknown): RustyApplicationRuntimeIdentity {

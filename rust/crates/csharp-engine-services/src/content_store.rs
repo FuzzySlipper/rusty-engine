@@ -26,8 +26,6 @@ use crate::{
     persistence::borrowed_bytes,
 };
 
-const MAX_READ_BYTES: usize = 1024 * 1024;
-
 struct RetainedStore {
     scope: String,
     store: ContentStore,
@@ -418,9 +416,6 @@ unsafe extern "C" fn read_body(
         return 0;
     }
     let request = unsafe { &*request };
-    if request.max_bytes as usize > MAX_READ_BYTES {
-        return 0;
-    }
     let path = match unsafe {
         borrowed_utf8(
             request.path.bytes,

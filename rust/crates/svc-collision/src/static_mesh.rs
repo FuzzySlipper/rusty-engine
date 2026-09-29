@@ -7,13 +7,6 @@ use parry3d_f64::shape::{Cuboid, Shape, SharedShape};
 
 use crate::{identity, world_to_point, Ray, WorldAabb};
 
-pub const MAX_STATIC_MESH_ASSETS: usize = 256;
-pub const MAX_STATIC_MESH_INSTANCES: usize = 4_096;
-pub const MAX_STATIC_MESH_VERTICES_PER_ASSET: usize = 1_000_000;
-pub const MAX_STATIC_MESH_TRIANGLES_PER_ASSET: usize = 2_000_000;
-pub const MAX_STATIC_MESH_VERTICES: usize = 2_000_000;
-pub const MAX_STATIC_MESH_TRIANGLES: usize = 4_000_000;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StaticMeshAssetId(pub u64);
 
@@ -81,10 +74,6 @@ pub struct StaticMeshCollisionReceipt {
     pub revision_after: u64,
     pub asset_count: usize,
     pub instance_count: usize,
-    pub vertex_count: usize,
-    pub triangle_count: usize,
-    pub projected_vertex_count: usize,
-    pub projected_triangle_count: usize,
     pub projection_hash: u64,
 }
 
@@ -101,18 +90,6 @@ pub struct StaticMeshHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticMeshCollisionError {
     RevisionExhausted,
-    TooManyAssets {
-        limit: usize,
-    },
-    TooManyInstances {
-        limit: usize,
-    },
-    TooManyVertices {
-        limit: usize,
-    },
-    TooManyTriangles {
-        limit: usize,
-    },
     DuplicateAsset {
         id: StaticMeshAssetId,
     },
@@ -296,42 +273,12 @@ impl StaticMeshCollisionProjection {
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        // Assets were validated and hashed when constructed.
         let mut next_assets = BTreeMap::new();
-        let mut vertex_count = 0usize;
-        let mut triangle_count = 0usize;
         for asset in assets {
-            validate_geometry(&asset.positions, &asset.triangles)?;
-            if asset.geometry_hash != geometry_hash(&asset.positions, &asset.triangles) {
-                return Err(StaticMeshCollisionError::InvalidTriangleMesh);
-            }
-            vertex_count = vertex_count.checked_add(asset.positions.len()).ok_or(
-                StaticMeshCollisionError::TooManyVertices {
-                    limit: MAX_STATIC_MESH_VERTICES,
-                },
-            )?;
-            triangle_count = triangle_count.checked_add(asset.triangles.len()).ok_or(
-                StaticMeshCollisionError::TooManyTriangles {
-                    limit: MAX_STATIC_MESH_TRIANGLES,
-                },
-            )?;
-            if vertex_count > MAX_STATIC_MESH_VERTICES {
-                return Err(StaticMeshCollisionError::TooManyVertices {
-                    limit: MAX_STATIC_MESH_VERTICES,
-                });
-            }
-            if triangle_count > MAX_STATIC_MESH_TRIANGLES {
-                return Err(StaticMeshCollisionError::TooManyTriangles {
-                    limit: MAX_STATIC_MESH_TRIANGLES,
-                });
-            }
             let id = asset.id;
             if next_assets.insert(id, Arc::new(asset)).is_some() {
                 return Err(StaticMeshCollisionError::DuplicateAsset { id });
-            }
-            if next_assets.len() > MAX_STATIC_MESH_ASSETS {
-                return Err(StaticMeshCollisionError::TooManyAssets {
-                    limit: MAX_STATIC_MESH_ASSETS,
-                });
             }
         }
 
@@ -399,38 +346,8 @@ impl StaticMeshCollisionProjection {
             .revision
             .checked_add(1)
             .ok_or(StaticMeshCollisionError::RevisionExhausted)?;
-        if next_assets.len() > MAX_STATIC_MESH_ASSETS {
-            return Err(StaticMeshCollisionError::TooManyAssets {
-                limit: MAX_STATIC_MESH_ASSETS,
-            });
-        }
-        let vertex_count = next_assets
-            .values()
-            .map(|asset| asset.positions.len())
-            .sum::<usize>();
-        let triangle_count = next_assets
-            .values()
-            .map(|asset| asset.triangles.len())
-            .sum::<usize>();
-        if vertex_count > MAX_STATIC_MESH_VERTICES {
-            return Err(StaticMeshCollisionError::TooManyVertices {
-                limit: MAX_STATIC_MESH_VERTICES,
-            });
-        }
-        if triangle_count > MAX_STATIC_MESH_TRIANGLES {
-            return Err(StaticMeshCollisionError::TooManyTriangles {
-                limit: MAX_STATIC_MESH_TRIANGLES,
-            });
-        }
         let mut next_instances = BTreeMap::new();
-        let mut projected_vertex_count = 0usize;
-        let mut projected_triangle_count = 0usize;
         for instance in instances {
-            if next_instances.len() >= MAX_STATIC_MESH_INSTANCES {
-                return Err(StaticMeshCollisionError::TooManyInstances {
-                    limit: MAX_STATIC_MESH_INSTANCES,
-                });
-            }
             if next_instances.contains_key(&instance.id) {
                 return Err(StaticMeshCollisionError::DuplicateInstance { id: instance.id });
             }
@@ -445,26 +362,6 @@ impl StaticMeshCollisionProjection {
                 });
             }
             validate_transform(instance.transform)?;
-            projected_vertex_count = projected_vertex_count
-                .checked_add(asset.positions.len())
-                .ok_or(StaticMeshCollisionError::TooManyVertices {
-                    limit: MAX_STATIC_MESH_VERTICES,
-                })?;
-            projected_triangle_count = projected_triangle_count
-                .checked_add(asset.triangles.len())
-                .ok_or(StaticMeshCollisionError::TooManyTriangles {
-                    limit: MAX_STATIC_MESH_TRIANGLES,
-                })?;
-            if projected_vertex_count > MAX_STATIC_MESH_VERTICES {
-                return Err(StaticMeshCollisionError::TooManyVertices {
-                    limit: MAX_STATIC_MESH_VERTICES,
-                });
-            }
-            if projected_triangle_count > MAX_STATIC_MESH_TRIANGLES {
-                return Err(StaticMeshCollisionError::TooManyTriangles {
-                    limit: MAX_STATIC_MESH_TRIANGLES,
-                });
-            }
             if let Some(previous) = self.instances.get(&instance.id).filter(|previous| {
                 previous.asset == instance.asset
                     && previous.geometry_hash == asset.geometry_hash
@@ -518,10 +415,6 @@ impl StaticMeshCollisionProjection {
             revision_after,
             asset_count: candidate.assets.len(),
             instance_count: candidate.instances.len(),
-            vertex_count,
-            triangle_count,
-            projected_vertex_count,
-            projected_triangle_count,
             projection_hash: candidate.identity_hash(),
         };
         std::mem::swap(self, &mut candidate);
@@ -625,16 +518,6 @@ fn validate_geometry(
 ) -> Result<(), StaticMeshCollisionError> {
     if positions.is_empty() || triangles.is_empty() {
         return Err(StaticMeshCollisionError::EmptyGeometry);
-    }
-    if positions.len() > MAX_STATIC_MESH_VERTICES_PER_ASSET {
-        return Err(StaticMeshCollisionError::TooManyVertices {
-            limit: MAX_STATIC_MESH_VERTICES_PER_ASSET,
-        });
-    }
-    if triangles.len() > MAX_STATIC_MESH_TRIANGLES_PER_ASSET {
-        return Err(StaticMeshCollisionError::TooManyTriangles {
-            limit: MAX_STATIC_MESH_TRIANGLES_PER_ASSET,
-        });
     }
     if positions.iter().flatten().any(|value| !value.is_finite()) {
         return Err(StaticMeshCollisionError::NonFiniteVertex);
@@ -972,6 +855,52 @@ mod tests {
             )
             .unwrap();
         assert_ne!(projection.topology_hash_excluding_pose(&moving), before);
+    }
+
+    #[test]
+    fn admits_more_assets_and_instances_than_the_former_caps() {
+        // 300 assets and 5,000 instances: past the former 256 and 4,096 caps.
+        let assets: Vec<_> = (0..300_u64)
+            .map(|id| {
+                StaticMeshColliderAsset::new(
+                    StaticMeshAssetId(id),
+                    vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0 + id as f64],
+                    ],
+                    vec![[0, 1, 2]],
+                )
+                .unwrap()
+            })
+            .collect();
+        let instances: Vec<_> = (0..5_000_u64)
+            .map(|id| {
+                let asset = &assets[(id % 300) as usize];
+                StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(id),
+                    asset: asset.id,
+                    expected_geometry_hash: asset.geometry_hash,
+                    transform: StaticMeshTransform {
+                        translation: [(id % 100) as f64 * 2.0, 0.0, (id / 100) as f64 * 2.0],
+                        ..StaticMeshTransform::IDENTITY
+                    },
+                }
+            })
+            .collect();
+        let mut projection = StaticMeshCollisionProjection::default();
+        let receipt = projection.replace_all(assets, instances).unwrap();
+        assert_eq!(receipt.asset_count, 300);
+        assert_eq!(receipt.instance_count, 5_000);
+        assert!(projection
+            .raycast(
+                Ray::new(
+                    WorldPos::new(0.25, 1.0, 0.25),
+                    WorldVec::new(0.0, -1.0, 0.0)
+                ),
+                2.0,
+            )
+            .is_some());
     }
 
     #[test]

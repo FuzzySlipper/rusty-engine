@@ -109,7 +109,6 @@ pub struct NativeAudioClipFromContentRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioOptionalPreloadOutcome {
     Admitted = 1,
-    SkippedCapacity = 2,
     SkippedMissing = 3,
 }
 
@@ -118,13 +117,6 @@ pub enum NativeAudioOptionalPreloadOutcome {
 pub struct NativeAudioOptionalPreloadReceipt {
     pub outcome: NativeAudioOptionalPreloadOutcome,
     pub clip: NativeAudioClipHandle,
-    /// Committed-and-staged clip count after this attempt.
-    pub admitted_clip_count: u32,
-    /// Committed-and-staged bytes after this attempt, bounded by the Engine
-    /// preload ceiling.
-    pub admitted_bytes: u64,
-    pub max_clip_count: u32,
-    pub max_total_bytes: u64,
 }
 
 #[repr(C)]

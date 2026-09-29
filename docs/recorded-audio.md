@@ -21,11 +21,10 @@ Bundle descriptors and dynamic resource HTTP delivery preserve the MIME.
 
 ## Memory and execution
 
-The C# owner retains its existing limits: **8 MiB per encoded clip, 64 distinct
-clips, 32 MiB total encoded bytes**. Reopening identical bytes acquires another
-owner of the same clip; mixed formats share those budgets. Optional preload
-continues to distinguish missing/capacity receipts from invalid containers.
-These numbers do not purport to measure decoded PCM or total browser RSS.
+The Engine sets no clip count or encoded-byte budget; the product decides what
+to load. Reopening identical bytes acquires another owner of the same clip.
+Optional preload reports a missing resource as a receipt and an invalid
+container as an error.
 
 Compressed clips use `HTMLAudioElement` through `MediaElementAudioSourceNode`
 into the ordinary Engine bus/gain/pan/spatial graph. They never call
@@ -35,7 +34,7 @@ streaming voices are realized per audio host. Each voice has the browser's
 incremental decoder/read-ahead buffers. Their implementation-specific byte size
 is browser-owned, **not an exact Engine byte cap**. Thus decoded residency is
 bounded by active decoder windows/voices rather than track duration; there is
-no promise that 32 MiB encoded means 32 MiB resident. Decoder scratch, resampling,
+no fixed ratio between encoded and resident bytes. Decoder scratch, resampling,
 encoded delivery copies and browser caching remain additional overhead.
 
 WAV retains its existing buffer path and compatibility. It is suitable for

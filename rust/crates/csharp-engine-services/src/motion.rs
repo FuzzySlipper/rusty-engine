@@ -12,8 +12,6 @@ use crate::composition::{
     CsharpEngineServicesError, ABI_OK,
 };
 
-const MAX_MOTION_ENTITIES: usize = 1_024;
-
 pub(crate) fn api() -> NativeMotionApi {
     NativeMotionApi {
         context: std::ptr::null_mut(),
@@ -26,12 +24,6 @@ fn resolve_motion(
 ) -> Result<NativeMotionResolveReceipt, CsharpEngineServicesError> {
     let rows =
         unsafe { borrowed_slice(request.entities, request.entities_len, "motion entity rows") }?;
-    if rows.len() > MAX_MOTION_ENTITIES {
-        return Err(motion_error(
-            "CSHARP_MOTION_ENTITIES",
-            format!("motion request exceeded its {MAX_MOTION_ENTITIES}-entity bound"),
-        ));
-    }
     let view = rows.iter().map(native_spatial_entity).collect::<Vec<_>>();
     let resolution = EntityMotionService
         .resolve_spatial_view(

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  MAX_RENDERER_COMPOSITION_CAMERAS,
   MAX_RENDERER_TARGET_DIMENSION,
   RendererViewCompositionValidationError,
   validateRendererViewComposition,
@@ -68,20 +67,14 @@ void test('rejects stale target references, feedback destinations, and duplicate
   assert.throws(() => validateMutable(duplicate), /producing view/u);
 });
 
-void test('enforces exact camera and target boundaries before publication', () => {
-  const exact = mutableComposition();
-  while (exact.cameras.length < MAX_RENDERER_COMPOSITION_CAMERAS) {
-    const index = exact.cameras.length;
-    exact.cameras.push({ ...exact.cameras[0]!, id: `camera.boundary-${String(index)}` });
+void test('admits more cameras than the former cap of four', () => {
+  const many = mutableComposition();
+  while (many.cameras.length < 6) {
+    const index = many.cameras.length;
+    many.cameras.push({ ...many.cameras[0]!, id: `camera.extra-${String(index)}` });
   }
-  exact.targets[0]!.width = MAX_RENDERER_TARGET_DIMENSION;
-  assert.equal(validateMutable(exact).cameras.length, MAX_RENDERER_COMPOSITION_CAMERAS);
-
-  exact.cameras.push({ ...exact.cameras[0]!, id: 'camera.one-over' });
-  assert.throws(
-    () => validateMutable(exact),
-    RendererViewCompositionValidationError,
-  );
+  many.targets[0]!.width = MAX_RENDERER_TARGET_DIMENSION;
+  assert.equal(validateMutable(many).cameras.length, 6);
 });
 
 void test('rejects non-finite transforms and aggregate target pixel exhaustion', () => {

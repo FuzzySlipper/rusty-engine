@@ -355,7 +355,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 {
                     try
                     {
-                        if (command is null || result is null || (command->len != 0 && command->bytes is null) || command->len > MaxDebugCommandBytes) return 2;
+                        if (command is null || result is null || (command->len != 0 && command->bytes is null)) return 2;
                         *result = default;
                         string commandLine = StrictUtf8.GetString(new ReadOnlySpan<byte>(command->bytes, checked((int)command->len)));
                         DebugCommandResult commandResult = Get(handle).DebugCatalog.Execute(commandLine);
@@ -379,7 +379,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 private static int SetDebugResult(NativeProductDebugResult* result, bool succeeded, string message)
                 {
                     byte[] bytes = StrictUtf8.GetBytes(message);
-                    if (bytes.Length > MaxDebugResultBytes) return 2;
                     byte* owned = bytes.Length == 0 ? null : (byte*)NativeMemory.Alloc((nuint)bytes.Length);
                     if (bytes.Length != 0 && owned is null) return 99;
                     if (bytes.Length != 0) bytes.CopyTo(new Span<byte>(owned, bytes.Length));
@@ -593,8 +592,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     return (ProductLifetime)GCHandle.FromIntPtr((nint)handle).Target!;
                 }
 
-                private const int MaxDebugCommandBytes = 64 * 1024;
-                private const int MaxDebugResultBytes = 64 * 1024;
                 private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
                 private static ProductContentFile[] CopyContent(NativeContentFile* source, nuint count)

@@ -23,9 +23,6 @@ use crate::{
     spatial::RuntimeSpatialBridge,
 };
 
-const MAX_KINEMATIC_MOTION_ROWS: usize = 1_024;
-const MAX_KINEMATIC_MOTION_SELECTION: usize = 1_024;
-
 pub(crate) struct KinematicMotionLeaseBacking {
     _candidates: Box<[NativeKinematicMotionCandidate]>,
     _facts: Box<[NativeKinematicMotionFact]>,
@@ -319,7 +316,7 @@ unsafe extern "C" fn run_motion(
     let request = unsafe { &*request };
     let rows =
         match unsafe { borrowed_slice(request.rows, request.rows_len, "kinematic motion rows") } {
-            Ok(rows) if rows.len() <= MAX_KINEMATIC_MOTION_ROWS => rows,
+            Ok(rows) => rows,
             _ => return 0,
         };
     let selected_ids = match unsafe {
@@ -329,7 +326,7 @@ unsafe extern "C" fn run_motion(
             "kinematic motion selected entity ids",
         )
     } {
-        Ok(ids) if ids.len() <= MAX_KINEMATIC_MOTION_SELECTION => ids,
+        Ok(ids) => ids,
         _ => return 0,
     };
     if !request.selection_present && !selected_ids.is_empty() {

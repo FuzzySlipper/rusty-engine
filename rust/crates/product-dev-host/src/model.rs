@@ -1633,20 +1633,12 @@ impl ProductDevDebugResult {
     pub fn readout(&self) -> Option<&ProductDevRuntimeReadout> {
         self.readout.as_ref()
     }
-    pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
-
-    pub fn new(succeeded: bool, message: String) -> Result<Self, ProductDevHostError> {
-        if message.len() > Self::MAX_MESSAGE_BYTES {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_DEBUG_RESULT_BOUNDS",
-                "debug result exceeds the host result bound",
-            ));
-        }
-        Ok(Self {
+    pub fn new(succeeded: bool, message: String) -> Self {
+        Self {
             succeeded,
             message,
             readout: None,
-        })
+        }
     }
 
     pub const fn succeeded(&self) -> bool {

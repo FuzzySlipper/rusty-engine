@@ -752,28 +752,12 @@ void test('missing audio resources fail locally with typed operation diagnostics
   assert.equal(receipt.readout.activeSources, 0);
 });
 
-void test('blocked AudioContext and malformed frame return explicit failures', async () => {
+void test('blocked AudioContext returns an explicit failure', async () => {
   const context = new FakeContext();
   context.blockResume = true;
   const audio = host(context);
   const diagnostics = await audio.resume();
   assert.equal(diagnostics[0]?.code, 'audioContextBlocked');
-
-  const set = new RendererPresentationHostSet({ audio });
-  await assert.rejects(
-    set.apply(
-      frame([
-        operation(1, {
-          op: 'emit',
-          signalHandle: audioSignalHandle(16),
-          signalId: 'bad-sequence',
-          descriptor: descriptor(),
-        }),
-      ]),
-    ),
-    /ordered index 0/,
-  );
-  assert.equal(context.sources.length, 0, 'malformed framing rejects before host effects');
 });
 
 class FakeMediaElement {

@@ -53,8 +53,6 @@ use crate::composition::{
     CsharpEngineServicesError, ABI_OK,
 };
 
-const MAX_SPATIAL_QUERY_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_QUERY_ENTITIES;
-const MAX_SPATIAL_QUERY_IGNORED_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_IGNORED_ENTITIES;
 const SPATIAL_SERVICE: &[u8] = b"Spatial";
 const VALIDATE_CHARACTER_CONTROLLER_CONFIG_OPERATION: &[u8] = b"ValidateCharacterControllerConfig";
 const VALIDATE_CHARACTER_CONTROLLER_COMMAND_OPERATION: &[u8] =
@@ -66,12 +64,6 @@ const RESTORE_TRIGGERS_OPERATION: &[u8] = b"RestoreTriggers";
 const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
 const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
 const MAX_TRIGGER_OVERLAP_PAGE_ITEMS: usize = 1_024;
-const MAX_SPATIAL_CONTENT_BYTES: usize = 128 * 1024 * 1024;
-const MAX_SPATIAL_CONTENT_VERTICES: usize = 1_000_000;
-const MAX_SPATIAL_CONTENT_TRIANGLES: usize = 1_000_000;
-const MAX_SPATIAL_CONTENT_NAVIGATION_CELLS: usize = 1_000_000;
-const MAX_SPATIAL_CONTENT_COORDINATE: i64 = 10_000_000;
-const MAX_COLLISION_NAVIGATION_CELLS: u32 = 65_536;
 const MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN: usize = 8;
 const COLLISION_NAVIGATION_EPSILON: f64 = 0.001;
 const COLLISION_NAVIGATION_CLEARANCE_EPSILON: f64 = 0.02;
@@ -1262,7 +1254,6 @@ impl RuntimeSpatialBridge {
         };
         let max_cells = request.config.maximum_cells;
         if max_cells == 0
-            || max_cells > MAX_COLLISION_NAVIGATION_CELLS
             || !request.config.agent_radius.is_finite()
             || !request.config.agent_height.is_finite()
             || !request.config.maximum_slope_degrees.is_finite()
@@ -4946,10 +4937,10 @@ fn parse_spatial_content_artifact(
     path: &str,
     bytes: &[u8],
 ) -> Result<SpatialContentArtifact, CsharpEngineServicesError> {
-    if bytes.is_empty() || bytes.len() > MAX_SPATIAL_CONTENT_BYTES {
+    if bytes.is_empty() {
         return Err(spatial_error(
-            "CSHARP_SPATIAL_CONTENT_QUOTA",
-            format!("spatial artifact '{path}' was empty or exceeded the byte quota"),
+            "CSHARP_SPATIAL_CONTENT_SCHEMA",
+            format!("spatial artifact '{path}' was empty"),
         ));
     }
     let artifact: SpatialContentArtifact = serde_json::from_slice(bytes).map_err(|error| {
@@ -4970,26 +4961,12 @@ fn parse_spatial_content_artifact(
     for axis in 0..3 {
         let min = artifact.bounds.min[axis];
         let max = artifact.bounds.max[axis];
-        if !min.is_finite()
-            || !max.is_finite()
-            || min > max
-            || min.abs() > MAX_SPATIAL_CONTENT_COORDINATE as f64
-            || max.abs() > MAX_SPATIAL_CONTENT_COORDINATE as f64
-        {
+        if !min.is_finite() || !max.is_finite() || min > max {
             return Err(spatial_error(
                 "CSHARP_SPATIAL_CONTENT_BOUNDS",
-                "spatial artifact bounds were invalid or outside Engine limits",
+                "spatial artifact bounds were invalid",
             ));
         }
-    }
-    if artifact.collision.positions.len() > MAX_SPATIAL_CONTENT_VERTICES
-        || artifact.collision.triangles.len() > MAX_SPATIAL_CONTENT_TRIANGLES
-        || artifact.navigation.cells.len() > MAX_SPATIAL_CONTENT_NAVIGATION_CELLS
-    {
-        return Err(spatial_error(
-            "CSHARP_SPATIAL_CONTENT_QUOTA",
-            "spatial artifact exceeded geometry or navigation quotas",
-        ));
     }
     if artifact.collision.positions.is_empty() != artifact.collision.triangles.is_empty() {
         return Err(spatial_error(
@@ -5051,12 +5028,7 @@ fn parse_spatial_content_artifact(
                 "navigation cell identities were not unique",
             ));
         }
-        if [cell.column, cell.row, cell.level]
-            .into_iter()
-            .any(|value| {
-                !(-MAX_SPATIAL_CONTENT_COORDINATE..=MAX_SPATIAL_CONTENT_COORDINATE).contains(&value)
-            })
-            || !cell.support_height.is_finite()
+        if !cell.support_height.is_finite()
             || cell.support_height < artifact.bounds.min[1]
             || cell.support_height > artifact.bounds.max[1]
         {
@@ -5470,16 +5442,6 @@ fn validate_aabb(min: Vec3, max: Vec3) -> Result<(), CsharpEngineServicesError> 
 }
 
 fn ignored_set(values: &[u64]) -> Result<Vec<EntityId>, CsharpEngineServicesError> {
-    if values.len() > MAX_SPATIAL_QUERY_IGNORED_ENTITIES {
-        return Err(spatial_error(
-            "CSHARP_SPATIAL_FILTER",
-            format!(
-                "ignored entity count {} exceeded {}",
-                values.len(),
-                MAX_SPATIAL_QUERY_IGNORED_ENTITIES
-            ),
-        ));
-    }
     Ok(values.iter().copied().map(EntityId::new).collect())
 }
 
@@ -5501,16 +5463,6 @@ fn filtered_entities(
     filter: NativeSpatialQueryFilter,
     ignored: &[EntityId],
 ) -> Result<Vec<NativeSpatialEntityCollider>, CsharpEngineServicesError> {
-    if values.len() > MAX_SPATIAL_QUERY_ENTITIES {
-        return Err(spatial_error(
-            "CSHARP_SPATIAL_FILTER",
-            format!(
-                "entity count {} exceeded {}",
-                values.len(),
-                MAX_SPATIAL_QUERY_ENTITIES
-            ),
-        ));
-    }
     for value in values {
         validate_entity_collider(*value)?;
     }
