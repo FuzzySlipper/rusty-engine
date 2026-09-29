@@ -75,6 +75,7 @@ release information.
 | `RUSTY_NETWORK` | Only install and update need the network; everything else uses the cache. |
 | `RUSTY_DEV_RUNTIME_IDENTITY` or an ABI identity mismatch | The package and runtime are from different pairs. Reinstall the pinned pair; never add version negotiation or handwritten interop. |
 | hostfxr or CoreCLR fails to load | `rusty dev` sets `DOTNET_ROOT` from `dotnet` on `PATH`; set it yourself when running the host another way. |
+| `rusty: not found` under a service manager or Den broker | The bootstrap installs into `~/.local/bin`, which such environments may leave off `PATH`. Launch with `PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`. |
 | A compiler error | `rusty build` and `rusty dev` pass compiler output and exit codes through unchanged. |
 | A missing Engine capability | Follow the [missing capability workflow](#missing-capability-workflow). |
 

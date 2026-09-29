@@ -20,7 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scri
 
 The bootstrap downloads the newest pair, checks its SHA-256, puts that pair's
 `rusty` in `~/.local/bin` (`RUSTY_BIN_DIR`), and installs the pair into the
-shared cache.
+shared cache. Service managers and Den brokers that start commands with their
+own `PATH` may not include `~/.local/bin`; launch configurations use
+`PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`.
 
 A product pins exactly one pair with one element in its `Directory.Build.props`,
 which its projects also use for the package reference:
