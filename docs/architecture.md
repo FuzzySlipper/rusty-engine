@@ -34,7 +34,7 @@ Rusty.Engine safe services and optional managed helpers
   │  generated contracts/values plus product-side composition helpers
   ▼
 Rusty.Engine native bridge and C ABI function table
-  │  compiled interop and service implementations, copied values, explicit leases;
+  │  compiled interop and service implementations, copied values, borrowed results;
   │  a small generated product export selects the product and its debug catalog
   ▼
 Rust Engine services and runtime host
@@ -116,14 +116,13 @@ Add runtime verification only for a concrete identified requirement.
    and creates the product with `ProductCreateContext`.
 3. Rust sends lifecycle calls and update facts. The generated bootstrap copies
    input events into C# values and forwards `ProductUpdate` to the product.
-4. The product uses named services to read or publish facts. Explicit leases
-   make retained native resources disposable on the C# side; borrowed data must
-   not be stored past its documented call/lease boundary. A borrowed result
-   (a `Native*Result` with pointer/`_len` collections, such as Dynamics
-   `StepAndRead` and `ReadWorld`) points into bridge storage that stays valid
-   until the next call on the same service context. The generated wrapper
-   copies it before returning, with no handle or destroy call. Other transient
-   results still use a lease and destroy call until they move to this shape.
+4. The product uses named services to read or publish facts. Disposable C#
+   handles own retained native resources. Every transient result is borrowed:
+   a `Native*Result` with pointer/`_len` collections, and the diagnostics of a
+   refused call's `NativeOperationErrorReceipt`, point into bridge storage that
+   stays valid until the next call on the same service context. The generated
+   wrapper copies them before returning or throwing; there is no result handle
+   or destroy call.
 5. The Engine turns admitted product presentation facts into its renderer
    state. DOM UI observes Engine-supported UI/projection paths and emits
    semantic input; it does not become a second game implementation.

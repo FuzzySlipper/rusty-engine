@@ -1645,8 +1645,6 @@ pub(crate) struct RuntimeAppearanceData {
     sprite_playbacks_by_atlas: BTreeMap<u64, BTreeSet<u64>>,
     sprite_playbacks_by_appearance: BTreeMap<u64, BTreeSet<u64>>,
     next_sprite_playback: u64,
-    sprite_playback_advance_leases: BTreeMap<u64, SpritePlaybackAdvanceLeaseBacking>,
-    next_sprite_playback_advance_lease: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
@@ -1716,11 +1714,6 @@ struct SpritePlaybackUpdateIdentity {
     control_revision: u64,
     simulation_step: u64,
     admitted_step_count: u32,
-}
-
-#[derive(Clone)]
-struct SpritePlaybackAdvanceLeaseBacking {
-    _crossings: Box<[NativeSpritePlaybackMarkerCrossing]>,
 }
 
 #[derive(Clone)]
@@ -1879,11 +1872,6 @@ struct ImportedAnimatedContent {
     resource: CsharpRenderResource,
 }
 
-struct AnimationClipInfoLease {
-    _clips: Vec<AnimationClipDescriptor>,
-    _readout: Box<[NativeAnimationClipInfo]>,
-}
-
 pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
     /// Held in `state` while a product call owns the real state.
@@ -1895,8 +1883,8 @@ pub(crate) struct RuntimeAppearanceBridge {
     imported_mesh: BTreeMap<String, CsharpRenderResource>,
     imported_animated: BTreeMap<String, ImportedAnimatedContent>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
-    clip_info_leases: BTreeMap<u64, AnimationClipInfoLease>,
-    next_clip_info_lease: u64,
+    /// Backing of the latest borrowed appearance result.
+    borrowed: crate::operation_diagnostics::BorrowedResult,
     content: Option<*const crate::content::RuntimeContentBridge>,
     camera_view: Option<*const crate::camera_view::RuntimeCameraViewBridge>,
     staged: Option<RuntimeAppearanceCall>,
@@ -1950,8 +1938,6 @@ impl RuntimeAppearanceBridge {
             sprite_playbacks_by_atlas: BTreeMap::new(),
             sprite_playbacks_by_appearance: BTreeMap::new(),
             next_sprite_playback: 1,
-            sprite_playback_advance_leases: BTreeMap::new(),
-            next_sprite_playback_advance_lease: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
             animation_graphs: BTreeMap::new(),
@@ -1978,8 +1964,7 @@ impl RuntimeAppearanceBridge {
             imported_mesh: BTreeMap::new(),
             imported_animated: BTreeMap::new(),
             operation_diagnostics: Default::default(),
-            clip_info_leases: BTreeMap::new(),
-            next_clip_info_lease: 1,
+            borrowed: Default::default(),
             content: None,
             camera_view: None,
             staged: None,
@@ -5821,7 +5806,7 @@ impl RuntimeAppearanceBridge {
     fn advance_sprite_playback(
         &mut self,
         request: NativeSpritePlaybackAdvanceRequest,
-    ) -> Result<NativeSpritePlaybackAdvanceLease, CsharpEngineServicesError> {
+    ) -> Result<NativeSpritePlaybackAdvanceResult, CsharpEngineServicesError> {
         let facts = self.staged_ref()?.admitted_update.ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_PLAYBACK_UPDATE",
@@ -5910,47 +5895,23 @@ impl RuntimeAppearanceBridge {
         }
         let readout = sprite_playback_readout(&playback);
         let boxed = crossings.into_boxed_slice();
-        let lease = self.staged_ref()?.state.next_sprite_playback_advance_lease;
         let crossings_pointer = if boxed.is_empty() {
             std::ptr::null()
         } else {
             boxed.as_ptr()
         };
-        let result = NativeSpritePlaybackAdvanceLease {
-            handle: NativeSpritePlaybackAdvanceLeaseHandle { value: lease },
+        let result = NativeSpritePlaybackAdvanceResult {
             crossings: crossings_pointer,
             crossings_len: boxed.len(),
             readout,
             advanced,
         };
-        let staged = self.staged_mut()?;
-        staged.state.next_sprite_playback_advance_lease =
-            lease.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_SPRITE_PLAYBACK_LEASE",
-                    "sprite playback advance lease handle overflow",
-                )
-            })?;
-        staged
+        self.staged_mut()?
             .state
             .sprite_playbacks
             .insert(request.playback.value, playback);
-        staged.state.sprite_playback_advance_leases.insert(
-            lease,
-            SpritePlaybackAdvanceLeaseBacking { _crossings: boxed },
-        );
+        self.borrowed.hold(boxed);
         Ok(result)
-    }
-
-    fn destroy_sprite_playback_advance_lease(
-        &mut self,
-        lease: NativeSpritePlaybackAdvanceLeaseHandle,
-    ) -> Result<(), CsharpEngineServicesError> {
-        self.staged_mut()?
-            .state
-            .sprite_playback_advance_leases
-            .remove(&lease.value);
-        Ok(())
     }
 
     fn sample_sprite_playback(
@@ -9031,7 +8992,7 @@ pub(crate) unsafe extern "C" fn select_sprite_playback_frame(
 pub(crate) unsafe extern "C" fn advance_sprite_playback(
     context: *mut c_void,
     request: *const NativeSpritePlaybackAdvanceRequest,
-    result: *mut NativeSpritePlaybackAdvanceLease,
+    result: *mut NativeSpritePlaybackAdvanceResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     appearance_operation(context, operation_error, || {
@@ -9049,18 +9010,6 @@ pub(crate) unsafe extern "C" fn advance_sprite_playback(
                 0
             }
         }
-    })
-}
-
-pub(crate) unsafe extern "C" fn destroy_sprite_playback_advance_lease(
-    context: *mut c_void,
-    lease: NativeSpritePlaybackAdvanceLeaseHandle,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    appearance_operation(context, operation_error, || {
-        appearance_void(context, |bridge| {
-            bridge.destroy_sprite_playback_advance_lease(lease)
-        })
     })
 }
 
@@ -9852,7 +9801,6 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
         read_mesh_info: read_animated_mesh_info,
         read_clips: read_animation_clips,
-        destroy_clip_info_lease: destroy_animation_clip_info_lease,
         open_animated_mesh,
         open_animated_mesh_from_content,
         open_animation_clip_pack_from_content,
@@ -10628,7 +10576,7 @@ pub(crate) unsafe extern "C" fn read_animated_mesh_info(
 pub(crate) unsafe extern "C" fn read_animation_clips(
     context: *mut c_void,
     resource: NativeRenderResourceHandle,
-    result: *mut NativeAnimationClipInfoLease,
+    result: *mut NativeAnimationClipInfoResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     appearance_operation(context, operation_error, || {
@@ -10659,40 +10607,13 @@ pub(crate) unsafe extern "C" fn read_animation_clips(
                 })
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            let handle = bridge.next_clip_info_lease;
-            bridge.next_clip_info_lease += 1;
-            let receipt = NativeAnimationClipInfoLease {
-                handle: NativeAnimationClipInfoLeaseHandle { value: handle },
+            let result = NativeAnimationClipInfoResult {
                 clips: readout.as_ptr(),
                 clips_len: readout.len(),
             };
-            bridge.clip_info_leases.insert(
-                handle,
-                AnimationClipInfoLease {
-                    _clips: clips,
-                    _readout: readout,
-                },
-            );
-            Ok(receipt)
+            bridge.borrowed.hold((clips, readout));
+            Ok(result)
         })
-    })
-}
-
-pub(crate) unsafe extern "C" fn destroy_animation_clip_info_lease(
-    context: *mut c_void,
-    handle: NativeAnimationClipInfoLeaseHandle,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    appearance_operation(context, operation_error, || {
-        if context.is_null() {
-            return 0;
-        }
-        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-        if bridge.clip_info_leases.remove(&handle.value).is_some() {
-            ABI_OK
-        } else {
-            0
-        }
     })
 }
 

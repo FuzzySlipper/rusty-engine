@@ -182,17 +182,10 @@ pub struct NativeSampledVolumeReadRequest {
     pub count: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeDensitySnapshotLeaseHandle {
-    pub value: u64,
-}
-
-/// Owned copied density range. Release with `destroy_density_snapshot_lease`.
+/// Borrowed density range, valid until the next ImplicitSurfaces call.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeDensitySnapshotLease {
-    pub handle: NativeDensitySnapshotLeaseHandle,
+pub struct NativeDensitySnapshotResult {
     pub descriptor: NativeSampledVolumeDescriptor,
     pub start: u32,
     pub samples: *const NativeDensitySample,
@@ -359,12 +352,9 @@ pub type NativeWriteSampledVolume = unsafe extern "C" fn(
 pub type NativeReadSampledVolume = unsafe extern "C" fn(
     *mut c_void,
     NativeSampledVolumeReadRequest,
-    *mut NativeDensitySnapshotLease,
+    *mut NativeDensitySnapshotResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-
-pub type NativeDestroyDensitySnapshotLease =
-    unsafe extern "C" fn(*mut c_void, NativeDensitySnapshotLeaseHandle) -> i32;
 
 pub type NativeSampleSampledVolume = unsafe extern "C" fn(
     *mut c_void,
@@ -516,7 +506,6 @@ pub struct NativeImplicitSurfacesApi {
     pub describe_sampled_volume: NativeDescribeSampledVolume,
     pub write_sampled_volume: NativeWriteSampledVolume,
     pub read_sampled_volume: NativeReadSampledVolume,
-    pub destroy_density_snapshot_lease: NativeDestroyDensitySnapshotLease,
     pub sample_sampled_volume: NativeSampleSampledVolume,
     pub rasterize_sampled_volume: NativeRasterizeSampledVolume,
     pub generate_sampled_volume: NativeGenerateSampledVolume,
@@ -541,11 +530,9 @@ pub struct NativeImplicitSurfacesApi {
     pub destroy_audit: NativeDestroyImplicitAudit,
     pub capture_audit_piece: NativeCaptureImplicitAuditPiece,
     pub read_audit: NativeReadImplicitAudit,
-    pub destroy_audit_report_lease: NativeDestroyImplicitAuditReportLease,
     pub read_mesh_integrity: NativeReadImplicitIntegrity,
     pub read_expected_join: NativeReadImplicitJoin,
     pub read_enclosure: NativeReadImplicitEnclosure,
-    pub destroy_analysis_report_lease: NativeDestroyImplicitAnalysisReportLease,
 }
 
 /// Opt-in authoring collection; captured fields and mesh facts outlive sources.
@@ -598,14 +585,7 @@ pub struct NativeImplicitAuditDiagnostic {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeImplicitAuditReportLeaseHandle {
-    pub value: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeImplicitAuditReportLease {
-    pub handle: NativeImplicitAuditReportLeaseHandle,
+pub struct NativeImplicitAuditReportResult {
     pub candidate_pairs: u64,
     pub triangle_pairs: u64,
     pub diagnostics: *const NativeImplicitAuditDiagnostic,
@@ -630,11 +610,9 @@ pub type NativeCaptureImplicitAuditPiece = unsafe extern "C" fn(
 pub type NativeReadImplicitAudit = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitAuditRequest,
-    *mut NativeImplicitAuditReportLease,
+    *mut NativeImplicitAuditReportResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyImplicitAuditReportLease =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitAuditReportLeaseHandle) -> i32;
 
 /// World-space declaration of an intentionally open/clipped mesh region.
 #[repr(C)]
@@ -713,13 +691,7 @@ pub struct NativeImplicitAnalysisDiagnostic {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeImplicitAnalysisReportLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeImplicitAnalysisReportLease {
-    pub handle: NativeImplicitAnalysisReportLeaseHandle,
+pub struct NativeImplicitAnalysisReportResult {
     pub sampled: u64,
     /// One means the declared discrete query completed, not sub-resolution proof.
     pub complete: u8,
@@ -732,20 +704,18 @@ pub struct NativeImplicitAnalysisReportLease {
 pub type NativeReadImplicitIntegrity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeImplicitIntegrityRequest,
-    *mut NativeImplicitAnalysisReportLease,
+    *mut NativeImplicitAnalysisReportResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadImplicitJoin = unsafe extern "C" fn(
     *mut c_void,
     NativeImplicitJoinRequest,
-    *mut NativeImplicitAnalysisReportLease,
+    *mut NativeImplicitAnalysisReportResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadImplicitEnclosure = unsafe extern "C" fn(
     *mut c_void,
     *const NativeImplicitEnclosureRequest,
-    *mut NativeImplicitAnalysisReportLease,
+    *mut NativeImplicitAnalysisReportResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyImplicitAnalysisReportLease =
-    unsafe extern "C" fn(*mut c_void, NativeImplicitAnalysisReportLeaseHandle) -> i32;

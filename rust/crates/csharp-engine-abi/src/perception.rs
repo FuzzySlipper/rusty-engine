@@ -76,19 +76,11 @@ pub struct NativePerceptionAggregate {
     pub evidence_total: f64,
 }
 
-/// Owner for copied perception rows returned from one query.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativePerceptionReadoutLeaseHandle {
-    pub value: u64,
-}
-
 /// Copied pair facts, target reductions, and bounded query counters. Generated C# copies both
 /// collections before calling the matching named destroy operation.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativePerceptionReadoutLease {
-    pub handle: NativePerceptionReadoutLeaseHandle,
+pub struct NativePerceptionReadoutResult {
     pub pairs: *const NativePerceptionPair,
     pub pairs_len: usize,
     pub aggregates: *const NativePerceptionAggregate,
@@ -112,5 +104,4 @@ pub struct NativePerceptionReadoutLease {
 pub struct NativePerceptionApi {
     pub context: *mut c_void,
     pub query_visibility: NativeQueryPerception,
-    pub destroy_readout_lease: NativeDestroyPerceptionReadoutLease,
 }

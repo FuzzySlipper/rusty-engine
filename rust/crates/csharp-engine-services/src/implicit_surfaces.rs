@@ -78,10 +78,6 @@ struct RetainedVolume {
     generation: Option<NativeImplicitGenerationReadout>,
 }
 
-struct DensitySnapshotLease {
-    samples: Vec<NativeDensitySample>,
-}
-
 #[derive(Clone, Copy)]
 struct SurfaceGenerationOptions {
     crease_angle_degrees: f32,
@@ -127,12 +123,8 @@ pub(crate) struct RuntimeImplicitBridge {
     next_volume: u64,
     appearance: Option<*mut RuntimeAppearanceBridge>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
-    density_snapshot_leases: BTreeMap<u64, DensitySnapshotLease>,
-    next_density_snapshot_lease: u64,
     next_audit: u64,
-    next_audit_report: u64,
-    audit_reports: BTreeMap<u64, Vec<NativeImplicitAuditDiagnostic>>,
-    analysis_reports: BTreeMap<u64, AnalysisLease>,
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 impl RuntimeImplicitBridge {
     pub(crate) fn new() -> Self {
@@ -144,12 +136,8 @@ impl RuntimeImplicitBridge {
             next_volume: 1,
             appearance: None,
             operation_diagnostics: Default::default(),
-            density_snapshot_leases: BTreeMap::new(),
-            next_density_snapshot_lease: 1,
             next_audit: 1,
-            next_audit_report: 1,
-            audit_reports: BTreeMap::new(),
-            analysis_reports: BTreeMap::new(),
+            borrowed: Default::default(),
         }
     }
     pub(crate) fn begin_call(&mut self) {
@@ -202,24 +190,15 @@ impl RuntimeImplicitBridge {
         descriptor: VolumeDescriptor,
         start: u32,
         samples: Vec<NativeDensitySample>,
-    ) -> Result<NativeDensitySnapshotLease> {
-        let value = self.next_density_snapshot_lease;
-        self.next_density_snapshot_lease = value
-            .checked_add(1)
-            .ok_or_else(|| error("density snapshot lease identity exhausted"))?;
-        self.density_snapshot_leases
-            .insert(value, DensitySnapshotLease { samples });
-        let retained = self
-            .density_snapshot_leases
-            .get(&value)
-            .expect("inserted density snapshot lease");
-        Ok(NativeDensitySnapshotLease {
-            handle: NativeDensitySnapshotLeaseHandle { value },
+    ) -> Result<NativeDensitySnapshotResult> {
+        let result = NativeDensitySnapshotResult {
             descriptor: native_volume_descriptor(descriptor),
             start,
-            samples: retained.samples.as_ptr(),
-            samples_len: retained.samples.len(),
-        })
+            samples: samples.as_ptr(),
+            samples_len: samples.len(),
+        };
+        self.borrowed.hold(samples);
+        Ok(result)
     }
     fn node(
         &mut self,
@@ -455,7 +434,6 @@ pub(crate) fn api(
         describe_sampled_volume,
         write_sampled_volume,
         read_sampled_volume,
-        destroy_density_snapshot_lease,
         sample_sampled_volume,
         rasterize_sampled_volume,
         generate_sampled_volume,
@@ -480,11 +458,9 @@ pub(crate) fn api(
         destroy_audit,
         capture_audit_piece,
         read_audit,
-        destroy_audit_report_lease,
         read_mesh_integrity,
         read_expected_join,
         read_enclosure,
-        destroy_analysis_report_lease,
     }
 }
 fn call<T>(
@@ -675,7 +651,7 @@ unsafe extern "C" fn write_sampled_volume(
 unsafe extern "C" fn read_sampled_volume(
     context: *mut c_void,
     request: NativeSampledVolumeReadRequest,
-    result: *mut NativeDensitySnapshotLease,
+    result: *mut NativeDensitySnapshotResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     call_operation(context, result, receipt, |b| {
@@ -693,22 +669,6 @@ unsafe extern "C" fn read_sampled_volume(
         };
         b.retain_density_snapshot(descriptor, request.start, samples)
     })
-}
-unsafe extern "C" fn destroy_density_snapshot_lease(
-    context: *mut c_void,
-    handle: NativeDensitySnapshotLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
-    i32::from(
-        handle.value != 0
-            && bridge
-                .density_snapshot_leases
-                .remove(&handle.value)
-                .is_some(),
-    )
 }
 unsafe extern "C" fn sample_sampled_volume(
     context: *mut c_void,

@@ -92,7 +92,7 @@ pub(super) unsafe extern "C" fn capture_audit_piece(
 pub(super) unsafe extern "C" fn read_audit(
     context: *mut c_void,
     request: NativeImplicitAuditRequest,
-    result: *mut NativeImplicitAuditReportLease,
+    result: *mut NativeImplicitAuditReportResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     call_operation(context, result, receipt, |b| {
@@ -128,37 +128,17 @@ pub(super) unsafe extern "C" fn read_audit(
                 approximate_area: d.approximate_area,
             })
             .collect::<Vec<_>>();
-        let value = b.next_audit_report;
-        b.next_audit_report = value
-            .checked_add(1)
-            .ok_or_else(|| error("audit report identity overflow"))?;
-        let native = NativeImplicitAuditReportLease {
-            handle: NativeImplicitAuditReportLeaseHandle { value },
+        let native = NativeImplicitAuditReportResult {
             candidate_pairs: report.candidate_pairs,
             triangle_pairs: report.triangle_pairs,
             diagnostics: diagnostics.as_ptr(),
             diagnostics_len: diagnostics.len(),
         };
-        b.audit_reports.insert(value, diagnostics);
+        b.borrowed.hold(diagnostics);
         Ok(native)
     })
 }
 
-pub(super) unsafe extern "C" fn destroy_audit_report_lease(
-    context: *mut c_void,
-    handle: NativeImplicitAuditReportLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
-    i32::from(handle.value != 0 && bridge.audit_reports.remove(&handle.value).is_some())
-}
-
-pub(super) struct AnalysisLease {
-    diagnostics: Vec<NativeImplicitAnalysisDiagnostic>,
-    path: Vec<NativeVec3>,
-}
 fn pieces(
     b: &mut RuntimeImplicitBridge,
     audit: NativeImplicitAuditHandle,
@@ -175,52 +155,45 @@ fn pieces(
 fn retain_analysis(
     b: &mut RuntimeImplicitBridge,
     report: audit::AnalysisReport,
-) -> Result<NativeImplicitAnalysisReportLease> {
+) -> Result<NativeImplicitAnalysisReportResult> {
     use audit::AnalysisClassification as C;
     use NativeImplicitAnalysisClassification as N;
-    let lease = AnalysisLease {
-        diagnostics: report
-            .diagnostics
-            .into_iter()
-            .map(|d| NativeImplicitAnalysisDiagnostic {
-                piece_a: d.piece_a,
-                piece_b: d.piece_b,
-                classification: match d.classification {
-                    C::OpenBoundary => N::OpenBoundary,
-                    C::IntentionalBoundary => N::IntentionalBoundary,
-                    C::NonManifold => N::NonManifold,
-                    C::DegenerateTriangle => N::DegenerateTriangle,
-                    C::JoinGap => N::JoinGap,
-                    C::MissingJoinSurface => N::MissingJoinSurface,
-                    C::EnclosureLeak => N::EnclosureLeak,
-                    C::IntentionalOpening => N::IntentionalOpening,
-                    C::IncompleteCoverage => N::IncompleteCoverage,
-                },
-                minimum: nv(d.bounds.min),
-                maximum: nv(d.bounds.max),
-                approximate_width: d.approximate_width,
-                approximate_length: d.approximate_length,
-                approximate_area: d.approximate_area,
-                resolution: d.resolution,
-            })
-            .collect(),
-        path: report.path.into_iter().map(nv).collect(),
-    };
-    let value = b.next_audit_report;
-    b.next_audit_report = value
-        .checked_add(1)
-        .ok_or_else(|| error("analysis report identity overflow"))?;
-    let native = NativeImplicitAnalysisReportLease {
-        handle: NativeImplicitAnalysisReportLeaseHandle { value },
+    let diagnostics: Vec<_> = report
+        .diagnostics
+        .into_iter()
+        .map(|d| NativeImplicitAnalysisDiagnostic {
+            piece_a: d.piece_a,
+            piece_b: d.piece_b,
+            classification: match d.classification {
+                C::OpenBoundary => N::OpenBoundary,
+                C::IntentionalBoundary => N::IntentionalBoundary,
+                C::NonManifold => N::NonManifold,
+                C::DegenerateTriangle => N::DegenerateTriangle,
+                C::JoinGap => N::JoinGap,
+                C::MissingJoinSurface => N::MissingJoinSurface,
+                C::EnclosureLeak => N::EnclosureLeak,
+                C::IntentionalOpening => N::IntentionalOpening,
+                C::IncompleteCoverage => N::IncompleteCoverage,
+            },
+            minimum: nv(d.bounds.min),
+            maximum: nv(d.bounds.max),
+            approximate_width: d.approximate_width,
+            approximate_length: d.approximate_length,
+            approximate_area: d.approximate_area,
+            resolution: d.resolution,
+        })
+        .collect();
+    let path: Vec<_> = report.path.into_iter().map(nv).collect();
+    let native = NativeImplicitAnalysisReportResult {
         sampled: report.sampled,
         complete: u8::from(report.complete),
         resolution: report.resolution,
-        diagnostics: lease.diagnostics.as_ptr(),
-        diagnostics_len: lease.diagnostics.len(),
-        path: lease.path.as_ptr(),
-        path_len: lease.path.len(),
+        diagnostics: diagnostics.as_ptr(),
+        diagnostics_len: diagnostics.len(),
+        path: path.as_ptr(),
+        path_len: path.len(),
     };
-    b.analysis_reports.insert(value, lease);
+    b.borrowed.hold((diagnostics, path));
     Ok(native)
 }
 unsafe fn copied_slice<T: Copy>(ptr: *const T, len: usize) -> Result<Vec<T>> {
@@ -235,7 +208,7 @@ unsafe fn copied_slice<T: Copy>(ptr: *const T, len: usize) -> Result<Vec<T>> {
 pub(super) unsafe extern "C" fn read_mesh_integrity(
     context: *mut c_void,
     request: *const NativeImplicitIntegrityRequest,
-    result: *mut NativeImplicitAnalysisReportLease,
+    result: *mut NativeImplicitAnalysisReportResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if request.is_null() {
@@ -261,7 +234,7 @@ pub(super) unsafe extern "C" fn read_mesh_integrity(
 pub(super) unsafe extern "C" fn read_expected_join(
     context: *mut c_void,
     request: NativeImplicitJoinRequest,
-    result: *mut NativeImplicitAnalysisReportLease,
+    result: *mut NativeImplicitAnalysisReportResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     call_operation(context, result, receipt, |b| {
@@ -286,7 +259,7 @@ pub(super) unsafe extern "C" fn read_expected_join(
 pub(super) unsafe extern "C" fn read_enclosure(
     context: *mut c_void,
     request: *const NativeImplicitEnclosureRequest,
-    result: *mut NativeImplicitAnalysisReportLease,
+    result: *mut NativeImplicitAnalysisReportResult,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if request.is_null() {
@@ -317,14 +290,4 @@ pub(super) unsafe extern "C" fn read_enclosure(
         .map_err(kernel)?;
         retain_analysis(b, report)
     })
-}
-pub(super) unsafe extern "C" fn destroy_analysis_report_lease(
-    context: *mut c_void,
-    handle: NativeImplicitAnalysisReportLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
-    i32::from(handle.value != 0 && bridge.analysis_reports.remove(&handle.value).is_some())
 }

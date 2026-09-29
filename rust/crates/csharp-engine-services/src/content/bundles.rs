@@ -146,16 +146,10 @@ impl ProductContentBundles {
     }
 }
 
-struct BundleInfoLease {
-    _ids: Vec<String>,
-    infos: Vec<NativeContentBundleInfo>,
-}
-
 #[derive(Default)]
 pub(super) struct BundleState {
     pub(super) source: ProductContentBundles,
     open: BTreeMap<u64, BTreeMap<String, AdmittedContent>>,
-    infos: BTreeMap<u64, BundleInfoLease>,
     next: u64,
 }
 
@@ -176,15 +170,12 @@ impl BundleState {
 
 pub(super) unsafe extern "C" fn list_bundles(
     context: *mut c_void,
-    result: *mut NativeContentBundleInfoLease,
+    result: *mut NativeContentBundleInfoResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(value) = bridge.bundles.next() else {
-        return 0;
-    };
     let ids: Vec<String> = bridge
         .bundles
         .source
@@ -203,35 +194,15 @@ pub(super) unsafe extern "C" fn list_bundles(
             file_count: b.files.len() as u64,
             byte_length: b.files.iter().map(|f| f.byte_length).sum(),
         })
-        .collect();
-    bridge
-        .bundles
-        .infos
-        .insert(value, BundleInfoLease { _ids: ids, infos });
-    let lease = &bridge.bundles.infos[&value];
+        .collect::<Vec<_>>();
     unsafe {
-        *result = NativeContentBundleInfoLease {
-            handle: NativeContentBundleInfoLeaseHandle { value },
-            bundles: lease.infos.as_ptr(),
-            bundles_len: lease.infos.len(),
+        *result = NativeContentBundleInfoResult {
+            bundles: infos.as_ptr(),
+            bundles_len: infos.len(),
         };
     }
+    bridge.borrowed.hold((ids, infos));
     ABI_OK
-}
-
-pub(super) unsafe extern "C" fn destroy_bundle_info_lease(
-    context: *mut c_void,
-    handle: NativeContentBundleInfoLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    if bridge.bundles.infos.remove(&handle.value).is_some() {
-        ABI_OK
-    } else {
-        0
-    }
 }
 
 pub(super) unsafe extern "C" fn open_bundle(
@@ -278,7 +249,7 @@ pub(super) unsafe extern "C" fn destroy_bundle(
 pub(super) unsafe extern "C" fn read_bundle_files(
     context: *mut c_void,
     bundle: NativeContentBundleHandle,
-    result: *mut NativeContentReferenceInfoLease,
+    result: *mut NativeContentReferenceInfoResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -291,11 +262,11 @@ pub(super) unsafe extern "C" fn read_bundle_files(
         .iter()
         .map(|(path, file)| (path.clone(), file.sha256(), file.bytes.len() as u64))
         .collect();
-    let Some(lease) = bridge.retain_info(entries) else {
+    let Some(value) = bridge.retain_info(entries) else {
         return 0;
     };
     unsafe {
-        *result = lease;
+        *result = value;
     }
     ABI_OK
 }

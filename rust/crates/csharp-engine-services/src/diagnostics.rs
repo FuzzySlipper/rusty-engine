@@ -1,11 +1,7 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ffi::c_void,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, ffi::c_void, sync::Arc};
 
 use csharp_engine_abi::{
-    NativeByteLease, NativeByteLeaseHandle, NativeDiagnosticsApi, NativeDiagnosticsDisposition,
+    NativeByteResult, NativeDiagnosticsApi, NativeDiagnosticsDisposition,
     NativeDiagnosticsPublishRequest, NativeDiagnosticsSeverity,
 };
 use runtime_diagnostics::{
@@ -18,8 +14,7 @@ use crate::composition::ABI_OK;
 pub(crate) struct RuntimeDiagnosticsBridge {
     sink: RuntimeDiagnosticsSink,
     renderer_json: Option<Arc<[u8]>>,
-    leases: BTreeMap<u64, Arc<[u8]>>,
-    next_lease: u64,
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 
 /// Product-owned cosmetic admission can legitimately meet an Engine bound.
@@ -53,8 +48,7 @@ impl RuntimeDiagnosticsBridge {
     pub(crate) fn new(sink: RuntimeDiagnosticsSink) -> Self {
         Self {
             renderer_json: None,
-            leases: BTreeMap::new(),
-            next_lease: 1,
+            borrowed: Default::default(),
             sink,
         }
     }
@@ -141,7 +135,6 @@ pub(crate) fn api(bridge: &mut RuntimeDiagnosticsBridge) -> NativeDiagnosticsApi
         context: (bridge as *mut RuntimeDiagnosticsBridge).cast(),
         read_renderer,
         publish,
-        destroy_byte_lease,
     }
 }
 
@@ -157,7 +150,7 @@ unsafe extern "C" fn publish(
     bridge.publish(request).map(|()| ABI_OK).unwrap_or(0)
 }
 
-unsafe extern "C" fn read_renderer(context: *mut c_void, readout: *mut NativeByteLease) -> i32 {
+unsafe extern "C" fn read_renderer(context: *mut c_void, readout: *mut NativeByteResult) -> i32 {
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -167,29 +160,14 @@ unsafe extern "C" fn read_renderer(context: *mut c_void, readout: *mut NativeByt
     let Some(snapshot) = bridge.renderer_json.clone() else {
         return 0;
     };
-    let handle = bridge.next_lease;
-    bridge.next_lease = bridge.next_lease.checked_add(1).unwrap_or(1);
-    bridge.leases.insert(handle, Arc::clone(&snapshot));
     unsafe {
-        *readout = NativeByteLease {
-            handle: NativeByteLeaseHandle { value: handle },
+        *readout = NativeByteResult {
             bytes: snapshot.as_ptr(),
             len: snapshot.len(),
         };
     }
+    bridge.borrowed.hold(snapshot);
     ABI_OK
-}
-
-unsafe extern "C" fn destroy_byte_lease(context: *mut c_void, lease: NativeByteLeaseHandle) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *(context.cast::<RuntimeDiagnosticsBridge>()) };
-    if bridge.leases.remove(&lease.value).is_some() {
-        ABI_OK
-    } else {
-        0
-    }
 }
 
 #[cfg(test)]
@@ -197,34 +175,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renderer_snapshot_is_borrowed_through_one_exact_release() {
+    fn renderer_snapshot_is_borrowed_until_the_next_call() {
         let mut bridge =
             RuntimeDiagnosticsBridge::new(RuntimeDiagnosticsSink::new(Default::default()).unwrap());
         bridge
             .ingest_renderer(&serde_json::json!({"schemaVersion": 1, "renderer": "accelerated"}))
             .unwrap();
         let api = api(&mut bridge);
-        let mut lease = NativeByteLease {
-            handle: NativeByteLeaseHandle::default(),
+        let mut result = NativeByteResult {
             bytes: std::ptr::null(),
             len: 0,
         };
         assert_eq!(
-            unsafe { (api.read_renderer)(api.context, &mut lease) },
+            unsafe { (api.read_renderer)(api.context, &mut result) },
             ABI_OK
         );
-        let bytes = unsafe { std::slice::from_raw_parts(lease.bytes, lease.len) };
+        let bytes = unsafe { std::slice::from_raw_parts(result.bytes, result.len) };
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["renderer"],
             "accelerated"
-        );
-        assert_eq!(
-            unsafe { (api.destroy_byte_lease)(api.context, lease.handle) },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe { (api.destroy_byte_lease)(api.context, lease.handle) },
-            0
         );
     }
 

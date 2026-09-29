@@ -131,19 +131,14 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) sessions: BTreeMap<u64, SpatialSession>,
     /// The latest Spatial or Voxel refusal; both tables share this bridge.
     pub(crate) operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
-    trigger_overlap_page_leases: BTreeMap<u64, TriggerOverlapPageLease>,
     collision_source: SpatialCollisionSource,
     sibling_appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
     content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
-    next_trigger_overlap_page_lease: u64,
-    map_leases: BTreeMap<u64, Box<[NativeSpatialMapCell]>>,
-    next_map_lease: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
     pub(crate) next_world_origin_prepared: u64,
-    pub(crate) kinematic_motion_leases:
-        BTreeMap<u64, crate::kinematic::KinematicMotionLeaseBacking>,
-    pub(crate) next_kinematic_motion_lease: u64,
+    /// Backing of the latest borrowed Spatial, Kinematic or Voxel result.
+    pub(crate) borrowed: crate::operation_diagnostics::BorrowedResult,
     update_attribution: RuntimeUpdateAttribution,
     last_character_query_stats: CharacterCollisionQueryStats,
 }
@@ -165,13 +160,9 @@ pub(crate) struct SpatialSession {
     last_trigger_facts: Vec<TriggerOverlapFact>,
 }
 
-struct TriggerOverlapPageLease {
-    _subjects: Box<[NativeSpatialTriggerOverlapSubject]>,
-}
-
 /// Facts returned after an admitted asset becomes the canonical scene for a
 /// fresh Spatial session. The scene itself stays owned by the session; this
-/// value contains only fixed readout data needed by the voxel-content lease.
+/// value contains only fixed readout data needed by the voxel-content backing.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VoxelAssetSpatialPublishFacts {
     pub(crate) revision_before: u64,
@@ -421,18 +412,13 @@ impl RuntimeSpatialBridge {
         Self {
             sessions: BTreeMap::new(),
             operation_diagnostics: Default::default(),
-            trigger_overlap_page_leases: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
             sibling_appearance: None,
             content: None,
             next_session: 1,
-            next_trigger_overlap_page_lease: 1,
-            map_leases: BTreeMap::new(),
-            next_map_lease: 1,
             prepared_world_origins: BTreeMap::new(),
             next_world_origin_prepared: 1,
-            kinematic_motion_leases: BTreeMap::new(),
-            next_kinematic_motion_lease: 1,
+            borrowed: Default::default(),
             update_attribution: RuntimeUpdateAttribution::default(),
             last_character_query_stats: CharacterCollisionQueryStats::default(),
         }
@@ -2770,7 +2756,7 @@ impl RuntimeSpatialBridge {
     fn read_trigger_overlap_page(
         &mut self,
         request: NativeSpatialTriggerOverlapPageRequest,
-    ) -> Result<NativeSpatialTriggerOverlapPageLease, CsharpEngineServicesError> {
+    ) -> Result<NativeSpatialTriggerOverlapPageResult, CsharpEngineServicesError> {
         let page_size = usize::try_from(request.page_size).map_err(|_| {
             spatial_error(
                 "CSHARP_SPATIAL_TRIGGER",
@@ -2793,13 +2779,6 @@ impl RuntimeSpatialBridge {
                 page_size,
             )
             .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
-        let value = self.next_trigger_overlap_page_lease;
-        self.next_trigger_overlap_page_lease = value.checked_add(1).ok_or_else(|| {
-            spatial_error(
-                "CSHARP_SPATIAL_TRIGGER",
-                "trigger overlap page lease handles exhausted",
-            )
-        })?;
         let subjects = page
             .subjects
             .into_iter()
@@ -2808,8 +2787,7 @@ impl RuntimeSpatialBridge {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let result = NativeSpatialTriggerOverlapPageLease {
-            handle: NativeSpatialTriggerOverlapPageLeaseHandle { value },
+        let result = NativeSpatialTriggerOverlapPageResult {
             subjects: if subjects.is_empty() {
                 std::ptr::null()
             } else {
@@ -2826,24 +2804,8 @@ impl RuntimeSpatialBridge {
                 .transpose()?
                 .unwrap_or_default(),
         };
-        self.trigger_overlap_page_leases.insert(
-            value,
-            TriggerOverlapPageLease {
-                _subjects: subjects,
-            },
-        );
+        self.borrowed.hold(subjects);
         Ok(result)
-    }
-
-    fn destroy_trigger_overlap_page_lease(
-        &mut self,
-        handle: NativeSpatialTriggerOverlapPageLeaseHandle,
-    ) -> bool {
-        handle.value != 0
-            && self
-                .trigger_overlap_page_leases
-                .remove(&handle.value)
-                .is_some()
     }
 
     fn read_trigger_fact_at(
@@ -4688,7 +4650,7 @@ unsafe extern "C" fn read_trigger_overlap_at(
 unsafe extern "C" fn read_trigger_overlap_page(
     context: *mut c_void,
     request: NativeSpatialTriggerOverlapPageRequest,
-    result: *mut NativeSpatialTriggerOverlapPageLease,
+    result: *mut NativeSpatialTriggerOverlapPageResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -4701,19 +4663,6 @@ unsafe extern "C" fn read_trigger_overlap_page(
         }
         Err(_) => 0,
     }
-}
-
-unsafe extern "C" fn destroy_trigger_overlap_page_lease(
-    context: *mut c_void,
-    handle: NativeSpatialTriggerOverlapPageLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    i32::from(
-        unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-            .destroy_trigger_overlap_page_lease(handle),
-    )
 }
 
 unsafe extern "C" fn read_trigger_fact_at(
@@ -4751,7 +4700,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         clear_volumetric_navigation_traversal: clear_spatial_volumetric_navigation_traversal,
         read_navigation_projection,
         read_map: inspection::read_map,
-        destroy_map_lease: inspection::destroy_map_lease,
         request_navigation_path,
         request_weighted_navigation_path,
         request_weighted_volumetric_navigation_path,
@@ -4785,7 +4733,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         read_trigger,
         read_trigger_overlap_at,
         read_trigger_overlap_page,
-        destroy_trigger_overlap_page_lease,
         read_trigger_fact_at,
     }
 }
@@ -5837,7 +5784,7 @@ mod tests {
     }
 
     fn copied_utf8(value: NativeUtf8Slice) -> String {
-        // SAFETY: this test copies the receipt before its exact Spatial lease
+        // SAFETY: this test copies the receipt before its exact Spatial backing
         // release, which is the generated binding's required lifetime rule.
         unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(value.bytes, value.len)) }
             .to_owned()

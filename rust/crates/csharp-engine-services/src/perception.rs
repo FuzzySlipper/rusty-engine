@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, ffi::c_void};
+use std::ffi::c_void;
 
 use csharp_engine_abi::*;
 use engine_spatial::{
@@ -12,32 +12,25 @@ use crate::{
     CsharpEngineServicesError,
 };
 
-struct PerceptionReadoutLeaseBacking {
-    _pairs: Box<[NativePerceptionPair]>,
-    _aggregates: Box<[NativePerceptionAggregate]>,
-}
-
-/// Named C# perception bridge. The scene remains owned by Spatial; this bridge only retains
-/// copied readout leases until generated C# releases them.
+/// Named C# perception bridge. The scene remains owned by Spatial; this bridge
+/// only keeps its latest borrowed readout until the next call.
 pub(crate) struct RuntimePerceptionBridge {
     collision_source: SpatialCollisionSource,
-    readout_leases: BTreeMap<u64, PerceptionReadoutLeaseBacking>,
-    next_readout_lease: u64,
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 
 impl RuntimePerceptionBridge {
     pub(crate) fn new(spatial: &RuntimeSpatialBridge) -> Self {
         Self {
             collision_source: spatial.collision_source(),
-            readout_leases: BTreeMap::new(),
-            next_readout_lease: 1,
+            borrowed: Default::default(),
         }
     }
 
     fn query(
         &mut self,
         request: &NativePerceptionQueryRequest,
-    ) -> Result<NativePerceptionReadoutLease, CsharpEngineServicesError> {
+    ) -> Result<NativePerceptionReadoutResult, CsharpEngineServicesError> {
         let observers = unsafe {
             borrowed_slice(
                 request.observers,
@@ -130,15 +123,7 @@ impl RuntimePerceptionBridge {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let lease = self.next_readout_lease;
-        self.next_readout_lease = lease.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_PERCEPTION",
-                "perception readout lease handles exhausted",
-            )
-        })?;
-        let result = NativePerceptionReadoutLease {
-            handle: NativePerceptionReadoutLeaseHandle { value: lease },
+        let result = NativePerceptionReadoutResult {
             pairs: pointer_or_null(&pairs),
             pairs_len: pairs.len(),
             aggregates: pointer_or_null(&aggregates),
@@ -159,18 +144,8 @@ impl RuntimePerceptionBridge {
             visibility_casts: checked_count(readout.visibility_casts, "visibility casts")?,
             occlusion_rejects: checked_count(readout.occlusion_rejects, "occlusion rejects")?,
         };
-        self.readout_leases.insert(
-            lease,
-            PerceptionReadoutLeaseBacking {
-                _pairs: pairs,
-                _aggregates: aggregates,
-            },
-        );
+        self.borrowed.hold((pairs, aggregates));
         Ok(result)
-    }
-
-    fn destroy_readout_lease(&mut self, handle: NativePerceptionReadoutLeaseHandle) -> bool {
-        self.readout_leases.remove(&handle.value).is_some()
     }
 }
 
@@ -178,14 +153,13 @@ pub(crate) fn api(bridge: &mut RuntimePerceptionBridge) -> NativePerceptionApi {
     NativePerceptionApi {
         context: (bridge as *mut RuntimePerceptionBridge).cast(),
         query_visibility: query_perception,
-        destroy_readout_lease,
     }
 }
 
 unsafe extern "C" fn query_perception(
     context: *mut c_void,
     request: *const NativePerceptionQueryRequest,
-    result: *mut NativePerceptionReadoutLease,
+    result: *mut NativePerceptionReadoutResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
@@ -197,21 +171,6 @@ unsafe extern "C" fn query_perception(
             ABI_OK
         }
         Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn destroy_readout_lease(
-    context: *mut c_void,
-    handle: NativePerceptionReadoutLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimePerceptionBridge>() };
-    if bridge.destroy_readout_lease(handle) {
-        ABI_OK
-    } else {
-        0
     }
 }
 
@@ -251,7 +210,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn native_query_copies_typed_pairs_and_aggregates_and_releases_lease() {
+    fn native_query_copies_typed_pairs_and_aggregates() {
         let mut spatial_bridge = RuntimeSpatialBridge::new();
         let mut perception_bridge = RuntimePerceptionBridge::new(&spatial_bridge);
         let spatial_api = spatial::api(&mut spatial_bridge);
@@ -305,7 +264,7 @@ mod tests {
             page_size: 64,
         };
         let perception_api = api(&mut perception_bridge);
-        let mut result = NativePerceptionReadoutLease::default();
+        let mut result = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
                 (perception_api.query_visibility)(perception_api.context, &request, &mut result)
@@ -324,12 +283,6 @@ mod tests {
             unsafe { std::slice::from_raw_parts(result.aggregates, result.aggregates_len) };
         assert_eq!(aggregates[0].target, 2);
         assert_eq!(aggregates[0].visible_observer_count, 1);
-        assert_eq!(
-            unsafe {
-                (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
-            },
-            ABI_OK
-        );
         assert_eq!(
             unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
             ABI_OK
@@ -405,7 +358,7 @@ mod tests {
                 pair_cursor: 0,
                 page_size: 64,
             };
-            let mut result = NativePerceptionReadoutLease::default();
+            let mut result = NativePerceptionReadoutResult::default();
             assert_eq!(
                 unsafe {
                     (perception_api.query_visibility)(perception_api.context, &request, &mut result)
@@ -413,12 +366,6 @@ mod tests {
                 ABI_OK
             );
             let pair = unsafe { *result.pairs };
-            assert_eq!(
-                unsafe {
-                    (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
-                },
-                ABI_OK
-            );
             pair.kind
         };
 
@@ -502,7 +449,7 @@ mod tests {
                 z: 0.0,
             },
         }];
-        let mut result = NativePerceptionReadoutLease::default();
+        let mut result = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
                 (perception_api.query_visibility)(
@@ -529,12 +476,6 @@ mod tests {
         assert_eq!(result.occlusion_rejects, 1);
         let pairs = unsafe { std::slice::from_raw_parts(result.pairs, result.pairs_len) };
         assert_eq!(pairs[0].kind, NativePerceptionPairKind::Occluded);
-        assert_eq!(
-            unsafe {
-                (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
-            },
-            ABI_OK
-        );
         assert_eq!(
             unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
             ABI_OK
@@ -604,7 +545,7 @@ mod tests {
             page_size: 1,
         };
         let perception_api = api(&mut perception_bridge);
-        let mut first = NativePerceptionReadoutLease::default();
+        let mut first = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
                 (perception_api.query_visibility)(perception_api.context, &request, &mut first)
@@ -618,10 +559,6 @@ mod tests {
             .unwrap()
             .projection_version();
         assert_eq!(initial_local_version, 1);
-        assert_eq!(
-            unsafe { (perception_api.destroy_readout_lease)(perception_api.context, first.handle) },
-            ABI_OK
-        );
 
         spatial_bridge.publish_scene(
             session,
@@ -638,7 +575,7 @@ mod tests {
         );
         request.expected_projection_identity = first.projection_identity;
         request.pair_cursor = first.next_pair_cursor;
-        let mut continued = NativePerceptionReadoutLease::default();
+        let mut continued = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
                 (perception_api.query_visibility)(perception_api.context, &request, &mut continued)

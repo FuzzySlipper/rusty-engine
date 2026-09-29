@@ -1,9 +1,22 @@
-//! Borrowed refusal diagnostics shared by named service bridges. A bridge keeps
-//! its latest refusal here; the receipt's pointers stay valid until its next
-//! refusal replaces them. Generated callers copy them before throwing, so
-//! nothing is destroyed explicitly.
+//! Borrowed call results shared by named service bridges. A bridge keeps the
+//! backing of its latest result or refusal here; the pointers it returned stay
+//! valid until its next result or refusal replaces them. Generated callers copy
+//! them before returning to product code, so nothing is destroyed explicitly.
 use crate::CsharpEngineServicesError;
 use csharp_engine_abi::*;
+use std::any::Any;
+
+/// Owner of the latest borrowed `Native*Result` a bridge returned.
+#[derive(Default)]
+pub(crate) struct BorrowedResult(Option<Box<dyn Any>>);
+
+impl BorrowedResult {
+    /// Keeps `backing` alive until the next `hold` on this bridge. Moving a
+    /// backing does not move the heap buffers its result points into.
+    pub(crate) fn hold<T: 'static>(&mut self, backing: T) {
+        self.0 = Some(Box::new(backing));
+    }
+}
 
 /// Owner of the latest refusal a bridge reported through its receipt.
 #[derive(Default)]

@@ -11,11 +11,6 @@ use std::ffi::c_void;
 pub struct NativeAuthoredCatalogHandle {
     pub value: u64,
 }
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredCatalogReadoutLeaseHandle {
-    pub value: u64,
-}
 /// Retained, immutable prefab registry owned by the shared AuthoredContent
 /// service. A registry is explicitly validated against one admitted catalog.
 #[repr(C)]
@@ -23,26 +18,11 @@ pub struct NativeAuthoredCatalogReadoutLeaseHandle {
 pub struct NativeAuthoredPrefabRegistryHandle {
     pub value: u64,
 }
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredPrefabRegistryReadoutLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredResolvedPrefabLeaseHandle {
-    pub value: u64,
-}
 /// Retained, immutable scene admission plan. It owns the prepared
 /// `SceneAdmissionPlan` as well as the copied readout rows exposed to C#.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeAuthoredScenePlanHandle {
-    pub value: u64,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredScenePlanReadoutLeaseHandle {
     pub value: u64,
 }
 
@@ -736,8 +716,7 @@ pub struct NativeAuthoredVoxelSurfaceReadout {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredCatalogReadoutLease {
-    pub handle: NativeAuthoredCatalogReadoutLeaseHandle,
+pub struct NativeAuthoredCatalogReadoutResult {
     pub canonical_hash: NativeUtf8Slice,
     pub entry_count: u32,
     pub entries: *const NativeAuthoredCatalogEntryReadout,
@@ -756,14 +735,8 @@ pub struct NativeAuthoredCatalogReadoutLease {
     pub voxel_surfaces_len: usize,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredResolvedEntryLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredResolvedEntryLease {
-    pub handle: NativeAuthoredResolvedEntryLeaseHandle,
+pub struct NativeAuthoredResolvedEntryResult {
     pub entry: *const NativeAuthoredCatalogEntryReadout,
     pub entry_len: usize,
     pub dependencies: *const NativeAuthoredCatalogDependencyReadout,
@@ -782,31 +755,19 @@ pub struct NativeAuthoredResolvedEntryLease {
     pub has_fallback: bool,
     pub fallback: NativeAuthoredFallbackReadout,
 }
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredMaterialResolutionLeaseHandle {
-    pub value: u64,
-}
 /// Owner-derived render and collision material facts. This contains no renderer
 /// resources or realization handles; C# remains a consumer of the projection.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredMaterialResolutionLease {
-    pub handle: NativeAuthoredMaterialResolutionLeaseHandle,
+pub struct NativeAuthoredMaterialResolutionResult {
     pub materials: *const NativeAuthoredMaterialReadout,
     pub materials_len: usize,
     pub voxel_surfaces: *const NativeAuthoredVoxelSurfaceReadout,
     pub voxel_surfaces_len: usize,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredVoxelSurfaceResolutionLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredVoxelSurfaceResolutionLease {
-    pub handle: NativeAuthoredVoxelSurfaceResolutionLeaseHandle,
+pub struct NativeAuthoredVoxelSurfaceResolutionResult {
     pub surfaces: *const NativeAuthoredVoxelSurfaceReadout,
     pub surfaces_len: usize,
 }
@@ -818,14 +779,8 @@ pub struct NativeAuthoredFallbackReadout {
     pub reason: NativeUtf8Slice,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAuthoredFallbackLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredFallbackLease {
-    pub handle: NativeAuthoredFallbackLeaseHandle,
+pub struct NativeAuthoredFallbackResult {
     pub outcomes: *const NativeAuthoredFallbackReadout,
     pub outcomes_len: usize,
 }
@@ -882,8 +837,7 @@ pub struct NativeAuthoredPrefabOverrideReadout {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredPrefabRegistryReadoutLease {
-    pub handle: NativeAuthoredPrefabRegistryReadoutLeaseHandle,
+pub struct NativeAuthoredPrefabRegistryReadoutResult {
     pub schema_version: u32,
     pub definitions: *const NativeAuthoredPrefabDefinitionReadout,
     pub definitions_len: usize,
@@ -898,8 +852,7 @@ pub struct NativeAuthoredPrefabRegistryReadoutLease {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredResolvedPrefabLease {
-    pub handle: NativeAuthoredResolvedPrefabLeaseHandle,
+pub struct NativeAuthoredResolvedPrefabResult {
     pub requested_id: u64,
     pub base_id: u64,
     pub has_variant: bool,
@@ -979,8 +932,7 @@ pub struct NativeAuthoredSceneBootstrapCatalogBindingReadout {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAuthoredScenePlanReadoutLease {
-    pub handle: NativeAuthoredScenePlanReadoutLeaseHandle,
+pub struct NativeAuthoredScenePlanReadoutResult {
     pub scene_id: u64,
     pub scene_revision: u64,
     pub allocations: *const NativeAuthoredSceneAllocationReadout,
@@ -1019,42 +971,32 @@ pub type NativeDestroyAuthoredCatalog =
 pub type NativeReadAuthoredCatalog = unsafe extern "C" fn(
     *mut c_void,
     NativeAuthoredCatalogHandle,
-    *mut NativeAuthoredCatalogReadoutLease,
+    *mut NativeAuthoredCatalogReadoutResult,
 ) -> i32;
-pub type NativeDestroyAuthoredCatalogReadoutLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredCatalogReadoutLeaseHandle) -> i32;
 pub type NativeResolveAuthoredCatalogReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredCatalogResolveRequest,
-    *mut NativeAuthoredResolvedEntryLease,
+    *mut NativeAuthoredResolvedEntryResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAuthoredResolvedEntryLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredResolvedEntryLeaseHandle) -> i32;
 pub type NativeResolveAuthoredMaterial = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredMaterialResolveRequest,
-    *mut NativeAuthoredMaterialResolutionLease,
+    *mut NativeAuthoredMaterialResolutionResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAuthoredMaterialResolutionLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredMaterialResolutionLeaseHandle) -> i32;
 pub type NativeResolveAuthoredVoxelSurface = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredMaterialResolveRequest,
-    *mut NativeAuthoredVoxelSurfaceResolutionLease,
+    *mut NativeAuthoredVoxelSurfaceResolutionResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAuthoredVoxelSurfaceResolutionLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredVoxelSurfaceResolutionLeaseHandle) -> i32;
 pub type NativeResolveAuthoredFallback = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredFallbackResolveRequest,
-    *mut NativeAuthoredFallbackLease,
+    *mut NativeAuthoredFallbackResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAuthoredFallbackLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredFallbackLeaseHandle) -> i32;
 pub type NativeAdmitAuthoredPrefabRegistry = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredPrefabRegistryAdmitRequest,
@@ -1072,18 +1014,14 @@ pub type NativeDestroyAuthoredPrefabRegistry =
 pub type NativeReadAuthoredPrefabRegistry = unsafe extern "C" fn(
     *mut c_void,
     NativeAuthoredPrefabRegistryHandle,
-    *mut NativeAuthoredPrefabRegistryReadoutLease,
+    *mut NativeAuthoredPrefabRegistryReadoutResult,
 ) -> i32;
-pub type NativeDestroyAuthoredPrefabRegistryReadoutLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredPrefabRegistryReadoutLeaseHandle) -> i32;
 pub type NativeResolveAuthoredPrefab = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredPrefabResolveRequest,
-    *mut NativeAuthoredResolvedPrefabLease,
+    *mut NativeAuthoredResolvedPrefabResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAuthoredResolvedPrefabLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredResolvedPrefabLeaseHandle) -> i32;
 pub type NativePrepareAuthoredScene = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredScenePrepareRequest,
@@ -1101,7 +1039,5 @@ pub type NativeDestroyAuthoredScenePlan =
 pub type NativeReadAuthoredScenePlan = unsafe extern "C" fn(
     *mut c_void,
     NativeAuthoredScenePlanHandle,
-    *mut NativeAuthoredScenePlanReadoutLease,
+    *mut NativeAuthoredScenePlanReadoutResult,
 ) -> i32;
-pub type NativeDestroyAuthoredScenePlanReadoutLease =
-    unsafe extern "C" fn(*mut c_void, NativeAuthoredScenePlanReadoutLeaseHandle) -> i32;

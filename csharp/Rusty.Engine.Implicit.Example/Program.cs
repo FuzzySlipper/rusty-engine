@@ -173,7 +173,7 @@ sealed class RecordingImplicitSurfacesService : IImplicitSurfacesService
     public SampledVolume CreateSampledVolume(SampledVolumeCreateRequest arg0) => Unsupported<SampledVolume>();
     public SampledVolumeDescriptor DescribeSampledVolume(SampledVolume arg0) => Unsupported<SampledVolumeDescriptor>();
     public void WriteSampledVolume(SampledVolumeWriteRequest arg0) => Unsupported();
-    public DensitySnapshotLeaseReceipt ReadSampledVolume(SampledVolumeReadRequest arg0) => Unsupported<DensitySnapshotLeaseReceipt>();
+    public DensitySnapshotResult ReadSampledVolume(SampledVolumeReadRequest arg0) => Unsupported<DensitySnapshotResult>();
     public DensitySample SampleSampledVolume(SampledVolumeSampleRequest arg0) => Unsupported<DensitySample>();
     public void RasterizeSampledVolume(SampledVolumeRasterizeRequest arg0) => Unsupported();
     public MeshResource GenerateSampledVolume(SampledVolumeGenerateRequest arg0) => Unsupported<MeshResource>();
@@ -191,10 +191,10 @@ sealed class RecordingImplicitSurfacesService : IImplicitSurfacesService
     public ImplicitNode DisplaceWaves(ImplicitWaveRequest arg0) => Unsupported<ImplicitNode>();
     public ImplicitAudit CreateAudit() => Unsupported<ImplicitAudit>();
     public void CaptureAuditPiece(ImplicitAuditPieceRequest arg0) => Unsupported();
-    public ImplicitAuditReportLeaseReceipt ReadAudit(ImplicitAuditRequest arg0) => Unsupported<ImplicitAuditReportLeaseReceipt>();
-    public ImplicitAnalysisReportLeaseReceipt ReadMeshIntegrity(ImplicitIntegrityRequest arg0) => Unsupported<ImplicitAnalysisReportLeaseReceipt>();
-    public ImplicitAnalysisReportLeaseReceipt ReadExpectedJoin(ImplicitJoinRequest arg0) => Unsupported<ImplicitAnalysisReportLeaseReceipt>();
-    public ImplicitAnalysisReportLeaseReceipt ReadEnclosure(ImplicitEnclosureRequest arg0) => Unsupported<ImplicitAnalysisReportLeaseReceipt>();
+    public ImplicitAuditReportResult ReadAudit(ImplicitAuditRequest arg0) => Unsupported<ImplicitAuditReportResult>();
+    public ImplicitAnalysisReportResult ReadMeshIntegrity(ImplicitIntegrityRequest arg0) => Unsupported<ImplicitAnalysisReportResult>();
+    public ImplicitAnalysisReportResult ReadExpectedJoin(ImplicitJoinRequest arg0) => Unsupported<ImplicitAnalysisReportResult>();
+    public ImplicitAnalysisReportResult ReadEnclosure(ImplicitEnclosureRequest arg0) => Unsupported<ImplicitAnalysisReportResult>();
 
     private ImplicitNode NextNode() => new(++_nextNode);
     private static void Unsupported() => throw new NotSupportedException("This focused helper harness only records recipe composition.");

@@ -672,7 +672,7 @@ sealed class SpatialServiceFake : ISpatialService
     public NavigationVolumetricTraversalReplaceReceipt ReplaceVolumetricNavigationTraversal(NavigationVolumetricTraversalReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationVolumetricTraversalReplaceReceipt ClearVolumetricNavigationTraversal(NavigationVolumetricTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationProjectionReadout ReadNavigationProjection(NavigationProjectionReadRequest arg0) => throw new NotSupportedException();
-    public SpatialMapLeaseReceipt ReadMap(SpatialMapRequest arg0) => throw new NotSupportedException();
+    public SpatialMapResult ReadMap(SpatialMapRequest arg0) => throw new NotSupportedException();
     public NavigationPathReadout RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
     public NavigationWeightedPathReadout RequestWeightedNavigationPath(NavigationWeightedPathRequest arg0) => throw new NotSupportedException();
     public NavigationPathCellAtReceipt ReadNavigationPathCellAt(NavigationPathCellAtRequest arg0) => throw new NotSupportedException();
@@ -751,7 +751,7 @@ sealed class SpatialServiceFake : ISpatialService
 
     public SpatialTriggerReadReceipt ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
     public SpatialTriggerOverlapAtReceipt ReadTriggerOverlapAt(SpatialTriggerOverlapAtRequest arg0) => throw new NotSupportedException();
-    public SpatialTriggerOverlapPageLeaseReceipt ReadTriggerOverlapPage(SpatialTriggerOverlapPageRequest request)
+    public SpatialTriggerOverlapPageResult ReadTriggerOverlapPage(SpatialTriggerOverlapPageRequest request)
     {
         if (request.PageSize == 0 || request.Cursor != 0)
         {
@@ -764,7 +764,7 @@ sealed class SpatialServiceFake : ISpatialService
             throw new InvalidOperationException("trigger overlap continuation revision is stale");
         }
 
-        return new SpatialTriggerOverlapPageLeaseReceipt(
+        return new SpatialTriggerOverlapPageResult(
             ReadOnlyMemory<SpatialTriggerOverlapSubject>.Empty,
             request.Trigger,
             revision,
@@ -819,7 +819,7 @@ sealed class GraphicsServiceFake : IGraphicsService
     public SpritePlayback CreateSpritePlayback(SpritePlaybackCreateRequest arg0) => throw new NotSupportedException();
     public SpritePlaybackReadout ControlSpritePlayback(SpritePlaybackControlRequest arg0) => throw new NotSupportedException();
     public SpritePlaybackReadout SelectSpritePlaybackFrame(SpritePlaybackFrameSelectionRequest arg0) => throw new NotSupportedException();
-    public SpritePlaybackAdvanceLeaseReceipt AdvanceSpritePlayback(SpritePlaybackAdvanceRequest arg0) => throw new NotSupportedException();
+    public SpritePlaybackAdvanceResult AdvanceSpritePlayback(SpritePlaybackAdvanceRequest arg0) => throw new NotSupportedException();
     public SpritePlaybackSample SampleSpritePlayback(SpritePlaybackSampleRequest arg0) => throw new NotSupportedException();
     public SpritePlaybackReadout ReadSpritePlayback(SpritePlayback arg0) => throw new NotSupportedException();
 
@@ -1117,7 +1117,7 @@ sealed class KinematicServiceFake : IKinematicService
 
     public IntegrationResult IntegrateSpatial(KinematicSpatialIntegrationRequest request) => throw new NotSupportedException();
 
-    public KinematicMotionLeaseReceipt RunMotion(KinematicMotionRequest request)
+    public KinematicMotionResult RunMotion(KinematicMotionRequest request)
     {
         RunCount++;
         if (!request.SelectionPresent)
@@ -1126,7 +1126,7 @@ sealed class KinematicServiceFake : IKinematicService
         }
         if (request.SelectedEntityIds.Length == 0)
         {
-            return new KinematicMotionLeaseReceipt(
+            return new KinematicMotionResult(
                 ReadOnlyMemory<KinematicMotionCandidate>.Empty,
                 ReadOnlyMemory<KinematicMotionFact>.Empty,
                 0,
@@ -1156,7 +1156,7 @@ sealed class KinematicServiceFake : IKinematicService
             new KinematicMotionFact(mover.EntityId, KinematicMotionFactKind.Blocked, KinematicMotionAxis.Z, Vector3.Zero, Vector3.Zero, 2.0f),
             new KinematicMotionFact(mover.EntityId, KinematicMotionFactKind.Moved, KinematicMotionAxis.X, mover.Transform.Translation, after.Translation, 0.0f),
         };
-        return new KinematicMotionLeaseReceipt(new[] { candidate }, facts, 2, 1, 1);
+        return new KinematicMotionResult(new[] { candidate }, facts, 2, 1, 1);
     }
 }
 

@@ -5,7 +5,7 @@
 //! its path and SHA-256 identity can be persisted by product code and resolved
 //! exactly in a later runtime.
 
-use crate::{NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeUtf8Slice};
+use crate::{NativeByteResult, NativeByteSlice, NativeUtf8Slice};
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -58,18 +58,11 @@ pub struct NativeContentReferenceInfo {
     pub byte_length: u64,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeContentReferenceInfoLeaseHandle {
-    pub value: u64,
-}
-
-/// Exact immutable reference identity copied by generated bindings before
-/// `destroy_reference_info_lease` consumes the lease.
+/// Exact immutable reference identity, borrowed until the next Content call
+/// and copied by generated bindings before they return.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeContentReferenceInfoLease {
-    pub handle: NativeContentReferenceInfoLeaseHandle,
+pub struct NativeContentReferenceInfoResult {
     pub references: *const NativeContentReferenceInfo,
     pub references_len: usize,
 }
@@ -89,17 +82,13 @@ pub type NativeDestroyContentReference =
 pub type NativeReadContentReferenceInfo = unsafe extern "C" fn(
     *mut c_void,
     NativeContentReferenceHandle,
-    *mut NativeContentReferenceInfoLease,
+    *mut NativeContentReferenceInfoResult,
 ) -> i32;
-pub type NativeDestroyContentReferenceInfoLease =
-    unsafe extern "C" fn(*mut c_void, NativeContentReferenceInfoLeaseHandle) -> i32;
 pub type NativeReadContentBytes = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentReadBytesRequest,
-    *mut NativeByteLease,
+    *mut NativeByteResult,
 ) -> i32;
-pub type NativeDestroyContentByteLease =
-    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
 
 /// An independently admitted collection. File references retain their bytes
 /// independently of this handle; closing it does not invalidate consumers.
@@ -118,15 +107,8 @@ pub struct NativeContentBundleInfo {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeContentBundleInfoLeaseHandle {
-    pub value: u64,
-}
-
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeContentBundleInfoLease {
-    pub handle: NativeContentBundleInfoLeaseHandle,
+pub struct NativeContentBundleInfoResult {
     pub bundles: *const NativeContentBundleInfo,
     pub bundles_len: usize,
 }
@@ -145,9 +127,7 @@ pub struct NativeContentBundleReferenceRequest {
 }
 
 pub type NativeListContentBundles =
-    unsafe extern "C" fn(*mut c_void, *mut NativeContentBundleInfoLease) -> i32;
-pub type NativeDestroyContentBundleInfoLease =
-    unsafe extern "C" fn(*mut c_void, NativeContentBundleInfoLeaseHandle) -> i32;
+    unsafe extern "C" fn(*mut c_void, *mut NativeContentBundleInfoResult) -> i32;
 pub type NativeOpenContentBundle = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentBundleOpenRequest,
@@ -158,7 +138,7 @@ pub type NativeDestroyContentBundle =
 pub type NativeReadContentBundleFiles = unsafe extern "C" fn(
     *mut c_void,
     NativeContentBundleHandle,
-    *mut NativeContentReferenceInfoLease,
+    *mut NativeContentReferenceInfoResult,
 ) -> i32;
 pub type NativeOpenContentBundleReference = unsafe extern "C" fn(
     *mut c_void,

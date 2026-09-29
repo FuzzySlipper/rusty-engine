@@ -523,8 +523,8 @@ pub struct NativeSpritePlaybackReadout {
     pub completed: bool,
 }
 
-/// One immutable marker crossing copied by generated C# before the matching
-/// advance lease is released.
+/// One immutable marker crossing, borrowed until the next Appearance call and
+/// copied by generated C# before it returns.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSpritePlaybackMarkerCrossing {
@@ -535,18 +535,11 @@ pub struct NativeSpritePlaybackMarkerCrossing {
     pub crossing_sequence: u64,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeSpritePlaybackAdvanceLeaseHandle {
-    pub value: u64,
-}
-
 /// Copied advance result. `advanced` is false for paused/stopped/completed or
 /// duplicate admitted updates. Marker storage remains valid until released.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeSpritePlaybackAdvanceLease {
-    pub handle: NativeSpritePlaybackAdvanceLeaseHandle,
+pub struct NativeSpritePlaybackAdvanceResult {
     pub crossings: *const NativeSpritePlaybackMarkerCrossing,
     pub crossings_len: usize,
     pub readout: NativeSpritePlaybackReadout,

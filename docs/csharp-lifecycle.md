@@ -688,17 +688,17 @@ session identity and generation are copied diagnostic provenance, not a native
 handle that remains resolvable after save/load; target compatibility comes from
 the typed configuration, motion, session, and canonical-content checks.
 
-## Values, leases, and native lifetime
+## Values, handles, and native lifetime
 
 The public C# layer turns direct service calls into typed requests, receipts,
 values, and disposable handles. Follow the type's ownership model:
 
 - Use returned value records directly or copy their data when you need to keep
   it.
-- Dispose values that represent an Engine lease, session, snapshot, resource,
-  or handle when their scope ends. `using` is the usual product-side shape.
+- Dispose values that represent an Engine session, snapshot, resource, or
+  handle when their scope ends. `using` is the usual product-side shape.
 - Do not retain borrowed spans, native pointers, or callback-backed data beyond
-  their stated call/lease lifetime.
+  their stated call lifetime.
 - Do not add unsafe code, handwritten P/Invoke, ABI structs, or
   `UnmanagedCallersOnly` exports to normal product code. The generator owns
   those details.

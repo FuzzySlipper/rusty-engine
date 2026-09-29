@@ -10,11 +10,6 @@ pub struct NativePortableAssetHandle {
     pub value: u64,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativePortableAssetReadoutLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePortableAssetLoadRequest {
     pub descriptor: NativeContentReferenceHandle,
@@ -108,8 +103,7 @@ pub struct NativePortableMeshAttachment {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativePortableAssetReadoutLease {
-    pub handle: NativePortableAssetReadoutLeaseHandle,
+pub struct NativePortableAssetReadoutResult {
     pub asset_id: NativeUtf8Slice,
     pub direction_convention: NativeUtf8Slice,
     pub members: *const NativePortableAssetMember,
@@ -141,10 +135,8 @@ pub type NativeDestroyPortableAsset =
 pub type NativeReadPortableAsset = unsafe extern "C" fn(
     *mut c_void,
     NativePortableAssetHandle,
-    *mut NativePortableAssetReadoutLease,
+    *mut NativePortableAssetReadoutResult,
 ) -> i32;
-pub type NativeDestroyPortableAssetReadoutLease =
-    unsafe extern "C" fn(*mut c_void, NativePortableAssetReadoutLeaseHandle) -> i32;
 pub type NativeOpenPortableAssetMember = unsafe extern "C" fn(
     *mut c_void,
     *const NativePortableAssetMemberRequest,

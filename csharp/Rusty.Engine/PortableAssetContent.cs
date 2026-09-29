@@ -19,7 +19,7 @@ public sealed class PortableAssetContent : IDisposable
         catch { asset.Dispose(); throw; }
     }
 
-    public PortableAssetReadoutLeaseReceipt Facts { get; }
+    public PortableAssetReadoutResult Facts { get; }
 
     /// <summary>The returned reference independently retains its file and dependencies.</summary>
     public ContentReference OpenMember(string memberId)

@@ -70,7 +70,7 @@ public sealed class SpatialMapSnapshot
     private SpatialMapSnapshot(
         SpatialMapGeometry geometry,
         SpatialMapObservation observation,
-        SpatialMapLeaseReceipt receipt,
+        SpatialMapResult receipt,
         SpatialMapCell[] cells,
         SpatialMapPlacedAnnotation[] annotations,
         SpatialMapAnnotationSummary annotationSummary)
@@ -126,7 +126,7 @@ public sealed class SpatialMapSnapshot
             throw new ArgumentOutOfRangeException(nameof(maximumAnnotations));
         }
 
-        SpatialMapLeaseReceipt receipt = spatial.ReadMap(request);
+        SpatialMapResult receipt = spatial.ReadMap(request);
         int expectedCellCount = checked((int)((ulong)request.Columns * request.Rows));
         if (receipt.Cells.Length != expectedCellCount)
         {
@@ -134,8 +134,7 @@ public sealed class SpatialMapSnapshot
                 $"Spatial map returned {receipt.Cells.Length} cells for {request.Columns} by {request.Rows} geometry.");
         }
 
-        // The receipt is a lease-shaped generated value. Retain a managed copy so either
-        // formatter is valid after the generated service has released its native scratch data.
+        // Retain a managed array so either formatter can index the cells directly.
         SpatialMapCell[] copiedCells = receipt.Cells.ToArray();
         SpatialMapGeometry geometry = new(
             request.Origin,

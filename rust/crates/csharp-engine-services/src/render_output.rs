@@ -51,8 +51,7 @@ pub(crate) struct RuntimeRenderOutputBridge {
     staged: Option<RuntimeRenderOutputCall>,
     next: u64,
     published: Vec<u64>,
-    leases: BTreeMap<u64, Arc<Vec<u8>>>,
-    next_lease: u64,
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 fn error(message: impl Into<String>) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_RENDER_OUTPUT", message)
@@ -64,8 +63,7 @@ impl RuntimeRenderOutputBridge {
             staged: None,
             next: 1,
             published: vec![],
-            leases: BTreeMap::new(),
-            next_lease: 1,
+            borrowed: Default::default(),
         }
     }
     pub(crate) fn begin_call(&mut self) {
@@ -195,7 +193,7 @@ impl RuntimeRenderOutputBridge {
         &mut self,
         h: NativeRenderOutputHandle,
         diagnostic: bool,
-    ) -> Result<NativeByteLease, CsharpEngineServicesError> {
+    ) -> Result<NativeByteResult, CsharpEngineServicesError> {
         let e = self
             .staged()?
             .entries
@@ -209,16 +207,11 @@ impl RuntimeRenderOutputBridge {
         } else {
             e.bytes.clone()
         };
-        let id = self.next_lease;
-        self.next_lease = id
-            .checked_add(1)
-            .ok_or_else(|| error("lease handles exhausted"))?;
-        let result = NativeByteLease {
-            handle: NativeByteLeaseHandle { value: id },
+        let result = NativeByteResult {
             bytes: bytes.as_ptr(),
             len: bytes.len(),
         };
-        self.leases.insert(id, bytes);
+        self.borrowed.hold(bytes);
         Ok(result)
     }
     fn cancel(&mut self, h: NativeRenderOutputHandle) -> Result<(), CsharpEngineServicesError> {
@@ -436,7 +429,7 @@ unsafe extern "C" fn read(
 unsafe fn bytes(
     context: *mut c_void,
     h: NativeRenderOutputHandle,
-    out: *mut NativeByteLease,
+    out: *mut NativeByteResult,
     diagnostic: bool,
 ) -> i32 {
     if context.is_null() || out.is_null() {
@@ -453,14 +446,14 @@ unsafe fn bytes(
 unsafe extern "C" fn read_bytes(
     c: *mut c_void,
     h: NativeRenderOutputHandle,
-    o: *mut NativeByteLease,
+    o: *mut NativeByteResult,
 ) -> i32 {
     unsafe { bytes(c, h, o, false) }
 }
 unsafe extern "C" fn read_diagnostic(
     c: *mut c_void,
     h: NativeRenderOutputHandle,
-    o: *mut NativeByteLease,
+    o: *mut NativeByteResult,
 ) -> i32 {
     unsafe { bytes(c, h, o, true) }
 }
@@ -490,20 +483,6 @@ unsafe extern "C" fn destroy(c: *mut c_void, h: NativeRenderOutputHandle) -> i32
         0
     }
 }
-unsafe extern "C" fn destroy_byte_lease(c: *mut c_void, h: NativeByteLeaseHandle) -> i32 {
-    if c.is_null() {
-        return 0;
-    }
-    if unsafe { &mut *c.cast::<RuntimeRenderOutputBridge>() }
-        .leases
-        .remove(&h.value)
-        .is_some()
-    {
-        ABI_OK
-    } else {
-        0
-    }
-}
 pub(crate) fn api(b: &mut RuntimeRenderOutputBridge) -> NativeRenderOutputApi {
     NativeRenderOutputApi {
         context: (b as *mut RuntimeRenderOutputBridge).cast(),
@@ -514,7 +493,6 @@ pub(crate) fn api(b: &mut RuntimeRenderOutputBridge) -> NativeRenderOutputApi {
         read_diagnostic,
         cancel,
         destroy,
-        destroy_byte_lease,
     }
 }
 
@@ -565,9 +543,9 @@ mod tests {
             bridge.read(handle).unwrap().state,
             NativeRenderOutputState::Completed
         );
-        let lease = bridge.bytes(handle, false).unwrap();
+        let result = bridge.bytes(handle, false).unwrap();
         assert_eq!(
-            unsafe { std::slice::from_raw_parts(lease.bytes, lease.len) },
+            unsafe { std::slice::from_raw_parts(result.bytes, result.len) },
             [1, 2, 3]
         );
         let cancelled = bridge

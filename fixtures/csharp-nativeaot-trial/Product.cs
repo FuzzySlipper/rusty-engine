@@ -206,7 +206,7 @@ public sealed class Product : IEngineProduct
                 _spatial,
                 new[] { new VoxelSceneMaterialBinding(3, _material) },
                 new[] { new VoxelSceneFaceMaterialBinding(3, SpatialFace.PosY, _voxelTopMaterial) }));
-        VoxelSceneMaterialMappingLeaseReceipt voxelMapping = _engine.VoxelScenePresentation.ReadMaterialMapping(_voxelPresentation);
+        VoxelSceneMaterialMappingResult voxelMapping = _engine.VoxelScenePresentation.ReadMaterialMapping(_voxelPresentation);
         bool topOverrideMapped = false;
         foreach (VoxelSceneMaterialMappingRow row in voxelMapping.Mappings.Span)
         {
@@ -281,7 +281,7 @@ public sealed class Product : IEngineProduct
             // The named generated enum matches the discriminating ABI status.
         }
         Transform motionTransform = new(new Vector3(10.0f, 10.0f, 10.0f), Quaternion.Identity, Vector3.One);
-        KinematicMotionLeaseReceipt motionPhase = _engine.Kinematic.RunMotion(new KinematicMotionRequest(
+        KinematicMotionResult motionPhase = _engine.Kinematic.RunMotion(new KinematicMotionRequest(
             _spatial,
             1.0f,
             new[]
@@ -1389,7 +1389,7 @@ public sealed class Product : IEngineProduct
                 8,
                 3,
                 2));
-        MagicaVoxelPaletteLeaseReceipt palette = _engine.VoxelContent.ReadMagicaVoxelPalette(voxelObject);
+        MagicaVoxelPaletteResult palette = _engine.VoxelContent.ReadMagicaVoxelPalette(voxelObject);
         Require(
             palette.Palette.Length == 2
             && palette.Palette.Span[0] == new MagicaVoxelPaletteRow(1, 1, 12, 34, 56, 255)

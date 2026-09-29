@@ -64,22 +64,14 @@ impl RetainedContent {
     }
 }
 
-struct ContentReferenceInfoLease {
-    // Keeps `reference.path` alive until the matching lease is released.
-    _paths: Vec<String>,
-    references: Vec<NativeContentReferenceInfo>,
-}
-
 pub(crate) struct RuntimeContentBridge {
     portable: portable::PortableState,
     catalog: BTreeMap<String, AdmittedContent>,
     references: BTreeMap<u64, AdmittedContent>,
-    info_leases: BTreeMap<u64, ContentReferenceInfoLease>,
-    byte_leases: BTreeMap<u64, Arc<[u8]>>,
+    /// Backing of the latest borrowed Content result.
+    borrowed: crate::operation_diagnostics::BorrowedResult,
     bundles: bundles::BundleState,
     next_reference: u64,
-    next_info_lease: u64,
-    next_byte_lease: u64,
 }
 
 impl RuntimeContentBridge {
@@ -104,12 +96,9 @@ impl RuntimeContentBridge {
             portable: portable::PortableState::default(),
             catalog,
             references: BTreeMap::new(),
-            info_leases: BTreeMap::new(),
-            byte_leases: BTreeMap::new(),
+            borrowed: Default::default(),
             bundles: bundles::BundleState::default(),
             next_reference: 1,
-            next_info_lease: 1,
-            next_byte_lease: 1,
         }
     }
 
@@ -165,7 +154,7 @@ impl RuntimeContentBridge {
     fn read_info(
         &mut self,
         reference: NativeContentReferenceHandle,
-    ) -> Option<NativeContentReferenceInfoLease> {
+    ) -> Option<NativeContentReferenceInfoResult> {
         let content = self.references.get(&reference.value)?.clone();
         self.retain_info(vec![(
             content.path.clone(),
@@ -177,9 +166,7 @@ impl RuntimeContentBridge {
     fn retain_info(
         &mut self,
         entries: Vec<(String, NativeContentSha256, u64)>,
-    ) -> Option<NativeContentReferenceInfoLease> {
-        let value = self.next_info_lease;
-        self.next_info_lease = value.checked_add(1)?;
+    ) -> Option<NativeContentReferenceInfoResult> {
         let paths: Vec<String> = entries.iter().map(|entry| entry.0.clone()).collect();
         let references = paths
             .iter()
@@ -194,27 +181,20 @@ impl RuntimeContentBridge {
                     byte_length,
                 },
             )
-            .collect();
-        self.info_leases.insert(
-            value,
-            ContentReferenceInfoLease {
-                _paths: paths,
-                references,
-            },
-        );
-        let lease = self.info_leases.get(&value)?;
-        Some(NativeContentReferenceInfoLease {
-            handle: NativeContentReferenceInfoLeaseHandle { value },
-            references: lease.references.as_ptr(),
-            references_len: lease.references.len(),
-        })
+            .collect::<Vec<_>>();
+        let result = NativeContentReferenceInfoResult {
+            references: references.as_ptr(),
+            references_len: references.len(),
+        };
+        self.borrowed.hold((paths, references));
+        Some(result)
     }
 
     pub(crate) fn bind_bundles(&mut self, bundles: ProductContentBundles) {
         self.bundles.source = bundles;
     }
 
-    fn read_bytes(&mut self, request: NativeContentReadBytesRequest) -> Option<NativeByteLease> {
+    fn read_bytes(&mut self, request: NativeContentReadBytesRequest) -> Option<NativeByteResult> {
         let content = self.references.get(&request.reference.value)?;
         let offset = usize::try_from(request.offset).ok()?;
         if offset > content.bytes.len() {
@@ -223,16 +203,12 @@ impl RuntimeContentBridge {
         let len = usize::try_from(request.max_bytes)
             .ok()?
             .min(content.bytes.len().saturating_sub(offset));
-        let bytes = Arc::clone(&content.bytes);
-        let value = self.next_byte_lease;
-        self.next_byte_lease = value.checked_add(1)?;
-        let lease = NativeByteLease {
-            handle: NativeByteLeaseHandle { value },
-            bytes: bytes[offset..].as_ptr(),
+        // The reference stays retained until a later call closes it, so the
+        // result borrows its bytes directly.
+        Some(NativeByteResult {
+            bytes: content.bytes[offset..].as_ptr(),
             len,
-        };
-        self.byte_leases.insert(value, bytes);
-        Some(lease)
+        })
     }
 }
 
@@ -241,11 +217,9 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         load_portable_asset: portable::load,
         destroy_portable_asset: portable::destroy,
         read_portable_asset: portable::read,
-        destroy_portable_asset_readout_lease: portable::destroy_readout,
         open_portable_asset_member: portable::open_member,
         context: (bridge as *mut RuntimeContentBridge).cast(),
         list_bundles: bundles::list_bundles,
-        destroy_bundle_info_lease: bundles::destroy_bundle_info_lease,
         open_bundle: bundles::open_bundle,
         destroy_bundle: bundles::destroy_bundle,
         read_bundle_files: bundles::read_bundle_files,
@@ -255,9 +229,7 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         resolve_reference,
         destroy_reference,
         read_reference_info,
-        destroy_reference_info_lease,
         read_bytes,
-        destroy_byte_lease,
     }
 }
 
@@ -394,60 +366,33 @@ unsafe extern "C" fn destroy_reference(
 unsafe extern "C" fn read_reference_info(
     context: *mut c_void,
     reference: NativeContentReferenceHandle,
-    result: *mut NativeContentReferenceInfoLease,
+    result: *mut NativeContentReferenceInfoResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(lease) = bridge.read_info(reference) else {
+    let Some(value) = bridge.read_info(reference) else {
         return 0;
     };
-    unsafe { *result = lease };
+    unsafe { *result = value };
     ABI_OK
-}
-
-unsafe extern "C" fn destroy_reference_info_lease(
-    context: *mut c_void,
-    lease: NativeContentReferenceInfoLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    if bridge.info_leases.remove(&lease.value).is_some() {
-        ABI_OK
-    } else {
-        0
-    }
 }
 
 unsafe extern "C" fn read_bytes(
     context: *mut c_void,
     request: *const NativeContentReadBytesRequest,
-    result: *mut NativeByteLease,
+    result: *mut NativeByteResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(lease) = bridge.read_bytes(unsafe { *request }) else {
+    let Some(value) = bridge.read_bytes(unsafe { *request }) else {
         return 0;
     };
-    unsafe { *result = lease };
+    unsafe { *result = value };
     ABI_OK
-}
-
-unsafe extern "C" fn destroy_byte_lease(context: *mut c_void, lease: NativeByteLeaseHandle) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    if bridge.byte_leases.remove(&lease.value).is_some() {
-        ABI_OK
-    } else {
-        0
-    }
 }
 
 fn sha256(bytes: &[u8]) -> NativeContentSha256 {
@@ -566,20 +511,20 @@ mod tests {
     }
 
     #[test]
-    fn byte_lease_borrows_large_and_empty_ranges() {
+    fn byte_result_borrows_large_and_empty_ranges() {
         let body: Arc<[u8]> = Arc::from(vec![7; 1024 * 1024 + 13]);
         let mut bridge =
             RuntimeContentBridge::new(BTreeMap::from([("large".to_owned(), body.clone())]));
         let handle = bridge.retain(bridge.catalog["large"].clone()).unwrap();
-        let lease = bridge
+        let backing = bridge
             .read_bytes(NativeContentReadBytesRequest {
                 reference: handle,
                 offset: 0,
                 max_bytes: u32::MAX,
             })
             .unwrap();
-        assert_eq!(lease.bytes, body.as_ptr());
-        assert_eq!(lease.len, body.len());
+        assert_eq!(backing.bytes, body.as_ptr());
+        assert_eq!(backing.len, body.len());
         let empty = bridge
             .read_bytes(NativeContentReadBytesRequest {
                 reference: handle,
@@ -598,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_only_the_exact_persistable_path_and_hash_and_releases_leases() {
+    fn resolves_only_the_exact_persistable_path_and_hash() {
         let mut catalog = BTreeMap::new();
         catalog.insert("state.bin".to_owned(), Arc::from(&b"persisted content"[..]));
         let mut bridge = RuntimeContentBridge::new(catalog);
@@ -620,8 +565,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut info = NativeContentReferenceInfoLease {
-            handle: NativeContentReferenceInfoLeaseHandle::default(),
+        let mut info = NativeContentReferenceInfoResult {
             references: std::ptr::null(),
             references_len: 0,
         };
@@ -631,10 +575,6 @@ mod tests {
         );
         assert_eq!(info.references_len, 1);
         let identity = unsafe { (*info.references).sha256 };
-        assert_eq!(
-            unsafe { destroy_reference_info_lease(context, info.handle) },
-            ABI_OK
-        );
         let mut reopened = NativeContentReferenceHandle::default();
         assert_eq!(
             unsafe {
@@ -670,8 +610,7 @@ mod tests {
             },
             0
         );
-        let mut bytes = NativeByteLease {
-            handle: NativeByteLeaseHandle::default(),
+        let mut bytes = NativeByteResult {
             bytes: std::ptr::null(),
             len: 0,
         };
@@ -700,7 +639,5 @@ mod tests {
             unsafe { std::slice::from_raw_parts(bytes.bytes, bytes.len) },
             b"rsis"
         );
-        assert_eq!(unsafe { destroy_byte_lease(context, bytes.handle) }, ABI_OK);
-        assert_eq!(unsafe { destroy_byte_lease(context, bytes.handle) }, 0);
     }
 }

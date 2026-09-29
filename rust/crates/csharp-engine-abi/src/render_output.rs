@@ -77,15 +77,13 @@ pub type NativeReadRenderOutput = unsafe extern "C" fn(
     *mut NativeRenderOutputReadout,
 ) -> i32;
 pub type NativeReadRenderOutputBytes =
-    unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle, *mut NativeByteLease) -> i32;
+    unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle, *mut NativeByteResult) -> i32;
 pub type NativeReadRenderOutputDiagnostic =
-    unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle, *mut NativeByteLease) -> i32;
+    unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle, *mut NativeByteResult) -> i32;
 pub type NativeCancelRenderOutput =
     unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle) -> i32;
 pub type NativeDestroyRenderOutput =
     unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle) -> i32;
-pub type NativeDestroyRenderOutputByteLease =
-    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -99,5 +97,4 @@ pub struct NativeRenderOutputApi {
     pub read_diagnostic: NativeReadRenderOutputDiagnostic,
     pub cancel: NativeCancelRenderOutput,
     pub destroy: NativeDestroyRenderOutput,
-    pub destroy_byte_lease: NativeDestroyRenderOutputByteLease,
 }

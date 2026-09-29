@@ -4,7 +4,6 @@ use asset_catalog::portable::{PortableAssets, PortableDefinition};
 #[derive(Default)]
 pub(super) struct PortableState {
     assets: BTreeMap<u64, Asset>,
-    leases: BTreeMap<u64, Readout>,
     errors: crate::operation_diagnostics::OperationDiagnostics,
     next: u64,
 }
@@ -342,17 +341,16 @@ impl Readout {
 pub(super) unsafe extern "C" fn read(
     context: *mut c_void,
     handle: NativePortableAssetHandle,
-    result: *mut NativePortableAssetReadoutLease,
+    result: *mut NativePortableAssetReadoutResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let value = bridge.portable.id();
     let Some(asset) = bridge.portable.assets.get(&handle.value) else {
         return 0;
     };
-    let mut lease = Readout::build(asset);
+    let mut readout = Readout::build(asset);
     let convention = match &asset
         .document
         .asset(&asset.selected)
@@ -365,42 +363,31 @@ pub(super) unsafe extern "C" fn read(
         } => d.convention.as_str(),
         _ => "",
     };
-    let output = NativePortableAssetReadoutLease {
-        handle: NativePortableAssetReadoutLeaseHandle { value },
-        asset_id: lease.text.copy(&asset.selected),
-        direction_convention: lease.text.copy(convention),
-        members: lease.members.as_ptr(),
-        members_len: lease.members.len(),
-        frames: lease.frames.as_ptr(),
-        frames_len: lease.frames.len(),
-        anchors: lease.anchors.as_ptr(),
-        anchors_len: lease.anchors.len(),
-        animation_frames: lease.animation_frames.as_ptr(),
-        animation_frames_len: lease.animation_frames.len(),
-        directions: lease.directions.as_ptr(),
-        directions_len: lease.directions.len(),
-        actions: lease.actions.as_ptr(),
-        actions_len: lease.actions.len(),
-        relationships: lease.relationships.as_ptr(),
-        relationships_len: lease.relationships.len(),
-        attachments: lease.attachments.as_ptr(),
-        attachments_len: lease.attachments.len(),
+    let output = NativePortableAssetReadoutResult {
+        asset_id: readout.text.copy(&asset.selected),
+        direction_convention: readout.text.copy(convention),
+        members: readout.members.as_ptr(),
+        members_len: readout.members.len(),
+        frames: readout.frames.as_ptr(),
+        frames_len: readout.frames.len(),
+        anchors: readout.anchors.as_ptr(),
+        anchors_len: readout.anchors.len(),
+        animation_frames: readout.animation_frames.as_ptr(),
+        animation_frames_len: readout.animation_frames.len(),
+        directions: readout.directions.as_ptr(),
+        directions_len: readout.directions.len(),
+        actions: readout.actions.as_ptr(),
+        actions_len: readout.actions.len(),
+        relationships: readout.relationships.as_ptr(),
+        relationships_len: readout.relationships.len(),
+        attachments: readout.attachments.as_ptr(),
+        attachments_len: readout.attachments.len(),
     };
-    bridge.portable.leases.insert(value, lease);
+    bridge.borrowed.hold(readout);
     unsafe {
         *result = output;
     }
     ABI_OK
-}
-pub(super) unsafe extern "C" fn destroy_readout(
-    context: *mut c_void,
-    handle: NativePortableAssetReadoutLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    i32::from(bridge.portable.leases.remove(&handle.value).is_some())
 }
 
 #[cfg(test)]

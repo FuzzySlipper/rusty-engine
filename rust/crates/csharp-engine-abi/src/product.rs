@@ -212,10 +212,8 @@ pub type NativeClearVolumetricNavigationTraversal = unsafe extern "C" fn(
 pub type NativeReadSpatialMap = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialMapRequest,
-    *mut NativeSpatialMapLease,
+    *mut NativeSpatialMapResult,
 ) -> i32;
-pub type NativeDestroySpatialMapLease =
-    unsafe extern "C" fn(*mut c_void, NativeSpatialMapLeaseHandle) -> i32;
 pub type NativeReadNavigationProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationProjectionReadRequest,
@@ -319,10 +317,8 @@ pub type NativeSpatialRaycast = unsafe extern "C" fn(
 pub type NativeQueryPerception = unsafe extern "C" fn(
     *mut c_void,
     *const NativePerceptionQueryRequest,
-    *mut NativePerceptionReadoutLease,
+    *mut NativePerceptionReadoutResult,
 ) -> i32;
-pub type NativeDestroyPerceptionReadoutLease =
-    unsafe extern "C" fn(*mut c_void, NativePerceptionReadoutLeaseHandle) -> i32;
 pub type NativeSpatialSegmentCast = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialSegmentCastRequest,
@@ -386,10 +382,8 @@ pub type NativeSpatialReadTriggerOverlapAt = unsafe extern "C" fn(
 pub type NativeSpatialReadTriggerOverlapPage = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerOverlapPageRequest,
-    *mut NativeSpatialTriggerOverlapPageLease,
+    *mut NativeSpatialTriggerOverlapPageResult,
 ) -> i32;
-pub type NativeDestroySpatialTriggerOverlapPageLease =
-    unsafe extern "C" fn(*mut c_void, NativeSpatialTriggerOverlapPageLeaseHandle) -> i32;
 pub type NativeSpatialReadTriggerFactAt = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerFactAtRequest,
@@ -755,12 +749,7 @@ pub type NativeSelectSpritePlaybackFrame = unsafe extern "C" fn(
 pub type NativeAdvanceSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpritePlaybackAdvanceRequest,
-    *mut NativeSpritePlaybackAdvanceLease,
-    *mut crate::NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeDestroySpritePlaybackAdvanceLease = unsafe extern "C" fn(
-    *mut c_void,
-    NativeSpritePlaybackAdvanceLeaseHandle,
+    *mut NativeSpritePlaybackAdvanceResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSampleSpritePlayback = unsafe extern "C" fn(
@@ -1283,7 +1272,6 @@ pub struct NativeSpatialApi {
     pub clear_volumetric_navigation_traversal: NativeClearVolumetricNavigationTraversal,
     pub read_navigation_projection: NativeReadNavigationProjection,
     pub read_map: NativeReadSpatialMap,
-    pub destroy_map_lease: NativeDestroySpatialMapLease,
     pub request_navigation_path: NativeRequestNavigationPath,
     pub request_weighted_navigation_path: NativeRequestWeightedNavigationPath,
     pub request_weighted_volumetric_navigation_path: NativeRequestWeightedVolumetricNavigationPath,
@@ -1317,7 +1305,6 @@ pub struct NativeSpatialApi {
     pub read_trigger: NativeSpatialReadTrigger,
     pub read_trigger_overlap_at: NativeSpatialReadTriggerOverlapAt,
     pub read_trigger_overlap_page: NativeSpatialReadTriggerOverlapPage,
-    pub destroy_trigger_overlap_page_lease: NativeDestroySpatialTriggerOverlapPageLease,
     pub read_trigger_fact_at: NativeSpatialReadTriggerFactAt,
 }
 
@@ -1385,7 +1372,6 @@ pub struct NativeGraphicsApi {
     pub control_sprite_playback: NativeControlSpritePlayback,
     pub select_sprite_playback_frame: NativeSelectSpritePlaybackFrame,
     pub advance_sprite_playback: NativeAdvanceSpritePlayback,
-    pub destroy_sprite_playback_advance_lease: NativeDestroySpritePlaybackAdvanceLease,
     pub sample_sprite_playback: NativeSampleSpritePlayback,
     pub read_sprite_playback: NativeReadSpritePlayback,
     pub destroy_appearance: NativeDestroyAppearance,
@@ -1431,11 +1417,9 @@ pub struct NativeContentApi {
     pub load_portable_asset: NativeLoadPortableAsset,
     pub destroy_portable_asset: NativeDestroyPortableAsset,
     pub read_portable_asset: NativeReadPortableAsset,
-    pub destroy_portable_asset_readout_lease: NativeDestroyPortableAssetReadoutLease,
     pub open_portable_asset_member: NativeOpenPortableAssetMember,
     pub admit_reference: NativeAdmitContentReference,
     pub list_bundles: NativeListContentBundles,
-    pub destroy_bundle_info_lease: NativeDestroyContentBundleInfoLease,
     pub open_bundle: NativeOpenContentBundle,
     pub destroy_bundle: NativeDestroyContentBundle,
     pub read_bundle_files: NativeReadContentBundleFiles,
@@ -1444,9 +1428,7 @@ pub struct NativeContentApi {
     pub resolve_reference: NativeResolveContentReference,
     pub destroy_reference: NativeDestroyContentReference,
     pub read_reference_info: NativeReadContentReferenceInfo,
-    pub destroy_reference_info_lease: NativeDestroyContentReferenceInfoLease,
     pub read_bytes: NativeReadContentBytes,
-    pub destroy_byte_lease: NativeDestroyContentByteLease,
 }
 
 #[repr(C)]
@@ -1458,27 +1440,19 @@ pub struct NativeAuthoredContentApi {
     pub admit_catalog_payload: NativeAdmitAuthoredCatalogPayload,
     pub destroy_catalog: NativeDestroyAuthoredCatalog,
     pub read_catalog: NativeReadAuthoredCatalog,
-    pub destroy_catalog_readout_lease: NativeDestroyAuthoredCatalogReadoutLease,
     pub resolve_reference: NativeResolveAuthoredCatalogReference,
-    pub destroy_resolved_entry_lease: NativeDestroyAuthoredResolvedEntryLease,
     pub resolve_material: NativeResolveAuthoredMaterial,
-    pub destroy_material_resolution_lease: NativeDestroyAuthoredMaterialResolutionLease,
     pub resolve_voxel_surface: NativeResolveAuthoredVoxelSurface,
-    pub destroy_voxel_surface_resolution_lease: NativeDestroyAuthoredVoxelSurfaceResolutionLease,
     pub resolve_fallback: NativeResolveAuthoredFallback,
-    pub destroy_fallback_lease: NativeDestroyAuthoredFallbackLease,
     pub admit_prefab_registry: NativeAdmitAuthoredPrefabRegistry,
     pub admit_prefab_registry_from_content: NativeAdmitAuthoredPrefabRegistryFromContent,
     pub destroy_prefab_registry: NativeDestroyAuthoredPrefabRegistry,
     pub read_prefab_registry: NativeReadAuthoredPrefabRegistry,
-    pub destroy_prefab_registry_readout_lease: NativeDestroyAuthoredPrefabRegistryReadoutLease,
     pub resolve_prefab: NativeResolveAuthoredPrefab,
-    pub destroy_resolved_prefab_lease: NativeDestroyAuthoredResolvedPrefabLease,
     pub prepare_scene: NativePrepareAuthoredScene,
     pub prepare_scene_from_content: NativePrepareAuthoredSceneFromContent,
     pub destroy_scene_plan: NativeDestroyAuthoredScenePlan,
     pub read_scene_plan: NativeReadAuthoredScenePlan,
-    pub destroy_scene_plan_readout_lease: NativeDestroyAuthoredScenePlanReadoutLease,
 }
 
 #[repr(C)]
@@ -1487,7 +1461,6 @@ pub struct NativeAnimationApi {
     pub context: *mut c_void,
     pub read_mesh_info: NativeReadAnimatedMeshInfo,
     pub read_clips: NativeReadAnimationClips,
-    pub destroy_clip_info_lease: NativeDestroyAnimationClipInfoLease,
     pub open_animated_mesh: NativeOpenAnimatedMesh,
     pub open_animated_mesh_from_content: NativeOpenAnimationResourceFromContent,
     pub open_animation_clip_pack_from_content: NativeOpenAnimationResourceFromContent,
@@ -1607,7 +1580,6 @@ pub struct NativePersistenceApi {
     pub describe_blob: NativeDescribePersistenceBlob,
     pub copy_blob: NativeCopyPersistenceBlob,
     pub read_blob_bytes: NativeReadPersistenceBlobBytes,
-    pub destroy_byte_lease: NativeDestroyPersistenceByteLease,
 }
 
 pub type NativeReplaceInputMappings = unsafe extern "C" fn(

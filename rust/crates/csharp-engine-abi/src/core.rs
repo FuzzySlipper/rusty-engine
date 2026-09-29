@@ -39,22 +39,12 @@ pub struct NativeByteSlice {
     pub len: usize,
 }
 
-/// A typed owner for immutable bytes retained by one Engine service. The
-/// accompanying [`NativeByteLease`] is valid until its exact destroy callback
-/// consumes this handle.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeByteLeaseHandle {
-    pub value: u64,
-}
-
-/// Immutable Engine-owned byte storage. Consumers copy it immediately and
-/// release `handle`; neither the pointer nor its bytes are retained in public
-/// managed values.
+/// Borrowed Engine-owned bytes, valid until the next call on the returning
+/// service. Generated C# copies them before returning; neither the pointer nor
+/// its bytes reach public managed values.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeByteLease {
-    pub handle: NativeByteLeaseHandle,
+pub struct NativeByteResult {
     pub bytes: *const u8,
     pub len: usize,
 }
@@ -81,7 +71,7 @@ pub struct NativeOperationErrorReceipt {
 
 /// Product-owned writable storage borrowed only for the direct service call.
 /// Existing persistence consumers use this legacy immediate-copy request; new
-/// Engine-owned byte output uses [`NativeByteLease`] instead.
+/// Engine-owned byte output uses [`NativeByteResult`] instead.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeWritableByteSlice {

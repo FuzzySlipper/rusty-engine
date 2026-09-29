@@ -19,11 +19,11 @@ typedef struct NativeReplaceInvalidBorrowedTagsRequest {
 
 typedef int32_t (*NativeReplaceInvalidBorrowedTags)(void *, const NativeReplaceInvalidBorrowedTagsRequest *);
 
-typedef struct NativeLeaseFixtureApi {
+typedef struct NativeResultFixtureApi {
   void *context;
   NativeReplaceInvalidBorrowedTags replace_tags;
-} NativeLeaseFixtureApi;
+} NativeResultFixtureApi;
 
 typedef struct NativeEngineApi {
-  NativeLeaseFixtureApi lease_fixture;
+  NativeResultFixtureApi result_fixture;
 } NativeEngineApi;

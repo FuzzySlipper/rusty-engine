@@ -490,7 +490,7 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
         unsafe { (api.write_sampled_volume)(api.context, &write, &mut receipt) },
         ABI_OK
     );
-    let mut snapshot = unsafe { std::mem::zeroed::<NativeDensitySnapshotLease>() };
+    let mut snapshot = unsafe { std::mem::zeroed::<NativeDensitySnapshotResult>() };
     assert_eq!(
         unsafe {
             (api.read_sampled_volume)(
@@ -508,14 +508,6 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
     );
     assert_eq!(snapshot.descriptor.revision, 1);
     assert_eq!(unsafe { (*snapshot.samples).value }, -0.25);
-    assert_eq!(
-        unsafe { (api.destroy_density_snapshot_lease)(api.context, snapshot.handle) },
-        ABI_OK
-    );
-    assert_eq!(
-        unsafe { (api.destroy_density_snapshot_lease)(api.context, snapshot.handle) },
-        0
-    );
 
     assert_eq!(
         unsafe {

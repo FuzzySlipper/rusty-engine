@@ -369,12 +369,6 @@ pub struct NativeSpatialTriggerOverlapPageRequest {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeSpatialTriggerOverlapPageLeaseHandle {
-    pub value: u64,
-}
-
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSpatialTriggerOverlapSubject {
     pub subject: u64,
@@ -384,8 +378,7 @@ pub struct NativeSpatialTriggerOverlapSubject {
 /// next cursor is present only when another page is available.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeSpatialTriggerOverlapPageLease {
-    pub handle: NativeSpatialTriggerOverlapPageLeaseHandle,
+pub struct NativeSpatialTriggerOverlapPageResult {
     pub subjects: *const NativeSpatialTriggerOverlapSubject,
     pub subjects_len: usize,
     pub trigger: u64,
@@ -1252,7 +1245,7 @@ pub struct NativeCharacterContinuationCaptureRequest {
 }
 
 /// Durable, copied controller continuation facts. This is a value, never a
-/// native lease or session handle: product persistence may retain it, then
+/// borrowed result or session handle: product persistence may retain it, then
 /// restore it only into a compatible newly-created Spatial session. The
 /// source identity and generation are diagnostic provenance from the capture;
 /// compatibility is established by the typed config, motion, target-session,
@@ -1505,17 +1498,10 @@ pub struct NativeSpatialMapCell {
     pub maximum_support_y: f64,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeSpatialMapLeaseHandle {
-    pub value: u64,
-}
-
-/// Row-major cells (+X across, +Z down), copied before exact lease release.
+/// Row-major cells (+X across, +Z down), copied before the generated call returns.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeSpatialMapLease {
-    pub handle: NativeSpatialMapLeaseHandle,
+pub struct NativeSpatialMapResult {
     pub cells: *const NativeSpatialMapCell,
     pub cells_len: usize,
     pub projection_identity: u64,

@@ -37,27 +37,13 @@ const MAX_DIAGNOSTICS: usize = 128;
 pub(crate) struct RuntimeAuthoredContentBridge {
     catalogs: BTreeMap<u64, AdmittedAssetCatalog>,
     next_catalog: u64,
-    leases: BTreeMap<u64, CatalogLease>,
-    next_lease: u64,
-    resolved_leases: BTreeMap<u64, ResolvedLease>,
-    next_resolved_lease: u64,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
-    material_leases: BTreeMap<u64, MaterialResolutionLease>,
-    next_material_lease: u64,
-    surface_leases: BTreeMap<u64, SurfaceResolutionLease>,
-    next_surface_lease: u64,
-    fallback_leases: BTreeMap<u64, FallbackLease>,
-    next_fallback_lease: u64,
+    /// Backing of the latest borrowed authored-content result.
+    borrowed: crate::operation_diagnostics::BorrowedResult,
     prefab_registries: BTreeMap<u64, ValidatedPrefabRegistry>,
     next_prefab_registry: u64,
-    prefab_leases: BTreeMap<u64, PrefabRegistryLease>,
-    next_prefab_lease: u64,
-    resolved_prefab_leases: BTreeMap<u64, ResolvedPrefabLease>,
-    next_resolved_prefab_lease: u64,
     scene_plans: BTreeMap<u64, ScenePlanOwner>,
     next_scene_plan: u64,
-    scene_plan_readout_leases: BTreeMap<u64, ScenePlanReadoutLease>,
-    next_scene_plan_readout_lease: u64,
     content: Option<*const RuntimeContentBridge>,
 }
 struct Text {
@@ -181,16 +167,12 @@ fn admits_prefab_registry_content_inside_the_owner() {
         },
         ABI_OK
     );
-    let mut readout: NativeAuthoredPrefabRegistryReadoutLease = unsafe { std::mem::zeroed() };
+    let mut readout: NativeAuthoredPrefabRegistryReadoutResult = unsafe { std::mem::zeroed() };
     assert_eq!(
         unsafe { (api.read_prefab_registry)(api.context, registry, &mut readout) },
         ABI_OK
     );
     assert_eq!((readout.definitions_len, readout.parts_len), (1, 1));
-    assert_eq!(
-        unsafe { (api.destroy_prefab_registry_readout_lease)(api.context, readout.handle) },
-        ABI_OK
-    );
     assert_eq!(
         unsafe { (api.destroy_prefab_registry)(api.context, registry) },
         ABI_OK
@@ -204,7 +186,7 @@ fn admits_prefab_registry_content_inside_the_owner() {
         ABI_OK
     );
 }
-struct CatalogLease {
+struct CatalogBacking {
     _text: Text,
     entries: Vec<NativeAuthoredCatalogEntryReadout>,
     dependencies: Vec<NativeAuthoredCatalogDependencyReadout>,
@@ -215,7 +197,7 @@ struct CatalogLease {
     voxel_surfaces: Vec<NativeAuthoredVoxelSurfaceReadout>,
     hash: String,
 }
-struct ResolvedLease {
+struct ResolvedBacking {
     _text: Text,
     entry: Vec<NativeAuthoredCatalogEntryReadout>,
     dependencies: Vec<NativeAuthoredCatalogDependencyReadout>,
@@ -225,16 +207,16 @@ struct ResolvedLease {
     atlas_regions: Vec<NativeAuthoredAtlasRegionReadout>,
     voxel_surfaces: Vec<NativeAuthoredVoxelSurfaceReadout>,
 }
-struct MaterialResolutionLease {
+struct MaterialResolutionBacking {
     _text: Text,
     materials: Vec<NativeAuthoredMaterialReadout>,
     voxel_surfaces: Vec<NativeAuthoredVoxelSurfaceReadout>,
 }
-struct SurfaceResolutionLease {
+struct SurfaceResolutionBacking {
     _text: Text,
     surfaces: Vec<NativeAuthoredVoxelSurfaceReadout>,
 }
-struct FallbackLease {
+struct FallbackBacking {
     _text: Text,
     outcomes: Vec<NativeAuthoredFallbackReadout>,
 }
@@ -245,7 +227,7 @@ struct PayloadReadouts {
     atlas_regions: Vec<NativeAuthoredAtlasRegionReadout>,
     voxel_surfaces: Vec<NativeAuthoredVoxelSurfaceReadout>,
 }
-struct PrefabRegistryLease {
+struct PrefabRegistryBacking {
     _text: Text,
     definitions: Vec<NativeAuthoredPrefabDefinitionReadout>,
     parts: Vec<NativeAuthoredPrefabPartReadout>,
@@ -253,7 +235,7 @@ struct PrefabRegistryLease {
     removed_roles: Vec<NativeAuthoredPrefabRemovedRoleReadout>,
     overrides: Vec<NativeAuthoredPrefabOverrideReadout>,
 }
-struct ResolvedPrefabLease {
+struct ResolvedPrefabBacking {
     _text: Text,
     variant_id: String,
     parts: Vec<NativeAuthoredPrefabPartReadout>,
@@ -266,7 +248,7 @@ struct ScenePlanOwner {
     _document: FlatSceneDocument,
     _plan: SceneAdmissionPlan,
 }
-struct ScenePlanReadoutLease {
+struct ScenePlanReadoutBacking {
     _text: Text,
     allocations: Vec<NativeAuthoredSceneAllocationReadout>,
     instances: Vec<NativeAuthoredSceneResolvedInstanceReadout>,
@@ -300,27 +282,12 @@ impl RuntimeAuthoredContentBridge {
         Self {
             catalogs: BTreeMap::new(),
             next_catalog: 1,
-            leases: BTreeMap::new(),
-            next_lease: 1,
-            resolved_leases: BTreeMap::new(),
-            next_resolved_lease: 1,
             operation_diagnostics: Default::default(),
-            material_leases: BTreeMap::new(),
-            next_material_lease: 1,
-            surface_leases: BTreeMap::new(),
-            next_surface_lease: 1,
-            fallback_leases: BTreeMap::new(),
-            next_fallback_lease: 1,
+            borrowed: Default::default(),
             prefab_registries: BTreeMap::new(),
             next_prefab_registry: 1,
-            prefab_leases: BTreeMap::new(),
-            next_prefab_lease: 1,
-            resolved_prefab_leases: BTreeMap::new(),
-            next_resolved_prefab_lease: 1,
             scene_plans: BTreeMap::new(),
             next_scene_plan: 1,
-            scene_plan_readout_leases: BTreeMap::new(),
-            next_scene_plan_readout_lease: 1,
             content: None,
         }
     }
@@ -759,10 +726,8 @@ impl RuntimeAuthoredContentBridge {
     fn read_prefab_registry(
         &mut self,
         handle: NativeAuthoredPrefabRegistryHandle,
-    ) -> Option<NativeAuthoredPrefabRegistryReadoutLease> {
+    ) -> Option<NativeAuthoredPrefabRegistryReadoutResult> {
         let registry = self.prefab_registries.get(&handle.value)?.clone();
-        let value = self.next_prefab_lease;
-        self.next_prefab_lease = value.checked_add(1)?;
         let mut text = Text { values: vec![] };
         let mut definitions = vec![];
         let mut parts = vec![];
@@ -794,7 +759,7 @@ impl RuntimeAuthoredContentBridge {
                 }
             }
         }
-        let lease = PrefabRegistryLease {
+        let backing = PrefabRegistryBacking {
             _text: text,
             definitions,
             parts,
@@ -802,28 +767,27 @@ impl RuntimeAuthoredContentBridge {
             removed_roles,
             overrides,
         };
-        let result = NativeAuthoredPrefabRegistryReadoutLease {
-            handle: NativeAuthoredPrefabRegistryReadoutLeaseHandle { value },
+        let result = NativeAuthoredPrefabRegistryReadoutResult {
             schema_version: registry.as_registry().schema_version,
-            definitions: lease.definitions.as_ptr(),
-            definitions_len: lease.definitions.len(),
-            parts: lease.parts.as_ptr(),
-            parts_len: lease.parts.len(),
-            roles: lease.roles.as_ptr(),
-            roles_len: lease.roles.len(),
-            removed_roles: lease.removed_roles.as_ptr(),
-            removed_roles_len: lease.removed_roles.len(),
-            overrides: lease.overrides.as_ptr(),
-            overrides_len: lease.overrides.len(),
+            definitions: backing.definitions.as_ptr(),
+            definitions_len: backing.definitions.len(),
+            parts: backing.parts.as_ptr(),
+            parts_len: backing.parts.len(),
+            roles: backing.roles.as_ptr(),
+            roles_len: backing.roles.len(),
+            removed_roles: backing.removed_roles.as_ptr(),
+            removed_roles_len: backing.removed_roles.len(),
+            overrides: backing.overrides.as_ptr(),
+            overrides_len: backing.overrides.len(),
         };
-        self.prefab_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Some(result)
     }
     fn resolve_prefab_registry(
         &mut self,
         request: NativeAuthoredPrefabResolveRequest,
         instance_overrides: &[NativeAuthoredPrefabInstanceOverrideInput],
-    ) -> Result<NativeAuthoredResolvedPrefabLease, AuthoredError> {
+    ) -> Result<NativeAuthoredResolvedPrefabResult, AuthoredError> {
         let registry = self
             .prefab_registries
             .get(&request.registry.value)
@@ -839,10 +803,6 @@ impl RuntimeAuthoredContentBridge {
                 message: error.to_string(),
                 source: request.prefab_id.to_string(),
             })?;
-        let value = self.next_resolved_prefab_lease;
-        self.next_resolved_prefab_lease = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("resolved prefab lease exhausted"))?;
         let mut text = Text { values: vec![] };
         let mut parts = vec![];
         let mut roles = vec![];
@@ -862,27 +822,26 @@ impl RuntimeAuthoredContentBridge {
             }
         }
         let variant_id = resolved.variant_id.unwrap_or_default();
-        let lease = ResolvedPrefabLease {
+        let backing = ResolvedPrefabBacking {
             _text: text,
             variant_id,
             parts,
             roles,
         };
-        let result = NativeAuthoredResolvedPrefabLease {
-            handle: NativeAuthoredResolvedPrefabLeaseHandle { value },
+        let result = NativeAuthoredResolvedPrefabResult {
             requested_id: resolved.requested.raw(),
             base_id: resolved.base.raw(),
-            has_variant: !lease.variant_id.is_empty(),
+            has_variant: !backing.variant_id.is_empty(),
             variant_id: NativeUtf8Slice {
-                bytes: lease.variant_id.as_ptr(),
-                len: lease.variant_id.len(),
+                bytes: backing.variant_id.as_ptr(),
+                len: backing.variant_id.len(),
             },
-            parts: lease.parts.as_ptr(),
-            parts_len: lease.parts.len(),
-            roles: lease.roles.as_ptr(),
-            roles_len: lease.roles.len(),
+            parts: backing.parts.as_ptr(),
+            parts_len: backing.parts.len(),
+            roles: backing.roles.as_ptr(),
+            roles_len: backing.roles.len(),
         };
-        self.resolved_prefab_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Ok(result)
     }
     fn scene_context(
@@ -1057,11 +1016,9 @@ impl RuntimeAuthoredContentBridge {
     fn read_scene_plan(
         &mut self,
         handle: NativeAuthoredScenePlanHandle,
-    ) -> Option<NativeAuthoredScenePlanReadoutLease> {
+    ) -> Option<NativeAuthoredScenePlanReadoutResult> {
         let owner = self.scene_plans.get(&handle.value)?;
         let plan = &owner._plan;
-        let value = self.next_scene_plan_readout_lease;
-        self.next_scene_plan_readout_lease = value.checked_add(1)?;
         let scene_id = plan.scene_id().raw();
         let scene_revision = plan.scene_revision();
         let mut text = Text { values: vec![] };
@@ -1085,7 +1042,7 @@ impl RuntimeAuthoredContentBridge {
             .bootstrap_bindings()
             .map(|bindings| scene_bootstrap_rows(&mut text, bindings))
             .unwrap_or_default();
-        let lease = ScenePlanReadoutLease {
+        let backing = ScenePlanReadoutBacking {
             _text: text,
             allocations,
             instances,
@@ -1094,37 +1051,36 @@ impl RuntimeAuthoredContentBridge {
             generators,
             catalog_bindings,
         };
-        let result = NativeAuthoredScenePlanReadoutLease {
-            handle: NativeAuthoredScenePlanReadoutLeaseHandle { value },
+        let result = NativeAuthoredScenePlanReadoutResult {
             scene_id,
             scene_revision,
-            allocations: lease.allocations.as_ptr(),
-            allocations_len: lease.allocations.len(),
-            resolved_instances: lease.instances.as_ptr(),
-            resolved_instances_len: lease.instances.len(),
-            lights: lease.lights.as_ptr(),
-            lights_len: lease.lights.len(),
-            renderables: lease.renderables.as_ptr(),
-            renderables_len: lease.renderables.len(),
-            generators: lease.generators.as_ptr(),
-            generators_len: lease.generators.len(),
-            catalog_bindings: lease.catalog_bindings.as_ptr(),
-            catalog_bindings_len: lease.catalog_bindings.len(),
+            allocations: backing.allocations.as_ptr(),
+            allocations_len: backing.allocations.len(),
+            resolved_instances: backing.instances.as_ptr(),
+            resolved_instances_len: backing.instances.len(),
+            lights: backing.lights.as_ptr(),
+            lights_len: backing.lights.len(),
+            renderables: backing.renderables.as_ptr(),
+            renderables_len: backing.renderables.len(),
+            generators: backing.generators.as_ptr(),
+            generators_len: backing.generators.len(),
+            catalog_bindings: backing.catalog_bindings.as_ptr(),
+            catalog_bindings_len: backing.catalog_bindings.len(),
         };
-        self.scene_plan_readout_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Some(result)
     }
     fn read_catalog(
         &mut self,
         handle: NativeAuthoredCatalogHandle,
-    ) -> Option<NativeAuthoredCatalogReadoutLease> {
+    ) -> Option<NativeAuthoredCatalogReadoutResult> {
         let catalog = self.catalogs.get(&handle.value)?.clone();
-        self.lease_for(catalog.catalog(), catalog.canonical_hash())
+        self.catalog_result(catalog.catalog(), catalog.canonical_hash())
     }
     fn resolve(
         &mut self,
         request: NativeAuthoredCatalogResolveRequest,
-    ) -> Result<NativeAuthoredResolvedEntryLease, AuthoredError> {
+    ) -> Result<NativeAuthoredResolvedEntryResult, AuthoredError> {
         let catalog = self
             .catalogs
             .get(&request.catalog.value)
@@ -1169,10 +1125,6 @@ impl RuntimeAuthoredContentBridge {
                 });
             }
         };
-        let value = self.next_resolved_lease;
-        self.next_resolved_lease = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("resolved entry lease exhausted"))?;
         let mut text = Text { values: vec![] };
         let mut dependencies = Vec::new();
         let mut rows = Vec::new();
@@ -1197,7 +1149,7 @@ impl RuntimeAuthoredContentBridge {
             visual: NativeAuthoredFallbackVisual::None,
             reason: text.copy(""),
         };
-        let lease = ResolvedLease {
+        let backing = ResolvedBacking {
             _text: text,
             entry: rows,
             dependencies,
@@ -1207,33 +1159,32 @@ impl RuntimeAuthoredContentBridge {
             atlas_regions: payloads.atlas_regions,
             voxel_surfaces: payloads.voxel_surfaces,
         };
-        let out = NativeAuthoredResolvedEntryLease {
-            handle: NativeAuthoredResolvedEntryLeaseHandle { value },
-            entry: lease.entry.as_ptr(),
-            entry_len: lease.entry.len(),
-            dependencies: lease.dependencies.as_ptr(),
-            dependencies_len: lease.dependencies.len(),
-            materials: lease.materials.as_ptr(),
-            materials_len: lease.materials.len(),
-            textures: lease.textures.as_ptr(),
-            textures_len: lease.textures.len(),
-            voxel_atlases: lease.voxel_atlases.as_ptr(),
-            voxel_atlases_len: lease.voxel_atlases.len(),
-            atlas_regions: lease.atlas_regions.as_ptr(),
-            atlas_regions_len: lease.atlas_regions.len(),
-            voxel_surfaces: lease.voxel_surfaces.as_ptr(),
-            voxel_surfaces_len: lease.voxel_surfaces.len(),
+        let out = NativeAuthoredResolvedEntryResult {
+            entry: backing.entry.as_ptr(),
+            entry_len: backing.entry.len(),
+            dependencies: backing.dependencies.as_ptr(),
+            dependencies_len: backing.dependencies.len(),
+            materials: backing.materials.as_ptr(),
+            materials_len: backing.materials.len(),
+            textures: backing.textures.as_ptr(),
+            textures_len: backing.textures.len(),
+            voxel_atlases: backing.voxel_atlases.as_ptr(),
+            voxel_atlases_len: backing.voxel_atlases.len(),
+            atlas_regions: backing.atlas_regions.as_ptr(),
+            atlas_regions_len: backing.atlas_regions.len(),
+            voxel_surfaces: backing.voxel_surfaces.as_ptr(),
+            voxel_surfaces_len: backing.voxel_surfaces.len(),
             outcome,
             has_fallback: fallback.is_some(),
             fallback: fallback.unwrap_or(no_fallback),
         };
-        self.resolved_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Ok(out)
     }
     fn resolve_material(
         &mut self,
         request: NativeAuthoredMaterialResolveRequest,
-    ) -> Result<NativeAuthoredMaterialResolutionLease, AuthoredError> {
+    ) -> Result<NativeAuthoredMaterialResolutionResult, AuthoredError> {
         let material_id =
             parse_id(request.material_id, "material id").map_err(AuthoredError::simple)?;
         if material_id.kind() != AssetKind::Material {
@@ -1257,10 +1208,6 @@ impl RuntimeAuthoredContentBridge {
             .catalog()
             .render_material(&material_id)
             .map_err(|error| voxel_resolution_error(error, material_id.as_str()))?;
-        let value = self.next_material_lease;
-        self.next_material_lease = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("material resolution lease exhausted"))?;
         let mut text = Text { values: vec![] };
         let materials = vec![resolved_material_row(&mut text, entry, material, &render)];
         let voxel_surfaces = render
@@ -1269,25 +1216,24 @@ impl RuntimeAuthoredContentBridge {
             .map(|surface| resolved_surface_row(&mut text, entry, surface))
             .into_iter()
             .collect();
-        let lease = MaterialResolutionLease {
+        let backing = MaterialResolutionBacking {
             _text: text,
             materials,
             voxel_surfaces,
         };
-        let out = NativeAuthoredMaterialResolutionLease {
-            handle: NativeAuthoredMaterialResolutionLeaseHandle { value },
-            materials: lease.materials.as_ptr(),
-            materials_len: lease.materials.len(),
-            voxel_surfaces: lease.voxel_surfaces.as_ptr(),
-            voxel_surfaces_len: lease.voxel_surfaces.len(),
+        let out = NativeAuthoredMaterialResolutionResult {
+            materials: backing.materials.as_ptr(),
+            materials_len: backing.materials.len(),
+            voxel_surfaces: backing.voxel_surfaces.as_ptr(),
+            voxel_surfaces_len: backing.voxel_surfaces.len(),
         };
-        self.material_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Ok(out)
     }
     fn resolve_voxel_surface(
         &mut self,
         request: NativeAuthoredMaterialResolveRequest,
-    ) -> Result<NativeAuthoredVoxelSurfaceResolutionLease, AuthoredError> {
+    ) -> Result<NativeAuthoredVoxelSurfaceResolutionResult, AuthoredError> {
         let material_id =
             parse_id(request.material_id, "material id").map_err(AuthoredError::simple)?;
         let catalog = self
@@ -1310,55 +1256,43 @@ impl RuntimeAuthoredContentBridge {
             .voxel_surface
             .as_ref()
             .ok_or_else(|| AuthoredError::simple("material has no voxel surface payload"))?;
-        let value = self.next_surface_lease;
-        self.next_surface_lease = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("voxel surface resolution lease exhausted"))?;
         let mut text = Text { values: vec![] };
         let surfaces = vec![resolved_surface_row(&mut text, entry, resolved)];
-        let lease = SurfaceResolutionLease {
+        let backing = SurfaceResolutionBacking {
             _text: text,
             surfaces,
         };
-        let out = NativeAuthoredVoxelSurfaceResolutionLease {
-            handle: NativeAuthoredVoxelSurfaceResolutionLeaseHandle { value },
-            surfaces: lease.surfaces.as_ptr(),
-            surfaces_len: lease.surfaces.len(),
+        let out = NativeAuthoredVoxelSurfaceResolutionResult {
+            surfaces: backing.surfaces.as_ptr(),
+            surfaces_len: backing.surfaces.len(),
         };
-        self.surface_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Ok(out)
     }
     fn resolve_fallback(
         &mut self,
         request: NativeAuthoredFallbackResolveRequest,
-    ) -> Result<NativeAuthoredFallbackLease, AuthoredError> {
+    ) -> Result<NativeAuthoredFallbackResult, AuthoredError> {
         let kind = asset_kind(request.kind)?;
         let context = fallback_context(request.context)?;
-        let value = self.next_fallback_lease;
-        self.next_fallback_lease = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("fallback lease exhausted"))?;
         let mut text = Text { values: vec![] };
         let outcome = fallback_row(&mut text, asset_catalog::fallback_for(kind, context));
-        let lease = FallbackLease {
+        let backing = FallbackBacking {
             _text: text,
             outcomes: vec![outcome],
         };
-        let out = NativeAuthoredFallbackLease {
-            handle: NativeAuthoredFallbackLeaseHandle { value },
-            outcomes: lease.outcomes.as_ptr(),
-            outcomes_len: lease.outcomes.len(),
+        let out = NativeAuthoredFallbackResult {
+            outcomes: backing.outcomes.as_ptr(),
+            outcomes_len: backing.outcomes.len(),
         };
-        self.fallback_leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Ok(out)
     }
-    fn lease_for(
+    fn catalog_result(
         &mut self,
         catalog: &AssetCatalog,
         canonical_hash: &str,
-    ) -> Option<NativeAuthoredCatalogReadoutLease> {
-        let value = self.next_lease;
-        self.next_lease = value.checked_add(1)?;
+    ) -> Option<NativeAuthoredCatalogReadoutResult> {
         let mut text = Text { values: vec![] };
         let mut dependencies = vec![];
         let entries = catalog
@@ -1372,7 +1306,7 @@ impl RuntimeAuthoredContentBridge {
             .collect::<Vec<_>>();
         let hash = canonical_hash.to_owned();
         let payloads = payload_rows(&mut text, catalog.iter());
-        let lease = CatalogLease {
+        let backing = CatalogBacking {
             _text: text,
             entries,
             dependencies,
@@ -1383,29 +1317,28 @@ impl RuntimeAuthoredContentBridge {
             voxel_surfaces: payloads.voxel_surfaces,
             hash,
         };
-        let out = NativeAuthoredCatalogReadoutLease {
-            handle: NativeAuthoredCatalogReadoutLeaseHandle { value },
+        let out = NativeAuthoredCatalogReadoutResult {
             canonical_hash: NativeUtf8Slice {
-                bytes: lease.hash.as_ptr(),
-                len: lease.hash.len(),
+                bytes: backing.hash.as_ptr(),
+                len: backing.hash.len(),
             },
-            entry_count: u32::try_from(lease.entries.len()).ok()?,
-            entries: lease.entries.as_ptr(),
-            entries_len: lease.entries.len(),
-            dependencies: lease.dependencies.as_ptr(),
-            dependencies_len: lease.dependencies.len(),
-            materials: lease.materials.as_ptr(),
-            materials_len: lease.materials.len(),
-            textures: lease.textures.as_ptr(),
-            textures_len: lease.textures.len(),
-            voxel_atlases: lease.voxel_atlases.as_ptr(),
-            voxel_atlases_len: lease.voxel_atlases.len(),
-            atlas_regions: lease.atlas_regions.as_ptr(),
-            atlas_regions_len: lease.atlas_regions.len(),
-            voxel_surfaces: lease.voxel_surfaces.as_ptr(),
-            voxel_surfaces_len: lease.voxel_surfaces.len(),
+            entry_count: u32::try_from(backing.entries.len()).ok()?,
+            entries: backing.entries.as_ptr(),
+            entries_len: backing.entries.len(),
+            dependencies: backing.dependencies.as_ptr(),
+            dependencies_len: backing.dependencies.len(),
+            materials: backing.materials.as_ptr(),
+            materials_len: backing.materials.len(),
+            textures: backing.textures.as_ptr(),
+            textures_len: backing.textures.len(),
+            voxel_atlases: backing.voxel_atlases.as_ptr(),
+            voxel_atlases_len: backing.voxel_atlases.len(),
+            atlas_regions: backing.atlas_regions.as_ptr(),
+            atlas_regions_len: backing.atlas_regions.len(),
+            voxel_surfaces: backing.voxel_surfaces.as_ptr(),
+            voxel_surfaces_len: backing.voxel_surfaces.len(),
         };
-        self.leases.insert(value, lease);
+        self.borrowed.hold(backing);
         Some(out)
     }
 }
@@ -2839,27 +2772,19 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         admit_catalog_payload,
         destroy_catalog,
         read_catalog,
-        destroy_catalog_readout_lease,
         resolve_reference,
-        destroy_resolved_entry_lease,
         resolve_material,
-        destroy_material_resolution_lease,
         resolve_voxel_surface,
-        destroy_voxel_surface_resolution_lease,
         resolve_fallback,
-        destroy_fallback_lease,
         admit_prefab_registry,
         admit_prefab_registry_from_content,
         destroy_prefab_registry,
         read_prefab_registry,
-        destroy_prefab_registry_readout_lease,
         resolve_prefab,
-        destroy_resolved_prefab_lease,
         prepare_scene,
         prepare_scene_from_content,
         destroy_scene_plan,
         read_scene_plan,
-        destroy_scene_plan_readout_lease,
     }
 }
 fn receipt(
@@ -3002,7 +2927,7 @@ unsafe extern "C" fn destroy_catalog(
 unsafe extern "C" fn read_catalog(
     context: *mut c_void,
     handle: NativeAuthoredCatalogHandle,
-    result: *mut NativeAuthoredCatalogReadoutLease,
+    result: *mut NativeAuthoredCatalogReadoutResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -3016,20 +2941,10 @@ unsafe extern "C" fn read_catalog(
         None => 0,
     }
 }
-unsafe extern "C" fn destroy_catalog_readout_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredCatalogReadoutLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.leases.remove(&handle.value).is_some())
-}
 unsafe extern "C" fn resolve_reference(
     context: *mut c_void,
     request: *const NativeAuthoredCatalogResolveRequest,
-    result: *mut NativeAuthoredResolvedEntryLease,
+    result: *mut NativeAuthoredResolvedEntryResult,
     receipt_out: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt_out.is_null() {
@@ -3051,20 +2966,10 @@ unsafe extern "C" fn resolve_reference(
         }
     }
 }
-unsafe extern "C" fn destroy_resolved_entry_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredResolvedEntryLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.resolved_leases.remove(&handle.value).is_some())
-}
 unsafe extern "C" fn resolve_material(
     context: *mut c_void,
     request: *const NativeAuthoredMaterialResolveRequest,
-    result: *mut NativeAuthoredMaterialResolutionLease,
+    result: *mut NativeAuthoredMaterialResolutionResult,
     receipt_out: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt_out.is_null() {
@@ -3086,20 +2991,10 @@ unsafe extern "C" fn resolve_material(
         }
     }
 }
-unsafe extern "C" fn destroy_material_resolution_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredMaterialResolutionLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.material_leases.remove(&handle.value).is_some())
-}
 unsafe extern "C" fn resolve_voxel_surface(
     context: *mut c_void,
     request: *const NativeAuthoredMaterialResolveRequest,
-    result: *mut NativeAuthoredVoxelSurfaceResolutionLease,
+    result: *mut NativeAuthoredVoxelSurfaceResolutionResult,
     receipt_out: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt_out.is_null() {
@@ -3121,20 +3016,10 @@ unsafe extern "C" fn resolve_voxel_surface(
         }
     }
 }
-unsafe extern "C" fn destroy_voxel_surface_resolution_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredVoxelSurfaceResolutionLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.surface_leases.remove(&handle.value).is_some())
-}
 unsafe extern "C" fn resolve_fallback(
     context: *mut c_void,
     request: *const NativeAuthoredFallbackResolveRequest,
-    result: *mut NativeAuthoredFallbackLease,
+    result: *mut NativeAuthoredFallbackResult,
     receipt_out: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt_out.is_null() {
@@ -3155,16 +3040,6 @@ unsafe extern "C" fn resolve_fallback(
             0
         }
     }
-}
-unsafe extern "C" fn destroy_fallback_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredFallbackLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.fallback_leases.remove(&handle.value).is_some())
 }
 unsafe extern "C" fn admit_prefab_registry(
     context: *mut c_void,
@@ -3293,7 +3168,7 @@ unsafe extern "C" fn destroy_prefab_registry(
 unsafe extern "C" fn read_prefab_registry(
     context: *mut c_void,
     handle: NativeAuthoredPrefabRegistryHandle,
-    result: *mut NativeAuthoredPrefabRegistryReadoutLease,
+    result: *mut NativeAuthoredPrefabRegistryReadoutResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -3307,20 +3182,10 @@ unsafe extern "C" fn read_prefab_registry(
         None => 0,
     }
 }
-unsafe extern "C" fn destroy_prefab_registry_readout_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredPrefabRegistryReadoutLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.prefab_leases.remove(&handle.value).is_some())
-}
 unsafe extern "C" fn resolve_prefab(
     context: *mut c_void,
     request: *const NativeAuthoredPrefabResolveRequest,
-    result: *mut NativeAuthoredResolvedPrefabLease,
+    result: *mut NativeAuthoredResolvedPrefabResult,
     receipt_out: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if receipt_out.is_null() {
@@ -3352,22 +3217,6 @@ unsafe extern "C" fn resolve_prefab(
             0
         }
     }
-}
-unsafe extern "C" fn destroy_resolved_prefab_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredResolvedPrefabLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(
-        handle.value != 0
-            && bridge
-                .resolved_prefab_leases
-                .remove(&handle.value)
-                .is_some(),
-    )
 }
 unsafe extern "C" fn prepare_scene(
     context: *mut c_void,
@@ -3571,7 +3420,7 @@ unsafe extern "C" fn destroy_scene_plan(
 unsafe extern "C" fn read_scene_plan(
     context: *mut c_void,
     handle: NativeAuthoredScenePlanHandle,
-    result: *mut NativeAuthoredScenePlanReadoutLease,
+    result: *mut NativeAuthoredScenePlanReadoutResult,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -3584,22 +3433,6 @@ unsafe extern "C" fn read_scene_plan(
         }
         None => 0,
     }
-}
-unsafe extern "C" fn destroy_scene_plan_readout_lease(
-    context: *mut c_void,
-    handle: NativeAuthoredScenePlanReadoutLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(
-        handle.value != 0
-            && bridge
-                .scene_plan_readout_leases
-                .remove(&handle.value)
-                .is_some(),
-    )
 }
 
 #[cfg(test)]
@@ -3890,8 +3723,7 @@ mod tests {
             ABI_OK
         );
         assert_eq!(receipt.diagnostics_len, 0);
-        let mut readout = NativeAuthoredCatalogReadoutLease {
-            handle: NativeAuthoredCatalogReadoutLeaseHandle::default(),
+        let mut readout = NativeAuthoredCatalogReadoutResult {
             canonical_hash: slice(b""),
             entry_count: 0,
             entries: std::ptr::null(),
@@ -3923,12 +3755,7 @@ mod tests {
             },
             "scene/test"
         );
-        assert_eq!(
-            unsafe { (api.destroy_catalog_readout_lease)(api.context, readout.handle) },
-            ABI_OK
-        );
-        let mut resolved = NativeAuthoredResolvedEntryLease {
-            handle: NativeAuthoredResolvedEntryLeaseHandle::default(),
+        let mut resolved = NativeAuthoredResolvedEntryResult {
             entry: std::ptr::null(),
             entry_len: 0,
             dependencies: std::ptr::null(),
@@ -3977,10 +3804,6 @@ mod tests {
         assert_eq!(resolved.entry_len, 1);
         assert_eq!(resolved.outcome, NativeAuthoredResolutionKind::Present);
         assert!(!resolved.has_fallback);
-        assert_eq!(
-            unsafe { (api.destroy_resolved_entry_lease)(api.context, resolved.handle) },
-            ABI_OK
-        );
         let mut missing = resolved;
         assert_eq!(
             unsafe {
@@ -4005,10 +3828,6 @@ mod tests {
         assert_eq!(missing.outcome, NativeAuthoredResolutionKind::Missing);
         assert!(missing.has_fallback);
         assert_eq!(missing.entry_len, 0);
-        assert_eq!(
-            unsafe { (api.destroy_resolved_entry_lease)(api.context, missing.handle) },
-            ABI_OK
-        );
         assert_eq!(
             unsafe {
                 (api.resolve_reference)(
@@ -4292,8 +4111,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut readout = NativeAuthoredCatalogReadoutLease {
-            handle: NativeAuthoredCatalogReadoutLeaseHandle::default(),
+        let mut readout = NativeAuthoredCatalogReadoutResult {
             canonical_hash: slice(b""),
             entry_count: 0,
             entries: std::ptr::null(),
@@ -4326,16 +4144,11 @@ mod tests {
             ),
             (3, 1, 1, 1, 1, 1)
         );
-        assert_eq!(
-            unsafe { (api.destroy_catalog_readout_lease)(api.context, readout.handle) },
-            ABI_OK
-        );
         let material_request = NativeAuthoredMaterialResolveRequest {
             catalog,
             material_id: slice(b"material/stone"),
         };
-        let mut material = NativeAuthoredMaterialResolutionLease {
-            handle: NativeAuthoredMaterialResolutionLeaseHandle::default(),
+        let mut material = NativeAuthoredMaterialResolutionResult {
             materials: std::ptr::null(),
             materials_len: 0,
             voxel_surfaces: std::ptr::null(),
@@ -4351,12 +4164,7 @@ mod tests {
             (material.materials_len, material.voxel_surfaces_len),
             (1, 1)
         );
-        assert_eq!(
-            unsafe { (api.destroy_material_resolution_lease)(api.context, material.handle) },
-            ABI_OK
-        );
-        let mut surface = NativeAuthoredVoxelSurfaceResolutionLease {
-            handle: NativeAuthoredVoxelSurfaceResolutionLeaseHandle::default(),
+        let mut surface = NativeAuthoredVoxelSurfaceResolutionResult {
             surfaces: std::ptr::null(),
             surfaces_len: 0,
         };
@@ -4393,12 +4201,7 @@ mod tests {
             },
             "stone"
         );
-        assert_eq!(
-            unsafe { (api.destroy_voxel_surface_resolution_lease)(api.context, surface.handle) },
-            ABI_OK
-        );
-        let mut fallback = NativeAuthoredFallbackLease {
-            handle: NativeAuthoredFallbackLeaseHandle::default(),
+        let mut fallback = NativeAuthoredFallbackResult {
             outcomes: std::ptr::null(),
             outcomes_len: 0,
         };
@@ -4419,10 +4222,6 @@ mod tests {
         assert_eq!(
             unsafe { (*fallback.outcomes).outcome },
             NativeAuthoredFallbackOutcomeKind::UseFallback
-        );
-        assert_eq!(
-            unsafe { (api.destroy_fallback_lease)(api.context, fallback.handle) },
-            ABI_OK
         );
         assert_eq!(
             unsafe { (api.destroy_catalog)(api.context, catalog) },
@@ -4543,7 +4342,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut inspection: NativeAuthoredPrefabRegistryReadoutLease =
+        let mut inspection: NativeAuthoredPrefabRegistryReadoutResult =
             unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe { (api.read_prefab_registry)(api.context, registry, &mut inspection) },
@@ -4558,10 +4357,6 @@ mod tests {
             ),
             (2, 1, 1, 1)
         );
-        assert_eq!(
-            unsafe { (api.destroy_prefab_registry_readout_lease)(api.context, inspection.handle) },
-            ABI_OK
-        );
         let instance_overrides = [NativeAuthoredPrefabInstanceOverrideInput {
             target_role: slice(b"body/root"),
             kind: NativeAuthoredPrefabOverrideKind::Transform,
@@ -4569,7 +4364,7 @@ mod tests {
             value: slice(b""),
             active: false,
         }];
-        let mut resolved: NativeAuthoredResolvedPrefabLease = unsafe { std::mem::zeroed() };
+        let mut resolved: NativeAuthoredResolvedPrefabResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (api.resolve_prefab)(
@@ -4593,10 +4388,6 @@ mod tests {
         assert!(resolved.has_variant);
         assert_eq!(unsafe { (*resolved.parts).transform.translation.x }, 3.0);
         assert!(!unsafe { (*resolved.parts).active });
-        assert_eq!(
-            unsafe { (api.destroy_resolved_prefab_lease)(api.context, resolved.handle) },
-            ABI_OK
-        );
         let bad_parts = [NativeAuthoredPrefabPartInput {
             source: slice(b"scene/missing"),
             ..parts[0]
@@ -4982,7 +4773,7 @@ mod tests {
             ABI_OK
         );
         let mut typed_readout =
-            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutLease>() };
+            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutResult>() };
         assert_eq!(
             unsafe { (api.read_scene_plan)(api.context, typed, &mut typed_readout) },
             ABI_OK
@@ -5002,10 +4793,6 @@ mod tests {
         );
         assert_eq!(unsafe { (*typed_readout.allocations).entity_id }, 100);
         assert_eq!(typed_readout.renderables_len, 4);
-        assert_eq!(
-            unsafe { (api.destroy_scene_plan_readout_lease)(api.context, typed_readout.handle) },
-            ABI_OK
-        );
         assert_eq!(source.nodes[0].id.raw(), 8);
         assert_eq!(
             bridge.scene_plans[&typed.value]._document.nodes[0].id.raw(),
@@ -5042,7 +4829,7 @@ mod tests {
             ABI_OK
         );
         let mut content_readout =
-            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutLease>() };
+            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutResult>() };
         assert_eq!(
             unsafe { (api.read_scene_plan)(api.context, from_content, &mut content_readout) },
             ABI_OK
@@ -5073,10 +4860,6 @@ mod tests {
                     .y
             },
             -1.0
-        );
-        assert_eq!(
-            unsafe { (api.destroy_scene_plan_readout_lease)(api.context, content_readout.handle) },
-            ABI_OK
         );
         assert_eq!(
             unsafe { (api.destroy_scene_plan)(api.context, from_content) },

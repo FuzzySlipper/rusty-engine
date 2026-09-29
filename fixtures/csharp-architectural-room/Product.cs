@@ -121,13 +121,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         bool joinsComplete = true;
         foreach (RecipeJoin join in main.Joins.Span)
         {
-            ImplicitAnalysisReportLeaseReceipt report = _engine.ImplicitSurfaces.ReadExpectedJoin(
+            ImplicitAnalysisReportResult report = _engine.ImplicitSurfaces.ReadExpectedJoin(
                 join.Request(audit, name => pieces[name], .35f, .75f, AuditSampleSpacing, AuditBudget));
             joinDiagnostics += report.Diagnostics.Length;
             joinSamples += checked((int)report.Sampled);
             joinsComplete &= report.Complete != 0;
         }
-        ImplicitAnalysisReportLeaseReceipt enclosure = _engine.ImplicitSurfaces.ReadEnclosure(
+        ImplicitAnalysisReportResult enclosure = _engine.ImplicitSurfaces.ReadEnclosure(
             main.Request(audit, AuditSampleSpacing, AuditBudget));
         return new WorldAudit(main.Joins.Length, joinSamples, joinDiagnostics, joinsComplete,
             enclosure.Sampled, enclosure.Diagnostics.Length, enclosure.Complete != 0,

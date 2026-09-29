@@ -12,7 +12,7 @@ public readonly record struct Kinematic(Vector3 HalfExtents, Vector3 Velocity);
 
 /// <summary>One Kinematic motion phase and the managed writes that applied it.</summary>
 public readonly record struct EntityKinematicMotionReceipt(
-    KinematicMotionLeaseReceipt Motion,
+    KinematicMotionResult Motion,
     EntityBatchReceipt Managed);
 
 /// <summary>
@@ -68,7 +68,7 @@ public sealed class EntityKinematicMotion
         ulong[] selectedIds = selection is ReadOnlyMemory<EntityId> selected
             ? selected.ToArray().Select(entity => entity.Value).ToArray()
             : [];
-        KinematicMotionLeaseReceipt motion = _kinematic.RunMotion(new KinematicMotionRequest(
+        KinematicMotionResult motion = _kinematic.RunMotion(new KinematicMotionRequest(
             session,
             deltaSeconds,
             rows,

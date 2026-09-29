@@ -47,8 +47,6 @@ struct VoxelScenePresentationState {
     presentations: BTreeMap<u64, RetainedVoxelScenePresentation>,
     projector: VoxelRenderProjector,
     next_presentation: u64,
-    material_mapping_leases: BTreeMap<u64, Box<[NativeVoxelSceneMaterialMappingRow]>>,
-    next_material_mapping_lease: u64,
 }
 
 pub(crate) struct RuntimeVoxelScenePresentationCall {
@@ -66,6 +64,7 @@ pub(crate) struct RuntimeVoxelScenePresentationBridge {
     appearance: Option<*mut RuntimeAppearanceBridge>,
     update_attribution: RuntimeUpdateAttribution,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 
 impl RuntimeVoxelScenePresentationBridge {
@@ -76,13 +75,12 @@ impl RuntimeVoxelScenePresentationBridge {
                 presentations: BTreeMap::new(),
                 projector: VoxelRenderProjector::new(),
                 next_presentation: 1,
-                material_mapping_leases: BTreeMap::new(),
-                next_material_mapping_lease: 1,
             },
             staged: None,
             appearance: None,
             update_attribution: RuntimeUpdateAttribution::default(),
             operation_diagnostics: Default::default(),
+            borrowed: Default::default(),
         }
     }
 
@@ -428,7 +426,7 @@ impl RuntimeVoxelScenePresentationBridge {
     fn read_material_mapping(
         &mut self,
         handle: NativeVoxelScenePresentationHandle,
-    ) -> Result<NativeVoxelSceneMaterialMappingLease, CsharpEngineServicesError> {
+    ) -> Result<NativeVoxelSceneMaterialMappingResult, CsharpEngineServicesError> {
         let spatial = self.spatial.clone();
         let staged = self.staged_mut()?;
         let presentation = staged
@@ -498,42 +496,14 @@ impl RuntimeVoxelScenePresentationBridge {
             })
             .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?
             .into_boxed_slice();
-        let value = staged.state.next_material_mapping_lease;
-        staged.state.next_material_mapping_lease = value.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_MAPPING",
-                "voxel scene material mapping lease space overflowed",
-            )
-        })?;
-        let lease = NativeVoxelSceneMaterialMappingLease {
-            handle: NativeVoxelSceneMaterialMappingLeaseHandle { value },
+        let result = NativeVoxelSceneMaterialMappingResult {
             mappings: rows.as_ptr(),
             mappings_len: rows.len(),
             source_revision: scene.source_revision().raw(),
             mesh_revision: scene.projection_revisions().mesh().raw(),
         };
-        staged.state.material_mapping_leases.insert(value, rows);
-        Ok(lease)
-    }
-
-    fn destroy_material_mapping_lease(
-        &mut self,
-        handle: NativeVoxelSceneMaterialMappingLeaseHandle,
-    ) -> Result<(), CsharpEngineServicesError> {
-        let staged = self.staged_mut()?;
-        if handle.value == 0
-            || staged
-                .state
-                .material_mapping_leases
-                .remove(&handle.value)
-                .is_none()
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_MAPPING",
-                "voxel scene material mapping lease is not retained",
-            ));
-        }
-        Ok(())
+        self.borrowed.hold(rows);
+        Ok(result)
     }
 
     fn clear(
@@ -943,7 +913,6 @@ pub(crate) fn api(
         project_scene_directional,
         update_scene_directional,
         read_material_mapping,
-        destroy_material_mapping_lease,
     }
 }
 
@@ -1084,32 +1053,19 @@ unsafe extern "C" fn update_scene_directional(
 unsafe extern "C" fn read_material_mapping(
     context: *mut c_void,
     handle: NativeVoxelScenePresentationHandle,
-    output: *mut NativeVoxelSceneMaterialMappingLease,
+    output: *mut NativeVoxelSceneMaterialMappingResult,
 ) -> i32 {
     if context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
     match bridge.read_material_mapping(handle) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(backing) => {
+            unsafe { *output = backing };
             ABI_OK
         }
         Err(_) => 0,
     }
-}
-
-unsafe extern "C" fn destroy_material_mapping_lease(
-    context: *mut c_void,
-    handle: NativeVoxelSceneMaterialMappingLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
-    bridge
-        .destroy_material_mapping_lease(handle)
-        .map_or(0, |_| ABI_OK)
 }
 
 unsafe extern "C" fn destroy_scene(
@@ -1570,8 +1526,7 @@ mod tests {
             directional_material_count, 2,
             "one base material plus one +Y override are realized"
         );
-        let mut mapping = NativeVoxelSceneMaterialMappingLease {
-            handle: NativeVoxelSceneMaterialMappingLeaseHandle::default(),
+        let mut mapping = NativeVoxelSceneMaterialMappingResult {
             mappings: std::ptr::null(),
             mappings_len: 0,
             source_revision: 0,
@@ -1596,10 +1551,6 @@ mod tests {
         assert_eq!(top_row.material_value, top.value);
         assert_eq!(side_row.material_value, side.value);
         assert_ne!(top_row.renderer_slot, side_row.renderer_slot);
-        assert_eq!(
-            unsafe { (api.destroy_material_mapping_lease)(api.context, mapping.handle) },
-            ABI_OK
-        );
 
         // Reserve a retained +Y face slot that matches the preferred renderer
         // slot of a newly used, valid source slot. This exercises the update
@@ -1666,8 +1617,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut updated_mapping = NativeVoxelSceneMaterialMappingLease {
-            handle: NativeVoxelSceneMaterialMappingLeaseHandle::default(),
+        let mut updated_mapping = NativeVoxelSceneMaterialMappingResult {
             mappings: std::ptr::null(),
             mappings_len: 0,
             source_revision: 0,
@@ -1705,10 +1655,6 @@ mod tests {
                 RenderDiff::DefineMaterial { material }
                     if material.id == voxel_material_id(u16::try_from(new_base.renderer_slot).unwrap())
             )));
-        assert_eq!(
-            unsafe { (api.destroy_material_mapping_lease)(api.context, updated_mapping.handle) },
-            ABI_OK
-        );
 
         // A duplicate face override is rejected before the retained mapping or
         // renderer payload can be replaced.
@@ -1777,8 +1723,7 @@ mod tests {
             },
             0
         );
-        let mut after = NativeVoxelSceneMaterialMappingLease {
-            handle: NativeVoxelSceneMaterialMappingLeaseHandle::default(),
+        let mut after = NativeVoxelSceneMaterialMappingResult {
             mappings: std::ptr::null(),
             mappings_len: 0,
             source_revision: 0,
@@ -1796,10 +1741,6 @@ mod tests {
                 .unwrap()
                 .material_value,
             top.value
-        );
-        assert_eq!(
-            unsafe { (api.destroy_material_mapping_lease)(api.context, after.handle) },
-            ABI_OK
         );
     }
 

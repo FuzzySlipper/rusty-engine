@@ -85,12 +85,6 @@ pub struct NativeUpdateVoxelScenePresentationDirectionalRequest {
     pub face_materials_len: usize,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelSceneMaterialMappingLeaseHandle {
-    pub value: u64,
-}
-
 /// Copied provenance for one effective source-slot/face renderer selection.
 /// `material_value` identifies the selected retained Material at admission
 /// time; it is diagnostic provenance, not a live disposable handle.
@@ -105,12 +99,11 @@ pub struct NativeVoxelSceneMaterialMappingRow {
     pub overridden: bool,
 }
 
-/// Temporary backing for a copied effective mapping readout. The generated
-/// binding copies rows and consumes this lease before returning to C#.
+/// Borrowed effective mapping readout, valid until the next call on this
+/// service. The generated binding copies the rows before returning to C#.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeVoxelSceneMaterialMappingLease {
-    pub handle: NativeVoxelSceneMaterialMappingLeaseHandle,
+pub struct NativeVoxelSceneMaterialMappingResult {
     pub mappings: *const NativeVoxelSceneMaterialMappingRow,
     pub mappings_len: usize,
     pub source_revision: u64,
@@ -171,10 +164,8 @@ pub type NativeUpdateVoxelScenePresentationDirectional = unsafe extern "C" fn(
 pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
-    *mut NativeVoxelSceneMaterialMappingLease,
+    *mut NativeVoxelSceneMaterialMappingResult,
 ) -> i32;
-pub type NativeDestroyVoxelSceneMaterialMappingLease =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelSceneMaterialMappingLeaseHandle) -> i32;
 pub type NativeDestroyVoxelScenePresentation =
     unsafe extern "C" fn(*mut c_void, NativeVoxelScenePresentationHandle) -> i32;
 pub type NativeClearVoxelScenePresentations =
@@ -194,5 +185,4 @@ pub struct NativeVoxelScenePresentationApi {
     pub project_scene_directional: NativeProjectVoxelSceneDirectional,
     pub update_scene_directional: NativeUpdateVoxelScenePresentationDirectional,
     pub read_material_mapping: NativeReadVoxelSceneMaterialMapping,
-    pub destroy_material_mapping_lease: NativeDestroyVoxelSceneMaterialMappingLease,
 }

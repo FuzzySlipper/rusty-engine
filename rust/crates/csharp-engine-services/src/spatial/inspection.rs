@@ -6,7 +6,7 @@ impl RuntimeSpatialBridge {
     fn read_map(
         &mut self,
         request: &NativeSpatialMapRequest,
-    ) -> Result<NativeSpatialMapLease, CsharpEngineServicesError> {
+    ) -> Result<NativeSpatialMapResult, CsharpEngineServicesError> {
         let count = request
             .columns
             .checked_mul(request.rows)
@@ -122,12 +122,7 @@ impl RuntimeSpatialBridge {
             }
         }
         let cells = cells.into_boxed_slice();
-        let handle = self.next_map_lease;
-        self.next_map_lease = handle
-            .checked_add(1)
-            .ok_or_else(|| spatial_error("CSHARP_SPATIAL_MAP", "map lease handles exhausted"))?;
-        let result = NativeSpatialMapLease {
-            handle: NativeSpatialMapLeaseHandle { value: handle },
+        let result = NativeSpatialMapResult {
             cells: cells.as_ptr(),
             cells_len: cells.len(),
             projection_identity: identity,
@@ -136,7 +131,7 @@ impl RuntimeSpatialBridge {
             navigation_revision: session.navigation_revision,
             navigation_present: session.navigation.is_some(),
         };
-        self.map_leases.insert(handle, cells);
+        self.borrowed.hold(cells);
         Ok(result)
     }
 }
@@ -144,7 +139,7 @@ impl RuntimeSpatialBridge {
 pub(super) unsafe extern "C" fn read_map(
     context: *mut c_void,
     request: *const NativeSpatialMapRequest,
-    result: *mut NativeSpatialMapLease,
+    result: *mut NativeSpatialMapResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
@@ -156,21 +151,6 @@ pub(super) unsafe extern "C" fn read_map(
         }
         Err(_) => 0,
     }
-}
-
-pub(super) unsafe extern "C" fn destroy_map_lease(
-    context: *mut c_void,
-    handle: NativeSpatialMapLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    i32::from(
-        unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-            .map_leases
-            .remove(&handle.value)
-            .is_some(),
-    )
 }
 
 #[cfg(test)]
@@ -236,7 +216,8 @@ mod tests {
             entities_len: 1,
         };
         let closed = bridge.read_map(&request).unwrap();
-        let cells = unsafe { std::slice::from_raw_parts(closed.cells, closed.cells_len) };
+        // Copied, as the generated caller does: the next call replaces it.
+        let cells = unsafe { std::slice::from_raw_parts(closed.cells, closed.cells_len) }.to_vec();
         assert_eq!(cells[0].first_dynamic_entity, 17);
         assert_eq!(cells[0].navigation_samples, 2);
         assert_eq!(cells[0].navigation_allowed_samples, 2);
@@ -250,11 +231,8 @@ mod tests {
         assert_eq!(open_cells[0].dynamic_collision_count, 0);
         assert_eq!(open.navigation_revision, closed.navigation_revision);
         assert_eq!(open.projection_identity, closed.projection_identity);
-        assert_eq!(cells[0].dynamic_collision_count, 1); // Earlier copied lease remains independent.
-        assert!(bridge.map_leases.remove(&closed.handle.value).is_some());
-        assert!(bridge.map_leases.remove(&open.handle.value).is_some());
+        assert_eq!(cells[0].dynamic_collision_count, 1); // The earlier copy is independent.
         request.columns = 1025;
         assert!(bridge.read_map(&request).is_err());
-        assert!(bridge.map_leases.is_empty());
     }
 }

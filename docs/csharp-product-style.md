@@ -90,7 +90,7 @@ wall-clock time for gameplay, or introduce unmanaged timers/threads simply to
 advance product state.
 
 Keep no retained native pointers or borrowed callback data in product state.
-Follow disposable lease/handle ownership from the generated SDK. Ordinary
+Follow disposable handle ownership from the generated SDK. Ordinary
 product projects should contain neither handwritten P/Invoke nor unsafe native
 code; generated bootstrap and bindings own that boundary.
 

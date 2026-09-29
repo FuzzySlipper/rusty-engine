@@ -156,19 +156,11 @@ pub struct NativeKinematicMotionRequest {
     pub selected_entity_ids_len: usize,
 }
 
-/// Typed owner for one bounded call-local kinematic-motion result lease.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeKinematicMotionLeaseHandle {
-    pub value: u64,
-}
-
-/// Temporary Engine-owned backing for one completed call-local motion phase.
-/// Generated C# copies all rows and metadata, then releases this exact lease.
+/// Borrowed result of one completed call-local motion phase, valid until the
+/// next Spatial call. Generated C# copies all rows and metadata.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeKinematicMotionLease {
-    pub handle: NativeKinematicMotionLeaseHandle,
+pub struct NativeKinematicMotionResult {
     pub candidates: *const NativeKinematicMotionCandidate,
     pub candidates_len: usize,
     pub facts: *const NativeKinematicMotionFact,
@@ -181,7 +173,7 @@ pub struct NativeKinematicMotionLease {
 /// Stable non-success status values for `NativeKinematicApi` operations.
 /// `1` remains ABI success. `0` is reserved for boundary/service failures;
 /// these values preserve each `engine_spatial::PhysicsError` in generated
-/// `EngineCallException.Status` without a retained diagnostic lease.
+/// `EngineCallException.Status` without an operation diagnostic.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeKinematicErrorStatus {
@@ -208,10 +200,8 @@ pub type NativeKinematicIntegrateSpatial = unsafe extern "C" fn(
 pub type NativeRunKinematicMotion = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKinematicMotionRequest,
-    *mut NativeKinematicMotionLease,
+    *mut NativeKinematicMotionResult,
 ) -> i32;
-pub type NativeDestroyKinematicMotionLease =
-    unsafe extern "C" fn(*mut c_void, NativeKinematicMotionLeaseHandle) -> i32;
 
 /// Purpose-neutral, caller-owned kinematic integration. It owns no bodies,
 /// world, scheduling, or product-state publication.
@@ -222,5 +212,4 @@ pub struct NativeKinematicApi {
     pub integrate: NativeKinematicIntegrate,
     pub integrate_spatial: NativeKinematicIntegrateSpatial,
     pub run_motion: NativeRunKinematicMotion,
-    pub destroy_motion_lease: NativeDestroyKinematicMotionLease,
 }

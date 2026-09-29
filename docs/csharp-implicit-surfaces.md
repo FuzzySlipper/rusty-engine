@@ -297,8 +297,7 @@ The same collection supports three separate continuity queries:
   use a separate collection for another pose. The query examines mesh barriers,
   not field distances or an assumed union of closed solids.
 
-Continuity reports copy diagnostics and path points before releasing their
-native lease. `Complete != 0` means the declared discrete query completed (or
+Continuity reports copy diagnostics and path points before the call returns. `Complete != 0` means the declared discrete query completed (or
 found a witness); it is not proof below `Resolution`. For joins/enclosures,
 `Sampled` counts patch samples/visited cells. An insufficient `maxSamples`
 budget returns `IncompleteCoverage` and `Complete == 0`, never a clean result.

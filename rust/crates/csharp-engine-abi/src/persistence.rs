@@ -114,6 +114,4 @@ pub struct NativePersistenceCopyBlobRequest {
 }
 
 pub type NativeReadPersistenceBlobBytes =
-    unsafe extern "C" fn(*mut c_void, NativePersistenceBlobHandle, *mut NativeByteLease) -> i32;
-pub type NativeDestroyPersistenceByteLease =
-    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
+    unsafe extern "C" fn(*mut c_void, NativePersistenceBlobHandle, *mut NativeByteResult) -> i32;

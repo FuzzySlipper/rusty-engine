@@ -415,7 +415,7 @@ pub struct NativeAnimatedMeshInfo {
     pub joint_count: u32,
 }
 
-/// Strings are retained by the clip-info lease; the safe SDK copies them.
+/// Strings borrow the clip-info result; the safe SDK copies them.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationClipInfo {
@@ -432,25 +432,14 @@ pub type NativeReadAnimatedMeshInfo = unsafe extern "C" fn(
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAnimationClipInfoLeaseHandle {
-    pub value: u64,
-}
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAnimationClipInfoLease {
-    pub handle: NativeAnimationClipInfoLeaseHandle,
+pub struct NativeAnimationClipInfoResult {
     pub clips: *const NativeAnimationClipInfo,
     pub clips_len: usize,
 }
 pub type NativeReadAnimationClips = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeRenderResourceHandle,
-    *mut NativeAnimationClipInfoLease,
-    *mut crate::NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeDestroyAnimationClipInfoLease = unsafe extern "C" fn(
-    *mut std::ffi::c_void,
-    NativeAnimationClipInfoLeaseHandle,
+    *mut NativeAnimationClipInfoResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;

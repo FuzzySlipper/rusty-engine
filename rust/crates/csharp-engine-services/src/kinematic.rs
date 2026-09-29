@@ -23,11 +23,6 @@ use crate::{
     spatial::RuntimeSpatialBridge,
 };
 
-pub(crate) struct KinematicMotionLeaseBacking {
-    _candidates: Box<[NativeKinematicMotionCandidate]>,
-    _facts: Box<[NativeKinematicMotionFact]>,
-}
-
 fn native_body(value: NativeKinematicBody) -> KinematicBody {
     KinematicBody {
         position: native_vec3_value(value.position),
@@ -153,13 +148,13 @@ fn native_motion_body(row: &NativeKinematicMotionEntityRow) -> KinematicBodyView
 
 /// Resolve product-owned rows directly. Candidates keep each row's rotation
 /// and scale.
-fn build_motion_lease(
+fn build_motion_result(
     bridge: &mut RuntimeSpatialBridge,
     rows: &[NativeKinematicMotionEntityRow],
     scene: &engine_spatial::VoxelCollisionScene,
     request: &NativeKinematicMotionRequest,
     selected: &BTreeSet<EntityId>,
-) -> Result<NativeKinematicMotionLease, i32> {
+) -> Result<NativeKinematicMotionResult, i32> {
     let mut rows = rows.iter().collect::<Vec<_>>();
     rows.sort_by_key(|row| row.entity_id);
     if rows
@@ -218,12 +213,7 @@ fn build_motion_lease(
         .map(native_motion_fact)
         .collect::<Vec<_>>()
         .into_boxed_slice();
-    let handle_value = bridge.next_kinematic_motion_lease;
-    bridge.next_kinematic_motion_lease = handle_value.checked_add(1).ok_or(0)?;
-    let lease = NativeKinematicMotionLease {
-        handle: NativeKinematicMotionLeaseHandle {
-            value: handle_value,
-        },
+    let result = NativeKinematicMotionResult {
         candidates: candidates.as_ptr(),
         candidates_len: candidates.len(),
         facts: facts.as_ptr(),
@@ -232,14 +222,8 @@ fn build_motion_lease(
         moved_bodies: u64::try_from(resolution.moved_bodies).map_err(|_| 0)?,
         blocked_axes: u64::try_from(resolution.blocked_axes).map_err(|_| 0)?,
     };
-    bridge.kinematic_motion_leases.insert(
-        handle_value,
-        KinematicMotionLeaseBacking {
-            _candidates: candidates,
-            _facts: facts,
-        },
-    );
-    Ok(lease)
+    bridge.borrowed.hold((candidates, facts));
+    Ok(result)
 }
 
 unsafe extern "C" fn integrate(
@@ -305,7 +289,7 @@ unsafe extern "C" fn integrate_spatial(
 unsafe extern "C" fn run_motion(
     context: *mut c_void,
     request: *const NativeKinematicMotionRequest,
-    result: *mut NativeKinematicMotionLease,
+    result: *mut NativeKinematicMotionResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
@@ -337,7 +321,7 @@ unsafe extern "C" fn run_motion(
         Ok(scene) => scene,
         Err(_) => return 0,
     };
-    match build_motion_lease(bridge, rows, scene.as_ref(), request, &selected) {
+    match build_motion_result(bridge, rows, scene.as_ref(), request, &selected) {
         Ok(value) => {
             // SAFETY: result is an out pointer borrowed for this ABI call.
             unsafe { *result = value };
@@ -347,30 +331,12 @@ unsafe extern "C" fn run_motion(
     }
 }
 
-unsafe extern "C" fn destroy_motion_lease(
-    context: *mut c_void,
-    handle: NativeKinematicMotionLeaseHandle,
-) -> i32 {
-    if context.is_null() || handle.value == 0 {
-        return 0;
-    }
-    // SAFETY: this exact context is supplied by `api` for the product lifetime.
-    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    i32::from(
-        bridge
-            .kinematic_motion_leases
-            .remove(&handle.value)
-            .is_some(),
-    )
-}
-
 pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeKinematicApi {
     NativeKinematicApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
         integrate,
         integrate_spatial,
         run_motion,
-        destroy_motion_lease,
     }
 }
 
@@ -724,8 +690,7 @@ mod tests {
             selected_entity_ids: selected.as_ptr(),
             selected_entity_ids_len: selected.len(),
         };
-        let mut first = NativeKinematicMotionLease {
-            handle: NativeKinematicMotionLeaseHandle::default(),
+        let mut first = NativeKinematicMotionResult {
             candidates: std::ptr::null(),
             candidates_len: 0,
             facts: std::ptr::null(),
@@ -761,7 +726,8 @@ mod tests {
                 z: 0.0,
             },
         );
-        let facts = unsafe { std::slice::from_raw_parts(first.facts, first.facts_len) };
+        // Copied, as the generated caller does: the next call replaces it.
+        let facts = unsafe { std::slice::from_raw_parts(first.facts, first.facts_len) }.to_vec();
         assert_eq!(facts.len(), 2);
         assert_eq!(facts[0].kind, NativeKinematicMotionFactKind::Blocked);
         assert_eq!(facts[0].entity_id, 1);
@@ -784,14 +750,6 @@ mod tests {
                 .iter()
                 .map(|fact| (fact.kind, fact.entity_id, fact.axis, fact.attempted_delta))
                 .collect::<Vec<_>>(),
-        );
-        assert_eq!(
-            unsafe { (api.destroy_motion_lease)(api.context, first.handle) },
-            1
-        );
-        assert_eq!(
-            unsafe { (api.destroy_motion_lease)(api.context, second.handle) },
-            1
         );
     }
 }

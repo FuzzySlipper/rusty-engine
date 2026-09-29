@@ -230,7 +230,7 @@ reads only the inventory. Opening a bundle reads and verifies that collection's
 files into an immutable Rust snapshot; it does not load other bundles or copy
 all its bodies into C#. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
 `ReadText` and `ReadDirectory` copy the requested bodies. A read borrows the Rust
-source through a range lease and copies it once into managed storage, with no
+source for the call and copies it once into managed storage, with no
 intermediate chunk buffers. Bundle/file inventories already arrive in Engine UTF-8 path
 order; helpers do not sort them again or list every bundle before an open.
 Directory semantics

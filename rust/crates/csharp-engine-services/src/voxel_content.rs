@@ -63,7 +63,7 @@ struct RetainedMagicaVoxelPalette {
 }
 
 #[derive(Debug)]
-struct RetainedMagicaVoxelPaletteLease {
+struct MagicaVoxelPaletteBacking {
     _rows: Vec<NativeMagicaVoxelPaletteRow>,
 }
 
@@ -118,13 +118,13 @@ struct RetainedVoxelAnnotationRegion {
 }
 
 #[derive(Debug)]
-struct RetainedVoxelAnnotationRegionLease {
+struct VoxelAnnotationRegionBacking {
     _regions: Vec<RetainedVoxelAnnotationRegion>,
     _readout: Vec<NativeVoxelAnnotationRegionReadout>,
 }
 
 #[derive(Debug)]
-struct RetainedVoxelAnnotationEditLease {
+struct VoxelAnnotationEditBacking {
     _ids: Vec<String>,
     _readout: Vec<NativeVoxelAnnotationAffectedId>,
 }
@@ -136,7 +136,7 @@ struct RetainedVoxelAssetSpatialPaletteRow {
 }
 
 #[derive(Debug)]
-struct RetainedVoxelAssetSpatialPublishLease {
+struct VoxelAssetSpatialPublishBacking {
     _palette: Vec<RetainedVoxelAssetSpatialPaletteRow>,
     _readout: Vec<NativeVoxelAssetSpatialPaletteRow>,
 }
@@ -146,18 +146,12 @@ pub(crate) struct RuntimeVoxelContentBridge {
     objects: BTreeMap<u64, RetainedVoxelObject>,
     players: BTreeMap<u64, RetainedVoxelObjectPlayer>,
     annotations: BTreeMap<u64, RetainedVoxelAnnotation>,
-    annotation_region_leases: BTreeMap<u64, RetainedVoxelAnnotationRegionLease>,
-    annotation_edit_leases: BTreeMap<u64, RetainedVoxelAnnotationEditLease>,
-    asset_spatial_publish_leases: BTreeMap<u64, RetainedVoxelAssetSpatialPublishLease>,
-    magica_palette_leases: BTreeMap<u64, RetainedMagicaVoxelPaletteLease>,
+    /// Backing of the latest borrowed voxel-content result.
+    borrowed: crate::operation_diagnostics::BorrowedResult,
     next_asset: u64,
     next_object: u64,
     next_player: u64,
     next_annotation: u64,
-    next_annotation_region_lease: u64,
-    next_annotation_edit_lease: u64,
-    next_asset_spatial_publish_lease: u64,
-    next_magica_palette_lease: u64,
     presentation: VoxelObjectPresentationState,
     staged_presentation: Option<RuntimeVoxelContentCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
@@ -172,18 +166,11 @@ impl RuntimeVoxelContentBridge {
             objects: BTreeMap::new(),
             players: BTreeMap::new(),
             annotations: BTreeMap::new(),
-            annotation_region_leases: BTreeMap::new(),
-            annotation_edit_leases: BTreeMap::new(),
-            asset_spatial_publish_leases: BTreeMap::new(),
-            magica_palette_leases: BTreeMap::new(),
+            borrowed: Default::default(),
             next_asset: 1,
             next_object: 1,
             next_player: 1,
             next_annotation: 1,
-            next_annotation_region_lease: 1,
-            next_annotation_edit_lease: 1,
-            next_asset_spatial_publish_lease: 1,
-            next_magica_palette_lease: 1,
             presentation: VoxelObjectPresentationState {
                 projector: VoxelObjectRenderProjector::new(),
                 presentations: BTreeMap::new(),
@@ -252,10 +239,7 @@ impl RuntimeVoxelContentBridge {
         &mut self,
         object_handle: NativeVoxelObjectHandle,
     ) -> Result<
-        (
-            NativeMagicaVoxelPaletteLease,
-            RetainedMagicaVoxelPaletteLease,
-        ),
+        (NativeMagicaVoxelPaletteResult, MagicaVoxelPaletteBacking),
         CsharpEngineServicesError,
     > {
         let palette = self
@@ -268,13 +252,6 @@ impl RuntimeVoxelContentBridge {
                     "voxel object was not admitted from a MagicaVoxel source",
                 )
             })?;
-        let value = self.next_magica_palette_lease;
-        self.next_magica_palette_lease = value.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_CONTENT_MAGICA",
-                "MagicaVoxel palette lease handle space overflowed",
-            )
-        })?;
         let rows = palette
             .rows
             .iter()
@@ -287,14 +264,13 @@ impl RuntimeVoxelContentBridge {
                 alpha: row.rgba[3],
             })
             .collect::<Vec<_>>();
-        let lease = NativeMagicaVoxelPaletteLease {
-            handle: NativeMagicaVoxelPaletteLeaseHandle { value },
+        let result = NativeMagicaVoxelPaletteResult {
             palette: rows.as_ptr(),
             palette_len: rows.len(),
             source_hash: hash(&palette.source_hash)?,
             source_byte_count: palette.source_byte_count,
         };
-        Ok((lease, RetainedMagicaVoxelPaletteLease { _rows: rows }))
+        Ok((result, MagicaVoxelPaletteBacking { _rows: rows }))
     }
 
     fn insert_player(
@@ -356,16 +332,15 @@ impl RuntimeVoxelContentBridge {
         })
     }
 
-    fn prepare_asset_spatial_publish_lease(
+    fn prepare_asset_spatial_publish(
         &self,
-        value: u64,
         asset: &VoxelAsset,
         facts: VoxelAssetSpatialPublishFacts,
         voxel_data_hash: NativeVoxelContentHash,
         content_hash: NativeVoxelContentHash,
     ) -> (
-        NativeVoxelAssetSpatialPublishLease,
-        RetainedVoxelAssetSpatialPublishLease,
+        NativeVoxelAssetSpatialPublishResult,
+        VoxelAssetSpatialPublishBacking,
     ) {
         let palette = asset
             .material_palette
@@ -384,8 +359,7 @@ impl RuntimeVoxelContentBridge {
                 display_name: native_utf8(&row.display_name),
             })
             .collect::<Vec<_>>();
-        let lease = NativeVoxelAssetSpatialPublishLease {
-            handle: NativeVoxelAssetSpatialPublishLeaseHandle { value },
+        let result = NativeVoxelAssetSpatialPublishResult {
             palette: readout.as_ptr(),
             palette_len: readout.len(),
             revision_before: facts.revision_before,
@@ -404,8 +378,8 @@ impl RuntimeVoxelContentBridge {
             content_hash,
         };
         (
-            lease,
-            RetainedVoxelAssetSpatialPublishLease {
+            result,
+            VoxelAssetSpatialPublishBacking {
                 _palette: palette,
                 _readout: readout,
             },
@@ -454,21 +428,14 @@ impl RuntimeVoxelContentBridge {
         })
     }
 
-    fn insert_region_lease(
+    fn hold_region_result(
         &mut self,
         regions: Vec<VoxelAnnotationRegionReadout>,
         total_layer_regions: usize,
         truncated: bool,
         revision: u64,
         layer_hash: NativeVoxelContentHash,
-    ) -> Result<NativeVoxelAnnotationRegionLease, CsharpEngineServicesError> {
-        let value = self.next_annotation_region_lease;
-        self.next_annotation_region_lease = value.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_ANNOTATION_LEASE",
-                "annotation region lease handle space overflowed",
-            )
-        })?;
+    ) -> Result<NativeVoxelAnnotationRegionResult, CsharpEngineServicesError> {
         let retained: Vec<_> = regions
             .into_iter()
             .map(|region| RetainedVoxelAnnotationRegion {
@@ -499,8 +466,7 @@ impl RuntimeVoxelContentBridge {
                 assigned_cell_count: region.assigned_cell_count,
             })
             .collect::<Vec<_>>();
-        let lease = NativeVoxelAnnotationRegionLease {
-            handle: NativeVoxelAnnotationRegionLeaseHandle { value },
+        let result = NativeVoxelAnnotationRegionResult {
             regions: readout.as_ptr(),
             regions_len: readout.len(),
             total_layer_regions: narrow(total_layer_regions)?,
@@ -508,25 +474,18 @@ impl RuntimeVoxelContentBridge {
             revision,
             layer_hash,
         };
-        self.annotation_region_leases.insert(
-            value,
-            RetainedVoxelAnnotationRegionLease {
-                _regions: retained,
-                _readout: readout,
-            },
-        );
-        Ok(lease)
+        self.borrowed.hold(VoxelAnnotationRegionBacking {
+            _regions: retained,
+            _readout: readout,
+        });
+        Ok(result)
     }
 
-    fn prepare_edit_lease(
-        value: u64,
+    fn prepare_edit_result(
         receipt: voxel_annotation::VoxelAnnotationEditReceipt,
         revision: u64,
     ) -> Result<
-        (
-            NativeVoxelAnnotationEditLease,
-            RetainedVoxelAnnotationEditLease,
-        ),
+        (NativeVoxelAnnotationEditResult, VoxelAnnotationEditBacking),
         CsharpEngineServicesError,
     > {
         let ids = receipt.affected_region_ids;
@@ -536,8 +495,7 @@ impl RuntimeVoxelContentBridge {
                 region_id: native_utf8(region_id),
             })
             .collect::<Vec<_>>();
-        let lease = NativeVoxelAnnotationEditLease {
-            handle: NativeVoxelAnnotationEditLeaseHandle { value },
+        let result = NativeVoxelAnnotationEditResult {
             affected_ids: readout.as_ptr(),
             affected_ids_len: readout.len(),
             layer_hash_before: hash(&receipt.layer_hash_before)?,
@@ -550,8 +508,8 @@ impl RuntimeVoxelContentBridge {
             assigned_cell_count: receipt.assigned_cell_count,
         };
         Ok((
-            lease,
-            RetainedVoxelAnnotationEditLease {
+            result,
+            VoxelAnnotationEditBacking {
                 _ids: ids,
                 _readout: readout,
             },
@@ -563,7 +521,7 @@ impl RuntimeVoxelContentBridge {
         handle: NativeVoxelAnnotationHandle,
         expected_layer_hash: String,
         command: VoxelAnnotationEditCommand,
-    ) -> Result<NativeVoxelAnnotationEditLease, CsharpEngineServicesError> {
+    ) -> Result<NativeVoxelAnnotationEditResult, CsharpEngineServicesError> {
         let (next_revision, mut candidate) = {
             let annotation = self.annotation(handle)?;
             (
@@ -576,20 +534,13 @@ impl RuntimeVoxelContentBridge {
                 annotation.layer.clone(),
             )
         };
-        let next_lease = self.next_annotation_edit_lease;
-        let next_lease_after = next_lease.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_ANNOTATION_LEASE",
-                "annotation edit lease handle space overflowed",
-            )
-        })?;
         let transaction = VoxelAnnotationEditTransaction {
             expected_layer_hash,
             commands: vec![command],
         };
         // Preflight the owner transaction and construct every fallible ABI
         // receipt value before mutating the retained layer. This preserves the
-        // owner's all-or-nothing guarantee through lease construction too.
+        // owner's all-or-nothing guarantee through result construction too.
         let candidate_receipt =
             VoxelAnnotationEditService::apply(&mut candidate, transaction.clone()).map_err(
                 |_| {
@@ -599,8 +550,8 @@ impl RuntimeVoxelContentBridge {
                     )
                 },
             )?;
-        let (lease, retained_lease) =
-            Self::prepare_edit_lease(next_lease, candidate_receipt, next_revision)?;
+        let (result, retained_backing) =
+            Self::prepare_edit_result(candidate_receipt, next_revision)?;
         let receipt =
             VoxelAnnotationEditService::apply(&mut self.annotation_mut(handle)?.layer, transaction)
                 .map_err(|_| {
@@ -610,15 +561,13 @@ impl RuntimeVoxelContentBridge {
                     )
                 })?;
         debug_assert_eq!(
-            lease.layer_hash_after,
+            result.layer_hash_after,
             hash(&receipt.layer_hash_after).unwrap_or_default()
         );
         let annotation = self.annotation_mut(handle)?;
         annotation.revision = next_revision;
-        self.next_annotation_edit_lease = next_lease_after;
-        self.annotation_edit_leases
-            .insert(next_lease, retained_lease);
-        Ok(lease)
+        self.borrowed.hold(retained_backing);
+        Ok(result)
     }
 
     fn select_default(
@@ -1087,13 +1036,11 @@ fn api_impl(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
         destroy_asset,
         read_asset,
         publish_asset_to_spatial,
-        destroy_asset_spatial_publish_lease,
         admit_object,
         load_object_from_content,
         admit_magica_voxel_object,
         load_magica_voxel_from_content,
         read_magica_voxel_palette,
-        destroy_magica_voxel_palette_lease,
         destroy_object,
         read_object,
         select_default_object_frame,
@@ -1115,13 +1062,11 @@ fn api_impl(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
         load_annotation_from_content,
         destroy_annotation,
         query_annotation,
-        destroy_annotation_region_lease,
         set_annotation_label,
         set_annotation_kind,
         set_annotation_parent,
         set_annotation_bounds,
         set_annotation_tags,
-        destroy_annotation_edit_lease,
     }
 }
 
@@ -1219,17 +1164,13 @@ unsafe extern "C" fn read_asset(
 unsafe extern "C" fn publish_asset_to_spatial(
     context: *mut c_void,
     request: *const NativePublishVoxelAssetToSpatialRequest,
-    output: *mut NativeVoxelAssetSpatialPublishLease,
+    output: *mut NativeVoxelAssetSpatialPublishResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let request = unsafe { &*request };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    let next_lease = match bridge.next_asset_spatial_publish_lease.checked_add(1) {
-        Some(value) => value,
-        None => return 0,
-    };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
         Err(_) => return 0,
@@ -1251,42 +1192,14 @@ unsafe extern "C" fn publish_asset_to_spatial(
         Err(_) => return 0,
     };
     let facts = prepared.facts();
-    let (lease, retained) = bridge.prepare_asset_spatial_publish_lease(
-        bridge.next_asset_spatial_publish_lease,
-        &asset,
-        facts,
-        voxel_data_hash,
-        content_hash,
-    );
+    let (result, backing) =
+        bridge.prepare_asset_spatial_publish(&asset, facts, voxel_data_hash, content_hash);
     if spatial.commit_voxel_asset(prepared).is_err() {
         return 0;
     }
-    bridge.next_asset_spatial_publish_lease = next_lease;
-    let replaced = bridge
-        .asset_spatial_publish_leases
-        .insert(lease.handle.value, retained);
-    debug_assert!(replaced.is_none());
-    unsafe { *output = lease };
+    bridge.borrowed.hold(backing);
+    unsafe { *output = result };
     ABI_OK
-}
-
-unsafe extern "C" fn destroy_asset_spatial_publish_lease(
-    context: *mut c_void,
-    handle: NativeVoxelAssetSpatialPublishLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    if bridge
-        .asset_spatial_publish_leases
-        .remove(&handle.value)
-        .is_some()
-    {
-        ABI_OK
-    } else {
-        0
-    }
 }
 
 unsafe extern "C" fn admit_object(
@@ -1468,40 +1381,22 @@ fn admit_magica_bytes(
 unsafe extern "C" fn read_magica_voxel_palette(
     context: *mut c_void,
     object: NativeVoxelObjectHandle,
-    output: *mut NativeMagicaVoxelPaletteLease,
+    output: *mut NativeMagicaVoxelPaletteResult,
 ) -> i32 {
     if context.is_null() || output.is_null() {
         return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.read_magica_palette(object) {
-        Ok((lease, retained)) => {
-            let replaced = bridge
-                .magica_palette_leases
-                .insert(lease.handle.value, retained);
-            debug_assert!(replaced.is_none());
-            unsafe { *output = lease };
+        Ok((result, backing)) => {
+            bridge.borrowed.hold(backing);
+            unsafe { *output = result };
             ABI_OK
         }
         Err(error) if error.code() == "CSHARP_VOXEL_CONTENT_MAGICA" => {
             NativeMagicaVoxelAdmissionStatus::NotMagicaVoxelObject as i32
         }
         Err(_) => NativeMagicaVoxelAdmissionStatus::PaletteLeaseExhausted as i32,
-    }
-}
-
-unsafe extern "C" fn destroy_magica_voxel_palette_lease(
-    context: *mut c_void,
-    handle: NativeMagicaVoxelPaletteLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    if bridge.magica_palette_leases.remove(&handle.value).is_some() {
-        ABI_OK
-    } else {
-        NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32
     }
 }
 
@@ -1622,7 +1517,7 @@ unsafe extern "C" fn destroy_annotation(
 unsafe extern "C" fn query_annotation(
     context: *mut c_void,
     request: *const NativeVoxelAnnotationQueryRequest,
-    output: *mut NativeVoxelAnnotationRegionLease,
+    output: *mut NativeVoxelAnnotationRegionResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
@@ -1660,41 +1555,25 @@ unsafe extern "C" fn query_annotation(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    match bridge.insert_region_lease(
+    match bridge.hold_region_result(
         readout.matched_regions,
         readout.total_layer_regions,
         readout.truncated,
         revision,
         layer_hash,
     ) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(result) => {
+            unsafe { *output = result };
             ABI_OK
         }
         Err(_) => 0,
     }
 }
 
-unsafe extern "C" fn destroy_annotation_region_lease(
-    context: *mut c_void,
-    handle: NativeVoxelAnnotationRegionLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    i32::from(
-        bridge
-            .annotation_region_leases
-            .remove(&handle.value)
-            .is_some(),
-    )
-}
-
 unsafe extern "C" fn set_annotation_label(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationLabelRequest,
-    output: *mut NativeVoxelAnnotationEditLease,
+    output: *mut NativeVoxelAnnotationEditResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
@@ -1723,8 +1602,8 @@ unsafe extern "C" fn set_annotation_label(
         expected,
         VoxelAnnotationEditCommand::SetLabel { region_id, label },
     ) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(result) => {
+            unsafe { *output = result };
             ABI_OK
         }
         Err(_) => 0,
@@ -1734,7 +1613,7 @@ unsafe extern "C" fn set_annotation_label(
 unsafe extern "C" fn set_annotation_kind(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationKindRequest,
-    output: *mut NativeVoxelAnnotationEditLease,
+    output: *mut NativeVoxelAnnotationEditResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
@@ -1764,8 +1643,8 @@ unsafe extern "C" fn set_annotation_kind(
             annotation_kind: kind,
         },
     ) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(result) => {
+            unsafe { *output = result };
             ABI_OK
         }
         Err(_) => 0,
@@ -1775,7 +1654,7 @@ unsafe extern "C" fn set_annotation_kind(
 unsafe extern "C" fn set_annotation_parent(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationParentRequest,
-    output: *mut NativeVoxelAnnotationEditLease,
+    output: *mut NativeVoxelAnnotationEditResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
@@ -1815,8 +1694,8 @@ unsafe extern "C" fn set_annotation_parent(
             parent_region_id,
         },
     ) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(result) => {
+            unsafe { *output = result };
             ABI_OK
         }
         Err(_) => 0,
@@ -1826,7 +1705,7 @@ unsafe extern "C" fn set_annotation_parent(
 unsafe extern "C" fn set_annotation_bounds(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationBoundsRequest,
-    output: *mut NativeVoxelAnnotationEditLease,
+    output: *mut NativeVoxelAnnotationEditResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
@@ -1852,8 +1731,8 @@ unsafe extern "C" fn set_annotation_bounds(
             bounds: annotation_bounds(request.bounds),
         },
     ) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(result) => {
+            unsafe { *output = result };
             ABI_OK
         }
         Err(_) => 0,
@@ -1863,7 +1742,7 @@ unsafe extern "C" fn set_annotation_bounds(
 unsafe extern "C" fn set_annotation_tags(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationTagsRequest,
-    output: *mut NativeVoxelAnnotationEditLease,
+    output: *mut NativeVoxelAnnotationEditResult,
 ) -> i32 {
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
@@ -1890,28 +1769,12 @@ unsafe extern "C" fn set_annotation_tags(
         expected,
         VoxelAnnotationEditCommand::SetTags { region_id, tags },
     ) {
-        Ok(lease) => {
-            unsafe { *output = lease };
+        Ok(result) => {
+            unsafe { *output = result };
             ABI_OK
         }
         Err(_) => 0,
     }
-}
-
-unsafe extern "C" fn destroy_annotation_edit_lease(
-    context: *mut c_void,
-    handle: NativeVoxelAnnotationEditLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    i32::from(
-        bridge
-            .annotation_edit_leases
-            .remove(&handle.value)
-            .is_some(),
-    )
 }
 
 unsafe extern "C" fn destroy_object(context: *mut c_void, handle: NativeVoxelObjectHandle) -> i32 {
@@ -2843,7 +2706,7 @@ mod tests {
     }
 
     #[test]
-    fn publishes_admitted_asset_into_fresh_spatial_session_with_palette_lease() {
+    fn publishes_admitted_asset_into_fresh_spatial_session_with_borrowed_palette() {
         let mut spatial = RuntimeSpatialBridge::new();
         let spatial_api = crate::spatial::api(&mut spatial);
         let mut session = NativeSpatialSessionHandle::default();
@@ -2886,7 +2749,7 @@ mod tests {
             ABI_OK
         );
 
-        let mut lease = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishLease>() };
+        let mut result = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishResult>() };
         assert_eq!(
             unsafe {
                 (api.publish_asset_to_spatial)(
@@ -2895,18 +2758,18 @@ mod tests {
                         asset: asset_handle,
                         session,
                     },
-                    &mut lease,
+                    &mut result,
                 )
             },
             ABI_OK
         );
-        assert_eq!(lease.revision_before, 0);
-        assert_eq!(lease.revision_after, 0);
-        assert_eq!(lease.solid_voxel_count, 1);
-        assert_eq!(lease.resident_chunk_count, 1);
-        assert_ne!(lease.authority_hash, 0);
-        assert_eq!(lease.palette_len, 1);
-        let palette_row = unsafe { &*lease.palette };
+        assert_eq!(result.revision_before, 0);
+        assert_eq!(result.revision_after, 0);
+        assert_eq!(result.solid_voxel_count, 1);
+        assert_eq!(result.resident_chunk_count, 1);
+        assert_ne!(result.authority_hash, 0);
+        assert_eq!(result.palette_len, 1);
+        let palette_row = unsafe { &*result.palette };
         assert_eq!(palette_row.material_slot, 1);
         assert_eq!(
             unsafe {
@@ -2915,7 +2778,7 @@ mod tests {
                     palette_row.material_asset_id.len,
                 ))
             }
-            .expect("leased material id"),
+            .expect("borrowed material id"),
             "material/bridge-test"
         );
 
@@ -2931,23 +2794,13 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!(scene.solid_voxel_count, lease.solid_voxel_count);
-        assert_eq!(scene.resident_chunk_count, lease.resident_chunk_count);
-        assert_eq!(scene.authority_hash, lease.authority_hash);
-        assert_eq!(scene.navigation_revision, lease.navigation_revision);
-
-        assert_eq!(
-            unsafe { (api.destroy_asset_spatial_publish_lease)(api.context, lease.handle) },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe { (api.destroy_asset_spatial_publish_lease)(api.context, lease.handle) },
-            0,
-            "publish leases have one exact release"
-        );
+        assert_eq!(scene.solid_voxel_count, result.solid_voxel_count);
+        assert_eq!(scene.resident_chunk_count, result.resident_chunk_count);
+        assert_eq!(scene.authority_hash, result.authority_hash);
+        assert_eq!(scene.navigation_revision, result.navigation_revision);
 
         let before_rejected = scene;
-        let mut rejected = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishLease>() };
+        let mut rejected = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishResult>() };
         assert_eq!(
             unsafe {
                 (api.publish_asset_to_spatial)(
@@ -3037,7 +2890,7 @@ mod tests {
             ABI_OK
         );
         let mut navigation_rejected =
-            unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishLease>() };
+            unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishResult>() };
         assert_eq!(
             unsafe {
                 (api.publish_asset_to_spatial)(
@@ -3302,7 +3155,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_target_bound_annotations_queries_bounded_leases_and_keeps_metadata_edits_atomic() {
+    fn retains_target_bound_annotations_queries_bounded_results_and_keeps_metadata_edits_atomic() {
         let mut bridge = RuntimeVoxelContentBridge::new();
         let mut appearance =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
@@ -3371,7 +3224,7 @@ mod tests {
             NativeVoxelAnnotationQueryMode::Region,
             NativeVoxelAnnotationQueryMode::LayerSummary,
         ] {
-            let mut lease = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionLease>() };
+            let mut result = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionResult>() };
             let max_results = if mode == NativeVoxelAnnotationQueryMode::LayerSummary {
                 1
             } else {
@@ -3396,43 +3249,34 @@ mod tests {
                             expected_layer_hash: initial_hash,
                             max_results,
                         },
-                        &mut lease,
+                        &mut result,
                     )
                 },
                 ABI_OK
             );
-            assert_eq!(lease.total_layer_regions, 2);
-            assert_eq!(lease.revision, 0);
-            assert_eq!(lease.layer_hash, initial_hash);
+            assert_eq!(result.total_layer_regions, 2);
+            assert_eq!(result.revision, 0);
+            assert_eq!(result.layer_hash, initial_hash);
             assert_eq!(
-                lease.truncated,
+                result.truncated,
                 mode == NativeVoxelAnnotationQueryMode::LayerSummary
             );
-            assert!(!lease.regions.is_null());
-            assert!(lease.regions_len >= 1);
+            assert!(!result.regions.is_null());
+            assert!(result.regions_len >= 1);
             assert_eq!(
                 unsafe {
                     std::str::from_utf8(std::slice::from_raw_parts(
-                        (*lease.regions).region_id.bytes,
-                        (*lease.regions).region_id.len,
+                        (*result.regions).region_id.bytes,
+                        (*result.regions).region_id.len,
                     ))
                 }
-                .expect("leased region id"),
+                .expect("borrowed region id"),
                 "region/bridge-a"
-            );
-            assert_eq!(
-                unsafe { (api.destroy_annotation_region_lease)(api.context, lease.handle) },
-                ABI_OK
-            );
-            assert_eq!(
-                unsafe { (api.destroy_annotation_region_lease)(api.context, lease.handle) },
-                0,
-                "each query lease has one exact release"
             );
         }
 
         let label = b"renamed";
-        let mut label_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut label_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_label)(
@@ -3464,20 +3308,11 @@ mod tests {
                     (*label_edit.affected_ids).region_id.len,
                 ))
             }
-            .expect("leased affected id"),
+            .expect("borrowed affected id"),
             "region/bridge-a"
         );
-        assert_eq!(
-            unsafe { (api.destroy_annotation_edit_lease)(api.context, label_edit.handle) },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe { (api.destroy_annotation_edit_lease)(api.context, label_edit.handle) },
-            0,
-            "each edit lease has one exact release"
-        );
 
-        let mut stale_kind = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut stale_kind = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_kind)(
@@ -3498,7 +3333,7 @@ mod tests {
             "stale edits fail before the owner commits"
         );
 
-        let mut kind_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut kind_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_kind)(
@@ -3519,13 +3354,9 @@ mod tests {
         );
         assert_eq!(kind_edit.revision, 2);
         let kind_hash = kind_edit.layer_hash_after;
-        assert_eq!(
-            unsafe { (api.destroy_annotation_edit_lease)(api.context, kind_edit.handle) },
-            ABI_OK
-        );
 
         let region_b = b"region/bridge-b";
-        let mut parent_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut parent_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_parent)(
@@ -3550,12 +3381,8 @@ mod tests {
         );
         assert_eq!(parent_edit.revision, 3);
         let parent_hash = parent_edit.layer_hash_after;
-        assert_eq!(
-            unsafe { (api.destroy_annotation_edit_lease)(api.context, parent_edit.handle) },
-            ABI_OK
-        );
 
-        let mut bounds_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut bounds_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_bounds)(
@@ -3576,10 +3403,6 @@ mod tests {
         );
         assert_eq!(bounds_edit.revision, 4);
         let bounds_hash = bounds_edit.layer_hash_after;
-        assert_eq!(
-            unsafe { (api.destroy_annotation_edit_lease)(api.context, bounds_edit.handle) },
-            ABI_OK
-        );
 
         let mut tag_one = "café".as_bytes().to_vec();
         let mut tag_two = b"combat".to_vec();
@@ -3597,7 +3420,7 @@ mod tests {
                 },
             },
         ];
-        let mut tags_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut tags_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_tags)(
@@ -3618,10 +3441,6 @@ mod tests {
             ABI_OK
         );
         assert_eq!(tags_edit.revision, 5);
-        assert_eq!(
-            unsafe { (api.destroy_annotation_edit_lease)(api.context, tags_edit.handle) },
-            ABI_OK
-        );
         tag_one.fill(b'x');
         tag_two.fill(b'y');
         let copied_tags = &bridge
@@ -3645,7 +3464,7 @@ mod tests {
                 len: b"stale".len(),
             },
         }];
-        let mut stale_tags_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        let mut stale_tags_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
         assert_eq!(
             unsafe {
                 (api.set_annotation_tags)(
@@ -3679,7 +3498,7 @@ mod tests {
             vec!["café", "combat"]
         );
 
-        let mut after = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionLease>() };
+        let mut after = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionResult>() };
         assert_eq!(
             unsafe {
                 (api.query_annotation)(
@@ -3716,15 +3535,11 @@ mod tests {
                     (*after.regions).label.len,
                 ))
             }
-            .expect("leased label"),
+            .expect("borrowed label"),
             "renamed",
             "stale failure did not partially apply kind"
         );
         assert_eq!(unsafe { (*after.regions).bounds.max_x }, 1);
-        assert_eq!(
-            unsafe { (api.destroy_annotation_region_lease)(api.context, after.handle) },
-            ABI_OK
-        );
 
         assert_eq!(
             unsafe { (api.destroy_annotation)(api.context, annotation_handle) },
