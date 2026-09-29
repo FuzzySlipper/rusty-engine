@@ -1,0 +1,8 @@
+> [9.19s] physical:{"kind":"pointer-button","button":"primary","edge":"pressed"}
+{"accepted":true,"code":"DEV_HOST_INPUT_QUEUED","disposition":"accepted","count":1,"acceptedCount":1,"droppedCount":0}
+> [9.47s] physical:{"kind":"pointer-button","button":"primary","edge":"released"}
+{"accepted":true,"code":"DEV_HOST_INPUT_QUEUED","disposition":"accepted","count":1,"acceptedCount":1,"droppedCount":0}
+> [10.95s] physical:{"kind":"pointer-button","button":"primary","edge":"pressed"}
+{"accepted":true,"code":"DEV_HOST_INPUT_QUEUED","disposition":"accepted","count":1,"acceptedCount":1,"droppedCount":0}
+> [11.22s] physical:{"kind":"pointer-button","button":"primary","edge":"released"}
+{"accepted":true,"code":"DEV_HOST_INPUT_QUEUED","disposition":"accepted","count":1,"acceptedCount":1,"droppedCount":0}

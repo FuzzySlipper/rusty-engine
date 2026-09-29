@@ -6,8 +6,8 @@
 # recorded, so nothing reaches speakers. Each extra argument is one live-debug
 # command line, run in order; `sleep:<seconds>` waits and
 # `catalog` saves the debug catalog; `claim:<intent>:<contract>:<json>`
-# submits a product-payload intent; `post:<route>` posts the current binding to a runtime
-# control route. HOST_ARGS adds
+# submits a product-payload intent and `physical:<json fact>` a physical input; `post:<route>` posts the current binding to a runtime
+# control route; `script:<python file>` runs a driver against the host. HOST_ARGS adds
 # host arguments such as --persistence-root.
 set -euo pipefail
 RUNTIME="$1" PRODUCT="$2" WORK="$3"
@@ -51,25 +51,35 @@ ORIGIN="$(sed -n 's/.*listening at \(http:\/\/[^ ]*\).*/\1/p' "$WORK/host.log" |
 curl --silent --no-buffer -H "Accept: text/event-stream" -H "Origin: $ORIGIN" "$ORIGIN/__rusty/product/runtime/outputs/fresh" \
   >"$WORK/outputs.sse" &
 SSE=$!
-sleep 2
+# Commands start once the product has published its first binding.
+for _ in $(seq 1 240); do
+  grep -qE 'kind\\?":\\?"binding' "$WORK/outputs.sse" 2>/dev/null && break
+  sleep 0.25
+done
 for line in "$@"; do
   if [[ "$line" == catalog ]]; then
     curl --silent -H "Origin: $ORIGIN" "$ORIGIN/__rusty/product/runtime/debug/catalog" >"$WORK/catalog.json"
     continue
   fi
-  if [[ "$line" == claim:* ]]; then
+  if [[ "$line" == claim:* || "$line" == physical:* ]]; then
     # claim:<intent>:<contract>:<json data> submits one product-payload
-    # intent under the latest published binding, as the product UI does.
-    IFS=: read -r _ intent contract data <<<"$line"
-    body="$(python3 - "$WORK/outputs.sse" "$intent" "$contract" "$data" <<'PY'
+    # intent, and physical:<json fact> one physical input fact (for example
+    # {"kind":"pointer-button","button":"primary","edge":"pressed"}), each under
+    # the latest published binding, as the browser shell does.
+    body="$(python3 - "$WORK/outputs.sse" "$line" <<'PY'
 import json, re, sys
-stream = open(sys.argv[1]).read()
-runtime = re.findall(r'\{"kind":"binding","runtime":(\{[^}]*\})', stream)[-1]
+# Large batches arrive as fragments carrying escaped JSON.
+stream = open(sys.argv[1]).read().replace('\\"', '"')
+runtime = json.loads(re.findall(r'\{"kind":"binding","runtime":(\{[^}]*\})', stream)[-1])
 # Input results advance the sequence after the binding published it.
 sequence = re.findall(r'"nextInputSequence":"(\d+)"', stream)[-1]
-event = {"runtime": json.loads(runtime), "sequence": sequence, "context": "gameplay.default",
-         "intent": sys.argv[2],
-         "value": {"kind": "product-payload", "contract": sys.argv[3], "data": json.loads(sys.argv[4])}}
+event = {"runtime": runtime, "sequence": sequence, "context": "gameplay.default"}
+line = sys.argv[2]
+if line.startswith("claim:"):
+    _, intent, contract, data = line.split(":", 3)
+    event.update(intent=intent, value={"kind": "product-payload", "contract": contract, "data": json.loads(data)})
+else:
+    event["fact"] = json.loads(line[len("physical:"):])
 print(json.dumps({"batch": [event]}))
 PY
 )"
@@ -77,6 +87,7 @@ PY
     curl --silent -H "Origin: $ORIGIN" -H "Content-Type: application/json" \
       --data "$body" "$ORIGIN/__rusty/product/runtime/input" >>"$WORK/live-debug.log"
     echo >>"$WORK/live-debug.log"
+    sleep 0.2
     continue
   fi
   if [[ "$line" == post:* ]]; then
@@ -87,6 +98,13 @@ PY
       --data "{\"runtime\":$runtime}" "$ORIGIN/__rusty/product/runtime/${line#post:}" \
       | head -c 300 >>"$WORK/live-debug.log"
     echo >>"$WORK/live-debug.log"
+    continue
+  fi
+  if [[ "$line" == script:* ]]; then
+    # script:<python file> drives the product itself; it receives the origin,
+    # the output stream capture and the live-debug client.
+    echo "> [$(elapsed)s] $line" >>"$WORK/live-debug.log"
+    python3 "${line#script:}" "$ORIGIN" "$WORK/outputs.sse" "$RUNTIME/bin/rusty-live-debug" >>"$WORK/live-debug.log" 2>&1
     continue
   fi
   if [[ "$line" == sleep:* ]]; then
