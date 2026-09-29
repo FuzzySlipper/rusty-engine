@@ -2,11 +2,13 @@
 //! Engine presentation timeline and drawn over the primary target, letterboxed
 //! on black, as the browser's video element covered the view.
 //!
-//! A clip starts at the timeline position its play op was applied at, so a
-//! held simulation holds the picture and a fresh renderer (a new attachment)
-//! plays an active clip from its start. Playback ends as the browser host
-//! reported it: `Completed` at the clip's end, `Skipped` for a skip op,
-//! `Failed` when the clip cannot be read or decoded. A stop ends it silently.
+//! A clip starts at the timeline position its play op was applied at, drawn
+//! or not, so a held simulation holds the picture, a viewer that attaches
+//! mid-clip sees it where the Engine (and its soundtrack) is, and a rebuilt
+//! renderer, whose baseline applies at the current time, plays an active clip
+//! from its start. Playback ends as the browser host reported it: `Completed`
+//! at the clip's end, `Skipped` for a skip op, `Failed` when the clip cannot
+//! be read or decoded. A stop ends it silently.
 
 use std::sync::Arc;
 
@@ -52,10 +54,8 @@ pub(crate) struct Video {
 struct Active {
     handle: VideoPlaybackHandle,
     playback: VideoPlayback,
-    /// The timeline position of the first frame, taken at the first render
-    /// after the play op: a fresh renderer applies a baseline play before
-    /// the runtime moves it to the Engine's current time.
-    started_at: Option<f64>,
+    /// The timeline position of the first frame: when the play op applied.
+    started_at: f64,
     planes: Option<Planes>,
 }
 
@@ -159,7 +159,7 @@ impl Renderer {
                         self.video.active = Some(Active {
                             handle: *handle,
                             playback: VideoPlayback::new(Arc::clone(&clip)),
-                            started_at: None,
+                            started_at: self.animation_time,
                             planes: None,
                         });
                     }
@@ -204,8 +204,7 @@ impl Renderer {
         let Some(active) = &mut self.video.active else {
             return;
         };
-        let started_at = *active.started_at.get_or_insert(self.animation_time);
-        let position = (self.animation_time - started_at).max(0.0);
+        let position = (self.animation_time - active.started_at).max(0.0);
         let handle = active.handle;
         if active.playback.finished(position) {
             self.video.end(Some(VideoFact::Completed { handle }));

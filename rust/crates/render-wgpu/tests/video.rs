@@ -81,8 +81,8 @@ fn a_playing_clip_covers_the_world_letterboxed_on_the_engine_timeline() {
     let (stats, world) = render_stats_at(&mut harness, 10.0);
     assert!(!stats.video);
     play(&mut harness, CLIP_RESOURCE);
-    // The clip starts at the first render after its play op, and the frame
-    // says a clip covers it (the streamed frame's video flag).
+    // The clip starts when its play op applies, and the frame says a clip
+    // covers it (the streamed frame's video flag).
     let (stats, first) = render_stats_at(&mut harness, 10.0);
     assert!(stats.video);
     assert_screenshot("video-first-frame", WIDTH, HEIGHT, &first);
@@ -114,10 +114,34 @@ fn a_playing_clip_covers_the_world_letterboxed_on_the_engine_timeline() {
 }
 
 #[test]
-fn a_fresh_renderer_plays_an_active_clip_from_its_start() {
-    // A new attachment's baseline carries the play op; the runtime applies it
-    // before moving the renderer to the Engine's current time.
+fn an_undrawn_clip_keeps_to_the_engine_timeline() {
+    // Nothing draws while no viewer watches, but the clip (and its
+    // soundtrack) runs from its play op: a viewer that attaches later sees
+    // it where the Engine is, not from its start.
     let mut harness = room_harness();
+    harness.renderer.set_animation_time(10.0);
+    play(&mut harness, CLIP_RESOURCE);
+    harness.renderer.set_animation_time(10.3);
+    let attached = render_at(&mut harness, 10.55);
+    assert_screenshot("video-frame-5", WIDTH, HEIGHT, &attached);
+    // A clip that ended while undrawn completes at the first draw, once.
+    harness.renderer.set_animation_time(11.6);
+    render_at(&mut harness, 20.0);
+    assert_eq!(
+        harness.renderer.take_video_facts(),
+        [VideoFact::Completed { handle: HANDLE }]
+    );
+    render_at(&mut harness, 21.0);
+    assert!(harness.renderer.take_video_facts().is_empty());
+}
+
+#[test]
+fn a_rebuilt_renderer_plays_an_active_clip_from_its_start() {
+    // A rebuilt renderer (a failed call's lost work, a fault) takes the
+    // Engine's current time before its baseline, so the baseline's play
+    // starts the active clip again; its soundtrack restarts with it.
+    let mut harness = room_harness();
+    harness.renderer.set_animation_time(300.0);
     play(&mut harness, CLIP_RESOURCE);
     let restarted = render_at(&mut harness, 300.0);
     assert_screenshot("video-first-frame", WIDTH, HEIGHT, &restarted);
