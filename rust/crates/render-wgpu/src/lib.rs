@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 mod apply;
+mod batch;
 mod camera;
 mod capture;
 mod compose;
@@ -29,9 +30,11 @@ mod gpu;
 mod pipelines;
 mod primitives;
 mod resources;
+mod shadows;
 mod surface;
 pub mod tables;
 mod target;
+mod voxel;
 
 use std::collections::HashMap;
 
@@ -77,6 +80,10 @@ pub struct RendererOptions {
     /// `RustyEngineProductDefaultViewmodelLights`: the neutral rig lights the
     /// viewmodel layer unless the product disables it.
     pub default_viewmodel_lights: bool,
+    /// Render shadow maps for world lights whose `shadow_intent` requests
+    /// them (Three's `lighting.shadows.enabled` host option). Off by
+    /// default; C# products do not enable it.
+    pub shadows: bool,
 }
 
 impl Default for RendererOptions {
@@ -84,6 +91,7 @@ impl Default for RendererOptions {
         Self {
             default_world_lights: true,
             default_viewmodel_lights: true,
+            shadows: false,
         }
     }
 }
@@ -102,7 +110,14 @@ pub struct Renderer {
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
     lights: frame::LightRanges,
+    /// Part ids: the caster list, then the world and viewmodel view lists.
+    instances_buffer: wgpu::Buffer,
+    casters: batch::DrawList,
+    /// Per view layer (world, viewmodel): the last draw list.
+    views: [Option<frame::ViewCache>; 2],
+    shadows: shadows::ShadowMaps,
     frame_bind_group: wgpu::BindGroup,
+    caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
     /// Counts applied deltas; offscreen composition targets re-render when
     /// it moves past the value they were drawn at.
@@ -114,6 +129,7 @@ pub struct Renderer {
 /// Initial storage sizes; both grow by doubling.
 const INITIAL_PARTS_BYTES: u64 = 64 * 1024;
 const INITIAL_LIGHTS_BYTES: u64 = 4 * 1024;
+const INITIAL_INSTANCES_BYTES: u64 = 16 * 1024;
 
 impl Renderer {
     pub fn new(gpu: &Gpu, options: RendererOptions) -> Self {
@@ -123,12 +139,26 @@ impl Renderer {
         let parts_buffer = frame::storage_buffer(device, "render-wgpu parts", INITIAL_PARTS_BYTES);
         let lights_buffer =
             frame::storage_buffer(device, "render-wgpu lights", INITIAL_LIGHTS_BYTES);
+        let instances_buffer =
+            frame::storage_buffer(device, "render-wgpu instances", INITIAL_INSTANCES_BYTES);
+        let shadows = shadows::ShadowMaps::new(device, &layouts.shadow_layer);
         let frame_bind_group = frame::frame_bind_group(
             device,
             &layouts.frame,
-            &frame_buffer,
+            frame::FrameBindings {
+                frame: &frame_buffer,
+                parts: &parts_buffer,
+                lights: &lights_buffer,
+                instances: &instances_buffer,
+                shadows: &shadows,
+            },
+        );
+        let caster_bind_group = frame::caster_bind_group(
+            device,
+            &layouts.casters,
             &parts_buffer,
-            &lights_buffer,
+            &instances_buffer,
+            &shadows,
         );
         let white = white_texture(gpu);
         let (unlit_material, lit_fallback_material) =
@@ -147,7 +177,12 @@ impl Renderer {
             parts_buffer,
             lights_buffer,
             lights: Default::default(),
+            instances_buffer,
+            casters: batch::DrawList::default(),
+            views: Default::default(),
+            shadows,
             frame_bind_group,
+            caster_bind_group,
             sky_bind_group: None,
             scene_generation: 0,
             compose: compose::Compose::new(device),
@@ -178,7 +213,8 @@ impl Renderer {
         self.options
     }
 
-    /// Change host options; lights are re-derived on the next render.
+    /// Change host options; lights (and shadow layers) are re-derived on the
+    /// next render.
     pub fn set_options(&mut self, options: RendererOptions) {
         self.options = options;
         self.tables.lights_dirty = true;
@@ -194,6 +230,8 @@ impl Renderer {
             parts: self.tables.parts.meta.iter().flatten().count(),
             lights: self.tables.lights.len(),
             atlases: self.tables.atlases.len(),
+            voxel_objects: self.tables.voxel_objects.len(),
+            shadow_layers: self.shadows.layers as usize,
         }
     }
 }
@@ -207,6 +245,8 @@ pub struct TableCounts {
     pub parts: usize,
     pub lights: usize,
     pub atlases: usize,
+    pub voxel_objects: usize,
+    pub shadow_layers: usize,
 }
 
 /// A 1×1 white texture: untextured materials sample it.
@@ -228,6 +268,7 @@ fn white_texture(gpu: &Gpu) -> GpuTexture {
         &[255; 4],
     );
     GpuTexture {
+        size: (1, 1),
         view: texture.create_view(&Default::default()),
         sampler: gpu.device.create_sampler(&Default::default()),
     }

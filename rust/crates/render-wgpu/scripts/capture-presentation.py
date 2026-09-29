@@ -20,22 +20,33 @@ origin = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:4395"
 out = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(__file__).resolve().parents[4] / "target" / "render-wgpu-capture"
 headers = {"Origin": origin, "Accept": "text/event-stream"}
 
-fragments, counts, event = {}, {}, None
+# The baseline batch arrives whole as a plain message (newer hosts) or as
+# fragments of one transfer (`rusty-output-fragment`).
+fragments, counts, event, batch = {}, {}, None, None
 request = urllib.request.Request(f"{origin}/__rusty/product/runtime/outputs/fresh", headers=headers)
 with urllib.request.urlopen(request, timeout=30) as stream:
     for raw in stream:
         line = raw.decode().rstrip("\n")
         if line.startswith("event:"):
             event = line[6:].strip()
+        elif line == "":
+            event = None
+        elif line.startswith("data:") and event in (None, "message"):
+            data = json.loads(line[5:])
+            if data.get("kind") == "runtime-output-batch" and any(
+                output["kind"] == "frame" for output in data["outputs"]
+            ):
+                batch = data
+                break
         elif line.startswith("data:") and event == "rusty-output-fragment":
             data = json.loads(line[5:])
             fragments.setdefault(data["transferId"], {})[data["fragmentIndex"]] = data["data"]
             counts[data["transferId"]] = data["fragmentCount"]
             if len(fragments[data["transferId"]]) == data["fragmentCount"]:
                 transfer = data["transferId"]
+                batch = json.loads("".join(fragments[transfer][i] for i in range(counts[transfer])))
                 break
 
-batch = json.loads("".join(fragments[transfer][i] for i in range(counts[transfer])))
 outputs = {output["kind"]: output for output in batch["outputs"]}
 generation = outputs["binding"]["runtime"]["generation"]
 frame = outputs["frame"]["frame"]

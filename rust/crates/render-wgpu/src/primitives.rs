@@ -21,6 +21,7 @@ impl Geometry {
         self.vertices.extend_from_slice(&position);
         self.vertices.extend_from_slice(&normal);
         self.vertices.extend_from_slice(&uv);
+        self.vertices.extend_from_slice(&[1.0; 4]);
         index
     }
 }

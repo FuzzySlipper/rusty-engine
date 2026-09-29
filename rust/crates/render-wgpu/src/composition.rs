@@ -26,7 +26,7 @@ use render_host_contracts::{
 };
 
 use crate::camera::{self, CameraMatrices, CameraMotion, CameraPose, CameraSampleReadout};
-use crate::frame::{PassStart, PixelRect, ViewLayer, ViewPass};
+use crate::frame::{PassStart, PixelRect, ViewLayer, ViewPass, ViewStats};
 use crate::target::{self, TargetView, OFFSCREEN_FORMAT};
 use crate::{FrameStats, OffscreenTarget, PresentSkip, Renderer, WindowSurface};
 
@@ -229,18 +229,19 @@ impl Renderer {
         target: TargetView<'_>,
     ) -> FrameStats {
         let area = PixelRect::whole(target.width, target.height);
-        let draws = self.draw_primary_view(
+        let drawn = self.draw_primary_view(
             &target,
             area,
             camera::descriptor_pose(camera),
             camera,
             PassStart::Target,
         );
-        FrameStats {
-            draws,
+        let mut stats = FrameStats {
             lights: self.lights.world.count,
             ..FrameStats::default()
-        }
+        };
+        stats += drawn;
+        stats
     }
 
     fn draw_primary_view(
@@ -250,7 +251,7 @@ impl Renderer {
         pose: CameraPose,
         camera: &RendererCompositionCamera,
         start: PassStart,
-    ) -> u32 {
+    ) -> ViewStats {
         let clear = self.environment_clear();
         let world = self.encode_view(ViewPass {
             target: *target,
@@ -348,7 +349,7 @@ impl Renderer {
                 height,
             };
             for (index, (area, matrices)) in passes.iter().enumerate() {
-                stats.draws += self.encode_view(ViewPass {
+                stats += self.encode_view(ViewPass {
                     target: view,
                     viewport: *area,
                     camera: *matrices,
@@ -407,7 +408,7 @@ impl Renderer {
                     } else {
                         PassStart::Viewport
                     };
-                    stats.draws += self.draw_primary_view(&primary, area, *pose, camera, start);
+                    stats += self.draw_primary_view(&primary, area, *pose, camera, start);
                 }
                 PrimaryStep::Presentation(index) => {
                     let presentation = &composition.presentations[*index];

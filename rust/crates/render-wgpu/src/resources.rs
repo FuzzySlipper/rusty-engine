@@ -74,12 +74,13 @@ fn expand(pixels: &[u8], stride: usize, to_rgba: impl Fn(&[u8]) -> [u8; 4]) -> V
     pixels.chunks_exact(stride).flat_map(to_rgba).collect()
 }
 
-/// Vertex streams ready for upload. Vertex colours are not read: the Three
-/// lane's generic materials never enabled them.
+/// Vertex streams ready for upload. Colours (RGBA) are drawn only for static
+/// meshes, the one family whose Three materials enabled vertex colours.
 pub(crate) struct MeshStreams {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub uvs: Option<Vec<f32>>,
+    pub colors: Option<Vec<f32>>,
     pub indices: Vec<u32>,
 }
 
@@ -92,12 +93,13 @@ pub(crate) fn mesh_streams(
             positions,
             normals,
             uvs,
+            colors,
             indices,
-            ..
         } => Ok(MeshStreams {
             positions: positions.clone(),
             normals: normals.clone(),
             uvs: uvs.clone(),
+            colors: colors.clone(),
             indices: indices.clone(),
         }),
         MeshPayloadSource::Resource {
@@ -105,6 +107,7 @@ pub(crate) fn mesh_streams(
             positions_byte_offset,
             normals_byte_offset,
             uvs_byte_offset,
+            colors_byte_offset,
             indices_byte_offset,
             ..
         } => {
@@ -117,6 +120,9 @@ pub(crate) fn mesh_streams(
                 normals: f32_stream(&bytes, *normals_byte_offset, vertices * 3)?,
                 uvs: uvs_byte_offset
                     .map(|offset| f32_stream(&bytes, offset, vertices * 2))
+                    .transpose()?,
+                colors: colors_byte_offset
+                    .map(|offset| f32_stream(&bytes, offset, vertices * 4))
                     .transpose()?,
                 indices: u32_stream(
                     &bytes,

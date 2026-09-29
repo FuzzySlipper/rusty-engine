@@ -28,7 +28,8 @@ struct Light {
     position_range: vec4<f32>,
     // xyz: world travel direction; w: decay exponent
     direction_decay: vec4<f32>,
-    // hemisphere: ground colour * intensity; spot: (cos outer, cos inner)
+    // hemisphere: ground colour * intensity; spot: (cos outer, cos inner);
+    // w: first shadow layer + 1, or 0 without a shadow
     extra: vec4<f32>,
 };
 
@@ -37,15 +38,27 @@ struct MaterialUniform {
     alpha_cutoff: f32,
     flags: u32,
     pad: u32,
+    // Voxel surface: xy tile scale, zw tile origin (cells).
+    tile: vec4<f32>,
+    // Voxel surface: xy sample min, zw sample max (texture uv).
+    sample_rect: vec4<f32>,
 };
 
 const FLAG_UNLIT: u32 = 1u;
 const FLAG_MASK: u32 = 2u;
+const FLAG_VOXEL_SURFACE: u32 = 4u;
 const PI: f32 = 3.141592653589793;
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> parts: array<Part>;
 @group(0) @binding(2) var<storage, read> lights: array<Light>;
+// Part ids in draw order; a draw's instances index this list.
+@group(0) @binding(3) var<storage, read> instances: array<u32>;
+@group(0) @binding(4) var shadow_maps: texture_depth_2d_array;
+@group(0) @binding(5) var shadow_sampler: sampler_comparison;
+@group(0) @binding(6) var<storage, read> shadow_views: array<mat4x4<f32>>;
+
+const SHADOW_MAP_SIZE: f32 = 512.0;
 @group(1) @binding(0) var<uniform> material: MaterialUniform;
 @group(1) @binding(1) var albedo: texture_2d<f32>;
 @group(1) @binding(2) var albedo_sampler: sampler;
@@ -56,6 +69,7 @@ struct VsOut {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) @interpolate(flat) part: u32,
+    @location(4) color: vec4<f32>,
 };
 
 @vertex
@@ -63,8 +77,10 @@ fn vs_world(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    @builtin(instance_index) part: u32,
+    @location(3) color: vec4<f32>,
+    @builtin(instance_index) instance: u32,
 ) -> VsOut {
+    let part = instances[instance];
     let row = parts[part];
     let world = row.model * vec4<f32>(position, 1.0);
     var out: VsOut;
@@ -73,6 +89,7 @@ fn vs_world(
     out.normal = mat3x3<f32>(row.normal0.xyz, row.normal1.xyz, row.normal2.xyz) * normal;
     out.uv = uv;
     out.part = part;
+    out.color = color;
     return out;
 }
 
@@ -104,10 +121,52 @@ fn brdf_ggx(light: vec3<f32>, view: vec3<f32>, normal: vec3<f32>, roughness: f32
     return fresnel * visibility * distribution;
 }
 
+// Point light faces: +X, -X, +Y, -Y, +Z, -Z (shadows.rs CUBE_FACES).
+fn point_face(to_fragment: vec3<f32>) -> u32 {
+    let a = abs(to_fragment);
+    if a.x >= a.y && a.x >= a.z {
+        return select(1u, 0u, to_fragment.x > 0.0);
+    }
+    if a.y >= a.z {
+        return select(3u, 2u, to_fragment.y > 0.0);
+    }
+    return select(5u, 4u, to_fragment.z > 0.0);
+}
+
+// Fraction of a light reaching `position` through shadow layer `layer`:
+// 3×3 PCF over linearly filtered comparisons. Outside the map is lit.
+fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
+    let clip = shadow_views[layer] * vec4<f32>(position, 1.0);
+    if clip.w <= 0.0 {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || ndc.z > 1.0 {
+        return 1.0;
+    }
+    let texel = 1.0 / SHADOW_MAP_SIZE;
+    var lit = 0.0;
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            let offset = vec2<f32>(f32(x), f32(y)) * texel;
+            lit += textureSampleCompareLevel(shadow_maps, shadow_sampler, uv + offset, layer, ndc.z);
+        }
+    }
+    return lit / 9.0;
+}
+
 @fragment
 fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let row = parts[in.part];
-    let base = row.color * textureSample(albedo, albedo_sampler, in.uv);
+    var uv = in.uv;
+    if (material.flags & FLAG_VOXEL_SURFACE) != 0u {
+        // Chunk uvs are tile coordinates in cells: repeat by the tile scale
+        // from the origin, into the texture or its inset atlas region.
+        let repeated = fract((uv - material.tile.zw) / material.tile.xy);
+        uv = mix(material.sample_rect.xy, material.sample_rect.zw, repeated);
+    }
+    let base = row.color * in.color * textureSample(albedo, albedo_sampler, uv);
     var normal = normalize(in.normal);
     if !front {
         normal = -normal;
@@ -144,6 +203,14 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
                     let angle = dot(-direction, normalize(light.direction_decay.xyz));
                     attenuation = attenuation * smoothstep(light.extra.x, light.extra.y, angle);
                 }
+            }
+            let shadow = u32(light.extra.w);
+            if shadow > 0u {
+                var layer = shadow - 1u;
+                if kind == 3u {
+                    layer += point_face(in.world_position - light.position_range.xyz);
+                }
+                attenuation = attenuation * shadow_visibility(layer, in.world_position);
             }
             let incident = color * attenuation * clamp(dot(normal, direction), 0.0, 1.0);
             irradiance += incident;

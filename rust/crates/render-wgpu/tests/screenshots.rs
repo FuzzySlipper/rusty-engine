@@ -431,7 +431,9 @@ fn textured_static_meshes_take_the_neutral_rig_and_instance_parameters() {
         },
     ]);
     let (stats, pixels) = harness.render(&camera([0.0, 1.8, 3.5], 0.0, -20.0));
-    assert_eq!((stats.draws, stats.lights), (3, 2));
+    // Both crates share mesh and material: one instanced draw, with the
+    // instance parameters in the second crate's row.
+    assert_eq!((stats.draws, stats.instances, stats.lights), (2, 3, 2));
     assert_screenshot("lit-textured", &pixels);
 }
 
@@ -556,7 +558,11 @@ fn hierarchy_changes_upload_only_the_changed_subtree() {
     ]);
     let view = camera([0.0, 0.5, 0.0], 0.0, 0.0);
     let (first, _) = harness.render(&view);
-    assert_eq!((first.draws, first.parts_uploaded), (4, 4));
+    // Red and blue instances batch by mesh and material.
+    assert_eq!(
+        (first.draws, first.instances, first.parts_uploaded),
+        (2, 4, 4)
+    );
 
     harness.apply(vec![RenderDiff::Update {
         handle: RenderHandle::new(30),
@@ -567,7 +573,10 @@ fn hierarchy_changes_upload_only_the_changed_subtree() {
     }]);
     let (moved, _) = harness.render(&view);
     // Only the parent's two children are re-uploaded.
-    assert_eq!((moved.draws, moved.parts_uploaded), (4, 2));
+    assert_eq!(
+        (moved.draws, moved.instances, moved.parts_uploaded),
+        (2, 4, 2)
+    );
 
     harness.apply(vec![
         RenderDiff::Update {
@@ -583,7 +592,8 @@ fn hierarchy_changes_upload_only_the_changed_subtree() {
     ]);
     let (after, pixels) = harness.render(&view);
     assert_eq!(
-        after.draws, 1,
+        (after.draws, after.instances),
+        (1, 1),
         "hidden child and destroyed subtree are not drawn"
     );
     let counts = harness.renderer.table_counts();

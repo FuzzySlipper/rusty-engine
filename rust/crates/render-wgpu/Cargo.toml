@@ -18,6 +18,9 @@ pollster = "0.4"
 
 [dev-dependencies]
 render-presentation.workspace = true
+# Voxel scene fixtures: real chunk payloads from the scene projector.
+render-projection.workspace = true
+engine-spatial.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Window for the surface presentation example only; the desktop shell owns

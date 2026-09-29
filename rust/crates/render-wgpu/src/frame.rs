@@ -1,14 +1,22 @@
 //! The fixed pass pipeline, in order: propagate dirty transforms, prepare GPU
-//! rows, then per view pass build the draw list for its layer and encode sky
-//! and world (or viewmodel) draws. `composition.rs` orders the view passes.
+//! rows (lights and their shadow views, parts) and rebuild the shadow caster
+//! list when a part changed, then per view pass: take the layer's draw list
+//! (culled and batched, reused while neither the camera nor any part
+//! changed), render stale shadow maps before the first world pass, and encode
+//! sky and world (or viewmodel) draws. `composition.rs` orders the view
+//! passes.
 
-use glam::Vec3;
+use std::ops::{Add, AddAssign};
+
+use glam::{Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
-use render_model::{MaterialAlphaModeDescriptor, RenderHandle, RenderLayer};
+use render_model::{RenderHandle, RenderLayer};
 
 use crate::apply::light_row;
+use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
-use crate::tables::{Environment, MaterialRef, MeshRef, NodeKind, Topology, PART_ROW_FLOATS};
+use crate::shadows::{self, ShadowMaps};
+use crate::tables::{Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
 use crate::target::TargetView;
 use crate::{
     srgb_to_linear, OffscreenTarget, PresentSkip, Renderer, WindowSurface, DEFAULT_CLEAR_SRGB,
@@ -23,12 +31,58 @@ const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4) * 4;
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FrameStats {
+    /// Draw calls: instanced batches and blended parts, across view passes.
     pub draws: u32,
+    /// Parts those draws cover, after culling.
+    pub instances: u32,
     pub parts_uploaded: u32,
+    /// Part ids written to the instance buffer (0 when every pass's drawn
+    /// set was unchanged).
+    pub instances_uploaded: u32,
     pub lights: u32,
+    /// Caster draw calls across shadow layers; 0 when the maps were current.
+    pub shadow_draws: u32,
     /// Offscreen composition views drawn this frame; a target that is not
     /// stale is presented as it is.
     pub offscreen_views: u32,
+}
+
+/// What one view pass drew.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ViewStats {
+    pub draws: u32,
+    pub instances: u32,
+    pub instances_uploaded: u32,
+    pub shadow_draws: u32,
+}
+
+impl Add for ViewStats {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            draws: self.draws + other.draws,
+            instances: self.instances + other.instances,
+            instances_uploaded: self.instances_uploaded + other.instances_uploaded,
+            shadow_draws: self.shadow_draws + other.shadow_draws,
+        }
+    }
+}
+
+impl AddAssign<ViewStats> for FrameStats {
+    fn add_assign(&mut self, view: ViewStats) {
+        self.draws += view.draws;
+        self.instances += view.instances;
+        self.instances_uploaded += view.instances_uploaded;
+        self.shadow_draws += view.shadow_draws;
+    }
+}
+
+/// The draw list a view layer last used, kept while nothing changed. Each
+/// layer owns a region of the instance buffer after the caster list.
+pub(crate) struct ViewCache {
+    view_proj: Mat4,
+    pub list: DrawList,
 }
 
 /// Which retained layers a view pass draws.
@@ -100,21 +154,6 @@ pub(crate) struct ViewPass<'a> {
     pub sky: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Pass {
-    Opaque,
-    OpaqueDoubleSided,
-    Lines,
-    Blend,
-    BlendDoubleSided,
-}
-
-struct Draw {
-    pass: Pass,
-    part: u32,
-    depth: f32,
-}
-
 impl Renderer {
     /// Render the retained scene from `camera` into the whole offscreen
     /// target: the world, then the viewmodel layer. A composition renders
@@ -155,7 +194,15 @@ impl Renderer {
             self.rebuild_sky();
             self.tables.environment_dirty = false;
         }
-        self.upload_parts()
+        let uploaded = self.upload_parts();
+        if std::mem::take(&mut self.tables.parts.changed) {
+            // Casters lead the instance buffer; each layer's view list is
+            // rebuilt behind them on its next pass.
+            self.casters = batch::caster_list(&self.tables.parts, 0);
+            self.views = Default::default();
+            self.shadows.stale = true;
+        }
+        uploaded
     }
 
     /// Recompute world transform, visibility and layer for each dirty subtree.
@@ -207,7 +254,7 @@ impl Renderer {
             let parts = node.parts.clone();
             stack.extend(node.children.iter().copied());
             for part in parts {
-                self.tables.parts.write(part, &world);
+                self.tables.parts.write(part, &world, visible, layer);
             }
         }
     }
@@ -220,12 +267,22 @@ impl Renderer {
         if self.options.default_world_lights {
             neutral_rig(&mut rows, NEUTRAL_KEY_POSITION);
         }
-        self.retained_light_rows(&mut rows, ViewLayer::World);
+        // Only world lights cast: viewmodel lights are camera-local.
+        let mut shadow_views: Vec<Mat4> = Vec::new();
+        self.retained_light_rows(&mut rows, ViewLayer::World, Some(&mut shadow_views));
         let world_count = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         if self.options.default_viewmodel_lights {
             neutral_rig(&mut rows, NEUTRAL_VIEWMODEL_KEY_POSITION);
         }
-        self.retained_light_rows(&mut rows, ViewLayer::Viewmodel);
+        self.retained_light_rows(&mut rows, ViewLayer::Viewmodel, None);
+        if self.shadows.set_layers(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.layouts.shadow_layer,
+            &shadow_views,
+        ) {
+            self.rebind_frame();
+        }
         let total = (rows.len() / LIGHT_ROW_FLOATS) as u32;
         self.lights = LightRanges {
             world: LightRange {
@@ -253,7 +310,15 @@ impl Renderer {
         }
     }
 
-    fn retained_light_rows(&self, rows: &mut Vec<f32>, layer: ViewLayer) {
+    /// Retained light rows in `layer`. With `shadow_views`, a light whose
+    /// shadow is requested (and enabled by the host) gets its shadow layers
+    /// appended there and its row's `extra.w` set to the first layer + 1.
+    fn retained_light_rows(
+        &self,
+        rows: &mut Vec<f32>,
+        layer: ViewLayer,
+        mut shadow_views: Option<&mut Vec<Mat4>>,
+    ) {
         let mut handles: Vec<&RenderHandle> = self.tables.lights.iter().collect();
         handles.sort();
         for handle in handles {
@@ -263,7 +328,14 @@ impl Renderer {
                 if let (NodeKind::Light(light), true, true) =
                     (&node.kind, node.world_visible, in_layer)
                 {
-                    if let Some(row) = light_row(light, &node.world) {
+                    if let Some(mut row) = light_row(light, &node.world) {
+                        if let (true, Some(views)) = (self.options.shadows, shadow_views.as_mut()) {
+                            let layers = shadows::light_views(light, &node.world);
+                            if !layers.is_empty() {
+                                row[15] = (views.len() + 1) as f32;
+                                views.extend(layers);
+                            }
+                        }
                         rows.extend_from_slice(&row);
                     }
                 }
@@ -316,10 +388,165 @@ impl Renderer {
         self.frame_bind_group = frame_bind_group(
             &self.gpu.device,
             &self.layouts.frame,
-            &self.frame_buffer,
-            &self.parts_buffer,
-            &self.lights_buffer,
+            FrameBindings {
+                frame: &self.frame_buffer,
+                parts: &self.parts_buffer,
+                lights: &self.lights_buffer,
+                instances: &self.instances_buffer,
+                shadows: &self.shadows,
+            },
         );
+        self.caster_bind_group = caster_bind_group(
+            &self.gpu.device,
+            &self.layouts.casters,
+            &self.parts_buffer,
+            &self.instances_buffer,
+            &self.shadows,
+        );
+    }
+
+    /// The layer's draw list for this camera, rebuilt when the camera or any
+    /// part changed and uploaded only when the drawn set differs. Returns the
+    /// part ids uploaded.
+    fn update_view_list(&mut self, view_proj: &Mat4, eye: Vec3, layer: ViewLayer) -> u32 {
+        let slot = layer as usize;
+        if self.views[slot]
+            .as_ref()
+            .is_some_and(|view| view.view_proj == *view_proj)
+        {
+            return 0;
+        }
+        // Instance regions: casters, then the world list, then the viewmodel
+        // list, each list sized for every part slot.
+        let slots = self.tables.parts.meta.len() as u32;
+        let base = self.casters.instances() + slot as u32 * slots;
+        let list = batch::view_list(
+            &self.tables.parts,
+            layer == ViewLayer::Viewmodel,
+            &Frustum::new(view_proj),
+            eye,
+            base,
+        );
+        let unchanged = self.views[slot]
+            .as_ref()
+            .is_some_and(|view| view.list == list);
+        let casters_current = self.views.iter().any(Option::is_some);
+        let needed = u64::from(self.casters.instances() + 2 * slots).max(1) * 4;
+        let mut uploaded = 0;
+        if needed > self.instances_buffer.size() {
+            self.instances_buffer = storage_buffer(
+                &self.gpu.device,
+                "render-wgpu instances",
+                needed.next_power_of_two(),
+            );
+            self.rebind_frame();
+            // A new buffer starts empty: the other layer's list re-uploads too.
+            self.views = Default::default();
+            uploaded += self.upload_instances(0, &self.casters.ids);
+            uploaded += self.upload_instances(base, &list.ids);
+        } else if !unchanged {
+            // A rebuilt caster list dropped every cached view: upload it once.
+            if !casters_current {
+                uploaded += self.upload_instances(0, &self.casters.ids);
+            }
+            uploaded += self.upload_instances(base, &list.ids);
+        }
+        self.views[slot] = Some(ViewCache {
+            view_proj: *view_proj,
+            list,
+        });
+        uploaded
+    }
+
+    fn upload_instances(&self, first: u32, ids: &[u32]) -> u32 {
+        if !ids.is_empty() {
+            self.gpu.queue.write_buffer(
+                &self.instances_buffer,
+                u64::from(first) * 4,
+                bytemuck::cast_slice(ids),
+            );
+        }
+        ids.len() as u32
+    }
+
+    /// Render every shadow layer's casters when a light or part changed since
+    /// the maps were drawn. Returns the caster draws.
+    fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> u32 {
+        if !self.shadows.stale || self.shadows.layers == 0 {
+            return 0;
+        }
+        self.shadows.stale = false;
+        let mut draws = 0;
+        for layer in 0..self.shadows.layers {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.shadows.layer_view(layer),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.caster_bind_group, &[]);
+            pass.set_bind_group(
+                2,
+                &self.shadows.layer_bind_group,
+                &[ShadowMaps::layer_offset(layer)],
+            );
+            draws += self.draw_batches(&mut pass, &self.casters, |pass| {
+                self.layouts.shadow.get(pass)
+            });
+        }
+        draws
+    }
+
+    /// Encode a draw list's batches with the pipeline each pass selects.
+    /// Returns the draw calls made.
+    fn draw_batches<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        list: &DrawList,
+        pipeline: impl Fn(batch::Pass) -> &'a wgpu::RenderPipeline,
+    ) -> u32 {
+        let mut current: Option<batch::Pass> = None;
+        let mut draws = 0;
+        for draw in &list.batches {
+            let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
+                continue;
+            };
+            let Some(mesh) = self.mesh(&part.mesh) else {
+                continue;
+            };
+            if current != Some(draw.pass) {
+                pass.set_pipeline(pipeline(draw.pass));
+                current = Some(draw.pass);
+            }
+            let material = match &part.material {
+                MaterialRef::Retained(id) => self
+                    .tables
+                    .materials
+                    .get(id)
+                    .map_or(&self.lit_fallback_material, |row| &row.bind_group),
+                MaterialRef::Unlit => &self.unlit_material,
+                MaterialRef::LitFallback => &self.lit_fallback_material,
+            };
+            pass.set_bind_group(1, material, &[]);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(
+                part.first_index..part.first_index + part.index_count,
+                0,
+                draw.first_instance..draw.first_instance + draw.instances,
+            );
+            draws += 1;
+        }
+        draws
     }
 
     fn rebuild_sky(&mut self) {
@@ -394,8 +621,8 @@ impl Renderer {
 
     /// Encode and submit one view pass. Each pass writes the frame uniform
     /// and submits on its own, so passes with different cameras never share
-    /// one uniform write. Returns the draws issued.
-    pub(crate) fn encode_view(&mut self, view: ViewPass<'_>) -> u32 {
+    /// one uniform write.
+    pub(crate) fn encode_view(&mut self, view: ViewPass<'_>) -> ViewStats {
         let world_layer = view.layer == ViewLayer::World;
         let lights = if world_layer {
             self.lights.world
@@ -404,9 +631,17 @@ impl Renderer {
         };
         let view_proj = view.camera.view_proj;
         let eye = view.camera.eye;
-        let draws = self.draw_list(eye, view.layer);
-        if !world_layer && draws.is_empty() {
-            return 0;
+        let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
+        let slot = view.layer as usize;
+        if !world_layer
+            && self.views[slot]
+                .as_ref()
+                .is_none_or(|cache| cache.list.batches.is_empty())
+        {
+            return ViewStats {
+                instances_uploaded,
+                ..ViewStats::default()
+            };
         }
         let mut uniform = Vec::with_capacity((FRAME_UNIFORM_BYTES / 4) as usize);
         uniform.extend_from_slice(&view_proj.to_cols_array());
@@ -431,7 +666,6 @@ impl Renderer {
         if !whole {
             self.compose.prepare_clear(&self.gpu, format, view.clear);
         }
-        let pipelines = &self.pipelines[format_index];
         let color_load = if whole && world_layer {
             let [r, g, b, a] = view.clear.map(f64::from);
             wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a })
@@ -449,6 +683,17 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
+        let shadow_draws = if world_layer {
+            self.encode_shadows(&mut encoder)
+        } else {
+            0
+        };
+        let pipelines = &self.pipelines[format_index];
+        let list = &self.views[slot]
+            .as_ref()
+            .expect("view list is current")
+            .list;
+        let draws;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(if world_layer {
@@ -496,105 +741,15 @@ impl Renderer {
                 pass.set_bind_group(1, sky, &[]);
                 pass.draw(0..3, 0..1);
             }
-            let mut current: Option<Pass> = None;
-            for draw in &draws {
-                let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
-                    continue;
-                };
-                let mesh = match &part.mesh {
-                    MeshRef::Static(asset) => self.tables.static_meshes.get(asset),
-                    MeshRef::Payload(handle) => self.tables.payload_meshes.get(handle),
-                    MeshRef::Builtin(kind) => self.builtins.get(kind),
-                };
-                let Some(mesh) = mesh else { continue };
-                if current != Some(draw.pass) {
-                    pass.set_pipeline(match draw.pass {
-                        Pass::Opaque => &pipelines.opaque,
-                        Pass::OpaqueDoubleSided => &pipelines.opaque_double_sided,
-                        Pass::Lines => &pipelines.lines,
-                        Pass::Blend => &pipelines.blend,
-                        Pass::BlendDoubleSided => &pipelines.blend_double_sided,
-                    });
-                    current = Some(draw.pass);
-                }
-                let material = match &part.material {
-                    MaterialRef::Retained(id) => self
-                        .tables
-                        .materials
-                        .get(id)
-                        .map_or(&self.lit_fallback_material, |row| &row.bind_group),
-                    MaterialRef::Unlit => &self.unlit_material,
-                    MaterialRef::LitFallback => &self.lit_fallback_material,
-                };
-                pass.set_bind_group(1, material, &[]);
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(
-                    part.first_index..part.first_index + part.index_count,
-                    0,
-                    draw.part..draw.part + 1,
-                );
-            }
+            draws = self.draw_batches(&mut pass, list, |pass| pipelines.get(pass));
         }
         self.gpu.queue.submit([encoder.finish()]);
-        draws.len() as u32
-    }
-
-    /// Every visible part in `layer`, opaque first, blended parts back to
-    /// front.
-    fn draw_list(&self, eye: Vec3, layer: ViewLayer) -> Vec<Draw> {
-        let mut draws = Vec::new();
-        for (id, part) in self.tables.parts.meta.iter().enumerate() {
-            let Some(part) = part else { continue };
-            let Some(node) = self.tables.nodes.get(&part.node) else {
-                continue;
-            };
-            // The viewmodel layer draws in its own camera pass.
-            let viewmodel = node.world_layer == RenderLayer::Viewmodel;
-            if !node.world_visible || viewmodel != (layer == ViewLayer::Viewmodel) {
-                continue;
-            }
-            let row = &self.tables.parts.rows[id];
-            let descriptor = match &part.material {
-                MaterialRef::Retained(material) => self
-                    .tables
-                    .materials
-                    .get(material)
-                    .map(|row| &row.descriptor),
-                _ => None,
-            };
-            let double_sided = descriptor.is_some_and(|descriptor| descriptor.double_sided);
-            let blend = row.color[3] < 1.0
-                || descriptor.is_some_and(|descriptor| {
-                    descriptor.alpha_mode == MaterialAlphaModeDescriptor::Blend
-                });
-            let is_line = matches!(&part.mesh, MeshRef::Payload(handle)
-                if self.tables.payload_meshes.get(handle).is_some_and(|mesh| mesh.topology == Topology::Lines));
-            let pass = match (is_line, blend, double_sided) {
-                (true, _, _) => Pass::Lines,
-                (false, false, false) => Pass::Opaque,
-                (false, false, true) => Pass::OpaqueDoubleSided,
-                (false, true, false) => Pass::Blend,
-                (false, true, true) => Pass::BlendDoubleSided,
-            };
-            let depth = if blend {
-                -node.world.w_axis.truncate().distance_squared(eye)
-            } else {
-                0.0
-            };
-            draws.push(Draw {
-                pass,
-                part: id as u32,
-                depth,
-            });
+        ViewStats {
+            draws,
+            instances: list.instances(),
+            instances_uploaded,
+            shadow_draws,
         }
-        draws.sort_by(|a, b| {
-            a.pass
-                .cmp(&b.pass)
-                .then(a.depth.total_cmp(&b.depth))
-                .then(a.part.cmp(&b.part))
-        });
-        draws
     }
 }
 
@@ -616,12 +771,18 @@ pub(crate) fn frame_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     })
 }
 
+pub(crate) struct FrameBindings<'a> {
+    pub frame: &'a wgpu::Buffer,
+    pub parts: &'a wgpu::Buffer,
+    pub lights: &'a wgpu::Buffer,
+    pub instances: &'a wgpu::Buffer,
+    pub shadows: &'a ShadowMaps,
+}
+
 pub(crate) fn frame_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    frame: &wgpu::Buffer,
-    parts: &wgpu::Buffer,
-    lights: &wgpu::Buffer,
+    bindings: FrameBindings<'_>,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render-wgpu frame"),
@@ -629,15 +790,58 @@ pub(crate) fn frame_bind_group(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: frame.as_entire_binding(),
+                resource: bindings.frame.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: parts.as_entire_binding(),
+                resource: bindings.parts.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: lights.as_entire_binding(),
+                resource: bindings.lights.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: bindings.instances.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&bindings.shadows.array_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(&bindings.shadows.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: bindings.shadows.matrices_buffer.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+pub(crate) fn caster_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    parts: &wgpu::Buffer,
+    instances: &wgpu::Buffer,
+    shadows: &ShadowMaps,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("render-wgpu casters"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: parts.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: instances.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: shadows.matrices_buffer.as_entire_binding(),
             },
         ],
     })

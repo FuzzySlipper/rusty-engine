@@ -3971,12 +3971,14 @@ name = "render-wgpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "engine-spatial",
  "glam 0.30.10",
  "png",
  "pollster",
  "render-host-contracts",
  "render-model",
  "render-presentation",
+ "render-projection",
  "serde",
  "serde_json",
  "wgpu",

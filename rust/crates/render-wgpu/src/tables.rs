@@ -2,18 +2,23 @@
 //!
 //! | Table | Key | Row | Filled by |
 //! |---|---|---|---|
-//! | `textures` | texture id | GPU texture view and sampler | `DefineTexture` / `ReleaseTexture` |
+//! | `textures` | texture id | GPU texture view, sampler and pixel size | `DefineTexture` / `ReleaseTexture` |
 //! | `materials` | material id | descriptor and bind group | `DefineMaterial` / `ReleaseMaterial` |
-//! | `static_meshes` | static mesh asset id | vertex/index buffers, groups, default slots | `DefineStaticMesh` / `ReleaseStaticMesh` |
+//! | `static_meshes` | static mesh asset id | vertex/index buffers, groups, default slots, local bounds | `DefineStaticMesh` / `ReleaseStaticMesh` |
 //! | `payload_meshes` | node handle | vertex/index buffers of a primitive's replaced payload or line | `ReplaceMeshPayload`, `Create` (line) |
 //! | `nodes` | `RenderHandle` | parent, children, local and world transform, visibility, layer, kind, owned parts | `Create*`, `Update`, `Destroy`, `SetParentJoint`, `UpdateLight`, `SetMaterialInstanceParameters` |
-//! | `parts` | `PartId` (dense) | one drawable (node, mesh group, material) and its GPU `PartRow` | derived from nodes |
+//! | `parts` | `PartId` (dense) | one drawable (node, mesh group, material), its GPU `PartRow`, and its draw state (class, batch key, bounds, visibility, layer) | derived from nodes |
 //! | `atlases` | atlas id | retained descriptor | `DefineSpriteAtlas` / `ReleaseSpriteAtlas` |
+//! | `voxel_objects` | voxel object asset id | uploaded meshes, frame-to-mesh table, slot materials | `DefineVoxelObject` / `ReleaseVoxelObject` |
 //! | `environment` | (single) | background colour or equirectangular sky (with blend) | `SetBackgroundColor` / `SetSkyBackground` |
 //!
 //! Animated meshes, voxel objects and sprites are nodes (they take part in the
 //! hierarchy, transforms and visibility) whose kind a family module realizes;
-//! their descriptors wait in the node row until then.
+//! their descriptors wait in the node row until then. Voxel objects are
+//! realized (`voxel.rs`): a node draws its current frame's mesh.
+//!
+//! Draw lists (`batch.rs`) read the dense part state only: parts sharing a
+//! batch key draw as one instanced run.
 //!
 //! Dirty marks are the only change tracking: a transform or visibility change
 //! marks its node; `prepare` recomputes that subtree's world rows and uploads
@@ -29,6 +34,8 @@ use render_model::{
     VoxelObjectInstanceDescriptor,
 };
 
+use crate::voxel::VoxelObjectRow;
+
 pub(crate) fn transform_matrix(transform: &Transform) -> Mat4 {
     Mat4::from_scale_rotation_translation(
         Vec3::from(transform.scale),
@@ -40,6 +47,8 @@ pub(crate) fn transform_matrix(transform: &Transform) -> Mat4 {
 pub(crate) struct GpuTexture {
     pub view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
+    /// Pixel size; voxel atlas regions are resolved against it.
+    pub size: (u32, u32),
 }
 
 pub(crate) struct MaterialRow {
@@ -61,14 +70,60 @@ pub(crate) struct GpuMesh {
     pub groups: Vec<(u16, u32, u32)>,
     /// Static mesh default slot bindings; empty for payload meshes.
     pub slots: BTreeMap<u16, String>,
+    /// Local bounds of every vertex, for culling.
+    pub bounds: Aabb,
+}
+
+/// An axis-aligned box. `EMPTY` (min > max) contains nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Aabb {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+impl Aabb {
+    pub const EMPTY: Self = Self {
+        min: Vec3::splat(f32::MAX),
+        max: Vec3::splat(f32::MIN),
+    };
+
+    pub fn is_empty(&self) -> bool {
+        self.min.x > self.max.x
+    }
+
+    pub fn include(&mut self, point: Vec3) {
+        self.min = self.min.min(point);
+        self.max = self.max.max(point);
+    }
+
+    /// The world box of this local box under `world`.
+    pub fn transformed(&self, world: &Mat4) -> Self {
+        if self.is_empty() {
+            return *self;
+        }
+        let center = world.transform_point3((self.min + self.max) * 0.5);
+        let half = (self.max - self.min) * 0.5;
+        let abs = glam::Mat3::from_cols(
+            world.x_axis.truncate().abs(),
+            world.y_axis.truncate().abs(),
+            world.z_axis.truncate().abs(),
+        );
+        let half = abs * half;
+        Self {
+            min: center - half,
+            max: center + half,
+        }
+    }
 }
 
 /// Which mesh a part draws.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum MeshRef {
     Static(String),
     Payload(RenderHandle),
     Builtin(Builtin),
+    /// A voxel object asset's mesh (by index).
+    Voxel(String, u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,7 +135,7 @@ pub(crate) enum Builtin {
 }
 
 /// Which material bind group a part uses.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum MaterialRef {
     Retained(String),
     /// Primitive nodes: flat colour, no lighting (Three `MeshBasicMaterial`).
@@ -134,6 +189,31 @@ pub(crate) struct Part {
     pub material: MaterialRef,
 }
 
+/// How a part draws, fixed when its node's parts are derived.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PartClass {
+    pub blend: bool,
+    pub double_sided: bool,
+    pub lines: bool,
+}
+
+/// Dense per-part draw state: what the draw list reads without touching the
+/// node table. Refreshed by `Parts::write` whenever the part's node is.
+#[derive(Clone, Copy)]
+pub(crate) struct PartState {
+    pub class: PartClass,
+    /// Parts with equal keys (mesh, index range, material) batch together.
+    pub key: u32,
+    pub local_bounds: Aabb,
+    pub world_bounds: Aabb,
+    /// Negative world determinant: faces wind the other way.
+    pub mirrored: bool,
+    /// Effectively visible.
+    pub shown: bool,
+    /// The root's layer.
+    pub layer: RenderLayer,
+}
+
 /// GPU row per part: model matrix, normal matrix (3 columns), linear colour
 /// (rgb, alpha) and emission (rgb pre-multiplied by intensity).
 pub(crate) const PART_ROW_FLOATS: usize = 16 + 12 + 4 + 4;
@@ -144,43 +224,76 @@ pub(crate) struct PartRow {
     pub emission: [f32; 3],
 }
 
+/// What makes two parts one instanced draw.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BatchKey {
+    mesh: MeshRef,
+    first_index: u32,
+    index_count: u32,
+    material: MaterialRef,
+}
+
 #[derive(Default)]
 pub(crate) struct Parts {
     pub meta: Vec<Option<Part>>,
     pub rows: Vec<PartRow>,
+    pub state: Vec<PartState>,
     /// CPU copy of the dense GPU rows, uploaded where dirty.
     pub gpu: Vec<f32>,
     pub free: Vec<PartId>,
     pub dirty: HashSet<PartId>,
     /// Rows past the GPU buffer's capacity force a buffer reallocation.
     pub grown: bool,
+    /// Any part was added, removed, moved or shown/hidden since the draw
+    /// lists were built.
+    pub changed: bool,
+    /// Batch keys in use: key, reference count.
+    keys: HashMap<BatchKey, (u32, u32)>,
+    free_keys: Vec<u32>,
+    next_key: u32,
 }
 
 impl Parts {
-    pub fn insert(&mut self, part: Part, row: PartRow) -> PartId {
+    pub fn insert(&mut self, part: Part, row: PartRow, bounds: Aabb, class: PartClass) -> PartId {
+        let key = self.acquire_key(&part);
+        let state = PartState {
+            class,
+            key,
+            local_bounds: bounds,
+            world_bounds: Aabb::EMPTY,
+            mirrored: false,
+            shown: false,
+            layer: RenderLayer::Scene,
+        };
         let id = if let Some(id) = self.free.pop() {
             self.meta[id as usize] = Some(part);
             self.rows[id as usize] = row;
+            self.state[id as usize] = state;
             id
         } else {
             self.meta.push(Some(part));
             self.rows.push(row);
+            self.state.push(state);
             self.gpu.resize(self.meta.len() * PART_ROW_FLOATS, 0.0);
             self.grown = true;
             (self.meta.len() - 1) as PartId
         };
         self.dirty.insert(id);
+        self.changed = true;
         id
     }
 
     pub fn remove(&mut self, id: PartId) {
-        self.meta[id as usize] = None;
+        if let Some(part) = self.meta[id as usize].take() {
+            self.release_key(part);
+        }
         self.dirty.remove(&id);
         self.free.push(id);
+        self.changed = true;
     }
 
     /// Write a part's world state into its GPU row and mark it for upload.
-    pub fn write(&mut self, id: PartId, world: &Mat4) {
+    pub fn write(&mut self, id: PartId, world: &Mat4, shown: bool, layer: RenderLayer) {
         let row = self.rows[id as usize];
         let normal = glam::Mat3::from_mat4(*world).inverse().transpose();
         let start = id as usize * PART_ROW_FLOATS;
@@ -196,7 +309,48 @@ impl Parts {
         out[28..32].copy_from_slice(&row.color);
         out[32..35].copy_from_slice(&row.emission);
         out[35] = 0.0;
+        let state = &mut self.state[id as usize];
+        state.world_bounds = state.local_bounds.transformed(world);
+        state.mirrored = world.determinant() < 0.0;
+        state.shown = shown;
+        state.layer = layer;
         self.dirty.insert(id);
+        self.changed = true;
+    }
+
+    fn acquire_key(&mut self, part: &Part) -> u32 {
+        let key = BatchKey {
+            mesh: part.mesh.clone(),
+            first_index: part.first_index,
+            index_count: part.index_count,
+            material: part.material.clone(),
+        };
+        if let Some((id, references)) = self.keys.get_mut(&key) {
+            *references += 1;
+            return *id;
+        }
+        let id = self.free_keys.pop().unwrap_or_else(|| {
+            self.next_key += 1;
+            self.next_key - 1
+        });
+        self.keys.insert(key, (id, 1));
+        id
+    }
+
+    fn release_key(&mut self, part: Part) {
+        let key = BatchKey {
+            mesh: part.mesh,
+            first_index: part.first_index,
+            index_count: part.index_count,
+            material: part.material,
+        };
+        if let Some((id, references)) = self.keys.get_mut(&key) {
+            *references -= 1;
+            if *references == 0 {
+                self.free_keys.push(*id);
+                self.keys.remove(&key);
+            }
+        }
     }
 }
 
@@ -215,6 +369,7 @@ pub(crate) struct Tables {
     pub nodes: HashMap<RenderHandle, NodeRow>,
     pub parts: Parts,
     pub atlases: HashMap<String, SpriteAtlasDescriptor>,
+    pub voxel_objects: HashMap<String, VoxelObjectRow>,
     pub environment: Environment,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
@@ -234,6 +389,7 @@ impl Tables {
             nodes: HashMap::new(),
             parts: Parts::default(),
             atlases: HashMap::new(),
+            voxel_objects: HashMap::new(),
             environment: Environment::Default,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),

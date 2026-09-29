@@ -1,7 +1,10 @@
 # Voxel lighting and product-driven skies
 
 Use retained `Graphics` lights for cave and torch illumination. They already
-support point/spot attenuation, directional light, and requested shadows. Set
+support point/spot attenuation and directional light. `ShadowIntent.Requested`
+draws shadow maps only when the renderer host enables shadows
+(`render-wgpu` `RendererOptions::shadows`); C# product hosts do not enable them
+today, so requested shadows currently affect only the CPU sample below. Set
 `RustyEngineProductDefaultWorldLights` to `disabled` for a dark unlit world;
 the default neutral rig otherwise continues to illuminate it. Emissive material
 color makes a surface visible but does not emit light onto other surfaces. Pair

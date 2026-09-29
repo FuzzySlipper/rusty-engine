@@ -2,8 +2,11 @@
 //!
 //! ```text
 //! python3 rust/crates/render-wgpu/scripts/capture-presentation.py [origin] [dir]
-//! cargo run -p render-wgpu --example render_capture -- <dir> <out.png> [width height] [source capture.png]
+//! cargo run -p render-wgpu --example render_capture -- <dir> <out.png> [width height] [source capture.png] [--no-default-world-lights]
 //! ```
+//!
+//! Pass `--no-default-world-lights` for a product whose manifest sets
+//! `defaultLights.world` to `disabled` (Dagger).
 //!
 //! `<dir>` holds `world-frame.json` (the fresh-attachment presentation-world
 //! frame), `view.json` (the camera composition) and `resources/` (texture and
@@ -33,7 +36,9 @@ impl ResourceSource for DirectoryResources {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    let default_world_lights = !all.iter().any(|arg| arg == "--no-default-world-lights");
+    let mut args = all.into_iter().filter(|arg| !arg.starts_with("--"));
     let dir = PathBuf::from(
         args.next()
             .ok_or("usage: render_capture <dir> <out.png> [width height] [source capture.png]")?,
@@ -56,7 +61,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gpu = Gpu::headless()?;
     eprintln!("adapter: {:?}", gpu.adapter_summary());
     let resources = DirectoryResources(dir.join("resources"));
-    let mut renderer = Renderer::new(&gpu, RendererOptions::default());
+    let mut renderer = Renderer::new(
+        &gpu,
+        RendererOptions {
+            default_world_lights,
+            ..RendererOptions::default()
+        },
+    );
     let issues = renderer.apply(&world.snapshot().frame, &resources);
     let mut skipped = std::collections::BTreeMap::<&str, usize>::new();
     for issue in &issues {
