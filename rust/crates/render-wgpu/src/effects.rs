@@ -67,15 +67,34 @@ struct SpriteDraw {
 /// What one view pass draws of this family, prepared before the pass.
 #[derive(Default)]
 pub(crate) struct EffectsPass {
-    /// Instance ranges into the sprite rows: solid sprites, then blended.
-    solid: Vec<(SpriteState, SpriteTextures, u32)>,
-    blended: Vec<(SpriteState, SpriteTextures, u32)>,
+    /// One instance per sprite in the sprite rows: solid sprites, then
+    /// blended ones in back-to-front order.
+    solid: Vec<(SpriteState, SpriteTextures)>,
+    blended: Vec<BlendedSprite>,
     cubes: u32,
     /// (particle texture, first row, count) into the particle rows.
     billboards: Vec<(u32, u32, u32)>,
 }
 
+/// A blended sprite with the keys the world pass merges it by: Three sorts
+/// transparent objects by render order, then back to front.
+struct BlendedSprite {
+    state: SpriteState,
+    textures: SpriteTextures,
+    render_order: i32,
+    /// Squared distance from the view's eye.
+    depth: f32,
+}
+
 impl EffectsPass {
+    /// Sort key of the `index`th blended sprite: (render order, squared
+    /// distance from the eye), drawn in ascending order, farther first.
+    pub fn blended_key(&self, index: usize) -> Option<(i32, f32)> {
+        self.blended
+            .get(index)
+            .map(|sprite| (sprite.render_order, sprite.depth))
+    }
+
     pub fn draws(&self) -> u32 {
         (self.solid.len() + self.blended.len() + self.billboards.len()) as u32
             + u32::from(self.cubes > 0)
@@ -413,44 +432,55 @@ impl Effects {
         })
     }
 
-    /// Draw solid sprites (before the world's blended parts) or blended
-    /// sprites (after them).
-    pub fn draw_sprites(
+    /// Draw the solid sprites, between the world's opaque and blended parts.
+    pub fn draw_solid_sprites(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         format: wgpu::TextureFormat,
         effects: &EffectsPass,
-        blended: bool,
+    ) {
+        for (index, (state, textures)) in effects.solid.iter().enumerate() {
+            self.draw_sprite(pass, format, *state, textures, index as u32);
+        }
+    }
+
+    /// Draw one blended sprite. The world pass interleaves these with its
+    /// blended parts, so each call binds its own pipeline and buffers.
+    pub fn draw_blended_sprite(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        format: wgpu::TextureFormat,
+        effects: &EffectsPass,
+        index: usize,
+    ) {
+        if let Some(sprite) = effects.blended.get(index) {
+            let instance = (effects.solid.len() + index) as u32;
+            self.draw_sprite(pass, format, sprite.state, &sprite.textures, instance);
+        }
+    }
+
+    fn draw_sprite(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        format: wgpu::TextureFormat,
+        state: SpriteState,
+        textures: &SpriteTextures,
+        instance: u32,
     ) {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
             return;
         };
-        let (draws, first) = if blended {
-            (&effects.blended, effects.solid.len() as u32)
-        } else {
-            (&effects.solid, 0)
-        };
-        if draws.is_empty() {
+        let (Some(pipeline), Some(bind_group)) = (
+            set.sprites.get(&state),
+            self.sprite_bind_groups.get(textures),
+        ) else {
             return;
-        }
+        };
+        pass.set_pipeline(pipeline);
         pass.set_vertex_buffer(0, self.corners.slice(..));
         pass.set_vertex_buffer(1, self.sprite_rows.buffer.slice(..));
-        let mut current = None;
-        for (index, (state, textures, _)) in draws.iter().enumerate() {
-            let (Some(pipeline), Some(bind_group)) = (
-                set.sprites.get(state),
-                self.sprite_bind_groups.get(textures),
-            ) else {
-                continue;
-            };
-            if current != Some(*state) {
-                pass.set_pipeline(pipeline);
-                current = Some(*state);
-            }
-            pass.set_bind_group(1, bind_group, &[]);
-            let instance = first + index as u32;
-            pass.draw(0..4, instance..instance + 1);
-        }
+        pass.set_bind_group(1, bind_group, &[]);
+        pass.draw(0..4, instance..instance + 1);
     }
 
     pub fn draw_particles(
@@ -913,11 +943,15 @@ impl Renderer {
                     .insert(draw.textures.clone(), bind_group);
             }
             rows.extend_from_slice(&draw.row);
-            let entry = (draw.state, draw.textures.clone(), 1);
             if draw.state.blend {
-                pass.blended.push(entry);
+                pass.blended.push(BlendedSprite {
+                    state: draw.state,
+                    textures: draw.textures.clone(),
+                    render_order: draw.render_order,
+                    depth: draw.depth,
+                });
             } else {
-                pass.solid.push(entry);
+                pass.solid.push((draw.state, draw.textures.clone()));
             }
         }
         self.effects.sprite_rows.write(&self.gpu, &rows);

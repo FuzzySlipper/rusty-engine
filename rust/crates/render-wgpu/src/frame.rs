@@ -15,6 +15,7 @@ use render_model::{RenderHandle, RenderLayer};
 use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
+use crate::effects::EffectsPass;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
 use crate::target::TargetView;
@@ -575,6 +576,45 @@ impl Renderer {
         draws
     }
 
+    /// Blended parts and blended sprites in one order, as Three sorts its
+    /// transparent list: render order (parts are 0), then back to front.
+    /// A blended surface writes no depth, so drawing either family as a
+    /// block would let whatever draws second cover the other.
+    fn draw_blended<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        format: wgpu::TextureFormat,
+        parts: &[batch::Batch],
+        effects: &EffectsPass,
+        eye: Vec3,
+        pipeline: impl Fn(batch::Pass) -> &'a wgpu::RenderPipeline + Copy,
+    ) -> u32 {
+        let part_depth = |batch: &batch::Batch| {
+            let bounds = &self.tables.parts.state[batch.part as usize].world_bounds;
+            ((bounds.min + bounds.max) * 0.5).distance_squared(eye)
+        };
+        let (mut part, mut sprite, mut draws) = (0, 0, 0);
+        loop {
+            let part_first = match (parts.get(part), effects.blended_key(sprite)) {
+                (None, None) => break,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (Some(batch), Some((order, depth))) => {
+                    order > 0 || (order == 0 && part_depth(batch) >= depth)
+                }
+            };
+            if part_first {
+                draws += self.draw_batches(pass, &parts[part..part + 1], pipeline);
+                part += 1;
+            } else {
+                self.effects
+                    .draw_blended_sprite(pass, format, effects, sprite);
+                sprite += 1;
+            }
+        }
+        draws
+    }
+
     fn rebuild_sky(&mut self) {
         self.sky_bind_group = None;
         let Environment::Sky(sky) = &self.tables.environment else {
@@ -791,12 +831,15 @@ impl Renderer {
                 part_draws += self.draw_ghost_plates(&mut pass, format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
             }
-            self.effects
-                .draw_sprites(&mut pass, format, &effects, false);
-            part_draws += self.draw_batches(&mut pass, &batches[blend_start..], |pass| {
-                pipelines.get(pass)
-            });
-            self.effects.draw_sprites(&mut pass, format, &effects, true);
+            self.effects.draw_solid_sprites(&mut pass, format, &effects);
+            part_draws += self.draw_blended(
+                &mut pass,
+                format,
+                &batches[blend_start..],
+                &effects,
+                eye,
+                |pass| pipelines.get(pass),
+            );
             self.effects.draw_particles(
                 &mut pass,
                 format,

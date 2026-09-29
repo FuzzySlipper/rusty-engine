@@ -430,3 +430,104 @@ fn particles_mark_offscreen_targets_stale_only_when_they_move() {
     let readout = harness.renderer.view_composition_readout();
     assert_eq!(readout.targets[0].status, TargetStatus::Stale, "advanced");
 }
+
+/// Blended sprites and blended meshes share one order: render order, then
+/// back to front (#8787 review). A red half-transparent sprite behind blue
+/// glass shows blue-dominant, in front of it red-dominant; a positive render
+/// order draws it after the glass even from behind, as Three's does.
+#[test]
+fn blended_sprites_and_blended_meshes_share_one_back_to_front_order() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let (texture, _) =
+        harness
+            .resources
+            .texture("texture/white", 1, 1, &[255; 4], TextureFilter::Nearest);
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        texture,
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/white".into(),
+                texture: "texture/white".into(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0; 2],
+                    uv_max: [1.0; 2],
+                    size: None,
+                }],
+            },
+        },
+    ];
+    let plane = payload(
+        vec![
+            -1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 1.0, 0.0,
+        ],
+        [0.0, 0.0, 1.0].repeat(4),
+        vec![0, 1, 2, 0, 2, 3],
+    );
+    let mut glass = coloured_mesh("glass", plane, [0.0, 0.0, 1.0, 0.5]);
+    if let RenderDiff::DefineMaterial { material } = &mut glass[0] {
+        material.alpha_mode = MaterialAlphaModeDescriptor::Blend;
+        material.emission_color = [0.0, 0.0, 1.0];
+        material.emission_intensity = 1.0;
+    }
+    ops.extend(glass);
+    ops.push(instance(
+        1,
+        None,
+        "glass",
+        transform([0.0, 0.0, -3.0], 0.0, 1.0),
+    ));
+    let mut red = sprite(0, [0.0, 0.0, -4.0], BillboardMode::None);
+    red.asset = "sprite/white".into();
+    red.size = [2.0; 2];
+    red.tint = [1.0, 0.0, 0.0, 0.5];
+    red.material.alpha = SpriteAlphaMode::Blend;
+    ops.push(create(2, red));
+    harness.apply(ops);
+    let eye = camera("eye", [0.0; 3], 0.0, 0.0);
+    let centre = |harness: &mut Harness| pixel(&harness.single(&eye), WIDTH, WIDTH / 2, HEIGHT / 2);
+
+    let behind = centre(&mut harness);
+    assert!(behind[2] > behind[0], "sprite behind the glass: {behind:?}");
+
+    harness.apply(vec![RenderDiff::UpdateSprite {
+        handle: RenderHandle::new(2),
+        frame: None,
+        tint: None,
+        render_order: Some(1),
+        visible: None,
+    }]);
+    let ordered = centre(&mut harness);
+    assert!(
+        ordered[0] > ordered[2],
+        "render order 1 draws after the glass: {ordered:?}"
+    );
+
+    harness.apply(vec![
+        RenderDiff::UpdateSprite {
+            handle: RenderHandle::new(2),
+            frame: None,
+            tint: None,
+            render_order: Some(0),
+            visible: None,
+        },
+        RenderDiff::Update {
+            handle: RenderHandle::new(2),
+            transform: Some(transform([0.0, 0.0, -2.0], 0.0, 1.0)),
+            material: None,
+            visible: None,
+            metadata: None,
+        },
+    ]);
+    let front = centre(&mut harness);
+    assert!(
+        front[0] > front[2],
+        "sprite in front of the glass: {front:?}"
+    );
+}

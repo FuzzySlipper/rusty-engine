@@ -67,9 +67,10 @@ parent walk.
 - **Draw order in a view pass.**
   1. world opaque parts;
   2. solid sprites, by render order, then front to back;
-  3. world blended parts;
-  4. blended sprites, by render order, then back to front;
-  5. particles.
+  3. world blended parts and blended sprites as one sequence: by render
+     order (parts are 0), then back to front, as Three sorted its
+     transparent list;
+  4. particles.
 - **Viewmodel layer.** Its sprites draw in the viewmodel pass (#8785), which
   is where the Doom weapon and its flash live.
 - **Playback.** It stays where it was: the Engine advances sprite playback on
@@ -118,11 +119,28 @@ particles advance, not while held. A fixture asserts it.
 
 | Item | Here | Why |
 |---|---|---|
-| Blended sprites against blended world parts | Sorted within each group, not across | Three sorted every transparent object together. Interleaved blended sprites and blended meshes at mixed depths may order differently. |
 | Pixel-sized sprites | Target pixels | Three used CSS pixels; they differ only when the device pixel ratio isn't 1. |
 | Sprite `shadow` policy | Not realized | There are no shadows in the backend; shadows are #8784. |
 | Fog on sprites | None | The wgpu backend has no fog. |
 | Particle diagnostics readout (`ParticleProjectionReadout`) | `particle_counts()` and `ApplyIssue`s | Nothing reads the old readout outside the browser host. |
+
+## Review fix: one transparent order
+
+The review found that every blended part drew before every blended sprite.
+A blended surface writes no depth, so a sprite behind glass drew over the
+glass. Blended parts and blended sprites now merge into one sequence, by
+render order, then back to front (`Renderer::draw_blended` in `frame.rs`).
+`blended_sprites_and_blended_meshes_share_one_back_to_front_order` in
+`tests/effects.rs` checks three cases:
+- a red half-transparent sprite behind blue half-transparent glass comes out
+  blue-dominant (before the fix it was `[188, 0, 137]`, the same as in front);
+- the same sprite with render order 1 draws after the glass;
+- in front of the glass it comes out red-dominant.
+
+The #8783 Doom room-study capture (30 sprites, 125 meshes) renders
+byte-identical before and after the fix: it has no blended mesh behind or in
+front of a blended sprite. The Doom and Dagger held pairs above were not
+re-rendered, because their capture directories are no longer on disk.
 
 ## Evidence
 
