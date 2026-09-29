@@ -50,7 +50,11 @@ jobs:
           workspaces: . -> target
 
       - name: Install architecture audit dependency
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep libasound2-dev
+        # mesa-vulkan-drivers supplies llvmpipe (lavapipe), the software Vulkan
+        # adapter the render-wgpu screenshot tests run on.
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1
 
       - name: Verify
+        env:
+          WGPU_BACKEND: vulkan
         run: ./scripts/verify.sh

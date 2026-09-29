@@ -24,6 +24,7 @@ members = [
     "rust/crates/render-presentation",
     "rust/crates/render-audio",
     "rust/crates/render-projection",
+    "rust/crates/render-wgpu",
     "rust/crates/engine-spatial",
     "rust/crates/entity-state",
     "rust/crates/voxel-asset",
@@ -73,6 +74,7 @@ render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-audio = { path = "rust/crates/render-audio" }
 render-projection = { path = "rust/crates/render-projection" }
+render-wgpu = { path = "rust/crates/render-wgpu" }
 entity-state = { path = "rust/crates/entity-state" }
 voxel-asset = { path = "rust/crates/voxel-asset" }
 voxel-annotation = { path = "rust/crates/voxel-annotation" }

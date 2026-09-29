@@ -1,0 +1,25 @@
+[package]
+name = "render-wgpu"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+render-model.workspace = true
+render-host-contracts.workspace = true
+# Only this crate may depend on wgpu (scripts/dependency_boundary_check.py).
+wgpu = "30.0.1"
+glam = "0.30"
+png = "0.18"
+bytemuck = "1"
+pollster = "0.4"
+
+[dev-dependencies]
+render-presentation.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Window for the surface presentation example only; the desktop shell owns
+# the real window.
+winit = "0.30"

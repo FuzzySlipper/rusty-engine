@@ -175,6 +175,21 @@ class DependencyBoundaryTests(unittest.TestCase):
             ["csharp-product-runtime depends on kira, which only render-audio may depend on"],
         )
 
+    def test_only_render_wgpu_may_depend_on_wgpu(self) -> None:
+        metadata = metadata_fixture(["render-wgpu", "render-presentation"], [])
+        packages = {package["name"]: package for package in metadata["packages"]}
+        packages["render-wgpu"]["dependencies"] = [
+            {"name": "wgpu", "kind": None},
+            {"name": "render-presentation", "kind": "dev"},
+        ]
+        self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
+
+        packages["render-presentation"]["dependencies"] = [{"name": "wgpu-types", "kind": None}]
+        self.assertEqual(
+            dependency_boundary_check.find_violations(metadata),
+            ["render-presentation depends on wgpu-types, which only render-wgpu may depend on"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -22,7 +22,7 @@ excluded for all three.
   `createStaticMeshInstance`, 25 `defineTexture`, 9 `defineMaterial`, 1
   `setSkyBackground`, and 15 atlases with 30 sprites. The camera sits at
   (-7, 1.62, 3), yaw 0, fovY 90°. `world-frame.json` has sha256 `7298e373…`.
-- **Capture.** `rust/prototypes/wgpu-bootstrap/capture-fixture.py` reads
+- **Capture.** `capture-fixture.py` (now `rust/crates/render-wgpu/scripts/capture-presentation.py`) reads
   `/__rusty/product/runtime/outputs/fresh` and the texture resources from a
   running room study. The 28 MB fixture is not committed.
 - **Shared loader.** `bootstrap-fixture` replays the frame into
@@ -37,9 +37,9 @@ excluded for all three.
   llvmpipe Vulkan with `WGPU_BACKEND=vulkan
   VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`, so CI can use
   software Vulkan and needs no GPU runner.
-- **Location.** The prototypes live in a separate Cargo workspace,
-  `rust/prototypes/wgpu-bootstrap`, which no Engine crate can depend on.
-  Nothing is wired into production.
+- **Location.** The prototypes lived in a separate Cargo workspace,
+  `rust/prototypes/wgpu-bootstrap`, which no Engine crate could depend on.
+  Nothing was wired into production. #8815 deleted it; see "Reproduce".
 
 ## Measurements
 
@@ -65,7 +65,7 @@ The shared fixture took about 5 minutes and is excluded.
 | Frames until the baseline appears | 1 | 1 | 1 (with synchronous pipeline compilation) |
 
 Build times ran on a shared 20-core machine while other lanes were building,
-so they are indicative, not a benchmark. `measure-build.sh` reproduces them; raw rows are in `build-times.tsv`.
+so they are indicative, not a benchmark. `measure-build.sh` in the spike commit reproduces them; raw rows are in `build-times.tsv`.
 
 ## Fidelity on this scene
 
@@ -123,12 +123,17 @@ from them is adopted.
 
 ## Reproduce
 
+The prototype workspace was deleted by #8815 once `render-wgpu` (#8783)
+rendered the same capture. Check out the spike commit to rerun it:
+
 ```bash
-cd rust/prototypes/wgpu-bootstrap
+git worktree add ../wgpu-bootstrap-8796 6a88d6c7c
+cd ../wgpu-bootstrap-8796/rust/prototypes/wgpu-bootstrap
 python3 capture-fixture.py            # against a running `bash scripts/run-room-study.sh` in rusty-doom
 cargo run --release -p bootstrap-raw  # writes out/raw.png; also -p bootstrap-kiss3d, -p bootstrap-bevy
 ./measure-build.sh /path/to/scratch   # writes out/build-times.tsv
 ```
 
-The prototype workspace is disposable. Only the raw prototype's shape goes
-forward, into #8783.
+On current main, the same capture renders through the production crate:
+`rust/crates/render-wgpu/scripts/capture-presentation.py`, then
+`cargo run -p render-wgpu --example render_capture -- <dir> <out.png>`.
