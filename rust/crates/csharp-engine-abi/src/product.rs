@@ -1709,13 +1709,9 @@ pub struct NativeProductTimelineCompletion {
     pub provenance_detail: NativeByteSlice,
 }
 
-pub type NativeProductCreate =
-    unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32;
-/// Product creation callback with a copied diagnostic result for failures.
-/// The legacy `create` callback remains in the table for products generated
-/// before product-call diagnostics were added; new generated products fill
-/// both slots and the runtime prefers this one.
-pub type NativeProductCreateWithError = unsafe extern "C" fn(
+/// Creates the product. On failure the product fills `NativeProductCallError`,
+/// which Rust copies and releases with `NativeProductReleaseCallError`.
+pub type NativeProductCreate = unsafe extern "C" fn(
     *const NativeProductCreateArgs,
     *mut *mut c_void,
     *mut NativeProductCallError,
@@ -1729,10 +1725,7 @@ pub type NativeProductUpdate = unsafe extern "C" fn(
 pub type NativeProductCompleteTimeline =
     unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32;
 /// Copies the Rust-owned lifecycle state after a host transition has committed.
-///
-/// This observer is optional so products generated before committed lifecycle
-/// publication remain loadable. It is notification-only and cannot influence
-/// the already committed host transition.
+/// It is notification-only and cannot influence the committed transition.
 pub type NativeProductObserveRuntime =
     unsafe extern "C" fn(*mut c_void, *const NativeProductRuntimeFacts);
 pub type NativeProductDestroy = unsafe extern "C" fn(*mut c_void);
@@ -1792,12 +1785,19 @@ pub type NativeProductReadCallError =
 pub type NativeProductReleaseCallError = unsafe extern "C" fn(*mut c_void, NativeProductCallError);
 
 /// Product functions supplied to Rust by the generated V1 bootstrap handshake.
-/// Nullable fields let Rust inspect the copied table after exact ABI agreement.
+/// The generated `ProductBridge` fills every field and the host requires each
+/// one; the exact ABI fingerprint rules out an older, partial table. Fields stay
+/// nullable only so the host reports a null as an error rather than calling it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeProductApi {
-    pub create:
-        Option<unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32>,
+    pub create: Option<
+        unsafe extern "C" fn(
+            *const NativeProductCreateArgs,
+            *mut *mut c_void,
+            *mut NativeProductCallError,
+        ) -> i32,
+    >,
     pub start: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub update: Option<
         unsafe extern "C" fn(
@@ -1821,31 +1821,11 @@ pub struct NativeProductApi {
             *mut NativeProductDebugResult,
         ) -> i32,
     >,
-    pub release_debug_result: Option<unsafe extern "C" fn(*mut c_void, NativeProductDebugResult)>,
-    /// Appended after the established execute/release pair so products built
-    /// against the preceding table keep their release callback offset.
     pub describe_debug:
         Option<unsafe extern "C" fn(*mut c_void, *mut NativeProductDebugResult) -> i32>,
-    /// Appended optional committed-state observer. Rust calls this only after
-    /// the authoritative lifecycle transition has committed.
+    pub release_debug_result: Option<unsafe extern "C" fn(*mut c_void, NativeProductDebugResult)>,
     pub observe_runtime:
         Option<unsafe extern "C" fn(*mut c_void, *const NativeProductRuntimeFacts)>,
-    /// Republishes the current product presentation for a newly attached
-    /// browser without changing lifecycle state or resetting product state.
-    /// Appended so products built against earlier tables keep their offsets.
-    pub attach: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
-    /// Optional richer creation callback appended after all established
-    /// fields so older products retain their table prefix.
-    pub create_with_error: Option<
-        unsafe extern "C" fn(
-            *const NativeProductCreateArgs,
-            *mut *mut c_void,
-            *mut NativeProductCallError,
-        ) -> i32,
-    >,
-    /// Optional product callback failure readout and matching release pair.
-    /// New generated products record ordinary callback exceptions here while
-    /// preserving the existing action/update callback ABI.
     pub read_call_error:
         Option<unsafe extern "C" fn(*mut c_void, *mut NativeProductCallError) -> i32>,
     pub release_call_error: Option<unsafe extern "C" fn(*mut c_void, NativeProductCallError)>,

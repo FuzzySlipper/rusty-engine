@@ -615,7 +615,6 @@ struct CoreclrProductHost {
 struct LoadedProductApi {
     host: LoadedProductHost,
     create: NativeProductCreate,
-    create_with_error: Option<NativeProductCreateWithError>,
     start: NativeProductAction,
     update: NativeProductUpdate,
     complete_timeline: NativeProductCompleteTimeline,
@@ -624,10 +623,12 @@ struct LoadedProductApi {
     restart: NativeProductAction,
     shutdown: NativeProductAction,
     destroy: NativeProductDestroy,
-    debug: Option<(NativeProductExecuteDebug, NativeProductReleaseDebugResult)>,
-    debug_describe: Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
-    observe_runtime: Option<NativeProductObserveRuntime>,
-    call_error: Option<(NativeProductReadCallError, NativeProductReleaseCallError)>,
+    execute_debug: NativeProductExecuteDebug,
+    describe_debug: NativeProductDescribeDebug,
+    release_debug_result: NativeProductReleaseDebugResult,
+    observe_runtime: NativeProductObserveRuntime,
+    read_call_error: NativeProductReadCallError,
+    release_call_error: NativeProductReleaseCallError,
 }
 
 impl LoadedProductApi {
@@ -758,21 +759,8 @@ impl LoadedProductApi {
         product: NativeProductApi,
         host: LoadedProductHost,
     ) -> Result<Self, CsharpProductRuntimeError> {
-        let call_error = optional_callback_pair(
-            product.read_call_error,
-            product.release_call_error,
-            "read_call_error",
-            "release_call_error",
-        )?;
-        if product.create_with_error.is_some() && call_error.is_none() {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CALLBACK_PAIR",
-                "product supplied create_with_error without read_call_error and release_call_error",
-            ));
-        }
         Ok(Self {
             create: required_function(product.create, "create")?,
-            create_with_error: product.create_with_error,
             start: required_function(product.start, "start")?,
             update: required_function(product.update, "update")?,
             complete_timeline: required_function(product.complete_timeline, "complete_timeline")?,
@@ -781,59 +769,20 @@ impl LoadedProductApi {
             restart: required_function(product.restart, "restart")?,
             shutdown: required_function(product.shutdown, "shutdown")?,
             destroy: required_function(product.destroy, "destroy")?,
-            debug: optional_callback_pair(
-                product.execute_debug,
+            execute_debug: required_function(product.execute_debug, "execute_debug")?,
+            describe_debug: required_function(product.describe_debug, "describe_debug")?,
+            release_debug_result: required_function(
                 product.release_debug_result,
-                "execute_debug",
                 "release_debug_result",
             )?,
-            // Descriptor publication was added after execute/release. Keep an
-            // older execute/release-only product loadable: `describe_debug`
-            // is optional, but if it is present it shares the exact existing
-            // result-release callback.
-            debug_describe: optional_describe_callback(
-                product.describe_debug,
-                product.release_debug_result,
+            observe_runtime: required_function(product.observe_runtime, "observe_runtime")?,
+            read_call_error: required_function(product.read_call_error, "read_call_error")?,
+            release_call_error: required_function(
+                product.release_call_error,
+                "release_call_error",
             )?,
-            observe_runtime: product.observe_runtime,
-            call_error,
             host,
         })
-    }
-}
-
-fn optional_callback_pair<T, U>(
-    first: Option<T>,
-    second: Option<U>,
-    first_name: &str,
-    second_name: &str,
-) -> Result<Option<(T, U)>, CsharpProductRuntimeError> {
-    match (first, second) {
-        (Some(first), Some(second)) => Ok(Some((first, second))),
-        (None, None) => Ok(None),
-        _ => Err(CsharpProductRuntimeError::new(
-            "CSHARP_CALLBACK_PAIR",
-            format!(
-                "product supplied only one of optional callbacks `{first_name}` and `{second_name}`"
-            ),
-        )),
-    }
-}
-
-fn optional_describe_callback(
-    describe: Option<NativeProductDescribeDebug>,
-    release: Option<NativeProductReleaseDebugResult>,
-) -> Result<
-    Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
-    CsharpProductRuntimeError,
-> {
-    match (describe, release) {
-        (Some(describe), Some(release)) => Ok(Some((describe, release))),
-        (Some(_), None) => Err(CsharpProductRuntimeError::new(
-            "CSHARP_CALLBACK_PAIR",
-            "product supplied describe_debug without release_debug_result",
-        )),
-        (None, _) => Ok(None),
     }
 }
 
@@ -3049,12 +2998,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             let result = self.execute_renderer_debug(action)?;
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
         }
-        let Some((execute, release)) = self.api.debug else {
-            return Err(ProductDevRuntimeError::new_not_applied(
-                "CSHARP_DEBUG_UNSUPPORTED",
-                "the loaded product does not expose generated live-debug callbacks",
-            ));
-        };
+        let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
 
         // Debug commands may use ordinary generated Engine services, and their
         // changes stay like any other call's.
@@ -3080,15 +3024,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
         ProductDevRuntimeReceipt<product_dev_host::ProductDevDebugCatalog>,
         ProductDevRuntimeError,
     > {
-        let Some((describe, release)) = self.api.debug_describe else {
-            return ProductDevRuntimeReceipt::new(
-                product_dev_host::ProductDevDebugCatalog::unavailable().with_renderer_diagnostics(),
-                Vec::new(),
-            )
-            .map_err(host_runtime_error);
-        };
-        let result = call_describe_debug(describe, release, self.handle)
-            .map_err(|error| self.runtime_error(error))?;
+        let result = call_describe_debug(
+            self.api.describe_debug,
+            self.api.release_debug_result,
+            self.handle,
+        )
+        .map_err(|error| self.runtime_error(error))?;
         let catalog =
             product_dev_host::ProductDevDebugCatalog::decode_json(result.message().as_bytes())
                 .map_err(|error| {
@@ -4133,37 +4074,28 @@ fn call_create(
     args: &NativeProductCreateArgs,
     handle: &mut *mut c_void,
 ) -> Result<(), CsharpProductRuntimeError> {
+    let mut native_error = NativeProductCallError::default();
     // SAFETY: fixed ABI pointers are valid for the duration of this call.
-    if let Some(create_with_error) = api.create_with_error {
-        let mut native_error = NativeProductCallError::default();
-        let status = unsafe { create_with_error(args, handle, &mut native_error) };
-        let diagnostic_result = if status == ABI_OK {
-            if !native_product_call_error_is_empty(native_error) {
-                Ok(Some(CsharpProductRuntimeError::new(
-                    "CSHARP_PRODUCT_CALL",
-                    "C# product create succeeded with a non-empty callback diagnostic",
-                )))
-            } else {
-                Ok(None)
-            }
+    let status = unsafe { (api.create)(args, handle, &mut native_error) };
+    let diagnostic_result = if status == ABI_OK {
+        if !native_product_call_error_is_empty(native_error) {
+            Ok(Some(CsharpProductRuntimeError::new(
+                "CSHARP_PRODUCT_CALL",
+                "C# product create succeeded with a non-empty callback diagnostic",
+            )))
         } else {
-            copy_product_call_error(native_error)
-        };
-        // SAFETY: the generated product owns every buffer in the result and
-        // the matching release callback is required for every invocation,
-        // including a failed create with no product handle.
-        unsafe {
-            (api.call_error
-                .expect("create diagnostics require call-error callbacks")
-                .1)(ptr::null_mut(), native_error)
-        };
-        let diagnostic = diagnostic_result?;
-        if let Some(diagnostic) = diagnostic {
-            return Err(diagnostic);
+            Ok(None)
         }
-        return checked_status(status, "create");
+    } else {
+        copy_product_call_error(native_error)
+    };
+    // SAFETY: the generated product owns every buffer in the result and the
+    // matching release is required for every invocation, including a failed
+    // create with no product handle.
+    unsafe { (api.release_call_error)(ptr::null_mut(), native_error) };
+    if let Some(diagnostic) = diagnostic_result? {
+        return Err(diagnostic);
     }
-    let status = unsafe { (api.create)(args, handle) };
     checked_status(status, "create")
 }
 
@@ -4209,7 +4141,7 @@ fn read_product_call_error(
     api: &LoadedProductApi,
     handle: *mut c_void,
 ) -> Option<CsharpProductRuntimeError> {
-    let (read, release) = api.call_error?;
+    let (read, release) = (api.read_call_error, api.release_call_error);
     let mut native_error = NativeProductCallError::default();
     // SAFETY: the product handle remains live for this immediate read and the
     // generated callback writes only the supplied result storage.
@@ -4406,9 +4338,6 @@ fn observe_product_runtime(
     handle: *mut c_void,
     readout: RuntimeLifecycleReadout,
 ) {
-    let Some(observe) = api.observe_runtime else {
-        return;
-    };
     let facts = NativeProductRuntimeFacts {
         lifecycle_state: native_lifecycle_state(readout.state()),
         instance_id: readout.instance_id().value(),
@@ -4417,7 +4346,7 @@ fn observe_product_runtime(
     };
     // SAFETY: the generated observer borrows `facts` for this call only and
     // copies it into managed state. The product handle stays live until Drop.
-    unsafe { observe(handle, &facts) };
+    unsafe { (api.observe_runtime)(handle, &facts) };
 }
 
 fn native_utf8(value: &str) -> NativeUtf8Slice {
@@ -5803,8 +5732,9 @@ mod tests {
     unsafe extern "C" fn remapping_callback_fixture_create(
         args: *const NativeProductCreateArgs,
         handle: *mut *mut c_void,
+        error: *mut NativeProductCallError,
     ) -> i32 {
-        let status = unsafe { drop_fixture_create(args, handle) };
+        let status = unsafe { drop_fixture_create(args, handle, error) };
         if status == ABI_OK {
             let input = unsafe { (*args).engine.input };
             REMAPPING_CALLBACK_CONTEXT.store(input.context as usize, Ordering::SeqCst);
@@ -5871,6 +5801,7 @@ mod tests {
     unsafe extern "C" fn drop_fixture_create(
         args: *const NativeProductCreateArgs,
         handle: *mut *mut c_void,
+        _error: *mut NativeProductCallError,
     ) -> i32 {
         // SAFETY: product creation receives the live Engine service table;
         // this fixture copies only the one diagnostics function/context needed
@@ -5981,8 +5912,9 @@ mod tests {
     unsafe extern "C" fn voxel_failure_fixture_create(
         args: *const NativeProductCreateArgs,
         handle: *mut *mut c_void,
+        error: *mut NativeProductCallError,
     ) -> i32 {
-        let status = unsafe { drop_fixture_create(args, handle) };
+        let status = unsafe { drop_fixture_create(args, handle, error) };
         if status == ABI_OK {
             // SAFETY: product creation receives the live Engine service table.
             // The focused fixture uses these function pointers only during one
@@ -6144,16 +6076,63 @@ mod tests {
 
     fn product_error_fixture_api() -> LoadedProductApi {
         let mut api = drop_fixture_api();
-        api.create_with_error = Some(product_error_fixture_create);
-        api.call_error = Some((product_error_fixture_read, product_error_fixture_release));
+        api.create = product_error_fixture_create;
+        api.read_call_error = product_error_fixture_read;
+        api.release_call_error = product_error_fixture_release;
         api
+    }
+
+    const FIXTURE_DEBUG_CATALOG: &[u8] = br#"{"available":true,"commands":[]}"#;
+
+    unsafe extern "C" fn fixture_describe_debug(
+        _handle: *mut c_void,
+        result: *mut NativeProductDebugResult,
+    ) -> i32 {
+        // SAFETY: the fixture receives the call helper's writable result and
+        // exposes a static catalog until its matching release.
+        unsafe {
+            *result = NativeProductDebugResult {
+                succeeded: 1,
+                message: NativeUtf8Slice {
+                    bytes: FIXTURE_DEBUG_CATALOG.as_ptr(),
+                    len: FIXTURE_DEBUG_CATALOG.len(),
+                },
+            };
+        }
+        ABI_OK
+    }
+
+    unsafe extern "C" fn fixture_release_debug_result(
+        _handle: *mut c_void,
+        _result: NativeProductDebugResult,
+    ) {
+    }
+
+    unsafe extern "C" fn fixture_observe_runtime(
+        _handle: *mut c_void,
+        _facts: *const NativeProductRuntimeFacts,
+    ) {
+    }
+
+    unsafe extern "C" fn fixture_read_call_error(
+        _handle: *mut c_void,
+        result: *mut NativeProductCallError,
+    ) -> i32 {
+        // SAFETY: the fixture receives the call helper's writable result.
+        unsafe { *result = NativeProductCallError::default() };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn fixture_release_call_error(
+        _handle: *mut c_void,
+        _result: NativeProductCallError,
+    ) {
     }
 
     fn drop_fixture_api() -> LoadedProductApi {
         LoadedProductApi {
             host: LoadedProductHost::NativeAot(None),
             create: drop_fixture_create,
-            create_with_error: None,
             start: drop_fixture_action,
             update: drop_fixture_update,
             complete_timeline: drop_fixture_timeline,
@@ -6162,10 +6141,12 @@ mod tests {
             restart: drop_fixture_action,
             shutdown: drop_fixture_shutdown,
             destroy: drop_fixture_destroy,
-            debug: None,
-            debug_describe: None,
-            observe_runtime: None,
-            call_error: None,
+            execute_debug: debug_semantic_failure,
+            describe_debug: fixture_describe_debug,
+            release_debug_result: fixture_release_debug_result,
+            observe_runtime: fixture_observe_runtime,
+            read_call_error: fixture_read_call_error,
+            release_call_error: fixture_release_call_error,
         }
     }
 
@@ -6811,7 +6792,8 @@ mod tests {
         UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
         let (mut runtime, root) =
             drop_fixture_runtime_with_diagnostics("long-product-error", diagnostics.clone());
-        runtime.api.call_error = Some((long_product_error_read, product_error_fixture_release));
+        runtime.api.read_call_error = long_product_error_read;
+        runtime.api.release_call_error = product_error_fixture_release;
         runtime
             .lifecycle(ProductDevLifecycleOperation::Start)
             .expect("fixture start");
@@ -6996,7 +6978,8 @@ mod tests {
         runtime
             .lifecycle(ProductDevLifecycleOperation::Start)
             .unwrap();
-        runtime.api.debug = Some((debug_semantic_failure, release_debug_fixture));
+        runtime.api.execute_debug = debug_semantic_failure;
+        runtime.api.release_debug_result = release_debug_fixture;
         assert!(!runtime
             .execute_debug("unknown")
             .unwrap()
@@ -7005,7 +6988,7 @@ mod tests {
         runtime
             .admit_demand_step()
             .expect("semantic rejection preserves the owner");
-        runtime.api.debug = Some((debug_abi_failure_after_result, release_debug_fixture));
+        runtime.api.execute_debug = debug_abi_failure_after_result;
         assert_eq!(
             runtime
                 .execute_debug("mutating-command")
@@ -7065,7 +7048,8 @@ mod tests {
         };
         assert!(!call_complete_timeline(&api, ptr::null_mut(), &completion).unwrap());
         api.complete_timeline = timeline_error_fixture;
-        api.call_error = Some((timeline_error_read, product_error_fixture_release));
+        api.read_call_error = timeline_error_read;
+        api.release_call_error = product_error_fixture_release;
         let error = call_complete_timeline(&api, ptr::null_mut(), &completion).unwrap_err();
         assert!(error
             .detail()
@@ -7573,33 +7557,6 @@ mod tests {
         })
         .expect("large result");
         assert_eq!(copied.message().len(), large.len());
-        assert!(
-            optional_callback_pair::<NativeProductExecuteDebug, NativeProductReleaseDebugResult>(
-                None,
-                None,
-                "execute_debug",
-                "release_debug_result",
-            )
-            .expect("older product accepts absent pair")
-            .is_none()
-        );
-        assert_eq!(
-            optional_callback_pair(
-                Some(debug_semantic_failure as NativeProductExecuteDebug),
-                None::<NativeProductReleaseDebugResult>,
-                "execute_debug",
-                "release_debug_result",
-            )
-            .expect_err("mismatched pair rejects")
-            .code(),
-            "CSHARP_CALLBACK_PAIR"
-        );
-        assert!(optional_describe_callback(
-            None,
-            Some(release_debug_fixture as NativeProductReleaseDebugResult),
-        )
-        .expect("older execute/release-only product keeps descriptor publication absent")
-        .is_none());
     }
 
     const HANDSHAKE_FIXTURE_IDENTITY: &[u8] = b"fixture-sdk/v1";

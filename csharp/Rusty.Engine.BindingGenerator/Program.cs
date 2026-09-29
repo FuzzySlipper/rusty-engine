@@ -483,8 +483,6 @@ internal static class Emit
         output.AppendLine();
         output.AppendLine("public interface IEngineProduct : IDisposable").AppendLine("{");
         output.AppendLine("    void Start();");
-        output.AppendLine("    // Legacy source compatibility; renderer attachment reads committed Engine state.");
-        output.AppendLine("    void Attach() { }");
         output.AppendLine("    ProductUpdateResult Update(ProductUpdate update);");
         output.AppendLine("    void Pause();");
         output.AppendLine("    void Resume();");

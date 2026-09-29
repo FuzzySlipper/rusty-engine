@@ -33,11 +33,8 @@ policy before issuing mutations and make retry behavior explicit; do not assume
 an exception rewinds an Engine world.
 
 Fresh browser attachment reconstructs presentation from committed Engine
-snapshots; the host no longer invokes `IEngineProduct.Attach` to rebuild a
-renderer. Publish current presentation during ordinary product lifecycle and
-updates. The generated `Attach` member remains as an optional default method for
-source continuity, but placing required initialization only there has no effect on a
-fresh attachment. Graphics/voxel handles and publication frontiers survive the
+snapshots, and `IEngineProduct` has no attach callback. Publish current
+presentation during ordinary product lifecycle and updates. Graphics/voxel handles and publication frontiers survive the
 baseline. Playback cursors and controller clip phases resume from Engine-owned
 update facts, and ghost plates reconstruct from their capture-time source.
 Historical sounds, particle bursts, animation cues, and completion callbacks

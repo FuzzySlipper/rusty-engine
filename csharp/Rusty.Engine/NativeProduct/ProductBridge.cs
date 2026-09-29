@@ -144,8 +144,6 @@ public static unsafe class ProductBridge
             describe_debug = &DescribeDebug,
             release_debug_result = &ReleaseDebugResult,
             observe_runtime = &ObserveRuntime,
-            attach = &Attach,
-            create_with_error = &CreateWithError,
             read_call_error = &ReadCallError,
             release_call_error = &ReleaseCallError,
         };
@@ -177,23 +175,12 @@ public static unsafe class ProductBridge
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int Create(NativeProductCreateArgs* args, void** handle)
-    {
-        return CreateCore(args, handle, null);
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int CreateWithError(NativeProductCreateArgs* args, void** handle, NativeProductCallError* error)
-    {
-        return CreateCore(args, handle, error);
-    }
-
-    private static int CreateCore(NativeProductCreateArgs* args, void** handle, NativeProductCallError* error)
+    private static int Create(NativeProductCreateArgs* args, void** handle, NativeProductCallError* error)
     {
         ProductLifetime? lifetime = null;
         try
         {
-            if (error is not null) *error = default;
+            *error = default;
             if (args is null || handle is null || (args->content_len != 0 && args->content is null) || (args->input.context_len != 0 && args->input.context is null) || (args->input.direct_intents_len != 0 && args->input.direct_intents is null) || (args->input.physical_mappings_len != 0 && args->input.physical_mappings is null)) return 2;
             ProductInputConfiguration input = CopyInputConfiguration(args->input);
             ProductDebugExecutionContext debugging = new();
@@ -207,7 +194,7 @@ public static unsafe class ProductBridge
         }
         catch (Exception exception)
         {
-            try { if (error is not null) SetProductCallError(error, exception); }
+            try { SetProductCallError(error, exception); }
             catch { }
             try { lifetime?.Dispose(); }
             catch { }
@@ -217,9 +204,6 @@ public static unsafe class ProductBridge
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Start(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Start(); lifetime.Debugging.RecordStarted(); });
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int Attach(void* handle) => Invoke(handle, static lifetime => lifetime.Product.Attach());
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Update(void* handle, NativeProductUpdateArgs* args, NativeProductUpdateResult* result)
