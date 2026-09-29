@@ -40,11 +40,7 @@ use std::{
 // Admission policy for immutable bundle-backed resource files. Generated mesh
 // definitions remain typed and do not use this file-resource byte ceiling.
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
-const MAX_ANIMATION_CUE_DEFINITIONS: usize = 128;
 const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
-const MAX_SPRITE_ATLAS_FRAMES: usize = 4_096;
-const MAX_SPRITE_PLAYBACK_FRAMES: usize = 4_096;
-const MAX_SPRITE_PLAYBACK_MARKERS: usize = 4_096;
 const MAX_SPRITE_PLAYBACK_TRANSITIONS_PER_ADVANCE: usize = 16_384;
 
 /// Latest bounded browser realization snapshot for one opaque ghost owner.
@@ -551,6 +547,39 @@ fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteApp
         },
         material: NativeSpriteMaterialDescriptor::default(),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn sprite_atlas_admits_more_frames_than_the_former_cap() {
+    // 5,000 frames: past the former 4,096.
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let frames: Vec<_> = (0..5_000_u32)
+        .map(|frame_id| NativeSpriteAtlasFrame {
+            frame_id,
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        })
+        .collect();
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    unsafe {
+        bridge.create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+            texture,
+            frames: frames.as_ptr(),
+            frames_len: frames.len(),
+        })
+    }
+    .expect("a 5,000-frame atlas");
+    bridge.end_call();
 }
 
 #[cfg(test)]
@@ -5020,10 +5049,10 @@ impl RuntimeAppearanceBridge {
         request: &NativeSpriteAtlasCreateRequest,
     ) -> Result<NativeSpriteAtlasHandle, CsharpEngineServicesError> {
         let frames = borrowed_slice(request.frames, request.frames_len, "sprite atlas frames")?;
-        if frames.is_empty() || frames.len() > MAX_SPRITE_ATLAS_FRAMES {
+        if frames.is_empty() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_ATLAS_FRAMES",
-                "sprite atlas must contain between one and 4096 frames",
+                "sprite atlas must contain at least one frame",
             ));
         }
         if request.texture.value == 0 {
@@ -5492,16 +5521,10 @@ impl RuntimeAppearanceBridge {
             request.markers_len,
             "sprite playback markers",
         )?;
-        if frames.is_empty() || frames.len() > MAX_SPRITE_PLAYBACK_FRAMES {
+        if frames.is_empty() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_PLAYBACK_FRAMES",
-                "sprite playback must contain between one and 4096 sequence entries",
-            ));
-        }
-        if markers.len() > MAX_SPRITE_PLAYBACK_MARKERS {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_PLAYBACK_MARKERS",
-                "sprite playback cannot contain more than 4096 markers",
+                "sprite playback must contain at least one sequence entry",
             ));
         }
         if !request.playback_rate.is_finite() || request.playback_rate <= 0.0 {
@@ -6447,12 +6470,6 @@ impl RuntimeAppearanceBridge {
                 "animation cue definitions",
             )?
         };
-        if definitions.len() > MAX_ANIMATION_CUE_DEFINITIONS {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_CUE_DEFINITIONS",
-                "animation cue definition replacement exceeds the 128 definition bound",
-            ));
-        }
         let mut keys = BTreeSet::new();
         let copied = definitions
             .iter()

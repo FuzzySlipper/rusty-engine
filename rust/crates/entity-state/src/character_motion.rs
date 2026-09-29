@@ -2,14 +2,11 @@ use core_math::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::component::{ComponentCodec, ComponentRegistration, ComponentTypeId};
-use crate::{
-    CharacterMotionComponent, CharacterStance, Quat, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
-};
+use crate::{CharacterMotionComponent, CharacterStance, Quat};
 
 pub const CHARACTER_MOTION_COMPONENT_TYPE_ID: &str = "rusty.entity.character-motion";
 pub const CHARACTER_MOTION_CODEC_ID: &str = "rusty.entity.character-motion.json";
 pub const CHARACTER_MOTION_CODEC_VERSION: u32 = 1;
-pub const MAX_CHARACTER_TIMER_SECONDS: f32 = 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharacterMotionValidationError {
@@ -52,15 +49,15 @@ pub fn validate_character_motion(
     if !value.tether_length.is_finite()
         || value.tether_length < 0.0
         || (value.tether_attached && value.tether_length <= 0.0)
-        || !bounded_vector(value.tether_anchor_point, MAX_ABS_TRANSLATION)
-        || !bounded_vector(value.tether_local_anchor, MAX_ABS_TRANSLATION)
+        || !finite_vector(value.tether_anchor_point)
+        || !finite_vector(value.tether_local_anchor)
     {
         return Err(CharacterMotionValidationError::InvalidTether);
     }
-    if !bounded_vector(value.controlled_velocity, MAX_ABS_VELOCITY) {
+    if !finite_vector(value.controlled_velocity) {
         return Err(CharacterMotionValidationError::InvalidControlledVelocity);
     }
-    if !bounded_vector(value.external_velocity, MAX_ABS_VELOCITY) {
+    if !finite_vector(value.external_velocity) {
         return Err(CharacterMotionValidationError::InvalidExternalVelocity);
     }
     if [
@@ -69,26 +66,22 @@ pub fn validate_character_motion(
         value.landing_lockout_remaining,
     ]
     .into_iter()
-    .any(|timer| !timer.is_finite() || !(0.0..=MAX_CHARACTER_TIMER_SECONDS).contains(&timer))
+    .any(|timer| !timer.is_finite() || timer < 0.0)
     {
         return Err(CharacterMotionValidationError::InvalidTimer);
     }
-    if !bounded_vector(value.support_local_anchor, MAX_ABS_TRANSLATION) {
+    if !finite_vector(value.support_local_anchor) {
         return Err(CharacterMotionValidationError::InvalidSupportAnchor);
     }
-    if !bounded_vector(value.support_previous_translation, MAX_ABS_TRANSLATION)
+    if !finite_vector(value.support_previous_translation)
         || !quat_is_valid(value.support_previous_rotation)
     {
         return Err(CharacterMotionValidationError::InvalidSupportTransform);
     }
-    if !bounded_vector(value.support_point_velocity, MAX_ABS_VELOCITY) {
+    if !finite_vector(value.support_point_velocity) {
         return Err(CharacterMotionValidationError::InvalidSupportVelocity);
     }
-    if !value.fall_origin_y.is_finite()
-        || !value.peak_y.is_finite()
-        || value.fall_origin_y.abs() > MAX_ABS_TRANSLATION
-        || value.peak_y.abs() > MAX_ABS_TRANSLATION
-    {
+    if !value.fall_origin_y.is_finite() || !value.peak_y.is_finite() {
         return Err(CharacterMotionValidationError::InvalidFallHeight);
     }
     Ok(())
@@ -241,10 +234,8 @@ impl From<CharacterMotionSnapshotV1> for CharacterMotionComponent {
 fn vec3(value: [f32; 3]) -> Vec3 {
     Vec3::new(value[0], value[1], value[2])
 }
-fn bounded_vector(value: Vec3, maximum: f32) -> bool {
-    [value.x, value.y, value.z]
-        .into_iter()
-        .all(|v| v.is_finite() && v.abs() <= maximum)
+fn finite_vector(value: Vec3) -> bool {
+    [value.x, value.y, value.z].into_iter().all(f32::is_finite)
 }
 fn quat_is_valid(value: Quat) -> bool {
     [value.x, value.y, value.z, value.w]

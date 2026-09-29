@@ -6,8 +6,6 @@ use crate::{
     TriggerVolumeError, TriggerVolumeSystem,
 };
 
-const MAX_TRIGGER_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TriggerVolumeSnapshot {
@@ -29,28 +27,10 @@ pub fn encode_trigger_snapshot(system: &TriggerVolumeSystem) -> Result<String, T
             )],
         })?;
     encoded.push('\n');
-    if encoded.len() > MAX_TRIGGER_SNAPSHOT_BYTES {
-        return Err(TriggerVolumeError {
-            diagnostics: vec![diagnostic(
-                TriggerVolumeDiagnosticCode::QuotaExceeded,
-                None,
-                "encoded trigger snapshot exceeds byte limit",
-            )],
-        });
-    }
     Ok(encoded)
 }
 
 pub fn decode_trigger_snapshot(input: &str) -> Result<TriggerVolumeSystem, TriggerVolumeError> {
-    if input.len() > MAX_TRIGGER_SNAPSHOT_BYTES {
-        return Err(TriggerVolumeError {
-            diagnostics: vec![diagnostic(
-                TriggerVolumeDiagnosticCode::QuotaExceeded,
-                None,
-                "trigger snapshot exceeds byte limit",
-            )],
-        });
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let snapshot: TriggerVolumeSnapshot = serde_path_to_error::deserialize(&mut deserializer)
         .map_err(|error| TriggerVolumeError {

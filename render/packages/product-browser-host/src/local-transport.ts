@@ -109,7 +109,6 @@ const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
 const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
 const MAXIMUM_VIDEO_FEEDBACK_FACTS = 128;
 const MAXIMUM_ANIMATION_FEEDBACK_FACTS = 128;
-const MAXIMUM_ANIMATION_CUE_DEFINITIONS = 128;
 const MAXIMUM_ANIMATION_CUE_TEXT_BYTES = 96;
 const KEYBOARD_CONTROLS = new Set<string>([
   ...Array.from({ length: 26 }, (_, index) => `key-${String.fromCharCode(97 + index)}`),
@@ -2482,9 +2481,6 @@ function decodeAnimationCueDefinitions(
   value: unknown,
 ): readonly RustyApplicationAnimationCueDefinition[] {
   const values = requirePlainArray(value, 'animation cue definitions');
-  if (values.length > MAXIMUM_ANIMATION_CUE_DEFINITIONS) {
-    throw new TypeError('animation cue definition replacement exceeds 128 definitions');
-  }
   const keys = new Set<string>();
   return Object.freeze(values.map((value) => {
     const record = requireRecord(value, 'animation cue definition');

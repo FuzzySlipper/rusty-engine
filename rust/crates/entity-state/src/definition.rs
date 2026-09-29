@@ -11,9 +11,6 @@ use crate::components::{
 use crate::model::EntitySource;
 use crate::value::EntityTransform;
 
-pub const MAX_ABS_TRANSLATION: f32 = 1_000_000.0;
-pub const MAX_ABS_VELOCITY: f32 = 10_000.0;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntityDefinition {
     pub id: EntityId,
@@ -274,16 +271,10 @@ pub(crate) fn validate_definition(
 
 pub(crate) fn translation_is_valid(value: Vec3) -> bool {
     vector_is_finite(value)
-        && value.x.abs() <= MAX_ABS_TRANSLATION
-        && value.y.abs() <= MAX_ABS_TRANSLATION
-        && value.z.abs() <= MAX_ABS_TRANSLATION
 }
 
 pub(crate) fn velocity_is_valid(value: Vec3) -> bool {
     vector_is_finite(value)
-        && value.x.abs() <= MAX_ABS_VELOCITY
-        && value.y.abs() <= MAX_ABS_VELOCITY
-        && value.z.abs() <= MAX_ABS_VELOCITY
 }
 
 pub(crate) fn transform_is_valid(value: EntityTransform) -> bool {

@@ -8,17 +8,6 @@ use crate::{
     PresentationOpMeta,
 };
 
-const MAX_TEXT_BYTES: usize = 256;
-const MAX_KEY_BYTES: usize = 128;
-const MAX_ARGUMENTS: usize = 8;
-const MAX_METERS: usize = 4;
-const MAX_STATUS_CUES: usize = 8;
-const MAX_METER_ABS_VALUE: f32 = 1_000_000_000_000.0;
-const MAX_WIDTH_PIXELS: f32 = 2_048.0;
-const MAX_SPACING_PIXELS: f32 = 128.0;
-const MAX_RADIUS_PIXELS: f32 = 128.0;
-const MAX_SAFE_AREA_PIXELS: f32 = 4_096.0;
-const MAX_DISTANCE_SCALE: f32 = 16.0;
 const MAX_BILLBOARD_DIAGNOSTICS: usize = 128;
 pub(crate) const MIN_POSITIVE_BILLBOARD_VALUE: f32 = f32::EPSILON;
 
@@ -566,11 +555,8 @@ fn validate_indicator(
 ) -> Result<(), BillboardProjectionDiagnosticCode> {
     optional_localized_text(indicator.label.as_ref())?;
     validate_localized_text(&indicator.accessible_label)?;
-    if indicator.meters.len() > MAX_METERS || indicator.status_cues.len() > MAX_STATUS_CUES {
-        return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
-    }
-    if !in_range(indicator.width_pixels, 1.0, MAX_WIDTH_PIXELS)
-        || !in_range(indicator.spacing_pixels, 0.0, MAX_SPACING_PIXELS)
+    if !at_least(indicator.width_pixels, 1.0)
+        || !at_least(indicator.spacing_pixels, 0.0)
         || !validate_style(&indicator.style)
     {
         return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
@@ -612,22 +598,15 @@ fn validate_meter(meter: &BillboardMeter) -> Result<(), BillboardProjectionDiagn
         || meter.current < meter.min
         || meter.current > meter.max
         || !range.is_finite()
-        || meter.current.abs() > MAX_METER_ABS_VALUE
-        || meter.min.abs() > MAX_METER_ABS_VALUE
-        || meter.max.abs() > MAX_METER_ABS_VALUE
     {
         return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
     }
     if let Some(preview) = meter.preview {
-        if !preview.is_finite()
-            || preview.abs() > MAX_METER_ABS_VALUE
-            || preview < meter.min
-            || preview > meter.max
-        {
+        if !preview.is_finite() || preview < meter.min || preview > meter.max {
             return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
         }
     }
-    if !(1..=32).contains(&meter.segments)
+    if meter.segments == 0
         || !color_is_valid(meter.fill)
         || !color_is_valid(meter.preview_fill)
         || !color_is_valid(meter.back)
@@ -670,7 +649,7 @@ fn validate_style(style: &BillboardStyle) -> bool {
     in_range(style.opacity, 0.0, 1.0)
         && color_is_valid(style.backing)
         && color_is_valid(style.border)
-        && in_range(style.radius_pixels, 0.0, MAX_RADIUS_PIXELS)
+        && at_least(style.radius_pixels, 0.0)
 }
 
 pub(crate) fn validate_layout_policy(
@@ -686,9 +665,9 @@ pub(crate) fn validate_layout_policy(
             min_scale,
             max_scale,
         } => {
-            if !in_range(*reference_distance, MIN_POSITIVE_BILLBOARD_VALUE, 10_000.0)
-                || !in_range(*min_scale, MIN_POSITIVE_BILLBOARD_VALUE, MAX_DISTANCE_SCALE)
-                || !in_range(*max_scale, MIN_POSITIVE_BILLBOARD_VALUE, MAX_DISTANCE_SCALE)
+            if !at_least(*reference_distance, MIN_POSITIVE_BILLBOARD_VALUE)
+                || !at_least(*min_scale, MIN_POSITIVE_BILLBOARD_VALUE)
+                || !at_least(*max_scale, MIN_POSITIVE_BILLBOARD_VALUE)
                 || min_scale > max_scale
             {
                 return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
@@ -706,7 +685,7 @@ fn validate_safe_area(safe_area: BillboardSafeArea) -> bool {
         safe_area.left_pixels,
     ]
     .into_iter()
-    .all(|value| in_range(value, 0.0, MAX_SAFE_AREA_PIXELS))
+    .all(|value| at_least(value, 0.0))
 }
 
 pub(crate) fn validate_font(
@@ -778,6 +757,10 @@ fn color_is_valid(color: [f32; 4]) -> bool {
     color.into_iter().all(|value| in_range(value, 0.0, 1.0))
 }
 
+fn at_least(value: f32, minimum: f32) -> bool {
+    value.is_finite() && value >= minimum
+}
+
 fn in_range(value: f32, minimum: f32, maximum: f32) -> bool {
     value.is_finite() && (minimum..=maximum).contains(&value)
 }
@@ -799,14 +782,14 @@ fn normalized_fraction(value: f32, minimum: f32, maximum: f32) -> Option<f32> {
 }
 
 fn validate_key(value: &str) -> Result<(), BillboardProjectionDiagnosticCode> {
-    if value.is_empty() || value.len() > MAX_KEY_BYTES {
+    if value.is_empty() {
         return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
     }
     Ok(())
 }
 
 fn validate_text(value: &str) -> Result<(), BillboardProjectionDiagnosticCode> {
-    if value.is_empty() || value.len() > MAX_TEXT_BYTES {
+    if value.is_empty() {
         return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
     }
     Ok(())
@@ -822,9 +805,6 @@ fn optional(
 fn validate_arguments(
     arguments: &[BillboardTemplateArgument],
 ) -> Result<(), BillboardProjectionDiagnosticCode> {
-    if arguments.len() > MAX_ARGUMENTS {
-        return Err(BillboardProjectionDiagnosticCode::InvalidDescriptor);
-    }
     let mut names = BTreeSet::new();
     for argument in arguments {
         validate_key(&argument.name)?;

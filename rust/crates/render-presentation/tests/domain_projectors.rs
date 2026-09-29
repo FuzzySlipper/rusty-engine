@@ -938,3 +938,31 @@ fn particle_emitter_count_is_bounded_only_by_the_particle_budget() {
     }
     assert_eq!(projector.readout().active_emitters, 100);
 }
+
+#[test]
+fn particle_descriptors_take_long_curves_high_rates_and_long_lifetimes() {
+    // Past the former 8 curve keys, 10,000/s rate, 60 s lifetime and 120 fps.
+    let assets = assets();
+    let mut descriptor = particle_descriptor();
+    descriptor.rate_per_second = 20_000.0;
+    descriptor.lifetime_seconds = [0.5, 120.0];
+    descriptor.flipbook_frames_per_second = 240.0;
+    descriptor.size_curve = (0..=12)
+        .map(|index| ParticleScalarKey {
+            age: index as f32 / 12.0,
+            value: 0.1,
+        })
+        .collect();
+    let mut projector = ParticleProjector::default();
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(0),
+            ParticleProjectionOp::Create {
+                handle: ParticleEmitterHandle::new(1),
+                descriptor,
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.readout().active_emitters, 1);
+}

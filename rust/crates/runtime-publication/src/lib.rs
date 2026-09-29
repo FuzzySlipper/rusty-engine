@@ -77,7 +77,6 @@ pub struct RuntimeAnimationCueDefinition {
 }
 
 impl RuntimeAnimationCueDefinition {
-    pub const MAX_DEFINITIONS: usize = 128;
     pub const MAX_TEXT_BYTES: usize = 96;
 
     pub fn new(
@@ -176,9 +175,6 @@ impl RuntimePublication {
     pub fn animation_cue_definitions(
         definitions: Vec<RuntimeAnimationCueDefinition>,
     ) -> Result<Self, RuntimePublicationError> {
-        if definitions.len() > RuntimeAnimationCueDefinition::MAX_DEFINITIONS {
-            return Err(RuntimePublicationError::TooManyAnimationCueDefinitions);
-        }
         let mut keys = BTreeSet::new();
         for definition in &definitions {
             definition.validate()?;
@@ -215,9 +211,6 @@ impl RuntimePublication {
                 ..
             } => validate_frontiers(publication_frontiers),
             Self::AnimationCueDefinitions(definitions) => {
-                if definitions.len() > RuntimeAnimationCueDefinition::MAX_DEFINITIONS {
-                    return Err(RuntimePublicationError::TooManyAnimationCueDefinitions);
-                }
                 let mut keys = BTreeSet::new();
                 for definition in definitions {
                     definition.validate()?;
@@ -309,7 +302,6 @@ pub enum RuntimePublicationError {
     InvalidFrontierRevision,
     DuplicateFrontierStream,
     InvalidAnimationCueField { field: &'static str },
-    TooManyAnimationCueDefinitions,
     DuplicateAnimationCueDefinition,
 }
 
@@ -325,9 +317,6 @@ impl std::fmt::Display for RuntimePublicationError {
             }
             Self::InvalidAnimationCueField { field } => {
                 return write!(formatter, "runtime animation cue field {field} is invalid")
-            }
-            Self::TooManyAnimationCueDefinitions => {
-                "runtime animation cue definitions exceed the bounded replacement"
             }
             Self::DuplicateAnimationCueDefinition => {
                 "runtime animation cue definitions contain a duplicate identity"

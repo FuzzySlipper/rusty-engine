@@ -20,7 +20,6 @@ use crate::{composition::borrowed_utf8, composition::ABI_OK};
 
 const HEADER_MAGIC: [u8; 4] = *b"RSP2";
 const HEADER_LEN: usize = 4 + 8 + 8;
-const MAX_PRODUCT_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug)]
 struct DurableStore {
@@ -169,9 +168,6 @@ unsafe extern "C" fn save(
         Ok(value) => value.to_vec(),
         Err(_) => return 0,
     };
-    if payload.len() > MAX_PRODUCT_PAYLOAD_BYTES {
-        return 0;
-    }
     let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
     let Some(store) = bridge.stores.get(&request.store.value) else {
         return 0;
@@ -467,7 +463,9 @@ fn read_blob(path: &Path) -> Result<Option<PersistenceBlob>, ()> {
     let revision = u64::from_le_bytes(header[4..12].try_into().map_err(|_| ())?);
     let payload_len = u64::from_le_bytes(header[12..20].try_into().map_err(|_| ())?);
     let payload_len: usize = payload_len.try_into().map_err(|_| ())?;
-    if payload_len > MAX_PRODUCT_PAYLOAD_BYTES {
+    // A corrupt header must not size an allocation beyond the file itself.
+    let remaining = file.metadata().map_err(|_| ())?.len();
+    if payload_len as u64 > remaining.saturating_sub(HEADER_LEN as u64) {
         return Err(());
     }
     let mut payload = vec![0; payload_len];
@@ -520,6 +518,19 @@ fn write_atomically(path: &Path, blob: &PersistenceBlob) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_corrupt_length_is_refused_without_sizing_an_allocation_from_it() {
+        // The payload cap is gone; the declared length must fit the file.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("corrupt");
+        let mut bytes = HEADER_MAGIC.to_vec();
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&(u64::MAX / 2).to_le_bytes());
+        bytes.extend_from_slice(b"short");
+        std::fs::write(&path, bytes).unwrap();
+        assert!(read_blob(&path).is_err());
+    }
 
     #[test]
     fn direct_storage_round_trip_and_stale_save_preserves_committed_payload() {

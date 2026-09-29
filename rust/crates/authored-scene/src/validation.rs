@@ -13,7 +13,6 @@ use crate::{
 pub enum TransformInvalid {
     RequiresSchema5,
     NonFiniteTranslation,
-    TranslationOutOfRange,
     NonFiniteRotation,
     NonUnitRotation,
     NonFiniteScale,
@@ -25,7 +24,6 @@ impl TransformInvalid {
         match self {
             Self::RequiresSchema5 => "requires-schema-5",
             Self::NonFiniteTranslation => "non-finite-translation",
-            Self::TranslationOutOfRange => "translation-out-of-range",
             Self::NonFiniteRotation => "non-finite-rotation",
             Self::NonUnitRotation => "non-unit-rotation",
             Self::NonFiniteScale => "non-finite-scale",
@@ -652,16 +650,6 @@ fn validate_bootstrap(
 fn validate_transform(transform: SceneTransform) -> Result<(), TransformInvalid> {
     if !vector_finite(transform.translation) {
         return Err(TransformInvalid::NonFiniteTranslation);
-    }
-    if [
-        transform.translation.x,
-        transform.translation.y,
-        transform.translation.z,
-    ]
-    .into_iter()
-    .any(|value| value.abs() > entity_state::MAX_ABS_TRANSLATION)
-    {
-        return Err(TransformInvalid::TranslationOutOfRange);
     }
     if ![
         transform.rotation.x,

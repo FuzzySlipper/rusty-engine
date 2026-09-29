@@ -37,7 +37,6 @@ pub use authoring::{
 pub use character_motion::{
     validate_character_motion, CharacterMotionValidationError, CHARACTER_MOTION_CODEC_ID,
     CHARACTER_MOTION_CODEC_VERSION, CHARACTER_MOTION_COMPONENT_TYPE_ID,
-    MAX_CHARACTER_TIMER_SECONDS,
 };
 pub use character_motion_publication::{
     replace_character_motion_state, CharacterMotionPublicationError, CharacterMotionStateReceipt,
@@ -63,7 +62,6 @@ pub use model::{
     EntityLifecycle, EntitySource, EntityState, EntityTransform, EntityView, KinematicBodyView,
     KinematicComponent, ProjectionNode, Quat, RenderableComponent, RigidBodyComponent,
     RigidBodyInertiaPolicy, RigidBodyMode, RigidBodyShape, TransformComponent, ViewError,
-    MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
 };
 pub use relationship::{
     apply_relationship, preview_relationship, RelationshipCommand, RelationshipError,

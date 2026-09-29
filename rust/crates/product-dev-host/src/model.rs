@@ -2481,7 +2481,6 @@ pub struct ProductDevAnimationCueDefinition {
 }
 
 impl ProductDevAnimationCueDefinition {
-    pub const MAX_DEFINITIONS: usize = 128;
     pub const MAX_TEXT_BYTES: usize = 96;
 
     pub fn new(
@@ -2768,29 +2767,7 @@ impl ProductDevRuntimeOutput {
     pub fn animation_cue_definitions(
         definitions: Vec<ProductDevAnimationCueDefinition>,
     ) -> Result<Self, ProductDevHostError> {
-        if definitions.len() > ProductDevAnimationCueDefinition::MAX_DEFINITIONS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_ANIMATION_CUE",
-                "animation cue definition replacement exceeds the 128 definition bound",
-            ));
-        }
-        if definitions.iter().any(|definition| {
-            definition.cue_id.is_empty()
-                || definition.asset.is_empty()
-                || definition.clip.is_empty()
-                || definition.signal_id.is_empty()
-                || definition.cue_id.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
-                || definition.asset.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
-                || definition.clip.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
-                || definition.signal_id.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
-                || !definition.at_seconds.is_finite()
-                || definition.at_seconds < 0.0
-        }) {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_ANIMATION_CUE",
-                "animation cue definitions must use bounded non-empty text and finite non-negative markers",
-            ));
-        }
+        // Each definition was checked by `ProductDevAnimationCueDefinition::new`.
         let mut keys = std::collections::BTreeSet::new();
         if definitions.iter().any(|definition| {
             !keys.insert((

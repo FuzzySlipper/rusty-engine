@@ -8,9 +8,6 @@ namespace Rusty.Engine.Entities;
 /// </summary>
 public static class EngineComponentTypes
 {
-    private const float MaxAbsTranslation = 1_000_000f;
-    private const float MaxAbsVelocity = 10_000f;
-    private const float MaxCharacterTimerSeconds = 60f;
     private const float QuaternionNormalizationTolerance = 0.001f;
 
     // Values below 1024 are reserved for Engine-maintained descriptors.
@@ -50,14 +47,11 @@ public static class EngineComponentTypes
     private static void ValidateTransform(in Transform value)
     {
         if (!IsFinite(value.Translation) || !IsFinite(value.Scale)
-            || MathF.Abs(value.Translation.X) > MaxAbsTranslation
-            || MathF.Abs(value.Translation.Y) > MaxAbsTranslation
-            || MathF.Abs(value.Translation.Z) > MaxAbsTranslation
             || value.Scale.X <= 0 || value.Scale.Y <= 0 || value.Scale.Z <= 0
             || !IsFinite(value.Rotation)
             || MathF.Abs(value.Rotation.LengthSquared() - 1f) > QuaternionNormalizationTolerance)
         {
-            throw new ArgumentException("Transform must have finite bounded translation, positive scale, and normalized rotation.");
+            throw new ArgumentException("Transform must have finite translation, positive scale, and normalized rotation.");
         }
     }
 
@@ -65,18 +59,18 @@ public static class EngineComponentTypes
     {
         if (!float.IsFinite(value.TetherLength) || value.TetherLength < 0
             || (value.TetherAttached && value.TetherLength <= 0)
-            || !IsBounded(value.TetherAnchorPoint, MaxAbsTranslation)
-            || !IsBounded(value.TetherLocalAnchor, MaxAbsTranslation)
-            || !IsBounded(value.ControlledVelocity, MaxAbsVelocity)
-            || !IsBounded(value.ExternalVelocity, MaxAbsVelocity)
+            || !IsFinite(value.TetherAnchorPoint)
+            || !IsFinite(value.TetherLocalAnchor)
+            || !IsFinite(value.ControlledVelocity)
+            || !IsFinite(value.ExternalVelocity)
             || !IsTimer(value.JumpBufferRemaining) || !IsTimer(value.CoyoteRemaining)
             || !IsTimer(value.LandingLockoutRemaining)
-            || !IsBounded(value.SupportLocalAnchor, MaxAbsTranslation)
-            || !IsBounded(value.SupportPreviousTranslation, MaxAbsTranslation)
+            || !IsFinite(value.SupportLocalAnchor)
+            || !IsFinite(value.SupportPreviousTranslation)
             || !IsNormalized(value.SupportPreviousRotation)
-            || !IsBounded(value.SupportPointVelocity, MaxAbsVelocity)
-            || !IsBounded(value.FallOriginY, MaxAbsTranslation)
-            || !IsBounded(value.PeakY, MaxAbsTranslation))
+            || !IsFinite(value.SupportPointVelocity)
+            || !IsFinite(value.FallOriginY)
+            || !IsFinite(value.PeakY))
         {
             throw new ArgumentException("Character motion does not satisfy its intrinsic Engine value bounds.");
         }
@@ -97,9 +91,9 @@ public static class EngineComponentTypes
     {
         if (!IsFinite(value.HalfExtents)
             || value.HalfExtents.X <= 0 || value.HalfExtents.Y <= 0 || value.HalfExtents.Z <= 0
-            || !IsBounded(value.Velocity, MaxAbsVelocity))
+            || !IsFinite(value.Velocity))
         {
-            throw new ArgumentException("Kinematic must have finite positive half extents and bounded velocity.");
+            throw new ArgumentException("Kinematic must have finite positive half extents and finite velocity.");
         }
     }
 
@@ -109,12 +103,9 @@ public static class EngineComponentTypes
     private static bool IsFinite(System.Numerics.Quaternion value)
         => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z) && float.IsFinite(value.W);
 
-    private static bool IsBounded(System.Numerics.Vector3 value, float maximum)
-        => IsFinite(value) && MathF.Abs(value.X) <= maximum && MathF.Abs(value.Y) <= maximum && MathF.Abs(value.Z) <= maximum;
+    private static bool IsFinite(float value) => float.IsFinite(value);
 
-    private static bool IsBounded(float value, float maximum) => float.IsFinite(value) && MathF.Abs(value) <= maximum;
-
-    private static bool IsTimer(float value) => float.IsFinite(value) && value is >= 0 and <= MaxCharacterTimerSeconds;
+    private static bool IsTimer(float value) => float.IsFinite(value) && value >= 0;
 
     private static bool IsNormalized(System.Numerics.Quaternion value)
         => IsFinite(value) && MathF.Abs(value.LengthSquared() - 1f) <= QuaternionNormalizationTolerance;

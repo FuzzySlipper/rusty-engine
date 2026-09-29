@@ -251,32 +251,19 @@ fn legacy_descriptor_omits_layout_and_remains_compatible() {
 }
 
 #[test]
-fn structured_composition_bounds_and_identity_rules_are_enforced() {
-    let mut too_many_meters = structured_descriptor();
-    if let BillboardContent::Structured { indicator } = &mut too_many_meters.content {
-        indicator.meters = (0..5)
+fn structured_composition_accepts_any_counts_and_enforces_identity_rules() {
+    // Six meters, ten cues and 1 KiB of text: past the former 4, 8 and 256.
+    let mut large = structured_descriptor();
+    if let BillboardContent::Structured { indicator } = &mut large.content {
+        indicator.meters = (0..6)
             .map(|index| meter(&format!("meter-{index}")))
             .collect();
-    }
-    assert_eq!(
-        project(&mut BillboardProjector::default(), 1, too_many_meters)
-            .unwrap_err()
-            .code,
-        BillboardProjectionDiagnosticCode::InvalidDescriptor
-    );
-
-    let mut too_many_cues = structured_descriptor();
-    if let BillboardContent::Structured { indicator } = &mut too_many_cues.content {
-        indicator.status_cues = (0..9)
+        indicator.status_cues = (0..10)
             .map(|index| cue(&format!("cue-{index}"), None))
             .collect();
+        indicator.accessible_label.fallback_text = "x".repeat(1024);
     }
-    assert_eq!(
-        project(&mut BillboardProjector::default(), 2, too_many_cues)
-            .unwrap_err()
-            .code,
-        BillboardProjectionDiagnosticCode::InvalidDescriptor
-    );
+    project(&mut BillboardProjector::default(), 1, large).unwrap();
 
     let mut duplicate_ids = structured_descriptor();
     if let BillboardContent::Structured { indicator } = &mut duplicate_ids.content {
@@ -288,23 +275,12 @@ fn structured_composition_bounds_and_identity_rules_are_enforced() {
             .code,
         BillboardProjectionDiagnosticCode::InvalidDescriptor
     );
-
-    let mut long_text = structured_descriptor();
-    if let BillboardContent::Structured { indicator } = &mut long_text.content {
-        indicator.accessible_label.fallback_text = "x".repeat(257);
-    }
-    assert_eq!(
-        project(&mut BillboardProjector::default(), 4, long_text)
-            .unwrap_err()
-            .code,
-        BillboardProjectionDiagnosticCode::InvalidDescriptor
-    );
 }
 
 #[test]
-fn meters_require_finite_ordered_ranges_in_range_preview_and_segment_bounds() {
+fn meters_require_finite_ordered_ranges_in_range_preview_and_segments() {
     type MeterMutation = fn(&mut BillboardMeter);
-    let cases: [(&str, MeterMutation); 8] = [
+    let cases: [(&str, MeterMutation); 6] = [
         ("reversed range", |meter: &mut BillboardMeter| {
             meter.min = 100.0;
             meter.max = 0.0;
@@ -318,18 +294,11 @@ fn meters_require_finite_ordered_ranges_in_range_preview_and_segment_bounds() {
         ("zero segments", |meter: &mut BillboardMeter| {
             meter.segments = 0;
         }),
-        ("too many segments", |meter: &mut BillboardMeter| {
-            meter.segments = 33;
-        }),
         ("nonfinite current", |meter: &mut BillboardMeter| {
             meter.current = f32::NAN;
         }),
         ("nonfinite range", |meter: &mut BillboardMeter| {
             meter.max = f32::INFINITY;
-        }),
-        ("extreme magnitude", |meter: &mut BillboardMeter| {
-            meter.current = 1_500_000_000_000.0;
-            meter.max = 2_000_000_000_000.0;
         }),
     ];
 

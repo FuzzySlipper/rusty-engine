@@ -34,15 +34,7 @@ use crate::{
 };
 
 const SERVICE: &[u8] = b"AuthoredContent";
-const MAX_ENTRIES: usize = 4096;
-const MAX_DEPENDENCIES: usize = 16384;
-const MAX_PAYLOAD_ROWS: usize = 16384;
-const MAX_TEXT: usize = 4096;
 const MAX_DIAGNOSTICS: usize = 128;
-const MAX_PREFAB_DEFINITIONS: usize = 4096;
-const MAX_PREFAB_ROWS: usize = 16384;
-const MAX_ENTITY_DEFINITION_IDS: usize = 16384;
-const MAX_SCENE_ROWS: usize = 16384;
 
 pub(crate) struct RuntimeAuthoredContentBridge {
     catalogs: BTreeMap<u64, AdmittedAssetCatalog>,
@@ -471,9 +463,6 @@ impl RuntimeAuthoredContentBridge {
         dependencies: &[NativeAuthoredCatalogDependencyInput],
         allow_material: bool,
     ) -> Result<Vec<CatalogEntry>, AuthoredError> {
-        if entries.len() > MAX_ENTRIES || dependencies.len() > MAX_DEPENDENCIES {
-            return Err(AuthoredError::simple("catalog input exceeds engine bounds"));
-        }
         let mut values = Vec::with_capacity(entries.len());
         for row in entries {
             let id = parse_id(row.id, "entry id").map_err(AuthoredError::simple)?;
@@ -567,20 +556,6 @@ impl RuntimeAuthoredContentBridge {
             )
         }
         .map_err(|error| AuthoredError::simple(error.to_string()))?;
-        if [
-            materials.len(),
-            textures.len(),
-            atlases.len(),
-            regions.len(),
-            surfaces.len(),
-        ]
-        .into_iter()
-        .any(|count| count > MAX_PAYLOAD_ROWS)
-        {
-            return Err(AuthoredError::simple(
-                "catalog payload input exceeds engine bounds",
-            ));
-        }
         let mut values = Self::base_entries(entries, dependencies, true)?;
         let mut seen = std::collections::BTreeSet::new();
         for row in materials {
@@ -776,11 +751,6 @@ impl RuntimeAuthoredContentBridge {
         catalog: NativeAuthoredCatalogHandle,
         entity_definition_ids: &[NativeAuthoredPrefabEntityDefinitionInput],
     ) -> Result<PrefabRegistryValidationContext, AuthoredError> {
-        if entity_definition_ids.len() > MAX_ENTITY_DEFINITION_IDS {
-            return Err(AuthoredError::simple(
-                "prefab entity-definition input exceeds engine bounds",
-            ));
-        }
         let catalog = self
             .catalogs
             .get(&catalog.value)
@@ -820,18 +790,6 @@ impl RuntimeAuthoredContentBridge {
         overrides: &[NativeAuthoredPrefabOverrideInput],
         entity_definition_ids: &[NativeAuthoredPrefabEntityDefinitionInput],
     ) -> Result<NativeAuthoredPrefabRegistryHandle, AuthoredError> {
-        if definitions.len() > MAX_PREFAB_DEFINITIONS
-            || [
-                parts.len(),
-                roles.len(),
-                removed_roles.len(),
-                overrides.len(),
-            ]
-            .into_iter()
-            .any(|count| count > MAX_PREFAB_ROWS)
-        {
-            return Err(AuthoredError::simple("prefab input exceeds engine bounds"));
-        }
         let context = self.prefab_context(request.catalog, entity_definition_ids)?;
         let mut registry = PrefabRegistry {
             schema_version: request.schema_version,
@@ -1014,11 +972,6 @@ impl RuntimeAuthoredContentBridge {
         request: NativeAuthoredPrefabResolveRequest,
         instance_overrides: &[NativeAuthoredPrefabInstanceOverrideInput],
     ) -> Result<NativeAuthoredResolvedPrefabLease, AuthoredError> {
-        if instance_overrides.len() > MAX_PREFAB_ROWS {
-            return Err(AuthoredError::simple(
-                "prefab instance overrides exceed engine bounds",
-            ));
-        }
         let registry = self
             .prefab_registries
             .get(&request.registry.value)
@@ -1088,16 +1041,6 @@ impl RuntimeAuthoredContentBridge {
         generator_presets: &[NativeAuthoredSceneGeneratorPresetInput],
         catalog_ids: &[NativeAuthoredSceneCatalogIdInput],
     ) -> Result<SceneResolutionContext, AuthoredError> {
-        if [
-            entity_definition_ids.len(),
-            generator_presets.len(),
-            catalog_ids.len(),
-        ]
-        .into_iter()
-        .any(|count| count > MAX_SCENE_ROWS)
-        {
-            return Err(AuthoredError::simple("scene context exceeds engine bounds"));
-        }
         let catalog = self
             .catalogs
             .get(&catalog_handle.value)
@@ -1168,21 +1111,6 @@ impl RuntimeAuthoredContentBridge {
         generators: &[NativeAuthoredSceneGeneratorInput],
         catalog_bindings: &[NativeAuthoredSceneCatalogBindingInput],
     ) -> Result<NativeAuthoredScenePlanHandle, AuthoredError> {
-        if [
-            dependencies.len(),
-            nodes.len(),
-            tags.len(),
-            instances.len(),
-            lights.len(),
-            bootstraps.len(),
-            generators.len(),
-            catalog_bindings.len(),
-        ]
-        .into_iter()
-        .any(|count| count > MAX_SCENE_ROWS)
-        {
-            return Err(AuthoredError::simple("scene input exceeds engine bounds"));
-        }
         let resolution = self.scene_context(
             request.catalog,
             request.prefab_registry,
@@ -2203,9 +2131,6 @@ fn admission_error(error: CatalogAdmissionError) -> AuthoredError {
 fn parse_text(value: NativeUtf8Slice, field: &'static str) -> Result<String, String> {
     let value = unsafe { borrowed_utf8(value.bytes, value.len, field) }
         .map_err(|error| error.to_string())?;
-    if value.len() > MAX_TEXT {
-        return Err(format!("{field} exceeds engine bound"));
-    }
     Ok(value.to_owned())
 }
 fn parse_id(value: NativeUtf8Slice, field: &'static str) -> Result<AssetId, String> {

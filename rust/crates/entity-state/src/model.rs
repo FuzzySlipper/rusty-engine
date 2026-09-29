@@ -21,9 +21,7 @@ pub use crate::components::{
 pub(crate) use crate::definition::{
     transform_is_valid, translation_is_valid, validate_definition, velocity_is_valid,
 };
-pub use crate::definition::{
-    EntityDefinition, EntityDefinitionError, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
-};
+pub use crate::definition::{EntityDefinition, EntityDefinitionError};
 pub use crate::value::{EntityTransform, Quat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

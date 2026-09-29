@@ -108,14 +108,15 @@ impl ProductContentBundles {
         for file in &bundle.files {
             let path = self.content_root.join(&bundle.root).join(&file.path);
             let bytes = fs::read(path).ok()?;
+            // Staging wrote the manifest's SHA-256 from these same bytes, so
+            // its identity is trusted rather than recomputed on every open. A
+            // body changed after staging gets a new identity on the next
+            // restage. The length check costs nothing and catches a file cut
+            // short by an interrupted restage.
             if bytes.len() as u64 != file.byte_length {
                 return None;
             }
-            let digest = Sha256::digest(&bytes);
-            if format!("{digest:x}") != file.sha256.to_ascii_lowercase() {
-                return None;
-            }
-            hashes.insert(file.path.as_str(), sha256_words(&digest));
+            hashes.insert(file.path.as_str(), sha256_words(&hex_digest(&file.sha256)?));
             bodies.insert(
                 format!("{}/{}", bundle.root, file.path),
                 Arc::<[u8]>::from(bytes),
@@ -331,6 +332,15 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
     ABI_OK
 }
 
+/// The 32 bytes of a validated 64-digit hex SHA-256.
+fn hex_digest(hex: &str) -> Option<[u8; 32]> {
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
+    }
+    Some(digest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,7 +441,23 @@ mod tests {
             0
         );
         assert!(bridge.bundles.open.is_empty());
+        // Opening trusts the staged manifest identity instead of re-hashing
+        // every file: a same-length edit after staging opens under the old
+        // identity until the next restage, while a file of the wrong length
+        // (for example cut short) is refused.
         fs::write(directory.path().join("rules/a.json"), b"{\"id\":2}").unwrap();
+        assert_eq!(
+            unsafe {
+                open_bundle(
+                    context,
+                    &NativeContentBundleOpenRequest { id: text("rules") },
+                    &mut bundle,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { destroy_bundle(context, bundle) }, ABI_OK);
+        fs::write(directory.path().join("rules/a.json"), b"{\"id\":22}").unwrap();
         assert_eq!(
             unsafe {
                 open_bundle(

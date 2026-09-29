@@ -8,7 +8,6 @@ use crate::{
     PresentationOpMeta,
 };
 
-const MAX_CURVE_KEYS: usize = 8;
 const MAX_PARTICLE_DIAGNOSTICS: usize = 128;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -567,12 +566,12 @@ impl ParticleProjector {
         descriptor: &ParticleEmitterDescriptor,
     ) -> Result<(), ParticleProjectionDiagnosticCode> {
         if !anchor_is_finite(&descriptor.anchor)
-            || !in_range(descriptor.rate_per_second, 0.0, 10_000.0)
+            || !at_least(descriptor.rate_per_second, 0.0)
             || descriptor.max_particles == 0
-            || !ordered_positive_range(descriptor.lifetime_seconds, 0.01, 60.0)
+            || !ordered_positive_range(descriptor.lifetime_seconds)
             || !ordered_vec3(descriptor.velocity_min, descriptor.velocity_max)
             || !finite_vec3(descriptor.acceleration)
-            || !in_range(descriptor.flipbook_frames_per_second, 0.0, 120.0)
+            || !at_least(descriptor.flipbook_frames_per_second, 0.0)
             || descriptor.burst_count > descriptor.max_particles
             || descriptor.seed > JSON_SAFE_U64_MAX
             || !validate_scalar_curve(&descriptor.size_curve)
@@ -729,7 +728,6 @@ fn validate_color_curve(keys: &[ParticleColorKey]) -> bool {
 fn curve_ages(ages: impl Iterator<Item = f32>) -> bool {
     let values = ages.collect::<Vec<_>>();
     values.len() >= 2
-        && values.len() <= MAX_CURVE_KEYS
         && values.first() == Some(&0.0)
         && values.last() == Some(&1.0)
         && values
@@ -759,10 +757,13 @@ fn ordered_vec3(minimum: [f32; 3], maximum: [f32; 3]) -> bool {
             .all(|(low, high)| low <= high)
 }
 
-fn ordered_positive_range(value: [f32; 2], minimum: f32, maximum: f32) -> bool {
-    in_range(value[0], minimum, maximum)
-        && in_range(value[1], minimum, maximum)
-        && value[0] <= value[1]
+/// A finite, positive, ordered `[min, max]` range.
+fn ordered_positive_range(value: [f32; 2]) -> bool {
+    value[0].is_finite() && value[1].is_finite() && value[0] > 0.0 && value[0] <= value[1]
+}
+
+fn at_least(value: f32, minimum: f32) -> bool {
+    value.is_finite() && value >= minimum
 }
 
 fn in_range(value: f32, minimum: f32, maximum: f32) -> bool {
