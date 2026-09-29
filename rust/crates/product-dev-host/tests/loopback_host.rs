@@ -1713,6 +1713,29 @@ fn exact_loopback_host_and_origin_are_required() {
 }
 
 #[test]
+fn an_asset_reload_tells_each_attached_page_to_reload() {
+    let host = start();
+    let mut page = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let baseline = read_until(&mut page, "event: rusty-output-baseline");
+    assert!(baseline.contains("\"kind\":\"binding\""));
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html><title>Reloaded</title>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    host.asset_reload().reload(bundle).unwrap();
+    let reloaded = read_until(&mut page, "event: rusty-ui-reloaded\ndata: {}\n\n");
+    assert!(
+        !reloaded.contains("\nid: "),
+        "the reload event carries no output id"
+    );
+    drop(page);
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn a_debug_command_can_be_the_first_operation_without_a_subscriber() {
     // No browser has attached, so there is no output binding. The command's
     // readout has no subscriber to reach; it must not fail the command.

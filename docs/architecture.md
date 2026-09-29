@@ -287,7 +287,11 @@ supervised or headless NativeAOT launch runs its native module:
 full restage it sends `replace-runtime`. After a UI-only or content-bundle-only
 restage it sends `reload-assets`, which the supervisor forwards to the running
 runtime's stdin; the runtime re-reads its staged UI and bundle inventory in
-place, with no product restart and no reconnect.
+place, with no product restart. It then sends each attached page a
+`rusty-ui-reloaded` SSE event, and the page calls `location.reload()`: a page
+keeps running the UI module it loaded, and the `--headless` page has no one to
+refresh it. The reloaded page attaches with a fresh baseline; the product keeps
+running.
 
 Replacement stops the old runtime first, so persistence is never shared
 between two incarnations, then starts the next one. While no runtime is

@@ -210,11 +210,11 @@ export interface ProductBrowserLocalEventSource {
   /** `2` (CLOSED) once the browser has stopped reconnecting this stream. */
   readonly readyState?: number;
   readonly addEventListener?: (
-    type: 'rusty-output-baseline',
+    type: 'rusty-output-baseline' | 'rusty-ui-reloaded',
     listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly removeEventListener?: (
-    type: 'rusty-output-baseline',
+    type: 'rusty-output-baseline' | 'rusty-ui-reloaded',
     listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly close: () => void;
@@ -236,6 +236,12 @@ export interface ProductBrowserLocalTransportOptions {
   readonly maximumOutputBytes?: number;
   /** Stream errors are surfaced here; the operation surface remains closed. */
   readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;
+  /**
+   * Reloads the page after the host swaps the served UI, since the page still
+   * runs the UI module it loaded. Injectable for tests; defaults to
+   * `location.reload()`.
+   */
+  readonly reloadPage?: () => void;
 }
 
 export type ProductBrowserLocalTransportErrorCode =
@@ -339,6 +345,7 @@ export function createProductBrowserLocalHttpAdapter(
   const attachment = browserAttachmentEvidence(basePath);
   const fetchImpl = options.fetch ?? resolveFetch();
   const eventSourceConstructor = options.eventSource ?? resolveEventSource();
+  const reloadPage = options.reloadPage ?? (() => globalThis.location.reload());
   const maximumResponseBytes = validateMaximumBytes(
     options.maximumResponseBytes ?? DEFAULT_MAXIMUM_RESPONSE_BYTES,
     'maximumResponseBytes',
@@ -1030,6 +1037,9 @@ export function createProductBrowserLocalHttpAdapter(
       }
     };
     attachedStream.addEventListener?.('rusty-output-baseline', streamBaselineListener);
+    attachedStream.addEventListener?.('rusty-ui-reloaded', () => {
+      if (ownsProjection()) reloadPage();
+    });
     attachedStream.onmessage = (event) => {
       if (!ownsProjection()) return;
       try {

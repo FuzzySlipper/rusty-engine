@@ -198,6 +198,8 @@ impl ProductDevHost {
         let asset_reload = ProductDevAssetReload {
             bundle,
             content: Arc::new(move || content_owner.reload_content()),
+            outputs: Arc::clone(&state.outputs),
+            output_wake: Arc::clone(&output_wake),
         };
         Ok(RunningProductDevHost {
             address,
@@ -293,16 +295,24 @@ impl RunningProductDevHost {
 pub struct ProductDevAssetReload {
     bundle: Arc<RwLock<ProductDevBundle>>,
     content: Arc<dyn Fn() -> Result<(), ProductDevRuntimeError> + Send + Sync>,
+    outputs: Arc<Mutex<OutputBus>>,
+    output_wake: Arc<OutputWake>,
 }
 
 impl ProductDevAssetReload {
     /// Content admission can fail, so it runs first; a failed reload leaves
-    /// the old UI served with the old content.
+    /// the old UI served with the old content. After a successful reload,
+    /// each attached page is told to reload itself: it holds the UI module it
+    /// loaded, and a headless page has no one to refresh it.
     pub fn reload(&self, bundle: ProductDevBundle) -> Result<(), ProductDevRuntimeError> {
         (self.content)()?;
         *self.bundle.write().map_err(|_| {
             ProductDevRuntimeError::new("DEV_HOST_BUNDLE", "bundle lock poisoned")
         })? = bundle;
+        if let Ok(mut outputs) = self.outputs.lock() {
+            outputs.publish_ui_reloaded();
+        }
+        self.output_wake.notify();
         Ok(())
     }
 }
@@ -2392,7 +2402,10 @@ fn handle_sse<R: ProductDevRuntime>(
         };
         let had_events = !events.is_empty();
         for event in events {
-            let payload = format!("id: {}\ndata: {}\n\n", event.id, event.json);
+            let payload = match event.name {
+                Some(name) => format!("event: {name}\ndata: {}\n\n", event.json),
+                None => format!("id: {}\ndata: {}\n\n", event.id, event.json),
+            };
             if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
                 return;
             }
@@ -2430,6 +2443,8 @@ struct OutputBus {
 struct OutputEvent {
     id: u64,
     json: Arc<str>,
+    /// A named event is not an output batch and carries no sequence id.
+    name: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -2484,10 +2499,24 @@ impl OutputBus {
             let event = OutputEvent {
                 id: self.next_id,
                 json: json.into(),
+                name: None,
             };
             for subscriber in self.subscribers.iter().filter_map(Weak::upgrade) {
                 subscriber.push(&event);
             }
+        }
+    }
+
+    fn publish_ui_reloaded(&mut self) {
+        self.subscribers
+            .retain(|subscriber| subscriber.strong_count() > 0);
+        let event = OutputEvent {
+            id: 0,
+            json: "{}".into(),
+            name: Some("rusty-ui-reloaded"),
+        };
+        for subscriber in self.subscribers.iter().filter_map(Weak::upgrade) {
+            subscriber.push(&event);
         }
     }
 
@@ -2652,7 +2681,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_failed_content_reload_keeps_the_served_ui() {
+    fn a_failed_content_reload_keeps_the_served_ui_and_tells_no_page() {
         fn bundle(body: &[u8]) -> ProductDevBundle {
             ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
                 "index.html",
@@ -2663,9 +2692,16 @@ mod tests {
             .unwrap()
         }
         let served = Arc::new(RwLock::new(bundle(b"old UI")));
+        let page = Arc::new(SubscriberQueue::default());
+        let outputs = Arc::new(Mutex::new(OutputBus {
+            subscribers: vec![Arc::downgrade(&page)],
+            ..OutputBus::default()
+        }));
         let reload = |content: Result<(), ProductDevRuntimeError>| ProductDevAssetReload {
             bundle: Arc::clone(&served),
             content: Arc::new(move || content.clone()),
+            outputs: Arc::clone(&outputs),
+            output_wake: Arc::new(OutputWake::default()),
         };
         let failed = reload(Err(ProductDevRuntimeError::new(
             "CONTENT_BUNDLE_INDEX",
@@ -2673,8 +2709,14 @@ mod tests {
         )));
         assert!(failed.reload(bundle(b"new UI")).is_err());
         assert_eq!(served.read().unwrap().get("/").unwrap().bytes(), b"old UI");
+        assert!(page.take().unwrap().is_empty());
         reload(Ok(())).reload(bundle(b"new UI")).unwrap();
         assert_eq!(served.read().unwrap().get("/").unwrap().bytes(), b"new UI");
+        let events = page.take().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, Some("rusty-ui-reloaded"));
+        // Not an output: the output sequence does not advance.
+        assert_eq!(outputs.lock().unwrap().next_id, 0);
     }
 
     #[test]

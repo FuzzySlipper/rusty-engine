@@ -54,11 +54,11 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.closed = true;
   }
 
-  addEventListener(type: 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
+  addEventListener(type: 'rusty-output-baseline' | 'rusty-ui-reloaded', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     this.namedListeners.set(type, listener);
   }
 
-  removeEventListener(type: 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
+  removeEventListener(type: 'rusty-output-baseline' | 'rusty-ui-reloaded', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     if (this.namedListeners.get(type) === listener) this.namedListeners.delete(type);
   }
 
@@ -1259,6 +1259,32 @@ test('a dropped output stream asks for one fresh baseline without closing the ru
   await adapter.advanceRealtime('1');
   unsubscribeFailure?.();
   unsubscribeOutput();
+  adapter.dispose();
+});
+
+test('a served UI reload reloads the page, and only from the current stream', () => {
+  FakeEventSource.instances.length = 0;
+  let reloads = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response(result('advance-realtime')),
+    eventSource: FakeEventSource,
+    reloadPage: () => { reloads += 1; },
+  });
+  const unsubscribe = adapter.subscribeOutputs(() => undefined);
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+  stream.namedListeners.get('rusty-ui-reloaded')?.({ data: '{}', lastEventId: '' });
+  assert.equal(reloads, 1);
+
+  // A replaced stream's late event does not reload the page again.
+  stream.drop();
+  const replacement = FakeEventSource.instances[1]!;
+  completeConnectionBaseline(replacement);
+  stream.namedListeners.get('rusty-ui-reloaded')?.({ data: '{}', lastEventId: '' });
+  assert.equal(reloads, 1);
+  replacement.namedListeners.get('rusty-ui-reloaded')?.({ data: '{}', lastEventId: '' });
+  assert.equal(reloads, 2);
+  unsubscribe();
   adapter.dispose();
 });
 
