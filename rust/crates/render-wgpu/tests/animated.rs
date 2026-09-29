@@ -169,6 +169,92 @@ fn repeating_playback_advances_on_the_engine_timeline_and_the_weapon_follows() {
     assert_ne!(start, later);
 }
 
+/// The character drawn into an offscreen target, presented over the primary.
+fn character_composition() -> render_host_contracts::RendererViewComposition {
+    use render_host_contracts::*;
+    let full = RendererViewport {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+    let mut camera = character_view();
+    camera.id = "character".to_owned();
+    RendererViewComposition {
+        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
+        cameras: vec![camera],
+        targets: vec![RendererCompositionTarget {
+            id: "portrait".to_owned(),
+            revision: 1,
+            width: 96,
+            height: 96,
+            color: RendererTargetColor::Rgba8Srgb,
+            depth: RendererTargetDepth::Depth24,
+            sampling: RendererTargetSampling::Nearest,
+        }],
+        views: vec![RendererCompositionView {
+            id: "portrait-view".to_owned(),
+            camera_id: "character".to_owned(),
+            target: RendererViewTarget::Offscreen {
+                target_id: "portrait".to_owned(),
+                target_revision: 1,
+            },
+            viewport: full,
+            order: 0,
+        }],
+        presentations: vec![RendererCompositionPresentation {
+            id: "inset".to_owned(),
+            source_target_id: "portrait".to_owned(),
+            source_target_revision: 1,
+            destination: RendererPrimaryDestination {
+                kind: RendererPrimaryDestinationKind::Primary,
+                viewport: full,
+            },
+            order: 1,
+        }],
+    }
+}
+
+fn compose(harness: &mut Harness, time: f64) -> (render_wgpu::FrameStats, Vec<u8>) {
+    let stats = harness
+        .renderer
+        .render_view_composition(&harness.target, time);
+    (stats, harness.target.read_rgba(&harness.gpu))
+}
+
+#[test]
+fn an_advancing_pose_redraws_a_cached_composition_target_and_a_held_pose_reuses_it() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    harness
+        .renderer
+        .set_view_composition(&character_composition(), 0.0);
+    let (first, start) = compose(&mut harness, 0.0);
+    assert_eq!(first.offscreen_views, 1, "a new target draws once");
+
+    // The sampled pose holds, so Engine time alone leaves the target current.
+    harness.renderer.set_animation_time(1.0);
+    let (held, same) = compose(&mut harness, 1.0);
+    assert_eq!(held.offscreen_views, 0, "a held pose reuses the target");
+    assert_eq!(same, start);
+
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(BODY),
+        playback: play("run", AnimationLoopMode::Repeat),
+    }]);
+    let (_, playing) = compose(&mut harness, 2.0);
+    // Repeating playback moves the pose on Engine time alone: no delta and no
+    // republished composition, yet the target redraws the new pose.
+    harness.renderer.set_animation_time(1.2);
+    let (moved, later) = compose(&mut harness, 3.0);
+    assert_eq!(moved.offscreen_views, 1, "{moved:?}");
+    assert_ne!(later, playing);
+    assert_eq!(
+        harness.renderer.view_composition_readout().targets[0].status,
+        render_wgpu::TargetStatus::Current
+    );
+}
+
 #[test]
 fn a_once_clip_reports_its_natural_completion_then_holds_and_reports_bounds() {
     let mut harness = Harness::new(RendererOptions::default());

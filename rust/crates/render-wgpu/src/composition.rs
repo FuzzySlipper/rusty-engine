@@ -5,7 +5,8 @@
 //! Each frame, in order:
 //! 1. offscreen views, by `(order, id)`, into their targets. A target is drawn
 //!    only when it is stale: never drawn, a new composition, a delta applied
-//!    since, or a view camera that moved;
+//!    since, an animated pose that changed on Engine time, or a view camera
+//!    that moved;
 //! 2. primary steps (views and presentations), by `(order, id)`. Each primary
 //!    view clears its viewport and draws the world once, then the viewmodel
 //!    layer after a depth break. A presentation draws an offscreen target
@@ -23,8 +24,8 @@
 use std::collections::HashMap;
 
 use render_host_contracts::{
-    RendererCameraPose, RendererCompositionCamera, RendererCompositionTarget, RendererTargetSampling,
-    RendererViewComposition, RendererViewTarget, RendererViewport,
+    RendererCameraPose, RendererCompositionCamera, RendererCompositionTarget,
+    RendererTargetSampling, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 
 use crate::camera::{self, CameraMatrices, CameraMotion, CameraPose, CameraSampleReadout};

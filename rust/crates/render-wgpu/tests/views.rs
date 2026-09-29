@@ -216,7 +216,12 @@ fn an_observer_pose_replaces_the_primary_view_camera_until_it_is_cleared() {
     harness.renderer.set_view_composition(
         &composition(
             vec![product.clone()],
-            vec![primary_view("main", "player", viewport(0.0, 0.0, 1.0, 1.0), 0)],
+            vec![primary_view(
+                "main",
+                "player",
+                viewport(0.0, 0.0, 1.0, 1.0),
+                0,
+            )],
         ),
         0.0,
     );

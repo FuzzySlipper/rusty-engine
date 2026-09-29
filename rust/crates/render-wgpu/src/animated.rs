@@ -690,7 +690,11 @@ impl Renderer {
                 .into_iter()
                 .map(|(clip, time, weight)| (clip, time, weight * fade_in)),
         );
-        instance.pose = evaluate_pose(&asset.model, &asset.clips, &actions);
+        let pose = evaluate_pose(&asset.model, &asset.clips, &actions);
+        // A changed pose is a scene change: cached composition targets must
+        // redraw it. An unchanged pose (held, sampled, finished) keeps them.
+        let moved = pose != instance.pose;
+        instance.pose = pose;
         instance.pose_dirty = false;
         instance.posed_at = now;
         let completed = if finished {
@@ -706,6 +710,9 @@ impl Renderer {
                     clip,
                 });
             }
+        }
+        if moved {
+            self.scene_generation += 1;
         }
         self.skin_animated_instance(handle);
         self.write_animated_parts(handle);
