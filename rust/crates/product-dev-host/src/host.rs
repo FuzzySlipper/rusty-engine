@@ -2286,14 +2286,20 @@ fn handle_frames<R: ProductDevRuntime>(
             "this runtime does not render frames",
         ),
         (Some(_), Err(detail)) => HttpResponse::error(400, "DEV_HOST_FRAMES_REQUEST", detail),
-        (Some(frames), Ok(frame_request)) => match frames.next_after(
-            frame_request.after,
-            frame_request.size,
-            crate::frames::FRAME_REQUEST_WAIT,
-        ) {
-            Some(frame) => HttpResponse::bytes(200, "application/x-rusty-frame", frame),
-            None => HttpResponse::bytes(204, "application/x-rusty-frame", Vec::new()),
-        },
+        (Some(frames), Ok(frame_request)) => {
+            if let Some(ratio) = frame_request.pixel_ratio {
+                frames.set_viewer_pixel_ratio(ratio);
+            }
+            let frame = frames.next_after(
+                frame_request.after,
+                frame_request.size,
+                crate::frames::FRAME_REQUEST_WAIT,
+            );
+            match frame {
+                Some(frame) => HttpResponse::bytes(200, "application/x-rusty-frame", frame),
+                None => HttpResponse::bytes(204, "application/x-rusty-frame", Vec::new()),
+            }
+        }
     };
     let _ = stream.set_nodelay(true);
     let _ = write_response(&mut stream, response);

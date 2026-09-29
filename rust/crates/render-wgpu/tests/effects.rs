@@ -16,7 +16,7 @@ use render_presentation::{
     ParticleEmitterPatch, ParticleProjectionOp, ParticleScalarKey, ParticleSpriteRef,
     ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
-use render_wgpu::{RendererOptions, TargetStatus};
+use render_wgpu::{OffscreenTarget, RendererOptions, TargetStatus};
 
 const NO_ENTITIES: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
 
@@ -690,4 +690,50 @@ fn blended_sprites_and_blended_meshes_share_one_back_to_front_order() {
         front[0] > front[2],
         "sprite in front of the glass: {front:?}"
     );
+}
+
+/// A device pixel ratio of 2 (#8853): a pixel-sized sprite covers twice the
+/// target pixels in a target twice the size, keeping its CSS size.
+#[test]
+fn pixel_sized_sprites_keep_their_css_size_at_device_pixel_ratio_two() {
+    let render = |ratio: u32| {
+        let mut harness = Harness::new(RendererOptions::default());
+        harness.target = OffscreenTarget::new(&harness.gpu, WIDTH * ratio, HEIGHT * ratio);
+        harness.renderer.set_pixel_ratio(ratio as f32);
+        let mut ops = vec![RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        }];
+        ops.extend(atlas_ops(&mut harness.resources));
+        let mut pixel_sized = sprite(1, [0.0, 1.0, -9.0], BillboardMode::Spherical);
+        pixel_sized.size_mode = SpriteSizeMode::Pixel;
+        pixel_sized.size = [24.0, 24.0];
+        ops.push(create(13, pixel_sized));
+        harness.apply(ops);
+        let pixels = harness.single(&camera("eye", [0.0, 1.0, 1.0], 0.0, 0.0));
+        // Columns and rows the sprite covers.
+        let (width, height) = (WIDTH * ratio, HEIGHT * ratio);
+        let covered = |horizontal: bool| {
+            let (outer, inner) = if horizontal {
+                (width, height)
+            } else {
+                (height, width)
+            };
+            (0..outer)
+                .filter(|&a| {
+                    (0..inner).any(|b| {
+                        let (x, y) = if horizontal { (a, b) } else { (b, a) };
+                        pixel(&pixels, width, x, y)[..3]
+                            .iter()
+                            .any(|channel| *channel > 16)
+                    })
+                })
+                .count() as i64
+        };
+        (covered(true), covered(false))
+    };
+    let (one_w, one_h) = render(1);
+    let (two_w, two_h) = render(2);
+    assert!(one_w > 10 && one_h > 10, "{one_w}x{one_h}");
+    assert!((two_w - 2 * one_w).abs() <= 2, "{one_w} -> {two_w}");
+    assert!((two_h - 2 * one_h).abs() <= 2, "{one_h} -> {two_h}");
 }

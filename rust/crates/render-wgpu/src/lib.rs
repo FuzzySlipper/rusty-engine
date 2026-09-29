@@ -254,6 +254,21 @@ impl Renderer {
         self.options
     }
 
+    /// Target pixels per CSS pixel of the output: the desktop window's scale
+    /// factor, or the stream viewer's device pixel ratio. The host sets it,
+    /// not the product. Labels, pixel-sized sprites and particle points are
+    /// authored in CSS pixels and keep that size on a denser target, as they
+    /// did under Three's `pixelRatio`. Labels rasterize again at a new ratio.
+    pub fn set_pixel_ratio(&mut self, ratio: f32) {
+        if ratio.is_finite() && ratio > 0.0 {
+            self.labels.set_pixel_ratio(ratio);
+        }
+    }
+
+    pub fn pixel_ratio(&self) -> f32 {
+        self.labels.pixel_ratio()
+    }
+
     /// Change host options; lights (and shadow layers) are re-derived on the
     /// next render.
     pub fn set_options(&mut self, options: RendererOptions) {

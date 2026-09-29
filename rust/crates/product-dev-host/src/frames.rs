@@ -8,8 +8,11 @@
 //! asks for the next frame only when it can take one, a slow viewer skips
 //! frames instead of queueing them in socket buffers.
 //!
-//! `width` and `height` state the size the viewer shows. The renderer draws
-//! at the most recent viewer's size; other viewers scale what they receive.
+//! `width` and `height` state the size the viewer shows, in its pixels. The
+//! renderer draws at the most recent viewer's size; other viewers scale what
+//! they receive. `cssWidth` states the same width in CSS pixels, so
+//! `width / cssWidth` is the viewer's device pixel ratio: CSS-pixel
+//! presentation (labels, pixel-sized sprites) keeps its size at that ratio.
 //!
 //! A frame is a fixed little-endian header followed by its payload:
 //!
@@ -80,6 +83,7 @@ struct FrameState {
     sequence: u64,
     latest: Option<Arc<[u8]>>,
     size: Option<(u32, u32)>,
+    pixel_ratio: Option<f32>,
     waiting: usize,
     last_request: Option<Instant>,
 }
@@ -110,6 +114,24 @@ impl ProductDevFrameStream {
         state
             .watched()
             .then(|| state.size.unwrap_or(DEFAULT_FRAME_SIZE))
+    }
+
+    /// The most recent viewer's device pixel ratio; 1 until one states it.
+    pub fn wanted_pixel_ratio(&self) -> f32 {
+        self.state().pixel_ratio.unwrap_or(1.0)
+    }
+
+    /// Records the device pixel ratio a viewer's request stated.
+    pub fn set_viewer_pixel_ratio(&self, ratio: f32) {
+        let mut state = self.state();
+        if state.pixel_ratio == Some(ratio) {
+            return;
+        }
+        state.pixel_ratio = Some(ratio);
+        drop(state);
+        if let Some(waker) = &*self.demand_waker.lock().expect("frame waker lock") {
+            waker();
+        }
     }
 
     /// Numbers `frame`, makes it the latest, and returns its sequence.
@@ -176,11 +198,13 @@ fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
     bytes.into()
 }
 
-/// A viewer's frame request: `?after=N[&width=W&height=H]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A viewer's frame request: `?after=N[&width=W&height=H[&cssWidth=C]]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FrameRequest {
     pub after: u64,
     pub size: Option<(u32, u32)>,
+    /// `width / cssWidth`, when the viewer stated its CSS width.
+    pub pixel_ratio: Option<f32>,
 }
 
 pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
@@ -189,7 +213,7 @@ pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
         None if path == PRODUCT_DEV_FRAMES_PATH => "",
         _ => return Err("unknown frame route"),
     };
-    let (mut after, mut width, mut height) = (None, None, None);
+    let (mut after, mut width, mut height, mut css_width) = (None, None, None, None);
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (name, value) = pair.split_once('=').ok_or("malformed frame query")?;
         let value = value
@@ -199,6 +223,7 @@ pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
             "after" => &mut after,
             "width" => &mut width,
             "height" => &mut height,
+            "cssWidth" => &mut css_width,
             _ => return Err("unknown frame query parameter"),
         };
         if slot.replace(value).is_some() {
@@ -216,9 +241,15 @@ pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
         (None, None) => None,
         _ => return Err("frame query needs both width and height"),
     };
+    let pixel_ratio = match (size, css_width) {
+        (Some((width, _)), Some(css)) => Some(width as f32 / side(css)? as f32),
+        (None, Some(_)) => return Err("cssWidth needs width and height"),
+        (_, None) => None,
+    };
     Ok(FrameRequest {
         after: after.unwrap_or(0),
         size,
+        pixel_ratio,
     })
 }
 
@@ -300,17 +331,31 @@ mod tests {
             frame_request(PRODUCT_DEV_FRAMES_PATH),
             Ok(FrameRequest {
                 after: 0,
-                size: None
+                size: None,
+                pixel_ratio: None,
             })
         );
         assert_eq!(
             frame_request("/__rusty/product/runtime/frames?after=12&width=1280&height=720"),
             Ok(FrameRequest {
                 after: 12,
-                size: Some((1280, 720))
+                size: Some((1280, 720)),
+                pixel_ratio: None,
+            })
+        );
+        assert_eq!(
+            frame_request(
+                "/__rusty/product/runtime/frames?after=3&width=2560&height=1440&cssWidth=1280"
+            ),
+            Ok(FrameRequest {
+                after: 3,
+                size: Some((2560, 1440)),
+                pixel_ratio: Some(2.0),
             })
         );
         for bad in [
+            "/__rusty/product/runtime/frames?cssWidth=1280",
+            "/__rusty/product/runtime/frames?width=1280&height=720&cssWidth=0",
             "/__rusty/product/runtime/frames?width=1280",
             "/__rusty/product/runtime/frames?width=0&height=720",
             "/__rusty/product/runtime/frames?width=5000&height=720",

@@ -76,16 +76,54 @@ pub(crate) struct ActiveLabel {
     texture: Option<wgpu::BindGroup>,
 }
 
-#[derive(Default)]
 pub(crate) struct Labels {
     pub active: BTreeMap<BillboardHandle, ActiveLabel>,
     fonts: HashMap<String, Arc<fontdue::Font>>,
     icons: HashMap<String, Arc<DecodedImage>>,
     default_font: Option<Arc<fontdue::Font>>,
     gpu: Option<LabelGpu>,
+    /// Target pixels per CSS pixel (`Renderer::set_pixel_ratio`). Labels are
+    /// authored in CSS pixels and rasterized at this ratio.
+    pixel_ratio: f32,
+}
+
+impl Default for Labels {
+    fn default() -> Self {
+        Self {
+            active: BTreeMap::new(),
+            fonts: HashMap::new(),
+            icons: HashMap::new(),
+            default_font: None,
+            gpu: None,
+            pixel_ratio: 1.0,
+        }
+    }
 }
 
 impl Labels {
+    pub fn pixel_ratio(&self) -> f32 {
+        self.pixel_ratio
+    }
+
+    /// Rasterize every label again at `ratio`, from the fonts and icons their
+    /// creation already loaded.
+    pub fn set_pixel_ratio(&mut self, ratio: f32) {
+        if ratio == self.pixel_ratio {
+            return;
+        }
+        self.pixel_ratio = ratio;
+        let handles: Vec<_> = self.active.keys().copied().collect();
+        for handle in handles {
+            let descriptor = self.active[&handle].descriptor.clone();
+            let image = self
+                .rasterize(&descriptor, &resources::NoResources)
+                .unwrap_or_default();
+            let label = self.active.get_mut(&handle).expect("an active label");
+            label.image = image;
+            label.texture = None;
+        }
+    }
+
     fn default_font(&mut self) -> Result<Arc<fontdue::Font>, String> {
         if let Some(font) = &self.default_font {
             return Ok(font.clone());
@@ -166,6 +204,7 @@ impl Labels {
     ) -> Result<LabelImage, String> {
         let font = self.font(&descriptor.font, resources)?;
         let size = descriptor.height_pixels;
+        let ratio = self.pixel_ratio;
         match &descriptor.content {
             BillboardContent::Text {
                 fallback_text,
@@ -176,7 +215,7 @@ impl Labels {
                 for argument in arguments {
                     text = text.replace(&format!("{{{}}}", argument.name), &argument.value);
                 }
-                Ok(text_label(&font, size, &text, descriptor, None))
+                Ok(text_label(&font, size, &text, descriptor, None, ratio))
             }
             BillboardContent::Value {
                 fallback_label,
@@ -190,7 +229,7 @@ impl Labels {
                 } else {
                     format!("{fallback_label}: {value} {unit}")
                 };
-                Ok(text_label(&font, size, &text, descriptor, None))
+                Ok(text_label(&font, size, &text, descriptor, None, ratio))
             }
             BillboardContent::Icon {
                 texture,
@@ -204,6 +243,7 @@ impl Labels {
                     fallback_alt,
                     descriptor,
                     Some(&icon),
+                    ratio,
                 ))
             }
             BillboardContent::Structured { indicator } => {
@@ -216,7 +256,9 @@ impl Labels {
                 ) {
                     icons.insert(texture.content_hash.clone(), self.icon(texture, resources)?);
                 }
-                Ok(structured_label(&font, size, indicator, descriptor, &icons))
+                Ok(structured_label(
+                    &font, size, indicator, descriptor, &icons, ratio,
+                ))
             }
         }
     }
@@ -308,20 +350,36 @@ fn resolve_anchor(anchor: &BillboardAnchor, entities: EntityPositions<'_>) -> Op
 // ── Rasterizing ─────────────────────────────────────────────────────────────
 
 /// A straight-alpha canvas in sRGB space, composited source-over as a browser
-/// composites its page.
+/// composites its page. Callers draw in CSS pixels; the canvas holds `scale`
+/// pixels per CSS pixel, as a browser rasterizes at its device pixel ratio.
 struct Canvas {
     width: u32,
     height: u32,
+    scale: f32,
     pixels: Vec<[f32; 4]>,
 }
 
 impl Canvas {
-    fn new(width: f32, height: f32) -> Self {
-        let (width, height) = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+    fn new(width: f32, height: f32, scale: f32) -> Self {
+        let (width, height) = (
+            (width * scale).ceil().max(1.0) as u32,
+            (height * scale).ceil().max(1.0) as u32,
+        );
         Self {
             width,
             height,
+            scale,
             pixels: vec![[0.0; 4]; (width * height) as usize],
+        }
+    }
+
+    /// The canvas's extent in CSS pixels.
+    fn bounds(&self) -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: self.width as f32 / self.scale,
+            height: self.height as f32 / self.scale,
         }
     }
 
@@ -344,6 +402,7 @@ impl Canvas {
 
     /// Fill a rectangle, rounded by `radius`, antialiased at its edges.
     fn fill_rounded(&mut self, rect: Rect, radius: f32, color: [f32; 4]) {
+        let (rect, radius) = (rect.scaled(self.scale), radius * self.scale);
         if color[3] <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
@@ -361,8 +420,10 @@ impl Canvas {
         if color[3] <= 0.0 {
             return;
         }
-        let inner = rect.inset(BORDER_PIXELS);
-        let inner_radius = (radius - BORDER_PIXELS).max(0.0);
+        let (rect, radius) = (rect.scaled(self.scale), radius * self.scale);
+        let border = BORDER_PIXELS * self.scale;
+        let inner = rect.inset(border);
+        let inner_radius = (radius - border).max(0.0);
         let outer_radius = radius.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
         for y in rect.y.floor() as i32..(rect.y + rect.height).ceil() as i32 {
             for x in rect.x.floor() as i32..(rect.x + rect.width).ceil() as i32 {
@@ -377,6 +438,7 @@ impl Canvas {
     /// Draw an image scaled into `rect` (bilinear), as CSS draws an image or
     /// a background at a given size.
     fn draw_image(&mut self, image: &DecodedImage, rect: Rect) {
+        let rect = rect.scaled(self.scale);
         if image.width == 0 || image.height == 0 || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
@@ -422,6 +484,7 @@ impl Canvas {
         top: f32,
         color: [f32; 4],
     ) {
+        let (size, left, top) = (size * self.scale, left * self.scale, top * self.scale);
         let baseline = top + baseline_offset(font, size);
         let mut pen = left;
         let mut previous = None;
@@ -483,6 +546,15 @@ struct Rect {
 }
 
 impl Rect {
+    fn scaled(self, by: f32) -> Self {
+        Self {
+            x: self.x * by,
+            y: self.y * by,
+            width: self.width * by,
+            height: self.height * by,
+        }
+    }
+
     fn inset(self, by: f32) -> Self {
         Self {
             x: self.x + by,
@@ -541,16 +613,12 @@ fn text_label(
     text: &str,
     descriptor: &BillboardDescriptor,
     icon: Option<&DecodedImage>,
+    scale: f32,
 ) -> LabelImage {
     let width = text_width(font, size, text);
     let height = LINE_HEIGHT * size;
-    let mut canvas = Canvas::new(width, height);
-    let bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: canvas.width as f32,
-        height: canvas.height as f32,
-    };
+    let mut canvas = Canvas::new(width, height, scale);
+    let bounds = canvas.bounds();
     canvas.fill_rounded(bounds, LABEL_RADIUS_PIXELS, descriptor.background);
     if let Some(icon) = icon {
         canvas.draw_image(icon, contain(icon, bounds, Fit::Centre));
@@ -591,6 +659,7 @@ fn structured_label(
     indicator: &BillboardIndicator,
     descriptor: &BillboardDescriptor,
     icons: &HashMap<String, Arc<DecodedImage>>,
+    scale: f32,
 ) -> LabelImage {
     enum Item<'a> {
         Text(&'a str, Option<&'a DecodedImage>),
@@ -632,7 +701,7 @@ fn structured_label(
         .collect();
     let gaps = spacing * items.len().saturating_sub(1) as f32;
     let height = 2.0 * inset + heights.iter().sum::<f32>() + gaps;
-    let mut canvas = Canvas::new(indicator.width_pixels, height);
+    let mut canvas = Canvas::new(indicator.width_pixels, height, scale);
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -846,18 +915,22 @@ impl Labels {
                 continue;
             };
             let scale = layout_scale(&policy, projection.distance);
+            // The image is already in target pixels; the policy's lengths are
+            // CSS pixels.
+            let css = self.pixel_ratio;
             let unscaled = label.image.height as f32;
             let width = label.image.width as f32 * scale;
             let height = unscaled * scale;
             // Placement uses the DOM host's row estimate, as its layout did.
-            let layout_height = estimated_height(indicator, label.descriptor.height_pixels) * scale;
-            let half_width = indicator.width_pixels * scale / 2.0;
+            let layout_height =
+                estimated_height(indicator, label.descriptor.height_pixels) * scale * css;
+            let half_width = indicator.width_pixels * scale * css / 2.0;
             let safe = policy.safe_area;
             let (left, top, right, bottom) = (
-                area[0] + safe.left_pixels,
-                area[1] + safe.top_pixels,
-                area[0] + area[2] - safe.right_pixels,
-                area[1] + area[3] - safe.bottom_pixels,
+                area[0] + safe.left_pixels * css,
+                area[1] + safe.top_pixels * css,
+                area[0] + area[2] - safe.right_pixels * css,
+                area[1] + area[3] - safe.bottom_pixels * css,
             );
             let (mut x, mut y) = (projection.x, projection.y);
             let outside = x + half_width < left
@@ -873,8 +946,8 @@ impl Labels {
                 }
             }
             if let Some((px, py, pscale)) = label.placement {
-                if (px - x).abs() < PLACEMENT_HYSTERESIS_PIXELS
-                    && (py - y).abs() < PLACEMENT_HYSTERESIS_PIXELS
+                if (px - x).abs() < PLACEMENT_HYSTERESIS_PIXELS * css
+                    && (py - y).abs() < PLACEMENT_HYSTERESIS_PIXELS * css
                     && (pscale - scale).abs() < SCALE_HYSTERESIS
                 {
                     (x, y) = (px, py);
@@ -884,8 +957,8 @@ impl Labels {
             let mut rect = footprint(x, y);
             match policy.overlap_behavior {
                 BillboardOverlapBehavior::Stack => {
-                    let step =
-                        (indicator.spacing_pixels + layout_height).max(STACK_MIN_STEP_PIXELS);
+                    let step = (indicator.spacing_pixels * css + layout_height)
+                        .max(STACK_MIN_STEP_PIXELS * css);
                     while occupied.iter().any(|other| overlaps(other, &rect))
                         && y - step - layout_height >= top
                     {

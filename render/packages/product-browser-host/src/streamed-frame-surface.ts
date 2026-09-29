@@ -219,9 +219,12 @@ function mountRuntimeRenderedSurface(
     const ask = async (after: number): Promise<void> => {
       while (!controller.signal.aborted) {
         const [width, height] = backingSize();
+        // The CSS width gives the runtime this page's pixel ratio, so labels
+        // and pixel-sized sprites keep their CSS size in the frame.
+        const cssWidth = Math.max(1, Math.round(canvas.clientWidth));
         try {
           const response = await fetch(
-            `${PRODUCT_BROWSER_FRAME_STREAM_PATH}?after=${after}&width=${width}&height=${height}`,
+            `${PRODUCT_BROWSER_FRAME_STREAM_PATH}?after=${after}&width=${width}&height=${height}&cssWidth=${cssWidth}`,
             { cache: 'no-store', signal: controller.signal },
           );
           if (response.status === 204) continue;

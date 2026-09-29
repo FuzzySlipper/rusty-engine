@@ -730,3 +730,91 @@ fn a_content_patch_to_text_drops_the_structured_layout() {
     assert!(issues.is_empty(), "{issues:?}");
     assert!(changed(&base, &harness.single(&eye()), whole()) > 100);
 }
+
+/// Changed pixels' bounds (x0, y0, x1, y1) against `base`, in a `width` wide image.
+fn changed_bounds(base: &[u8], frame: &[u8], width: u32, height: u32) -> [u32; 4] {
+    let mut bounds = [u32::MAX, u32::MAX, 0, 0];
+    for y in 0..height {
+        for x in 0..width {
+            let (a, b) = (pixel(base, width, x, y), pixel(frame, width, x, y));
+            if a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 24) {
+                bounds = [
+                    bounds[0].min(x),
+                    bounds[1].min(y),
+                    bounds[2].max(x + 1),
+                    bounds[3].max(y + 1),
+                ];
+            }
+        }
+    }
+    bounds
+}
+
+fn ratio_scene() -> Vec<BillboardProjectionOp> {
+    let mut left = indicator(vec![meter(
+        "health",
+        0.65,
+        BillboardMeterFillDirection::LeftToRight,
+    )]);
+    left.label = Some(localized("Guard"));
+    vec![
+        create(
+            1,
+            structured(
+                [-1.3, 0.6, -4.0],
+                left,
+                policy(
+                    BillboardEdgeBehavior::Clamp,
+                    BillboardOverlapBehavior::Stack,
+                ),
+            ),
+        ),
+        create(
+            2,
+            label(
+                [1.3, 0.6, -3.6],
+                text("Crate A-7"),
+                BillboardLayer::AlwaysOnTop,
+            ),
+        ),
+    ]
+}
+
+/// A device pixel ratio of 2 (#8853): the same scene in a target twice the
+/// size draws every label at twice the target pixels, rasterized at the ratio
+/// rather than magnified, so it keeps its CSS size on the denser output.
+#[test]
+fn labels_keep_their_css_size_at_device_pixel_ratio_two() {
+    let render = |ratio: u32, before_labels: bool| {
+        let mut harness = harness();
+        harness.target =
+            OffscreenTarget::new(&harness.gpu, LABEL_WIDTH * ratio, LABEL_HEIGHT * ratio);
+        if before_labels {
+            harness.renderer.set_pixel_ratio(ratio as f32);
+        }
+        let base = harness.single(&eye());
+        let issues = apply(&mut harness, ratio_scene());
+        assert!(issues.is_empty(), "{issues:?}");
+        if !before_labels {
+            // Labels created at ratio 1 rasterize again at the new ratio.
+            harness.renderer.set_pixel_ratio(ratio as f32);
+        }
+        (base, harness.single(&eye()))
+    };
+    let (base, one) = render(1, true);
+    let (base_two, two) = render(2, true);
+    let one_bounds = changed_bounds(&base, &one, LABEL_WIDTH, LABEL_HEIGHT);
+    let two_bounds = changed_bounds(&base_two, &two, LABEL_WIDTH * 2, LABEL_HEIGHT * 2);
+    for (single, double) in one_bounds.iter().zip(two_bounds) {
+        assert!(
+            (double as i64 - 2 * *single as i64).abs() <= 3,
+            "ratio 2 bounds {two_bounds:?} are not twice ratio 1 bounds {one_bounds:?}"
+        );
+    }
+    assert_screenshot("labels-ratio-2", LABEL_WIDTH * 2, LABEL_HEIGHT * 2, &two);
+    let (_, raised) = render(2, false);
+    assert_eq!(
+        raised, two,
+        "raising the ratio after creation must rasterize again"
+    );
+}

@@ -538,6 +538,7 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
         };
         let started = Instant::now();
         scene.dirty = false;
+        scene.renderer.set_pixel_ratio(frames.wanted_pixel_ratio());
         let request = scene.requested;
         let mut drawn = DrawnFrame {
             sequence: 0,

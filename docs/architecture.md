@@ -268,11 +268,15 @@ The world is realized either by the browser's Three surface or, with
   runs, once per change while it is paused or inspection time is held. It
   takes the product manifest's default light rigs.
 - **Transport.** A viewer pulls frames one at a time:
-  `GET /__rusty/product/runtime/frames?after=N&width=W&height=H` answers with
+  `GET /__rusty/product/runtime/frames?after=N&width=W&height=H&cssWidth=C`
+  answers with
   the latest frame newer than `N`, or `204` after a second. Each frame is a
   40-byte `RSF1` header (sequence, simulation step, size, format, held and
   video flags) and a JPEG (quality 80) payload; `product-dev-host/src/frames.rs` is the
-  format's source. The renderer draws at the most recent viewer's size.
+  format's source. The renderer draws at the most recent viewer's size, and
+  at its pixel ratio (`W / C`): labels, pixel-sized sprites and particle
+  points are CSS pixels (`Renderer::set_pixel_ratio`). The desktop window
+  uses its scale factor.
   `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames, for measurement only.
 - **Browser.** `product-bootstrap.json` carries `renderer.output: "stream"`,
   and the runtime-pack shell mounts `mountStreamedFrameSurface`

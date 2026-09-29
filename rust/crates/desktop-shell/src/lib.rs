@@ -196,9 +196,12 @@ impl Shell {
         }
         let mut result: Result<(), PresentSkip> = Ok(());
         let surface = &mut open.surface;
+        // The window's scale factor is the page's device pixel ratio too.
+        let pixel_ratio = open.window.scale_factor() as f32;
         #[cfg(feature = "web-overlay")]
         let mut ui = open.ui.as_mut();
         self.scene.draw(&mut |renderer, now| {
+            renderer.set_pixel_ratio(pixel_ratio);
             #[cfg(feature = "web-overlay")]
             if let Some(ui) = ui.as_deref_mut() {
                 result = renderer

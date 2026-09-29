@@ -107,7 +107,8 @@ Their depth layers now use the view's real depth buffer.
     sRGB.
   - Unscaled labels land on whole pixels, not subpixel positions.
 - **Pixels.** CSS pixels are drawn as target pixels, with no device pixel
-  ratio.
+  ratio. (#8853 adds the ratio: labels rasterize and lay out at the
+  output's device pixel ratio.)
 - **Depth layers are real.** In the DOM host both depth layers always showed
   (`occluded: false`; there was no depth readback).
 - **Placement follows the camera.** In the browser, the Doom indicator stayed

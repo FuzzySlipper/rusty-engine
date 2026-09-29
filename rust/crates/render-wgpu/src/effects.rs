@@ -578,6 +578,7 @@ fn sprite_quad(
     frame_size: [f32; 2],
     camera: &CameraMatrices,
     viewport: PixelRect,
+    pixel_ratio: f32,
 ) -> Option<(Mat4, [f32; 4])> {
     let (width, height) = (viewport.width as f32, viewport.height as f32);
     if let Some(placement) = sprite.viewport_placement {
@@ -626,7 +627,8 @@ fn sprite_quad(
     let camera_world = camera.view.inverse();
     let orthographic = camera.projection.w_axis.w == 1.0;
     if sprite.size_mode == SpriteSizeMode::Pixel {
-        // World units per pixel at the sprite's depth.
+        // World units per target pixel at the sprite's depth; the size is in
+        // CSS pixels.
         let depth = if orthographic {
             1.0
         } else {
@@ -639,8 +641,8 @@ fn sprite_quad(
         };
         let per_pixel_x = 2.0 * depth / (camera.projection.x_axis.x * width);
         let per_pixel_y = 2.0 * depth / (camera.projection.y_axis.y * height);
-        scale.x *= sprite.size[0] * per_pixel_x / w;
-        scale.y *= sprite.size[1] * per_pixel_y / h;
+        scale.x *= sprite.size[0] * pixel_ratio * per_pixel_x / w;
+        scale.y *= sprite.size[1] * pixel_ratio * per_pixel_y / h;
     }
     let rotation = match sprite.billboard {
         BillboardMode::None => authored,
@@ -915,6 +917,7 @@ impl Renderer {
     pub(crate) fn prepare_effects(&mut self, view: &ViewPass<'_>) -> EffectsPass {
         let mut pass = EffectsPass::default();
         let viewmodel = view.layer == ViewLayer::Viewmodel;
+        let pixel_ratio = self.pixel_ratio();
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
         for handle in &self.tables.sprites {
@@ -940,9 +943,14 @@ impl Renderer {
                 ]
             });
             let frame_size = rect.and_then(|rect| rect.size).unwrap_or(sprite.size);
-            let Some((model, quad)) =
-                sprite_quad(sprite, &node.world, frame_size, &view.camera, view.viewport)
-            else {
+            let Some((model, quad)) = sprite_quad(
+                sprite,
+                &node.world,
+                frame_size,
+                &view.camera,
+                view.viewport,
+                pixel_ratio,
+            ) else {
                 continue;
             };
             let color = atlas.map(|atlas| atlas.texture);
@@ -1033,9 +1041,10 @@ impl Renderer {
         // Particles draw in world passes only.
         if !viewmodel && !self.particles.particles.is_empty() {
             self.effects.format_index(&self.gpu.device, format);
+            let points = PARTICLE_PIXELS_PER_UNIT * pixel_ratio;
             let half = Vec4::new(
-                PARTICLE_PIXELS_PER_UNIT / view.viewport.width as f32,
-                PARTICLE_PIXELS_PER_UNIT / view.viewport.height as f32,
+                points / view.viewport.width as f32,
+                points / view.viewport.height as f32,
                 0.0,
                 0.0,
             );
