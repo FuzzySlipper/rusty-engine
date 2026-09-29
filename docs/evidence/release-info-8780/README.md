@@ -39,7 +39,48 @@
 
 ## Evidence
 
-See the results sections below.
+**Semantic-only change, in a real CI publication.** Pushing `1f2d755b` ran
+[run 36524229020](https://github.com/FuzzySlipper/rusty-engine/actions/runs/36524229020).
+It built the pair, ran the consumer check, and built release information
+against the Latest pair at the time, `0.1.0-dev.7eca06d2e972`. Then it
+published `csharp-sdk-v0.1.0-dev.1f2d755b43a7`. All of the following came from
+the Latest discovery URL:
+
+- `pair-release.json` → `releaseInfo.previous` names `0.1.0-dev.7eca06d2e972` /
+  `7eca06d2…0472`; `notes` and `apiSurface` URLs return 200; `apiDiff` is
+  `null`.
+- `release-notes.md` (also the release description) names both pair
+  identities. It says "No public signature changes since
+  `0.1.0-dev.7eca06d2e972`" and includes two authored notes:
+  - `pair-publication-8778`, which landed in a docs-only commit that published
+    no pair, so it was carried into this one;
+  - `release-info-8780`.
+
+**Public signature change.** I produced this with the same script from two real
+published pairs:
+`--pair` the CI pair `0.1.0-dev.6fd6ee77ae05`, and `--previous`
+`0.1.0-dev.58f6316dad11`. The result was 43 lines added and 456 removed; the
+83 KB diff was too large to inline, so it was linked. The #8737 change shows
+as:
+
+```diff
+@@ ... @@ public interface IGraphicsService
+         Rusty.Engine.MeshPartition PartitionMesh(Rusty.Engine.MeshPartitionRequest arg0);
+-        void PublishAttachedSnapshot(Rusty.Engine.AttachedAppearanceSnapshotRequest arg0);
++        void PublishChanges(Rusty.Engine.AppearanceChangesRequest arg0);
+         void PublishSnapshot(System.ReadOnlySpan<Rusty.Engine.AppearanceFact> values);
+```
+
+The same notes gathered the changed `## Migration` sections of #8737, #8738,
+#8739, #8741 and #8742. Evidence READMEs without such a section were omitted.
+
+**No previous pair.** Running without `--previous` wrote `previous: null` and
+`apiDiff: null`. The notes say there is no baseline pair, and the full surface
+is in `api-surface.txt`.
+
+**CLI and discovery links.** Discovery works through `pair-release.json`
+as shown above. No `rusty` update command exists yet; #8779 owns it and has the
+contract.
 
 ## Limits
 
