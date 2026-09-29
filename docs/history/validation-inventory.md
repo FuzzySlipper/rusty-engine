@@ -93,7 +93,6 @@ necessity and placement checked against the actual consumer.
 | `rust/crates/runtime-ui/src/model.rs`, `runtime-timeline/src/model.rs` | Which constructors serialize only to measure size, and which validators reconstruct or clone already admitted values? |
 | `rust/crates/product-dev-host/src/model.rs`, `host.rs` | Which event, baseline, and fragment size scans reuse eventual wire bytes, and which encode again? |
 | `rust/crates/asset-import/src/gltf_package.rs` | Can root parsing be shared with resource-closure discovery? |
-| `rust/crates/content-store/src/batch.rs`, `write_set.rs` | Is prior-manifest validation repeated while computing identity? |
 | `rust/crates/engine-spatial/src/occlusion.rs` | Does the public ray query repeat checks in its delegated implementation? |
 | `csharp/Rusty.Engine.BindingGenerator/Program.cs` | What requires the generated 256 MiB owned-lease and 1,000,000-item caps beyond representation limits? |
 | `render/packages/render-contracts/src/validation.ts` | Are descriptor and patch restrictions consistent, and are they needed by the backend? |

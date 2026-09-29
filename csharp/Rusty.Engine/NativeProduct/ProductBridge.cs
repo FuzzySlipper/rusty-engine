@@ -26,7 +26,6 @@ internal sealed class EngineContext : IEngineContext
         VoxelScenePresentation = new VoxelScenePresentationServiceImplementation(native.voxel_scene_presentation);
         Content = new ContentServiceImplementation(native.content);
         AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
-        ContentStore = new ContentStoreServiceImplementation(native.content_store);
         Graphics = new GraphicsServiceImplementation(native.graphics);
         ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics);
         Presentation = new PresentationServiceImplementation(native.presentation);
@@ -53,7 +52,6 @@ internal sealed class EngineContext : IEngineContext
     public IVoxelScenePresentationService VoxelScenePresentation { get; }
     public IContentService Content { get; }
     public IAuthoredContentService AuthoredContent { get; }
-    public IContentStoreService ContentStore { get; }
     public IGraphicsService Graphics { get; }
     public IImplicitSurfacesService ImplicitSurfaces { get; }
     public IPresentationService Presentation { get; }

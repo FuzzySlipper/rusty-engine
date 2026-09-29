@@ -469,7 +469,6 @@ if [[ "$coreclr_smoke" == true ]]; then
         --content-dir "$staged_product_directory/content" \
         --mode realtime \
         --persistence-root "$work_dir/persistence" \
-        --content-store-root "$work_dir/content-store" \
         --direct-intent runtime.exercise=payload:runtime.exercise.payload \
         --port 0 \
         --exercise
@@ -507,7 +506,6 @@ if [[ "$run_aot" == true ]]; then
         --content-dir "$staged_product_directory/content" \
         --mode realtime \
         --persistence-root "$work_dir/aot-persistence" \
-        --content-store-root "$work_dir/aot-content-store" \
         --direct-intent runtime.exercise=payload:runtime.exercise.payload \
         --port 0 \
         --exercise

@@ -490,32 +490,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
-name = "content-store"
-version = "0.1.0"
-dependencies = [
- "asset-catalog",
- "authored-scene",
- "core-assets",
- "core-ids",
- "entity-state",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2 0.10.9",
- "voxel-annotation",
- "voxel-asset",
-]
-
-[[package]]
-name = "content-store-host"
-version = "0.1.0"
-dependencies = [
- "content-store",
- "fs2",
- "tempfile",
-]
-
-[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -727,8 +701,6 @@ dependencies = [
  "asset-catalog",
  "asset-import",
  "authored-scene",
- "content-store",
- "content-store-host",
  "core-assets",
  "core-ids",
  "core-math",
@@ -1433,16 +1405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]

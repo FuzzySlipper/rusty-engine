@@ -548,7 +548,6 @@ struct Arguments {
     physical_mappings: Vec<RuntimeInputMapping>,
     legacy_live_debug: bool,
     persistence_root: Option<PathBuf>,
-    content_store_root: Option<PathBuf>,
     exercise: bool,
     performance_probe: Option<u32>,
     supervised: bool,
@@ -683,9 +682,6 @@ impl Arguments {
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
         }
-        if let Some(root) = &self.content_store_root {
-            config = config.with_content_store_root(root.clone());
-        }
         config
     }
 
@@ -778,7 +774,6 @@ impl Arguments {
         let mut direct_intents = Vec::new();
         let mut physical_mappings = Vec::new();
         let mut persistence_root = None;
-        let mut content_store_root = None;
         let mut live_debug = false;
         let mut exercise = false;
         let mut performance_probe = None;
@@ -851,13 +846,6 @@ impl Arguments {
                         values.next().ok_or("--persistence-root requires a value")?,
                     ))
                 }
-                "--content-store-root" => {
-                    content_store_root = Some(PathBuf::from(
-                        values
-                            .next()
-                            .ok_or("--content-store-root requires a value")?,
-                    ))
-                }
                 "--exercise" => exercise = true,
                 "--performance-probe" => {
                     let iterations = values
@@ -895,7 +883,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-sdk.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` starts Chromium after the listener is ready and closes it with the host; set `RUSTY_CHROMIUM_PATH` to select its executable. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-sdk.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` starts Chromium after the listener is ready and closes it with the host; set `RUSTY_CHROMIUM_PATH` to select its executable. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -949,7 +937,6 @@ impl Arguments {
             direct_intents,
             physical_mappings,
             persistence_root,
-            content_store_root,
             legacy_live_debug: live_debug,
             exercise,
             performance_probe,

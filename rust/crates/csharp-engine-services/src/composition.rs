@@ -54,7 +54,6 @@ fn engine_api(
     appearance_bridge: &mut RuntimeAppearanceBridge,
     content_bridge: &mut RuntimeContentBridge,
     authored_content_bridge: &mut RuntimeAuthoredContentBridge,
-    content_store_bridge: &mut crate::content_store::RuntimeContentStoreBridge,
     audio_bridge: &mut RuntimeAudioBridge,
     video_bridge: &mut RuntimeVideoBridge,
     render_output_bridge: &mut crate::render_output::RuntimeRenderOutputBridge,
@@ -93,7 +92,6 @@ fn engine_api(
         ),
         content: crate::content::api(content_bridge),
         authored_content: crate::authored_content::api(authored_content_bridge),
-        content_store: crate::content_store::api(content_store_bridge),
         graphics: NativeGraphicsApi {
             publish_changes: crate::appearance::publish_appearance_changes,
             destroy_operation_diagnostic_lease:
@@ -282,7 +280,6 @@ pub struct EngineServiceSet {
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
     authored_content: RuntimeAuthoredContentBridge,
-    content_store: Box<crate::content_store::RuntimeContentStoreBridge>,
     audio: RuntimeAudioBridge,
     video: RuntimeVideoBridge,
     render_output: crate::render_output::RuntimeRenderOutputBridge,
@@ -356,14 +353,12 @@ impl EngineServiceSet {
         catalog: CsharpAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,
         persistence_root: Option<PathBuf>,
-        content_store_root: Option<PathBuf>,
         diagnostics_sink: RuntimeDiagnosticsSink,
     ) -> Result<Self, CsharpEngineServicesError> {
         Self::with_direct_intents(
             catalog,
             content_resources,
             persistence_root,
-            content_store_root,
             diagnostics_sink,
             Vec::new(),
         )
@@ -373,7 +368,6 @@ impl EngineServiceSet {
         catalog: CsharpAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,
         persistence_root: Option<PathBuf>,
-        content_store_root: Option<PathBuf>,
         diagnostics_sink: RuntimeDiagnosticsSink,
         direct_intents: Vec<runtime_input::DirectInputIntentDescriptor>,
     ) -> Result<Self, CsharpEngineServicesError> {
@@ -384,10 +378,6 @@ impl EngineServiceSet {
         spatial.bind_content(&content);
         let mut authored_content = RuntimeAuthoredContentBridge::new();
         authored_content.bind_content(&content);
-        let mut content_store = Box::new(crate::content_store::RuntimeContentStoreBridge::new(
-            content_store_root,
-        )?);
-        authored_content.bind_content_store(&mut content_store);
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         let camera_view = Box::new(RuntimeCameraViewBridge::new());
@@ -411,7 +401,6 @@ impl EngineServiceSet {
             appearance,
             content,
             authored_content,
-            content_store,
             audio,
             video,
             render_output: crate::render_output::RuntimeRenderOutputBridge::new(),
@@ -435,7 +424,6 @@ impl EngineServiceSet {
             &mut self.appearance,
             &mut self.content,
             &mut self.authored_content,
-            &mut self.content_store,
             &mut self.audio,
             &mut self.video,
             &mut self.render_output,
@@ -943,7 +931,6 @@ mod tests {
                 Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
             )]),
             None,
-            None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .unwrap();
@@ -1055,7 +1042,6 @@ mod tests {
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).unwrap(),
             BTreeMap::new(),
-            None,
             None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
@@ -1197,7 +1183,6 @@ mod tests {
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
             content,
-            None,
             None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
@@ -1349,7 +1334,6 @@ mod tests {
             parse_runtime_appearance_catalog(None).expect("default catalog"),
             BTreeMap::new(),
             None,
-            None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .expect("service set");
@@ -1458,7 +1442,6 @@ mod tests {
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
             content,
-            None,
             None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )

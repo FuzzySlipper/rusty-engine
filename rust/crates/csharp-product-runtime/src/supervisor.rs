@@ -81,7 +81,6 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
             .ok_or("DEV_HOST_SUPERVISOR: the runtime incarnation was not allocated")?
             .value(),
         persistence_root: args.persistence_root.clone(),
-        content_store_root: args.content_store_root.clone(),
         startup_timeout: (!args.debugger).then_some(RUNTIME_STARTUP_TIMEOUT),
     };
     if args.debugger {
@@ -287,7 +286,6 @@ struct RuntimeLaunch {
     loader: ProductLoader,
     next_runtime_instance_id: u64,
     persistence_root: Option<PathBuf>,
-    content_store_root: Option<PathBuf>,
     startup_timeout: Option<Duration>,
 }
 
@@ -319,10 +317,7 @@ impl RuntimeLaunch {
             "--serve-listener-fd".to_owned(),
             self.listener_fd.to_string(),
         ];
-        for (flag, root) in [
-            ("--persistence-root", &self.persistence_root),
-            ("--content-store-root", &self.content_store_root),
-        ] {
+        for (flag, root) in [("--persistence-root", &self.persistence_root)] {
             if let Some(root) = root {
                 arguments.push(flag.to_owned());
                 arguments.push(path_argument(root)?);
@@ -686,7 +681,6 @@ mod tests {
                 loader,
                 next_runtime_instance_id: 7,
                 persistence_root: None,
-                content_store_root: None,
                 startup_timeout: None,
             };
             let arguments = launch.runtime_arguments(7).unwrap();

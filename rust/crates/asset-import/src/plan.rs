@@ -33,6 +33,26 @@ pub struct ImportPlan {
     pub has_errors: bool,
 }
 
+impl ImportPlan {
+    /// Classifies this plan against the manifest a previous import
+    /// published. The CLI learns where that manifest lives only from this
+    /// plan, so it compares afterwards instead of converting the source twice.
+    #[must_use]
+    pub fn against_prior(mut self, prior: &ImportManifest) -> Self {
+        let (Some(manifest), Some(current)) = (&self.manifest, &self.reimport) else {
+            return self;
+        };
+        let next = plan_reimport(prior, manifest);
+        self.report = self.report.replacen(
+            &format!("reimportPlan: {}\n", current.label()),
+            &format!("reimportPlan: {}\n", next.label()),
+            1,
+        );
+        self.reimport = Some(next);
+        self
+    }
+}
+
 pub fn plan_import(
     source_uri: &SourceUri,
     source_text: &str,

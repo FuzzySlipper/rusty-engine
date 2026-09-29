@@ -19,8 +19,6 @@ members = [
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
     "rust/crates/asset-catalog",
-    "rust/crates/content-store",
-    "rust/crates/content-store-host",
     "rust/crates/environment-authoring",
     "rust/crates/render-model",
     "rust/crates/render-presentation",
@@ -68,8 +66,6 @@ asset-import = { path = "rust/crates/asset-import" }
 voxel-convert = { path = "rust/crates/voxel-convert" }
 authored-scene = { path = "rust/crates/authored-scene" }
 asset-catalog = { path = "rust/crates/asset-catalog" }
-content-store = { path = "rust/crates/content-store" }
-content-store-host = { path = "rust/crates/content-store-host" }
 environment-authoring = { path = "rust/crates/environment-authoring" }
 engine-spatial = { path = "rust/crates/engine-spatial" }
 render-model = { path = "rust/crates/render-model" }

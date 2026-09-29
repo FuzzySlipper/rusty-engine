@@ -52,7 +52,6 @@ to force a rerun.
 | `CameraView` | Retain cameras, offscreen targets, and ordered primary/offscreen view compositions; select one active camera as a convenience. |
 | `Random` | Provide Engine-owned deterministic streams, keyed draws, and explicit-state compatibility draws. `DrawLcg15` advances a caller-held wrapping 32-bit LCG state, exposes its 15-bit sample, and reduces it with modulo arithmetic; it is intentionally compatibility behavior, so it has modulo bias and is not a general uniform random API. |
 | `Persistence` | Read and write bounded Engine persistence blobs and stores. |
-| `ContentStore` | Plan, publish, and inspect durable content-store generations. |
 | `Ui` | Publish bounded product UI projections through the Engine host. |
 
 The generated contracts are authoritative when this table and source ever

@@ -1325,6 +1325,27 @@ fn reimport_distinguishes_visual_and_structural_changes() {
 }
 
 #[test]
+fn comparing_a_plan_with_its_prior_afterwards_matches_planning_against_it() {
+    let context = ImportContext::default();
+    let prior = plan_import(&uri(), VALID, &context, ImportMode::DryRun, None, None)
+        .manifest
+        .unwrap();
+    let recolored = VALID.replace("0.5, 0.6, 0.7", "0.2, 0.3, 0.4");
+    let direct = plan_import(
+        &uri(),
+        &recolored,
+        &context,
+        ImportMode::DryRun,
+        Some(&prior),
+        None,
+    );
+    let afterwards = plan_import(&uri(), &recolored, &context, ImportMode::DryRun, None, None)
+        .against_prior(&prior);
+    assert_eq!(afterwards, direct);
+    assert!(afterwards.report.contains("reimportPlan: visualUpdate"));
+}
+
+#[test]
 fn directory_publication_is_whole_and_failed_verification_preserves_prior() {
     let root = temp_directory("publication");
     let output = root.join("imported");

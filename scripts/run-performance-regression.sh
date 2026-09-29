@@ -70,7 +70,6 @@ for loader in coreclr nativeaot; do
     --product "$PRODUCT_DIRECTORY" \
     --loader "$loader" \
     --persistence-root "$PROBE_ROOT/$loader-persistence" \
-    --content-store-root "$PROBE_ROOT/$loader-content-store" \
     --performance-probe "$ITERATIONS"
 done
 

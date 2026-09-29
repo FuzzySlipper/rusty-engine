@@ -67,7 +67,7 @@ fn import_command(
     } else {
         ImportMode::DryRun
     };
-    let provisional = plan_source(
+    let plan = plan_source(
         &source_uri,
         source_path,
         loaded_source(&source_bytes, gltf_source.as_ref()),
@@ -76,21 +76,16 @@ fn import_command(
         None,
         sidecar.as_ref(),
     )?;
-    let prior = provisional
+    let prior = plan
         .files
         .iter()
         .find(|file| file.relative_path.ends_with(".import.json"))
         .and_then(|file| fs::read_to_string(output.join(&file.relative_path)).ok())
         .and_then(|text| decode_import_manifest(&text).ok());
-    let plan = plan_source(
-        &source_uri,
-        source_path,
-        loaded_source(&source_bytes, gltf_source.as_ref()),
-        &context,
-        mode,
-        prior.as_ref(),
-        sidecar.as_ref(),
-    )?;
+    let plan = match &prior {
+        Some(prior) => plan.against_prior(prior),
+        None => plan,
+    };
     print!("{}", plan.report);
     if plan.has_errors {
         return Err("source admission failed".into());

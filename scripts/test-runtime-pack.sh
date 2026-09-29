@@ -93,8 +93,7 @@ start_and_assert() {
 }
 
 start_and_assert nativeaot "$PRODUCTS/native" \
-  --persistence-root "$PRODUCTS/native/persistence" \
-  --content-store-root "$PRODUCTS/native/content-store"
+  --persistence-root "$PRODUCTS/native/persistence"
 start_and_assert coreclr "$PRODUCTS/coreclr"
 
 # Alter only loose Product bytes; the moved runtime pack remains bit-for-bit

@@ -75,7 +75,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
     runtime.verify()?;
 
     let persistence_root = development_persistence_root(&options.project)?;
-    let content_store_root = development_content_store_root(&options.project)?;
     let initial = stage_product(&options)?;
     let mut staged = initial.directory;
     verify_staged_product(&staged)?;
@@ -86,7 +85,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
         &runtime.host,
         &staged,
         &persistence_root,
-        &content_store_root,
         options.debugger,
         options.headless,
     )?);
@@ -98,7 +96,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "project": options.project,
             "productDirectory": staged,
             "persistenceRoot": persistence_root,
-            "contentStoreRoot": content_store_root,
             "runtimePack": runtime.root,
             "loader": "coreclr",
             "watchPaths": watches,
@@ -143,7 +140,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
                             &runtime.host,
                             &staged,
                             &persistence_root,
-                            &content_store_root,
                             options.debugger,
                             options.headless,
                         )?;
@@ -309,7 +305,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 &runtime.host,
                 &next_staged,
                 &persistence_root,
-                &content_store_root,
                 options.debugger,
                 options.headless,
             )?);
@@ -320,7 +315,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 &runtime.host,
                 &next_staged,
                 &persistence_root,
-                &content_store_root,
                 options.debugger,
                 options.headless,
             )?);
@@ -335,7 +329,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 serde_json::json!({
                     "productDirectory": next_staged,
                     "persistenceRoot": persistence_root,
-                    "contentStoreRoot": content_store_root,
                     "loader": "coreclr",
                     "watchPaths": watches,
                     "pid": child.as_ref().expect("restaged child is present").child.id(),
@@ -349,7 +342,6 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 serde_json::json!({
                     "productDirectory": next_staged,
                     "persistenceRoot": persistence_root,
-                    "contentStoreRoot": content_store_root,
                     "loader": "coreclr",
                     "watchPaths": watches,
                     "pid": child.as_ref().expect("restaged child is present").child.id(),
@@ -815,10 +807,6 @@ fn development_persistence_root(project: &Path) -> Result<PathBuf, String> {
     Ok(development_runtime_root(project)?.join("persistence"))
 }
 
-fn development_content_store_root(project: &Path) -> Result<PathBuf, String> {
-    Ok(development_runtime_root(project)?.join("content-store"))
-}
-
 fn development_runtime_root(project: &Path) -> Result<PathBuf, String> {
     let project = absolute(project)?;
     let project_directory = project.parent().ok_or_else(|| {
@@ -850,7 +838,6 @@ impl SupervisedHost {
         host: &Path,
         product: &Path,
         persistence_root: &Path,
-        content_store_root: &Path,
         debugger: bool,
         headless: bool,
     ) -> Result<Self, String> {
@@ -858,7 +845,6 @@ impl SupervisedHost {
         let arguments = supervised_host_arguments(
             product,
             persistence_root,
-            content_store_root,
             runtime_instance_id,
             debugger,
             headless,
@@ -978,7 +964,6 @@ fn encode_supervisor_command(command: &SupervisedHostCommand) -> Result<Vec<u8>,
 fn supervised_host_arguments(
     product: &Path,
     persistence_root: &Path,
-    content_store_root: &Path,
     runtime_instance_id: u64,
     debugger: bool,
     headless: bool,
@@ -1003,11 +988,6 @@ fn supervised_host_arguments(
         persistence_root
             .to_str()
             .ok_or("RUSTY_DEV_PERSISTENCE: persistence root path must be UTF-8")?
-            .to_owned(),
-        "--content-store-root".to_owned(),
-        content_store_root
-            .to_str()
-            .ok_or("RUSTY_DEV_CONTENT_STORE: content store root path must be UTF-8")?
             .to_owned(),
     ];
     if debugger {
@@ -1217,7 +1197,6 @@ mod tests {
         let host = supervised_host_arguments(
             Path::new("/product"),
             Path::new("/persistence"),
-            Path::new("/content-store"),
             7,
             options.debugger,
             options.headless,
@@ -1237,7 +1216,6 @@ mod tests {
         let host = supervised_host_arguments(
             Path::new("/product"),
             Path::new("/persistence"),
-            Path::new("/content-store"),
             7,
             options.debugger,
             options.headless,
@@ -1310,8 +1288,6 @@ mod tests {
     fn development_runtime_roots_are_repository_local_and_absolute() {
         let persistence_root = development_persistence_root(Path::new("src/Product.csproj"))
             .expect("development persistence root");
-        let content_store_root = development_content_store_root(Path::new("src/Product.csproj"))
-            .expect("development content store root");
         let current_directory = env::current_dir().expect("current directory");
         let repository_root = current_directory
             .ancestors()
@@ -1322,13 +1298,7 @@ mod tests {
             persistence_root,
             repository_root.join(".runtime").join("persistence")
         );
-        assert_eq!(
-            content_store_root,
-            repository_root.join(".runtime").join("content-store")
-        );
         assert!(persistence_root.is_absolute());
-        assert!(content_store_root.is_absolute());
-        assert_ne!(persistence_root, content_store_root);
     }
 
     #[test]
@@ -1336,26 +1306,15 @@ mod tests {
         let persistence_root =
             development_persistence_root(Path::new("/workspace/Product/Product.csproj"))
                 .expect("development persistence root");
-        let content_store_root =
-            development_content_store_root(Path::new("/workspace/Product/Product.csproj"))
-                .expect("development content store root");
         let staged_product = Path::new("/workspace/Product/obj/RustyEngineProduct");
 
         assert_eq!(
             persistence_root,
             PathBuf::from("/workspace/Product/.runtime/persistence")
         );
-        assert_eq!(
-            content_store_root,
-            PathBuf::from("/workspace/Product/.runtime/content-store")
-        );
         assert_ne!(
             persistence_root,
             staged_product.join(".runtime/persistence")
-        );
-        assert_ne!(
-            content_store_root,
-            staged_product.join(".runtime/content-store")
         );
     }
 
@@ -1364,7 +1323,6 @@ mod tests {
         let arguments = supervised_host_arguments(
             Path::new("/workspace/Product/obj/RustyEngineProduct"),
             Path::new("/workspace/Product/.runtime/persistence"),
-            Path::new("/workspace/Product/.runtime/content-store"),
             41,
             false,
             false,
@@ -1381,8 +1339,6 @@ mod tests {
             "41",
             "--persistence-root",
             "/workspace/Product/.runtime/persistence",
-            "--content-store-root",
-            "/workspace/Product/.runtime/content-store",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -1474,7 +1430,6 @@ mod tests {
         let error = supervised_host_arguments(
             Path::new("/workspace/Product"),
             Path::new("/workspace/Product/.runtime/persistence"),
-            Path::new("/workspace/Product/.runtime/content-store"),
             0,
             false,
             false,

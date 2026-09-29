@@ -1201,39 +1201,6 @@ pub type NativeDescribePersistenceBlob = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeCopyPersistenceBlob =
     unsafe extern "C" fn(*mut c_void, *const NativePersistenceCopyBlobRequest) -> i32;
-pub type NativeOpenContentStore = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeContentStoreOpenRequest,
-    *mut NativeContentStoreHandle,
-) -> i32;
-pub type NativeDestroyContentStore =
-    unsafe extern "C" fn(*mut c_void, NativeContentStoreHandle) -> i32;
-pub type NativeCaptureContentStoreSnapshot = unsafe extern "C" fn(
-    *mut c_void,
-    NativeContentStoreHandle,
-    *mut NativeContentStoreSnapshotHandle,
-) -> i32;
-pub type NativeDestroyContentStoreSnapshot =
-    unsafe extern "C" fn(*mut c_void, NativeContentStoreSnapshotHandle) -> i32;
-pub type NativeReadContentStoreSnapshot = unsafe extern "C" fn(
-    *mut c_void,
-    NativeContentStoreSnapshotHandle,
-    *mut NativeContentStoreSnapshotLease,
-) -> i32;
-pub type NativeDestroyContentStoreSnapshotLease =
-    unsafe extern "C" fn(*mut c_void, NativeContentStoreSnapshotLeaseHandle) -> i32;
-pub type NativeReadContentStoreBody = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeContentStoreBodyRequest,
-    *mut NativeByteLease,
-) -> i32;
-pub type NativeDestroyContentStoreByteLease =
-    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
-pub type NativePublishContentStore = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeContentStorePublishRequest,
-    *mut NativeContentStorePublishReceipt,
-) -> i32;
 
 pub type NativeSetDynamicsChainLength = unsafe extern "C" fn(
     *mut c_void,
@@ -1522,8 +1489,6 @@ pub struct NativeAuthoredContentApi {
     pub destroy_catalog: NativeDestroyAuthoredCatalog,
     pub read_catalog: NativeReadAuthoredCatalog,
     pub destroy_catalog_readout_lease: NativeDestroyAuthoredCatalogReadoutLease,
-    pub publish_catalog_to_store: NativePublishAuthoredCatalogToStore,
-    pub reopen_catalog_from_store: NativeReopenAuthoredCatalogFromStore,
     pub resolve_reference: NativeResolveAuthoredCatalogReference,
     pub destroy_resolved_entry_lease: NativeDestroyAuthoredResolvedEntryLease,
     pub resolve_material: NativeResolveAuthoredMaterial,
@@ -1537,8 +1502,6 @@ pub struct NativeAuthoredContentApi {
     pub destroy_prefab_registry: NativeDestroyAuthoredPrefabRegistry,
     pub read_prefab_registry: NativeReadAuthoredPrefabRegistry,
     pub destroy_prefab_registry_readout_lease: NativeDestroyAuthoredPrefabRegistryReadoutLease,
-    pub publish_prefab_registry_to_store: NativePublishAuthoredPrefabRegistryToStore,
-    pub reopen_prefab_registry_from_store: NativeReopenAuthoredPrefabRegistryFromStore,
     pub resolve_prefab: NativeResolveAuthoredPrefab,
     pub destroy_resolved_prefab_lease: NativeDestroyAuthoredResolvedPrefabLease,
     pub prepare_scene: NativePrepareAuthoredScene,
@@ -1546,8 +1509,6 @@ pub struct NativeAuthoredContentApi {
     pub destroy_scene_plan: NativeDestroyAuthoredScenePlan,
     pub read_scene_plan: NativeReadAuthoredScenePlan,
     pub destroy_scene_plan_readout_lease: NativeDestroyAuthoredScenePlanReadoutLease,
-    pub publish_scene_to_store: NativePublishAuthoredSceneToStore,
-    pub prepare_scene_from_store: NativePrepareAuthoredSceneFromStore,
     pub destroy_operation_diagnostic_lease: NativeDestroyAuthoredContentOperationDiagnosticLease,
 }
 
@@ -1684,21 +1645,6 @@ pub struct NativePersistenceApi {
     pub destroy_byte_lease: NativeDestroyPersistenceByteLease,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeContentStoreApi {
-    pub context: *mut c_void,
-    pub open_store: NativeOpenContentStore,
-    pub destroy_store: NativeDestroyContentStore,
-    pub capture_snapshot: NativeCaptureContentStoreSnapshot,
-    pub destroy_snapshot: NativeDestroyContentStoreSnapshot,
-    pub read_snapshot: NativeReadContentStoreSnapshot,
-    pub destroy_snapshot_lease: NativeDestroyContentStoreSnapshotLease,
-    pub read_body: NativeReadContentStoreBody,
-    pub destroy_byte_lease: NativeDestroyContentStoreByteLease,
-    pub publish: NativePublishContentStore,
-}
-
 pub type NativeReplaceInputMappings = unsafe extern "C" fn(
     *mut c_void,
     *const NativeInputMapping,
@@ -1743,7 +1689,6 @@ pub struct NativeEngineApi {
     pub camera_view: NativeCameraViewApi,
     pub rng: NativeRngApi,
     pub persistence: NativePersistenceApi,
-    pub content_store: NativeContentStoreApi,
     pub ui: NativeUiApi,
 }
 
