@@ -131,7 +131,7 @@ file in which `render-presentation` depends on wgpu fails with
 
 ![Fixture scenes](fixtures.jpg)
 
-`cargo test -p render-wgpu --test screenshots` runs six tests. Each builds a
+`cargo test -p render-wgpu --test screenshots` runs seven tests. Each builds a
 scene, applies it through `PresentationWorld::apply`, renders it at 320×180
 and compares it with `tests/screenshots/*.png`:
 - primitives over a background colour;
@@ -139,7 +139,11 @@ and compares it with `tests/screenshots/*.png`:
 - a torch room with the rig disabled (point, spot and ambient lights);
 - hierarchy moves, hide and destroy, with the upload counts asserted;
 - an equirect sky blend;
-- resize and readback.
+- resize and readback;
+- blend order across face culling (review fix): two overlapping half-transparent
+  panels keep their back-to-front order when only the farther one becomes
+  double-sided. Before the fix the centre pixel went from `[188, 21, 139]` to
+  `[138, 21, 188]`, because each blend pipeline sorted separately.
 
 - **Tolerance.** A pixel differs when a channel is off by more than 12. A scene
   fails above 0.2% differing pixels.

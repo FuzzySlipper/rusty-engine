@@ -46,6 +46,17 @@ impl Pass {
     fn blends(self) -> bool {
         self >= Self::Blend
     }
+
+    /// Sort bucket: opaque passes group by pass; every blend pass shares one
+    /// bucket so blended parts interleave back to front whatever their face
+    /// culling, each still drawn with its own pipeline.
+    fn bucket(self) -> Self {
+        if self.blends() {
+            Self::Blend
+        } else {
+            self
+        }
+    }
 }
 
 /// One instanced draw: `instances` parts sharing `part`'s mesh range and
@@ -109,7 +120,7 @@ pub(crate) fn view_list(
     eye: Vec3,
     base: u32,
 ) -> DrawList {
-    let mut entries: Vec<(Pass, u32, PartId)> = Vec::new();
+    let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
         if parts.meta[id].is_none()
             || !state.shown
@@ -126,17 +137,20 @@ pub(crate) fn view_list(
         } else {
             state.key
         };
-        entries.push((pass, order, id as PartId));
+        entries.push((pass.bucket(), order, id as PartId, pass));
     }
     group(parts, entries, base)
 }
+
+/// (sort bucket, order within the bucket, part, pass the part draws with)
+type Entry = (Pass, u32, PartId, Pass);
 
 /// Shadow casters: every shown triangle part of the scene layer, not culled
 /// by any camera. Blended parts cast as opaque, as Three's depth material
 /// did. Passes select the face culling: single-sided parts render their back
 /// faces, double-sided parts both.
 pub(crate) fn caster_list(parts: &Parts, base: u32) -> DrawList {
-    let mut entries: Vec<(Pass, u32, PartId)> = Vec::new();
+    let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
         if parts.meta[id].is_none()
             || !state.shown
@@ -149,19 +163,20 @@ pub(crate) fn caster_list(parts: &Parts, base: u32) -> DrawList {
             blend: false,
             ..state.class
         };
-        entries.push((Pass::of(opaque, state.mirrored), state.key, id as PartId));
+        let pass = Pass::of(opaque, state.mirrored);
+        entries.push((pass, state.key, id as PartId, pass));
     }
     group(parts, entries, base)
 }
 
-fn group(parts: &Parts, mut entries: Vec<(Pass, u32, PartId)>, base: u32) -> DrawList {
+fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
     entries.sort_unstable();
     let mut list = DrawList {
         batches: Vec::new(),
         ids: Vec::with_capacity(entries.len()),
     };
     let mut previous: Option<(Pass, u32)> = None;
-    for (pass, _, id) in entries {
+    for (_, _, id, pass) in entries {
         let key = parts.state[id as usize].key;
         match list.batches.last_mut() {
             Some(batch) if !pass.blends() && previous == Some((pass, key)) => {

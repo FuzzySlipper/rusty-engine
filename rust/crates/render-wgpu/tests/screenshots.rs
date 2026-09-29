@@ -77,7 +77,12 @@ struct Harness {
 
 impl Harness {
     fn new(options: RendererOptions) -> Self {
-        let gpu = Gpu::headless().expect("screenshot tests need a wgpu adapter");
+        // One device per test binary: parallel device creation crashes the
+        // Vulkan loader (`vkSetDebugUtilsObjectNameEXT`, seen on RADV).
+        static GPU: std::sync::OnceLock<Gpu> = std::sync::OnceLock::new();
+        let gpu = GPU
+            .get_or_init(|| Gpu::headless().expect("screenshot tests need a wgpu adapter"))
+            .clone();
         Self {
             renderer: Renderer::new(&gpu, options),
             target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT),
@@ -659,5 +664,63 @@ fn resize_changes_the_readback_size() {
         &pixels[..4],
         &[255, 0, 0, 255],
         "linear red encodes to sRGB red"
+    );
+}
+
+/// Blended parts draw back to front across every blend pipeline: switching
+/// the farther panel to double-sided must not move it in front (#8783 review).
+#[test]
+fn transparent_parts_sort_by_distance_whatever_their_face_culling() {
+    let capture = |far_double_sided: bool| {
+        let mut harness = Harness::new(RendererOptions::default());
+        let blended = |id: &str, color: [f32; 4], double_sided: bool| {
+            let mut descriptor = material(id, color, None);
+            descriptor.alpha_mode = MaterialAlphaModeDescriptor::Blend;
+            descriptor.double_sided = double_sided;
+            descriptor.emission_color = [color[0], color[1], color[2]];
+            descriptor.emission_intensity = 0.5;
+            RenderDiff::DefineMaterial {
+                material: descriptor,
+            }
+        };
+        let quad = || {
+            payload(
+                vec![-1., -1., 0., 1., -1., 0., 1., 1., 0., -1., 1., 0.],
+                [0., 0., 1.].repeat(4),
+                vec![0., 0., 1., 0., 1., 1., 0., 1.],
+                vec![0, 1, 2, 0, 2, 3],
+            )
+        };
+        harness.apply(vec![
+            blended("material/far", [0.0, 0.0, 1.0, 0.5], far_double_sided),
+            blended("material/near", [1.0, 0.0, 0.0, 0.5], false),
+            static_mesh("mesh/far", quad(), "material/far"),
+            static_mesh("mesh/near", quad(), "material/near"),
+            instance(
+                1,
+                None,
+                "mesh/far",
+                transform([0.0, 0.0, 0.0], 0.0, [1.0; 3]),
+            ),
+            instance(
+                2,
+                None,
+                "mesh/near",
+                transform([0.0, 0.0, 1.0], 0.0, [1.0; 3]),
+            ),
+        ]);
+        let (_, pixels) = harness.render(&camera([0.0, 0.0, 5.0], 0.0, 0.0));
+        let center = ((HEIGHT / 2 * WIDTH + WIDTH / 2) * 4) as usize;
+        [pixels[center], pixels[center + 1], pixels[center + 2]]
+    };
+    let single_sided = capture(false);
+    let double_sided = capture(true);
+    assert!(
+        single_sided[0] > single_sided[2],
+        "the nearer red panel blends over the farther blue one: {single_sided:?}"
+    );
+    assert_eq!(
+        single_sided, double_sided,
+        "face culling changed the blend order"
     );
 }
