@@ -31,10 +31,8 @@ internal static class SpatialResidencyChecks
         Require(!Hit(0.5f).Present && Hit(1.5f).Instance == 2, "Cell removal changed an unrelated resident cell.");
         Admit(1, 1000);
         Require(Hit(1000.5f).Instance == 1 && !Hit(0.5f).Present, "Teleport/reload retained stale cell geometry.");
-        WorldOriginReadout origin = engine.WorldOrigin.Read(new(session));
         using WorldOriginPrepared rebase = engine.WorldOrigin.Prepare(new(
-            session, origin.Revision, origin.VoxelSourceRevision, origin.StaticMeshRevision,
-            1000, 0, 0, ReadOnlyMemory<WorldOriginEntityRow>.Empty));
+            session, 1000, 0, 0, ReadOnlyMemory<WorldOriginEntityRow>.Empty));
         engine.WorldOrigin.Commit(new(rebase));
         Require(Hit(0.5f).Instance == 1 && Hit(-998.5f).Instance == 2, "Origin shift lost resident static cells.");
         Remove(1); Admit(1, 0);
