@@ -412,6 +412,12 @@ impl InstalledPair {
     pub fn sdk_feed(&self) -> PathBuf {
         self.root.join("sdk-feed")
     }
+
+    /// The pair's host built with the desktop shell and Chromium's runtime,
+    /// installed beside the pair on first use ([`install_desktop_pack`]).
+    pub fn desktop_pack(&self) -> PathBuf {
+        self.root.join("desktop-pack")
+    }
 }
 
 pub fn installed(version: &str) -> Result<Option<InstalledPair>, String> {
@@ -446,6 +452,84 @@ fn archive_name(version: &str) -> String {
 
 fn release_asset_url(version: &str, asset: &str) -> String {
     format!("{}/download/csharp-sdk-v{version}/{asset}", releases_base())
+}
+
+fn desktop_archive_name(version: &str) -> String {
+    format!("rusty-engine-desktop-pack-{version}-{TARGET}.tar.xz")
+}
+
+/// Installs the pair's desktop runtime pack for window mode, or reports the
+/// one already installed. It is published beside the pair, and its ABI must
+/// be the pair's own.
+pub fn install_desktop_pack(pair: &InstalledPair) -> Result<(PathBuf, bool), String> {
+    install_desktop_pack_from(pair, &releases_base())
+}
+
+fn install_desktop_pack_from(
+    pair: &InstalledPair,
+    releases: &str,
+) -> Result<(PathBuf, bool), String> {
+    let pack = pair.desktop_pack();
+    if pack.join("runtime-manifest.json").is_file() {
+        return Ok((pack, false));
+    }
+    let name = desktop_archive_name(&pair.version);
+    let url = format!("{releases}/download/csharp-sdk-v{}/{name}", pair.version);
+    let download = IncomingDirectory::create(&pair.root, "desktop-download")?;
+    let archive = download.path.join(&name);
+    eprintln!(
+        "rusty: downloading the desktop runtime pack for Engine pair {}",
+        pair.version
+    );
+    if !http_get(
+        &format!("{url}.sha256"),
+        &download.path.join(format!("{name}.sha256")),
+    )? || !http_get(&url, &archive)?
+    {
+        return Err(format!(
+            "RUSTY_DESKTOP_NOT_PUBLISHED: pair {} has no desktop runtime pack at {url}. Pairs published before the desktop pack have none; move to a newer pair with `rusty update`.",
+            pair.version
+        ));
+    }
+    verify_checksum(&archive)?;
+    let incoming = IncomingDirectory::create(&pair.root, "desktop-extract")?;
+    let status = Command::new("tar")
+        .arg("-xJf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&incoming.path)
+        .status()
+        .map_err(|error| format!("RUSTY_PREREQUISITE: could not run tar: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "RUSTY_DESKTOP_ARCHIVE: tar could not extract `{name}` ({status}); tar needs xz"
+        ));
+    }
+    let extracted = incoming.path.join(name.trim_end_matches(".tar.xz"));
+    let abi = |pack: &Path| -> Result<Value, String> {
+        let path = pack.join("runtime-manifest.json");
+        let manifest: Value = fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
+            .map_err(|error| format!("RUSTY_DESKTOP_ARCHIVE: `{}`: {error}", path.display()))?;
+        Ok(manifest["runtime"]["abi"].clone())
+    };
+    if abi(&extracted)? != abi(&pair.runtime_pack())? {
+        return Err(format!(
+            "RUSTY_DESKTOP_IDENTITY: the desktop pack `{name}` does not have pair {}'s ABI; replace it with the unmodified release archive",
+            pair.version
+        ));
+    }
+    if let Err(error) = fs::rename(&extracted, &pack) {
+        // Another install of the same pack finished first.
+        if !pack.join("runtime-manifest.json").is_file() {
+            return Err(format!(
+                "RUSTY_CACHE: could not move the desktop pack into `{}`: {error}",
+                pack.display()
+            ));
+        }
+    }
+    Ok((pack, true))
 }
 
 /// Installs one exact published pair, or reports the one already installed.
@@ -652,6 +736,8 @@ fn http_get(url: &str, destination: &Path) -> Result<bool, String> {
     }
     match code.as_str() {
         "200" => Ok(true),
+        // A file:// mirror (RUSTY_ENGINE_RELEASES) has no HTTP status.
+        "000" if url.starts_with("file://") => Ok(true),
         "404" => {
             let _ = fs::remove_file(destination);
             Ok(false)
@@ -945,5 +1031,81 @@ mod tests {
             ))
         );
         assert_eq!(compare_url("0.1.0-dev.playtest-20260928c", &target), None);
+    }
+
+    /// A pair in a temporary cache, and a release directory beside it that
+    /// publishes a desktop pack with the given ABI fingerprint.
+    fn desktop_fixture(label: &str, pack_fingerprint: &str) -> (PathBuf, InstalledPair, String) {
+        let version = "0.1.0-dev.abc123def456";
+        let base = env::temp_dir().join(format!("rusty-desktop-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let manifest = |fingerprint: &str| {
+            serde_json::json!({"runtime": {"abi": {"fingerprint": fingerprint}}}).to_string()
+        };
+        let pair = InstalledPair {
+            version: version.to_owned(),
+            root: base.join("cache/pairs").join(version),
+        };
+        fs::create_dir_all(pair.runtime_pack()).unwrap();
+        fs::write(
+            pair.runtime_pack().join("runtime-manifest.json"),
+            manifest("aa"),
+        )
+        .unwrap();
+        let name = desktop_archive_name(version);
+        let stem = name.trim_end_matches(".tar.xz");
+        let staged = base.join("stage").join(stem);
+        fs::create_dir_all(staged.join("lib/cef")).unwrap();
+        fs::write(
+            staged.join("runtime-manifest.json"),
+            manifest(pack_fingerprint),
+        )
+        .unwrap();
+        let release = base.join(format!("releases/download/csharp-sdk-v{version}"));
+        fs::create_dir_all(&release).unwrap();
+        assert!(Command::new("tar")
+            .arg("-cJf")
+            .arg(release.join(&name))
+            .arg("-C")
+            .arg(base.join("stage"))
+            .arg(stem)
+            .status()
+            .unwrap()
+            .success());
+        let digest = format!(
+            "{:x}",
+            Sha256::digest(fs::read(release.join(&name)).unwrap())
+        );
+        fs::write(
+            release.join(format!("{name}.sha256")),
+            format!("{digest}  {name}\n"),
+        )
+        .unwrap();
+        let releases = format!("file://{}", base.join("releases").display());
+        (base, pair, releases)
+    }
+
+    #[test]
+    fn the_desktop_pack_installs_beside_its_pair_once() {
+        let (base, pair, releases) = desktop_fixture("installs", "aa");
+        let (pack, fetched) = install_desktop_pack_from(&pair, &releases).unwrap();
+        assert!(fetched);
+        assert_eq!(pack, pair.desktop_pack());
+        assert!(pack.join("lib/cef").is_dir());
+        // The next window run uses it without downloading.
+        assert_eq!(
+            install_desktop_pack_from(&pair, &releases).unwrap(),
+            (pack, false)
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_desktop_pack_with_another_abi_is_refused() {
+        let (base, pair, releases) = desktop_fixture("abi", "bb");
+        let error = install_desktop_pack_from(&pair, &releases).unwrap_err();
+        assert!(error.starts_with("RUSTY_DESKTOP_IDENTITY"), "{error}");
+        assert!(!pair.desktop_pack().exists());
+        fs::remove_dir_all(base).unwrap();
     }
 }

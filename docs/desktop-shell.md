@@ -43,22 +43,63 @@ TypeScript UI is composited over it. Decision and measurements:
   to the page.
 - **UI storage.** The page's local storage persists under the runtime's
   persistence root (`desktop-ui/`).
+- **Window placement.** The window reopens at its last size, position (where
+  the platform reports one; Wayland does not) and maximized state, kept in
+  `desktop-window` under the persistence root. A position that no longer falls
+  on a connected monitor is dropped. There is no fullscreen yet; no product
+  has asked for it.
 
 ## Running
 
-`RUSTY_RENDER_OUTPUT=window` selects the shell for a runtime built with the
-`desktop` feature:
+`RUSTY_RENDER_OUTPUT=window` selects the shell. A pinned product needs nothing
+else:
 
 ```bash
-RUSTY_RENDER_OUTPUT=window rusty dev --runtime <desktop runtime pack> --project <product.csproj>
+RUSTY_RENDER_OUTPUT=window rusty dev --project <product.csproj>
 ```
 
-A desktop runtime pack is built with `scripts/build-runtime-pack.sh --desktop`.
-It ships Chromium's runtime in `lib/cef` (about 322 MB installed, 105 MB
-compressed); `RUSTY_CEF_DIR` overrides that location. Building it needs
-`cmake` and `ninja`, and the CEF build script downloads CEF into `CEF_PATH`
-(default `target/cef`). Default workspace builds and CI never enable the
-feature.
+- **Fetching.** The first window run downloads the pinned pair's desktop
+  runtime pack into the cache beside the pair (`desktop-pack/`). It is the
+  pair's host built with the `desktop` feature, plus Chromium's runtime.
+  - `rusty` checks the pack's checksum, and that its ABI is the pair's.
+  - `rusty status` shows whether it is installed.
+  - Pairs published before the desktop pack have none. `rusty update` moves
+    to one that has.
+- **Publication.** The pair workflow builds the pack from the pair's revision
+  (`scripts/build-desktop-runtime-pack-archive.sh`) and publishes
+  `rusty-engine-desktop-pack-<version>-linux-x64.tar.xz` with the pair,
+  about 166 MB. `pair-release.json` names it under `desktopPack`. The default
+  pack stays free of Chromium.
+- **Contributors.** `scripts/build-runtime-pack.sh --desktop` builds a pack
+  from a checkout; pass it with `--runtime`.
+  - Building needs `cmake` and `ninja`.
+  - The CEF build script downloads CEF into `CEF_PATH` (default `target/cef`).
+  - Default workspace builds and the verify workflow never enable the
+    feature.
+- **What `lib/cef` holds.** About 292 MB installed; `RUSTY_CEF_DIR` overrides
+  the location.
+  - `libcef.so`, stripped;
+  - its paks, ICU data and V8 snapshot;
+  - ANGLE's `libEGL.so` and `libGLESv2.so`;
+  - one locale.
+
+  SwiftShader and the bundled Vulkan loader are left out. The overlay imports
+  Chromium's frames as GPU textures, so it needs the system GPU driver and
+  Vulkan loader the world renderer already uses. Measured on RADV only.
+
+## Shipping a product
+
+A product release that opens a window ships:
+- `bin/rusty-product-host` from the desktop pack, with `lib/cef` beside it
+  (the host finds it at `../lib/cef`);
+- the staged product bundle;
+- the licences in `share/third-party/`:
+  - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others);
+  - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,
+    which must stay available to recipients;
+  - the rest of the pack's notices.
+
+An installer or archive format is chosen when a product asks for one.
 
 ## Platforms
 

@@ -19,6 +19,7 @@ on:
       - 'scripts/generate-csharp-native-bindings.sh'
       - 'scripts/*-csharp-release-pair.sh'
       - 'scripts/build-csharp-release-info.sh'
+      - 'scripts/build-desktop-runtime-pack-archive.sh'
       - 'scripts/fixtures/**'
       - '.github/workflows/pair.yml'
       - '!**/*.md'
@@ -85,7 +86,7 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1
+          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1 cmake ninja-build
           libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
           test -n "$libclang_path"
           echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
@@ -98,6 +99,27 @@ jobs:
       - name: Exercise the pair with a packaged consumer
         if: steps.published.outputs.skip != 'true'
         run: ./scripts/test-csharp-release-pair.sh "$RUNNER_TEMP"/pair/*.tar.gz
+
+      # The desktop runtime pack is the same host built with the desktop shell
+      # and Chromium's runtime; `rusty dev` fetches it for window mode (#8860).
+      - name: Restore the Chromium distribution
+        if: steps.published.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: target/cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
+
+      - name: Build the desktop runtime pack
+        if: steps.published.outputs.skip != 'true'
+        run: |
+          ./scripts/build-desktop-runtime-pack-archive.sh --output "$RUNNER_TEMP/desktop"
+          pair_abi=$(tar -xzOf "$RUNNER_TEMP"/pair/*.tar.gz --wildcards '*/pair-manifest.json' | jq -c .runtime.abi)
+          desktop_abi=$(tar -xJOf "$RUNNER_TEMP"/desktop/*.tar.xz --wildcards '*/runtime-manifest.json' | jq -c .runtime.abi)
+          if [[ "$pair_abi" != "$desktop_abi" ]]; then
+            echo "the desktop pack's ABI $desktop_abi is not the pair's $pair_abi" >&2
+            exit 1
+          fi
 
       - name: Build release information against the current Latest pair
         if: steps.published.outputs.skip != 'true'
@@ -112,4 +134,4 @@ jobs:
 
       - name: Publish the exercised pair
         if: steps.published.outputs.skip != 'true'
-        run: ./scripts/publish-csharp-release-pair.sh "$RUNNER_TEMP"/pair/*.tar.gz "$RUNNER_TEMP/release-info"
+        run: ./scripts/publish-csharp-release-pair.sh "$RUNNER_TEMP"/pair/*.tar.gz "$RUNNER_TEMP/release-info" --desktop "$RUNNER_TEMP"/desktop/*.tar.xz

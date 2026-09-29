@@ -75,9 +75,10 @@ cargo build --locked --release -p rusty-cli --bin rusty
 
 install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
-install -m 755 target/release/rusty-product-host "$STAGE/bin/rusty-product-host"
-install -m 755 target/release/rusty-live-debug "$STAGE/bin/rusty-live-debug"
-install -m 755 target/release/rusty "$STAGE/bin/rusty"
+release="${CARGO_TARGET_DIR:-target}/release"
+install -m 755 "$release/rusty-product-host" "$STAGE/bin/rusty-product-host"
+install -m 755 "$release/rusty-live-debug" "$STAGE/bin/rusty-live-debug"
+install -m 755 "$release/rusty" "$STAGE/bin/rusty"
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
 install -m 644 render/artifacts/live-debug-panel/index.js \
@@ -93,20 +94,30 @@ cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
 
 if ((DESKTOP)); then
   # Only what Chromium loads at run time: the library (stripped of its
-  # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, the ANGLE
-  # and SwiftShader GL/Vulkan libraries, and one locale.
+  # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, ANGLE's GL
+  # libraries, and one locale. SwiftShader (Chromium's software GPU) and the
+  # bundled Vulkan loader are left out (#8860): the overlay imports Chromium's
+  # frames as GPU textures, which needs the same system GPU driver and Vulkan
+  # loader the world renderer uses, so neither is ever loaded.
   CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_linux_x86_64/libcef.so' -print -quit)")"
   [[ -f "$CEF_DIST/libcef.so" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
   install -d "$STAGE/lib/cef/locales" "$STAGE/share/third-party/cef"
   strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
   for file in chrome_100_percent.pak chrome_200_percent.pak resources.pak icudtl.dat \
-    v8_context_snapshot.bin libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 \
-    vk_swiftshader_icd.json; do
+    v8_context_snapshot.bin libEGL.so libGLESv2.so; do
     install -m 644 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
   done
-  chmod 755 "$STAGE/lib/cef/"*.so "$STAGE/lib/cef/libvulkan.so.1"
+  chmod 755 "$STAGE/lib/cef/"*.so
   install -m 644 "$CEF_DIST/locales/en-US.pak" "$STAGE/lib/cef/locales/en-US.pak"
   install -m 644 "$CEF_DIST/CREDITS.html" "$STAGE/share/third-party/cef/CREDITS.html"
+  # welding and grafting are MPL-2.0: their source ships with the binary, as
+  # fidget-mesh's does.
+  metadata=$(cargo metadata --format-version 1 --locked --all-features)
+  for crate in welding grafting; do
+    manifest=$(jq -r --arg name "$crate" '.packages[] | select(.name == $name) | .manifest_path' <<<"$metadata" | head -n 1)
+    [[ -f "$manifest" ]] || { echo "source of $crate not found" >&2; exit 1; }
+    cp -a "$(dirname "$manifest")" "$STAGE/share/third-party/$crate"
+  done
 fi
 
 # Include the corresponding source and license for our modified MPL component.

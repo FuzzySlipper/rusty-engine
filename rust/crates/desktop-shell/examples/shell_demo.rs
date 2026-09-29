@@ -164,6 +164,7 @@ fn main() -> Result<(), String> {
             width: 1280,
             height: 720,
             ui_url: Some(url),
+            placement_file: None,
             web: WebRuntimeConfig {
                 cef_dir,
                 cache_dir: None,

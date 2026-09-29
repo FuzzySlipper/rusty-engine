@@ -9,17 +9,31 @@ set -euo pipefail
 #   https://github.com/<repo>/releases/download/csharp-sdk-v<version>/pair-release.json
 # Assets go to a draft first; one edit then publishes the release and moves
 # Latest, so a failed upload never changes what is discoverable. The optional
-# release-information directory comes from build-csharp-release-info.sh.
+# release-information directory comes from build-csharp-release-info.sh; the
+# optional desktop pack from build-desktop-runtime-pack-archive.sh.
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if [[ $# -lt 1 || $# -gt 2 || "$1" == --help ]]; then
-    echo "usage: scripts/publish-csharp-release-pair.sh <pair.tar.gz> [<release-info-directory>]"
-    [[ ${1:-} == --help ]] && exit 0
+usage="usage: scripts/publish-csharp-release-pair.sh <pair.tar.gz> [<release-info-directory>] [--desktop <desktop-pack.tar.xz>]"
+desktop=""
+positional=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --help) echo "$usage"; exit 0 ;;
+        --desktop)
+            [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 2; }
+            desktop=$(realpath -- "$2")
+            shift 2
+            ;;
+        *) positional+=("$1"); shift ;;
+    esac
+done
+if [[ ${#positional[@]} -lt 1 || ${#positional[@]} -gt 2 ]]; then
+    echo "$usage" >&2
     exit 2
 fi
-archive=$(realpath -- "$1")
+archive=$(realpath -- "${positional[0]}")
 info=""
-if [[ -n "${2:-}" ]]; then
-    info=$(realpath -- "$2")
+if [[ -n "${positional[1]:-}" ]]; then
+    info=$(realpath -- "${positional[1]}")
     [[ -f "$info/release-info.json" ]] || { echo "release information is missing: $info/release-info.json" >&2; exit 1; }
 fi
 "$script_dir/verify-csharp-release-pair.sh" --archive "$archive"
@@ -47,6 +61,24 @@ fi
 work=$(mktemp -d -t rusty-engine-release.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 assets=("$archive" "$archive.sha256" "$work/pair-release.json")
+desktop_pack=null
+if [[ -n "$desktop" ]]; then
+    desktop_name=$(basename -- "$desktop")
+    [[ "$desktop_name" == "rusty-engine-desktop-pack-$version-linux-x64.tar.xz" ]] || {
+        echo "the desktop pack $desktop_name is not this pair's ($version)" >&2
+        exit 1
+    }
+    (cd "$(dirname -- "$desktop")" && sha256sum --check --status "$desktop_name.sha256") || {
+        echo "the desktop pack $desktop_name does not match its .sha256" >&2
+        exit 1
+    }
+    assets+=("$desktop" "$desktop.sha256")
+    desktop_pack=$(jq -n --arg name "$desktop_name" \
+        --arg sha256 "$(sha256sum "$desktop" | awk '{print $1}')" \
+        --argjson bytes "$(wc -c < "$desktop" | tr -d '[:space:]')" \
+        --arg url "https://github.com/$repo/releases/download/$tag/$desktop_name" \
+        '{name: $name, sha256: $sha256, bytes: $bytes, url: $url}')
+fi
 release_info=null
 if [[ -n "$info" ]]; then
     download="https://github.com/$repo/releases/download/$tag"
@@ -68,7 +100,8 @@ jq -n \
     --arg name "$archive_name" --arg sha256 "$(sha256sum "$archive" | awk '{print $1}')" \
     --argjson bytes "$(wc -c < "$archive" | tr -d '[:space:]')" \
     --arg url "https://github.com/$repo/releases/download/$tag/$archive_name" \
-    --arg run "$run_url" --argjson manifest "$manifest" --argjson info "$release_info" '{
+    --arg run "$run_url" --argjson manifest "$manifest" --argjson info "$release_info" \
+    --argjson desktop "$desktop_pack" '{
         artifact: "rusty.engine.csharp-pair-release",
         schemaVersion: 1,
         target: $manifest.target,
@@ -78,6 +111,7 @@ jq -n \
         archive: {name: $name, sha256: $sha256, bytes: $bytes, url: $url},
         package: {id: $manifest.package.id, version: $manifest.package.version},
         abi: $manifest.runtime.abi,
+        desktopPack: $desktop,
         publishedBy: (if $run == "" then null else $run end),
         releaseInfo: $info
     }' > "$work/pair-release.json"

@@ -107,7 +107,13 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         if let Some((pin, pair)) = pinned {
             warn_shape(&pin, &absolute(&options.project)?);
             if options.runtime.is_none() {
-                let runtime = pair.runtime_pack();
+                // Window mode runs the pair's desktop pack: the same host with
+                // the desktop shell and Chromium's runtime.
+                let runtime = if window_output() {
+                    pair::install_desktop_pack(&pair)?.0
+                } else {
+                    pair.runtime_pack()
+                };
                 diagnostic(
                     "pin-resolved",
                     serde_json::json!({
@@ -762,6 +768,8 @@ edits replace the runtime.
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
 `rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host.
+With RUSTY_RENDER_OUTPUT=window the product opens in a native window; the first such run downloads
+the pair's desktop runtime pack (Chromium's runtime for the UI) into the cache beside the pair.
 
   --port, --bind-host  where the browser host listens
   --live-debug         enable the live-debug command surface
@@ -774,7 +782,8 @@ This command never invokes Cargo and never searches for an adjacent Engine check
 
 Examples:
   rusty dev --project src/Game/Game.csproj --port 8787
-  rusty dev --project src/Game/Game.csproj --live-debug --headless"
+  rusty dev --project src/Game/Game.csproj --live-debug --headless
+  RUSTY_RENDER_OUTPUT=window rusty dev --project src/Game/Game.csproj"
         .to_owned()
 }
 
@@ -1046,6 +1055,11 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// `RUSTY_RENDER_OUTPUT=window`: the runtime presents to a native window.
+fn window_output() -> bool {
+    env::var_os("RUSTY_RENDER_OUTPUT").is_some_and(|value| value == "window")
+}
+
 /// Runs the pinned pair's own `rusty dev`, whose supervisor protocol and
 /// staging expectations match that pair's host. Returns when this process is
 /// already that command.
@@ -1239,6 +1253,12 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
                 Some(pair) => {
                     println!("installed      yes");
                     println!("runtime pack   {}", pair.runtime_pack().display());
+                    let desktop = pair.desktop_pack();
+                    if desktop.join("runtime-manifest.json").is_file() {
+                        println!("desktop pack   {}", desktop.display());
+                    } else {
+                        println!("desktop pack   not installed (fetched on the first RUSTY_RENDER_OUTPUT=window run)");
+                    }
                     println!("sdk feed       {}", pair.sdk_feed().display());
                 }
                 None => {

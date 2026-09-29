@@ -103,6 +103,7 @@ impl Desktop {
                 width: WINDOW_WIDTH,
                 height: WINDOW_HEIGHT,
                 ui_url: Some(format!("{}/", origin.trim_end_matches('/'))),
+                placement_file: persistence_root.map(|root| root.join("desktop-window")),
                 web: WebRuntimeConfig {
                     cef_dir: cef_dir()?,
                     cache_dir,

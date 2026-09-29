@@ -26,6 +26,7 @@
 mod keys;
 #[cfg(feature = "web-overlay")]
 mod overlay;
+mod placement;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -63,6 +64,9 @@ pub struct DesktopShellConfig {
     /// The UI page, normally the runtime's browser shell URL. `None` presents
     /// the scene alone.
     pub ui_url: Option<String>,
+    /// Where the window's size, position and maximized state are kept between
+    /// runs; `None` always opens at `width` × `height`.
+    pub placement_file: Option<std::path::PathBuf>,
     #[cfg(feature = "web-overlay")]
     pub web: WebRuntimeConfig,
 }
@@ -153,16 +157,23 @@ struct Open {
 
 impl Shell {
     fn open(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
+        let mut attributes = Window::default_attributes()
+            .with_title(self.config.title.clone())
+            .with_inner_size(winit::dpi::PhysicalSize::new(
+                self.config.width,
+                self.config.height,
+            ));
+        if let Some(placement) = self
+            .config
+            .placement_file
+            .as_deref()
+            .and_then(placement::Placement::load)
+        {
+            attributes = placement.apply(attributes, event_loop);
+        }
         let window = Arc::new(
             event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title(self.config.title.clone())
-                        .with_inner_size(winit::dpi::PhysicalSize::new(
-                            self.config.width,
-                            self.config.height,
-                        )),
-                )
+                .create_window(attributes)
                 .map_err(|error| error.to_string())?,
         );
         let size = window.inner_size();
@@ -230,6 +241,11 @@ impl Shell {
         self.scene.close();
         // The page and Chromium go before the window and device.
         if let Some(open) = self.window.take() {
+            if let Some(path) = &self.config.placement_file {
+                if let Err(error) = placement::Placement::of(&open.window).save(path) {
+                    eprintln!("desktop-shell: could not keep the window placement: {error}");
+                }
+            }
             #[cfg(feature = "web-overlay")]
             drop(open.ui);
             drop(open.surface);
