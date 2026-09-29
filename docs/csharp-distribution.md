@@ -68,13 +68,43 @@ https://github.com/FuzzySlipper/rusty-engine/releases/download/csharp-sdk-v<vers
 Latest only makes an update available. A product keeps its explicit pin until
 someone changes it.
 
+## What changed in a pair
+
+Each release also carries release information, linked from
+`pair-release.json` under `releaseInfo`:
+
+- `release-notes.md`, which is also the release description. It names this pair
+  and the previous published pair, gathers the authored migration notes, and
+  summarizes the API changes.
+- `api-diff.diff`: the public `Rusty.Engine` surface against the previous pair.
+  It is absent when the surface did not change or there is no previous pair.
+- `api-surface.txt`: this pair's full public surface.
+
+The notes cover one step. To update across several pairs, follow
+`releaseInfo.previous` back to your pinned version and read each release. The
+API diff shows signatures only. The authored notes carry behaviour, lifecycle
+and default changes.
+
+**Writing a note (Engine contributors).** Put a `## Migration` section in the
+task's `docs/evidence/<topic>-<task>/README.md`. The next pair includes every
+such section that was added or changed since the previous pair. Say what
+product code changes, with before/after code where it helps. Name the affected
+downstream products when you know them.
+
+To compare any two pairs locally:
+
+```bash
+./scripts/build-csharp-release-info.sh --pair new.tar.gz --previous old.tar.gz --output /tmp/release-info
+```
+
 ## How pairs are published
 
 The `pair` workflow (`.github/workflows/pair.yml`) owns publication. For each
 `main` push that changes Rust, C#, the browser shell, fixtures, or the pair
 scripts, it builds the pair with `scripts/build-csharp-release-pair.sh`,
-exercises that archive with `scripts/test-csharp-release-pair.sh`, and
-publishes the same archive with `scripts/publish-csharp-release-pair.sh`.
+exercises that archive with `scripts/test-csharp-release-pair.sh`, builds
+release information against the current Latest pair, and publishes the same
+archive with `scripts/publish-csharp-release-pair.sh`.
 Documentation-only changes do not produce a pair. Run the workflow by hand
 (`gh workflow run pair.yml`) to retry a failed publication.
 
