@@ -1,14 +1,16 @@
 //! The Engine's wgpu renderer over the retained `PresentationWorld`.
 //!
 //! The runtime applies the deltas `PresentationWorld::apply` returns (a fresh
-//! renderer applies the world's snapshot frame first), then renders a view
-//! into an offscreen target or a window surface. There is no serialization,
-//! realizer layer or mirrored contract between the retained model and the GPU.
+//! renderer applies the world's snapshot frame first), installs the committed
+//! camera composition, then renders it into an offscreen target or a window
+//! surface. Output image jobs render their frozen frame in isolation. There is
+//! no serialization, realizer layer or mirrored contract between the retained
+//! model and the GPU.
 //!
 //! Inside, the renderer is typed handle-keyed tables (see [`tables`]) and a
-//! fixed pass pipeline (see [`frame`]): apply deltas, propagate dirty
-//! transforms, upload changed rows, build the view's draw list, encode passes,
-//! present or read back. It has no scheduler, plugin registration, generic
+//! fixed pass pipeline (see `frame` and `composition`): apply deltas,
+//! propagate dirty transforms, upload changed rows, then per view pass build
+//! the draw list and encode it, then present or read back. It has no scheduler, plugin registration, generic
 //! query layer or second retained world, and it neither validates nor
 //! sequences product mutations.
 //!
@@ -18,6 +20,10 @@
 #![forbid(unsafe_code)]
 
 mod apply;
+mod camera;
+mod capture;
+mod compose;
+mod composition;
 mod frame;
 mod gpu;
 mod pipelines;
@@ -30,6 +36,8 @@ mod target;
 use std::collections::HashMap;
 
 pub use apply::ApplyIssue;
+pub use camera::CameraSampleReadout;
+pub use composition::{TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use frame::FrameStats;
 pub use gpu::{AdapterSummary, Gpu, GpuError};
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
@@ -46,6 +54,9 @@ pub(crate) const NEUTRAL_HEMISPHERE_INTENSITY: f32 = 2.4;
 pub(crate) const NEUTRAL_GROUND_SRGB: [f32; 3] = [38.0 / 255.0, 50.0 / 255.0, 56.0 / 255.0];
 pub(crate) const NEUTRAL_KEY_INTENSITY: f32 = 2.2;
 pub(crate) const NEUTRAL_KEY_POSITION: [f32; 3] = [5.0, 8.0, 6.0];
+/// The viewmodel rig's key light, in camera-local coordinates
+/// (`createNeutralLights([2, 3, 2])`).
+pub(crate) const NEUTRAL_VIEWMODEL_KEY_POSITION: [f32; 3] = [2.0, 3.0, 2.0];
 /// Clear colour with no background or sky selected: 0x101820, sRGB.
 pub(crate) const DEFAULT_CLEAR_SRGB: [f32; 3] = [16.0 / 255.0, 24.0 / 255.0, 32.0 / 255.0];
 
@@ -63,12 +74,16 @@ pub struct RendererOptions {
     /// `RustyEngineProductDefaultWorldLights`: the neutral rig lights the world
     /// unless the product disables it.
     pub default_world_lights: bool,
+    /// `RustyEngineProductDefaultViewmodelLights`: the neutral rig lights the
+    /// viewmodel layer unless the product disables it.
+    pub default_viewmodel_lights: bool,
 }
 
 impl Default for RendererOptions {
     fn default() -> Self {
         Self {
             default_world_lights: true,
+            default_viewmodel_lights: true,
         }
     }
 }
@@ -86,9 +101,14 @@ pub struct Renderer {
     frame_buffer: wgpu::Buffer,
     parts_buffer: wgpu::Buffer,
     lights_buffer: wgpu::Buffer,
-    light_count: u32,
+    lights: frame::LightRanges,
     frame_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
+    /// Counts applied deltas; offscreen composition targets re-render when
+    /// it moves past the value they were drawn at.
+    scene_generation: u64,
+    compose: compose::Compose,
+    composition: composition::ViewComposition,
 }
 
 /// Initial storage sizes; both grow by doubling.
@@ -126,9 +146,12 @@ impl Renderer {
             frame_buffer,
             parts_buffer,
             lights_buffer,
-            light_count: 0,
+            lights: Default::default(),
             frame_bind_group,
             sky_bind_group: None,
+            scene_generation: 0,
+            compose: compose::Compose::new(device),
+            composition: Default::default(),
         };
         for kind in [
             Builtin::Cube,

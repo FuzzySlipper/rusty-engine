@@ -7,7 +7,7 @@ struct Frame {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     camera: vec4<f32>,
-    // x: light count
+    // x: light count, y: first light row (world lights, then viewmodel lights)
     counts: vec4<u32>,
 };
 
@@ -124,7 +124,7 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     let view = normalize(frame.camera.xyz - in.world_position);
     var irradiance = vec3<f32>(0.0);
     var specular = vec3<f32>(0.0);
-    for (var index = 0u; index < frame.counts.x; index = index + 1u) {
+    for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
         let light = lights[index];
         let kind = u32(light.color_kind.w);
         let color = light.color_kind.rgb;

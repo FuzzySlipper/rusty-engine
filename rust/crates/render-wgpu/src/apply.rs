@@ -44,6 +44,9 @@ impl Renderer {
         resources: &dyn ResourceSource,
     ) -> Vec<ApplyIssue> {
         let mut issues = Vec::new();
+        if !frame.ops.is_empty() {
+            self.scene_generation += 1;
+        }
         for op in &frame.ops {
             if let Err(detail) = self.apply_op(op, resources) {
                 issues.push(ApplyIssue {

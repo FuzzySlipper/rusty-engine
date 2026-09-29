@@ -439,6 +439,7 @@ fn textured_static_meshes_take_the_neutral_rig_and_instance_parameters() {
 fn a_torch_lights_a_dark_room_when_the_default_rig_is_disabled() {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,
+        ..RendererOptions::default()
     });
     harness.apply(vec![
         RenderDiff::DefineMaterial {
