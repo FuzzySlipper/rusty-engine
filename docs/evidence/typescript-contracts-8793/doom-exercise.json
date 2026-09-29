@@ -1,0 +1,118 @@
+{
+ "shellFailure": null,
+ "title": "Loading Bay — Doom E1M1",
+ "frameSequence": "900",
+ "discover": {
+  "commands": 40,
+  "timeModes": [
+   "realtime",
+   "manual",
+   "action-driven"
+  ],
+  "drawingModes": [
+   "continuous",
+   "on-demand"
+  ]
+ },
+ "time": {
+  "mode": "manual",
+  "simulationStep": "1003",
+  "fixedStepHz": 60,
+  "advancedMs": 0,
+  "worldHeld": true
+ },
+ "drawing": {
+  "drawing": "on-demand",
+  "output": "stream",
+  "held": true,
+  "observer": false,
+  "camera": {
+   "position": [
+    -7,
+    1.6200000047683716,
+    3
+   ],
+   "pitchDegrees": 0,
+   "yawDegrees": 0
+  },
+  "frame": {
+   "sequence": 903,
+   "step": 1003
+  }
+ },
+ "camera": {
+  "drawing": "on-demand",
+  "output": "stream",
+  "held": true,
+  "observer": false,
+  "camera": {
+   "position": [
+    -7,
+    1.6200000047683716,
+    3
+   ],
+   "pitchDegrees": 0,
+   "yawDegrees": 0
+  },
+  "frame": {
+   "sequence": 903,
+   "step": 1003
+  }
+ },
+ "timeRealtime": {
+  "mode": "realtime",
+  "simulationStep": "1003",
+  "fixedStepHz": 60,
+  "advancedMs": 0,
+  "worldHeld": false
+ },
+ "diagnostics": {
+  "status": 200,
+  "keys": [
+   "droppedCount",
+   "errorCount",
+   "events",
+   "floorSequence",
+   "lagged",
+   "nextCursor",
+   "readMonotonicNanoseconds",
+   "telemetry",
+   "throughSequence",
+   "warningCount"
+  ],
+  "telemetry": 18
+ },
+ "rendererStatus": {
+  "available": true,
+  "widget": {
+   "visible": true
+  },
+  "renderer": {
+   "adapter": "AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)",
+   "output": "stream",
+   "stream": {
+    "viewerSize": [
+     1280,
+     720
+    ],
+    "recentFrames": 120,
+    "framesPerSecond": 59.90556161059269,
+    "medianMs": {
+     "render": 0.433031,
+     "readback": 1.168613,
+     "encode": 4.401849
+    },
+    "medianBytesPerFrame": 88360,
+    "bytesPerSecond": 5293025.869827143
+   },
+   "skippedOps": {},
+   "lastSkip": null
+  }
+ },
+ "templateCounter": null,
+ "widget": "Renderer metrics\nAdapter: AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan) | stream\nFrames: 59.9 per second | render 0.43 ms | readback 1.17 ms | encode 4.40 ms\nStream: 86.3 KiB per frame | 5169.0 KiB per second\nSkipped ops: none",
+ "errors": [],
+ "freshStreams": [
+  200
+ ]
+}

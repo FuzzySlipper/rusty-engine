@@ -4,20 +4,31 @@
  * do not cross the application-host boundary.
  */
 
+import type {
+  ControllerAxis,
+  ControllerButton,
+  KeyboardControl,
+  PointerButton,
+  RuntimeInputWireBinding,
+  RuntimeInputWireClearReason,
+  RuntimeInputWireEvent,
+  RuntimeInputWireFact,
+  RuntimeInputWireIntentClaim,
+  RuntimeInputWireIntentValue,
+  RuntimeInputWirePhysical,
+} from './generated/contracts.js';
+
 export const RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM = 1_024;
 export const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
-export const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18_446_744_073_709_551_615n;
-export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM = 9_007_199_254_740_991;
+const U64_MAXIMUM = 18_446_744_073_709_551_615n;
 
-export interface RustyApplicationRuntimeIdentity {
-  /** Canonical unsigned 64-bit decimal text; never a lossy JavaScript number. */
-  readonly instanceId: string;
-  /** Canonical unsigned 64-bit decimal text; never a lossy JavaScript number. */
-  readonly generation: string;
-  /** Canonical unsigned 64-bit decimal text; never a lossy JavaScript number. */
-  readonly controlRevision: string;
-}
+/**
+ * The runtime binding every wire shape carries, as canonical decimal text.
+ * Input, UI projections and host results each declare it in Rust; they are
+ * this one shape.
+ */
+export type RustyApplicationRuntimeIdentity = RuntimeInputWireBinding;
 
 export interface RustyApplicationRuntimeInputBinding {
   readonly runtime: RustyApplicationRuntimeIdentity;
@@ -27,120 +38,13 @@ export interface RustyApplicationRuntimeInputBinding {
   readonly nextSequence?: string;
 }
 
-/** Mirrors the closed Engine input control catalog; navigation keys are not admitted yet. */
-export type RustyApplicationKeyboardControl =
-  | 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g'
-  | 'key-h' | 'key-i' | 'key-j' | 'key-k' | 'key-l' | 'key-m' | 'key-n'
-  | 'key-o' | 'key-p' | 'key-q' | 'key-r' | 'key-s' | 'key-t' | 'key-u'
-  | 'key-v' | 'key-w' | 'key-x' | 'key-y' | 'key-z'
-  | 'digit-0' | 'digit-1' | 'digit-2' | 'digit-3' | 'digit-4'
-  | 'digit-5' | 'digit-6' | 'digit-7' | 'digit-8' | 'digit-9'
-  | 'space' | 'enter' | 'escape'
-  | 'shift-left' | 'shift-right'
-  | 'control-left' | 'control-right'
-  | 'alt-left' | 'alt-right'
-  | 'arrow-up' | 'arrow-down' | 'arrow-left' | 'arrow-right';
-
-export type RustyApplicationPointerButton = 'primary' | 'secondary' | 'middle';
-export type RustyApplicationControllerButton =
-  | 'button-0' | 'button-1' | 'button-2' | 'button-3'
-  | 'button-4' | 'button-5' | 'button-6' | 'button-7'
-  | 'button-8' | 'button-9' | 'button-10' | 'button-11'
-  | 'button-12' | 'button-13' | 'button-14' | 'button-15';
-export type RustyApplicationControllerAxis = 'axis-0' | 'axis-1' | 'axis-2' | 'axis-3';
-export type RustyApplicationInputEdge = 'pressed' | 'released';
-export type RustyApplicationInputClearReason =
-  | 'focus-loss'
-  | 'ingress-overflow'
-  | 'interaction-mode-loss'
-  | 'pointer-lock-loss'
-  | 'restart'
-  | 'control-revision-change'
-  | 'dispose';
-
-/** Structural mirror of the Engine runtime physical ingress wire. */
-export type RustyApplicationRuntimeInputFact =
-  | {
-      readonly kind: 'key';
-      readonly code: RustyApplicationKeyboardControl;
-      readonly edge: RustyApplicationInputEdge;
-    }
-  | {
-      readonly kind: 'pointer-button';
-      readonly button: RustyApplicationPointerButton;
-      readonly edge: RustyApplicationInputEdge;
-    }
-  | { readonly kind: 'pointer-delta'; readonly x: number; readonly y: number }
-  | { readonly kind: 'wheel'; readonly x: number; readonly y: number }
-  | {
-      readonly kind: 'controller-button';
-      readonly button: RustyApplicationControllerButton;
-      readonly edge: RustyApplicationInputEdge;
-    }
-  | {
-      readonly kind: 'controller-axis';
-      readonly axis: RustyApplicationControllerAxis;
-      readonly value: number;
-    }
-  | {
-      readonly kind: 'controller-button-value';
-      readonly button: RustyApplicationControllerButton;
-      readonly value: number;
-    }
-  | { readonly kind: 'clear'; readonly reason: RustyApplicationInputClearReason };
-
-export interface RustyApplicationRuntimeInputIngress {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  /** Canonical unsigned 64-bit decimal text scoped to the runtime epoch. */
-  readonly sequence: string;
-  readonly context: string;
-  readonly fact: RustyApplicationRuntimeInputFact;
-}
-
 /** UI-owned observations from the existing selected-controller sampler. */
 export interface RustyApplicationInterfaceInputObservation {
   readonly context: 'interface';
-  readonly fact: Extract<RustyApplicationRuntimeInputFact, {
+  readonly fact: Extract<RuntimeInputWireFact, {
     readonly kind: 'controller-button' | 'controller-axis' | 'controller-button-value';
   }>;
 }
-
-export type RustyApplicationRuntimeIntentValue =
-  | { readonly kind: 'digital'; readonly active: boolean }
-  | { readonly kind: 'axis'; readonly value: number }
-  | {
-      readonly kind: 'product-payload';
-      /** Stable product schema identity; Rust matches it to the descriptor. */
-      readonly contract: string;
-      /** Bounded plain JSON only; never a callback, DOM object, or command route. */
-      readonly data: RustyApplicationProductPayloadJson;
-    };
-
-export type RustyApplicationProductPayloadJson =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly RustyApplicationProductPayloadJson[]
-  | RustyApplicationProductPayloadJsonObject;
-
-export interface RustyApplicationProductPayloadJsonObject {
-  readonly [key: string]: RustyApplicationProductPayloadJson;
-}
-
-/** Structural mirror of a trusted product UI intent claim for the same ordered lane. */
-export interface RustyApplicationRuntimeDirectIntentClaim {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  /** Canonical unsigned 64-bit decimal text scoped to the runtime epoch. */
-  readonly sequence: string;
-  readonly context: string;
-  readonly intent: string;
-  readonly value: RustyApplicationRuntimeIntentValue;
-}
-
-export type RustyApplicationRuntimeInputEnvelope =
-  | RustyApplicationRuntimeInputIngress
-  | RustyApplicationRuntimeDirectIntentClaim;
 
 export interface RustyApplicationSelectedControllerOptions {
   /** Browser gamepad index. Only one explicitly selected controller is observed. */
@@ -175,11 +79,11 @@ export interface RustyApplicationInputPort {
   /** Change the product input context after clearing the old context's pending facts. */
   readonly setContext: (context: string) => void;
   /** Explicitly clear local held state and queue an ordered lifecycle clear fact. */
-  readonly clear: (reason: RustyApplicationInputClearReason) => void;
+  readonly clear: (reason: RuntimeInputWireClearReason) => void;
   /** Drain the combined physical-input and direct-UI-claim lane in observation order. */
-  readonly drain: () => readonly RustyApplicationRuntimeInputEnvelope[];
+  readonly drain: () => readonly RuntimeInputWireEvent[];
   /** Claim one product-declared intent from trusted UI without mutating product state. */
-  readonly claim: (intent: string, value: RustyApplicationRuntimeIntentValue) => void;
+  readonly claim: (intent: string, value: RuntimeInputWireIntentValue) => void;
   /** Sample the one selected browser controller. The caller, never this host, owns cadence. */
   readonly sampleController: () => number;
 }
@@ -205,12 +109,12 @@ export interface RustyApplicationInputQueue {
   /** Adopts a binding whose Engine lane already performed its mandatory clear. */
   readonly rebaseRuntime: (binding: RustyApplicationRuntimeInputBinding) => boolean;
   readonly setContext: (context: string) => boolean;
-  readonly clear: (reason: RustyApplicationInputClearReason) => void;
+  readonly clear: (reason: RuntimeInputWireClearReason) => void;
   /** True means the bounded queue overflowed and now contains only a clear fact. */
-  readonly enqueueFact: (fact: RustyApplicationRuntimeInputFact) => boolean;
+  readonly enqueueFact: (fact: RuntimeInputWireFact) => boolean;
   /** True means the bounded queue overflowed and now contains only a clear fact. */
-  readonly claim: (intent: string, value: RustyApplicationRuntimeIntentValue) => boolean;
-  readonly drain: () => readonly RustyApplicationRuntimeInputEnvelope[];
+  readonly claim: (intent: string, value: RuntimeInputWireIntentValue) => boolean;
+  readonly drain: () => readonly RuntimeInputWireEvent[];
 }
 
 export interface RustyApplicationManagedInputIngress extends RustyApplicationInputPort {
@@ -240,11 +144,11 @@ export function createRustyApplicationInputIngress(
 ): RustyApplicationManagedInputIngress {
   const normalized = normalizeOptions(options);
   const queue = createRustyApplicationInputQueue(normalized.maximumQueue);
-  const heldKeys = new Set<RustyApplicationKeyboardControl>();
-  const heldPointerButtons = new Set<RustyApplicationPointerButton>();
-  const controllerAxes = new Map<RustyApplicationControllerAxis, number>();
-  const controllerButtonValues = new Map<RustyApplicationControllerButton, number>();
-  const heldControllerButtons = new Set<RustyApplicationControllerButton>();
+  const heldKeys = new Set<KeyboardControl>();
+  const heldPointerButtons = new Set<PointerButton>();
+  const controllerAxes = new Map<ControllerAxis, number>();
+  const controllerButtonValues = new Map<ControllerButton, number>();
+  const heldControllerButtons = new Set<ControllerButton>();
   let attachedCanvas = environment.canvas();
   let disposed = false;
   let controllerEpoch = 0;
@@ -261,7 +165,7 @@ export function createRustyApplicationInputIngress(
     controllerAxes.clear();
     controllerButtonValues.clear();
   };
-  const clear = (reason: RustyApplicationInputClearReason): void => {
+  const clear = (reason: RuntimeInputWireClearReason): void => {
     clearLocal();
     // A held menu button must not become a new press when ownership changes,
     // including the asynchronous pointer-lock loss caused by opening a menu.
@@ -271,7 +175,7 @@ export function createRustyApplicationInputIngress(
     queue.clear(reason);
     normalized.onAvailable?.();
   };
-  const enqueueFact = (fact: RustyApplicationRuntimeInputFact): boolean => {
+  const enqueueFact = (fact: RuntimeInputWireFact): boolean => {
     const overflowed = queue.enqueueFact(fact);
     if (overflowed) clearLocal();
     normalized.onAvailable?.();
@@ -507,11 +411,11 @@ export function createRustyApplicationInputIngress(
       if (disposed) return;
       if (queue.setContext(context)) clearLocal();
     },
-    clear: (reason: RustyApplicationInputClearReason) => {
+    clear: (reason: RuntimeInputWireClearReason) => {
       if (!disposed) clear(reason);
     },
     drain: () => queue.drain(),
-    claim: (intent: string, value: RustyApplicationRuntimeIntentValue) => {
+    claim: (intent: string, value: RuntimeInputWireIntentValue) => {
       if (!disposed) {
         if (queue.claim(intent, value)) clearLocal();
         normalized.onAvailable?.();
@@ -542,11 +446,11 @@ export function createRustyApplicationInputIngress(
 /** Strictly normalize DOM keyboard codes before they become host-neutral observations. */
 export function normalizeRustyApplicationKeyboardControl(
   code: string,
-): RustyApplicationKeyboardControl | null {
+): KeyboardControl | null {
   const alpha = /^Key([A-Z])$/u.exec(code);
-  if (alpha !== null) return `key-${alpha[1]!.toLowerCase()}` as RustyApplicationKeyboardControl;
+  if (alpha !== null) return `key-${alpha[1]!.toLowerCase()}` as KeyboardControl;
   const digit = /^Digit([0-9])$/u.exec(code);
-  if (digit !== null) return `digit-${digit[1]!}` as RustyApplicationKeyboardControl;
+  if (digit !== null) return `digit-${digit[1]!}` as KeyboardControl;
   const mapped = KEYBOARD_CODE_MAP.get(code);
   return mapped ?? null;
 }
@@ -559,16 +463,16 @@ export function createRustyApplicationInputQueue(
   maximumQueue: number,
   initialSequence = 0n,
 ): RustyApplicationInputQueue {
-  if (initialSequence < 0n || initialSequence > RUSTY_APPLICATION_INPUT_U64_MAXIMUM) {
+  if (initialSequence < 0n || initialSequence > U64_MAXIMUM) {
     throw new RangeError('initial input sequence must fit u64');
   }
   let binding: RustyApplicationRuntimeInputBinding | null = null;
   let sequence = initialSequence;
   let initialBinding = true;
   let terminal = false;
-  let entries: RustyApplicationRuntimeInputEnvelope[] = [];
+  let entries: RuntimeInputWireEvent[] = [];
   const nextSequence = (): string | null => {
-    if (terminal || sequence >= RUSTY_APPLICATION_INPUT_U64_MAXIMUM) return null;
+    if (terminal || sequence >= U64_MAXIMUM) return null;
     const result = sequence.toString(10);
     sequence += 1n;
     return result;
@@ -578,7 +482,7 @@ export function createRustyApplicationInputQueue(
     terminal = true;
     const firstDiscarded = entries[0];
     const terminalSequence = firstDiscarded?.sequence
-      ?? RUSTY_APPLICATION_INPUT_U64_MAXIMUM.toString(10);
+      ?? U64_MAXIMUM.toString(10);
     if (firstDiscarded !== undefined) sequence = BigInt(terminalSequence) + 1n;
     entries = [freezeIngress(
       binding,
@@ -586,7 +490,7 @@ export function createRustyApplicationInputQueue(
       Object.freeze({ kind: 'clear', reason: 'ingress-overflow' }),
     )];
   };
-  const replaceQueuedWithClear = (reason: RustyApplicationInputClearReason): void => {
+  const replaceQueuedWithClear = (reason: RuntimeInputWireClearReason): void => {
     if (binding === null || terminal) return;
     const firstDiscarded = entries[0];
     const clearSequence = firstDiscarded === undefined ? nextSequence() : firstDiscarded.sequence;
@@ -597,7 +501,7 @@ export function createRustyApplicationInputQueue(
     if (firstDiscarded !== undefined) sequence = BigInt(clearSequence) + 1n;
     entries = [freezeIngress(binding, clearSequence, Object.freeze({ kind: 'clear', reason }))];
   };
-  const appendFact = (fact: RustyApplicationRuntimeInputFact): boolean => {
+  const appendFact = (fact: RuntimeInputWireFact): boolean => {
     if (binding === null) return false;
     if (terminal) return true;
     if (entries.length >= maximumQueue) {
@@ -612,7 +516,7 @@ export function createRustyApplicationInputQueue(
     entries.push(freezeIngress(binding, next, fact));
     return false;
   };
-  const appendClaim = (intent: string, value: RustyApplicationRuntimeIntentValue): boolean => {
+  const appendClaim = (intent: string, value: RuntimeInputWireIntentValue): boolean => {
     if (binding === null) return false;
     if (terminal) return true;
     if (entries.length >= maximumQueue) {
@@ -628,8 +532,7 @@ export function createRustyApplicationInputQueue(
     return false;
   };
   return {
-    bindRuntime: (next) => {
-      const normalized = validateBinding(next);
+    bindRuntime: (normalized) => {
       const previous = binding;
       if (previous !== null && sameBinding(previous, normalized)) {
         // A binding observation can also carry the Engine's authoritative
@@ -678,7 +581,7 @@ export function createRustyApplicationInputQueue(
         replaceQueuedWithClear('interaction-mode-loss');
         return true;
       }
-      const reason: RustyApplicationInputClearReason = previous.runtime.instanceId !== normalized.runtime.instanceId
+      const reason: RuntimeInputWireClearReason = previous.runtime.instanceId !== normalized.runtime.instanceId
         || previous.runtime.generation !== normalized.runtime.generation
         ? 'restart'
         : 'control-revision-change';
@@ -689,8 +592,7 @@ export function createRustyApplicationInputQueue(
       replaceQueuedWithClear(reason);
       return true;
     },
-    rebaseRuntime: (next) => {
-      const normalized = validateBinding(next);
+    rebaseRuntime: (normalized) => {
       const previous = binding;
       if (previous !== null && sameBinding(previous, normalized)) return false;
       if (previous !== null && previous.runtime.instanceId === normalized.runtime.instanceId) {
@@ -716,35 +618,26 @@ export function createRustyApplicationInputQueue(
       return true;
     },
     setContext: (context) => {
-      const normalized = validateContext(context);
-      if (binding === null || terminal || binding.context === normalized) return false;
-      binding = Object.freeze({ runtime: binding.runtime, context: normalized });
+      if (binding === null || terminal || binding.context === context) return false;
+      binding = Object.freeze({ runtime: binding.runtime, context });
       replaceQueuedWithClear('interaction-mode-loss');
       return true;
     },
     clear: (reason) => {
-      const normalized = validateClearReason(reason);
-      if (normalized === 'interaction-mode-loss') {
+      if (reason === 'interaction-mode-loss') {
         // Same-context physical loss must not discard an accepted DOM action.
         // Keep ordering (including any earlier context transition), and coalesce
         // repeated disallowed pointer events instead of filling the queue.
         const last = entries.at(-1);
         if (last !== undefined && 'fact' in last && last.fact.kind === 'clear'
-          && last.fact.reason === normalized) return;
-        appendFact(Object.freeze({ kind: 'clear', reason: normalized }));
+          && last.fact.reason === reason) return;
+        appendFact(Object.freeze({ kind: 'clear', reason }));
       } else {
-        replaceQueuedWithClear(normalized);
+        replaceQueuedWithClear(reason);
       }
     },
-    enqueueFact: (fact) => {
-      return appendFact(validateInputFact(fact));
-    },
-    claim: (intent, value) => {
-      if (binding === null) return false;
-      const normalizedIntent = validateIntent(intent);
-      const normalizedValue = validateIntentValue(value);
-      return appendClaim(normalizedIntent, normalizedValue);
-    },
+    enqueueFact: appendFact,
+    claim: appendClaim,
     drain: () => {
       const drained = entries;
       entries = [];
@@ -765,13 +658,13 @@ export function createRustyApplicationInputQueue(
 function freezeIngress(
   binding: RustyApplicationRuntimeInputBinding,
   sequence: string,
-  fact: RustyApplicationRuntimeInputFact,
-): RustyApplicationRuntimeInputIngress {
+  fact: RuntimeInputWireFact,
+): RuntimeInputWirePhysical {
   return Object.freeze({
     runtime: binding.runtime,
     sequence,
     context: binding.context,
-    fact: Object.freeze({ ...fact }) as RustyApplicationRuntimeInputFact,
+    fact: Object.freeze({ ...fact }) as RuntimeInputWireFact,
   });
 }
 
@@ -779,22 +672,21 @@ function freezeClaim(
   binding: RustyApplicationRuntimeInputBinding,
   sequence: string,
   intent: string,
-  value: RustyApplicationRuntimeIntentValue,
-): RustyApplicationRuntimeDirectIntentClaim {
-  const normalizedIntent = validateIntent(intent);
-  const normalizedValue = validateIntentValue(value);
+  value: RuntimeInputWireIntentValue,
+): RuntimeInputWireIntentClaim {
+  // The claim is sent later: a copy keeps the product's later edits out of it.
   return Object.freeze({
     runtime: binding.runtime,
     sequence,
     context: binding.context,
-    intent: normalizedIntent,
-    value: normalizedValue,
+    intent,
+    value: structuredClone(value),
   });
 }
 
 function normalizeOptions(options: RustyApplicationRuntimeInputOptions): NormalizedInputOptions {
   return Object.freeze({
-    initialBinding: options.binding === undefined ? null : validateBinding(options.binding),
+    initialBinding: options.binding ?? null,
     maximumQueue: boundedPositiveInteger(
       options.maximumQueue ?? RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM,
       'maximumQueue',
@@ -826,259 +718,6 @@ function requireInputAvailabilityCallback(value: unknown): () => void {
   return value as () => void;
 }
 
-function validateBinding(binding: RustyApplicationRuntimeInputBinding): RustyApplicationRuntimeInputBinding {
-  if (typeof binding !== 'object' || binding === null || typeof binding.runtime !== 'object'
-    || binding.runtime === null) {
-    throw new TypeError('runtime input binding must include one runtime identity');
-  }
-  return Object.freeze({
-    runtime: Object.freeze({
-      instanceId: validateCanonicalU64(binding.runtime.instanceId, 'runtime.instanceId'),
-      generation: validateCanonicalU64(binding.runtime.generation, 'runtime.generation'),
-      controlRevision: validateCanonicalU64(binding.runtime.controlRevision, 'runtime.controlRevision'),
-    }),
-    context: validateContext(binding.context),
-    ...(binding.nextSequence === undefined
-      ? {}
-      : { nextSequence: validateCanonicalU64(binding.nextSequence, 'nextSequence') }),
-  });
-}
-
-function validateCanonicalU64(value: string, name: string): string {
-  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new TypeError(`${name} must be canonical unsigned decimal text`);
-  }
-  const parsed = BigInt(value);
-  if (parsed > 18_446_744_073_709_551_615n) {
-    throw new RangeError(`${name} exceeds u64`);
-  }
-  return value;
-}
-
-function validateContext(value: string): string {
-  return validateProductIdentity(value, 'input context');
-}
-
-function validateIntent(intent: string): string {
-  return validateProductIdentity(intent, 'direct UI intent');
-}
-
-function validateProductIdentity(value: string, name: string): string {
-  if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > 128
-    || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(value)) {
-    throw new TypeError(`${name} must be a 1..128 byte lowercase product identity`);
-  }
-  return value;
-}
-
-function validateIntentValue(
-  value: RustyApplicationRuntimeIntentValue,
-): RustyApplicationRuntimeIntentValue {
-  if (value.kind === 'digital') {
-    if (typeof value.active !== 'boolean') throw new TypeError('digital intent claim requires boolean active');
-    return Object.freeze({ kind: 'digital', active: value.active });
-  }
-  if (value.kind === 'axis') {
-    if (!Number.isFinite(value.value) || value.value < -1 || value.value > 1) {
-      throw new RangeError('axis intent claim value must be finite and within [-1, 1]');
-    }
-    return Object.freeze({ kind: 'axis', value: value.value });
-  }
-  if (value.kind === 'product-payload') {
-    return Object.freeze({
-      kind: 'product-payload',
-      contract: validateProductIdentity(value.contract, 'product payload contract'),
-      data: snapshotRustyApplicationProductPayloadJson(value.data),
-    });
-  }
-  throw new TypeError('direct UI intent claim has an unknown value kind');
-}
-
-/**
- * Clones only plain JSON into an immutable data value. This lives at the
- * browser ingress boundary because `claim` queues data for later delivery.
- */
-export function snapshotRustyApplicationProductPayloadJson(
-  value: unknown,
-): RustyApplicationProductPayloadJson {
-  return snapshotPlainJson(value, true);
-}
-
-/** Snapshots transport JSON without imposing the direct-input integer contract. */
-export function snapshotRustyApplicationJson(value: unknown): RustyApplicationProductPayloadJson {
-  return snapshotPlainJson(value, false);
-}
-
-function snapshotPlainJson(value: unknown, requireSafeIntegers: boolean): RustyApplicationProductPayloadJson {
-  type JsonContainer = RustyApplicationProductPayloadJson[] | Record<string, RustyApplicationProductPayloadJson>;
-  type Work =
-    | { readonly kind: 'value'; readonly candidate: unknown; readonly path: string; readonly assign: (value: RustyApplicationProductPayloadJson) => void }
-    | { readonly kind: 'finish'; readonly source: object; readonly output: JsonContainer; readonly assign: (value: RustyApplicationProductPayloadJson) => void };
-  const active = new WeakSet<object>();
-  const pending: Work[] = [];
-  let normalized: RustyApplicationProductPayloadJson | undefined;
-  pending.push({ kind: 'value', candidate: value, path: '$.data', assign: (next) => { normalized = next; } });
-
-  while (pending.length > 0) {
-    const work = pending.pop()!;
-    if (work.kind === 'finish') {
-      active.delete(work.source);
-      work.assign(Object.freeze(work.output));
-      continue;
-    }
-    const { candidate, path, assign } = work;
-    if (candidate === null || typeof candidate === 'boolean') {
-      assign(candidate);
-      continue;
-    }
-    if (typeof candidate === 'string') {
-      validateProductPayloadString(candidate, path);
-      assign(candidate);
-      continue;
-    }
-    if (typeof candidate === 'number') {
-      if (!Number.isFinite(candidate) || (requireSafeIntegers && Number.isInteger(candidate)
-        && Math.abs(candidate) > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM)) {
-        throw new TypeError(`product payload JSON number is invalid at ${path}`);
-      }
-      assign(Object.is(candidate, -0) ? 0 : candidate);
-      continue;
-    }
-    if (typeof candidate !== 'object') {
-      throw new TypeError(`product payload JSON cannot contain ${typeof candidate} at ${path}`);
-    }
-    if (active.has(candidate)) {
-      throw new TypeError(`product payload JSON cannot contain a cycle at ${path}`);
-    }
-    active.add(candidate);
-    if (Array.isArray(candidate)) {
-      if (Object.getPrototypeOf(candidate) !== Array.prototype
-        || Reflect.ownKeys(candidate).some((key) => key !== 'length'
-          && (typeof key !== 'string' || !isProductPayloadArrayIndex(key, candidate.length)))) {
-        throw new TypeError(`product payload JSON array is invalid at ${path}`);
-      }
-      const output: RustyApplicationProductPayloadJson[] = new Array(candidate.length);
-      pending.push({ kind: 'finish', source: candidate, output, assign });
-      for (let index = candidate.length - 1; index >= 0; index -= 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
-        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-          throw new TypeError(`product payload JSON arrays cannot contain accessors at ${path}`);
-        }
-        pending.push({ kind: 'value', candidate: descriptor.value, path: `${path}[${String(index)}]`, assign: (next) => { output[index] = next; } });
-      }
-      continue;
-    }
-    const prototype = Object.getPrototypeOf(candidate);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(`product payload JSON objects must be plain data at ${path}`);
-    }
-    const descriptors = Object.getOwnPropertyDescriptors(candidate);
-    const keys = Object.keys(candidate).sort(compareProductPayloadUtf8);
-    if (Reflect.ownKeys(descriptors).some((key) => typeof key !== 'string'
-      || descriptors[key] === undefined || !descriptors[key]!.enumerable
-      || !('value' in descriptors[key]!))) {
-      throw new TypeError(`product payload JSON objects cannot contain accessors or hidden fields at ${path}`);
-    }
-    const output: Record<string, RustyApplicationProductPayloadJson> = Object.create(null) as Record<string, RustyApplicationProductPayloadJson>;
-    pending.push({ kind: 'finish', source: candidate, output, assign });
-    for (const key of [...keys].reverse()) {
-      validateProductPayloadString(key, `${path} key`);
-      const descriptor = descriptors[key]!;
-      pending.push({ kind: 'value', candidate: descriptor.value, path: `${path}.${key}`, assign: (next) => {
-        Object.defineProperty(output, key, { value: next, enumerable: true, configurable: false, writable: false });
-      } });
-    }
-  }
-  return normalized!;
-}
-
-function validateProductPayloadString(value: string, path: string): void {
-  for (const scalar of value) {
-    const codePoint = scalar.codePointAt(0)!;
-    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
-      throw new TypeError(`product payload JSON string must contain Unicode scalar values at ${path}`);
-    }
-  }
-}
-
-function isProductPayloadArrayIndex(key: string, length: number): boolean {
-  if (key !== '0' && !/^[1-9][0-9]*$/u.test(key)) return false;
-  const index = Number(key);
-  return Number.isSafeInteger(index)
-    && index < 4_294_967_295
-    && index < length
-    && String(index) === key;
-}
-
-function compareProductPayloadUtf8(left: string, right: string): number {
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  const length = Math.min(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < length; index += 1) {
-    const difference = (leftBytes[index] as number) - (rightBytes[index] as number);
-    if (difference !== 0) return difference;
-  }
-  return leftBytes.length - rightBytes.length;
-}
-
-function validateInputFact(
-  value: RustyApplicationRuntimeInputFact,
-): RustyApplicationRuntimeInputFact {
-  if (typeof value !== 'object' || value === null) {
-    throw new TypeError('runtime input fact must be an object');
-  }
-  switch (value.kind) {
-    case 'key': {
-      if (!KEYBOARD_CONTROLS.has(value.code) || !isInputEdge(value.edge)) {
-        throw new TypeError('key input fact must use one closed keyboard control and edge');
-      }
-      return Object.freeze({ kind: 'key', code: value.code, edge: value.edge });
-    }
-    case 'pointer-button': {
-      if (!isPointerButton(value.button) || !isInputEdge(value.edge)) {
-        throw new TypeError('pointer button input fact must use one closed button and edge');
-      }
-      return Object.freeze({ kind: 'pointer-button', button: value.button, edge: value.edge });
-    }
-    case 'pointer-delta':
-    case 'wheel': {
-      if (!Number.isFinite(value.x) || !Number.isFinite(value.y)) {
-        throw new TypeError(`${value.kind} input fact requires finite x and y`);
-      }
-      return Object.freeze({ kind: value.kind, x: value.x, y: value.y });
-    }
-    case 'controller-button': {
-      if (!isControllerButton(value.button) || !isInputEdge(value.edge)) {
-        throw new TypeError('controller button input fact must use one closed button and edge');
-      }
-      return Object.freeze({ kind: 'controller-button', button: value.button, edge: value.edge });
-    }
-    case 'controller-axis': {
-      if (!isControllerAxis(value.axis) || !Number.isFinite(value.value)
-        || value.value < -1 || value.value > 1) {
-        throw new TypeError('controller axis input fact requires one closed axis within [-1, 1]');
-      }
-      return Object.freeze({ kind: 'controller-axis', axis: value.axis, value: value.value });
-    }
-    case 'controller-button-value': {
-      if (!isControllerButton(value.button) || !Number.isFinite(value.value)
-        || value.value < 0 || value.value > 1) {
-        throw new TypeError('controller button value requires one closed button within [0, 1]');
-      }
-      return Object.freeze({ kind: 'controller-button-value', button: value.button, value: value.value });
-    }
-    case 'clear':
-      return Object.freeze({ kind: 'clear', reason: validateClearReason(value.reason) });
-    default:
-      throw new TypeError('runtime input fact has an unknown kind');
-  }
-}
-
-function validateClearReason(value: RustyApplicationInputClearReason): RustyApplicationInputClearReason {
-  if (INPUT_CLEAR_REASONS.has(value)) return value;
-  throw new TypeError('runtime input clear must use one closed reason');
-}
-
 function sameBinding(
   left: RustyApplicationRuntimeInputBinding,
   right: RustyApplicationRuntimeInputBinding,
@@ -1096,35 +735,19 @@ function sameRuntime(
     && left.controlRevision === right.controlRevision;
 }
 
-function normalizePointerButton(button: number): RustyApplicationPointerButton | null {
+function normalizePointerButton(button: number): PointerButton | null {
   if (button === 0) return 'primary';
   if (button === 1) return 'middle';
   if (button === 2) return 'secondary';
   return null;
 }
 
-function isInputEdge(value: unknown): value is RustyApplicationInputEdge {
-  return value === 'pressed' || value === 'released';
+function controllerButton(index: number): ControllerButton {
+  return `button-${String(index)}` as ControllerButton;
 }
 
-function isPointerButton(value: unknown): value is RustyApplicationPointerButton {
-  return value === 'primary' || value === 'secondary' || value === 'middle';
-}
-
-function isControllerButton(value: unknown): value is RustyApplicationControllerButton {
-  return typeof value === 'string' && /^button-(?:[0-9]|1[0-5])$/u.test(value);
-}
-
-function isControllerAxis(value: unknown): value is RustyApplicationControllerAxis {
-  return typeof value === 'string' && /^axis-[0-3]$/u.test(value);
-}
-
-function controllerButton(index: number): RustyApplicationControllerButton {
-  return `button-${String(index)}` as RustyApplicationControllerButton;
-}
-
-function controllerAxis(index: number): RustyApplicationControllerAxis {
-  return `axis-${String(index)}` as RustyApplicationControllerAxis;
+function controllerAxis(index: number): ControllerAxis {
+  return `axis-${String(index)}` as ControllerAxis;
 }
 
 function boundedNumber(value: number, maximum: number): number {
@@ -1143,24 +766,11 @@ function boundedInteger(value: number, name: string, minimum: number, maximum: n
   return value;
 }
 
-const KEYBOARD_CODE_MAP: ReadonlyMap<string, RustyApplicationKeyboardControl> = new Map([
+const KEYBOARD_CODE_MAP: ReadonlyMap<string, KeyboardControl> = new Map([
   ['Space', 'space'], ['Enter', 'enter'], ['Escape', 'escape'],
   ['ShiftLeft', 'shift-left'], ['ShiftRight', 'shift-right'],
   ['ControlLeft', 'control-left'], ['ControlRight', 'control-right'],
   ['AltLeft', 'alt-left'], ['AltRight', 'alt-right'],
   ['ArrowUp', 'arrow-up'], ['ArrowDown', 'arrow-down'],
   ['ArrowLeft', 'arrow-left'], ['ArrowRight', 'arrow-right'],
-]);
-
-const KEYBOARD_CONTROLS: ReadonlySet<RustyApplicationKeyboardControl> = new Set([
-  ...Array.from({ length: 26 }, (_, index) => `key-${String.fromCharCode(97 + index)}` as RustyApplicationKeyboardControl),
-  ...Array.from({ length: 10 }, (_, index) => `digit-${String(index)}` as RustyApplicationKeyboardControl),
-  'space', 'enter', 'escape',
-  'shift-left', 'shift-right', 'control-left', 'control-right', 'alt-left', 'alt-right',
-  'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-]);
-
-const INPUT_CLEAR_REASONS: ReadonlySet<RustyApplicationInputClearReason> = new Set([
-  'focus-loss', 'ingress-overflow', 'interaction-mode-loss', 'pointer-lock-loss',
-  'restart', 'control-revision-change', 'dispose',
 ]);

@@ -10,6 +10,11 @@ This pnpm workspace owns the TypeScript the Engine still ships to a browser:
 - `live-debug-client` and `live-debug-panel`: the optional developer console
   over the product's debug catalog.
 
+Each package's `src/generated/contracts.ts` holds the wire shapes it reads or
+sends. The file is generated from the Rust types and checked in. Do not edit
+it: change the Rust type and run `scripts/generate-typescript-contracts.sh`.
+`cargo test` fails while a generated file is stale.
+
 The world, audio and video are rendered in the runtime process by Rust
 (`render-wgpu`, `render-audio`); see the
 [architecture overview](../docs/architecture.md#runtime-rendered-output).

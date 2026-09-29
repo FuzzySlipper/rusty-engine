@@ -12,6 +12,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize, Serializer};
+use ts_rs::TS;
 
 const DEFAULT_RING_CAPACITY: usize = 256;
 const MAX_RING_CAPACITY: usize = 1_024;
@@ -60,7 +61,8 @@ impl fmt::Display for RuntimeDiagnosticsError {
 impl std::error::Error for RuntimeDiagnosticsError {}
 
 /// A JSON u64 represented as canonical decimal text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TS)]
+#[ts(type = "string")]
 pub struct CanonicalU64(u64);
 
 impl CanonicalU64 {
@@ -111,7 +113,7 @@ impl<'de> Deserialize<'de> for CanonicalU64 {
 
 /// Runtime provenance attached to a diagnostic without depending on a host
 /// transport binding type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeDiagnosticRuntimeBinding {
     pub instance_id: CanonicalU64,
@@ -119,7 +121,7 @@ pub struct RuntimeDiagnosticRuntimeBinding {
     pub control_revision: CanonicalU64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeDiagnosticSeverity {
     Debug,
@@ -128,7 +130,7 @@ pub enum RuntimeDiagnosticSeverity {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeDiagnosticDisposition {
     Accepted,
@@ -138,7 +140,7 @@ pub enum RuntimeDiagnosticDisposition {
     Terminal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeDiagnosticField {
     key: String,
@@ -155,12 +157,14 @@ impl RuntimeDiagnosticField {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeDiagnosticEvent {
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     sequence: u64,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     monotonic_nanoseconds: u64,
     severity: RuntimeDiagnosticSeverity,
     disposition: RuntimeDiagnosticDisposition,
@@ -168,10 +172,13 @@ pub struct RuntimeDiagnosticEvent {
     code: String,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     runtime: Option<RuntimeDiagnosticRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     correlation: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<RuntimeDiagnosticField>>", optional)]
     fields: Vec<RuntimeDiagnosticField>,
 }
 
@@ -300,24 +307,31 @@ pub struct RuntimeDiagnosticsSnapshot {
     pub dropped_count: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeDiagnosticsBatch {
     pub events: Vec<RuntimeDiagnosticEvent>,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub floor_sequence: u64,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub through_sequence: u64,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub next_cursor: u64,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub read_monotonic_nanoseconds: u64,
     pub lagged: bool,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub warning_count: u64,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub error_count: u64,
     #[serde(serialize_with = "serialize_u64_as_string")]
+    #[ts(as = "CanonicalU64")]
     pub dropped_count: u64,
 }
 

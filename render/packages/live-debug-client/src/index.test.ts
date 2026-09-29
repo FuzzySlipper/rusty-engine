@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
   createLiveDebugHttpTransport,
   diagnosticEventAgeMilliseconds,
-  diagnosticRendererObservationAgeMilliseconds,
 } from './index.js';
 
 test('accepts an unavailable generated catalog without inventing commands', async () => {
@@ -28,7 +27,7 @@ test('sends one raw command body and keeps semantic failure typed', async () => 
   assert.equal(request?.body, 'fixture.unknown');
 });
 
-test('diagnostics retain independent cursor facts and age a stopped browser observation', async () => {
+test('diagnostics retain independent cursor facts and age each event', async () => {
   const client = createLiveDebugHttpTransport({
     origin: 'http://127.0.0.1:8123',
     fetch: (async () => new Response(JSON.stringify({
@@ -59,7 +58,6 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
   });
   const batch = await client.diagnostics!('7');
   assert.equal(batch.nextCursor, '8');
-  assert.equal(diagnosticRendererObservationAgeMilliseconds(batch, batch.events[0]!), 850);
   assert.equal(diagnosticEventAgeMilliseconds(batch, batch.events[0]!), 750);
   assert.equal(batch.telemetry?.queuedInputEvents, 4);
   assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepCastCount, '8');
@@ -68,40 +66,13 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
   assert.equal(batch.telemetry?.updateAttribution?.latest.postCallbackDurationUs, '15');
 });
 
-test('diagnostics reject a malformed optional telemetry snapshot', async () => {
+test('a host error names its code and diagnostic', async () => {
   const client = createLiveDebugHttpTransport({
     origin: 'http://127.0.0.1:8123',
     fetch: (async () => new Response(JSON.stringify({
-      events: [], floorSequence: '0', throughSequence: '0', nextCursor: '0',
-      readMonotonicNanoseconds: '0', lagged: false, warningCount: '0', errorCount: '0', droppedCount: '0',
-      telemetry: {
-        inFlightOperation: null, inFlightAgeMs: null,
-        lastProductAdmissionLatencyMs: null, lastInputAdmissionLatencyMs: null,
-        queuedInputBatches: 'not-a-count', queuedInputEvents: 0, inputBatchCapacity: 256,
-        oldestInputAgeMs: null, inputOverflowPending: false,
-        runtimeProgressRateMillihertz: null, runtimeProgressAgeMs: null,
-        runtimeProgressUnavailableReason: 'No completed update observed in this incarnation',
-        connections: 0, subscribers: 0, outputQueueItems: 0, outputQueueCapacity: 256,
-        outputBindingActive: false,
-        updateAttribution: null,
-      },
-    }), { status: 200 })) as typeof fetch,
+      accepted: false,
+      error: { code: 'DEV_HOST_ROUTE_NOT_FOUND', diagnostic: 'route is not admitted' },
+    }), { status: 404 })) as typeof fetch,
   });
-  await assert.rejects(() => client.diagnostics!(), /telemetry queuedInputBatches is invalid/u);
-});
-
-test('diagnostics reject cursor values outside canonical u64 range before transport', async () => {
-  let calls = 0;
-  const client = createLiveDebugHttpTransport({
-    origin: 'http://127.0.0.1:8123',
-    fetch: (async () => {
-      calls += 1;
-      return new Response('{}', { status: 200 });
-    }) as typeof fetch,
-  });
-  await assert.rejects(
-    () => client.diagnostics!('18446744073709551616'),
-    /cursor is invalid/u,
-  );
-  assert.equal(calls, 0);
+  await assert.rejects(() => client.diagnostics!(), /DEV_HOST_ROUTE_NOT_FOUND: route is not admitted/u);
 });

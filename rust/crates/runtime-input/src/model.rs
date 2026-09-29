@@ -5,6 +5,7 @@ use runtime_lifecycle::{
     SimulationStep,
 };
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::CompiledInputIntent;
 
@@ -31,7 +32,7 @@ pub enum InputEdge {
     Released,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeyboardControl {
     KeyA,
@@ -95,7 +96,7 @@ pub enum KeyboardControl {
     ArrowRight,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum PointerButton {
     Primary,
@@ -110,7 +111,7 @@ pub enum InputAxis {
     Y,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ControllerButton {
     #[serde(rename = "button-0")]
@@ -147,7 +148,7 @@ pub enum ControllerButton {
     Button15,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ControllerAxis {
     #[serde(rename = "axis-0")]

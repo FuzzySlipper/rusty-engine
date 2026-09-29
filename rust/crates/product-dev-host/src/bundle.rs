@@ -1,9 +1,79 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::ProductDevHostError;
+use serde::Serialize;
+use ts_rs::TS;
+
+use crate::{ProductDevHostError, ProductDevRenderOutput, ProductDevRuntimeMode};
 
 /// The generated Product Bundle entry point served at the local origin root.
 pub const PRODUCT_DEV_INDEX_PATH: &str = "index.html";
+/// Where the runtime pack's page reads [`ProductDevBrowserBootstrap`].
+pub const PRODUCT_DEV_BOOTSTRAP_PATH: &str = "product-bootstrap.json";
+
+/// What the runtime pack's page needs to mount a product: the product host
+/// writes it from the product's manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBrowserBootstrap {
+    pub product: ProductDevBootstrapProduct,
+    pub ui: ProductDevBootstrapUi,
+    pub lifecycle: ProductDevBootstrapLifecycle,
+    pub input: ProductDevBootstrapInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ui_projection: Option<ProductDevBootstrapUiProjection>,
+    pub renderer: ProductDevBootstrapRenderer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBootstrapProduct {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBootstrapUi {
+    /// The product UI module, relative to the page: `product-ui/...`.
+    pub entry: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBootstrapLifecycle {
+    pub mode: ProductDevRuntimeMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBootstrapInput {
+    pub cursor_mode: ProductDevCursorMode,
+}
+
+/// How gameplay holds the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProductDevCursorMode {
+    PointerLock,
+    Unlocked,
+}
+
+/// The product UI projection stream and contract the page admits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBootstrapUiProjection {
+    pub expected_stream: String,
+    pub expected_contract: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBootstrapRenderer {
+    /// The page shows the runtime's frames, or lets the desktop window show
+    /// through.
+    pub output: ProductDevRenderOutput,
+}
 
 fn validate_bundle_entry_metadata(
     path: &str,

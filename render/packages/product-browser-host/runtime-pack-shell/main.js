@@ -1,66 +1,8 @@
-import {
-  createProductBrowserLocalHttpAdapter,
-  mountProductBrowserHost,
-} from './engine/product-browser-host.js';
+import { startProductBrowserShell } from './engine/product-browser-host.js';
 
 const root = document.querySelector('#application');
 if (root === null) throw new Error('Rusty runtime shell root is missing');
-
-const bootstrap = await fetch('./product-bootstrap.json').then(async (response) => {
-  if (!response.ok) throw new Error(`Product bootstrap failed: HTTP ${response.status}`);
-  return response.json();
-});
-if (bootstrap?.artifact !== 'rusty.product.browser-bootstrap' || bootstrap?.schemaVersion !== 1) {
-  throw new Error('Product bootstrap is not a Rusty Product V1 descriptor');
-}
-if (typeof bootstrap?.product?.title === 'string') document.title = bootstrap.product.title;
-if (typeof bootstrap?.ui?.entry !== 'string' || !bootstrap.ui.entry.startsWith('product-ui/')) {
-  throw new Error('Product bootstrap has no admitted product UI entry');
-}
-const uiProjection = bootstrap.uiProjection;
-if (uiProjection !== undefined
-  && (uiProjection === null
-    || typeof uiProjection !== 'object'
-    || typeof uiProjection.expectedStream !== 'string'
-    || typeof uiProjection.expectedContract !== 'string')) {
-  throw new Error('Product bootstrap has an invalid UI projection declaration');
-}
-// `stream`: the runtime renders the world and this page shows its frames.
-// `window`: the runtime presents the world to the desktop shell's window
-// under this page, which must let it show through.
-const output = bootstrap?.renderer?.output;
-if (output !== 'stream' && output !== 'window') {
-  throw new Error('Product bootstrap has an invalid renderer output');
-}
-if (output === 'window') {
-  document.documentElement.style.background = 'transparent';
-  document.body.style.background = 'transparent';
-}
-const cursorMode = bootstrap?.input?.cursorMode;
-if (cursorMode !== 'pointer-lock' && cursorMode !== 'unlocked') {
-  throw new Error('Product bootstrap has an invalid input cursor mode');
-}
-const productUi = await import(`./${bootstrap.ui.entry}`);
-if (typeof productUi.mountProductUi !== 'function') {
-  throw new Error('Product UI entry must export mountProductUi(root)');
-}
-
-const transport = createProductBrowserLocalHttpAdapter();
-void mountProductBrowserHost({
-  root,
-  transport,
-  lifecycleMode: bootstrap.lifecycle.mode,
-  realtimeAdvanceOwner: 'rust-host',
-  initialInteractionMode: 'gameplay',
-  gameplayCursorMode: cursorMode,
-  runtimeInput: {
-    maximumWheelDelta: 64,
-    selectedController: { index: 0 },
-  },
-  output,
-  ...(uiProjection === undefined ? {} : { uiProjection }),
-  mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),
-}).catch((error) => {
+startProductBrowserShell(root).catch((error) => {
   const detail = document.createElement('pre');
   detail.id = 'rusty-runtime-shell-failure';
   detail.textContent = error instanceof Error ? error.message : String(error);

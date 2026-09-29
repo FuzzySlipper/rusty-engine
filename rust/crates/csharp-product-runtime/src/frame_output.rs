@@ -34,7 +34,11 @@ use csharp_engine_abi::{
 use csharp_engine_services::{
     AnimationRealizationFact, EngineServiceSet, GhostPlateRealizationFact, VideoRealizationFact,
 };
-use product_dev_host::ProductDevFrameStream;
+use product_dev_host::{
+    ProductDevDrawingMode, ProductDevDrawnFrame, ProductDevFrameStream,
+    ProductDevRendererInspection, ProductDevRendererStatistics, ProductDevStreamMedians,
+    ProductDevStreamStatistics,
+};
 use render_host_contracts::RendererViewTarget;
 use render_stream::{
     AnimationFact, DrawnFrame, FrameStreamer, Gpu, RendererCameraPose, RendererOptions,
@@ -44,11 +48,9 @@ use render_stream::{
 use runtime_publication::RuntimePublication;
 use serde_json::{json, Value};
 
-use crate::CsharpProductRuntimeError;
+use crate::{CsharpProductRuntimeError, RenderOutput};
 
 pub(crate) const RENDER_OUTPUT_ENV: &str = "RUSTY_RENDER_OUTPUT";
-const RENDER_OUTPUT_STREAM: &str = "stream";
-const RENDER_OUTPUT_WINDOW: &str = "window";
 const STREAM_FORMAT_ENV: &str = "RUSTY_RENDER_STREAM_FORMAT";
 /// The Engine's realization feedback admits this many facts per report.
 const MAX_FACTS_PER_REPORT: usize = 128;
@@ -65,39 +67,21 @@ pub(crate) fn is_inspection_command(command: &str) -> bool {
     )
 }
 
-/// Where this process's renderer draws.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderOutput {
-    /// Frames streamed to the browser shell (the default).
-    Stream,
-    /// The desktop shell's window.
-    Window,
-}
-
-impl RenderOutput {
-    /// The browser bootstrap's name for it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Stream => RENDER_OUTPUT_STREAM,
-            Self::Window => RENDER_OUTPUT_WINDOW,
-        }
-    }
-}
-
 /// `RUSTY_RENDER_OUTPUT`: `stream` when unset. An unknown value is an error
 /// rather than a silent fallback.
 pub(crate) fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
-    match std::env::var_os(RENDER_OUTPUT_ENV) {
-        None => Ok(RenderOutput::Stream),
-        Some(value) if value == RENDER_OUTPUT_STREAM => Ok(RenderOutput::Stream),
-        Some(value) if value == RENDER_OUTPUT_WINDOW => Ok(RenderOutput::Window),
-        Some(_) => Err(CsharpProductRuntimeError::new(
-            "CSHARP_RENDER_OUTPUT",
-            format!(
-                "{RENDER_OUTPUT_ENV} must be `{RENDER_OUTPUT_STREAM}` or `{RENDER_OUTPUT_WINDOW}` when set"
-            ),
-        )),
-    }
+    let Some(value) = std::env::var_os(RENDER_OUTPUT_ENV) else {
+        return Ok(RenderOutput::Stream);
+    };
+    [RenderOutput::Stream, RenderOutput::Window]
+        .into_iter()
+        .find(|output| value == output.as_str())
+        .ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_RENDER_OUTPUT",
+                format!("{RENDER_OUTPUT_ENV} must be `stream` or `window` when set"),
+            )
+        })
 }
 
 pub(crate) struct FrameOutput {
@@ -123,7 +107,7 @@ impl FrameOutput {
             RenderOutput::Window => {
                 let gpu = window_gpu.ok_or_else(|| {
                     error(format!(
-                        "{RENDER_OUTPUT_ENV}={RENDER_OUTPUT_WINDOW} needs the desktop shell (a runtime built with the `desktop` feature)"
+                        "{RENDER_OUTPUT_ENV}=window needs the desktop shell (a runtime built with the `desktop` feature)"
                     ))
                 })?;
                 (SceneDriver::new(gpu.clone(), options), None)
@@ -230,8 +214,10 @@ impl FrameOutput {
             .is_none_or(|reported| reported.elapsed() >= STATISTICS_INTERVAL)
         {
             self.statistics_reported = Some(Instant::now());
-            // The statistics are plain JSON values, so they always encode.
-            let _ = services.ingest_renderer_diagnostics(&self.stats_json());
+            // The statistics are plain values, so they always encode.
+            let _ = services.ingest_renderer_diagnostics(
+                &serde_json::to_value(self.statistics()).unwrap_or_default(),
+            );
         }
     }
 
@@ -260,7 +246,10 @@ impl FrameOutput {
 
     /// Runs an inspection command (see [`is_inspection_command`]). A change
     /// draws a frame and waits for it; the answer carries that frame.
-    pub(crate) fn execute_inspection(&self, command: &str) -> Result<Value, String> {
+    pub(crate) fn execute_inspection(
+        &self,
+        command: &str,
+    ) -> Result<ProductDevRendererInspection, String> {
         let Some((streamer, _)) = &self.stream else {
             return self.execute_window_inspection(command);
         };
@@ -307,18 +296,29 @@ impl FrameOutput {
                 .and_then(primary_camera_pose)
         });
         let frame = drawn.or(inspection.last_drawn);
-        Ok(json!({
-            "drawing": if inspection.on_demand { "on-demand" } else { "continuous" },
-            "held": inspection.held,
-            "observer": inspection.observer.is_some(),
-            "camera": camera,
-            "frame": frame.map(|frame| json!({ "sequence": frame.sequence, "step": frame.step })),
-        }))
+        Ok(ProductDevRendererInspection {
+            drawing: if inspection.on_demand {
+                ProductDevDrawingMode::OnDemand
+            } else {
+                ProductDevDrawingMode::Continuous
+            },
+            output: RenderOutput::Stream,
+            held: inspection.held,
+            observer: inspection.observer.is_some(),
+            camera,
+            frame: frame.map(|frame| ProductDevDrawnFrame {
+                sequence: frame.sequence,
+                step: frame.step,
+            }),
+        })
     }
 
     /// The desktop window draws every frame itself; only the observer
     /// camera applies to it.
-    fn execute_window_inspection(&self, command: &str) -> Result<Value, String> {
+    fn execute_window_inspection(
+        &self,
+        command: &str,
+    ) -> Result<ProductDevRendererInspection, String> {
         let words: Vec<&str> = command.split_whitespace().collect();
         let pose = |values: &[&str]| -> Result<RendererCameraPose, String> {
             let number = |value: &str| {
@@ -335,6 +335,7 @@ impl FrameOutput {
             })
         };
         match words.as_slice() {
+            ["engine.renderer.camera"] => {}
             ["engine.renderer.camera", "none"] => self.driver.set_observer(None),
             ["engine.renderer.camera", values @ ..] if values.len() == 5 => {
                 self.driver.set_observer(Some(pose(values)?));
@@ -345,7 +346,15 @@ impl FrameOutput {
                     .to_owned())
             }
         }
-        Ok(json!({ "drawing": "continuous", "output": RENDER_OUTPUT_WINDOW }))
+        let (held, observer, composition) = self.driver.view_state();
+        Ok(ProductDevRendererInspection {
+            drawing: ProductDevDrawingMode::Continuous,
+            output: RenderOutput::Window,
+            held,
+            observer: observer.is_some(),
+            camera: observer.or_else(|| composition.as_deref().and_then(primary_camera_pose)),
+            frame: None,
+        })
     }
 
     fn draw_now(&self) -> Result<Option<DrawnFrame>, String> {
@@ -433,17 +442,19 @@ impl FrameOutput {
         })
     }
 
-    /// What the recent streamed frames cost, for `engine.renderer.*`.
-    pub(crate) fn stats_json(&self) -> serde_json::Value {
+    /// The renderer's adapter and what its recent frames cost, for
+    /// `engine.renderer.*` and `Diagnostics.ReadRenderer`.
+    pub(crate) fn statistics(&self) -> ProductDevRendererStatistics {
         let Some((streamer, route)) = &self.stream else {
             let (skipped_ops, last_skip) = self.driver.skipped_ops();
             let adapter = self.driver.gpu().adapter_summary();
-            return serde_json::json!({
-                "adapter": format!("{} ({})", adapter.name, adapter.backend),
-                "output": RENDER_OUTPUT_WINDOW,
-                "skippedOps": skipped_ops,
-                "lastSkip": last_skip,
-            });
+            return ProductDevRendererStatistics {
+                adapter: format!("{} ({})", adapter.name, adapter.backend),
+                output: RenderOutput::Window,
+                stream: None,
+                skipped_ops: skipped_op_counts(skipped_ops),
+                last_skip,
+            };
         };
         let StreamStats {
             adapter,
@@ -457,17 +468,24 @@ impl FrameOutput {
             skipped_ops,
             last_skip,
         } = streamer.stats();
-        serde_json::json!({
-            "adapter": adapter,
-            "viewerSize": route.wanted_size(),
-            "recentFrames": frames,
-            "framesPerSecond": frames_per_second,
-            "medianMs": { "render": render_ms, "readback": readback_ms, "encode": encode_ms },
-            "medianBytesPerFrame": bytes_per_frame,
-            "bytesPerSecond": bytes_per_second,
-            "skippedOps": skipped_ops,
-            "lastSkip": last_skip,
-        })
+        ProductDevRendererStatistics {
+            adapter,
+            output: RenderOutput::Stream,
+            stream: Some(ProductDevStreamStatistics {
+                viewer_size: route.wanted_size(),
+                recent_frames: frames,
+                frames_per_second,
+                median_ms: ProductDevStreamMedians {
+                    render: render_ms,
+                    readback: readback_ms,
+                    encode: encode_ms,
+                },
+                median_bytes_per_frame: bytes_per_frame,
+                bytes_per_second,
+            }),
+            skipped_ops: skipped_op_counts(skipped_ops),
+            last_skip,
+        }
     }
 
     fn engine_fact(&mut self, fact: AnimationFact) -> AnimationRealizationFact {
@@ -533,6 +551,15 @@ fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneStat
 }
 
 /// The camera pose of the lowest-ordered primary view.
+fn skipped_op_counts(
+    skipped: std::collections::BTreeMap<&'static str, u64>,
+) -> std::collections::BTreeMap<String, u64> {
+    skipped
+        .into_iter()
+        .map(|(op, count)| (op.to_owned(), count))
+        .collect()
+}
+
 fn primary_camera_pose(composition: &RendererViewComposition) -> Option<RendererCameraPose> {
     let view = composition
         .views

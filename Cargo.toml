@@ -100,6 +100,8 @@ ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"
+# Emits the Rust-to-TypeScript wire contracts (#8793).
+ts-rs = { version = "11.1", features = ["serde-json-impl", "no-serde-warnings"] }
 toml = "0.8"
 sha2 = "0.10"
 base64 = "0.22"

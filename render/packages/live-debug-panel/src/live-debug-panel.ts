@@ -2,11 +2,11 @@ import {
   completeLiveDebug,
   createLiveDebugHttpTransport,
   diagnosticEventAgeMilliseconds,
-  type LiveDebugCatalog,
-  type LiveDebugCommandDescriptor,
-  type LiveDebugDiagnosticEvent,
-  type LiveDebugDiagnosticsBatch,
-  type LiveDebugTelemetrySnapshot,
+  type ProductDevDebugCatalog,
+  type ProductDevDebugCommandDescriptor,
+  type RuntimeDiagnosticEvent,
+  type ProductDevDiagnosticsReadResponse,
+  type ProductDevTelemetrySnapshot,
   type LiveDebugTransport,
 } from '@rusty-engine/live-debug-client';
 
@@ -71,14 +71,14 @@ export class LiveDebugPanel {
   readonly #transport: LiveDebugTransport | null;
 
   #connection: LiveDebugConnectionState = 'disconnected';
-  #catalog: LiveDebugCatalog | null = null;
+  #catalog: ProductDevDebugCatalog | null = null;
   #executing = false;
   #transcript: readonly LiveDebugTranscriptEntry[] = [];
   #history: readonly string[] = [];
   #historyCursor: number | null = null;
   #diagnosticCursor: string | undefined;
   /** Retained events whose age label follows the latest diagnostics read. */
-  #diagnosticEntries: { readonly event: LiveDebugDiagnosticEvent; readonly detail: HTMLElement }[] = [];
+  #diagnosticEntries: { readonly event: RuntimeDiagnosticEvent; readonly detail: HTMLElement }[] = [];
   #requestRevision = 0;
   #catalogAbort: AbortController | null = null;
   #executeAbort: AbortController | null = null;
@@ -309,7 +309,7 @@ export class LiveDebugPanel {
     });
   }
 
-  #applyDiagnostics(batch: LiveDebugDiagnosticsBatch): void {
+  #applyDiagnostics(batch: ProductDevDiagnosticsReadResponse): void {
     this.#diagnosticCursor = batch.nextCursor;
     this.#diagnosticCounts.textContent =
       `warn ${batch.warningCount} · error ${batch.errorCount} · dropped ${batch.droppedCount}`;
@@ -338,7 +338,7 @@ export class LiveDebugPanel {
     this.#telemetry.replaceChildren();
   }
 
-  #renderTelemetry(telemetry: LiveDebugTelemetrySnapshot): void {
+  #renderTelemetry(telemetry: ProductDevTelemetrySnapshot): void {
     const lines = [
       `In flight: ${telemetry.inFlightOperation || 'none'} · age ${milliseconds(telemetry.inFlightAgeMs)}`,
       `Admission: product ${milliseconds(telemetry.lastProductAdmissionLatencyMs)} · input ${milliseconds(telemetry.lastInputAdmissionLatencyMs)}`,
@@ -393,13 +393,13 @@ export class LiveDebugPanel {
     }
   }
 
-  #applyCompletion(completion: LiveDebugCommandDescriptor): void {
+  #applyCompletion(completion: ProductDevDebugCommandDescriptor): void {
     this.#input.value = `${completion.name}${completion.parameters.length === 0 ? '' : ' '}`;
     this.#historyCursor = null;
     this.#renderCommand();
   }
 
-  #currentCompletions(): readonly LiveDebugCommandDescriptor[] {
+  #currentCompletions(): readonly ProductDevDebugCommandDescriptor[] {
     const catalog = this.#catalog;
     if (catalog === null || !catalog.available) return [];
     return completeLiveDebug(catalog, this.#input.value.trim()).slice(0, LIVE_DEBUG_PANEL_MAX_COMPLETIONS);
@@ -467,7 +467,7 @@ function statusText(enabled: boolean, connection: LiveDebugConnectionState): str
   }
 }
 
-function diagnosticDetail(batch: LiveDebugDiagnosticsBatch, event: LiveDebugDiagnosticEvent): string {
+function diagnosticDetail(batch: ProductDevDiagnosticsReadResponse, event: RuntimeDiagnosticEvent): string {
   const fields = event.fields?.map((field) => `${field.key}=${field.value}`) ?? [];
   const eventAge = diagnosticEventAgeMilliseconds(batch, event);
   if (eventAge !== null) fields.push(`event-age-ms=${String(Math.floor(eventAge))}`);

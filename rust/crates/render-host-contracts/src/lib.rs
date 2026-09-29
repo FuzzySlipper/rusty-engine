@@ -8,12 +8,13 @@
 
 use render_model::{RenderHandle, RenderLayer, JSON_SAFE_U64_MAX};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 pub const RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RENDERER_TARGET_DIMENSION: u32 = 2_048;
 pub const MAX_RENDERER_TARGET_PIXELS: u64 = 8_388_608;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RendererCameraPose {
     pub position: [f64; 3],

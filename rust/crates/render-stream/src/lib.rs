@@ -281,6 +281,19 @@ impl SceneDriver {
         self.wake.notify_all();
     }
 
+    /// Whether the simulation is held, the observer camera, and the view
+    /// composition the next frame draws.
+    pub fn view_state(
+        &self,
+    ) -> (
+        bool,
+        Option<RendererCameraPose>,
+        Option<Arc<RendererViewComposition>>,
+    ) {
+        let scene = self.scene();
+        (scene.held, scene.observer, scene.composition.clone())
+    }
+
     /// Animation facts the drawn frames produced since the last call.
     pub fn take_animation_facts(&self) -> Vec<AnimationFact> {
         std::mem::take(&mut self.scene().animation_facts)

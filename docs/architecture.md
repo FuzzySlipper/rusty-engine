@@ -203,6 +203,20 @@ SSE ids remain only as an output sequence, so a caller can wait until an
 operation's outputs have been observed. Immutable host bundles and C# content
 have no default file/count/aggregate byte quotas.
 
+Every shape that crosses to the browser shell is declared once, in Rust:
+- the outputs, operation results and requests;
+- the product bootstrap and the input and UI projection wires;
+- the diagnostics and telemetry;
+- the Engine's own live-debug answers;
+- the `RSF1` frame header.
+
+ts-rs emits them into `render/packages/*/src/generated/contracts.ts`. The
+TypeScript reads them as typed values and does not check their shape again: the
+host is first-party, and the Rust decoders reject bad requests.
+`product-dev-host`'s `typescript_contracts_are_current` test fails while a
+checked-in file differs from the Rust types, and
+`scripts/generate-typescript-contracts.sh` rewrites them.
+
 ### Runtime-rendered output
 
 `RUSTY_RENDER_OUTPUT` selects where the runtime's renderer draws: `stream`

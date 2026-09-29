@@ -1,8 +1,5 @@
-import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
-import type {
-  ProductBrowserRealtimeAdvanceOwner,
-  ProductBrowserRuntimeMode,
-} from './product-browser-host.js';
+import type { ProductDevRuntimeMode, RuntimeInputWireEvent } from './generated/contracts.js';
+import type { ProductBrowserRealtimeAdvanceOwner } from './product-browser-host.js';
 
 /**
  * The small dependency surface used by the Product Browser Host's one
@@ -11,13 +8,13 @@ import type {
  * second DOM or renderer host.
  */
 export interface ProductBrowserCadenceDependencies {
-  readonly lifecycleMode: ProductBrowserRuntimeMode;
+  readonly lifecycleMode: ProductDevRuntimeMode;
   readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly isReady: () => boolean;
   readonly enqueueOperation: <T>(operation: () => Promise<T>) => Promise<T>;
-  readonly sampleInput: () => readonly RustyApplicationRuntimeInputEnvelope[];
+  readonly sampleInput: () => readonly RuntimeInputWireEvent[];
   readonly sendInput: (
-    batch: readonly RustyApplicationRuntimeInputEnvelope[],
+    batch: readonly RuntimeInputWireEvent[],
   ) => Promise<void>;
   readonly advanceRealtime: (observedTimeNs: string) => Promise<void>;
   readonly admitDemandStep: () => Promise<void>;

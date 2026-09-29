@@ -1,0 +1,98 @@
+{
+ "shellFailure": null,
+ "title": "Rusty Template",
+ "frameSequence": "900",
+ "discover": {
+  "error": "page.evaluate: Error: playtest.help is not registered on a live module."
+ },
+ "time": {
+  "mode": "manual",
+  "simulationStep": "989",
+  "fixedStepHz": 60,
+  "advancedMs": 0,
+  "worldHeld": true
+ },
+ "drawing": {
+  "drawing": "on-demand",
+  "output": "stream",
+  "held": true,
+  "observer": false,
+  "camera": null,
+  "frame": {
+   "sequence": 903,
+   "step": 989
+  }
+ },
+ "camera": {
+  "drawing": "on-demand",
+  "output": "stream",
+  "held": true,
+  "observer": false,
+  "camera": null,
+  "frame": {
+   "sequence": 903,
+   "step": 989
+  }
+ },
+ "timeRealtime": {
+  "mode": "realtime",
+  "simulationStep": "989",
+  "fixedStepHz": 60,
+  "advancedMs": 0,
+  "worldHeld": false
+ },
+ "diagnostics": {
+  "status": 200,
+  "keys": [
+   "droppedCount",
+   "errorCount",
+   "events",
+   "floorSequence",
+   "lagged",
+   "nextCursor",
+   "readMonotonicNanoseconds",
+   "telemetry",
+   "throughSequence",
+   "warningCount"
+  ],
+  "telemetry": 18
+ },
+ "rendererStatus": {
+  "available": true,
+  "widget": {
+   "visible": true
+  },
+  "renderer": {
+   "adapter": "AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)",
+   "output": "stream",
+   "stream": {
+    "viewerSize": [
+     1280,
+     720
+    ],
+    "recentFrames": 120,
+    "framesPerSecond": 60.48725458114811,
+    "medianMs": {
+     "render": 0.17064200000000002,
+     "readback": 1.2426139999999999,
+     "encode": 3.437493
+    },
+    "medianBytesPerFrame": 15028,
+    "bytesPerSecond": 909002.4618454938
+   },
+   "skippedOps": {},
+   "lastSkip": null
+  }
+ },
+ "templateCounter": {
+  "before": "0",
+  "after": "2"
+ },
+ "widget": "Renderer metrics\nAdapter: AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan) | stream\nFrames: 60.5 per second | render 0.17 ms | readback 1.24 ms | encode 3.44 ms\nStream: 14.7 KiB per frame | 887.7 KiB per second\nSkipped ops: none",
+ "errors": [
+  "Failed to load resource: the server responded with a status of 422 (Unprocessable Content)"
+ ],
+ "freshStreams": [
+  200
+ ]
+}

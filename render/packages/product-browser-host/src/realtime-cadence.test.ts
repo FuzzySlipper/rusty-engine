@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
+import type { RuntimeInputWireEvent } from '@rusty-engine/application-host';
 import { createProductBrowserCadence } from './realtime-cadence.js';
 
 test('realtime owner controls advancement without dropping typed cadence input', async () => {
-  const input: RustyApplicationRuntimeInputEnvelope = {
+  const input: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
     context: 'gameplay.default',
@@ -12,7 +12,7 @@ test('realtime owner controls advancement without dropping typed cadence input',
   };
 
   const run = async (realtimeAdvanceOwner: 'browser' | 'rust-host') => {
-    const inputBatches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+    const inputBatches: Array<readonly RuntimeInputWireEvent[]> = [];
     const observedTimes: string[] = [];
     const failures: unknown[] = [];
     const cadence = createProductBrowserCadence({
@@ -50,7 +50,7 @@ test('realtime owner controls advancement without dropping typed cadence input',
 });
 
 test('input availability wakes static realtime and demand admission without a second loop', async () => {
-  const input: RustyApplicationRuntimeInputEnvelope = {
+  const input: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
     context: 'gameplay.default',
@@ -65,7 +65,7 @@ test('input availability wakes static realtime and demand admission without a se
     lifecycleMode: 'realtime' | 'demand' | 'external',
     realtimeAdvanceOwner: 'browser' | 'rust-host' = 'browser',
   ) => {
-    const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+    const batches: Array<readonly RuntimeInputWireEvent[]> = [];
     const advances: string[] = [];
     let demandSteps = 0;
     const cadence = createProductBrowserCadence({
@@ -92,19 +92,19 @@ test('input availability wakes static realtime and demand admission without a se
 });
 
 test('slow cadence coalesces an input wake while ingress preserves ordered edges', async () => {
-  const pressed: RustyApplicationRuntimeInputEnvelope = {
+  const pressed: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
     context: 'gameplay.default',
     fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
   };
-  const released: RustyApplicationRuntimeInputEnvelope = {
+  const released: RuntimeInputWireEvent = {
     ...pressed,
     sequence: '2',
     fact: { kind: 'key', code: 'key-w', edge: 'released' },
   };
-  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
-  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const queued: RuntimeInputWireEvent[] = [];
+  const batches: Array<readonly RuntimeInputWireEvent[]> = [];
   const advances: string[] = [];
   let releaseFirstAdvance: () => void = () => undefined;
   const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
@@ -138,14 +138,14 @@ test('slow cadence coalesces an input wake while ingress preserves ordered edges
 });
 
 test('a renderer cadence before a pending input wake does not drain later input early', async () => {
-  const pressed: RustyApplicationRuntimeInputEnvelope = {
+  const pressed: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
     context: 'gameplay.default',
     fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
   };
-  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
-  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const queued: RuntimeInputWireEvent[] = [];
+  const batches: Array<readonly RuntimeInputWireEvent[]> = [];
   const advances: string[] = [];
   let samples = 0;
   let releaseFirstAdvance: () => void = () => undefined;
@@ -182,14 +182,14 @@ test('a renderer cadence before a pending input wake does not drain later input 
 });
 
 test('a cadence deferred by the serialized lane does not drain a later input wake', async () => {
-  const pressed: RustyApplicationRuntimeInputEnvelope = {
+  const pressed: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
     context: 'gameplay.default',
     fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
   };
-  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
-  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const queued: RuntimeInputWireEvent[] = [];
+  const batches: Array<readonly RuntimeInputWireEvent[]> = [];
   const advances: string[] = [];
   let samples = 0;
   let releasePriorOperation: () => void = () => undefined;
@@ -230,19 +230,19 @@ test('a cadence deferred by the serialized lane does not drain a later input wak
 });
 
 test('slow admission keeps ingress overflow recovery bounded after more than 1024 input wakes', async () => {
-  const overflowClear: RustyApplicationRuntimeInputEnvelope = {
+  const overflowClear: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '0',
     context: 'gameplay.default',
     fact: { kind: 'clear', reason: 'ingress-overflow' },
   };
-  const laterPressed: RustyApplicationRuntimeInputEnvelope = {
+  const laterPressed: RuntimeInputWireEvent = {
     ...overflowClear,
     sequence: '1',
     fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
   };
-  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
-  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const queued: RuntimeInputWireEvent[] = [];
+  const batches: Array<readonly RuntimeInputWireEvent[]> = [];
   const advances: string[] = [];
   const failures: unknown[] = [];
   let samples = 0;
@@ -283,15 +283,15 @@ test('slow admission keeps ingress overflow recovery bounded after more than 102
 });
 
 test('cadence keeps an older same-frame RAF timestamp monotonic after an input wakeup', async () => {
-  const pressed: RustyApplicationRuntimeInputEnvelope = {
+  const pressed: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
     context: 'gameplay.default',
     fact: { kind: 'key', code: 'key-a', edge: 'pressed' },
   };
-  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
+  const queued: RuntimeInputWireEvent[] = [];
   const advances: string[] = [];
-  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const batches: Array<readonly RuntimeInputWireEvent[]> = [];
   let releaseFirstAdvance: () => void = () => undefined;
   const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
   const cadence = createProductBrowserCadence({

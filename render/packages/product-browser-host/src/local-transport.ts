@@ -1,48 +1,41 @@
 import { browserAttachmentEvidence } from './attachment-evidence.js';
-import { snapshotRustyApplicationJson, snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
-import type {
-  RustyApplicationControllerAxis,
-  RustyApplicationControllerButton,
-  RustyApplicationInputClearReason,
-  RustyApplicationKeyboardControl,
-  RustyApplicationPointerButton,
-  RustyApplicationRuntimeIdentity,
-  RustyApplicationRuntimeInputFact,
-  RustyApplicationRuntimeInputEnvelope,
-  RustyApplicationRuntimeIntentValue,
-  RustyApplicationUiProjectionEnvelope,
-} from '@rusty-engine/application-host';
+import type { RustyApplicationRuntimeIdentity } from '@rusty-engine/application-host';
+import {
+  RUNTIME_BASE_PATH,
+  type ProductDevBrowserDiagnosticsReport,
+  type ProductDevBrowserDiagnosticsResult,
+  type ProductDevConnectionBaseline,
+  type ProductDevControlRequest,
+  type ProductDevEmptyRequest,
+  type ProductDevExternalRequest,
+  type ProductDevInputRequest,
+  type ProductDevInputResult,
+  type ProductDevLifecycleRequest,
+  type ProductDevOperationResult,
+  type ProductDevRealtimeRequest,
+  type ProductDevRuntimeOutput,
+  type ProductDevTimelineCompletion,
+  type ProductDevTimelineCompletionResult,
+  type RuntimeInputWireEvent,
+} from './generated/contracts.js';
 import type {
   ProductBrowserLifecycleOperation,
-  ProductBrowserDiagnosticsReport,
-  ProductBrowserDiagnosticsResult,
-  ProductBrowserHostFaultDisposition,
   ProductBrowserRuntimeAdapter,
-  ProductBrowserRuntimeInputResult,
-  ProductBrowserRuntimeOperationKind,
-  ProductBrowserRuntimeOperationResult,
-  ProductBrowserRuntimeOutput,
   ProductBrowserRuntimeOutputBatchListener,
   ProductBrowserRuntimeOutputBatchMetadata,
-  ProductBrowserRuntimeReadout,
   ProductBrowserRuntimeTerminalFailure,
   ProductBrowserRuntimeTerminalFailureListener,
-  ProductBrowserTimelineCompletion,
-  ProductBrowserTimelineCompletionResult,
 } from './product-browser-host.js';
-
-/**
- * Fixed same-origin endpoint family for the generated local Product runtime.
- * The endpoint is deliberately an operation-specific route set, rather than
- * a method-name RPC endpoint or a generic message tunnel.
- */
-export const PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH =
-  '/__rusty/product/runtime/' as const;
 
 /** Fixed identity for the Engine-owned browser-to-local-runtime transport. */
 export const PRODUCT_BROWSER_LOCAL_TRANSPORT_ARTIFACT =
   'rusty.product.local-runtime-transport' as const;
 
+/**
+ * The runtime's operation routes. The endpoint is deliberately an
+ * operation-specific route set, rather than a method-name RPC endpoint or a
+ * generic message tunnel.
+ */
 const ROUTES = Object.freeze({
   lifecycle: Object.freeze({
     start: 'lifecycle/start',
@@ -65,94 +58,9 @@ const ROUTES = Object.freeze({
   freshOutputs: 'outputs/fresh',
 });
 
-const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
 const EVENT_SOURCE_CLOSED = 2;
 const FRESH_RETRY_INITIAL_DELAY_MS = 250;
 const FRESH_RETRY_MAX_DELAY_MS = 2_000;
-const DEFAULT_MAXIMUM_RESPONSE_BYTES = MAXIMUM_RUNTIME_RESPONSE_BYTES;
-const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
-const UINT64_MAX_DECIMAL = '18446744073709551615';
-const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
-const KEYBOARD_CONTROLS = new Set<string>([
-  ...Array.from({ length: 26 }, (_, index) => `key-${String.fromCharCode(97 + index)}`),
-  ...Array.from({ length: 10 }, (_, index) => `digit-${String(index)}`),
-  'space', 'enter', 'escape', 'shift-left', 'shift-right', 'control-left', 'control-right',
-  'alt-left', 'alt-right',
-  'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-]);
-const POINTER_BUTTONS = new Set<string>(['primary', 'secondary', 'middle']);
-const CONTROLLER_BUTTONS = new Set<string>(Array.from({ length: 16 }, (_, index) => `button-${String(index)}`));
-const CONTROLLER_AXES = new Set<string>(Array.from({ length: 4 }, (_, index) => `axis-${String(index)}`));
-const INPUT_EDGES = new Set<string>(['pressed', 'released']);
-const INPUT_CLEAR_REASONS = new Set<string>([
-  'focus-loss', 'ingress-overflow', 'interaction-mode-loss', 'pointer-lock-loss',
-  'restart', 'control-revision-change', 'dispose',
-]);
-const HOST_FAULT_DISPOSITIONS = new Set<string>([
-  'accepted', 'rejected-recoverable', 'degraded', 'resync-required', 'terminal',
-]);
-
-interface ProductBrowserWireRecord {
-  readonly [key: string]: unknown;
-  readonly accepted?: unknown;
-  readonly operation?: unknown;
-  readonly binding?: unknown;
-  readonly readout?: unknown;
-  readonly diagnostic?: unknown;
-  readonly count?: unknown;
-  readonly ticket?: unknown;
-  readonly kind?: unknown;
-  readonly context?: unknown;
-  readonly fact?: unknown;
-  readonly intent?: unknown;
-  readonly code?: unknown;
-  readonly edge?: unknown;
-  readonly button?: unknown;
-  readonly x?: unknown;
-  readonly y?: unknown;
-  readonly axis?: unknown;
-  readonly reason?: unknown;
-  readonly active?: unknown;
-  readonly outcome?: unknown;
-  readonly provenance?: unknown;
-  readonly data?: unknown;
-  readonly detail?: unknown;
-  readonly runtime?: unknown;
-  readonly frame?: unknown;
-  readonly composition?: unknown;
-  readonly envelope?: unknown;
-  readonly artifact?: unknown;
-  readonly sequence?: unknown;
-  readonly stream?: unknown;
-  readonly contract?: unknown;
-  readonly value?: unknown;
-  readonly instanceId?: unknown;
-  readonly generation?: unknown;
-  readonly controlRevision?: unknown;
-  readonly mode?: unknown;
-  readonly state?: unknown;
-  readonly fault?: unknown;
-  readonly scaledRemainder?: unknown;
-  readonly admittedSimulationSteps?: unknown;
-  readonly admittedPresentations?: unknown;
-  readonly droppedRealtimeSteps?: unknown;
-  readonly clockRegressions?: unknown;
-  readonly hostState?: unknown;
-  readonly runtimeProgress?: unknown;
-  readonly transportState?: unknown;
-  readonly outputState?: unknown;
-  readonly firstTerminal?: unknown;
-  readonly pageEvents?: unknown;
-  readonly reported?: unknown;
-  readonly lastObservedTimeNs?: unknown;
-  readonly replaceOwner?: unknown;
-  readonly evictedFactCount?: unknown;
-  readonly facts?: unknown;
-  readonly acceptedThroughFactId?: unknown;
-  readonly source?: unknown;
-  readonly signalHandle?: unknown;
-  readonly voiceHandle?: unknown;
-}
 
 export type ProductBrowserLocalFetch = (
   input: RequestInfo | URL,
@@ -188,9 +96,6 @@ export interface ProductBrowserLocalTransportOptions {
   readonly fetch?: ProductBrowserLocalFetch;
   /** Injectable only for headless tests. Browser builds use EventSource. */
   readonly eventSource?: ProductBrowserLocalEventSourceConstructor;
-  readonly maximumResponseBytes?: number;
-  /** Optional caller-selected aggregate output budget; omitted uses JS's safe-integer ceiling. */
-  readonly maximumOutputBytes?: number;
   /** Stream errors are surfaced here; the operation surface remains closed. */
   readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;
   /**
@@ -298,20 +203,11 @@ function decodeCommitDisposition(
 export function createProductBrowserLocalHttpAdapter(
   options: ProductBrowserLocalTransportOptions = {},
 ): ProductBrowserRuntimeAdapter {
-  const basePath = validateBasePath(options.basePath ?? PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH);
+  const basePath = options.basePath ?? RUNTIME_BASE_PATH;
   const attachment = browserAttachmentEvidence(basePath);
   const fetchImpl = options.fetch ?? resolveFetch();
   const eventSourceConstructor = options.eventSource ?? resolveEventSource();
   const reloadPage = options.reloadPage ?? (() => globalThis.location.reload());
-  const maximumResponseBytes = validateMaximumBytes(
-    options.maximumResponseBytes ?? DEFAULT_MAXIMUM_RESPONSE_BYTES,
-    'maximumResponseBytes',
-    MAXIMUM_RUNTIME_RESPONSE_BYTES,
-  );
-  const maximumOutputBytes = validateMaximumBytes(
-    options.maximumOutputBytes ?? Number.MAX_SAFE_INTEGER,
-    'maximumOutputBytes',
-  );
   let disposed = false;
   let stream: ProductBrowserLocalEventSource | null = null;
   let streamBaselineListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
@@ -320,11 +216,11 @@ export function createProductBrowserLocalHttpAdapter(
   let pageInstanceId: string | null = null;
   let outputSubscriptionReady: Promise<void> | null = null;
   let resolveOutputSubscriptionReady: (() => void) | null = null;
-  let connectionReady: Promise<ProductBrowserRuntimeOperationResult> | null = null;
-  let resolveConnectionReady: ((result: ProductBrowserRuntimeOperationResult) => void) | null = null;
+  let connectionReady: Promise<ProductDevOperationResult> | null = null;
+  let resolveConnectionReady: ((result: ProductDevOperationResult) => void) | null = null;
   let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
   let connectionBaselineComplete = false;
-  let pendingConnectionOutputs: ProductBrowserRuntimeOutput[] = [];
+  let pendingConnectionOutputs: ProductDevRuntimeOutput[] = [];
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let nextOutputEpoch = 0;
   let currentOutputEpoch = 0;
@@ -334,7 +230,7 @@ export function createProductBrowserLocalHttpAdapter(
     readonly through: bigint;
     readonly resolve: (outcome: 'observed' | 'fresh-baseline' | 'closed') => void;
   }>();
-  const listeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
+  const listeners = new Set<(output: ProductDevRuntimeOutput) => void>();
   const batchListeners = new Set<ProductBrowserRuntimeOutputBatchListener>();
   const terminalFailureListeners = new Set<ProductBrowserRuntimeTerminalFailureListener>();
   const abortController = new AbortController();
@@ -383,7 +279,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const observeOutputSequence = (value: string): void => {
-    const sequence = decodeOutputSequence(value, 'output event id', 'output_decode_failed');
+    const sequence = BigInt(value);
     if (sequence <= observedOutputSequence) {
       throw new ProductBrowserLocalTransportError(
         'output_decode_failed',
@@ -539,16 +435,15 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
-  const post = async <T>(
+  const post = async <Body, Result>(
     route: string,
-    body: unknown,
-    decode: (value: unknown) => T,
+    body: Body,
     allowAfterDispose = false,
-  ): Promise<T> => {
+  ): Promise<Result> => {
     if (!allowAfterDispose) ensureOpen();
     const url = `${basePath}${route}`;
     const outputEpochAtRequest = currentOutputEpoch;
-    const encodedBody = encodeRequestBody(body, maximumResponseBytes, route);
+    const encodedBody = JSON.stringify(body);
     let response: Response;
     try {
       response = await fetchImpl(url, {
@@ -596,41 +491,7 @@ export function createProductBrowserLocalHttpAdapter(
     const mutationCertainty = commitDisposition === 'not-applied' ? 'not-applied' as const
       : commitDisposition === 'unknown' ? 'outcome-unknown' as const : 'committed' as const;
     const outputThroughHeader = response.headers.get('x-rusty-output-through');
-    let outputThrough: bigint | null = null;
-    if (outputThroughHeader !== null) {
-      try {
-        outputThrough = decodeOutputSequence(
-          outputThroughHeader,
-          'X-Rusty-Output-Through response header',
-          'response_decode_failed',
-          route,
-        );
-      } catch (cause) {
-        const source = cause instanceof ProductBrowserLocalTransportError
-          ? cause
-          : new ProductBrowserLocalTransportError(
-            'response_decode_failed',
-            `Product Browser local runtime returned an invalid output cursor for ${route}`,
-            { cause, route },
-          );
-        const error = new ProductBrowserLocalTransportError(
-          source.code,
-          source.message,
-          {
-            cause: source,
-            route,
-            mutation: Object.freeze({
-              certainty: mutationCertainty,
-              outputRecovery: mutationCertainty === 'committed'
-                ? 'fresh-baseline-required' as const : 'none' as const,
-              outputThrough: null,
-            }),
-          },
-        );
-        if (mutationCertainty === 'committed') await recoverFreshOutputsOrTerminal(route);
-        throw error;
-      }
-    }
+    const outputThrough = outputThroughHeader === null ? null : BigInt(outputThroughHeader);
     const mutation = Object.freeze({
       certainty: mutationCertainty,
       outputRecovery: commitDisposition === 'resync-required'
@@ -652,7 +513,7 @@ export function createProductBrowserLocalHttpAdapter(
     }
     let text: string;
     try {
-      text = await readResponseText(response, maximumResponseBytes, route);
+      text = await response.text();
     } catch (cause) {
       const source = cause instanceof ProductBrowserLocalTransportError
         ? cause
@@ -685,23 +546,7 @@ export function createProductBrowserLocalHttpAdapter(
       }
       throw error;
     }
-    let decoded: T;
-    try {
-      if (!allowAfterDispose) ensureOpen();
-      decoded = decode(value);
-    } catch (cause) {
-      const error = cause instanceof ProductBrowserLocalTransportError
-        ? cause
-        : new ProductBrowserLocalTransportError(
-        'response_decode_failed',
-        `Product Browser local runtime returned an invalid response for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        { cause, route, mutation },
-      );
-      if (mutation.outputRecovery === 'fresh-baseline-required') {
-        await recoverFreshOutputsOrTerminal(route);
-      }
-      throw error;
-    }
+    if (!allowAfterDispose) ensureOpen();
     if (commitDisposition === 'resync-required') {
       await recoverFreshOutputsOrTerminal(route);
     } else if (outputThrough !== null) {
@@ -714,65 +559,49 @@ export function createProductBrowserLocalHttpAdapter(
         await freshOutputRecovery;
       }
     }
-    return decoded;
+    return value as Result;
   };
 
-  const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductBrowserRuntimeOperationResult> =>
-    post(ROUTES.lifecycle[operation.kind], {}, (value) => decodeOperationResult(value, operation.kind));
+  const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductDevOperationResult> =>
+    post<ProductDevLifecycleRequest, ProductDevOperationResult>(ROUTES.lifecycle[operation.kind], {});
 
   const replaceControl = (
     runtime: RustyApplicationRuntimeIdentity,
-  ): Promise<ProductBrowserRuntimeOperationResult> =>
-    post(
-      ROUTES.control.replace,
-      { runtime: snapshotRuntimeIdentity(runtime) },
-      (value) => decodeOperationResult(value, 'replace-control'),
-    );
+  ): Promise<ProductDevOperationResult> =>
+    post<ProductDevControlRequest, ProductDevOperationResult>(ROUTES.control.replace, { runtime });
 
   const input = (
-    batch: readonly RustyApplicationRuntimeInputEnvelope[],
-  ): Promise<ProductBrowserRuntimeInputResult> =>
-    post(ROUTES.input, { batch: snapshotInputBatch(batch) }, decodeInputResult);
+    batch: readonly RuntimeInputWireEvent[],
+  ): Promise<ProductDevInputResult> =>
+    post<ProductDevInputRequest, ProductDevInputResult>(ROUTES.input, { batch: [...batch] });
 
   const reportBrowserDiagnostics = (
-    report: ProductBrowserDiagnosticsReport,
-  ): Promise<ProductBrowserDiagnosticsResult> => {
-    const snapshot = snapshotBrowserDiagnosticsReport(report);
+    report: ProductDevBrowserDiagnosticsReport,
+  ): Promise<ProductDevBrowserDiagnosticsResult> =>
     // The first terminal host report must survive closing the SSE transport.
     // This exact route remains bounded and does not reopen the runtime API.
-    return post(ROUTES.browserDiagnostics, { ...snapshot, attachment: attachment.read() }, decodeBrowserDiagnosticsResult, true);
-  };
-
-  const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
-    post(
-      ROUTES.advanceRealtime,
-      { observedTimeNs: requireU64Text(observedTimeNs, 'observedTimeNs') },
-      (value) => decodeOperationResult(value, 'advance-realtime'),
+    post<ProductDevBrowserDiagnosticsReport, ProductDevBrowserDiagnosticsResult>(
+      ROUTES.browserDiagnostics,
+      { ...report, attachment: attachment.read() },
+      true,
     );
 
-  const admitDemandStep = (): Promise<ProductBrowserRuntimeOperationResult> =>
-    post(ROUTES.admitDemandStep, {}, (value) => decodeOperationResult(value, 'admit-demand-step'));
+  const advanceRealtime = (observedTimeNs: string): Promise<ProductDevOperationResult> =>
+    post<ProductDevRealtimeRequest, ProductDevOperationResult>(ROUTES.advanceRealtime, { observedTimeNs });
 
-  const admitExternalStep = (step: string): Promise<ProductBrowserRuntimeOperationResult> =>
-    post(
-      ROUTES.admitExternalStep,
-      { step: requireU64Text(step, 'step') },
-      (value) => decodeOperationResult(value, 'admit-external-step'),
-    );
+  const admitDemandStep = (): Promise<ProductDevOperationResult> =>
+    post<ProductDevEmptyRequest, ProductDevOperationResult>(ROUTES.admitDemandStep, {});
+
+  const admitExternalStep = (step: string): Promise<ProductDevOperationResult> =>
+    post<ProductDevExternalRequest, ProductDevOperationResult>(ROUTES.admitExternalStep, { step });
 
   const completeTimeline = (
-    completion: ProductBrowserTimelineCompletion,
-  ): Promise<ProductBrowserTimelineCompletionResult> => {
-    const snapshot = snapshotTimelineCompletion(completion);
-    return post(
-      ROUTES.completeTimeline,
-      snapshot,
-      (value) => decodeTimelineCompletionResult(value, snapshot.ticket),
-    );
-  };
+    completion: ProductDevTimelineCompletion,
+  ): Promise<ProductDevTimelineCompletionResult> =>
+    post<ProductDevTimelineCompletion, ProductDevTimelineCompletionResult>(ROUTES.completeTimeline, completion);
 
   const publishOutputBatch = (
-    outputs: readonly ProductBrowserRuntimeOutput[],
+    outputs: readonly ProductDevRuntimeOutput[],
     metadata: ProductBrowserRuntimeOutputBatchMetadata = {
       epoch: currentOutputEpoch,
       baseline: false,
@@ -817,7 +646,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const stageOrPublishOutputBatch = (
-    outputs: readonly ProductBrowserRuntimeOutput[],
+    outputs: readonly ProductDevRuntimeOutput[],
     epoch: number,
   ): void => {
     if (connectionBaselineComplete) {
@@ -896,13 +725,9 @@ export function createProductBrowserLocalHttpAdapter(
         if (event.lastEventId !== '') {
           throw new TypeError('connection baseline completion must not carry a reconnect cursor');
         }
-        const baseline = requireRecord(parseBoundedJson(event.data, MAXIMUM_RUNTIME_RESPONSE_BYTES), 'connection baseline');
-        const { outputThrough, ...connection } = baseline;
-        const result = decodeConnectionResult(connection);
-        if (outputThrough !== undefined) {
-          observedOutputSequence = decodeOutputSequence(String(outputThrough), 'baseline output boundary', 'output_decode_failed');
-          settleOutputSequenceWaiters();
-        }
+        const { outputThrough, ...result } = JSON.parse(event.data) as ProductDevConnectionBaseline;
+        observedOutputSequence = BigInt(outputThrough);
+        settleOutputSequenceWaiters();
         if (!result.accepted) {
           throw new ProductBrowserLocalTransportError(
             'request_failed',
@@ -955,7 +780,7 @@ export function createProductBrowserLocalHttpAdapter(
     attachedStream.onmessage = (event) => {
       if (!ownsProjection()) return;
       try {
-        const outputs = decodeRuntimeOutputBatch(parseBoundedJson(event.data, maximumOutputBytes));
+        const outputs = JSON.parse(event.data) as ProductDevRuntimeOutput[];
         if (connectionBaselineComplete) {
           observeOutputSequence(event.lastEventId);
         }
@@ -1009,7 +834,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const subscribeOutputs = (
-    listener: (output: ProductBrowserRuntimeOutput) => void,
+    listener: (output: ProductDevRuntimeOutput) => void,
   ): (() => void) => {
     ensureOpen();
     if (typeof listener !== 'function') {
@@ -1024,7 +849,7 @@ export function createProductBrowserLocalHttpAdapter(
         outputSubscriptionReady = new Promise<void>((resolve) => {
           resolveOutputSubscriptionReady = resolve;
         });
-        connectionReady = new Promise<ProductBrowserRuntimeOperationResult>((resolve, reject) => {
+        connectionReady = new Promise<ProductDevOperationResult>((resolve, reject) => {
           resolveConnectionReady = resolve;
           rejectConnectionReady = reject;
         });
@@ -1117,7 +942,7 @@ export function createProductBrowserLocalHttpAdapter(
     ensureOpen();
   };
 
-  const connect = async (): Promise<ProductBrowserRuntimeOperationResult> => {
+  const connect = async (): Promise<ProductDevOperationResult> => {
     ensureOpen();
     if (stream === null || connectionReady === null) {
       throw new ProductBrowserLocalTransportError(
@@ -1198,7 +1023,7 @@ export function createProductBrowserLocalHttpAdapter(
     subscribeOutputs,
     subscribeOutputBatches,
     waitUntilOutputSubscriptionReady,
-    waitUntilOutputSequence: (through: string) => waitUntilOutputSequence(decodeOutputSequence(through, 'debug output through', 'response_decode_failed')),
+    waitUntilOutputSequence: (through: string) => waitUntilOutputSequence(BigInt(through)),
     recoverOutputProjection: () => recoverFreshOutputsOrTerminal(ROUTES.freshOutputs),
     confirmOutputBaseline: (epoch: number) => attachment.confirm(epoch),
     dispose,
@@ -1226,819 +1051,5 @@ function resolveEventSource(): ProductBrowserLocalEventSourceConstructor {
       'Product Browser local runtime transport requires EventSource',
     );
   }
-  return value;
-}
-
-function validateBasePath(value: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 256
-    || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')
-    || value.includes('..') || value.includes('%')
-    || value.includes('?') || value.includes('#') || !value.endsWith('/')) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      'Product Browser local runtime basePath must be a same-origin absolute path ending in /',
-    );
-  }
-  return value;
-}
-
-function validateMaximumBytes(value: number, name: string, maximum?: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || (maximum !== undefined && value > maximum)) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      maximum === undefined
-        ? `${name} must be a positive safe integer`
-        : `${name} must be a positive safe integer no greater than ${String(maximum)}`,
-    );
-  }
-  return value;
-}
-
-function decodeOutputSequence(
-  value: string,
-  name: string,
-  code: 'response_decode_failed' | 'output_decode_failed',
-  route: string = ROUTES.outputs,
-): bigint {
-  if (!/^(?:0|[1-9]\d{0,19})$/u.test(value)
-    || (value.length === UINT64_MAX_DECIMAL.length && value > UINT64_MAX_DECIMAL)) {
-    throw new ProductBrowserLocalTransportError(
-      code,
-      `${name} must be canonical unsigned 64-bit decimal text`,
-      { route },
-    );
-  }
-  return BigInt(value);
-}
-
-function requireU64Text(value: unknown, name: string): string {
-  if (typeof value !== 'string'
-    || !/^(?:0|[1-9]\d{0,19})$/u.test(value)
-    || (value.length === UINT64_MAX_DECIMAL.length && value > UINT64_MAX_DECIMAL)) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `${name} must be a canonical unsigned 64-bit decimal string`,
-    );
-  }
-  return value;
-}
-
-function requireU32(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 4_294_967_295) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `${name} must be an unsigned 32-bit integer`,
-    );
-  }
-  return value as number;
-}
-
-function requireIdentity(value: unknown, name: string): string {
-  return requireProductIdentity(value, name);
-}
-
-function requireProductIdentity(value: unknown, name: string): string {
-  if (typeof value !== 'string'
-    || new TextEncoder().encode(value).byteLength > 128
-    || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(value)) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `${name} must be a 1..128 byte lowercase runtime identity`,
-    );
-  }
-  return value;
-}
-
-function requireFaultCode(value: unknown, name: string): string {
-  if (typeof value !== 'string'
-    || new TextEncoder().encode(value).byteLength > 128
-    || !/^[A-Z0-9][A-Z0-9._-]*$/u.test(value)) {
-    throw new TypeError(`${name} must be a bounded stable host fault code`);
-  }
-  return value;
-}
-
-function requireBoundedString(value: unknown, name: string, maximumBytes = 256): string {
-  if (typeof value !== 'string' || value.length === 0
-    || new TextEncoder().encode(value).byteLength > maximumBytes
-    || /[\u0000-\u001f\u007f]/u.test(value)) {
-    throw new TypeError(`${name} must be a bounded string without control characters`);
-  }
-  return value;
-}
-
-function requireFiniteNumber(
-  value: unknown,
-  name: string,
-  minimum = Number.NEGATIVE_INFINITY,
-  maximum = Number.POSITIVE_INFINITY,
-): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) {
-    throw new TypeError(`${name} must be a finite number within [${String(minimum)}, ${String(maximum)}]`);
-  }
-  return value;
-}
-
-function requireInputEdge(value: unknown): 'pressed' | 'released' {
-  return requireCatalogValue<'pressed' | 'released'>(value, 'input edge', INPUT_EDGES);
-}
-
-function requireCatalogValue<T extends string>(
-  value: unknown,
-  name: string,
-  catalog: ReadonlySet<string>,
-): T {
-  if (typeof value !== 'string' || !catalog.has(value)) {
-    throw new TypeError(`${name} is not in the closed runtime input catalog`);
-  }
-  return value as T;
-}
-
-function hasOwn(record: ProductBrowserWireRecord, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
-async function readResponseText(
-  response: Response,
-  maximumBytes: number,
-  route: string,
-): Promise<string> {
-  // Use the browser's complete-body consumer. In Chromium, manually draining
-  // a fetch reader can report ERR_ABORTED even after every byte and done=true
-  // reached JavaScript. Native consumption also settles the network request.
-  const oversized = (): ProductBrowserLocalTransportError => new ProductBrowserLocalTransportError(
-    'response_decode_failed',
-    `Product Browser local runtime response for ${route} exceeds ${String(maximumBytes)} bytes`,
-    { route },
-  );
-  // The trusted local host supplies a bounded Content-Length. Reject a
-  // caller-selected smaller budget before buffering, then check actual bytes.
-  const declaredBytes = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredBytes) && declaredBytes > maximumBytes) throw oversized();
-  let bytes: ArrayBuffer;
-  try {
-    bytes = await response.arrayBuffer();
-  } catch (cause) {
-    throw new ProductBrowserLocalTransportError(
-      'request_failed',
-      `Product Browser local runtime response could not be read for ${route}`,
-      { cause, route },
-    );
-  }
-  if (bytes.byteLength > maximumBytes) throw oversized();
-  return new TextDecoder().decode(bytes);
-}
-
-function encodeRequestBody(body: unknown, maximumBytes: number, route: string): string {
-  let text: string | undefined;
-  try {
-    text = JSON.stringify(body);
-  } catch (cause) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `Product Browser local runtime request for ${route} is not JSON-safe`,
-      { cause, route },
-    );
-  }
-  if (text === undefined) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `Product Browser local runtime request for ${route} is not a JSON value`,
-      { route },
-    );
-  }
-  const bytes = new TextEncoder().encode(text).byteLength;
-  if (bytes > maximumBytes) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `Product Browser local runtime request for ${route} exceeds ${String(maximumBytes)} bytes`,
-      { route },
-    );
-  }
-  return text;
-}
-
-type ProductBrowserLocalJson =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly ProductBrowserLocalJson[]
-  | { readonly [key: string]: ProductBrowserLocalJson };
-
-function snapshotInputBatch(
-  batch: readonly RustyApplicationRuntimeInputEnvelope[],
-): readonly RustyApplicationRuntimeInputEnvelope[] {
-  const source = requirePlainArray(batch, 'runtime input batch');
-  if (source.length > MAXIMUM_INPUT_BATCH_LENGTH) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `runtime input batch must contain 0..${String(MAXIMUM_INPUT_BATCH_LENGTH)} entries`,
-    );
-  }
-  const entries: RustyApplicationRuntimeInputEnvelope[] = [];
-  for (let index = 0; index < source.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(source, String(index));
-    if (descriptor === undefined || !('value' in descriptor)) {
-      throw new ProductBrowserLocalTransportError(
-        'invalid_options',
-        `runtime input batch entry ${String(index)} cannot be a getter or hole`,
-      );
-    }
-    entries.push(snapshotInputEnvelope(descriptor.value));
-  }
-  return Object.freeze(entries);
-}
-
-function snapshotRuntimeIdentity(value: unknown): RustyApplicationRuntimeIdentity {
-  return decodeRuntimeIdentity(requireRecord(value, 'runtime identity'));
-}
-
-function snapshotInputEnvelope(value: unknown): RustyApplicationRuntimeInputEnvelope {
-  const record = requireRecord(value, 'runtime input envelope');
-  const common = {
-    runtime: decodeRuntimeIdentity(record.runtime),
-    sequence: requireU64Text(record.sequence, 'sequence'),
-    context: requireProductIdentity(record['context'], 'context'),
-  };
-  if (hasOwn(record, 'fact')) {
-    requireKnownFields(record, ['runtime', 'sequence', 'context', 'fact'], 'runtime input ingress');
-    return Object.freeze({ ...common, fact: snapshotInputFact(record['fact']) });
-  }
-  if (hasOwn(record, 'intent')) {
-    requireKnownFields(record, ['runtime', 'sequence', 'context', 'intent', 'value'], 'runtime direct intent claim');
-    return Object.freeze({
-      ...common,
-      intent: requireProductIdentity(record['intent'], 'intent'),
-      value: snapshotIntentValue(record['value']),
-    });
-  }
-  throw new TypeError('runtime input envelope must contain fact or intent');
-}
-
-function snapshotBrowserDiagnosticsReport(
-  value: ProductBrowserDiagnosticsReport,
-): ProductBrowserDiagnosticsReport {
-  const record = requireRecord(value, 'browser diagnostics report');
-  requireKnownFields(record, [
-    'hostState', 'runtimeProgress', 'transportState', 'outputState',
-    'firstTerminal', 'recoverableEvent', 'pageEvents',
-  ], 'browser diagnostics report');
-  const pageEvents = requirePlainArray(record.pageEvents, 'browser diagnostics page events');
-  if (pageEvents.length > 8) throw new TypeError('browser diagnostics exceeds 8 page events');
-  const terminal = record.firstTerminal === undefined
-    ? undefined
-    : snapshotBrowserDiagnostic(record.firstTerminal, 'browser terminal diagnostic');
-  const recoverable = record['recoverableEvent'] === undefined
-    ? undefined
-    : snapshotBrowserDiagnostic(record['recoverableEvent'], 'browser recoverable diagnostic');
-  if (recoverable !== undefined && recoverable.code !== 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
-    && recoverable.code !== 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
-    throw new TypeError('browser recoverable diagnostic code is not supported');
-  }
-  return Object.freeze({
-    hostState: requireCatalogValue(record.hostState, 'browser host state', new Set(['loading', 'ready', 'degraded', 'failed', 'disposed'])),
-    runtimeProgress: requireU64Text(record.runtimeProgress, 'browser runtime progress'),
-    transportState: requireCatalogValue(record.transportState, 'browser transport state', new Set(['open', 'closed'])),
-    outputState: requireCatalogValue(record.outputState, 'browser output state', new Set(['open', 'closed'])),
-    ...(terminal === undefined ? {} : { firstTerminal: terminal }),
-    ...(recoverable === undefined ? {} : { recoverableEvent: recoverable }),
-    pageEvents: Object.freeze(pageEvents.map((event) => {
-      const eventRecord = requireRecord(event, 'browser page diagnostic');
-      requireKnownFields(eventRecord, ['kind', 'code', 'message'], 'browser page diagnostic');
-      return Object.freeze({
-        kind: requireCatalogValue(eventRecord.kind, 'browser page diagnostic kind', new Set(['error', 'unhandled-rejection'])),
-        code: requireBrowserDiagnosticCode(eventRecord.code, 'browser page diagnostic code'),
-        message: requireDiagnostic(eventRecord['message']),
-      });
-    })),
-  }) as ProductBrowserDiagnosticsReport;
-}
-
-function snapshotBrowserDiagnostic(value: unknown, name: string): { readonly code: string; readonly message: string } {
-  const record = requireRecord(value, name);
-  requireKnownFields(record, ['code', 'message'], name);
-  const code = requireBrowserDiagnosticCode(record.code, `${name} code`);
-  const message = requireDiagnostic(record['message']);
-  return Object.freeze({ code, message });
-}
-
-function requireBrowserDiagnosticCode(value: unknown, name: string): string {
-  if (typeof value !== 'string' || value.length === 0
-    || new TextEncoder().encode(value).byteLength > 128
-    || /[^A-Za-z0-9._:-]/u.test(value)) {
-    throw new TypeError(`${name} is invalid`);
-  }
-  return value;
-}
-
-function snapshotInputFact(value: unknown): RustyApplicationRuntimeInputFact {
-  const record = requireRecord(value, 'runtime input fact');
-  const kind = record.kind;
-  switch (kind) {
-    case 'key':
-      requireKnownFields(record, ['kind', 'code', 'edge'], 'key input fact');
-      return Object.freeze({
-        kind,
-        code: requireCatalogValue<RustyApplicationKeyboardControl>(record['code'], 'key code', KEYBOARD_CONTROLS),
-        edge: requireInputEdge(record['edge']),
-      });
-    case 'pointer-button':
-      requireKnownFields(record, ['kind', 'button', 'edge'], 'pointer-button input fact');
-      return Object.freeze({
-        kind,
-        button: requireCatalogValue<RustyApplicationPointerButton>(record['button'], 'pointer button', POINTER_BUTTONS),
-        edge: requireInputEdge(record['edge']),
-      });
-    case 'pointer-delta':
-      requireKnownFields(record, ['kind', 'x', 'y'], 'pointer-delta input fact');
-      return Object.freeze({ kind, x: requireFiniteNumber(record['x'], 'pointer delta x', -256, 256), y: requireFiniteNumber(record['y'], 'pointer delta y', -256, 256) });
-    case 'wheel':
-      requireKnownFields(record, ['kind', 'x', 'y'], 'wheel input fact');
-      return Object.freeze({ kind, x: requireFiniteNumber(record['x'], 'wheel x', -256, 256), y: requireFiniteNumber(record['y'], 'wheel y', -256, 256) });
-    case 'controller-button':
-      requireKnownFields(record, ['kind', 'button', 'edge'], 'controller-button input fact');
-      return Object.freeze({
-        kind,
-        button: requireCatalogValue<RustyApplicationControllerButton>(record['button'], 'controller button', CONTROLLER_BUTTONS),
-        edge: requireInputEdge(record['edge']),
-      });
-    case 'controller-axis':
-      requireKnownFields(record, ['kind', 'axis', 'value'], 'controller-axis input fact');
-      return Object.freeze({
-        kind,
-        axis: requireCatalogValue<RustyApplicationControllerAxis>(record['axis'], 'controller axis', CONTROLLER_AXES),
-        value: requireFiniteNumber(record['value'], 'controller axis value', -1, 1),
-      });
-    case 'controller-button-value':
-      requireKnownFields(record, ['kind', 'button', 'value'], 'controller-button-value input fact');
-      return Object.freeze({
-        kind,
-        button: requireCatalogValue<RustyApplicationControllerButton>(record['button'], 'controller button', CONTROLLER_BUTTONS),
-        value: requireFiniteNumber(record['value'], 'controller button value', 0, 1),
-      });
-    case 'clear':
-      requireKnownFields(record, ['kind', 'reason'], 'clear input fact');
-      return Object.freeze({
-        kind,
-        reason: requireCatalogValue<RustyApplicationInputClearReason>(record['reason'], 'input clear reason', INPUT_CLEAR_REASONS),
-      });
-    default:
-      throw new TypeError('runtime input fact kind is not admitted');
-  }
-}
-
-function snapshotIntentValue(value: unknown): RustyApplicationRuntimeIntentValue {
-  const record = requireRecord(value, 'runtime intent value');
-  switch (record.kind) {
-    case 'digital':
-      requireKnownFields(record, ['kind', 'active'], 'digital intent value');
-      if (typeof record['active'] !== 'boolean') throw new TypeError('digital intent active must be boolean');
-      return Object.freeze({ kind: 'digital', active: record['active'] });
-    case 'axis':
-      requireKnownFields(record, ['kind', 'value'], 'axis intent value');
-      return Object.freeze({ kind: 'axis', value: requireFiniteNumber(record['value'], 'axis intent value', -1, 1) });
-    case 'product-payload':
-      requireKnownFields(record, ['kind', 'contract', 'data'], 'product payload intent value');
-      return Object.freeze({
-        kind: 'product-payload',
-        contract: requireProductIdentity(record['contract'], 'product payload contract'),
-        data: snapshotRustyApplicationProductPayloadJson(record['data']),
-      });
-    default:
-      throw new TypeError('runtime intent value kind is not admitted');
-  }
-}
-
-function snapshotTimelineCompletion(
-  value: ProductBrowserTimelineCompletion,
-): ProductBrowserTimelineCompletion {
-  const record = requireRecord(value, 'timeline completion');
-  requireKnownFields(record, ['ticket', 'runtime', 'correlation', 'outcome', 'provenance'], 'timeline completion');
-  const outcomeRecord = requireRecord(record['outcome'], 'timeline completion outcome');
-  requireKnownFields(outcomeRecord, ['kind', 'data'], 'timeline completion outcome');
-  if (outcomeRecord.kind !== 'success' && outcomeRecord.kind !== 'failure') {
-    throw new TypeError('timeline completion outcome kind is invalid');
-  }
-  const provenanceRecord = requireRecord(record['provenance'], 'timeline completion provenance');
-  requireKnownFields(provenanceRecord, ['correlation', 'detail'], 'timeline completion provenance');
-  const correlation = requireProductIdentity(record['correlation'], 'timeline correlation');
-  const provenanceCorrelation = requireProductIdentity(
-    provenanceRecord['correlation'],
-    'provenance correlation',
-  );
-  if (correlation !== provenanceCorrelation) {
-    throw new TypeError('timeline provenance correlation must match completion correlation');
-  }
-  const outcome = {
-    kind: outcomeRecord.kind,
-    ...(hasOwn(outcomeRecord, 'data')
-      ? { data: snapshotTimelineOpaqueData(outcomeRecord.data) }
-      : {}),
-  } as ProductBrowserTimelineCompletion['outcome'];
-  const provenance = {
-    correlation: provenanceCorrelation,
-    ...(hasOwn(provenanceRecord, 'detail')
-      ? { detail: snapshotTimelineOpaqueData(provenanceRecord.detail) }
-      : {}),
-  } as ProductBrowserTimelineCompletion['provenance'];
-  const snapshot = Object.freeze({
-    ticket: requireU64Text(record.ticket, 'timeline ticket'),
-    runtime: decodeRuntimeIdentity(record.runtime),
-    correlation,
-    outcome: Object.freeze(outcome),
-    provenance: Object.freeze(provenance),
-  });
-  return snapshot;
-}
-
-function snapshotTimelineOpaqueData(value: unknown): ProductBrowserLocalJson {
-  return snapshotRustyApplicationJson(value);
-}
-
-function snapshotJsonValue(value: unknown): ProductBrowserLocalJson {
-  return snapshotRustyApplicationJson(value);
-}
-
-function parseBoundedJson(value: string, maximumBytes: number): unknown {
-  if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > maximumBytes) {
-    throw new ProductBrowserLocalTransportError(
-      'output_decode_failed',
-      `Product Browser local runtime output exceeds ${String(maximumBytes)} bytes`,
-      { route: ROUTES.outputs },
-    );
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch (cause) {
-    throw new ProductBrowserLocalTransportError(
-      'output_decode_failed',
-      'Product Browser local runtime output is not valid JSON',
-      { cause, route: ROUTES.outputs },
-    );
-  }
-}
-
-function decodeFault(
-  record: ProductBrowserWireRecord,
-  name: string,
-): { readonly code: string; readonly disposition: ProductBrowserHostFaultDisposition } {
-  if (record.accepted !== true && record.accepted !== false) {
-    throw new TypeError(`${name} accepted must be boolean`);
-  }
-  const code = requireFaultCode(record.code, `${name} code`);
-  const disposition = requireCatalogValue<ProductBrowserHostFaultDisposition>(
-    record['disposition'],
-    `${name} disposition`,
-    HOST_FAULT_DISPOSITIONS,
-  );
-  if ((record.accepted === true) !== (disposition === 'accepted')) {
-    throw new TypeError(`${name} accepted and disposition are incoherent`);
-  }
-  return { code, disposition };
-}
-
-function decodeOperationResult(
-  value: unknown,
-  expectedOperation: ProductBrowserRuntimeOperationKind,
-): ProductBrowserRuntimeOperationResult {
-  const record = requireRecord(value, 'operation result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'operation', 'binding', 'nextInputSequence', 'admittedThrough', 'readout', 'diagnostic'], 'operation result');
-  if (record.accepted !== true && record.accepted !== false) {
-    throw new TypeError('accepted must be boolean');
-  }
-  if (record.operation !== expectedOperation) {
-    throw new TypeError(`operation must be ${expectedOperation}`);
-  }
-  const fault = decodeFault(record, 'operation result');
-  if ((record.binding === undefined) !== (record['nextInputSequence'] === undefined)) {
-    throw new TypeError('operation binding and nextInputSequence must be present together');
-  }
-  if (record.accepted === false
-    && (record.binding !== undefined || record['nextInputSequence'] !== undefined || record.readout !== undefined)
-    && fault.disposition !== 'resync-required') {
-    throw new TypeError('only resync-required operation results may include current binding, input cursor, or readout');
-  }
-  if (record.accepted === true && record.diagnostic !== undefined) {
-    throw new TypeError('accepted operation result cannot include diagnostic');
-  }
-  return {
-    accepted: record.accepted,
-    ...fault,
-    operation: expectedOperation,
-    ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
-    ...(record['nextInputSequence'] === undefined
-      ? {}
-      : { nextInputSequence: requireU64Text(record['nextInputSequence'], 'operation nextInputSequence') }),
-    ...(record['admittedThrough'] === undefined
-      ? {}
-      : { admittedThrough: requireU64Text(record['admittedThrough'], 'operation admittedThrough') }),
-    ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
-    ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
-  };
-}
-
-function decodeConnectionResult(value: unknown): ProductBrowserRuntimeOperationResult {
-  const record = requireRecord(value, 'connection result');
-  if (record.operation !== 'start' && record.operation !== 'connect') {
-    throw new TypeError('connection operation must be start or connect');
-  }
-  return decodeOperationResult(value, record.operation);
-}
-
-function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
-  const record = requireRecord(value, 'input result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'count', 'acceptedCount', 'droppedCount', 'acceptedThrough', 'consumedThrough', 'nextInputSequence', 'binding', 'readout', 'diagnostic'], 'input result');
-  if (record.accepted !== true && record.accepted !== false) {
-    throw new TypeError('accepted must be boolean');
-  }
-  if (!Number.isSafeInteger(record.count) || (record.count as number) < 0) {
-    throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
-  }
-  const fault = decodeFault(record, 'input result');
-  // The Rust host rejects strict-decode failures before wire admission. That
-  // response preserves the host-bounded submitted count diagnostically, so it
-  // can exceed the smaller outgoing/admitted batch limit without widening it.
-  if ((record.count as number) > MAXIMUM_INPUT_BATCH_LENGTH
-    && (record.accepted !== false || fault.disposition !== 'resync-required')) {
-    throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
-  }
-  if (record['acceptedCount'] !== undefined
-    && (!Number.isSafeInteger(record['acceptedCount'])
-      || (record['acceptedCount'] as number) < 0
-      || (record['acceptedCount'] as number) > (record.count as number))) {
-    throw new TypeError('acceptedCount must be a non-negative integer no greater than count');
-  }
-  if (record['droppedCount'] !== undefined
-    && (!Number.isSafeInteger(record['droppedCount'])
-      || (record['droppedCount'] as number) < 0
-      || (record['droppedCount'] as number) > (record.count as number))) {
-    throw new TypeError('droppedCount must be a non-negative integer no greater than count');
-  }
-  const acceptedCount = record['acceptedCount'] === undefined
-    ? (record.accepted ? record.count as number : 0)
-    : record['acceptedCount'] as number;
-  const droppedCount = record['droppedCount'] === undefined ? 0 : record['droppedCount'] as number;
-  if (acceptedCount + droppedCount !== (record.count as number)) {
-    throw new TypeError('input result acceptedCount and droppedCount must account for count');
-  }
-  if (record.accepted === false
-    && (record.binding !== undefined || record.readout !== undefined || record['nextInputSequence'] !== undefined)
-    && (fault.disposition !== 'rejected-recoverable' && fault.disposition !== 'resync-required')) {
-    throw new TypeError('only recoverable input results may include current binding, input cursor, or readout');
-  }
-  if (record['nextInputSequence'] !== undefined && record.binding === undefined) {
-    throw new TypeError('input nextInputSequence requires a runtime binding');
-  }
-  if (record.accepted === false
-    && (record.binding !== undefined || record.readout !== undefined)
-    && record['nextInputSequence'] === undefined) {
-    throw new TypeError('recoverable input result with current state must include nextInputSequence');
-  }
-  if ((record.binding !== undefined) !== (record.readout !== undefined)) {
-    throw new TypeError('input binding and readout must be present together');
-  }
-  const acceptedThrough = record['acceptedThrough'] === undefined
-    ? undefined
-    : requireU64Text(record['acceptedThrough'], 'input acceptedThrough');
-  const consumedThrough = record['consumedThrough'] === undefined
-    ? undefined
-    : requireU64Text(record['consumedThrough'], 'input consumedThrough');
-  if (acceptedCount === 0 && acceptedThrough !== undefined) {
-    throw new TypeError('input acceptedThrough requires an accepted event');
-  }
-  if (acceptedThrough !== undefined && consumedThrough !== undefined
-    && BigInt(acceptedThrough) > BigInt(consumedThrough)) {
-    throw new TypeError('input acceptedThrough cannot exceed consumedThrough');
-  }
-  if (record.accepted === true && record.diagnostic !== undefined) {
-    throw new TypeError('accepted input result cannot include diagnostic');
-  }
-  return {
-    accepted: record.accepted,
-    ...fault,
-    count: record.count as number,
-    acceptedCount,
-    droppedCount,
-    ...(acceptedThrough === undefined ? {} : { acceptedThrough }),
-    ...(consumedThrough === undefined ? {} : { consumedThrough }),
-    ...(record['nextInputSequence'] === undefined
-      ? {}
-      : { nextInputSequence: requireU64Text(record['nextInputSequence'], 'input nextInputSequence') }),
-    ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
-    ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
-    ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
-  };
-}
-
-function decodeBrowserDiagnosticsResult(value: unknown): ProductBrowserDiagnosticsResult {
-  const record = requireRecord(value, 'browser diagnostics result');
-  requireKnownFields(record, ['accepted', 'reported'], 'browser diagnostics result');
-  if (record.accepted !== true || !Number.isSafeInteger(record.reported) || (record.reported as number) < 1 || (record.reported as number) > 10) {
-    throw new TypeError('browser diagnostics result is invalid');
-  }
-  return Object.freeze({ accepted: true, reported: record.reported as number });
-}
-
-function decodeTimelineCompletionResult(
-  value: unknown,
-  expectedTicket: string,
-): ProductBrowserTimelineCompletionResult {
-  const record = requireRecord(value, 'timeline completion result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'ticket', 'binding', 'readout', 'diagnostic'], 'timeline completion result');
-  if (record.accepted !== true && record.accepted !== false) {
-    throw new TypeError('accepted must be boolean');
-  }
-  const ticket = requireU64Text(record.ticket, 'timeline result ticket');
-  const fault = decodeFault(record, 'timeline completion result');
-  if (ticket !== expectedTicket) throw new TypeError('ticket does not match completion request');
-  if ((record.binding === undefined) !== (record.readout === undefined)) {
-    throw new TypeError('timeline binding and readout must be present together');
-  }
-  if (record.accepted === true && record.diagnostic !== undefined) {
-    throw new TypeError('accepted timeline result cannot include diagnostic');
-  }
-  const binding = record.binding === undefined ? undefined : decodeRuntimeIdentity(record.binding);
-  const readout = record.readout === undefined ? undefined : decodeRuntimeReadout(record.readout);
-  if (binding !== undefined && readout !== undefined && !sameRuntimeIdentity(binding, readout.runtime)) {
-    throw new TypeError('timeline result binding does not match its readout');
-  }
-  return {
-    accepted: record.accepted,
-    ...fault,
-    ticket,
-    ...(binding === undefined ? {} : { binding }),
-    ...(readout === undefined ? {} : { readout }),
-    ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
-  };
-}
-
-function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
-  const record = requireRecord(value, 'runtime output');
-  switch (record.kind) {
-    case 'binding':
-      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence'], 'binding output');
-      return {
-        kind: 'binding',
-        runtime: decodeRuntimeIdentity(record.runtime),
-        nextInputSequence: requireU64Text(record['nextInputSequence'], 'binding nextInputSequence'),
-      };
-    case 'ui-projection':
-      requireKnownFields(record, ['kind', 'envelope'], 'UI projection output');
-      return { kind: 'ui-projection', envelope: decodeUiProjection(record.envelope) };
-    case 'runtime-readout':
-      requireKnownFields(record, ['kind', 'readout'], 'runtime readout output');
-      return { kind: 'runtime-readout', readout: decodeRuntimeReadout(record.readout) };
-    case 'runtime-input-result':
-      requireKnownFields(record, ['kind', 'result'], 'runtime input result output');
-      return { kind: 'runtime-input-result', result: decodeInputResult(record['result']) };
-    default:
-      throw new TypeError('runtime output kind is not admitted');
-  }
-}
-
-function decodeRuntimeOutputBatch(value: unknown): readonly ProductBrowserRuntimeOutput[] {
-  const record = requireRecord(value, 'runtime output');
-  if (record.kind !== 'runtime-output-batch') {
-    return Object.freeze([decodeRuntimeOutput(value)]);
-  }
-  requireKnownFields(record, ['kind', 'outputs'], 'runtime output batch');
-  const outputs = requirePlainArray(record['outputs'], 'runtime output batch outputs');
-  if (outputs.length === 0) throw new TypeError('runtime output batch must contain at least one output');
-  return Object.freeze(outputs.map(decodeRuntimeOutput));
-}
-
-// The renderer validates a composition when it configures it.
-// The application host validates the envelope when it ingests it.
-function decodeUiProjection(value: unknown): RustyApplicationUiProjectionEnvelope {
-  return requireRecord(value, 'UI projection') as unknown as RustyApplicationUiProjectionEnvelope;
-}
-
-function decodeRuntimeIdentity(value: unknown): RustyApplicationRuntimeIdentity {
-  const record = requireRecord(value, 'runtime identity');
-  requireKnownFields(record, ['instanceId', 'generation', 'controlRevision'], 'runtime identity');
-  return {
-    instanceId: requireU64Text(record.instanceId, 'instanceId'),
-    generation: requireU64Text(record.generation, 'generation'),
-    controlRevision: requireU64Text(record.controlRevision, 'controlRevision'),
-  };
-}
-
-function sameRuntimeIdentity(
-  left: RustyApplicationRuntimeIdentity,
-  right: RustyApplicationRuntimeIdentity,
-): boolean {
-  return left.instanceId === right.instanceId
-    && left.generation === right.generation
-    && left.controlRevision === right.controlRevision;
-}
-
-function decodeRuntimeReadout(value: unknown): ProductBrowserRuntimeReadout {
-  const record = requireRecord(value, 'runtime readout');
-  requireKnownFields(record, [
-    'artifact',
-    'runtime',
-    'mode',
-    'state',
-    'admittedSimulationSteps',
-    'admittedPresentations',
-    'droppedRealtimeSteps',
-    'clockRegressions',
-    'scaledRemainder',
-    'lastObservedTimeNs',
-    'fault',
-  ], 'runtime readout');
-  if (record.artifact !== 'rusty.product.runtime-readout') throw new TypeError('runtime readout artifact is invalid');
-  const mode = record.mode;
-  if (mode !== 'realtime' && mode !== 'demand' && mode !== 'external') throw new TypeError('runtime readout mode is invalid');
-  const state = record.state;
-  if (state !== 'created' && state !== 'running' && state !== 'paused' && state !== 'faulted' && state !== 'shutdown') {
-    throw new TypeError('runtime readout state is invalid');
-  }
-  const fault = record.fault;
-  if (fault !== null && fault !== 'owner-reported' && fault !== 'counter-exhausted') {
-    throw new TypeError('runtime readout fault is invalid');
-  }
-  if (record.scaledRemainder !== null
-    && (!Number.isSafeInteger(record.scaledRemainder)
-      || (record.scaledRemainder as number) < 0
-      || (record.scaledRemainder as number) > 4_294_967_295)) {
-    throw new TypeError('runtime readout scaledRemainder must be a u32 or null');
-  }
-  return {
-    artifact: 'rusty.product.runtime-readout',
-    runtime: decodeRuntimeIdentity(record.runtime),
-    mode,
-    state,
-    admittedSimulationSteps: requireU64Text(record.admittedSimulationSteps, 'admittedSimulationSteps'),
-    admittedPresentations: requireU64Text(record.admittedPresentations, 'admittedPresentations'),
-    droppedRealtimeSteps: requireU64Text(record.droppedRealtimeSteps, 'droppedRealtimeSteps'),
-    clockRegressions: requireU64Text(record.clockRegressions, 'clockRegressions'),
-    scaledRemainder: record.scaledRemainder as number | null,
-    lastObservedTimeNs: record.lastObservedTimeNs === null
-      ? null
-      : requireU64Text(record.lastObservedTimeNs, 'lastObservedTimeNs'),
-    fault,
-  };
-}
-
-function requireRecord(value: unknown, name: string): ProductBrowserWireRecord {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError(`${name} must be an object`);
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    throw new TypeError(`${name} must be a plain object`);
-  }
-  for (const key of Reflect.ownKeys(value)) {
-    if (typeof key !== 'string') throw new TypeError(`${name} cannot contain symbol keys`);
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-      throw new TypeError(`${name} cannot contain getters or non-enumerable fields`);
-    }
-  }
-  return value as ProductBrowserWireRecord;
-}
-
-function requirePlainArray(value: unknown, name: string): readonly unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
-    throw new TypeError(`${name} must be a plain array`);
-  }
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-  if (lengthDescriptor === undefined
-    || !('value' in lengthDescriptor)
-    || lengthDescriptor.value !== value.length
-    || lengthDescriptor.enumerable !== false
-    || lengthDescriptor.configurable !== false) {
-    throw new TypeError(`${name} has a non-canonical length descriptor`);
-  }
-  for (const key of Reflect.ownKeys(value)) {
-    if (key === 'length') continue;
-    if (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(key)) {
-      throw new TypeError(`${name} contains an extra property`);
-    }
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined
-      || !('value' in descriptor)
-      || descriptor.enumerable !== true) {
-      throw new TypeError(`${name} contains a non-canonical array entry descriptor`);
-    }
-  }
-  return value;
-}
-
-function requireKnownFields(
-  record: ProductBrowserWireRecord,
-  allowed: readonly string[],
-  name: string,
-): void {
-  for (const key of Reflect.ownKeys(record)) {
-    if (typeof key !== 'string') throw new TypeError(`${name} cannot contain symbol keys`);
-    if (!allowed.includes(key)) throw new TypeError(`${name} contains unknown field ${key}`);
-  }
-}
-
-function requireDiagnostic(value: unknown): string {
-  if (typeof value !== 'string') throw new TypeError('diagnostic must be a string');
   return value;
 }

@@ -38,15 +38,18 @@ available when the product host opts into its existing live-debug routes. Run
 `engine.renderer` in the ordinary debug CLI or panel to print the runtime
 renderer's statistics: its adapter, and for streamed frames the recent frame
 rate, median render, readback and encode times, bytes per frame and per
-second, and any skipped ops. Trusted product code reads the same JSON as UTF-8
-bytes through `IEngineContext.Diagnostics.ReadRenderer()`, refreshed once a
+second, and any skipped ops. Trusted product code reads the same statistics
+(`ProductDevRendererStatistics` in `product-dev-host`: adapter, output, a
+`stream` object while frames are streamed, and skipped ops by kind) as UTF-8
+JSON bytes through `IEngineContext.Diagnostics.ReadRenderer()`, refreshed once a
 second; the generated binding copies and releases the Engine byte lease before
 returning. Reading it never draws a frame or synchronizes the GPU.
 
 The renderer's own frame cost is measured on a captured presentation baseline
 with `cargo run --release -p render-wgpu --example render_capture -- <capture
 dir> out.png 1280 720 --frames=200`, which reports the mean frame time with
-readback.
+readback. Nothing captures a new baseline since the browser stopped receiving
+graphics (#8792); #8869 owns a Rust capture or the example's retirement.
 
 ## Repeatable baseline artifacts
 

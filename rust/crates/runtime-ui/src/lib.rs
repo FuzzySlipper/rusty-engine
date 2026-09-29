@@ -7,8 +7,9 @@
 mod model;
 
 pub use model::{
-    RuntimeUiProjectionEnvelope, RuntimeUiProjectionError, RuntimeUiRuntimeBinding,
-    MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER, RUNTIME_UI_PROJECTION_ARTIFACT,
+    RuntimeUiProjectionEnvelope, RuntimeUiProjectionError, RuntimeUiProjectionWire,
+    RuntimeUiRuntimeBinding, RuntimeUiRuntimeWire, MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER,
+    RUNTIME_UI_PROJECTION_ARTIFACT,
 };
 
 #[cfg(test)]

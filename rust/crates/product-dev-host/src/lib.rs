@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod bundle;
+mod engine_debug;
 mod error;
 mod frames;
 mod host;
@@ -23,8 +24,21 @@ mod log;
 mod model;
 mod scheduler;
 mod session;
+#[cfg(test)]
+mod typescript;
 
-pub use bundle::{ProductDevBundle, ProductDevBundleEntry, PRODUCT_DEV_INDEX_PATH};
+pub use bundle::{
+    ProductDevBootstrapInput, ProductDevBootstrapLifecycle, ProductDevBootstrapProduct,
+    ProductDevBootstrapRenderer, ProductDevBootstrapUi, ProductDevBootstrapUiProjection,
+    ProductDevBrowserBootstrap, ProductDevBundle, ProductDevBundleEntry, ProductDevCursorMode,
+    PRODUCT_DEV_BOOTSTRAP_PATH, PRODUCT_DEV_INDEX_PATH,
+};
+pub use engine_debug::{
+    ProductDevDrawingMode, ProductDevDrawnFrame, ProductDevRenderOutput,
+    ProductDevRendererInspection, ProductDevRendererStatistics, ProductDevRendererStatus,
+    ProductDevRendererWidget, ProductDevStreamMedians, ProductDevStreamStatistics,
+    ProductDevTimeAnswer, ProductDevTimeMode,
+};
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use frames::{
     ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream, FRAME_REQUEST_WAIT,

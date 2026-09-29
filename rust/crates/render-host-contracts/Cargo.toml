@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 render-model.workspace = true
 serde.workspace = true
+ts-rs.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

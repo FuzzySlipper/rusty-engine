@@ -17,6 +17,7 @@ runtime-ui.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 sha2.workspace = true
+ts-rs.workspace = true
 
 [lints]
 workspace = true

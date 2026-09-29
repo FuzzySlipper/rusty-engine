@@ -1,22 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile } from 'node:fs/promises';
 
 import {
   createRustyApplicationInputIngress,
   createRustyApplicationInputQueue,
   normalizeRustyApplicationKeyboardControl,
-  RUSTY_APPLICATION_INPUT_U64_MAXIMUM,
 } from './input-ingress.js';
+
+const U64_MAXIMUM = 18_446_744_073_709_551_615n;
 
 const INITIAL = {
   runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
   context: 'gameplay.default',
 } as const;
-const HOST_NEUTRAL_WIRE_FIXTURE = new URL(
-  '../../../../fixtures/runtime-input/host-neutral-input-envelope.json',
-  import.meta.url,
-);
 
 void test('input ingress normalizes exactly the Engine keyboard catalog', () => {
   assert.equal(normalizeRustyApplicationKeyboardControl('KeyW'), 'key-w');
@@ -138,62 +134,23 @@ void test('same-binding Engine cursor synchronization drops stale input and pres
   assert.equal(concurrent.drain()[0]?.sequence, '3');
 });
 
-void test('direct product payload claims are deeply plain and immutable', () => {
+void test('a claimed product payload is a copy the product cannot change afterwards', () => {
   const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);
+  const data = { sourceSlot: 3, targetSlot: 5, selected: true };
   queue.claim('inventory.drop', {
+    kind: 'product-payload',
+    contract: 'example.inventory.drop.v1',
+    data,
+  });
+  data.targetSlot = 9;
+  const [entry] = queue.drain();
+  assert.ok(entry !== undefined && 'value' in entry);
+  assert.deepEqual(entry.value, {
     kind: 'product-payload',
     contract: 'example.inventory.drop.v1',
     data: { sourceSlot: 3, targetSlot: 5, selected: true },
   });
-  const [entry] = queue.drain();
-  assert.ok(entry !== undefined && 'value' in entry);
-  assert.equal(entry.value.kind, 'product-payload');
-  if (entry.value.kind === 'product-payload') {
-    assert.equal(entry.value.contract, 'example.inventory.drop.v1');
-    assert.deepEqual({ ...(entry.value.data as Record<string, unknown>) }, {
-      selected: true, sourceSlot: 3, targetSlot: 5,
-    });
-    assert.ok(Object.isFrozen(entry.value.data));
-  }
-  assert.throws(() => queue.claim('inventory.drop', {
-    kind: 'product-payload',
-    contract: 'example.inventory.drop.v1',
-    data: Object.create({ inherited: true }) as never,
-  }));
-  const accessor: Record<string, unknown> = {};
-  Object.defineProperty(accessor, 'slot', { enumerable: true, get: () => 3 });
-  assert.throws(() => queue.claim('inventory.drop', {
-    kind: 'product-payload', contract: 'example.inventory.drop.v1', data: accessor as never,
-  }));
-  const executableArray: unknown[] = [3];
-  Object.defineProperty(executableArray, '4294967295', {
-    enumerable: true,
-    get: () => { throw new Error('must not read extra array property'); },
-  });
-  assert.throws(() => queue.claim('inventory.drop', {
-    kind: 'product-payload', contract: 'example.inventory.drop.v1', data: executableArray as never,
-  }));
-  assert.throws(() => queue.claim('inventory.drop', {
-    kind: 'product-payload', contract: 'example.inventory.drop.v1', data: { slot: 9_007_199_254_740_992 },
-  }));
-});
-
-void test('direct product payload claims detach deep JSON without recursive quota validation', () => {
-  const queue = createRustyApplicationInputQueue(8);
-  queue.bindRuntime(INITIAL);
-  let deep: unknown = null;
-  for (let index = 0; index < 1_024; index += 1) deep = [deep];
-  queue.claim('inventory.drop', {
-    kind: 'product-payload',
-    contract: 'example.inventory.drop.v1',
-    data: { deep: deep as never, array: Array.from({ length: 1_100 }, (_, index) => index) },
-  });
-  const [entry] = queue.drain();
-  assert.ok(entry !== undefined && 'value' in entry && entry.value.kind === 'product-payload');
-  if (entry !== undefined && 'value' in entry && entry.value.kind === 'product-payload') {
-    assert.ok(Object.isFrozen(entry.value.data));
-  }
 });
 
 void test('input ingress rebinding and context changes clear with the exact epoch ordering', () => {
@@ -288,7 +245,7 @@ void test('managed interface events preserve a claimed product payload while rel
       value: {
         kind: 'product-payload',
         contract: 'example.inventory.drop.v1',
-        data: Object.assign(Object.create(null), { sourceSlot: 3, targetSlot: 5 }),
+        data: { sourceSlot: 3, targetSlot: 5 },
       },
     },
     {
@@ -645,7 +602,7 @@ void test('same-epoch clears replace undispatched input at its first sequence wi
 });
 
 void test('input ingress reserves u64 maximum for one terminal fail-closed clear until rebind', () => {
-  const queue = createRustyApplicationInputQueue(4, RUSTY_APPLICATION_INPUT_U64_MAXIMUM);
+  const queue = createRustyApplicationInputQueue(4, U64_MAXIMUM);
   queue.bindRuntime(INITIAL);
   assert.equal(queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' }), true);
   assert.deepEqual(queue.drain(), [{
@@ -675,7 +632,7 @@ void test('input ingress reserves u64 maximum for one terminal fail-closed clear
 });
 
 void test('terminal exhaustion rewinds undispatched max-minus-one input into one gap-free clear', () => {
-  const queue = createRustyApplicationInputQueue(4, RUSTY_APPLICATION_INPUT_U64_MAXIMUM - 1n);
+  const queue = createRustyApplicationInputQueue(4, U64_MAXIMUM - 1n);
   queue.bindRuntime(INITIAL);
   assert.equal(queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' }), false);
   assert.equal(queue.enqueueFact({ kind: 'wheel', x: 0, y: 1 }), true);
@@ -687,23 +644,9 @@ void test('terminal exhaustion rewinds undispatched max-minus-one input into one
   }]);
 });
 
-void test('input ingress rejects malformed runtime, context, and intent wire values', () => {
+void test('input ingress rejects a runtime binding that moves backward, and an unbounded queue', () => {
   const queue = createRustyApplicationInputQueue(4);
-  assert.throws(() => queue.bindRuntime({
-    runtime: { instanceId: '01', generation: '0', controlRevision: '0' },
-    context: INITIAL.context,
-  }), /canonical unsigned decimal/u);
-  assert.throws(() => queue.bindRuntime({
-    runtime: INITIAL.runtime,
-    context: 'Gameplay.default',
-  }), /lowercase product identity/u);
   queue.bindRuntime(INITIAL);
-  for (const value of ['bad identity', 'bad..identity', '.leading', 'trailing-', 'unicode-é']) {
-    assert.throws(
-      () => queue.claim(value, { kind: 'digital', active: true }),
-      /lowercase product identity/u,
-    );
-  }
   assert.throws(() => queue.bindRuntime({
     runtime: { instanceId: '7', generation: '2', controlRevision: '99' },
     context: INITIAL.context,
@@ -731,55 +674,6 @@ void test('input ingress rejects malformed runtime, context, and intent wire val
   ), /maximumQueue must be a safe integer within \[1, 1024\]/u);
 });
 
-void test('shared host-neutral input envelope fixture has the exact public application-host wire shape', async () => {
-  const values: unknown = JSON.parse(await readFile(HOST_NEUTRAL_WIRE_FIXTURE, 'utf8'));
-  assert.ok(Array.isArray(values));
-  assert.equal(values.length, 17);
-  for (const entry of values) {
-    assertRecord(entry);
-  }
-});
-
-function assertRecord(entry: unknown): asserts entry is Record<string, unknown> {
-  assert.ok(isRecord(entry));
-  const physical = 'fact' in entry;
-  assert.deepEqual(
-    Object.keys(entry).sort(),
-    physical
-      ? ['context', 'fact', 'runtime', 'sequence']
-      : ['context', 'intent', 'runtime', 'sequence', 'value'],
-  );
-  assertCanonicalU64(entry['sequence']);
-  assertIdentity(entry['context']);
-  assert.ok(isRecord(entry['runtime']));
-  assert.deepEqual(Object.keys(entry['runtime']).sort(), ['controlRevision', 'generation', 'instanceId']);
-  assertCanonicalU64(entry['runtime']['instanceId']);
-  assertCanonicalU64(entry['runtime']['generation']);
-  assertCanonicalU64(entry['runtime']['controlRevision']);
-  if (physical) {
-    assertFact(entry['fact']);
-    return;
-  }
-  assertIdentity(entry['intent']);
-  assert.ok(isRecord(entry['value']));
-  if (entry['value']['kind'] === 'digital') {
-    assert.deepEqual(Object.keys(entry['value']).sort(), ['active', 'kind']);
-    assert.equal(typeof entry['value']['active'], 'boolean');
-    return;
-  }
-  if (entry['value']['kind'] === 'product-payload') {
-    assert.deepEqual(Object.keys(entry['value']).sort(), ['contract', 'data', 'kind']);
-    assertIdentity(entry['value']['contract']);
-    assertPlainProductPayload(entry['value']['data']);
-    return;
-  }
-  assert.equal(entry['value']['kind'], 'axis');
-  assert.deepEqual(Object.keys(entry['value']).sort(), ['kind', 'value']);
-  assert.ok(typeof entry['value']['value'] === 'number'
-    && Number.isFinite(entry['value']['value'])
-    && entry['value']['value'] >= -1 && entry['value']['value'] <= 1);
-}
-
 function createListenerTarget(): {
   readonly addEventListener: (type: string, listener: (event: Event) => void) => void;
   readonly removeEventListener: (type: string, listener: (event: Event) => void) => void;
@@ -793,86 +687,4 @@ function createListenerTarget(): {
     },
     emit: (type, event) => { listeners.get(type)?.(event); },
   };
-}
-
-function assertPlainProductPayload(value: unknown): void {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return;
-  if (typeof value === 'number') {
-    assert.ok(Number.isFinite(value) && (!Number.isInteger(value) || Math.abs(value) <= 9_007_199_254_740_991));
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach(assertPlainProductPayload);
-    return;
-  }
-  assert.ok(isRecord(value));
-  Object.values(value).forEach(assertPlainProductPayload);
-}
-
-function assertFact(value: unknown): void {
-  assert.ok(isRecord(value));
-  assert.equal(typeof value['kind'], 'string');
-  switch (value['kind']) {
-    case 'key':
-      assert.deepEqual(Object.keys(value).sort(), ['code', 'edge', 'kind']);
-      assert.ok(typeof value['code'] === 'string' && normalizeRustyApplicationKeyboardControl(
-        `Key${value['code'].slice(4).toUpperCase()}`,
-      ) === value['code']);
-      assertEdge(value['edge']);
-      return;
-    case 'pointer-button':
-      assert.deepEqual(Object.keys(value).sort(), ['button', 'edge', 'kind']);
-      assert.ok(value['button'] === 'primary' || value['button'] === 'secondary' || value['button'] === 'middle');
-      assertEdge(value['edge']);
-      return;
-    case 'pointer-delta':
-    case 'wheel':
-      assert.deepEqual(Object.keys(value).sort(), ['kind', 'x', 'y']);
-      assertFiniteNumber(value['x']);
-      assertFiniteNumber(value['y']);
-      return;
-    case 'controller-button':
-      assert.deepEqual(Object.keys(value).sort(), ['button', 'edge', 'kind']);
-      assert.ok(typeof value['button'] === 'string' && /^button-(?:[0-9]|1[0-5])$/u.test(value['button']));
-      assertEdge(value['edge']);
-      return;
-    case 'controller-axis':
-      assert.deepEqual(Object.keys(value).sort(), ['axis', 'kind', 'value']);
-      assert.ok(typeof value['axis'] === 'string' && /^axis-[0-3]$/u.test(value['axis']));
-      assertFiniteNumber(value['value']);
-      assert.ok((value['value'] as number) >= -1 && (value['value'] as number) <= 1);
-      return;
-    case 'clear':
-      assert.deepEqual(Object.keys(value).sort(), ['kind', 'reason']);
-      assert.ok([
-        'focus-loss', 'interaction-mode-loss', 'pointer-lock-loss', 'restart',
-        'control-revision-change', 'dispose', 'ingress-overflow',
-      ].includes(value['reason'] as string));
-      return;
-    default:
-      assert.fail(`unknown host-neutral input fact ${String(value['kind'])}`);
-  }
-}
-
-function assertCanonicalU64(value: unknown): void {
-  assert.ok(typeof value === 'string' && /^(?:0|[1-9][0-9]*)$/u.test(value));
-  assert.ok(BigInt(value) <= RUSTY_APPLICATION_INPUT_U64_MAXIMUM);
-}
-
-function assertIdentity(value: unknown): void {
-  assert.ok(typeof value === 'string'
-    && /^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(value)
-    && new TextEncoder().encode(value).byteLength <= 128);
-}
-
-function assertFiniteNumber(value: unknown): asserts value is number {
-  assert.ok(typeof value === 'number' && Number.isFinite(value));
-}
-
-function assertEdge(value: unknown): void {
-  assert.ok(value === 'pressed' || value === 'released');
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

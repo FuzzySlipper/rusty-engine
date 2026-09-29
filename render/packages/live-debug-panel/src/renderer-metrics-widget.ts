@@ -2,6 +2,7 @@ import {
   createLiveDebugHttpTransport,
   type LiveDebugResult,
   type LiveDebugTransport,
+  type ProductDevRendererStatus,
 } from '@rusty-engine/live-debug-client';
 
 const REFRESH_INTERVAL_MS = 750;
@@ -20,14 +21,6 @@ export interface RendererMetricsWidgetMountOptions {
 /** Releases polling and the DOM node owned by one widget mount. */
 export interface RendererMetricsWidgetMount {
   dispose(): void;
-}
-
-/** The runtime renderer's statistics (`engine.renderer.status`). */
-interface RendererMetricsSummary {
-  readonly available: boolean;
-  readonly widget?: { readonly visible?: boolean };
-  readonly diagnostic?: string;
-  readonly renderer?: Record<string, unknown>;
 }
 
 /**
@@ -107,39 +100,29 @@ export function mountRendererMetricsWidget(
   };
 }
 
-function decodeSummary(result: LiveDebugResult): RendererMetricsSummary {
-  const parsed: unknown = JSON.parse(result.message);
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new TypeError('Renderer metrics status response is not an object.');
-  }
-  const summary = parsed as RendererMetricsSummary;
-  if (typeof summary.available !== 'boolean') {
-    throw new TypeError('Renderer metrics status response does not describe availability.');
-  }
-  return summary;
+function decodeSummary(result: LiveDebugResult): ProductDevRendererStatus {
+  return JSON.parse(result.message) as ProductDevRendererStatus;
 }
 
-function renderSummary(root: HTMLElement, summary: RendererMetricsSummary): void {
-  const visible = summary.widget?.visible === true;
+function renderSummary(root: HTMLElement, summary: ProductDevRendererStatus): void {
+  const visible = summary.widget.visible;
   root.hidden = !visible;
   root.dataset['visible'] = String(visible);
-  if (!summary.available) {
-    root.textContent = `Renderer metrics\nUnavailable: ${text(summary.diagnostic)}`;
+  const renderer = summary.renderer;
+  if (!summary.available || renderer === undefined) {
+    root.textContent = `Renderer metrics\nUnavailable: ${summary.diagnostic ?? 'no renderer'}`;
     return;
   }
-  const renderer = summary.renderer ?? {};
-  const median = (renderer['medianMs'] ?? {}) as Record<string, unknown>;
-  const lines = [
-    'Renderer metrics',
-    `Adapter: ${text(renderer['adapter'])}${renderer['output'] === undefined ? '' : ` | ${text(renderer['output'])}`}`,
-  ];
-  if (renderer['framesPerSecond'] !== undefined) {
+  const lines = ['Renderer metrics', `Adapter: ${renderer.adapter} | ${renderer.output}`];
+  const stream = renderer.stream;
+  if (stream !== undefined) {
     lines.push(
-      `Frames: ${fixed(renderer['framesPerSecond'])} per second | render ${milliseconds(median['render'])} | readback ${milliseconds(median['readback'])} | encode ${milliseconds(median['encode'])}`,
-      `Stream: ${kilobytes(renderer['medianBytesPerFrame'])} per frame | ${kilobytes(renderer['bytesPerSecond'])} per second`,
+      `Frames: ${stream.framesPerSecond.toFixed(1)} per second | render ${milliseconds(stream.medianMs.render)} | readback ${milliseconds(stream.medianMs.readback)} | encode ${milliseconds(stream.medianMs.encode)}`,
+      `Stream: ${kilobytes(stream.medianBytesPerFrame)} per frame | ${kilobytes(stream.bytesPerSecond)} per second`,
     );
   }
-  lines.push(`Skipped ops: ${text(renderer['skippedOps'])}${renderer['lastSkip'] ? ` | last: ${text(renderer['lastSkip'])}` : ''}`);
+  const skipped = Object.entries(renderer.skippedOps).map(([op, count]) => `${op} ×${String(count)}`);
+  lines.push(`Skipped ops: ${skipped.length === 0 ? 'none' : skipped.join(', ')}${renderer.lastSkip === null ? '' : ` | last: ${renderer.lastSkip}`}`);
   root.textContent = lines.join('\n');
 }
 
@@ -149,18 +132,10 @@ function renderError(root: HTMLElement, error: unknown): void {
   root.textContent = `Renderer metrics\nUnavailable: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-function kilobytes(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value) ? `${(value / 1024).toFixed(1)} KiB` : 'unavailable';
+function kilobytes(value: number): string {
+  return `${(value / 1024).toFixed(1)} KiB`;
 }
 
-function fixed(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : 'unavailable';
-}
-
-function milliseconds(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)} ms` : 'unavailable';
-}
-
-function text(value: unknown): string {
-  return value === null || value === undefined ? 'unavailable' : String(value);
+function milliseconds(value: number): string {
+  return `${value.toFixed(2)} ms`;
 }

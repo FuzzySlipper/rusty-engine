@@ -1,7 +1,7 @@
 import type {
-  LiveDebugCommandDescriptor,
-  LiveDebugRuntimeBinding,
-  LiveDebugUpdateAttribution,
+  ProductDevDebugCommandDescriptor,
+  ProductDevRuntimeBinding,
+  ProductDevUpdateAttribution,
 } from '@rusty-engine/live-debug-client';
 
 export const LIVE_DEBUG_PANEL_MAX_TRANSCRIPT_ENTRIES = 128;
@@ -22,7 +22,7 @@ export function appendLiveDebugTranscript(
   return [...entries, entry].slice(-LIVE_DEBUG_PANEL_MAX_TRANSCRIPT_ENTRIES);
 }
 
-export function commandSummary(command: LiveDebugCommandDescriptor): string {
+export function commandSummary(command: ProductDevDebugCommandDescriptor): string {
   const parameters = command.parameters.map((parameter) => `${parameter.name}: ${parameter.type}`);
   return parameters.length === 0 ? command.name : `${command.name} ${parameters.join(' ')}`;
 }
@@ -41,13 +41,13 @@ export function historyCommand(
 }
 
 /** Formats the exact runtime incarnation without assigning any game meaning to it. */
-export function runtimeIncarnationLabel(runtime: LiveDebugRuntimeBinding | null): string {
+export function runtimeIncarnationLabel(runtime: ProductDevRuntimeBinding | null): string {
   return runtime === null
     ? 'runtime unavailable'
     : `runtime ${runtime.instanceId}/${runtime.generation}/${runtime.controlRevision}`;
 }
 
 /** Labels a completed C# callback and its separate Rust post-callback work. */
-export function updateAttributionLabel(sample: LiveDebugUpdateAttribution): string {
+export function updateAttributionLabel(sample: ProductDevUpdateAttribution): string {
   return `${runtimeIncarnationLabel(sample.runtime)} · simulation step ${sample.simulationStep} · admitted ${sample.admittedStepCount} · callback ${sample.callbackDurationUs} us · post-callback ${sample.postCallbackDurationUs} us`;
 }

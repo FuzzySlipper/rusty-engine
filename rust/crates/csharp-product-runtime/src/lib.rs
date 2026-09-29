@@ -31,7 +31,8 @@ use product_dev_host::{
     runtime_fault_disposition, CanonicalU64, ProductDevControlOperation, ProductDevDebugResult,
     ProductDevFaultDisposition, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
-    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
+    ProductDevRendererStatus, ProductDevRendererWidget, ProductDevRuntime,
     ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
     ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
@@ -145,11 +146,11 @@ fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
     }
 }
 
-fn pretty_json(value: &serde_json::Value) -> Result<String, ProductDevRuntimeError> {
+fn pretty_json(value: &impl serde::Serialize) -> Result<String, ProductDevRuntimeError> {
     serde_json::to_string_pretty(value).map_err(|error| {
         ProductDevRuntimeError::new(
             "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
-            format!("renderer inspection answer could not be encoded: {error}"),
+            format!("renderer answer could not be encoded: {error}"),
         )
     })
 }
@@ -619,7 +620,7 @@ mod audio_output;
 mod frame_output;
 mod render_output;
 
-pub use frame_output::RenderOutput;
+pub use product_dev_host::ProductDevRenderOutput as RenderOutput;
 
 /// Where `RUSTY_RENDER_OUTPUT` has this process draw the world: `stream`
 /// (the default) or `window`.
@@ -2429,36 +2430,34 @@ impl CsharpProductRuntime {
             | RendererDebugCommand::Detail
             | RendererDebugCommand::Status => {}
         }
-        let summary = match (&self.frame_output, action) {
-            (Some(frames), RendererDebugCommand::Presentation) => {
-                frames.presentation(serde_json::to_value(self.binding()).unwrap_or_default())
-            }
-            (Some(frames), _) => serde_json::json!({
-                "schemaVersion": 1,
-                "available": true,
-                "widget": { "visible": self.renderer_metrics_visible },
-                "renderer": frames.stats_json(),
-            }),
-            (None, _) => serde_json::json!({
-                "schemaVersion": 1,
-                "available": false,
-                "widget": { "visible": self.renderer_metrics_visible },
-                "diagnostic": "This runtime has no renderer.",
-            }),
+        if let (Some(frames), RendererDebugCommand::Presentation) = (&self.frame_output, action) {
+            let presentation =
+                frames.presentation(serde_json::to_value(self.binding()).unwrap_or_default());
+            return Ok(ProductDevDebugResult::new(
+                true,
+                pretty_json(&presentation)?,
+            ));
+        }
+        let status = ProductDevRendererStatus {
+            available: self.frame_output.is_some(),
+            widget: ProductDevRendererWidget {
+                visible: self.renderer_metrics_visible,
+            },
+            diagnostic: self
+                .frame_output
+                .is_none()
+                .then(|| "This runtime has no renderer.".to_owned()),
+            renderer: self
+                .frame_output
+                .as_ref()
+                .map(frame_output::FrameOutput::statistics),
         };
-        let message = serde_json::to_string_pretty(&summary).map_err(|error| {
-            ProductDevRuntimeError::new(
-                "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
-                format!("renderer diagnostics summary could not be encoded: {error}"),
-            )
-        })?;
+        let message = pretty_json(&status)?;
         // A read with no renderer is a failed observation for callers.
         // Visibility operations succeed either way, so a mounted widget can
         // show its unavailable state.
         let succeeded = match action {
-            RendererDebugCommand::Read | RendererDebugCommand::Detail => {
-                summary["available"].as_bool().unwrap_or(false)
-            }
+            RendererDebugCommand::Read | RendererDebugCommand::Detail => status.available,
             RendererDebugCommand::Show
             | RendererDebugCommand::Hide
             | RendererDebugCommand::Toggle

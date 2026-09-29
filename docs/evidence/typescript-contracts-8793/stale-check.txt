@@ -1,0 +1,4 @@
+thread 'typescript::typescript_contracts_are_current' (3916045) panicked at rust/crates/product-dev-host/src/typescript.rs:181:5:
+these TypeScript contracts differ from the Rust types: ["render/packages/product-browser-host/src/generated/contracts.ts"]
+run scripts/generate-typescript-contracts.sh and commit the result
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.00s

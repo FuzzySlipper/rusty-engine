@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 
+import type { RuntimeUiProjectionEnvelope } from './generated/contracts.js';
 import {
   RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
   RustyApplicationUiProjectionError,
   createRustyApplicationUiProjection,
-  type RustyApplicationUiProjectionEnvelope,
 } from './ui-projection.js';
 
 const RUST_UI_FIXTURE = new URL(
@@ -26,23 +26,20 @@ const OPTIONS = {
   binding: RUNTIME,
 } as const;
 
-function envelope(sequence: string, value: unknown = { health: 72 }): RustyApplicationUiProjectionEnvelope {
+function envelope(sequence: string, value: unknown = { health: 72 }): RuntimeUiProjectionEnvelope {
   return {
     artifact: RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
     runtime: { ...RUNTIME },
     sequence,
     stream: 'product.hud',
     contract: 'product.hud.v1',
-    value: value as RustyApplicationUiProjectionEnvelope['value'],
+    value: value as RuntimeUiProjectionEnvelope['value'],
   };
 }
 
-void test('strict UI projection detaches and freezes the exact worker envelope', () => {
+void test('a projection freezes the envelope every subscriber shares', () => {
   const projection = createRustyApplicationUiProjection(OPTIONS);
-  const source = { health: { current: 72 }, tags: ['stealth'] };
-  assert.equal(projection.ingest(envelope('0', source)), true);
-  source.health.current = 0;
-  source.tags[0] = 'mutated';
+  assert.equal(projection.ingest(envelope('0', { health: { current: 72 }, tags: ['stealth'] })), true);
   const current = projection.current();
   assert.ok(current !== null);
   assert.deepEqual(current, envelope('0', { health: { current: 72 }, tags: ['stealth'] }));
@@ -56,18 +53,8 @@ void test('strict UI projection detaches and freezes the exact worker envelope',
   projection.dispose();
 });
 
-void test('projection accepts only exact fields, expected identity, and strictly increasing sequences', () => {
+void test('projection admits its stream, contract and binding, in increasing sequence', () => {
   const projection = createRustyApplicationUiProjection(OPTIONS);
-  assert.throws(
-    () => projection.ingest({ ...envelope('0'), extra: true }),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'invalid_envelope',
-  );
-  assert.throws(
-    () => projection.ingest({ ...envelope('0'), sequence: '01' }),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'invalid_sequence',
-  );
   assert.throws(
     () => projection.ingest({ ...envelope('0'), stream: 'product.other' }),
     (error: unknown) => error instanceof RustyApplicationUiProjectionError
@@ -115,7 +102,7 @@ void test('rebind clears the snapshot, notifies but retains subscribers, and res
   assert.equal(projection.readout().subscriberCount, 0);
 });
 
-void test('projection rejects unbound, non-JSON, and cyclic values', () => {
+void test('projection rejects an envelope before a runtime binding', () => {
   const unbound = createRustyApplicationUiProjection({
     expectedStream: 'product.hud',
     expectedContract: 'product.hud.v1',
@@ -125,81 +112,7 @@ void test('projection rejects unbound, non-JSON, and cyclic values', () => {
     (error: unknown) => error instanceof RustyApplicationUiProjectionError
       && error.code === 'runtime_unbound',
   );
-
-  const projection = createRustyApplicationUiProjection(OPTIONS);
-  const cyclic: { self?: unknown } = {};
-  cyclic.self = cyclic;
-  assert.throws(
-    () => projection.ingest(envelope('0', cyclic)),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'value_invalid',
-  );
-  assert.throws(
-    () => projection.ingest(envelope('0', new Date(0))),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'value_invalid',
-  );
-  projection.dispose();
-});
-
-void test('projection admits finite fractions but rejects unsafe integer-valued numbers', () => {
-  const projection = createRustyApplicationUiProjection(OPTIONS);
-  assert.equal(projection.ingest(envelope('0', { fraction: 0.5 })), true);
-  assert.equal((projection.current()?.value as { readonly fraction: number }).fraction, 0.5);
-  assert.throws(
-    () => projection.ingest(envelope('1', { integer: Number.MAX_SAFE_INTEGER + 2 })),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'value_invalid',
-  );
-  projection.dispose();
-});
-
-void test('projection detaches deep and large JSON without a quota walk', () => {
-  const projection = createRustyApplicationUiProjection(OPTIONS);
-  let deep: unknown = null;
-  for (let index = 0; index < 1_024; index += 1) deep = [deep];
-  assert.equal(projection.ingest(envelope('0', {
-    deep,
-    text: 'x'.repeat(9_000),
-    array: Array.from({ length: 600 }, (_, index) => index),
-  })), true);
-  assert.ok(Object.isFrozen(projection.current()?.value));
-  projection.dispose();
-});
-
-void test('projection rejects hostile accessors, array subclasses, holes, and overridden map without invoking them', () => {
-  const projection = createRustyApplicationUiProjection(OPTIONS);
-  let getterInvoked = false;
-  const getterValue = {} as Record<string, unknown>;
-  Object.defineProperty(getterValue, 'health', {
-    enumerable: true,
-    get: () => {
-      getterInvoked = true;
-      return 100;
-    },
-  });
-  assert.throws(() => projection.ingest(envelope('0', getterValue)), RustyApplicationUiProjectionError);
-  assert.equal(getterInvoked, false);
-
-  let mapInvoked = false;
-  const array = [1, 2] as number[] & { map: () => never };
-  Object.defineProperty(array, 'map', {
-    configurable: true,
-    enumerable: false,
-    value: () => {
-      mapInvoked = true;
-      throw new Error('map must not run');
-    },
-  });
-  assert.throws(() => projection.ingest(envelope('0', array)), RustyApplicationUiProjectionError);
-  assert.equal(mapInvoked, false);
-
-  const hole: unknown[] = [];
-  hole.length = 1;
-  assert.throws(() => projection.ingest(envelope('0', hole)), RustyApplicationUiProjectionError);
-  class ProductArray extends Array<number> {}
-  assert.throws(() => projection.ingest(envelope('0', new ProductArray(1))), RustyApplicationUiProjectionError);
-  projection.dispose();
+  unbound.dispose();
 });
 
 void test('projection enforces the subscriber bound and monotonic runtime rebinding', () => {
@@ -226,7 +139,7 @@ void test('projection enforces the subscriber bound and monotonic runtime rebind
   projection.dispose();
 });
 
-void test('TS projection admits the exact Rust runtime-ui fixture wire', async () => {
+void test('projection admits the Rust runtime-ui fixture', async () => {
   const fixture: unknown = JSON.parse(await readFile(RUST_UI_FIXTURE, 'utf8'));
   assert.ok(typeof fixture === 'object' && fixture !== null);
   const value = fixture as {
@@ -239,7 +152,7 @@ void test('TS projection admits the exact Rust runtime-ui fixture wire', async (
     expectedStream: value.stream,
     expectedContract: value.contract,
   });
-  assert.equal(projection.ingest(fixture), true);
+  assert.equal(projection.ingest(fixture as RuntimeUiProjectionEnvelope), true);
   assert.deepEqual(projection.current(), fixture);
   projection.dispose();
 });

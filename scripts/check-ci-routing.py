@@ -81,6 +81,8 @@ def main() -> None:
             "Cargo.toml",
             "Cargo.lock",
             "rust/**",
+            # The contracts Rust emits; a stale one fails a Rust test.
+            "render/packages/*/src/generated/**",
             "scripts/verify.sh",
         },
         {"csharp/**", "fixtures/csharp-*/**", "render/**", "migration/**"},
@@ -124,6 +126,7 @@ def main() -> None:
         "scripts/test-csharp-binding-generator-results-fixture.sh": {"csharp"},
         "render/packages/product-browser-host/src/index.ts": {"browser"},
         "render/packages/live-debug-panel/src/browser-mount.ts": {"browser"},
+        "render/packages/application-host/src/generated/contracts.ts": {"browser", "verify"},
         "rust/crates/entity-state/src/lib.rs": {"verify"},
         "docs/csharp-sdk.md": {"docs"},
         ".github/workflows/browser.yml": {"docs", "browser"},

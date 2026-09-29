@@ -9,19 +9,11 @@
  * stays the application's focus, pointer-lock and input target, and this view
  * runs the one page cadence the application samples input on.
  *
- * Wire format: see `rust/crates/product-dev-host/src/frames.rs`.
+ * Wire format: `rust/crates/product-dev-host/src/frames.rs`, whose header
+ * layout is emitted as `FRAME_STREAM_HEADER`.
  */
-export const RUSTY_APPLICATION_FRAME_STREAM_PATH = '/__rusty/product/runtime/frames';
+import { FRAME_STREAM_HEADER, FRAME_STREAM_PATH, type ProductDevRenderOutput } from './generated/contracts.js';
 
-/** Where the runtime draws the world: streamed to this page, or to the desktop window. */
-export type RustyApplicationRenderOutput = 'stream' | 'window';
-
-const FRAME_MAGIC = 0x31465352; // "RSF1", little-endian
-const FRAME_MIN_HEADER_BYTES = 40;
-const FRAME_FORMAT_JPEG = 1;
-const FRAME_FORMAT_RGBA8 = 2;
-const FRAME_FLAG_HELD = 1;
-const FRAME_FLAG_VIDEO = 2;
 /** Above the product UI while a video clip covers the frame. */
 const VIDEO_Z_INDEX = '1000';
 const RETRY_DELAY_MS = 500;
@@ -40,27 +32,29 @@ export interface RustyApplicationStreamedFrame {
 /** Parses one `RSF1` frame: its header, then its payload. */
 export function parseRustyApplicationStreamedFrame(bytes: Uint8Array): RustyApplicationStreamedFrame {
   const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes.byteLength < FRAME_MIN_HEADER_BYTES || header.getUint32(0, true) !== FRAME_MAGIC) {
+  const { offsets, flags } = FRAME_STREAM_HEADER;
+  if (bytes.byteLength < FRAME_STREAM_HEADER.bytes || header.getUint32(0, true) !== FRAME_STREAM_HEADER.magic) {
     throw new Error('frame response is not an RSF1 frame');
   }
-  const headerBytes = header.getUint32(4, true);
+  const headerBytes = header.getUint32(offsets.headerBytes, true);
+  const frameFlags = header.getUint8(offsets.flags);
   return {
-    sequence: Number(header.getBigUint64(8, true)),
-    step: Number(header.getBigUint64(16, true)),
-    width: header.getUint32(24, true),
-    height: header.getUint32(28, true),
-    format: header.getUint8(32),
-    held: (header.getUint8(33) & FRAME_FLAG_HELD) !== 0,
-    video: (header.getUint8(33) & FRAME_FLAG_VIDEO) !== 0,
-    payload: bytes.subarray(headerBytes, headerBytes + header.getUint32(36, true)),
+    sequence: Number(header.getBigUint64(offsets.sequence, true)),
+    step: Number(header.getBigUint64(offsets.step, true)),
+    width: header.getUint32(offsets.width, true),
+    height: header.getUint32(offsets.height, true),
+    format: header.getUint8(offsets.format),
+    held: (frameFlags & flags.held) !== 0,
+    video: (frameFlags & flags.video) !== 0,
+    payload: bytes.subarray(headerBytes, headerBytes + header.getUint32(offsets.payloadBytes, true)),
   };
 }
 
 async function decodeFrame(frame: RustyApplicationStreamedFrame): Promise<ImageBitmap> {
-  if (frame.format === FRAME_FORMAT_JPEG) {
+  if (frame.format === FRAME_STREAM_HEADER.formats.jpeg) {
     return createImageBitmap(new Blob([frame.payload as Uint8Array<ArrayBuffer>], { type: 'image/jpeg' }));
   }
-  if (frame.format === FRAME_FORMAT_RGBA8) {
+  if (frame.format === FRAME_STREAM_HEADER.formats.rgba8) {
     const pixels = new Uint8ClampedArray(frame.payload.buffer as ArrayBuffer, frame.payload.byteOffset, frame.payload.byteLength);
     return createImageBitmap(new ImageData(pixels, frame.width, frame.height));
   }
@@ -77,7 +71,7 @@ export interface RustyApplicationFrameView {
  */
 export function mountRustyApplicationFrameView(
   canvas: HTMLCanvasElement,
-  output: RustyApplicationRenderOutput,
+  output: ProductDevRenderOutput,
   onCadence: (timeMs: number) => void,
 ): RustyApplicationFrameView {
   const document = canvas.ownerDocument;
@@ -142,7 +136,7 @@ export function mountRustyApplicationFrameView(
         const cssWidth = Math.max(1, Math.round(canvas.clientWidth));
         try {
           const response = await fetch(
-            `${RUSTY_APPLICATION_FRAME_STREAM_PATH}?after=${after}&width=${width}&height=${height}&cssWidth=${cssWidth}`,
+            `${FRAME_STREAM_PATH}?after=${after}&width=${width}&height=${height}&cssWidth=${cssWidth}`,
             { cache: 'no-store', signal: pulling.signal },
           );
           if (response.status === 204) continue;

@@ -1,5 +1,6 @@
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use serde::Deserialize;
+use ts_rs::TS;
 
 use crate::{
     model::{validate_controller_axis, validate_controller_button_value},
@@ -17,7 +18,7 @@ pub const MAX_RUNTIME_INPUT_WIRE_EVENTS: usize = 1_024;
 pub fn decode_runtime_input_wire_event_json(
     bytes: &[u8],
 ) -> Result<RuntimeInputEvent, RuntimeInputError> {
-    decode_exact::<WireInputEvent>(bytes)?.into_event()
+    decode_exact::<RuntimeInputWireEvent>(bytes)?.into_event()
 }
 
 /// Strictly decodes the ordered `drain()` array emitted by a host adapter.
@@ -25,11 +26,14 @@ pub fn decode_runtime_input_wire_event_json(
 pub fn decode_runtime_input_wire_events_json(
     bytes: &[u8],
 ) -> Result<Vec<RuntimeInputEvent>, RuntimeInputError> {
-    let events = decode_exact::<Vec<WireInputEvent>>(bytes)?;
+    let events = decode_exact::<Vec<RuntimeInputWireEvent>>(bytes)?;
     if events.len() > MAX_RUNTIME_INPUT_WIRE_EVENTS {
         return Err(RuntimeInputError::WireEventLimit);
     }
-    events.into_iter().map(WireInputEvent::into_event).collect()
+    events
+        .into_iter()
+        .map(RuntimeInputWireEvent::into_event)
+        .collect()
 }
 
 fn decode_exact<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, RuntimeInputError> {
@@ -41,14 +45,16 @@ fn decode_exact<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, Runtime
     Ok(value)
 }
 
-#[derive(Deserialize)]
+/// One input envelope a host submits, in observation order: a physical fact
+/// or an intent claimed by product UI.
+#[derive(Deserialize, TS)]
 #[serde(untagged)]
-enum WireInputEvent {
-    Physical(WirePhysicalInputEvent),
-    Direct(WireDirectIntentClaim),
+pub enum RuntimeInputWireEvent {
+    Physical(RuntimeInputWirePhysical),
+    Direct(RuntimeInputWireIntentClaim),
 }
 
-impl WireInputEvent {
+impl RuntimeInputWireEvent {
     fn into_event(self) -> Result<RuntimeInputEvent, RuntimeInputError> {
         match self {
             Self::Physical(value) => value.into_event(),
@@ -57,16 +63,19 @@ impl WireInputEvent {
     }
 }
 
-#[derive(Deserialize)]
+/// A physical input fact observed for one runtime binding.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WirePhysicalInputEvent {
-    runtime: WireRuntimeBinding,
+pub struct RuntimeInputWirePhysical {
+    runtime: RuntimeInputWireBinding,
+    /// Canonical decimal u64, increasing within the binding.
     sequence: String,
+    /// Product-declared input context.
     context: String,
-    fact: WireFact,
+    fact: RuntimeInputWireFact,
 }
 
-impl WirePhysicalInputEvent {
+impl RuntimeInputWirePhysical {
     fn into_event(self) -> Result<RuntimeInputEvent, RuntimeInputError> {
         let runtime = self.runtime.into_binding()?;
         let sequence = parse_canonical_u64(&self.sequence)?;
@@ -80,17 +89,21 @@ impl WirePhysicalInputEvent {
     }
 }
 
-#[derive(Deserialize)]
+/// A product-declared intent claimed by product UI, in the same ordered lane.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WireDirectIntentClaim {
-    runtime: WireRuntimeBinding,
+pub struct RuntimeInputWireIntentClaim {
+    runtime: RuntimeInputWireBinding,
+    /// Canonical decimal u64, increasing within the binding.
     sequence: String,
+    /// Product-declared input context.
     context: String,
+    /// Product-declared intent name.
     intent: String,
-    value: WireIntentValue,
+    value: RuntimeInputWireIntentValue,
 }
 
-impl WireDirectIntentClaim {
+impl RuntimeInputWireIntentClaim {
     fn into_event(self) -> Result<RuntimeInputEvent, RuntimeInputError> {
         Ok(RuntimeInputEvent::DirectIntent(
             RuntimeDirectIntentClaim::new(
@@ -104,15 +117,16 @@ impl WireDirectIntentClaim {
     }
 }
 
-#[derive(Deserialize)]
+/// The runtime binding an envelope belongs to, as canonical decimal text.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WireRuntimeBinding {
+pub struct RuntimeInputWireBinding {
     instance_id: String,
     generation: String,
     control_revision: String,
 }
 
-impl WireRuntimeBinding {
+impl RuntimeInputWireBinding {
     fn into_binding(self) -> Result<RuntimeInputBinding, RuntimeInputError> {
         Ok(RuntimeInputBinding::new(
             RuntimeInstanceId::new(parse_canonical_u64(&self.instance_id)?),
@@ -122,16 +136,17 @@ impl WireRuntimeBinding {
     }
 }
 
-#[derive(Deserialize)]
+/// A physical fact from the closed Engine input catalog.
+#[derive(Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-enum WireFact {
+pub enum RuntimeInputWireFact {
     Key {
         code: KeyboardControl,
-        edge: WirePhysicalEdge,
+        edge: RuntimeInputWireEdge,
     },
     PointerButton {
         button: PointerButton,
-        edge: WirePhysicalEdge,
+        edge: RuntimeInputWireEdge,
     },
     PointerDelta {
         x: f32,
@@ -143,7 +158,7 @@ enum WireFact {
     },
     ControllerButton {
         button: ControllerButton,
-        edge: WirePhysicalEdge,
+        edge: RuntimeInputWireEdge,
     },
     ControllerAxis {
         axis: ControllerAxis,
@@ -154,11 +169,11 @@ enum WireFact {
         value: f32,
     },
     Clear {
-        reason: WireClearReason,
+        reason: RuntimeInputWireClearReason,
     },
 }
 
-impl WireFact {
+impl RuntimeInputWireFact {
     fn into_fact(self) -> Result<RuntimeInputFact, RuntimeInputError> {
         Ok(match self {
             Self::Key { code, edge } => RuntimeInputFact::Key {
@@ -198,14 +213,14 @@ impl WireFact {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
-enum WirePhysicalEdge {
+pub enum RuntimeInputWireEdge {
     Pressed,
     Released,
 }
 
-impl WirePhysicalEdge {
+impl RuntimeInputWireEdge {
     const fn into_edge(self) -> PhysicalEdge {
         match self {
             Self::Pressed => PhysicalEdge::Pressed,
@@ -214,9 +229,10 @@ impl WirePhysicalEdge {
     }
 }
 
-#[derive(Deserialize)]
+/// Why a host cleared held input.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
-enum WireClearReason {
+pub enum RuntimeInputWireClearReason {
     FocusLoss,
     InteractionModeLoss,
     PointerLockLoss,
@@ -226,7 +242,7 @@ enum WireClearReason {
     IngressOverflow,
 }
 
-impl WireClearReason {
+impl RuntimeInputWireClearReason {
     const fn into_reason(self) -> InputClearReason {
         match self {
             Self::FocusLoss => InputClearReason::FocusLoss,
@@ -240,9 +256,9 @@ impl WireClearReason {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-enum WireIntentValue {
+pub enum RuntimeInputWireIntentValue {
     Digital {
         active: bool,
     },
@@ -255,7 +271,7 @@ enum WireIntentValue {
     },
 }
 
-impl WireIntentValue {
+impl RuntimeInputWireIntentValue {
     fn into_value(self) -> Result<RuntimeIntentValue, RuntimeInputError> {
         Ok(match self {
             Self::Digital { active } => RuntimeIntentValue::Digital { active },

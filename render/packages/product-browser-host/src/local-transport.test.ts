@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH,
   ProductBrowserLocalTransportError,
   createProductBrowserLocalHttpAdapter,
   type ProductBrowserLocalEventSource,
 } from './local-transport.js';
-import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
+import { RUNTIME_BASE_PATH, type RuntimeInputWireEvent } from './generated/contracts.js';
 
 const RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
 const ACCEPTED_FAULT = { code: 'DEV_HOST_ACCEPTED', disposition: 'accepted' } as const;
@@ -61,11 +60,12 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     if (this.namedListeners.get(type) === listener) this.namedListeners.delete(type);
   }
 
+  /** Sends `output` as one event: the host sends each event as an array of outputs. */
   emit(output: unknown, lastEventId = String(this.nextEventId++)): void {
     const listener = this.onmessage;
     if (listener === null) return;
     this.messageDeliveryCallbacks += 1;
-    listener({ data: JSON.stringify(output), lastEventId });
+    listener({ data: JSON.stringify(Array.isArray(output) ? output : [output]), lastEventId });
   }
 
   open(): void {
@@ -78,8 +78,11 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.onerror?.({});
   }
 
-  emitBaseline(value: unknown, lastEventId = String(this.nextEventId++)): void {
-    this.namedListeners.get('rusty-output-baseline')?.({ data: JSON.stringify(value), lastEventId });
+  emitBaseline(value: object, lastEventId = String(this.nextEventId++)): void {
+    this.namedListeners.get('rusty-output-baseline')?.({
+      data: JSON.stringify({ outputThrough: '0', ...value }),
+      lastEventId,
+    });
   }
 }
 
@@ -152,27 +155,27 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   FakeEventSource.instances.length = 0;
   const routes: string[] = [];
   const transportErrors: unknown[] = [];
-  const batches: RustyApplicationRuntimeInputEnvelope[][] = [];
+  const batches: RuntimeInputWireEvent[][] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (input, init) => {
       const url = new URL(String(input), 'http://product.local/');
       routes.push(`${init?.method ?? 'GET'} ${url.pathname}`);
       const body = init?.body === undefined ? null : JSON.parse(String(init.body)) as Record<string, unknown>;
       switch (url.pathname) {
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}lifecycle/start`:
+        case `${RUNTIME_BASE_PATH}lifecycle/start`:
           return response(result('start'));
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}input`:
-          batches.push([...(body?.['batch'] as readonly RustyApplicationRuntimeInputEnvelope[])]);
+        case `${RUNTIME_BASE_PATH}input`:
+          batches.push([...(body?.['batch'] as readonly RuntimeInputWireEvent[])]);
           return response({ accepted: true, ...ACCEPTED_FAULT, count: (body?.['batch'] as readonly unknown[]).length, binding: RUNTIME, readout: READOUT });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}advance-realtime`:
+        case `${RUNTIME_BASE_PATH}advance-realtime`:
           assert.equal(body?.['observedTimeNs'], '100');
           return response(result('advance-realtime'));
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}admit-demand-step`:
+        case `${RUNTIME_BASE_PATH}admit-demand-step`:
           return response(result('admit-demand-step'));
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}admit-external-step`:
+        case `${RUNTIME_BASE_PATH}admit-external-step`:
           assert.equal(body?.['step'], '1');
           return response(result('admit-external-step'));
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
+        case `${RUNTIME_BASE_PATH}timeline-completion`:
           assert.equal(body?.['ticket'], '1');
           return response({ accepted: true, ...ACCEPTED_FAULT, ticket: '1', binding: RUNTIME, readout: READOUT });
         default:
@@ -188,7 +191,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   const throwingUnsubscribe = adapter.subscribeOutputs(() => { throw new Error('listener probe'); });
   const isolatedOutputs: unknown[] = [];
   const isolatedUnsubscribe = adapter.subscribeOutputs((output) => isolatedOutputs.push(output));
-  assert.equal(FakeEventSource.instances[0]?.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs/fresh`);
+  assert.equal(FakeEventSource.instances[0]?.url, `${RUNTIME_BASE_PATH}outputs/fresh`);
   let outputSubscriptionReady = false;
   const readiness = adapter.waitUntilOutputSubscriptionReady?.().then(() => {
     outputSubscriptionReady = true;
@@ -228,27 +231,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     outcome: { kind: 'success' },
     provenance: { correlation: 'request-1' },
   }))?.ticket, '1');
-  assert.throws(
-    () => adapter.completeTimeline?.({
-      ticket: '01',
-      runtime: RUNTIME,
-      correlation: 'request-1',
-      outcome: { kind: 'success' },
-      provenance: { correlation: 'request-1' },
-    }),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError
-      && error.code === 'invalid_options',
-  );
-  assert.throws(
-    () => adapter.completeTimeline?.({
-      ticket: '1',
-      runtime: RUNTIME,
-      correlation: 'request-1',
-      outcome: { kind: 'success' },
-      provenance: { correlation: 'different' },
-    }),
-    (error: unknown) => error instanceof TypeError,
-  );
   assert.deepEqual(routes, [
     'POST /__rusty/product/runtime/lifecycle/start',
     'POST /__rusty/product/runtime/input',
@@ -296,51 +278,6 @@ test('local transport distinguishes an unknown mutation outcome from an HTTP rej
   );
 });
 
-test('local transport posts large deep timeline data as a detached immutable snapshot', async () => {
-  let posted: Record<string, unknown> | null = null;
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async (input, init) => {
-      assert.equal(
-        new URL(String(input), 'http://product.local/').pathname,
-        `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`,
-      );
-      posted = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return response({ accepted: true, ...ACCEPTED_FAULT, ticket: '1', binding: RUNTIME, readout: READOUT });
-    },
-    eventSource: FakeEventSource,
-  });
-  let deep: TestJson = null;
-  for (let depth = 0; depth < 128; depth += 1) deep = [deep];
-  const data = {
-    status: { value: 'before' },
-    deep,
-    magnitude: 1e20,
-    entries: Array.from({ length: 129 }, (_, index) => index),
-    text: 'x'.repeat(4 * 1024 + 1),
-  } satisfies { readonly [key: string]: TestJson };
-
-  const completion = adapter.completeTimeline!({
-    ticket: '1',
-    runtime: RUNTIME,
-    correlation: 'request-1',
-    outcome: { kind: 'success', data },
-    provenance: { correlation: 'request-1', detail: data },
-  });
-  data.status.value = 'after';
-  await completion;
-
-  assert.ok(posted !== null);
-  const outcome = (posted as Record<string, unknown>)['outcome'] as { readonly data: Record<string, unknown> };
-  const provenance = (posted as Record<string, unknown>)['provenance'] as { readonly detail: Record<string, unknown> };
-  assert.equal((outcome.data['status'] as { readonly value: string }).value, 'before');
-  assert.equal((provenance.detail['status'] as { readonly value: string }).value, 'before');
-  assert.equal(outcome.data['magnitude'], 1e20);
-  assert.equal((outcome.data['entries'] as readonly unknown[]).length, 129);
-  assert.equal((outcome.data['text'] as string).length, 4 * 1024 + 1);
-  assertNestedArrayDepth(outcome.data['deep'], 128);
-  adapter.dispose();
-});
-
 test('rejected runtime results remain decoded result facts rather than transport failures', async () => {
   const rejected = {
     accepted: false,
@@ -352,11 +289,11 @@ test('rejected runtime results remain decoded result facts rather than transport
     fetch: async (input) => {
       const pathname = new URL(String(input), 'http://product.local/').pathname;
       switch (pathname) {
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}advance-realtime`:
+        case `${RUNTIME_BASE_PATH}advance-realtime`:
           return response({ ...rejected, operation: 'advance-realtime' }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}input`:
+        case `${RUNTIME_BASE_PATH}input`:
           return response({ ...rejected, count: 0, acceptedCount: 0, droppedCount: 0 }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
+        case `${RUNTIME_BASE_PATH}timeline-completion`:
           return response({ ...rejected, ticket: '1' }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         default:
           throw new Error(`unexpected route ${pathname}`);
@@ -385,41 +322,9 @@ test('local transport exposes only the fixed control-replace recovery fence', as
   });
   assert.deepEqual(await adapter.replaceControl?.(RUNTIME), result('replace-control'));
   assert.deepEqual(requests, [{
-    url: `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}control/replace`,
+    url: `${RUNTIME_BASE_PATH}control/replace`,
     body: JSON.stringify({ runtime: RUNTIME }),
   }]);
-  adapter.dispose();
-});
-
-test('local transport preserves the UTF-8 response byte limit and committed receipt', async () => {
-  const adapter = createProductBrowserLocalHttpAdapter({
-    maximumResponseBytes: 1024,
-    fetch: async () => response({ ...result('start'), diagnostic: '界'.repeat(400) }),
-    eventSource: FakeEventSource,
-  });
-  await assert.rejects(
-    adapter.lifecycle({ kind: 'start' }),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError
-      && error.code === 'response_decode_failed'
-      && error.message.includes('exceeds 1024 bytes')
-      && error.mutation.certainty === 'committed',
-  );
-  adapter.dispose();
-});
-
-test('local transport rejects a declared oversized local response before buffering', async () => {
-  let consumed = false;
-  const adapter = createProductBrowserLocalHttpAdapter({
-    maximumResponseBytes: 1024,
-    fetch: async () => {
-      const receipt = response(result('start'), 200, { 'content-length': '2048' });
-      receipt.arrayBuffer = async () => { consumed = true; return new ArrayBuffer(2048); };
-      return receipt;
-    },
-    eventSource: FakeEventSource,
-  });
-  await assert.rejects(adapter.lifecycle({ kind: 'start' }), /exceeds 1024 bytes/u);
-  assert.equal(consumed, false);
   adapter.dispose();
 });
 
@@ -538,13 +443,10 @@ test('one runtime output batch is decoded and delivered through one batch callba
   const unsubscribe = adapter.subscribeOutputBatches?.((outputs) => received.push([...outputs]));
   const stream = FakeEventSource.instances[0]!;
   completeConnectionBaseline(stream);
-  stream.emit({
-    kind: 'runtime-output-batch',
-    outputs: [
-      { kind: 'runtime-readout', readout: READOUT },
-      { kind: 'binding', runtime: RUNTIME, nextInputSequence: '2' },
-    ],
-  }, '1');
+  stream.emit([
+    { kind: 'runtime-readout', readout: READOUT },
+    { kind: 'binding', runtime: RUNTIME, nextInputSequence: '2' },
+  ], '1');
   assert.equal(received.length, 2);
   assert.deepEqual(received[1]?.map((output) => (output as { kind: string }).kind), [
     'runtime-readout',
@@ -568,9 +470,7 @@ test('runtime output UI projections pass empty strings and large deep data throu
 
   let deep: TestJson = null;
   for (let depth = 0; depth < 128; depth += 1) deep = [deep];
-  stream.emit({
-    kind: 'runtime-output-batch',
-    outputs: [{
+  stream.emit([{
       kind: 'ui-projection',
       envelope: {
         artifact: 'rusty.product.ui-projection',
@@ -588,8 +488,7 @@ test('runtime output UI projections pass empty strings and large deep data throu
           text: 'x'.repeat(64 * 1024 + 1),
         },
       },
-    }],
-  }, '1');
+    }], '1');
 
   const output = received.at(-1) as {
     readonly kind: string;
@@ -645,30 +544,27 @@ test('sixty hertz receipt stream parses once and preserves output order per rece
   }) as typeof JSON.parse;
   try {
     for (let tick = 0; tick < TICKS; tick += 1) {
-      stream.emit({
-        kind: 'runtime-output-batch',
-        outputs: [
-          {
-            kind: 'ui-projection',
-            envelope: {
-              artifact: 'rusty.product.ui-projection',
-              runtime: RUNTIME,
-              sequence: String(tick),
-              stream: 'product.ui',
-              contract: 'runtime.tick.v1',
-              value: { tick },
-            },
+      stream.emit([
+        {
+          kind: 'ui-projection',
+          envelope: {
+            artifact: 'rusty.product.ui-projection',
+            runtime: RUNTIME,
+            sequence: String(tick),
+            stream: 'product.ui',
+            contract: 'runtime.tick.v1',
+            value: { tick },
           },
-          {
-            kind: 'runtime-readout',
-            readout: {
-              ...READOUT,
-              admittedSimulationSteps: String(tick + 1),
-              lastObservedTimeNs: String(tick + 1),
-            },
+        },
+        {
+          kind: 'runtime-readout',
+          readout: {
+            ...READOUT,
+            admittedSimulationSteps: String(tick + 1),
+            lastObservedTimeNs: String(tick + 1),
           },
-        ],
-      });
+        },
+      ]);
     }
   } finally {
     JSON.parse = originalJsonParse;
@@ -796,7 +692,7 @@ test('local transport decodes scheduled input receipts with authoritative progre
   adapter.dispose();
 });
 
-test('local transport accepts a host-bounded decode-resync receipt without widening outgoing input batches', async () => {
+test('local transport returns a decode-resync receipt as its result', async () => {
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response({
       accepted: false,
@@ -819,11 +715,6 @@ test('local transport accepts a host-bounded decode-resync receipt without widen
     droppedCount: 1_025,
     diagnostic: 'input binding was resynchronized after strict decode rejection',
   });
-  assert.throws(
-    () => adapter.input(Array.from({ length: 1_025 }, () => ({})) as never),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError
-      && error.code === 'invalid_options',
-  );
   adapter.dispose();
 });
 
@@ -895,7 +786,7 @@ test('resync-required commit reconnects the fresh output baseline without replay
   assert.equal(first.closed, true);
   assert.equal(FakeEventSource.instances.length, 2);
   const fresh = FakeEventSource.instances[1]!;
-  assert.equal(fresh.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs/fresh`);
+  assert.equal(fresh.url, `${RUNTIME_BASE_PATH}outputs/fresh`);
   completeConnectionBaseline(fresh);
 
   assert.equal((await operation).operation, 'start');
@@ -1018,80 +909,6 @@ test('output cursor mismatch replaces the projection and ignores late old-stream
   }
 });
 
-test('local transport rejects malformed typed output and bounded paths', () => {
-  const errors: ProductBrowserLocalTransportError[] = [];
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' }),
-    eventSource: FakeEventSource,
-    onTransportError: (error) => errors.push(error),
-  });
-  adapter.subscribeOutputs(() => undefined);
-  const stream = FakeEventSource.instances.at(-1);
-  assert.ok(stream);
-  stream.emit({ kind: 'runtime-readout', readout: { artifact: 'wrong' } });
-  assert.equal(errors[0]?.code, 'output_decode_failed');
-  adapter.dispose();
-  assert.throws(
-    () => createProductBrowserLocalHttpAdapter({
-      fetch: async () => response({}),
-      eventSource: FakeEventSource,
-      basePath: '/../runtime/',
-    }),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'invalid_options',
-  );
-  assert.throws(
-    () => createProductBrowserLocalHttpAdapter({
-      fetch: async () => response({}),
-      eventSource: FakeEventSource,
-      basePath: '//other-origin/runtime/',
-    }),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'invalid_options',
-  );
-});
-
-test('local transport rejects missing or incoherent host fault facts', async () => {
-  const missingFault = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({ accepted: true, operation: 'advance-realtime' }),
-    eventSource: FakeEventSource,
-  });
-  await assert.rejects(missingFault.advanceRealtime('1'), /operation result code/u);
-
-  const incoherentFault = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({
-      accepted: false,
-      code: 'CSHARP_CONTROL_BINDING',
-      disposition: 'accepted',
-      operation: 'advance-realtime',
-      diagnostic: 'stale binding',
-    }),
-    eventSource: FakeEventSource,
-  });
-  await assert.rejects(
-    incoherentFault.advanceRealtime('1'),
-    /accepted and disposition are incoherent/u,
-  );
-});
-
-test('ordinary outputs honor the configured quota below the hard event bound', () => {
-  FakeEventSource.instances.length = 0;
-  const errors: ProductBrowserLocalTransportError[] = [];
-  const outputs: unknown[] = [];
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({}),
-    eventSource: FakeEventSource,
-    maximumOutputBytes: 1,
-    onTransportError: (error) => errors.push(error),
-  });
-  adapter.subscribeOutputs((output) => outputs.push(output));
-  const stream = FakeEventSource.instances[0];
-  assert.ok(stream);
-  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
-  assert.equal(outputs.length, 0);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0]?.code, 'output_decode_failed');
-  adapter.dispose();
-});
-
 test('one output batch far above the former 256 KiB event bound arrives as one event', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -1102,9 +919,7 @@ test('one output batch far above the former 256 KiB event bound arrives as one e
   adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
   const stream = FakeEventSource.instances[0]!;
   completeConnectionBaseline(stream);
-  stream.emit({
-    kind: 'runtime-output-batch',
-    outputs: [{
+  stream.emit([{
       kind: 'ui-projection',
       envelope: {
         artifact: 'rusty.product.ui-projection',
@@ -1114,8 +929,7 @@ test('one output batch far above the former 256 KiB event bound arrives as one e
         contract: 'runtime.large.v1',
         value: { payload: 'x'.repeat(4 * 1024 * 1024) },
       },
-    }],
-  });
+    }]);
   assert.equal(batches.length, 2);
   assert.equal(
     ((batches[1]?.[0] as { envelope: { value: { payload: string } } }).envelope.value.payload).length,
@@ -1163,7 +977,7 @@ test('a dropped output stream asks for one fresh baseline without closing the ru
     pageEvents: [],
   };
   await adapter.reportBrowserDiagnostics?.(terminalReport);
-  assert.deepEqual(requestUrls, [`${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}browser-diagnostics`]);
+  assert.deepEqual(requestUrls, [`${RUNTIME_BASE_PATH}browser-diagnostics`]);
   const attachment = (requestBodies[0] as { attachment: { id: string; baseline?: unknown } }).attachment;
   assert.match(attachment.id, /^browser-[0-9a-f]{32}$/u);
   assert.equal(attachment.baseline, undefined);
@@ -1201,45 +1015,7 @@ test('a served UI reload reloads the page, and only from the current stream', ()
   adapter.dispose();
 });
 
-test('local transport hardens the JSON border before requests', async () => {
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async (_input, init) => {
-      assert.equal(new Headers(init?.headers).get('content-type'), 'application/json');
-      return response({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' });
-    },
-    eventSource: FakeEventSource,
-  });
-  class ArraySubclass extends Array<unknown> {}
-  assert.throws(
-    () => adapter.input(new ArraySubclass() as readonly RustyApplicationRuntimeInputEnvelope[]),
-    (error: unknown) => error instanceof TypeError,
-  );
-  const getterEnvelope = {} as Record<string, unknown>;
-  Object.defineProperty(getterEnvelope, 'runtime', { get: () => RUNTIME, enumerable: true });
-  assert.throws(
-    () => adapter.input([getterEnvelope] as never),
-    (error: unknown) => error instanceof TypeError,
-  );
-  assert.throws(
-    () => adapter.admitExternalStep?.('01'),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'invalid_options',
-  );
-  adapter.dispose();
-
-  const wrongContentType = createProductBrowserLocalHttpAdapter({
-    fetch: async () => new Response('{}', {
-      headers: { 'content-type': 'text/plain', 'x-rusty-commit-disposition': 'committed' },
-    }),
-    eventSource: FakeEventSource,
-  });
-  await assert.rejects(
-    wrongContentType.advanceRealtime('1'),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'response_decode_failed',
-  );
-  wrongContentType.dispose();
-});
-
-test('local transport carries immutable product payload intents without local quotas', async () => {
+test('local transport sends a product payload as it was when claimed, without local quotas', async () => {
   const requestBodies: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (_input, init) => {
@@ -1248,7 +1024,7 @@ test('local transport carries immutable product payload intents without local qu
     },
     eventSource: FakeEventSource,
   });
-  const envelope = (data: unknown): readonly RustyApplicationRuntimeInputEnvelope[] => [{
+  const envelope = (data: unknown): readonly RuntimeInputWireEvent[] => [{
     runtime: RUNTIME,
     sequence: '1',
     context: 'gameplay',
@@ -1273,10 +1049,6 @@ test('local transport carries immutable product payload intents without local qu
     },
   }] }]);
 
-  const accessor = {} as Record<string, unknown>;
-  Object.defineProperty(accessor, 'value', { enumerable: true, get: () => 1 });
-  const inherited = Object.create({ inherited: true }) as Record<string, unknown>;
-  inherited['value'] = 1;
   let deep: unknown = null;
   for (let index = 0; index < 1_024; index += 1) deep = [deep];
   const manyNodes = Object.fromEntries(Array.from(
@@ -1284,17 +1056,6 @@ test('local transport carries immutable product payload intents without local qu
     (_unused, index) => [`entry${String(index)}`, [index, index, index]],
   ));
   const largeText = Array.from({ length: 1_024 }, () => 'x'.repeat(64));
-
-  for (const rejected of [
-    accessor,
-    inherited,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    9_007_199_254_740_992,
-  ]) {
-    assert.throws(() => adapter.input(envelope(rejected)), (error: unknown) =>
-      error instanceof TypeError || error instanceof RangeError);
-  }
   await Promise.all([deep, manyNodes, largeText].map((data) => adapter.input(envelope(data))));
   assert.equal(requestBodies.length, 4);
   adapter.dispose();
@@ -1324,7 +1085,7 @@ test('local transport preserves primary and secondary pointer button edges', asy
   adapter.dispose();
 });
 
-test('local transport preserves analog button values and rejects pressure outside its range', async () => {
+test('local transport preserves analog button values', async () => {
   const bodies: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (_input, init) => {
@@ -1338,10 +1099,6 @@ test('local transport preserves analog button values and rejects pressure outsid
   }));
   await adapter.input(batch);
   assert.deepEqual(bodies, [{ batch }]);
-  for (const value of [-0.1, 1.1, NaN]) {
-    assert.throws(() => adapter.input([{ ...batch[0]!, fact: { ...batch[0]!.fact, value } }]));
-  }
-  assert.equal(bodies.length, 1);
   adapter.dispose();
 });
 
@@ -1477,19 +1234,3 @@ test('held connection baseline satisfies response output fences without another 
   adapter.dispose();
 });
 
-test('local transport admits all four arrow key controls', async () => {
-  const batch: RustyApplicationRuntimeInputEnvelope[] = (['arrow-up', 'arrow-down', 'arrow-left', 'arrow-right'] as const).map((code, index) => ({
-    runtime: RUNTIME,
-    sequence: String(index + 1),
-    context: 'gameplay.default',
-    fact: { kind: 'key', code, edge: 'pressed' },
-  }));
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async (_input, init) => {
-      assert.deepEqual(JSON.parse(String(init?.body)).batch, batch);
-      return response({ accepted: true, ...ACCEPTED_FAULT, count: batch.length, binding: RUNTIME, readout: READOUT });
-    },
-    eventSource: FakeEventSource,
-  });
-  assert.equal((await adapter.input(batch)).count, 4);
-});

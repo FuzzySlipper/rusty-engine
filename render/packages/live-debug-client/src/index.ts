@@ -3,147 +3,28 @@
  * Descriptor data is read-only help/completion data; this client never derives
  * command schemas or dispatches anything except one command-line string.
  */
+import type {
+  ProductDevDebugCatalog,
+  ProductDevDebugCommandDescriptor,
+  ProductDevDiagnosticsReadRequest,
+  ProductDevDiagnosticsReadResponse,
+  ProductDevErrorResponse,
+  RuntimeDiagnosticEvent,
+} from './generated/contracts.js';
 
-export interface LiveDebugParameterDescriptor {
-  readonly name: string;
-  readonly type: string;
-}
+// The shapes the Engine host answers with, generated from their Rust declarations.
+export * from './generated/contracts.js';
 
-export interface LiveDebugCommandDescriptor {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: readonly LiveDebugParameterDescriptor[];
-}
-
-export interface LiveDebugCatalog {
-  readonly available: boolean;
-  readonly commands: readonly LiveDebugCommandDescriptor[];
-}
-
+/** A command's outcome: the host answers 200 or 422 with the message as text. */
 export interface LiveDebugResult {
   readonly succeeded: boolean;
   readonly message: string;
 }
 
-/** Bounded process-owned diagnostic event; it is not the presentation stream. */
-export interface LiveDebugDiagnosticEvent {
-  readonly sequence: string;
-  readonly monotonicNanoseconds: string;
-  readonly severity: 'debug' | 'info' | 'warning' | 'error';
-  readonly disposition: 'accepted' | 'rejected-recoverable' | 'degraded' | 'resync-required' | 'terminal';
-  readonly source: string;
-  readonly code: string;
-  readonly message: string;
-  readonly fields?: readonly { readonly key: string; readonly value: string }[];
-}
-
-export interface LiveDebugDiagnosticsBatch {
-  readonly events: readonly LiveDebugDiagnosticEvent[];
-  readonly floorSequence: string;
-  readonly throughSequence: string;
-  readonly nextCursor: string;
-  readonly readMonotonicNanoseconds: string;
-  readonly lagged: boolean;
-  readonly warningCount: string;
-  readonly errorCount: string;
-  readonly droppedCount: string;
-  /** Optional host-owned product lane facts; renderer telemetry is separate. */
-  readonly telemetry?: LiveDebugTelemetrySnapshot;
-}
-
-export type LiveDebugOperationKind =
-  | 'connect'
-  | 'start'
-  | 'pause'
-  | 'resume'
-  | 'restart'
-  | 'shutdown'
-  | 'report-fault'
-  | 'replace-control'
-  | 'release-control'
-  | 'input'
-  | 'advance-realtime'
-  | 'admit-demand-step'
-  | 'admit-external-step'
-  | 'complete-timeline'
-  | 'report-audio-feedback'
-  | 'report-animation-feedback'
-  | 'report-ghost-plate-feedback'
-  | 'report-renderer-diagnostics'
-  | 'execute-debug';
-
-/** Bounded product/runtime lane observations returned by the Engine host. */
-export interface LiveDebugTelemetrySnapshot {
-  readonly inFlightOperation: LiveDebugOperationKind | null;
-  readonly inFlightAgeMs: string | null;
-  readonly lastProductAdmissionLatencyMs: string | null;
-  readonly lastInputAdmissionLatencyMs: string | null;
-  readonly queuedInputBatches: number;
-  readonly queuedInputEvents: number;
-  readonly inputBatchCapacity: number;
-  readonly oldestInputAgeMs: string | null;
-  readonly inputOverflowPending: boolean;
-  /** Progress rate in millihertz (1000 = one update per second). */
-  readonly runtimeProgressRateMillihertz: string | null;
-  readonly runtimeProgressAgeMs: string | null;
-  /** Why this host cannot currently report runtime progress, if known. */
-  readonly runtimeProgressUnavailableReason: string | null;
-  readonly connections: number;
-  readonly subscribers: number;
-  /** Unsent events held for the slowest output subscriber, and the bound at which it is closed to reconnect fresh. */
-  readonly outputQueueItems: number;
-  readonly outputQueueCapacity: number;
-  readonly outputBindingActive: boolean;
-  /** Completed C# update samples. Service time is nested in callback time. */
-  readonly updateAttribution: LiveDebugUpdateAttributionSnapshot | null;
-}
-
-export interface LiveDebugUpdateAttribution {
-  /** Runtime incarnation that produced this completed callback, if available. */
-  readonly runtime: LiveDebugRuntimeBinding | null;
-  readonly simulationStep: string;
-  readonly admittedStepCount: string;
-  /** Rust staging/reduction/conversion/completion after the callback returns. */
-  readonly postCallbackDurationUs: string;
-  /** Inclusive C# callback duration, including native service calls. */
-  readonly callbackDurationUs: string;
-  readonly characterStepCalls: string;
-  readonly characterStepDurationUs: string;
-  /** Logical character-controller casts, not narrow-phase work. */
-  readonly characterStepCastCount: string;
-  /** Eligible world projection entries and call-local active obstacles. */
-  readonly characterStepCandidateCount: string;
-  /** Actual Parry character cast/contact calls. */
-  readonly characterStepNarrowPhaseCount: string;
-  readonly voxelResidencyCalls: string;
-  readonly voxelResidencyDurationUs: string;
-  readonly voxelScenePresentationCalls: string;
-  readonly voxelScenePresentationDurationUs: string;
-}
-
-/** Exact runtime incarnation carried by update samples. */
-export interface LiveDebugRuntimeBinding {
-  readonly instanceId: string;
-  readonly generation: string;
-  readonly controlRevision: string;
-}
-
-export interface LiveDebugUpdateAttributionSnapshot {
-  readonly sampleCount: string;
-  readonly callbackDurationUsP50: string;
-  readonly callbackDurationUsP95: string;
-  readonly callbackDurationUsMax: string;
-  readonly latest: LiveDebugUpdateAttribution;
-  readonly rollingSlowest: LiveDebugUpdateAttribution;
-  readonly rollingSlowestAgeMs: string;
-  readonly slowest: LiveDebugUpdateAttribution;
-  readonly slowestAgeMs: string;
-}
-
 export interface LiveDebugTransport {
-  catalog(signal?: AbortSignal): Promise<LiveDebugCatalog>;
+  catalog(signal?: AbortSignal): Promise<ProductDevDebugCatalog>;
   execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult>;
-  diagnostics?(after?: string, signal?: AbortSignal): Promise<LiveDebugDiagnosticsBatch>;
+  diagnostics?(after?: string, signal?: AbortSignal): Promise<ProductDevDiagnosticsReadResponse>;
 }
 
 export interface LiveDebugHttpTransportOptions {
@@ -155,7 +36,6 @@ export interface LiveDebugHttpTransportOptions {
 const CATALOG_PATH = '/__rusty/product/runtime/debug/catalog';
 const EXECUTE_PATH = '/__rusty/product/runtime/debug/execute';
 const DIAGNOSTICS_READ_PATH = '/__rusty/product/runtime/diagnostics/read';
-const U64_MAX = 18_446_744_073_709_551_615n;
 
 /** Creates the default same-origin HTTP transport without owning UI state. */
 export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOptions = {}): LiveDebugTransport {
@@ -164,10 +44,10 @@ export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOpti
   if (origin === undefined || origin === 'null') throw new Error('A live-debug HTTP origin is required outside a browser page.');
   const url = (path: string): string => new URL(path, origin).toString();
   return {
-    async catalog(signal?: AbortSignal): Promise<LiveDebugCatalog> {
+    async catalog(signal?: AbortSignal): Promise<ProductDevDebugCatalog> {
       const response = await request(url(CATALOG_PATH), { method: 'GET', signal });
       if (response.status === 404) return { available: false, commands: [] };
-      return decodeCatalog(await requireSuccess(response));
+      return await requireSuccess(response) as ProductDevDebugCatalog;
     },
     async execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult> {
       const response = await request(url(EXECUTE_PATH), {
@@ -178,277 +58,33 @@ export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOpti
       if (response.status === 422) return { succeeded: false, message };
       throw new Error(message || `Live-debug host request failed (${response.status}).`);
     },
-    async diagnostics(after?: string, signal?: AbortSignal): Promise<LiveDebugDiagnosticsBatch> {
-      if (after !== undefined && !canonicalU64(after)) {
-        throw new Error('Live-debug diagnostics cursor is invalid.');
-      }
+    async diagnostics(after?: string, signal?: AbortSignal): Promise<ProductDevDiagnosticsReadResponse> {
+      const body: ProductDevDiagnosticsReadRequest = after === undefined ? {} : { after };
       const response = await request(url(DIAGNOSTICS_READ_PATH), {
         method: 'POST', signal, headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(after === undefined ? {} : { after }),
+        body: JSON.stringify(body),
       });
-      return decodeDiagnosticsBatch(await requireSuccess(response));
+      return await requireSuccess(response) as ProductDevDiagnosticsReadResponse;
     },
   };
 }
 
 /** Small UI/CLI-neutral helper for catalog-derived completion. */
-export function completeLiveDebug(catalog: LiveDebugCatalog, prefix: string): readonly LiveDebugCommandDescriptor[] {
+export function completeLiveDebug(
+  catalog: ProductDevDebugCatalog,
+  prefix: string,
+): readonly ProductDevDebugCommandDescriptor[] {
   return catalog.commands.filter((command) => command.name.startsWith(prefix));
 }
 
 async function requireSuccess(response: Response): Promise<unknown> {
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = body as { error?: { code?: unknown; diagnostic?: unknown } } | null;
-    const code = typeof error?.error?.code === 'string' ? error.error.code : `HTTP_${response.status}`;
-    const diagnostic = typeof error?.error?.diagnostic === 'string' ? error.error.diagnostic : 'Live-debug host request failed.';
-    throw new Error(`${code}: ${diagnostic}`);
+    // Host errors carry a code; anything else in front of it may not.
+    const error = (body as ProductDevErrorResponse | null)?.error;
+    throw new Error(`${error?.code ?? `HTTP_${response.status}`}: ${error?.diagnostic ?? 'Live-debug host request failed.'}`);
   }
   return body;
-}
-
-function decodeCatalog(value: unknown): LiveDebugCatalog {
-  const candidate = object(value);
-  if (typeof candidate.available !== 'boolean' || !Array.isArray(candidate.commands)) throw new Error('Live-debug catalog response is invalid.');
-  if (!candidate.available) {
-    if (candidate.commands.length !== 0) throw new Error('Unavailable live-debug catalogs cannot carry commands.');
-    return { available: false, commands: [] };
-  }
-  return { available: true, commands: candidate.commands.map(decodeCommand) };
-}
-
-function decodeCommand(value: unknown): LiveDebugCommandDescriptor {
-  const candidate = object(value);
-  if (typeof candidate.name !== 'string' || typeof candidate.description !== 'string' || !Array.isArray(candidate.parameters)) throw new Error('Live-debug command descriptor is invalid.');
-  return { name: candidate.name, description: candidate.description, parameters: candidate.parameters.map(decodeParameter) };
-}
-
-function decodeParameter(value: unknown): LiveDebugParameterDescriptor {
-  const candidate = object(value);
-  if (typeof candidate.name !== 'string' || typeof candidate.type !== 'string') throw new Error('Live-debug parameter descriptor is invalid.');
-  return { name: candidate.name, type: candidate.type };
-}
-
-function decodeDiagnosticsBatch(value: unknown): LiveDebugDiagnosticsBatch {
-  const candidate = object(value);
-  if (!Array.isArray(candidate.events)
-    || !canonicalU64(candidate.floorSequence)
-    || !canonicalU64(candidate.throughSequence)
-    || !canonicalU64(candidate.nextCursor)
-    || !canonicalU64(candidate.readMonotonicNanoseconds)
-    || typeof candidate.lagged !== 'boolean'
-    || !canonicalU64(candidate.warningCount)
-    || !canonicalU64(candidate.errorCount)
-    || !canonicalU64(candidate.droppedCount)) {
-    throw new Error('Live-debug diagnostics response is invalid.');
-  }
-  return Object.freeze({
-    events: Object.freeze(candidate.events.map(decodeDiagnosticEvent)),
-    floorSequence: candidate.floorSequence,
-    throughSequence: candidate.throughSequence,
-    nextCursor: candidate.nextCursor,
-    readMonotonicNanoseconds: candidate.readMonotonicNanoseconds,
-    lagged: candidate.lagged,
-    warningCount: candidate.warningCount,
-    errorCount: candidate.errorCount,
-    droppedCount: candidate.droppedCount,
-    ...(candidate.telemetry === undefined ? {} : { telemetry: decodeTelemetrySnapshot(candidate.telemetry) }),
-  });
-}
-
-function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
-  const candidate = object(value);
-  const fields = [
-    'inFlightOperation', 'inFlightAgeMs', 'lastProductAdmissionLatencyMs',
-    'lastInputAdmissionLatencyMs', 'queuedInputBatches', 'queuedInputEvents',
-    'inputBatchCapacity', 'oldestInputAgeMs', 'inputOverflowPending',
-    'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs', 'runtimeProgressUnavailableReason',
-    'connections',
-    'subscribers', 'outputQueueItems', 'outputQueueCapacity',
-    'outputBindingActive',
-    'updateAttribution',
-  ];
-  if (Object.keys(candidate).some((key) => !fields.includes(key))) {
-    throw new Error('Live-debug telemetry snapshot contains unknown fields.');
-  }
-  const operation = candidate.inFlightOperation;
-  const admittedOperations: readonly LiveDebugOperationKind[] = [
-    'connect', 'start', 'pause', 'resume', 'restart', 'shutdown', 'report-fault',
-    'replace-control', 'release-control', 'input', 'advance-realtime', 'admit-demand-step',
-    'admit-external-step', 'complete-timeline', 'report-audio-feedback',
-    'report-animation-feedback', 'report-ghost-plate-feedback',
-    'report-renderer-diagnostics', 'execute-debug',
-  ];
-  if (operation !== null && !admittedOperations.includes(operation as LiveDebugOperationKind)) {
-    throw new Error('Live-debug telemetry in-flight operation is invalid.');
-  }
-  for (const field of [
-    'inFlightAgeMs', 'lastProductAdmissionLatencyMs', 'lastInputAdmissionLatencyMs',
-    'oldestInputAgeMs', 'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs',
-  ]) {
-    if (candidate[field] !== null && !canonicalU64(candidate[field])) {
-      throw new Error(`Live-debug telemetry ${field} is invalid.`);
-    }
-  }
-  for (const field of [
-    'queuedInputBatches', 'queuedInputEvents', 'inputBatchCapacity', 'connections',
-    'subscribers', 'outputQueueItems', 'outputQueueCapacity',
-  ]) {
-    if (!boundedCount(candidate[field])) throw new Error(`Live-debug telemetry ${field} is invalid.`);
-  }
-  if (typeof candidate.inputOverflowPending !== 'boolean'
-    || typeof candidate.outputBindingActive !== 'boolean'
-    || (candidate.runtimeProgressUnavailableReason !== null && typeof candidate.runtimeProgressUnavailableReason !== 'string')
-    || (candidate.updateAttribution !== null && !isObject(candidate.updateAttribution))) {
-    throw new Error('Live-debug telemetry snapshot is invalid.');
-  }
-  return Object.freeze({
-    inFlightOperation: operation as LiveDebugOperationKind | null,
-    inFlightAgeMs: candidate.inFlightAgeMs as string | null,
-    lastProductAdmissionLatencyMs: candidate.lastProductAdmissionLatencyMs as string | null,
-    lastInputAdmissionLatencyMs: candidate.lastInputAdmissionLatencyMs as string | null,
-    queuedInputBatches: candidate.queuedInputBatches as number,
-    queuedInputEvents: candidate.queuedInputEvents as number,
-    inputBatchCapacity: candidate.inputBatchCapacity as number,
-    oldestInputAgeMs: candidate.oldestInputAgeMs as string | null,
-    inputOverflowPending: candidate.inputOverflowPending,
-    runtimeProgressRateMillihertz: candidate.runtimeProgressRateMillihertz as string | null,
-    runtimeProgressAgeMs: candidate.runtimeProgressAgeMs as string | null,
-    runtimeProgressUnavailableReason: candidate.runtimeProgressUnavailableReason as string | null,
-    connections: candidate.connections as number,
-    subscribers: candidate.subscribers as number,
-    outputQueueItems: candidate.outputQueueItems as number,
-    outputQueueCapacity: candidate.outputQueueCapacity as number,
-    outputBindingActive: candidate.outputBindingActive,
-    updateAttribution: candidate.updateAttribution === null
-      ? null
-      : decodeUpdateAttributionSnapshot(candidate.updateAttribution),
-  });
-}
-
-function decodeRuntimeBinding(value: Record<string, unknown>): LiveDebugRuntimeBinding {
-  const fields = ['instanceId', 'generation', 'controlRevision'];
-  if (Object.keys(value).some((key) => !fields.includes(key)) || fields.some((field) => !canonicalU64(value[field]))) {
-    throw new Error('Live-debug runtime binding is invalid.');
-  }
-  return Object.freeze({
-    instanceId: value.instanceId as string,
-    generation: value.generation as string,
-    controlRevision: value.controlRevision as string,
-  });
-}
-
-function decodeUpdateAttributionSnapshot(value: Record<string, unknown>): LiveDebugUpdateAttributionSnapshot {
-  const fields = [
-    'sampleCount', 'callbackDurationUsP50', 'callbackDurationUsP95', 'callbackDurationUsMax',
-    'latest', 'rollingSlowest', 'rollingSlowestAgeMs', 'slowest', 'slowestAgeMs',
-  ];
-  if (Object.keys(value).some((key) => !fields.includes(key))
-    || !canonicalU64(value.sampleCount)
-    || !canonicalU64(value.callbackDurationUsP50)
-    || !canonicalU64(value.callbackDurationUsP95)
-    || !canonicalU64(value.callbackDurationUsMax)
-    || !canonicalU64(value.rollingSlowestAgeMs)
-    || !canonicalU64(value.slowestAgeMs)
-    || !isObject(value.latest)
-    || !isObject(value.rollingSlowest)
-    || !isObject(value.slowest)) {
-    throw new Error('Live-debug update attribution is invalid.');
-  }
-  return Object.freeze({
-    sampleCount: value.sampleCount,
-    callbackDurationUsP50: value.callbackDurationUsP50,
-    callbackDurationUsP95: value.callbackDurationUsP95,
-    callbackDurationUsMax: value.callbackDurationUsMax,
-    latest: decodeUpdateAttribution(value.latest),
-    rollingSlowest: decodeUpdateAttribution(value.rollingSlowest),
-    rollingSlowestAgeMs: value.rollingSlowestAgeMs,
-    slowest: decodeUpdateAttribution(value.slowest),
-    slowestAgeMs: value.slowestAgeMs,
-  });
-}
-
-function decodeUpdateAttribution(value: Record<string, unknown>): LiveDebugUpdateAttribution {
-  const fields = [
-    'runtime', 'simulationStep', 'admittedStepCount', 'postCallbackDurationUs', 'callbackDurationUs',
-    'characterStepCalls', 'characterStepDurationUs', 'characterStepCastCount',
-    'characterStepCandidateCount', 'characterStepNarrowPhaseCount',
-    'voxelResidencyCalls', 'voxelResidencyDurationUs', 'voxelScenePresentationCalls', 'voxelScenePresentationDurationUs',
-  ];
-  const durationAndCounterFields = fields.filter((field) => field !== 'runtime');
-  if (Object.keys(value).some((key) => !fields.includes(key))
-    || (value.runtime !== null && !isObject(value.runtime))
-    || durationAndCounterFields.some((field) => !canonicalU64(value[field]))) {
-    throw new Error('Live-debug update attribution sample is invalid.');
-  }
-  return Object.freeze({
-    runtime: value.runtime === null ? null : decodeRuntimeBinding(value.runtime),
-    simulationStep: value.simulationStep as string,
-    admittedStepCount: value.admittedStepCount as string,
-    postCallbackDurationUs: value.postCallbackDurationUs as string,
-    callbackDurationUs: value.callbackDurationUs as string,
-    characterStepCalls: value.characterStepCalls as string,
-    characterStepDurationUs: value.characterStepDurationUs as string,
-    characterStepCastCount: value.characterStepCastCount as string,
-    characterStepCandidateCount: value.characterStepCandidateCount as string,
-    characterStepNarrowPhaseCount: value.characterStepNarrowPhaseCount as string,
-    voxelResidencyCalls: value.voxelResidencyCalls as string,
-    voxelResidencyDurationUs: value.voxelResidencyDurationUs as string,
-    voxelScenePresentationCalls: value.voxelScenePresentationCalls as string,
-    voxelScenePresentationDurationUs: value.voxelScenePresentationDurationUs as string,
-  });
-}
-
-function boundedCount(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
-}
-
-function decodeDiagnosticEvent(value: unknown): LiveDebugDiagnosticEvent {
-  const candidate = object(value);
-  const severity = candidate.severity;
-  const disposition = candidate.disposition;
-  if (!canonicalU64(candidate.sequence) || !canonicalU64(candidate.monotonicNanoseconds)
-    || !['debug', 'info', 'warning', 'error'].includes(String(severity))
-    || !['accepted', 'rejected-recoverable', 'degraded', 'resync-required', 'terminal'].includes(String(disposition))
-    || typeof candidate.source !== 'string' || typeof candidate.code !== 'string' || typeof candidate.message !== 'string') {
-    throw new Error('Live-debug diagnostic event is invalid.');
-  }
-  const fields = candidate.fields === undefined ? undefined : decodeDiagnosticFields(candidate.fields);
-  return Object.freeze({
-    sequence: candidate.sequence,
-    monotonicNanoseconds: candidate.monotonicNanoseconds,
-    severity: severity as LiveDebugDiagnosticEvent['severity'],
-    disposition: disposition as LiveDebugDiagnosticEvent['disposition'],
-    source: candidate.source,
-    code: candidate.code,
-    message: candidate.message,
-    ...(fields === undefined ? {} : { fields }),
-  });
-}
-
-function decodeDiagnosticFields(value: unknown): readonly { readonly key: string; readonly value: string }[] {
-  if (!Array.isArray(value) || value.length > 8) throw new Error('Live-debug diagnostic fields are invalid.');
-  return Object.freeze(value.map((field) => {
-    const candidate = object(field);
-    if (typeof candidate.key !== 'string' || typeof candidate.value !== 'string') {
-      throw new Error('Live-debug diagnostic field is invalid.');
-    }
-    return Object.freeze({ key: candidate.key, value: candidate.value });
-  }));
-}
-
-/** Computes a browser renderer observation age from the process-owned sink clock. */
-export function diagnosticRendererObservationAgeMilliseconds(
-  batch: LiveDebugDiagnosticsBatch,
-  event: LiveDebugDiagnosticEvent,
-): number | null {
-  if (event.source !== 'browser-host') return null;
-  const encodedAge = event.fields?.find((field) => field.key === 'renderer-observation-age-ms')?.value;
-  if (encodedAge === undefined || !/^\d+$/u.test(encodedAge)) return null;
-  const reportedAge = BigInt(encodedAge);
-  const elapsed = BigInt(batch.readMonotonicNanoseconds) - BigInt(event.monotonicNanoseconds);
-  const age = reportedAge + (elapsed > 0n ? elapsed / 1_000_000n : 0n);
-  return age > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(age);
 }
 
 /**
@@ -457,25 +93,10 @@ export function diagnosticRendererObservationAgeMilliseconds(
  * browser host's renderer observation age).
  */
 export function diagnosticEventAgeMilliseconds(
-  batch: LiveDebugDiagnosticsBatch,
-  event: LiveDebugDiagnosticEvent,
+  batch: ProductDevDiagnosticsReadResponse,
+  event: RuntimeDiagnosticEvent,
 ): number | null {
   const elapsed = BigInt(batch.readMonotonicNanoseconds) - BigInt(event.monotonicNanoseconds);
   if (elapsed < 0n || elapsed / 1_000_000n > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   return Number(elapsed / 1_000_000n);
-}
-
-function canonicalU64(value: unknown): value is string {
-  return typeof value === 'string'
-    && /^(?:0|[1-9]\d*)$/u.test(value)
-    && BigInt(value) <= U64_MAX;
-}
-
-function object(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Live-debug response is invalid.');
-  return value as Record<string, unknown>;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

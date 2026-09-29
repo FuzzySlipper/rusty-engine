@@ -1,3 +1,4 @@
+import type { JsonValue, RuntimeUiProjectionEnvelope } from './generated/contracts.js';
 import type { RustyApplicationRuntimeIdentity } from './input-ingress.js';
 
 /** The one Product UI projection artifact admitted by the application host. */
@@ -7,29 +8,6 @@ export const RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT =
 export const RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM = 'product.ui';
 
 export const RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS = 64;
-export const RUSTY_APPLICATION_UI_PROJECTION_U64_MAXIMUM =
-  18_446_744_073_709_551_615n;
-
-export type RustyApplicationUiProjectionJson =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly RustyApplicationUiProjectionJson[]
-  | { readonly [key: string]: RustyApplicationUiProjectionJson };
-
-/**
- * A strict worker-to-DOM projection envelope. The value is detached and
- * deeply frozen before it crosses into a mounted product UI.
- */
-export interface RustyApplicationUiProjectionEnvelope {
-  readonly artifact: typeof RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly sequence: string;
-  readonly stream: string;
-  readonly contract: string;
-  readonly value: RustyApplicationUiProjectionJson;
-}
 
 export interface RustyApplicationUiProjectionReadout {
   readonly artifact: typeof RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT;
@@ -46,20 +24,18 @@ export interface RustyApplicationUiProjectionReadout {
 
 export interface RustyApplicationUiProjectionView {
   /** Returns the current immutable envelope, or null before the first value. */
-  readonly current: () => RustyApplicationUiProjectionEnvelope | null;
+  readonly current: () => RuntimeUiProjectionEnvelope | null;
   /** Subscribe to the current value. Rebinding publishes null before later values. */
   readonly subscribe: (
-    listener: (value: RustyApplicationUiProjectionEnvelope | null) => void,
+    listener: (value: RuntimeUiProjectionEnvelope | null) => void,
   ) => () => void;
 }
 
 export interface RustyApplicationUiProjectionPort extends RustyApplicationUiProjectionView {
   /** Rebind the projection epoch and clear the current snapshot. */
   readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => boolean;
-  /** Admit one Rust worker envelope into the current bound epoch. */
-  readonly ingest: (envelope: unknown) => boolean;
-  /** Alias used by adapters that model worker messages as received values. */
-  readonly receive: (envelope: unknown) => boolean;
+  /** Admit one Rust envelope into the current bound epoch. */
+  readonly ingest: (envelope: RuntimeUiProjectionEnvelope) => boolean;
   readonly readout: () => RustyApplicationUiProjectionReadout;
   readonly dispose: () => void;
 }
@@ -74,18 +50,11 @@ export interface RustyApplicationUiProjectionOptions {
 
 export type RustyApplicationUiProjectionErrorCode =
   | 'disposed'
-  | 'invalid_envelope'
-  | 'invalid_runtime'
-  | 'invalid_sequence'
-  | 'invalid_stream'
-  | 'invalid_contract'
-  | 'artifact_mismatch'
   | 'stream_mismatch'
   | 'contract_mismatch'
   | 'runtime_unbound'
   | 'runtime_mismatch'
   | 'sequence_not_increasing'
-  | 'value_invalid'
   | 'subscriber_limit_exceeded';
 
 export class RustyApplicationUiProjectionError extends Error {
@@ -104,7 +73,7 @@ interface ProjectionLimits {
 
 const EMPTY_SUBSCRIBERS: ReadonlySet<ProjectionListener> = new Set();
 type ProjectionListener = (
-  value: RustyApplicationUiProjectionEnvelope | null,
+  value: RuntimeUiProjectionEnvelope | null,
 ) => void;
 
 /**
@@ -115,26 +84,18 @@ type ProjectionListener = (
 export function createRustyApplicationUiProjection(
   options: RustyApplicationUiProjectionOptions,
 ): RustyApplicationUiProjectionPort {
-  const expectedStream = validateProductIdentity(
-    options.expectedStream ?? RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM,
-    'expected UI projection stream',
-  );
-  const expectedContract = validateProductIdentity(
-    options.expectedContract,
-    'expected UI projection contract',
-  );
+  const expectedStream = options.expectedStream ?? RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM;
+  const expectedContract = options.expectedContract;
   const limits = normalizeLimits(options);
-  let runtime = options.binding === undefined
-    ? null
-    : validateRuntimeIdentity(options.binding, 'projection binding');
-  let current: RustyApplicationUiProjectionEnvelope | null = null;
+  let runtime = options.binding ?? null;
+  let current: RuntimeUiProjectionEnvelope | null = null;
   let lastSequence: bigint | null = null;
   let acceptedCount = 0;
   let rejectedCount = 0;
   let disposed = false;
   let subscribers: ReadonlySet<ProjectionListener> = EMPTY_SUBSCRIBERS;
 
-  const notify = (value: RustyApplicationUiProjectionEnvelope | null): void => {
+  const notify = (value: RuntimeUiProjectionEnvelope | null): void => {
     for (const listener of subscribers) {
       try {
         listener(value);
@@ -151,9 +112,8 @@ export function createRustyApplicationUiProjection(
       );
     }
   };
-  const bindRuntime = (nextRuntime: RustyApplicationRuntimeIdentity): boolean => {
+  const bindRuntime = (normalized: RustyApplicationRuntimeIdentity): boolean => {
     requireActive();
-    const normalized = validateRuntimeIdentity(nextRuntime, 'projection binding');
     if (runtime !== null && sameRuntime(runtime, normalized)) return false;
     if (runtime !== null && runtime.instanceId === normalized.instanceId) {
       const priorGeneration = BigInt(runtime.generation);
@@ -187,46 +147,36 @@ export function createRustyApplicationUiProjection(
     notify(null);
     return true;
   };
-  const ingest = (rawEnvelope: unknown): boolean => {
+  const ingest = (envelope: RuntimeUiProjectionEnvelope): boolean => {
     requireActive();
-    try {
-      const envelope = validateEnvelope(rawEnvelope, expectedStream, expectedContract, limits);
-      if (runtime === null) {
-        throw new RustyApplicationUiProjectionError(
-          'runtime_unbound',
-          'UI projection cannot be admitted before a runtime binding',
-        );
-      }
-      if (!sameRuntime(runtime, envelope.runtime)) {
-        throw new RustyApplicationUiProjectionError(
-          'runtime_mismatch',
-          'UI projection envelope runtime does not match the bound runtime',
-        );
-      }
-      const sequence = BigInt(envelope.sequence);
-      if (lastSequence !== null && sequence <= lastSequence) {
-        throw new RustyApplicationUiProjectionError(
-          'sequence_not_increasing',
-          'UI projection sequence must strictly increase within one runtime epoch',
-        );
-      }
-      lastSequence = sequence;
-      current = envelope;
-      acceptedCount += 1;
-      notify(envelope);
-      return true;
-    } catch (cause) {
+    const reject = (code: RustyApplicationUiProjectionErrorCode, message: string): never => {
       rejectedCount += 1;
-      throw cause instanceof RustyApplicationUiProjectionError
-        ? cause
-        : new RustyApplicationUiProjectionError(
-          'invalid_envelope',
-          cause instanceof Error ? cause.message : String(cause),
-          { cause },
-        );
+      throw new RustyApplicationUiProjectionError(code, message);
+    };
+    if (envelope.stream !== expectedStream) {
+      reject('stream_mismatch', `UI projection stream ${envelope.stream} does not match expected ${expectedStream}`);
     }
+    if (envelope.contract !== expectedContract) {
+      reject('contract_mismatch', `UI projection contract ${envelope.contract} does not match expected ${expectedContract}`);
+    }
+    if (runtime === null) {
+      return reject('runtime_unbound', 'UI projection cannot be admitted before a runtime binding');
+    }
+    if (!sameRuntime(runtime, envelope.runtime)) {
+      reject('runtime_mismatch', 'UI projection envelope runtime does not match the bound runtime');
+    }
+    const sequence = BigInt(envelope.sequence);
+    if (lastSequence !== null && sequence <= lastSequence) {
+      reject('sequence_not_increasing', 'UI projection sequence must strictly increase within one runtime epoch');
+    }
+    lastSequence = sequence;
+    // Every subscriber shares this value, so none may change it.
+    current = Object.freeze({ ...envelope, value: deepFreeze(envelope.value) });
+    acceptedCount += 1;
+    notify(current);
+    return true;
   };
-  const currentValue = (): RustyApplicationUiProjectionEnvelope | null => current;
+  const currentValue = (): RuntimeUiProjectionEnvelope | null => current;
   const subscribe = (listener: ProjectionListener): (() => void) => {
     requireActive();
     if (typeof listener !== 'function') {
@@ -288,7 +238,6 @@ export function createRustyApplicationUiProjection(
     subscribe,
     bindRuntime,
     ingest,
-    receive: ingest,
     readout,
     dispose,
   });
@@ -312,243 +261,12 @@ function boundedInteger(value: number, minimum: number, maximum: number, name: s
   return value;
 }
 
-function validateEnvelope(
-  raw: unknown,
-  expectedStream: string,
-  expectedContract: string,
-  limits: ProjectionLimits,
-): RustyApplicationUiProjectionEnvelope {
-  if (!isPlainRecord(raw)) {
-    throw new RustyApplicationUiProjectionError(
-      'invalid_envelope',
-      'UI projection envelope must be a plain object',
-    );
-  }
-  assertExactKeys(raw, ['artifact', 'contract', 'runtime', 'sequence', 'stream', 'value'], 'UI projection envelope');
-  const artifact = readDataProperty(raw, 'artifact', 'UI projection envelope');
-  if (artifact !== RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT) {
-    throw new RustyApplicationUiProjectionError(
-      'artifact_mismatch',
-      `UI projection artifact must be ${RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT}`,
-    );
-  }
-  const stream = validateProductIdentity(
-    readDataProperty(raw, 'stream', 'UI projection envelope'),
-    'UI projection stream',
-  );
-  if (stream !== expectedStream) {
-    throw new RustyApplicationUiProjectionError(
-      'stream_mismatch',
-      `UI projection stream ${stream} does not match expected ${expectedStream}`,
-    );
-  }
-  const contract = validateProductIdentity(
-    readDataProperty(raw, 'contract', 'UI projection envelope'),
-    'UI projection contract',
-  );
-  if (contract !== expectedContract) {
-    throw new RustyApplicationUiProjectionError(
-      'contract_mismatch',
-      `UI projection contract ${contract} does not match expected ${expectedContract}`,
-    );
-  }
-  const runtime = validateRuntimeIdentity(
-    readDataProperty(raw, 'runtime', 'UI projection envelope'),
-    'UI projection runtime',
-  );
-  const sequence = validateCanonicalU64(
-    readDataProperty(raw, 'sequence', 'UI projection envelope'),
-    'UI projection sequence',
-  );
-  const value = detachJson(readDataProperty(raw, 'value', 'UI projection envelope'));
-  const envelope = {
-    artifact: RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
-    runtime,
-    sequence,
-    stream,
-    contract,
-    value,
-  } satisfies RustyApplicationUiProjectionEnvelope;
-  return Object.freeze(envelope);
-}
-
-function detachJson(value: unknown): RustyApplicationUiProjectionJson {
-  type JsonContainer = RustyApplicationUiProjectionJson[] | Record<string, RustyApplicationUiProjectionJson>;
-  type Work =
-    | { readonly kind: 'value'; readonly candidate: unknown; readonly path: string; readonly assign: (value: RustyApplicationUiProjectionJson) => void }
-    | { readonly kind: 'finish'; readonly source: object; readonly output: JsonContainer; readonly assign: (value: RustyApplicationUiProjectionJson) => void };
-  const ancestors = new WeakSet<object>();
-  const pending: Work[] = [];
-  let detached: RustyApplicationUiProjectionJson | undefined;
-  pending.push({ kind: 'value', candidate: value, path: 'value', assign: (next) => { detached = next; } });
-
-  while (pending.length > 0) {
-    const work = pending.pop()!;
-    if (work.kind === 'finish') {
-      ancestors.delete(work.source);
-      work.assign(Object.freeze(work.output));
-      continue;
-    }
-    const { candidate, path, assign } = work;
-    if (candidate === null || typeof candidate === 'boolean' || typeof candidate === 'string') {
-      assign(candidate);
-      continue;
-    }
-    if (typeof candidate === 'number') {
-      if (!Number.isFinite(candidate) || (Number.isInteger(candidate) && !Number.isSafeInteger(candidate))) {
-        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection number is not portable at ${path}`);
-      }
-      assign(candidate);
-      continue;
-    }
-    if (!isPlainRecord(candidate) && !Array.isArray(candidate)) {
-      throw new RustyApplicationUiProjectionError('value_invalid', `UI projection value must contain only plain JSON at ${path}`);
-    }
-    if (ancestors.has(candidate)) {
-      throw new RustyApplicationUiProjectionError('value_invalid', `UI projection value cannot contain a cycle at ${path}`);
-    }
-    ancestors.add(candidate);
-    if (Array.isArray(candidate)) {
-      let prototype: object | null;
-      try {
-        prototype = Object.getPrototypeOf(candidate);
-      } catch (cause) {
-        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must use the plain Array prototype at ${path}`, { cause });
-      }
-      if (prototype !== Array.prototype) {
-        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must use the plain Array prototype at ${path}`);
-      }
-      const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, 'length');
-      if (lengthDescriptor === undefined || !('value' in lengthDescriptor)
-        || lengthDescriptor.enumerable !== false || typeof lengthDescriptor.value !== 'number') {
-        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array length must be an intrinsic data property at ${path}`);
-      }
-      const length = lengthDescriptor.value;
-      const keys = Reflect.ownKeys(candidate);
-      if (keys.length !== length + 1 || !keys.includes('length')) {
-        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must contain only dense indexed entries at ${path}`);
-      }
-      const output: RustyApplicationUiProjectionJson[] = new Array(length);
-      pending.push({ kind: 'finish', source: candidate, output, assign });
-      for (let index = length - 1; index >= 0; index -= 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
-        if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-          throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must contain dense data entries at ${path}[${String(index)}]`);
-        }
-        pending.push({ kind: 'value', candidate: descriptor.value, path: `${path}[${String(index)}]`, assign: (next) => { output[index] = next; } });
-      }
-      continue;
-    }
-    const keys = Reflect.ownKeys(candidate);
-    if (keys.some((key) => typeof key !== 'string')) {
-      throw new RustyApplicationUiProjectionError('value_invalid', `UI projection object cannot contain symbol keys at ${path}`);
-    }
-    const output: Record<string, RustyApplicationUiProjectionJson> = {};
-    pending.push({ kind: 'finish', source: candidate, output, assign });
-    for (const key of [...keys as string[]].reverse()) {
-      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
-      if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection object must contain enumerable data entries at ${path}.${key}`);
-      }
-      pending.push({ kind: 'value', candidate: descriptor.value, path: `${path}.${key}`, assign: (next) => {
-        Object.defineProperty(output, key, { configurable: true, enumerable: true, value: next, writable: true });
-      } });
-    }
-  }
-  return detached!;
-}
-
-function validateRuntimeIdentity(
-  value: unknown,
-  name: string,
-): RustyApplicationRuntimeIdentity {
-  if (!isPlainRecord(value)) {
-    throw new RustyApplicationUiProjectionError('invalid_runtime', `${name} must be a plain runtime identity`);
-  }
-  assertExactKeys(value, ['controlRevision', 'generation', 'instanceId'], name);
-  return Object.freeze({
-    instanceId: validateCanonicalU64(readDataProperty(value, 'instanceId', name), `${name}.instanceId`),
-    generation: validateCanonicalU64(readDataProperty(value, 'generation', name), `${name}.generation`),
-    controlRevision: validateCanonicalU64(readDataProperty(value, 'controlRevision', name), `${name}.controlRevision`),
-  });
-}
-
-function validateCanonicalU64(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new RustyApplicationUiProjectionError(
-      'invalid_sequence',
-      `${name} must be canonical unsigned decimal text`,
-    );
-  }
-  let parsed: bigint;
-  try {
-    parsed = BigInt(value);
-  } catch (cause) {
-    throw new RustyApplicationUiProjectionError('invalid_sequence', `${name} must be canonical unsigned decimal text`, { cause });
-  }
-  if (parsed > RUSTY_APPLICATION_UI_PROJECTION_U64_MAXIMUM) {
-    throw new RustyApplicationUiProjectionError('invalid_sequence', `${name} exceeds u64`);
+function deepFreeze(value: JsonValue): JsonValue {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const entry of Object.values(value)) deepFreeze(entry ?? null);
+    Object.freeze(value);
   }
   return value;
-}
-
-function validateProductIdentity(value: unknown, name: string): string {
-  if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > 128
-    || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(value)) {
-    throw new RustyApplicationUiProjectionError(
-      name.includes('stream') ? 'invalid_stream' : 'invalid_contract',
-      `${name} must be a 1..128 byte lowercase product identity`,
-    );
-  }
-  return value;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  try {
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-  } catch {
-    return false;
-  }
-}
-
-function assertExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-  name: string,
-): void {
-  const keys = Reflect.ownKeys(value);
-  if (keys.some((key) => typeof key !== 'string')) {
-    throw new RustyApplicationUiProjectionError(
-      'invalid_envelope',
-      `${name} cannot contain symbol keys`,
-    );
-  }
-  for (const key of keys as string[]) readDataProperty(value, key, name);
-  const actual = (keys as string[]).sort();
-  const wanted = [...expected].sort();
-  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
-    throw new RustyApplicationUiProjectionError(
-      'invalid_envelope',
-      `${name} must contain exactly ${wanted.join(', ')}`,
-    );
-  }
-}
-
-function readDataProperty(
-  value: Record<string, unknown>,
-  key: string,
-  name: string,
-): unknown {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-    throw new RustyApplicationUiProjectionError(
-      'invalid_envelope',
-      `${name}.${key} must be an enumerable data property`,
-    );
-  }
-  return descriptor.value;
 }
 
 function sameRuntime(

@@ -1,8 +1,12 @@
 import {
   mountRustyApplicationFrameView,
   type RustyApplicationFrameView,
-  type RustyApplicationRenderOutput,
 } from './frame-view.js';
+import type {
+  ProductDevCursorMode,
+  ProductDevRenderOutput,
+  RuntimeInputWireIntentValue,
+} from './generated/contracts.js';
 import {
   resolvePresentationFrameGeometry,
   validatePresentationAspectBounds,
@@ -14,7 +18,6 @@ import {
   type RustyApplicationInterfaceInputObservation,
   type RustyApplicationManagedInputIngress,
   type RustyApplicationRuntimeInputOptions,
-  type RustyApplicationRuntimeIntentValue,
 } from './input-ingress.js';
 import {
   createRustyApplicationUiProjection,
@@ -34,9 +37,6 @@ export type RustyApplicationInteractionMode =
   | 'interface'
   | 'modal';
 
-/** Engine-selected cursor behavior while gameplay owns input. */
-export type RustyApplicationGameplayCursorMode = 'pointer-lock' | 'unlocked';
-
 export interface RustyApplicationUiPort {
   readonly active: () => boolean;
   /**
@@ -54,7 +54,7 @@ export interface RustyApplicationUiPort {
 export interface RustyApplicationUiIntentsPort {
   readonly claim: (
     intent: string,
-    value: RustyApplicationRuntimeIntentValue,
+    value: RuntimeInputWireIntentValue,
   ) => void;
 }
 
@@ -93,7 +93,7 @@ export interface RustyApplicationHostOptions {
   readonly root: HTMLElement;
   readonly mountUi: RustyApplicationUiMount;
   /** Where the runtime draws the world: streamed to this page (the default) or to the desktop window under it. */
-  readonly output?: RustyApplicationRenderOutput;
+  readonly output?: ProductDevRenderOutput;
   /** Observe the one page cadence without creating another animation-frame loop. */
   readonly onCadence?: (timeMs: number) => void;
   /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
@@ -102,7 +102,7 @@ export interface RustyApplicationHostOptions {
   readonly failureLabel?: string;
   readonly initialInteractionMode?: RustyApplicationInteractionMode;
   /** Pointer lock is the existing first-person default; unlocked gameplay keeps the browser cursor. */
-  readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
+  readonly gameplayCursorMode?: ProductDevCursorMode;
   /** Optional browser input ingress. Omission leaves DOM capture disabled. */
   readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
   /** Optional strict Product UI projection channel. */
@@ -273,7 +273,7 @@ export async function mountRustyApplication(
         },
       });
       intents = Object.freeze({
-        claim: (intent: string, value: RustyApplicationRuntimeIntentValue): void => {
+        claim: (intent: string, value: RuntimeInputWireIntentValue): void => {
           input?.claim(intent, value);
         },
       });

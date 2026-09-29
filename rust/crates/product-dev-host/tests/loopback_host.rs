@@ -694,7 +694,7 @@ fn output_batch(event: &str) -> serde_json::Value {
         .find_map(|line| line.strip_prefix("data: "))
         .expect("SSE data");
     let batch: serde_json::Value = serde_json::from_str(data).expect("JSON output batch");
-    assert_eq!(batch["kind"], "runtime-output-batch");
+    assert!(batch.is_array(), "an output event is an array of outputs");
     batch
 }
 
@@ -1183,8 +1183,8 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     let event = read_through_marker(&mut stream, "\n\n");
     let batch = output_batch(&event);
-    assert_eq!(batch["outputs"][0]["kind"], "binding");
-    assert_eq!(batch["outputs"][0]["nextInputSequence"], "0");
+    assert_eq!(batch[0]["kind"], "binding");
+    assert_eq!(batch[0]["nextInputSequence"], "0");
     host.shutdown().unwrap();
 }
 
@@ -1290,10 +1290,7 @@ fn partial_fresh_baseline_reconnects_without_a_cursor_or_second_start() {
     let headers = read_through_marker(&mut interrupted, "\r\n\r\n");
     assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
     let first_private_event = read_through_marker(&mut interrupted, "\n\n");
-    assert_eq!(
-        output_batch(&first_private_event)["outputs"][0]["kind"],
-        "binding"
-    );
+    assert_eq!(output_batch(&first_private_event)[0]["kind"], "binding");
     assert!(!first_private_event.contains("id: "));
     drop(interrupted);
 

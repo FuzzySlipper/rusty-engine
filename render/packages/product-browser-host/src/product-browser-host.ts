@@ -1,24 +1,33 @@
 import { installPlaytestInspection } from './playtest-inspection.js';
 import {
   mountRustyApplication,
-  type RustyApplicationGameplayCursorMode,
   type RustyApplicationHost,
   type RustyApplicationHostReadout,
-  type RustyApplicationRenderOutput,
   type RustyApplicationRuntimeIdentity,
-  type RustyApplicationRuntimeInputEnvelope,
   type RustyApplicationRuntimeInputOptions,
   type RustyApplicationUiMount,
-  type RustyApplicationUiProjectionEnvelope,
   type RustyApplicationUiProjectionOptions,
   type RustyApplicationPresentationAspectBounds,
 } from '@rusty-engine/application-host';
+import type {
+  ProductDevBrowserDiagnosticsReport,
+  ProductDevBrowserDiagnosticsResult,
+  ProductDevCursorMode,
+  ProductDevInputResult,
+  ProductDevOperationResult,
+  ProductDevRenderOutput,
+  ProductDevRuntimeMode,
+  ProductDevRuntimeOutput,
+  ProductDevRuntimeReadout,
+  ProductDevTimelineCompletion,
+  ProductDevTimelineCompletionResult,
+  RuntimeInputWireEvent,
+  RuntimeUiProjectionEnvelope,
+} from './generated/contracts.js';
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
-
-export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
 
 /**
  * Selects the owner that admits fixed-step realtime work.
@@ -42,122 +51,12 @@ export type ProductBrowserLifecycleOperation =
   | { readonly kind: 'shutdown' }
   | { readonly kind: 'report-fault' };
 
-export type ProductBrowserRuntimeOperationKind =
-  | ProductBrowserLifecycleOperation['kind']
-  | 'replace-control'
-  | 'connect'
-  | 'advance-realtime'
-  | 'admit-demand-step'
-  | 'admit-external-step';
-
-/**
- * Closed Engine recovery posture for a completed local-host operation. The
- * accompanying stable code identifies the exact condition; callers must not
- * infer recovery policy from diagnostics.
- */
-export type ProductBrowserHostFaultDisposition =
-  | 'accepted'
-  | 'rejected-recoverable'
-  | 'degraded'
-  | 'resync-required'
-  | 'terminal';
-
-export interface ProductBrowserRuntimeOperationResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  readonly operation: ProductBrowserRuntimeOperationKind;
-  readonly binding?: RustyApplicationRuntimeIdentity;
-  /** Engine-owned cursor after lifecycle input clear/rebind work. */
-  readonly nextInputSequence?: string;
-  /** Last simulation step admitted before a resync-required operation result. */
-  readonly admittedThrough?: string;
-  readonly readout?: ProductBrowserRuntimeReadout;
-  readonly diagnostic?: string;
-}
-
-export interface ProductBrowserRuntimeInputResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  /** Number of submitted input events (the existing count field). */
-  readonly count: number;
-  /** Number of events admitted by the Engine input lane. */
-  readonly acceptedCount?: number;
-  /** Number of safe stale/duplicate events deliberately dropped. */
-  readonly droppedCount?: number;
-  readonly acceptedThrough?: string;
-  readonly consumedThrough?: string;
-  readonly nextInputSequence?: string;
-  readonly binding?: RustyApplicationRuntimeIdentity;
-  readonly readout?: ProductBrowserRuntimeReadout;
-  readonly diagnostic?: string;
-}
-
-export interface ProductBrowserTimelineCompletion {
-  /** Canonical decimal u64 ticket issued by runtime-timeline. */
-  readonly ticket: string;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly correlation: string;
-  readonly outcome:
-    | { readonly kind: 'success'; readonly data?: ProductBrowserJson }
-    | { readonly kind: 'failure'; readonly data?: ProductBrowserJson };
-  readonly provenance: {
-    readonly correlation: string;
-    readonly detail?: ProductBrowserJson;
-  };
-}
-
-export interface ProductBrowserTimelineCompletionResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  /** Canonical decimal u64 ticket echoed by runtime-timeline. */
-  readonly ticket: string;
-  readonly binding?: RustyApplicationRuntimeIdentity;
-  readonly readout?: ProductBrowserRuntimeReadout;
-  readonly diagnostic?: string;
-}
-
-/** A bounded semantic-neutral readout emitted by the Rust runtime owner. */
-export interface ProductBrowserRuntimeReadout {
-  readonly artifact: 'rusty.product.runtime-readout';
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly mode: ProductBrowserRuntimeMode;
-  readonly state: 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
-  readonly admittedSimulationSteps: string;
-  readonly admittedPresentations: string;
-  readonly droppedRealtimeSteps: string;
-  readonly clockRegressions: string;
-  readonly scaledRemainder: number | null;
-  readonly lastObservedTimeNs: string | null;
-  readonly fault: 'owner-reported' | 'counter-exhausted' | null;
-}
-
-export interface ProductBrowserRuntimeBindingOutput {
-  readonly kind: 'binding';
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly nextInputSequence: string;
-}
-
-/**
- * What the runtime publishes to the page. The world is rendered in the
- * runtime, so the page receives only its binding, the product UI projection,
- * readouts and input results.
- */
-export type ProductBrowserRuntimeOutput =
-  | ProductBrowserRuntimeBindingOutput
-  /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
-  | { readonly kind: 'runtime-input-result'; readonly result: ProductBrowserRuntimeInputResult }
-  | { readonly kind: 'ui-projection'; readonly envelope: RustyApplicationUiProjectionEnvelope }
-  | { readonly kind: 'runtime-readout'; readonly readout: ProductBrowserRuntimeReadout };
-
 export type ProductBrowserRuntimeOutputListener = (
-  output: ProductBrowserRuntimeOutput,
+  output: ProductDevRuntimeOutput,
 ) => void;
 
 export type ProductBrowserRuntimeOutputBatchListener = (
-  outputs: readonly ProductBrowserRuntimeOutput[],
+  outputs: readonly ProductDevRuntimeOutput[],
   metadata: ProductBrowserRuntimeOutputBatchMetadata,
 ) => void;
 
@@ -180,39 +79,6 @@ export interface ProductBrowserRuntimeTerminalFailure {
   readonly diagnostic: string;
 }
 
-/** Fixed health facts copied into the Engine diagnostic ring; never console data. */
-export interface ProductBrowserAttachmentBaseline {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly nextInputSequence: string;
-}
-
-export interface ProductBrowserAttachmentEvidence {
-  readonly id: string;
-  readonly replaces?: string;
-  readonly baseline?: ProductBrowserAttachmentBaseline;
-}
-
-export interface ProductBrowserDiagnosticsReport {
-  readonly attachment?: ProductBrowserAttachmentEvidence;
-  readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
-  /** Accepted browser-owned realtime advances; stays zero when the Rust host owns the clock. */
-  readonly runtimeProgress: string;
-  readonly transportState: 'open' | 'closed';
-  readonly outputState: 'open' | 'closed';
-  readonly firstTerminal?: { readonly code: string; readonly message: string };
-  /** One bounded, typed operation observation that was deliberately dropped. */
-  readonly recoverableEvent?: {
-    readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' | 'BROWSER_LOCAL_REQUEST_UNAVAILABLE';
-    readonly message: string;
-  };
-  readonly pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[];
-}
-
-export interface ProductBrowserDiagnosticsResult {
-  readonly accepted: boolean;
-  readonly reported: number;
-}
-
 export type ProductBrowserRuntimeTerminalFailureListener = (
   failure: ProductBrowserRuntimeTerminalFailure,
 ) => void;
@@ -226,30 +92,30 @@ export interface ProductBrowserRuntimeAdapter {
    * Resolves the Engine-owned fresh connection baseline. Local generated
    * hosts use this instead of issuing `start` on every browser mount.
    */
-  readonly connect?: () => Promise<ProductBrowserRuntimeOperationResult>;
+  readonly connect?: () => Promise<ProductDevOperationResult>;
   readonly lifecycle: (
     operation: ProductBrowserLifecycleOperation,
-  ) => Promise<ProductBrowserRuntimeOperationResult>;
+  ) => Promise<ProductDevOperationResult>;
   /** Advances only the current input control fence; it does not fault or restart the product. */
   readonly replaceControl?: (
     runtime: RustyApplicationRuntimeIdentity,
-  ) => Promise<ProductBrowserRuntimeOperationResult>;
+  ) => Promise<ProductDevOperationResult>;
   readonly input: (
-    batch: readonly RustyApplicationRuntimeInputEnvelope[],
-  ) => Promise<ProductBrowserRuntimeInputResult>;
+    batch: readonly RuntimeInputWireEvent[],
+  ) => Promise<ProductDevInputResult>;
   readonly reportBrowserDiagnostics?: (
-    report: ProductBrowserDiagnosticsReport,
-  ) => Promise<ProductBrowserDiagnosticsResult>;
+    report: ProductDevBrowserDiagnosticsReport,
+  ) => Promise<ProductDevBrowserDiagnosticsResult>;
   readonly advanceRealtime: (
     observedTimeNs: string,
-  ) => Promise<ProductBrowserRuntimeOperationResult>;
-  readonly admitDemandStep?: () => Promise<ProductBrowserRuntimeOperationResult>;
+  ) => Promise<ProductDevOperationResult>;
+  readonly admitDemandStep?: () => Promise<ProductDevOperationResult>;
   readonly admitExternalStep?: (
     step: string,
-  ) => Promise<ProductBrowserRuntimeOperationResult>;
+  ) => Promise<ProductDevOperationResult>;
   readonly completeTimeline?: (
-    completion: ProductBrowserTimelineCompletion,
-  ) => Promise<ProductBrowserTimelineCompletionResult>;
+    completion: ProductDevTimelineCompletion,
+  ) => Promise<ProductDevTimelineCompletionResult>;
   readonly subscribeTerminalFailures?: (
     listener: ProductBrowserRuntimeTerminalFailureListener,
   ) => () => void;
@@ -272,14 +138,14 @@ export interface ProductBrowserRuntimeAdapter {
 export interface ProductBrowserHostOptions {
   readonly root: HTMLElement;
   readonly transport: ProductBrowserRuntimeAdapter;
-  readonly lifecycleMode: ProductBrowserRuntimeMode;
+  readonly lifecycleMode: ProductDevRuntimeMode;
   /**
    * Owner of realtime simulation admission. Defaults to `browser`. Only
    * realtime products read it; demand and external products ignore it.
    */
   readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
   /** Where the runtime draws the world: streamed to this page (the default) or to the desktop window. */
-  readonly output?: RustyApplicationRenderOutput;
+  readonly output?: ProductDevRenderOutput;
   readonly mountUi: RustyApplicationUiMount;
   readonly runtimeInput?: Omit<RustyApplicationRuntimeInputOptions, 'binding' | 'onAvailable'> & {
     readonly binding?: RustyApplicationRuntimeIdentity;
@@ -290,7 +156,7 @@ export interface ProductBrowserHostOptions {
   readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
   readonly initialInteractionMode?: 'gameplay' | 'interface' | 'modal';
   /** Engine-selected gameplay cursor behavior; defaults to pointer lock for FPS products. */
-  readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
+  readonly gameplayCursorMode?: ProductDevCursorMode;
   readonly inputContext?: string;
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
@@ -307,10 +173,10 @@ export interface ProductBrowserUiProjectionOptions {
 export interface ProductBrowserHostReadout {
   readonly artifact: typeof PRODUCT_BROWSER_HOST_ARTIFACT;
   readonly state: 'starting' | 'ready' | 'degraded' | 'failed' | 'disposed';
-  readonly mode: ProductBrowserRuntimeMode;
+  readonly mode: ProductDevRuntimeMode;
   readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly host: RustyApplicationHostReadout | null;
-  readonly runtime: ProductBrowserRuntimeReadout | null;
+  readonly runtime: ProductDevRuntimeReadout | null;
   readonly lastFailure: string | null;
 }
 
@@ -320,12 +186,12 @@ export interface ProductBrowserHost {
   readonly transport: ProductBrowserRuntimeAdapter;
   readonly readout: () => ProductBrowserHostReadout;
   readonly completeTimeline: (
-    completion: ProductBrowserTimelineCompletion,
-  ) => Promise<ProductBrowserTimelineCompletionResult>;
-  readonly admitDemandStep: () => Promise<ProductBrowserRuntimeOperationResult>;
+    completion: ProductDevTimelineCompletion,
+  ) => Promise<ProductDevTimelineCompletionResult>;
+  readonly admitDemandStep: () => Promise<ProductDevOperationResult>;
   readonly admitExternalStep: (
     step: string,
-  ) => Promise<ProductBrowserRuntimeOperationResult>;
+  ) => Promise<ProductDevOperationResult>;
   readonly dispose: () => Promise<void>;
 }
 
@@ -349,14 +215,6 @@ export class ProductBrowserHostError extends Error {
   }
 }
 
-type ProductBrowserJson =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly ProductBrowserJson[]
-  | { readonly [key: string]: ProductBrowserJson };
-
 interface ProductBrowserOperationQueue {
   readonly enqueue: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly settle: () => Promise<void>;
@@ -366,7 +224,7 @@ const MAXIMUM_PENDING_OUTPUTS = 64;
 const MAXIMUM_HEALTH_DIAGNOSTIC_BYTES = 512;
 
 /** This is the sole browser cadence observation that can be safely dropped. */
-export function isDroppedClockRegression(result: ProductBrowserRuntimeOperationResult): boolean {
+export function isDroppedClockRegression(result: ProductDevOperationResult): boolean {
   return !result.accepted
     && result.disposition === 'rejected-recoverable'
     && result.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
@@ -381,8 +239,8 @@ export function isDroppedClockRegression(result: ProductBrowserRuntimeOperationR
  * @internal
  */
 export function bufferProductBrowserPreMountOutput(
-  pendingOutputs: ProductBrowserRuntimeOutput[],
-  output: ProductBrowserRuntimeOutput,
+  pendingOutputs: ProductDevRuntimeOutput[],
+  output: ProductDevRuntimeOutput,
   maximumPendingOutputs: number,
 ): boolean {
   const previous = pendingOutputs.findIndex((pending) =>
@@ -404,7 +262,7 @@ export function syncProductBrowserHealthDatasets(
   roots: readonly Pick<HTMLElement, 'dataset'>[],
   values: {
     readonly state: ProductBrowserHostReadout['state'];
-    readonly mode: ProductBrowserRuntimeMode;
+    readonly mode: ProductDevRuntimeMode;
     readonly progress: string;
     readonly failure: string | null;
   },
@@ -445,7 +303,7 @@ export async function mountProductBrowserHostWithApplication(
   const transport = options.transport;
   const queue = createOperationQueue();
   let state: ProductBrowserHostReadout['state'] = 'starting';
-  let runtimeReadout: ProductBrowserRuntimeReadout | null = null;
+  let runtimeReadout: ProductDevRuntimeReadout | null = null;
   let application: RustyApplicationHost | null = null;
   let unsubscribeOutputs: (() => void) | null = null;
   let unsubscribeTerminalFailures: (() => void) | null = null;
@@ -474,7 +332,7 @@ export async function mountProductBrowserHostWithApplication(
   let terminalDiagnosticsReported = false;
   let recoverableClockDiagnosticPending = false;
   let recoverableClockDiagnosticReported = false;
-  const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
+  const pendingOutputs: ProductDevRuntimeOutput[] = [];
 
   // These are deliberately small, product-neutral observation markers. They
   // let an outer host prove that a mounted runtime is still making accepted
@@ -531,7 +389,7 @@ export async function mountProductBrowserHostWithApplication(
       ...(includeTerminal ? { firstTerminal: terminal } : {}),
       ...(recoverableEvent === undefined ? {} : { recoverableEvent }),
       pageEvents: Object.freeze([...pageEvents]),
-    }) as ProductBrowserDiagnosticsReport;
+    }) as ProductDevBrowserDiagnosticsReport;
     browserDiagnosticsReportInFlight = true;
     const followUp = (): void => {
       browserDiagnosticsReportInFlight = false;
@@ -752,7 +610,7 @@ export async function mountProductBrowserHostWithApplication(
     });
   };
 
-  const beginInputRecovery = (batch: readonly RustyApplicationRuntimeInputEnvelope[]): void => {
+  const beginInputRecovery = (batch: readonly RuntimeInputWireEvent[]): void => {
     const first = batch[0];
     if (first === undefined || inputRecovery !== null
       || (state !== 'ready' && state !== 'degraded')) return;
@@ -789,7 +647,7 @@ export async function mountProductBrowserHostWithApplication(
     };
   }
 
-  const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
+  const applyOutput = (output: ProductDevRuntimeOutput): void => {
     if (application === null) {
       if (!bufferProductBrowserPreMountOutput(pendingOutputs, output, MAXIMUM_PENDING_OUTPUTS)) {
         failAndClose(
@@ -848,7 +706,7 @@ export async function mountProductBrowserHostWithApplication(
   };
 
   const applyOutputBatch = (
-    outputs: readonly ProductBrowserRuntimeOutput[],
+    outputs: readonly ProductDevRuntimeOutput[],
     metadata?: ProductBrowserRuntimeOutputBatchMetadata,
   ): void => {
     if (metadata?.recovery === 'fresh-baseline-required') {
@@ -884,9 +742,9 @@ export async function mountProductBrowserHostWithApplication(
   const operationOutputs = (result: {
     readonly binding?: RustyApplicationRuntimeIdentity;
     readonly nextInputSequence?: string;
-    readonly readout?: ProductBrowserRuntimeReadout;
-  }): ProductBrowserRuntimeOutput[] => {
-    const outputs: ProductBrowserRuntimeOutput[] = [];
+    readonly readout?: ProductDevRuntimeReadout;
+  }): ProductDevRuntimeOutput[] => {
+    const outputs: ProductDevRuntimeOutput[] = [];
     if (result.binding !== undefined && result.nextInputSequence !== undefined) {
       outputs.push({
         kind: 'binding',
@@ -899,7 +757,7 @@ export async function mountProductBrowserHostWithApplication(
   };
 
   const applyOperationResult = (
-    result: ProductBrowserRuntimeOperationResult,
+    result: ProductDevOperationResult,
     rejectedCode: ProductBrowserHostError['code'] = 'transport_failed',
     allowDroppedClockRegression = false,
   ): boolean => {
@@ -926,7 +784,7 @@ export async function mountProductBrowserHostWithApplication(
     return true;
   };
 
-  function applyInputResult(result: ProductBrowserRuntimeInputResult): void {
+  function applyInputResult(result: ProductDevInputResult): void {
     if (inputRecovery !== null) {
       // An asynchronous mailbox result for the ambiguous batch is stale by
       // construction. Only the acknowledged control-replace response may
@@ -954,7 +812,7 @@ export async function mountProductBrowserHostWithApplication(
     restoreReadyAfterHealthyTransport();
   }
 
-  const sendInput = async (batch: readonly RustyApplicationRuntimeInputEnvelope[]): Promise<void> => {
+  const sendInput = async (batch: readonly RuntimeInputWireEvent[]): Promise<void> => {
     try {
       applyInputResult(await transport.input(batch));
     } catch (cause) {
@@ -1128,8 +986,8 @@ export async function mountProductBrowserHostWithApplication(
   });
 
   const completeTimeline = (
-    completion: ProductBrowserTimelineCompletion,
-  ): Promise<ProductBrowserTimelineCompletionResult> => {
+    completion: ProductDevTimelineCompletion,
+  ): Promise<ProductDevTimelineCompletionResult> => {
     try { requireReady(); } catch (cause) { return Promise.reject(cause); }
     if (transport.completeTimeline === undefined) {
       return Promise.reject(new ProductBrowserHostError(
@@ -1164,8 +1022,8 @@ export async function mountProductBrowserHostWithApplication(
 
   const admitStep = (
     mode: 'demand' | 'external',
-    admit: (() => Promise<ProductBrowserRuntimeOperationResult>) | undefined,
-  ): Promise<ProductBrowserRuntimeOperationResult> => {
+    admit: (() => Promise<ProductDevOperationResult>) | undefined,
+  ): Promise<ProductDevOperationResult> => {
     try { requireReady(); } catch (cause) { return Promise.reject(cause); }
     if (options.lifecycleMode !== mode) {
       return Promise.reject(new ProductBrowserHostError(
@@ -1292,18 +1150,10 @@ function validateOptions(options: ProductBrowserHostOptions): void {
   if (options.root.childNodes.length > 0) {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host root must be empty');
   }
-  if (options.lifecycleMode !== 'realtime'
-    && options.lifecycleMode !== 'demand'
-    && options.lifecycleMode !== 'external') {
-    throw new ProductBrowserHostError('invalid_options', 'Product Browser Host lifecycle mode is invalid');
-  }
   if (options.realtimeAdvanceOwner !== undefined
     && options.realtimeAdvanceOwner !== 'browser'
     && options.realtimeAdvanceOwner !== 'rust-host') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host realtime advance owner is invalid');
-  }
-  if (options.output !== undefined && options.output !== 'stream' && options.output !== 'window') {
-    throw new ProductBrowserHostError('invalid_options', 'Product Browser Host output must be stream or window');
   }
   if (typeof options.mountUi !== 'function') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host mountUi must be a function');

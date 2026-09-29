@@ -6,6 +6,7 @@ use runtime_lifecycle::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 /// The current immutable UI projection artifact identity.
 pub const RUNTIME_UI_PROJECTION_ARTIFACT: &str = "rusty.product.ui-projection";
@@ -221,20 +222,28 @@ fn validate_number(number: &serde_json::Number) -> Result<(), RuntimeUiProjectio
     Ok(())
 }
 
-#[derive(Deserialize)]
+/// The wire shape of a UI projection envelope: what the browser host
+/// receives and passes to the mounted product UI.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WireEnvelope {
+#[ts(rename = "RuntimeUiProjectionEnvelope")]
+pub struct RuntimeUiProjectionWire {
+    #[ts(type = "\"rusty.product.ui-projection\"")]
     artifact: String,
-    runtime: WireRuntime,
+    runtime: RuntimeUiRuntimeWire,
+    /// Canonical decimal u64, increasing within the runtime binding.
     sequence: String,
     stream: String,
+    /// The product's projection contract identity.
     contract: String,
+    /// The product-owned projection value.
     value: Value,
 }
 
-#[derive(Serialize, Deserialize)]
+/// The runtime binding a projection belongs to, as canonical decimal text.
+#[derive(Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WireRuntime {
+pub struct RuntimeUiRuntimeWire {
     instance_id: String,
     generation: String,
     control_revision: String,
@@ -243,11 +252,11 @@ struct WireRuntime {
 impl Serialize for RuntimeUiProjectionEnvelope {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut wire = serializer.serialize_struct("WireEnvelope", 6)?;
+        let mut wire = serializer.serialize_struct("RuntimeUiProjectionWire", 6)?;
         wire.serialize_field("artifact", RUNTIME_UI_PROJECTION_ARTIFACT)?;
         wire.serialize_field(
             "runtime",
-            &WireRuntime {
+            &RuntimeUiRuntimeWire {
                 instance_id: self.runtime.instance_id().value().to_string(),
                 generation: self.runtime.generation().value().to_string(),
                 control_revision: self.runtime.control_revision().value().to_string(),
@@ -263,13 +272,13 @@ impl Serialize for RuntimeUiProjectionEnvelope {
 
 impl<'de> Deserialize<'de> for RuntimeUiProjectionEnvelope {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        WireEnvelope::deserialize(deserializer)?
+        RuntimeUiProjectionWire::deserialize(deserializer)?
             .into_envelope()
             .map_err(serde::de::Error::custom)
     }
 }
 
-impl WireEnvelope {
+impl RuntimeUiProjectionWire {
     fn into_envelope(self) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
         if self.artifact != RUNTIME_UI_PROJECTION_ARTIFACT {
             return Err(RuntimeUiProjectionError::WireUnknownArtifact {

@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
+import type { ProductDevRuntimeOutput, RuntimeInputWireEvent } from './generated/contracts.js';
 import {
   bufferProductBrowserPreMountOutput,
   isDroppedClockRegression,
   mountProductBrowserHostWithApplication,
   syncProductBrowserHealthDatasets,
   type ProductBrowserRuntimeAdapter,
-  type ProductBrowserRuntimeOutput,
   type ProductBrowserRuntimeOutputBatchListener,
   type ProductBrowserRuntimeTerminalFailureListener,
 } from './product-browser-host.js';
@@ -22,7 +21,13 @@ const adapter: ProductBrowserRuntimeAdapter = {
     ...ACCEPTED_FAULT,
     operation: operation.kind,
   }),
-  input: async (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => ({ accepted: true, ...ACCEPTED_FAULT, count: batch.length }),
+  input: async (batch: readonly RuntimeInputWireEvent[]) => ({
+    accepted: true,
+    ...ACCEPTED_FAULT,
+    count: batch.length,
+    acceptedCount: batch.length,
+    droppedCount: 0,
+  }),
   advanceRealtime: async () => ({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
   admitDemandStep: async () => ({ accepted: true, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
   subscribeOutputs: () => () => undefined,
@@ -62,7 +67,7 @@ function fakeApplication(input: Record<string, unknown>, projections: unknown[] 
 }
 
 test('pre-mount buffering keeps the newest readout and the newest projection per stream', () => {
-  const pending: ProductBrowserRuntimeOutput[] = [];
+  const pending: ProductDevRuntimeOutput[] = [];
   const readout = {
     artifact: 'rusty.product.runtime-readout' as const,
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
@@ -76,7 +81,7 @@ test('pre-mount buffering keeps the newest readout and the newest projection per
     lastObservedTimeNs: '1',
     fault: null,
   };
-  const projection = (stream: string, value: number): ProductBrowserRuntimeOutput => ({
+  const projection = (stream: string, value: number): ProductDevRuntimeOutput => ({
     kind: 'ui-projection',
     envelope: { runtime: readout.runtime, sequence: String(value), stream, contract: 'hud.v1', value } as never,
   });
@@ -187,7 +192,7 @@ test('after an output gap only the fresh baseline is applied', async () => {
       autoStart: false,
     }, async () => fakeApplication({ bindRuntime: () => undefined }, projections) as never);
     const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
-    const projection = (value: number): ProductBrowserRuntimeOutput => ({
+    const projection = (value: number): ProductDevRuntimeOutput => ({
       kind: 'ui-projection',
       envelope: { runtime: RUNNING, sequence: String(value), stream: 'hud', contract: 'hud.v1', value } as never,
     });
@@ -210,7 +215,7 @@ test('after an output gap only the fresh baseline is applied', async () => {
 test('host recovers an unknown input batch from a fresh binding after a lost control response', async () => {
   await withFakeRoot(async (root) => {
     const freshRuntime = { ...RUNNING, controlRevision: '3' } as const;
-    const inputBatch: RustyApplicationRuntimeInputEnvelope = {
+    const inputBatch: RuntimeInputWireEvent = {
       runtime: RUNNING,
       sequence: '4',
       context: 'gameplay.default',
@@ -291,6 +296,8 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
         accepted: true,
         ...ACCEPTED_FAULT,
         count: 1,
+        acceptedCount: 1,
+        droppedCount: 0,
         binding: RUNNING,
         nextInputSequence: '5',
       },

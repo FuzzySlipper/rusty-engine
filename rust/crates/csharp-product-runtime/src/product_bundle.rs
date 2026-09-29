@@ -11,19 +11,23 @@ use std::{
 };
 
 use csharp_engine_abi::NativeInputCursorMode;
-use product_dev_host::ProductDevBundleEntry;
+use product_dev_host::{
+    ProductDevBootstrapInput, ProductDevBootstrapLifecycle, ProductDevBootstrapProduct,
+    ProductDevBootstrapRenderer, ProductDevBootstrapUi, ProductDevBootstrapUiProjection,
+    ProductDevBrowserBootstrap, ProductDevBundleEntry, ProductDevCursorMode, ProductDevRuntimeMode,
+    PRODUCT_DEV_BOOTSTRAP_PATH,
+};
 use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
 use runtime_lifecycle::{
     validate_runtime_identity, RealtimeLifecycleConfig, RuntimeLifecycleConfig,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{content_type, parse_direct_intent, parse_physical_mapping, ProductLoader};
 
 pub(super) const PRODUCT_MANIFEST_NAME: &str = "product.json";
 const PRODUCT_ARTIFACT: &str = "rusty.product.bundle";
 const PRODUCT_UI_PREFIX: &str = "product-ui";
-const PRODUCT_BOOTSTRAP_PATH: &str = "product-bootstrap.json";
 
 #[derive(Debug)]
 pub(super) struct ProductBundle {
@@ -38,7 +42,7 @@ pub(super) struct ProductBundle {
     ui_projection: Option<ProductUiProjection>,
     renderer_lighting: ProductRendererLighting,
     pub(super) lifecycle: RuntimeLifecycleConfig,
-    pub(super) lifecycle_mode: &'static str,
+    pub(super) lifecycle_mode: ProductDevRuntimeMode,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
     pub(super) physical_mappings: Vec<RuntimeInputMapping>,
     pub(super) input_cursor_mode: ProductInputCursorMode,
@@ -177,34 +181,34 @@ impl ProductBundle {
     pub(super) fn browser_entries(&self) -> Result<Vec<ProductDevBundleEntry>, String> {
         let mut entries = Vec::new();
         collect_ui(&self.ui_root, &self.ui_root, &mut entries)?;
-        let bootstrap = ProductBootstrap {
-            artifact: "rusty.product.browser-bootstrap",
-            schema_version: 1,
-            product: ProductBootstrapIdentity {
-                id: &self.id,
-                title: &self.title,
+        let bootstrap = ProductDevBrowserBootstrap {
+            product: ProductDevBootstrapProduct {
+                id: self.id.clone(),
+                title: self.title.clone(),
             },
-            ui: ProductBootstrapUi {
-                entry: &format!("{PRODUCT_UI_PREFIX}/{}", self.ui_entry),
+            ui: ProductDevBootstrapUi {
+                entry: format!("{PRODUCT_UI_PREFIX}/{}", self.ui_entry),
             },
-            lifecycle: ProductBootstrapLifecycle {
+            lifecycle: ProductDevBootstrapLifecycle {
                 mode: self.lifecycle_mode,
             },
-            input: ProductBootstrapInput {
-                cursor_mode: self.input_cursor_mode.as_str(),
+            input: ProductDevBootstrapInput {
+                cursor_mode: self.input_cursor_mode.bootstrap(),
             },
-            ui_projection: self.ui_projection.as_ref(),
-            renderer: ProductBootstrapRenderer {
-                // The shell shows the runtime's frames, or lets the desktop
-                // window show through.
+            ui_projection: self.ui_projection.as_ref().map(|projection| {
+                ProductDevBootstrapUiProjection {
+                    expected_stream: projection.expected_stream.clone(),
+                    expected_contract: projection.expected_contract.clone(),
+                }
+            }),
+            renderer: ProductDevBootstrapRenderer {
                 output: csharp_product_runtime::render_output_mode()
-                    .map_err(|error| error.to_string())?
-                    .as_str(),
+                    .map_err(|error| error.to_string())?,
             },
         };
         entries.push(
             ProductDevBundleEntry::new(
-                PRODUCT_BOOTSTRAP_PATH,
+                PRODUCT_DEV_BOOTSTRAP_PATH,
                 "application/json; charset=utf-8",
                 serde_json::to_vec(&bootstrap).expect("fixed Product browser bootstrap encodes"),
             )
@@ -214,7 +218,9 @@ impl ProductBundle {
     }
 }
 
-fn lifecycle(value: &ManifestLifecycle) -> Result<(RuntimeLifecycleConfig, &'static str), String> {
+fn lifecycle(
+    value: &ManifestLifecycle,
+) -> Result<(RuntimeLifecycleConfig, ProductDevRuntimeMode), String> {
     match value.mode.as_str() {
         "realtime" => {
             let fixed_step = value.fixed_step.as_ref().ok_or_else(|| {
@@ -222,7 +228,10 @@ fn lifecycle(value: &ManifestLifecycle) -> Result<(RuntimeLifecycleConfig, &'sta
             })?;
             let config = RealtimeLifecycleConfig::new(fixed_step.hz, fixed_step.max_catch_up_steps)
                 .map_err(|error| field_error("lifecycle.fixedStep", error.to_string()))?;
-            Ok((RuntimeLifecycleConfig::Realtime(config), "realtime"))
+            Ok((
+                RuntimeLifecycleConfig::Realtime(config),
+                ProductDevRuntimeMode::Realtime,
+            ))
         }
         "demand" => {
             if value.fixed_step.is_some() {
@@ -231,7 +240,10 @@ fn lifecycle(value: &ManifestLifecycle) -> Result<(RuntimeLifecycleConfig, &'sta
                     "is valid only for realtime mode",
                 ));
             }
-            Ok((RuntimeLifecycleConfig::Demand, "demand"))
+            Ok((
+                RuntimeLifecycleConfig::Demand,
+                ProductDevRuntimeMode::Demand,
+            ))
         }
         "external" => {
             if value.fixed_step.is_some() {
@@ -240,7 +252,10 @@ fn lifecycle(value: &ManifestLifecycle) -> Result<(RuntimeLifecycleConfig, &'sta
                     "is valid only for realtime mode",
                 ));
             }
-            Ok((RuntimeLifecycleConfig::External, "external"))
+            Ok((
+                RuntimeLifecycleConfig::External,
+                ProductDevRuntimeMode::External,
+            ))
         }
         _ => Err(field_error(
             "lifecycle.mode",
@@ -608,10 +623,10 @@ impl ProductInputCursorMode {
             Self::Unlocked => NativeInputCursorMode::Unlocked,
         }
     }
-    fn as_str(self) -> &'static str {
+    fn bootstrap(self) -> ProductDevCursorMode {
         match self {
-            Self::PointerLock => "pointer-lock",
-            Self::Unlocked => "unlocked",
+            Self::PointerLock => ProductDevCursorMode::PointerLock,
+            Self::Unlocked => ProductDevCursorMode::Unlocked,
         }
     }
 }
@@ -647,61 +662,6 @@ impl Default for ManifestServer {
 }
 fn loopback() -> String {
     "127.0.0.1".to_owned()
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProductBootstrap<'a> {
-    artifact: &'static str,
-    schema_version: u32,
-    product: ProductBootstrapIdentity<'a>,
-    ui: ProductBootstrapUi<'a>,
-    lifecycle: ProductBootstrapLifecycle,
-    input: ProductBootstrapInput,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ui_projection: Option<&'a ProductUiProjection>,
-    renderer: ProductBootstrapRenderer,
-}
-#[derive(Serialize)]
-struct ProductBootstrapIdentity<'a> {
-    id: &'a str,
-    title: &'a str,
-}
-#[derive(Serialize)]
-struct ProductBootstrapUi<'a> {
-    entry: &'a str,
-}
-#[derive(Serialize)]
-struct ProductBootstrapLifecycle {
-    mode: &'static str,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProductBootstrapInput {
-    cursor_mode: &'static str,
-}
-#[derive(Serialize)]
-struct ProductBootstrapRenderer {
-    output: &'static str,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProductBootstrapUiProjection<'a> {
-    expected_stream: &'a str,
-    expected_contract: &'a str,
-}
-
-impl Serialize for ProductUiProjection {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        ProductBootstrapUiProjection {
-            expected_stream: &self.expected_stream,
-            expected_contract: &self.expected_contract,
-        }
-        .serialize(serializer)
-    }
 }
 
 #[cfg(test)]
@@ -831,7 +791,7 @@ mod tests {
             .browser_entries()
             .expect("browser bootstrap stages")
             .into_iter()
-            .find(|entry| entry.path() == PRODUCT_BOOTSTRAP_PATH)
+            .find(|entry| entry.path() == PRODUCT_DEV_BOOTSTRAP_PATH)
             .expect("browser bootstrap exists");
         let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.bytes()).unwrap();
         assert_eq!(bootstrap["input"]["cursorMode"], "unlocked");

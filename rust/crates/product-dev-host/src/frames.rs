@@ -38,12 +38,34 @@ use std::time::{Duration, Instant};
 pub const PRODUCT_DEV_FRAMES_PATH: &str = "/__rusty/product/runtime/frames";
 /// How long one request waits for a newer frame before answering 204.
 pub const FRAME_REQUEST_WAIT: Duration = Duration::from_secs(1);
-const FRAME_MAGIC: &[u8; 4] = b"RSF1";
-const FRAME_HEADER_BYTES: usize = 40;
-const FLAG_HELD: u8 = 1;
+pub(crate) const FRAME_MAGIC: &[u8; 4] = b"RSF1";
+/// Byte offsets of the little-endian header fields, and the header length.
+/// The browser's frame view reads the same offsets, emitted with the wire
+/// contracts.
+pub(crate) mod header {
+    pub const MAGIC: usize = 0;
+    /// u32: the header length, so later fields can extend it.
+    pub const HEADER_BYTES: usize = 4;
+    /// u64
+    pub const SEQUENCE: usize = 8;
+    /// u64
+    pub const STEP: usize = 16;
+    /// u32
+    pub const WIDTH: usize = 24;
+    /// u32
+    pub const HEIGHT: usize = 28;
+    /// u8: a [`super::ProductDevFrameFormat`].
+    pub const FORMAT: usize = 32;
+    /// u8: [`super::FLAG_HELD`] and [`super::FLAG_VIDEO`].
+    pub const FLAGS: usize = 33;
+    /// u32
+    pub const PAYLOAD_BYTES: usize = 36;
+    pub const LEN: usize = 40;
+}
+pub(crate) const FLAG_HELD: u8 = 1;
 /// The page shows such a frame above its UI, as a browser's video element
 /// covered the page.
-const FLAG_VIDEO: u8 = 2;
+pub(crate) const FLAG_VIDEO: u8 = 2;
 /// Largest size a viewer may ask for, per side.
 const MAX_FRAME_SIDE: u32 = 4096;
 /// Size rendered before any viewer states one.
@@ -183,18 +205,24 @@ impl ProductDevFrameStream {
 }
 
 fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
-    let mut bytes = Vec::with_capacity(FRAME_HEADER_BYTES + frame.payload.len());
-    bytes.extend_from_slice(FRAME_MAGIC);
-    bytes.extend_from_slice(&(FRAME_HEADER_BYTES as u32).to_le_bytes());
-    bytes.extend_from_slice(&sequence.to_le_bytes());
-    bytes.extend_from_slice(&frame.step.to_le_bytes());
-    bytes.extend_from_slice(&frame.width.to_le_bytes());
-    bytes.extend_from_slice(&frame.height.to_le_bytes());
-    bytes.push(frame.format as u8);
-    bytes.push(if frame.held { FLAG_HELD } else { 0 } | if frame.video { FLAG_VIDEO } else { 0 });
-    bytes.extend_from_slice(&[0, 0]);
-    bytes.extend_from_slice(&(frame.payload.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&frame.payload);
+    let mut bytes = vec![0; header::LEN + frame.payload.len()];
+    let mut put = |offset: usize, field: &[u8]| {
+        bytes[offset..offset + field.len()].copy_from_slice(field);
+    };
+    put(header::MAGIC, FRAME_MAGIC);
+    put(header::HEADER_BYTES, &(header::LEN as u32).to_le_bytes());
+    put(header::SEQUENCE, &sequence.to_le_bytes());
+    put(header::STEP, &frame.step.to_le_bytes());
+    put(header::WIDTH, &frame.width.to_le_bytes());
+    put(header::HEIGHT, &frame.height.to_le_bytes());
+    put(header::FORMAT, &[frame.format as u8]);
+    let flags = if frame.held { FLAG_HELD } else { 0 } | if frame.video { FLAG_VIDEO } else { 0 };
+    put(header::FLAGS, &[flags]);
+    put(
+        header::PAYLOAD_BYTES,
+        &(frame.payload.len() as u32).to_le_bytes(),
+    );
+    put(header::LEN, &frame.payload);
     bytes.into()
 }
 

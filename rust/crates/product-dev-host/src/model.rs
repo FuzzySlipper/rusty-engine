@@ -9,6 +9,7 @@ use runtime_timeline::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::{ProductDevHostError, ProductDevRuntimeError};
 
@@ -18,7 +19,7 @@ pub const PRODUCT_DEV_RUNTIME_BASE_PATH: &str = "/__rusty/product/runtime/";
 pub const PRODUCT_DEV_HOST_ARTIFACT: &str = "rusty.product.dev-host";
 
 /// Exact runtime generation binding used by browser input, operations, and outputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevRuntimeBinding {
     pub instance_id: CanonicalU64,
@@ -107,7 +108,7 @@ impl ProductDevLifecycleOperation {
 }
 
 /// Closed operation identities returned by direct runtime calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevOperationKind {
     Connect,
@@ -130,7 +131,7 @@ pub enum ProductDevOperationKind {
 /// Closed recovery posture for one host operation result. The code identifies
 /// the precise failure while this value tells a host what it may safely do
 /// next without interpreting the diagnostic text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevFaultDisposition {
     Accepted,
@@ -164,41 +165,46 @@ fn runtime_fault_fields(
 
 /// Fixed browser-host observation batch. This is deliberately a small health
 /// report, not a browser console or generic diagnostic transport.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevBrowserDiagnosticsReport {
     pub host_state: ProductDevBrowserHostState,
     pub runtime_progress: CanonicalU64,
     pub transport_state: ProductDevBrowserConnectionState,
     pub output_state: ProductDevBrowserConnectionState,
+    #[ts(optional)]
     pub first_terminal: Option<ProductDevBrowserTerminalDiagnostic>,
+    #[ts(optional)]
     pub recoverable_event: Option<ProductDevBrowserTerminalDiagnostic>,
     pub page_events: Vec<ProductDevBrowserPageDiagnostic>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub attachment: Option<ProductDevBrowserAttachment>,
 }
 
 /// A browser connection identity and, after a fresh successful attachment, its
 /// retained runtime boundary. This is deliberately limited to the one browser
 /// attachment that may correlate a previously lost HTTP response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevBrowserAttachment {
     pub id: String,
+    #[ts(optional)]
     pub replaces: Option<String>,
+    #[ts(optional)]
     pub baseline: Option<ProductDevBrowserAttachmentBaseline>,
 }
 
 /// The fixed runtime facts that prove a browser attachment has a fresh output
 /// baseline. It is not a general browser state snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevBrowserAttachmentBaseline {
     pub runtime: ProductDevRuntimeBinding,
     pub next_input_sequence: CanonicalU64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevBrowserHostState {
     Loading,
@@ -208,21 +214,21 @@ pub enum ProductDevBrowserHostState {
     Disposed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevBrowserConnectionState {
     Open,
     Closed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevBrowserTerminalDiagnostic {
     pub code: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevBrowserPageDiagnostic {
     pub kind: ProductDevBrowserPageDiagnosticKind,
@@ -230,7 +236,7 @@ pub struct ProductDevBrowserPageDiagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevBrowserPageDiagnosticKind {
     Error,
@@ -314,7 +320,7 @@ fn validate_browser_diagnostic(code: &str, message: &str) -> Result<(), ProductD
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevBrowserDiagnosticsResult {
     pub accepted: bool,
@@ -325,7 +331,7 @@ pub struct ProductDevBrowserDiagnosticsResult {
 /// diagnostics batch. These are observations only; renderer cadence remains
 /// in the browser renderer diagnostics report and is intentionally not folded
 /// into this product-lane snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevTelemetrySnapshot {
     pub in_flight_operation: Option<ProductDevOperationKind>,
@@ -354,7 +360,7 @@ pub struct ProductDevTelemetrySnapshot {
 
 /// One complete C# update callback observation. Durations are integer
 /// microseconds so the diagnostics wire remains canonical and float-free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevUpdateAttribution {
     pub runtime: Option<ProductDevRuntimeBinding>,
@@ -426,7 +432,7 @@ impl From<RuntimeUpdateAttribution> for ProductDevUpdateAttribution {
 }
 
 /// Host-owned rolling distribution and long-lived slowest complete update.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevUpdateAttributionSnapshot {
     pub sample_count: CanonicalU64,
@@ -443,9 +449,10 @@ pub struct ProductDevUpdateAttributionSnapshot {
 }
 
 /// Minimal local readout passed through from the generated runtime owner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevRuntimeReadout {
+    #[ts(type = "\"rusty.product.runtime-readout\"")]
     artifact: String,
     runtime: ProductDevRuntimeBinding,
     mode: ProductDevRuntimeMode,
@@ -529,7 +536,7 @@ impl ProductDevRuntimeReadout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeMode {
     Realtime,
@@ -537,7 +544,7 @@ pub enum ProductDevRuntimeMode {
     External,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeState {
     Created,
@@ -563,7 +570,7 @@ pub enum ProductDevRuntimeScheduleState {
     Shutdown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeFault {
     OwnerReported,
@@ -571,7 +578,7 @@ pub enum ProductDevRuntimeFault {
 }
 
 /// Direct operation result supplied by the generated runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevOperationResult {
     accepted: bool,
@@ -579,26 +586,32 @@ pub struct ProductDevOperationResult {
     disposition: ProductDevFaultDisposition,
     operation: ProductDevOperationKind,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     binding: Option<ProductDevRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     next_input_sequence: Option<CanonicalU64>,
     /// Last lifecycle simulation step admitted before this operation result.
     /// It is present on a resync receipt when admission has already advanced
     /// but the downstream callback/update could not be completed.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     admitted_through: Option<CanonicalU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     readout: Option<ProductDevRuntimeReadout>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     diagnostic: Option<String>,
 }
 
 /// One bounded result returned by a product-owned generated debug catalog.
 /// A failed command is a completed product operation, not a host/ABI failure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevDebugResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     readout: Option<ProductDevRuntimeReadout>,
     succeeded: bool,
     message: String,
@@ -607,14 +620,14 @@ pub struct ProductDevDebugResult {
 /// Read-only product-generated descriptor data for live-debug completion and
 /// help. It is never a dispatch schema: command invocation remains the single
 /// explicit `execute_debug` operation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevDebugCatalog {
     available: bool,
     commands: Vec<ProductDevDebugCommandDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevDebugCommandDescriptor {
     name: String,
@@ -622,7 +635,7 @@ pub struct ProductDevDebugCommandDescriptor {
     parameters: Vec<ProductDevDebugCommandParameterDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevDebugCommandParameterDescriptor {
     name: String,
@@ -960,7 +973,7 @@ impl ProductDevInputBatch {
 }
 
 /// Typed input result supplied by the generated runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevInputResult {
     accepted: bool,
@@ -976,16 +989,22 @@ pub struct ProductDevInputResult {
     accepted_count: usize,
     dropped_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     accepted_through: Option<CanonicalU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     consumed_through: Option<CanonicalU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     next_input_sequence: Option<CanonicalU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     binding: Option<ProductDevRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     readout: Option<ProductDevRuntimeReadout>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     diagnostic: Option<String>,
 }
 
@@ -1321,8 +1340,9 @@ impl ProductDevTimelineCompletion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename = "ProductDevTimelineCompletion")]
 pub(crate) struct ProductDevTimelineCompletionWire {
     pub ticket: CanonicalU64,
     pub runtime: ProductDevRuntimeBinding,
@@ -1331,29 +1351,34 @@ pub(crate) struct ProductDevTimelineCompletionWire {
     pub provenance: ProductDevTimelineProvenanceWire,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[ts(rename = "ProductDevTimelineOutcome")]
 pub(crate) enum ProductDevTimelineOutcomeWire {
     Success {
         #[serde(default)]
+        #[ts(optional)]
         data: Option<Value>,
     },
     Failure {
         #[serde(default)]
+        #[ts(optional)]
         data: Option<Value>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename = "ProductDevTimelineProvenance")]
 pub(crate) struct ProductDevTimelineProvenanceWire {
     pub correlation: String,
     #[serde(default)]
+    #[ts(optional)]
     pub detail: Option<Value>,
 }
 
 /// Completion result supplied by the generated runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevTimelineCompletionResult {
     accepted: bool,
@@ -1361,10 +1386,13 @@ pub struct ProductDevTimelineCompletionResult {
     disposition: ProductDevFaultDisposition,
     ticket: CanonicalU64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     binding: Option<ProductDevRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     readout: Option<ProductDevRuntimeReadout>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     diagnostic: Option<String>,
 }
 
@@ -1466,19 +1494,24 @@ pub struct ProductDevRuntimeOutput {
     wire: ProductDevRuntimeOutputWire,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-enum ProductDevRuntimeOutputWire {
+#[ts(rename = "ProductDevRuntimeOutput")]
+pub(crate) enum ProductDevRuntimeOutputWire {
     Binding {
         runtime: ProductDevRuntimeBinding,
         #[serde(rename = "nextInputSequence")]
         next_input_sequence: CanonicalU64,
     },
     /// Ends the outputs that together make one binding's complete baseline.
+    /// The host consumes it; the browser sees the `rusty-output-baseline`
+    /// event instead.
+    #[ts(skip)]
     CompleteBaseline {
         runtime: ProductDevRuntimeBinding,
     },
     UiProjection {
+        #[ts(as = "runtime_ui::RuntimeUiProjectionWire")]
         envelope: runtime_ui::RuntimeUiProjectionEnvelope,
     },
     RuntimeReadout {

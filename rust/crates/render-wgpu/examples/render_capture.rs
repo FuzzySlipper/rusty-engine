@@ -1,7 +1,9 @@
 //! Render a captured presentation baseline to PNG without Chromium.
 //!
+//! Captures were read from the browser output stream, which carries no
+//! graphics since #8792; nothing makes new ones until #8869 decides.
+//!
 //! ```text
-//! python3 rust/crates/render-wgpu/scripts/capture-presentation.py [origin] [dir]
 //! cargo run -p render-wgpu --example render_capture -- <dir> <out.png> [width height] [source capture.png] [--no-default-world-lights] [--no-default-viewmodel-lights]
 //! ```
 //!

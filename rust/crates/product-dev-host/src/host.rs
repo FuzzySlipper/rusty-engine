@@ -13,6 +13,7 @@ use std::{
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::{
     CanonicalU64, ProductDevBrowserConnectionState, ProductDevBrowserDiagnosticsReport,
@@ -1425,7 +1426,7 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
     body: &[u8],
     operation: ProductDevLifecycleOperation,
 ) -> HttpResponse {
-    let request: LifecycleRequest = match decode_json(body) {
+    let request: ProductDevLifecycleRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1450,7 +1451,7 @@ fn invoke_control<R: ProductDevRuntime>(
     body: &[u8],
     operation: ProductDevControlOperation,
 ) -> HttpResponse {
-    let request: ControlRequest = match decode_json(body) {
+    let request: ProductDevControlRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1471,7 +1472,7 @@ fn invoke_control<R: ProductDevRuntime>(
 }
 
 fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: InputRequest = match decode_json(body) {
+    let request: ProductDevInputRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1557,7 +1558,7 @@ fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
 }
 
 fn invoke_realtime<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: RealtimeRequest = match decode_json(body) {
+    let request: ProductDevRealtimeRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1596,7 +1597,7 @@ fn invoke_demand<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
 }
 
 fn invoke_external<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ExternalRequest = match decode_json(body) {
+    let request: ProductDevExternalRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1639,7 +1640,7 @@ fn invoke_diagnostics_read<R: ProductDevRuntime>(
     if !state.live_debug_enabled {
         return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
     }
-    let request: DiagnosticsReadRequest = match decode_json(body) {
+    let request: ProductDevDiagnosticsReadRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1647,7 +1648,7 @@ fn invoke_diagnostics_read<R: ProductDevRuntime>(
         .diagnostics
         .read_after(request.after.map(CanonicalU64::get));
     let telemetry = telemetry_snapshot(state, batch.read_monotonic_nanoseconds);
-    json_response(200, &DiagnosticsReadResponse { batch, telemetry })
+    json_response(200, &ProductDevDiagnosticsReadResponse { batch, telemetry })
 }
 
 fn telemetry_snapshot<R: ProductDevRuntime>(
@@ -2137,13 +2138,6 @@ fn handle_sse<R: ProductDevRuntime>(
                         "runtime connection did not publish a complete binding baseline",
                     )));
                 };
-                let Ok(result_json) = serde_json::to_string(&result) else {
-                    return Ok(Err(HttpResponse::error(
-                        500,
-                        "DEV_HOST_RESPONSE_ENCODE",
-                        "runtime connection result could not be encoded",
-                    )));
-                };
                 let Ok(mut outputs) = state.outputs.lock() else {
                     return Ok(Err(HttpResponse::error(
                         500,
@@ -2154,13 +2148,13 @@ fn handle_sse<R: ProductDevRuntime>(
                 outputs.active_binding = Some(binding);
                 let queue = Arc::new(SubscriberQueue::default());
                 outputs.subscribers.push(Arc::downgrade(&queue));
-                Ok(Ok((baseline, result_json, outputs.next_id, queue)))
+                Ok(Ok((baseline, result, outputs.next_id, queue)))
             },
             || finish_telemetry(&state, ProductDevOperationKind::Connect),
         )
         .map_err(|_| crate::session::runtime_poisoned())
         .and_then(|response| response);
-    let (baseline, result_json, output_through, queue) = match connection {
+    let (baseline, result, output_through, queue) = match connection {
         Ok(Ok(connection)) => {
             state.scheduler_wake.notify();
             connection
@@ -2177,6 +2171,20 @@ fn handle_sse<R: ProductDevRuntime>(
             return;
         }
     };
+    let Ok(completion) = serde_json::to_string(&ProductDevConnectionBaseline {
+        result,
+        output_through: CanonicalU64::new(output_through),
+    }) else {
+        let _ = write_response(
+            &mut stream,
+            HttpResponse::error(
+                500,
+                "DEV_HOST_RESPONSE_ENCODE",
+                "runtime connection result could not be encoded",
+            ),
+        );
+        return;
+    };
     if write_sse_headers(&mut stream).is_err() {
         return;
     }
@@ -2186,12 +2194,7 @@ fn handle_sse<R: ProductDevRuntime>(
             return;
         }
     }
-    let mut result: serde_json::Value =
-        serde_json::from_str(&result_json).expect("serialized connection result");
-    // The output sequence at the baseline, so a caller can wait for a later
-    // operation's outputs.
-    result["outputThrough"] = serde_json::Value::String(output_through.to_string());
-    let payload = format!("event: rusty-output-baseline\ndata: {result}\n\n");
+    let payload = format!("event: rusty-output-baseline\ndata: {completion}\n\n");
     if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
         return;
     }
@@ -2444,17 +2447,10 @@ fn encode_output_batches(
     Ok((batches, active_binding))
 }
 
+/// One SSE `data` event: the outputs published together, in order.
 fn encode_output_batch(outputs: &[ProductDevRuntimeOutput]) -> Result<String, ProductDevHostError> {
-    #[derive(Serialize)]
-    struct OutputBatch<'a> {
-        kind: &'static str,
-        outputs: &'a [ProductDevRuntimeOutput],
-    }
-    serde_json::to_string(&OutputBatch {
-        kind: "runtime-output-batch",
-        outputs,
-    })
-    .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))
+    serde_json::to_string(outputs)
+        .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))
 }
 
 struct CounterGuard<'a> {
@@ -2730,11 +2726,10 @@ mod tests {
         let events = queue.take().unwrap();
         assert_eq!(events.len(), 1);
         let value = batch_json(&events[0]);
-        assert_eq!(value["kind"], "runtime-output-batch");
-        assert_eq!(value["outputs"][0]["kind"], "binding");
-        assert_eq!(value["outputs"][0]["runtime"]["controlRevision"], "3");
-        assert_eq!(value["outputs"][1]["kind"], "ui-projection");
-        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(value[0]["kind"], "binding");
+        assert_eq!(value[0]["runtime"]["controlRevision"], "3");
+        assert_eq!(value[1]["kind"], "ui-projection");
+        assert_eq!(value.as_array().map(Vec::len), Some(2));
     }
 
     #[test]
@@ -2756,9 +2751,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, output_through);
         let value = batch_json(&events[0]);
-        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
-        assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
-        assert_eq!(value["outputs"][1]["kind"], "ui-projection");
+        assert_eq!(value.as_array().map(Vec::len), Some(2));
+        assert_eq!(value[0]["kind"], "runtime-readout");
+        assert_eq!(value[1]["kind"], "ui-projection");
     }
 
     #[test]
@@ -2771,7 +2766,7 @@ mod tests {
         assert_eq!(events.len(), 60);
         for (tick, event) in events.iter().enumerate() {
             let value = batch_json(event);
-            let kinds: Vec<_> = value["outputs"]
+            let kinds: Vec<_> = value
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2779,7 +2774,7 @@ mod tests {
                 .collect();
             assert_eq!(kinds, ["ui-projection", "ui-projection", "runtime-readout"]);
             assert_eq!(
-                value["outputs"][0]["envelope"]["value"]["tick"],
+                value[0]["envelope"]["value"]["tick"],
                 serde_json::json!(tick)
             );
         }
@@ -2841,7 +2836,7 @@ mod tests {
         .unwrap();
         let events = queue.take().unwrap();
         assert_eq!(events.len(), 1);
-        let carried = batch_json(&events[0])["outputs"][0]["envelope"]["value"]["payload"]
+        let carried = batch_json(&events[0])[0]["envelope"]["value"]["payload"]
             .as_str()
             .map(str::len);
         assert_eq!(carried, Some(payload.len()));
@@ -3564,13 +3559,15 @@ impl HttpResponse {
     }
 
     fn error(status: u16, code: &str, detail: &str) -> Self {
-        let body = format!(
-            "{{\"accepted\":false,\"error\":{{\"code\":{},\"diagnostic\":{}}}}}",
-            json_string(code),
-            json_string(detail)
-        )
-        .into_bytes();
-        Self::bytes(status, "application/json", body)
+        let body = ProductDevErrorResponse {
+            accepted: false,
+            error: ProductDevError {
+                code: code.to_owned(),
+                diagnostic: detail.to_owned(),
+            },
+        };
+        let bytes = serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
+        Self::bytes(status, "application/json", bytes)
     }
 }
 
@@ -3623,57 +3620,97 @@ fn write_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
     stream.flush()
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
+/// The body of every host error response.
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProductDevErrorResponse {
+    #[ts(type = "false")]
+    accepted: bool,
+    error: ProductDevError,
+}
 
-#[derive(Deserialize)]
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProductDevError {
+    code: String,
+    diagnostic: String,
+}
+
+/// The body of a route that takes no arguments: `{}`.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProductDevEmptyRequest {}
+
+/// `diagnostics/read`: diagnostics after a cursor, or the retained ones.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DiagnosticsReadRequest {
+pub(crate) struct ProductDevDiagnosticsReadRequest {
+    #[serde(default)]
+    #[ts(optional)]
     after: Option<CanonicalU64>,
 }
 
-#[derive(Serialize)]
+/// The `diagnostics/read` answer: retained diagnostics and host telemetry.
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-struct DiagnosticsReadResponse {
+pub(crate) struct ProductDevDiagnosticsReadResponse {
     #[serde(flatten)]
     batch: crate::ProductDevLogBatch,
     telemetry: ProductDevTelemetrySnapshot,
 }
 
-#[derive(Deserialize)]
+/// A lifecycle route's body. `runtime` names the binding the operation is
+/// meant for; without it, the current one.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LifecycleRequest {
+pub(crate) struct ProductDevLifecycleRequest {
     #[serde(default)]
+    #[ts(optional)]
     runtime: Option<crate::ProductDevRuntimeBinding>,
 }
 
-#[derive(Deserialize)]
+/// `control/replace`: advance the input control fence of `runtime`.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ControlRequest {
+pub(crate) struct ProductDevControlRequest {
     runtime: crate::ProductDevRuntimeBinding,
 }
 
-#[derive(Deserialize)]
+/// `input`: one ordered input batch.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct InputRequest {
+pub(crate) struct ProductDevInputRequest {
+    #[ts(as = "Vec<runtime_input::RuntimeInputWireEvent>")]
     batch: Vec<Value>,
 }
 
-#[derive(Deserialize)]
+/// `advance-realtime`: the page's monotonic clock, in nanoseconds.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RealtimeRequest {
+pub(crate) struct ProductDevRealtimeRequest {
     observed_time_ns: CanonicalU64,
 }
 
-#[derive(Deserialize)]
+/// `admit-external-step`: the step an external clock admits.
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ExternalRequest {
+pub(crate) struct ProductDevExternalRequest {
     step: CanonicalU64,
 }
 
+/// The `rusty-output-baseline` event that ends a connection's baseline.
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProductDevConnectionBaseline {
+    #[serde(flatten)]
+    result: ProductDevOperationResult,
+    /// The output sequence at the baseline, so a caller can wait for a
+    /// later operation's outputs.
+    output_through: CanonicalU64,
+}
+
 fn decode_empty(body: &[u8]) -> Result<(), HttpResponse> {
-    decode_json::<EmptyRequest>(body).map(|_| ())
+    decode_json::<ProductDevEmptyRequest>(body).map(|_| ())
 }
 
 fn decode_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, HttpResponse> {
@@ -3719,8 +3756,4 @@ fn reap_finished_handlers(handlers: &Mutex<Vec<JoinHandle<()>>>) {
         }
     }
     *handlers = live;
-}
-
-fn json_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"encoding failure\"".to_owned())
 }

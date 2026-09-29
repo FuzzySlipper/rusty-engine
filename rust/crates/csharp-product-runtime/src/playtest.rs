@@ -1,13 +1,8 @@
 //! Forward-only inspection time, admitted by the ordinary lifecycle owner.
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum TimeMode {
-    Realtime,
-    Manual,
-    ActionDriven,
-}
+use product_dev_host::ProductDevTimeAnswer;
+pub(super) use product_dev_host::ProductDevTimeMode as TimeMode;
 
 impl CsharpProductRuntime {
     pub(super) fn execute_time_debug(
@@ -63,14 +58,21 @@ impl CsharpProductRuntime {
                 )
             }
         }
-        let message = serde_json::json!({
-            "mode": self.playtest_time,
-            "simulationStep": self.lifecycle.readout().admitted_simulation_steps().to_string(),
-            "fixedStepHz": hz,
-            "advancedMs": f64::from(advanced) * 1000.0 / f64::from(hz),
-            "worldHeld": self.playtest_time != TimeMode::Realtime,
+        let message = serde_json::to_string(&ProductDevTimeAnswer {
+            mode: self.playtest_time,
+            simulation_step: CanonicalU64::new(
+                self.lifecycle.readout().admitted_simulation_steps(),
+            ),
+            fixed_step_hz: hz,
+            advanced_ms: f64::from(advanced) * 1000.0 / f64::from(hz),
+            world_held: self.playtest_time != TimeMode::Realtime,
         })
-        .to_string();
+        .map_err(|error| {
+            ProductDevRuntimeError::new(
+                "CSHARP_TIME_ENCODE",
+                format!("time answer could not be encoded: {error}"),
+            )
+        })?;
         ProductDevRuntimeReceipt::new(
             ProductDevDebugResult::new(true, message).with_readout(self.readout()),
             outputs,
