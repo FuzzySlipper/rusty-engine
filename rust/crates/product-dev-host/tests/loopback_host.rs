@@ -325,6 +325,11 @@ impl ProductDevRuntime for FixtureRuntime {
                 ))
             }
             "fixture.large" => ProductDevDebugResult::new(true, "x".repeat(100 * 1024)),
+            // The product runtime attaches its readout to a successful command.
+            "fixture.readout" => {
+                ProductDevDebugResult::new(true, "executed fixture.readout".to_owned())
+                    .with_readout(Self::readout())
+            }
             _ => ProductDevDebugResult::new(true, format!("executed {command}")),
         };
         Ok(ProductDevRuntimeReceipt::new(result, Vec::new()).unwrap())
@@ -429,10 +434,13 @@ impl ProductDevRuntime for OutputFailureRuntime {
     > {
         let call = self.inputs.fetch_add(1, Ordering::SeqCst);
         let outputs = if call == 0 {
-            // This receipt is valid, but it cannot be attached to a retained
-            // stream until a binding baseline exists. It models publication
-            // failure after the authoritative input call has consumed once.
-            vec![RuntimePublication::Frame(RenderFrameDiff::new())]
+            // This receipt is valid, but its baseline never completes, so it
+            // cannot be published. It models publication failure after the
+            // authoritative input call has consumed once.
+            vec![RuntimePublication::binding(
+                FixtureRuntime::publication_binding(),
+                0,
+            )]
         } else {
             Vec::new()
         };
@@ -1701,6 +1709,35 @@ fn exact_loopback_host_and_origin_are_required() {
     assert!(hostile_origin.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     let same_origin = request(&origin, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\nConnection: keep-alive\r\n\r\n"));
     assert!(same_origin.starts_with("HTTP/1.1 200 OK\r\n"));
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn a_debug_command_can_be_the_first_operation_without_a_subscriber() {
+    // No browser has attached, so there is no output binding. The command's
+    // readout has no subscriber to reach; it must not fail the command.
+    let host = start_debug();
+    let origin = host.origin();
+    let body = "fixture.readout";
+    let execute = format!("POST /__rusty/product/runtime/debug/execute HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    let first = request(&origin, &execute);
+    assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{first}");
+    assert!(first.ends_with("executed fixture.readout"));
+    let second = request(&origin, &execute);
+    assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "{second}");
+
+    // A later subscriber still starts from a complete baseline.
+    let address = origin.trim_start_matches("http://");
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    stream
+        .write_all(format!("GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n").as_bytes())
+        .unwrap();
+    let baseline = read_through_marker(&mut stream, "event: rusty-output-baseline");
+    assert!(baseline.contains("\"kind\":\"binding\""));
+    drop(stream);
     host.shutdown().unwrap();
 }
 

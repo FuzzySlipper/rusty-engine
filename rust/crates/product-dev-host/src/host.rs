@@ -874,17 +874,6 @@ fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
     // ordered SSE output family so accepted/consumed cursors and recoverable
     // stale drops remain observable without delaying POST acknowledgement.
     outputs.insert(0, ProductDevRuntimeOutput::runtime_input_result(result));
-    // Before a browser has attached there is no active output binding to
-    // publish against. A later fresh SSE connection receives its own complete
-    // baseline, so dropping this pre-attachment receipt is safe.
-    let active = state
-        .outputs
-        .lock()
-        .map(|outputs| outputs.active_binding.is_some())
-        .unwrap_or(false);
-    if !active {
-        return;
-    }
     if let Err(error) = push_host_outputs(state, outputs) {
         publish_host_diagnostic(
             &state.diagnostics,
@@ -946,17 +935,6 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
         outputs.push(readout);
     }
     if outputs.is_empty() {
-        return;
-    }
-    // Before a browser has attached there is no active output binding to
-    // publish against. A later fresh SSE connection receives its own complete
-    // baseline and current readout, so dropping these outputs is safe.
-    let active = state
-        .outputs
-        .lock()
-        .map(|outputs| outputs.active_binding.is_some())
-        .unwrap_or(false);
-    if !active {
         return;
     }
     if let Err(error) = push_host_outputs(state, outputs) {
@@ -2560,8 +2538,11 @@ fn push_host_outputs<R: ProductDevRuntime>(
 
 /// Encodes one operation's outputs as SSE batches. A binding opens a
 /// baseline that must complete within the same operation; the baseline and
-/// each run of incremental outputs become one batch each. Returns the batches
-/// and the binding that is active afterwards.
+/// each run of incremental outputs become one batch each. Incremental outputs
+/// with no active binding are dropped: before a browser attaches, or after a
+/// fence, there is no subscriber state to apply them to, and the next
+/// connection starts from its own complete baseline. Returns the batches and
+/// the binding that is active afterwards.
 fn encode_output_batches(
     mut active_binding: Option<crate::ProductDevRuntimeBinding>,
     outputs: Vec<ProductDevRuntimeOutput>,
@@ -2613,13 +2594,9 @@ fn encode_output_batches(
             members.push(output);
             continue;
         }
-        if active_binding.is_none() {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_BASELINE",
-                "incremental output arrived before a complete binding baseline",
-            ));
+        if active_binding.is_some() {
+            incremental.push(output);
         }
-        incremental.push(output);
     }
     if baseline.is_some() {
         return Err(ProductDevHostError::new(
@@ -3068,14 +3045,15 @@ mod tests {
         assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
         assert!(queue.take().unwrap().is_empty());
         assert_eq!(bus.lock().unwrap().active_binding, None);
-        let error = push_outputs(
+        push_outputs(
             &bus,
             vec![ProductDevRuntimeOutput::test_frame_value(
                 serde_json::json!({}),
             )],
         )
-        .expect_err("incrementals need a fresh baseline after a fence");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
+        .expect("incrementals after a fence are dropped, not rejected");
+        assert!(queue.take().unwrap().is_empty());
+        assert_eq!(bus.lock().unwrap().active_binding, None);
     }
 
     #[test]
