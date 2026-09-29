@@ -106,3 +106,13 @@ Products move to the CLI workflow as follows:
 - CI or scripts that run plain `dotnet` before any `rusty` restore:
   `export $(rusty env)` (or `rusty env >> "$GITHUB_ENV"`).
 - `rusty <command> --help` now exits 0 and prints to stdout.
+
+## Review fix: bootstrap with an older pair
+
+`install-rusty.sh --version <pair before #8779>` used to put that pair's
+dev-only `rusty` on PATH and then fail. The bootstrap now runs the candidate
+binary from its scratch directory (`install --help`, then `install --archive`)
+and replaces the command only after both succeed. Checked with an isolated
+`RUSTY_BIN_DIR`: `--version 0.1.0-dev.db2bb445aeaa` exits 1 with a message to
+omit `--version`, leaving the existing command byte-identical and the cache
+empty. The latest pair (`0.1.0-dev.8f08ab04275f`) installs and replaces it.

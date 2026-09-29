@@ -70,10 +70,17 @@ curl -fsSL --retry 3 -o "$work/$archive" "$url"
 (cd "$work" && sha256sum --check --quiet "$archive.sha256")
 
 tar -xzf "$work/$archive" -C "$work" "$name/runtime-pack/bin/rusty"
+candidate="$work/$name/runtime-pack/bin/rusty"
+# Pairs published before the install workflow ship a dev-only rusty. Check the
+# candidate before it replaces the command on PATH.
+"$candidate" install --help >/dev/null 2>&1 || {
+    echo "install-rusty: pair $version predates \`rusty install\`; bootstrap the newest pair (omit --version). A newer rusty still installs and runs products pinned to $version." >&2
+    exit 1
+}
+"$candidate" install --archive "$work/$archive"
 mkdir -p "$bin_dir"
-install -m 755 "$work/$name/runtime-pack/bin/rusty" "$bin_dir/.rusty.incoming.$$"
+install -m 755 "$candidate" "$bin_dir/.rusty.incoming.$$"
 mv -f "$bin_dir/.rusty.incoming.$$" "$bin_dir/rusty"
-"$bin_dir/rusty" install --archive "$work/$archive"
 
 echo "install-rusty: installed $bin_dir/rusty from pair $version."
 case ":$PATH:" in
