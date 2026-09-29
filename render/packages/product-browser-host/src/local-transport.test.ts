@@ -542,12 +542,14 @@ test('local transport marks a successful response with no commit boundary outcom
 });
 
 for (const cursor of ['', '5', '50000']) {
-  test(`disconnect at cursor ${cursor || 'none'} replaces the baseline across host incarnations`, async () => {
+  test(`disconnect at cursor ${cursor || 'none'} reloads the page for a new host incarnation`, async () => {
     FakeEventSource.instances.length = 0;
     let mutations = 0;
+    let reloads = 0;
     const adapter = createProductBrowserLocalHttpAdapter({
       fetch: async () => { mutations += 1; return response(result('advance-realtime')); },
       eventSource: FakeEventSource,
+      reloadPage: () => { reloads += 1; },
     });
     const outputs: unknown[] = [];
     const batches: { readonly outputs: readonly unknown[]; readonly metadata: unknown }[] = [];
@@ -584,23 +586,15 @@ for (const cursor of ['', '5', '50000']) {
     }, '');
     replacement.emit({ kind: 'runtime-readout', readout: READOUT }, '');
     replacement.emitBaseline({ ...result('connect'), binding: nextRuntime }, '');
-    assert.equal(outputs.length, previousCount + 2);
+    // The new incarnation may serve a different UI, so the page starts over
+    // instead of attaching the old UI module to the new baseline.
+    assert.equal(reloads, 1);
+    assert.equal(outputs.length, previousCount);
     assert.deepEqual(batches.map((batch) => batch.metadata), [
       { epoch: 1, baseline: true, recovery: 'none' },
       ...(cursor === '' ? [] : [{ epoch: 1, baseline: false, recovery: 'none' }]),
       { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' },
-      { epoch: 2, baseline: true, recovery: 'none' },
     ]);
-
-    replacement.emit({
-      kind: 'frame',
-      frame: {
-        schemaVersion: 1,
-        publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
-        ops: [],
-      },
-    }, '20');
-    assert.equal(outputs.length, previousCount + 3);
     assert.equal(mutations, 0, 'output recovery must not replay any mutation');
     unsubscribeBatches?.();
     unsubscribe();
@@ -1224,6 +1218,7 @@ test('a dropped output stream asks for one fresh baseline without closing the ru
     },
     eventSource: FakeEventSource,
     onTransportError: (error) => transportErrors.push(error),
+    reloadPage: () => assert.fail('the same incarnation re-attaches without a page reload'),
   });
   const hostFailures: unknown[] = [];
   const unsubscribeFailure = adapter.subscribeTerminalFailures?.((failure) => hostFailures.push(failure));

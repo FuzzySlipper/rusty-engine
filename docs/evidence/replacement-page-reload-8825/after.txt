@@ -1,0 +1,11 @@
+start +   560ms {"navigations":1,"state":null,"ui":"ui v1","instance":"9edf54f3"}
+start +   665ms {"navigations":1,"state":"ready","ui":"ui v1","instance":"9edf54f3"}
+cs-only +     3ms {"navigations":1,"state":"ready","ui":"ui v1","instance":"9edf54f3"}
+cs-only +  2030ms {"navigations":1,"state":"degraded","ui":"ui v1","instance":"http-503"}
+cs-only +  2241ms {"navigations":1,"state":"degraded","ui":"ui v1","instance":"26cc95c6"}
+cs-only +  2520ms {"navigations":2,"state":null,"ui":null,"instance":"26cc95c6"}
+cs-only +  2631ms {"navigations":2,"state":"ready","ui":"ui v1","instance":"26cc95c6"}
+cs+ui +     7ms {"navigations":2,"state":"ready","ui":"ui v1","instance":"26cc95c6"}
+cs+ui +  2913ms {"navigations":2,"state":"degraded","ui":"ui v1","instance":"http-503"}
+cs+ui +  3031ms {"navigations":2,"state":"degraded","ui":"ui v1","instance":"3a53ec5b"}
+cs+ui +  3327ms {"navigations":3,"state":"ready","ui":"ui v2","instance":"3a53ec5b"}

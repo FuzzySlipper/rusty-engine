@@ -295,9 +295,11 @@ running.
 Replacement stops the old runtime first, so persistence is never shared
 between two incarnations, then starts the next one. While no runtime is
 serving, the supervisor answers requests with 503: JSON for runtime routes,
-and a page that refreshes itself for navigations. A browser treats the new
-runtime as a new incarnation: its output stream reconnects fresh, retrying
-through 503s, and receives a complete baseline.
+and a page that refreshes itself for navigations. An open page's output
+stream reconnects fresh, retrying through 503s. When the baseline comes from a
+new runtime incarnation, the page calls `location.reload()` instead of
+attaching: the new runtime may serve a different UI. A reconnect to the same
+incarnation attaches the fresh baseline in place.
 
 A direct launch stops with a named nonzero exit if its runtime crashes. Under
 `rusty dev`, a second crash pauses until the next source restage. NativeAOT,

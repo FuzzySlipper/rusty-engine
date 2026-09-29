@@ -237,9 +237,9 @@ export interface ProductBrowserLocalTransportOptions {
   /** Stream errors are surfaced here; the operation surface remains closed. */
   readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;
   /**
-   * Reloads the page after the host swaps the served UI, since the page still
-   * runs the UI module it loaded. Injectable for tests; defaults to
-   * `location.reload()`.
+   * Reloads the page when its UI module may be out of date: the host swapped
+   * the served UI, or a new runtime incarnation answered. Injectable for tests;
+   * defaults to `location.reload()`.
    */
   readonly reloadPage?: () => void;
 }
@@ -359,6 +359,8 @@ export function createProductBrowserLocalHttpAdapter(
   let stream: ProductBrowserLocalEventSource | null = null;
   let streamBaselineListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   let currentOutputBinding: RustyApplicationRuntimeIdentity | null = null;
+  // The runtime incarnation this page's UI module was loaded against.
+  let pageInstanceId: string | null = null;
   let outputSubscriptionReady: Promise<void> | null = null;
   let resolveOutputSubscriptionReady: (() => void) | null = null;
   let connectionReady: Promise<ProductBrowserRuntimeOperationResult> | null = null;
@@ -1009,6 +1011,14 @@ export function createProductBrowserLocalHttpAdapter(
         if (connectionBaselineComplete) {
           throw new TypeError('connection baseline completion was duplicated without a reconnect');
         }
+        const instanceId = currentOutputBinding?.instanceId ?? null;
+        if (pageInstanceId !== null && instanceId !== null && instanceId !== pageInstanceId) {
+          // A new incarnation is a new product, possibly with a new UI. Start
+          // the page over instead of re-attaching its old UI module.
+          reloadPage();
+          return;
+        }
+        pageInstanceId ??= instanceId;
         connectionBaselineComplete = true;
         freshRetryDelayMs = FRESH_RETRY_INITIAL_DELAY_MS;
         const baselineOutputs = pendingConnectionOutputs;
