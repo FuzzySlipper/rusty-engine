@@ -14,6 +14,8 @@ render-presentation.workspace = true
 wgpu = "30.0.1"
 glam = "0.30"
 png = "0.18"
+# Animated mesh GLBs (the runtime admits them; this crate only reads them).
+gltf.workspace = true
 bytemuck = "1"
 pollster = "0.4"
 
@@ -21,6 +23,8 @@ pollster = "0.4"
 # Voxel scene fixtures: real chunk payloads from the scene projector.
 render-projection.workspace = true
 engine-spatial.workspace = true
+# Animated fixtures: GLBs admitted exactly as the runtime admits them.
+asset-import.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Window for the surface presentation example only; the desktop shell owns

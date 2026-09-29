@@ -268,11 +268,13 @@ fn capture_image_writes_a_straight_alpha_png_of_the_frozen_subtree() {
         clip: "run".to_owned(),
         normalized_time: 0.5,
     };
+    // A pose names an animated instance; this box is not one (pose captures
+    // of animated meshes: tests/animated.rs).
     let refused = harness.renderer.capture_image(
         &capture_job(&harness.world, image(1, Some(pose))),
         &NoResources,
     );
-    assert!(refused.unwrap_err().contains("#8788"));
+    assert!(refused.unwrap_err().contains("unknown animated mesh"));
     let glb = harness.renderer.capture_image(
         &capture_job(
             &harness.world,

@@ -10,6 +10,8 @@
 //! | `parts` | `PartId` (dense) | one drawable (node, mesh group, material), its GPU `PartRow`, and its draw state (class, batch key, bounds, visibility, layer) | derived from nodes |
 //! | `atlases` | atlas id | retained descriptor | `DefineSpriteAtlas` / `ReleaseSpriteAtlas` |
 //! | `voxel_objects` | voxel object asset id | uploaded meshes, frame-to-mesh table, slot materials | `DefineVoxelObject` / `ReleaseVoxelObject` |
+//! | `animated_assets` | animated mesh asset id | decoded GLB (nodes, skins, clips), uploaded unskinned primitives, GLB materials and textures | `DefineAnimatedMesh` / `ReleaseAnimatedMesh` |
+//! | `animated` | `RenderHandle` | playback, pose, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetAnimatedMeshPlayback`, `SetAnimatedMeshInspection` |
 //! | `environment` | (single) | background colour or equirectangular sky (with blend) | `SetBackgroundColor` / `SetSkyBackground` |
 //!
 //! Animated meshes, voxel objects and sprites are nodes (they take part in the
@@ -30,10 +32,11 @@ use glam::{Mat4, Quat, Vec3};
 use render_model::{
     AnimatedMeshInstanceDescriptor, Geometry, LightDescriptor, Material,
     MaterialInstanceParameters, RenderHandle, RenderLayer, RenderMaterialDescriptor,
-    SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor, Transform,
-    VoxelObjectInstanceDescriptor,
+    RenderMetadata, SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
+    Transform, VoxelObjectInstanceDescriptor,
 };
 
+use crate::animated::{AnimatedAssetRow, AnimatedInstance};
 use crate::voxel::VoxelObjectRow;
 
 pub(crate) fn transform_matrix(transform: &Transform) -> Mat4 {
@@ -72,6 +75,14 @@ pub(crate) struct GpuMesh {
     pub slots: BTreeMap<u16, String>,
     /// Local bounds of every vertex, for culling.
     pub bounds: Aabb,
+    /// Positions and indices kept for picking.
+    pub cpu: std::sync::Arc<CpuGeometry>,
+}
+
+#[derive(Default)]
+pub(crate) struct CpuGeometry {
+    pub positions: Vec<Vec3>,
+    pub indices: Vec<u32>,
 }
 
 /// An axis-aligned box. `EMPTY` (min > max) contains nothing.
@@ -124,6 +135,10 @@ pub(crate) enum MeshRef {
     Builtin(Builtin),
     /// A voxel object asset's mesh (by index).
     Voxel(String, u32),
+    /// An animated asset's unskinned primitive: (asset, mesh, primitive).
+    AnimatedRigid(String, u32, u32),
+    /// An instance's CPU-skinned primitive: (instance, GLB node, primitive).
+    AnimatedSkinned(RenderHandle, u32, u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -157,8 +172,6 @@ pub(crate) enum NodeKind {
         parameters: BTreeMap<u16, MaterialInstanceParameters>,
     },
     Light(LightDescriptor),
-    // Realized by family modules (#8784, #8787, #8788).
-    #[allow(dead_code, reason = "realized by #8788")]
     AnimatedMesh(Box<AnimatedMeshInstanceDescriptor>),
     VoxelObject(Box<VoxelObjectInstanceDescriptor>),
     Sprite(Box<SpriteInstanceDescriptor>),
@@ -208,6 +221,8 @@ pub(crate) struct PartState {
     pub world_bounds: Aabb,
     /// Negative world determinant: faces wind the other way.
     pub mirrored: bool,
+    /// A transform under the node's world (an animated GLB node's pose).
+    pub local: Option<Mat4>,
     /// Effectively visible.
     pub shown: bool,
     /// The root's layer.
@@ -262,6 +277,7 @@ impl Parts {
             local_bounds: bounds,
             world_bounds: Aabb::EMPTY,
             mirrored: false,
+            local: None,
             shown: false,
             layer: RenderLayer::Scene,
         };
@@ -294,6 +310,10 @@ impl Parts {
 
     /// Write a part's world state into its GPU row and mark it for upload.
     pub fn write(&mut self, id: PartId, world: &Mat4, shown: bool, layer: RenderLayer) {
+        let world = &match self.state[id as usize].local {
+            Some(local) => *world * local,
+            None => *world,
+        };
         let row = self.rows[id as usize];
         let normal = glam::Mat3::from_mat4(*world).inverse().transpose();
         let start = id as usize * PART_ROW_FLOATS;
@@ -370,6 +390,10 @@ pub(crate) struct Tables {
     pub parts: Parts,
     pub atlases: HashMap<String, SpriteAtlasDescriptor>,
     pub voxel_objects: HashMap<String, VoxelObjectRow>,
+    pub animated_assets: HashMap<String, AnimatedAssetRow>,
+    pub animated: HashMap<RenderHandle, AnimatedInstance>,
+    /// Retained node metadata (label, tags, source entity), for picking.
+    pub metadata: HashMap<RenderHandle, RenderMetadata>,
     pub environment: Environment,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
@@ -390,6 +414,9 @@ impl Tables {
             parts: Parts::default(),
             atlases: HashMap::new(),
             voxel_objects: HashMap::new(),
+            animated_assets: HashMap::new(),
+            animated: HashMap::new(),
+            metadata: HashMap::new(),
             environment: Environment::Default,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),

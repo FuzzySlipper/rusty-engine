@@ -29,11 +29,11 @@ pub struct ApplyIssue {
 }
 
 /// Material flags in `MaterialUniform.flags` (world.wgsl).
-const FLAG_UNLIT: u32 = 1;
+pub(crate) const FLAG_UNLIT: u32 = 1;
 const FLAG_MASK: u32 = 2;
 const FLAG_VOXEL_SURFACE: u32 = 4;
-/// `MaterialUniform` size: roughness, cutoff, flags, pad, then the voxel
-/// surface's tile scale, tile origin, and sample rect.
+/// `MaterialUniform` size: roughness, cutoff, flags, metalness, then the
+/// voxel surface's tile scale, tile origin, and sample rect.
 const MATERIAL_UNIFORM_BYTES: usize = 48;
 /// Payload groups without a voxel material use Three's fallback roughness.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
@@ -53,6 +53,7 @@ impl Renderer {
             self.scene_generation += 1;
         }
         for op in &frame.ops {
+            self.record_metadata(op);
             if let Err(detail) = self.apply_op(op, resources) {
                 issues.push(ApplyIssue {
                     op: op_name(op),
@@ -141,14 +142,17 @@ impl Renderer {
                 handle,
                 parent,
                 instance,
-            } => self.insert_node(
-                *handle,
-                *parent,
-                transform_matrix(&instance.transform),
-                instance.visible,
-                RenderLayer::Scene,
-                NodeKind::AnimatedMesh(Box::new(instance.clone())),
-            ),
+            } => {
+                self.insert_node(
+                    *handle,
+                    *parent,
+                    transform_matrix(&instance.transform),
+                    instance.visible,
+                    RenderLayer::Scene,
+                    NodeKind::AnimatedMesh(Box::new(instance.clone())),
+                );
+                self.create_animated_instance(*handle);
+            }
             RenderDiff::CreateVoxelObjectInstance {
                 handle,
                 parent,
@@ -228,8 +232,20 @@ impl Renderer {
             }
             RenderDiff::Destroy { handle } => self.destroy_node(*handle),
             RenderDiff::SetParentJoint { handle, joint } => {
-                // Joint attachment is realized with animated meshes (#8788).
+                // The child follows the named joint of its animated parent.
                 self.node_mut(*handle)?.parent_joint = joint.clone();
+                self.tables.dirty_nodes.insert(*handle);
+                if let Some(joint) = joint {
+                    let parent = self.tables.nodes[handle].parent;
+                    if parent
+                        .and_then(|parent| self.joint_pose(parent, joint))
+                        .is_none()
+                    {
+                        return Err(format!(
+                            "joint {joint} is not a unique joint of the parent's animated mesh"
+                        ));
+                    }
+                }
             }
             RenderDiff::ReplaceMeshPayload { handle, payload } => {
                 let mut streams = resources::mesh_streams(payload, resources)?;
@@ -299,14 +315,45 @@ impl Renderer {
                 self.define_voxel_object(asset, resources)?
             }
             RenderDiff::ReleaseVoxelObject { asset } => self.release_voxel_object(asset),
-            RenderDiff::DefineAnimatedMesh { .. }
-            | RenderDiff::ReleaseAnimatedMesh { .. }
-            | RenderDiff::SetAnimatedMeshInspection { .. }
-            | RenderDiff::SetAnimatedMeshPlayback { .. } => {
-                return Err("realized by a later family (#8788)".to_owned());
+            RenderDiff::DefineAnimatedMesh { asset } => {
+                self.define_animated_mesh(asset, resources)?
+            }
+            RenderDiff::ReleaseAnimatedMesh { asset } => self.release_animated_mesh(asset),
+            RenderDiff::SetAnimatedMeshInspection { handle, inspection } => {
+                if let NodeKind::AnimatedMesh(descriptor) = &mut self.node_mut(*handle)?.kind {
+                    descriptor.inspection = inspection.clone();
+                }
+                self.set_animated_inspection(*handle, inspection)?
+            }
+            RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
+                self.set_animated_playback(*handle, playback)?
             }
         }
         Ok(())
+    }
+
+    /// Keep each node's metadata (label, tags, source entity) for picking.
+    fn record_metadata(&mut self, op: &RenderDiff) {
+        let (handle, metadata) = match op {
+            RenderDiff::Create { handle, node, .. } => (handle, &node.metadata),
+            RenderDiff::CreateStaticMeshInstance {
+                handle, instance, ..
+            } => (handle, &instance.metadata),
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle, instance, ..
+            } => (handle, &instance.metadata),
+            RenderDiff::CreateVoxelObjectInstance {
+                handle, instance, ..
+            } => (handle, &instance.metadata),
+            RenderDiff::CreateSprite { handle, sprite, .. } => (handle, &sprite.metadata),
+            RenderDiff::Update {
+                handle,
+                metadata: Some(metadata),
+                ..
+            } => (handle, metadata),
+            _ => return,
+        };
+        self.tables.metadata.insert(*handle, metadata.clone());
     }
 
     fn node_mut(&mut self, handle: RenderHandle) -> Result<&mut NodeRow, String> {
@@ -395,6 +442,8 @@ impl Renderer {
             }
         }
         for handle in removed {
+            self.remove_animated_instance(handle);
+            self.tables.metadata.remove(&handle);
             self.tables.payload_meshes.remove(&handle);
             self.tables.lights.remove(&handle);
             self.tables.dirty_nodes.remove(&handle);
@@ -403,6 +452,16 @@ impl Renderer {
 
     /// Re-derive a node's drawable parts from its kind and bindings.
     pub(crate) fn rebuild_parts(&mut self, handle: RenderHandle) {
+        let animated = self
+            .tables
+            .nodes
+            .get(&handle)
+            .is_some_and(|node| matches!(node.kind, NodeKind::AnimatedMesh(_)));
+        let animated_parts = if animated {
+            self.animated_parts(handle)
+        } else {
+            Vec::new()
+        };
         let Some(node) = self.tables.nodes.get_mut(&handle) else {
             return;
         };
@@ -555,10 +614,34 @@ impl Renderer {
                     }
                 }
             }
-            NodeKind::Group
-            | NodeKind::Light(_)
-            | NodeKind::AnimatedMesh(_)
-            | NodeKind::Sprite(_) => {}
+            NodeKind::AnimatedMesh(_) => {
+                for (mesh, index_count, material) in animated_parts {
+                    let (color, emission) = match &material {
+                        MaterialRef::Retained(id) => match self.tables.materials.get(id) {
+                            Some(row) => (
+                                mul(row.descriptor.color, row.descriptor.texture_tint),
+                                emission(
+                                    row.descriptor.emission_color,
+                                    row.descriptor.emission_intensity,
+                                ),
+                            ),
+                            None => ([1.0; 4], [0.0; 3]),
+                        },
+                        _ => ([1.0; 4], [0.0; 3]),
+                    };
+                    parts.push((
+                        Part {
+                            node: handle,
+                            mesh,
+                            first_index: 0,
+                            index_count,
+                            material,
+                        },
+                        PartRow { color, emission },
+                    ));
+                }
+            }
+            NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) => {}
         }
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let mut ids = Vec::with_capacity(parts.len());
@@ -586,6 +669,10 @@ impl Renderer {
         if let Some(node) = self.tables.nodes.get_mut(&handle) {
             node.parts = ids;
         }
+        if animated {
+            // Rigid GLB nodes draw at their pose under the instance.
+            self.write_animated_parts(handle);
+        }
     }
 
     /// The uploaded mesh a part draws, if it is (still) defined.
@@ -599,6 +686,7 @@ impl Renderer {
                 .voxel_objects
                 .get(asset)
                 .and_then(|object| object.meshes.get(*index as usize)),
+            MeshRef::AnimatedRigid(..) | MeshRef::AnimatedSkinned(..) => self.animated_mesh(mesh),
         }
     }
 
@@ -648,45 +736,16 @@ impl Renderer {
             Some(image) => (image.width, image.height, image.rgba.as_slice()),
             None => (1, 1, &[255u8; 4][..]),
         };
-        let texture = self.gpu.device.create_texture_with_data(
-            &self.gpu.queue,
-            &wgpu::TextureDescriptor {
-                label: Some(label),
-                size: crate::target::extent(width, height),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: if srgb {
-                    wgpu::TextureFormat::Rgba8UnormSrgb
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                },
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
+        upload_rgba_texture(
+            &self.gpu,
+            label,
+            width,
+            height,
             pixels,
-        );
-        let filter = match descriptor.filter {
-            TextureFilter::Nearest => wgpu::FilterMode::Nearest,
-            TextureFilter::Linear => wgpu::FilterMode::Linear,
-        };
-        let address = match descriptor.wrap {
-            TextureWrap::Repeat => wgpu::AddressMode::Repeat,
-            TextureWrap::Clamp => wgpu::AddressMode::ClampToEdge,
-        };
-        GpuTexture {
-            size: (width, height),
-            view: texture.create_view(&Default::default()),
-            sampler: self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some(label),
-                address_mode_u: address,
-                address_mode_v: address,
-                mag_filter: filter,
-                min_filter: filter,
-                ..Default::default()
-            }),
-        }
+            srgb,
+            descriptor.filter == TextureFilter::Nearest,
+            descriptor.wrap == TextureWrap::Repeat,
+        )
     }
 
     fn define_material(&mut self, descriptor: RenderMaterialDescriptor) {
@@ -695,8 +754,21 @@ impl Renderer {
             .as_ref()
             .and_then(|id| self.tables.textures.get(id));
         let params = MaterialParams::of(&descriptor, texture.map(|texture| texture.size));
+        self.insert_material(descriptor, &params);
+    }
+
+    /// Store a material row with `params` and re-derive the parts drawing it.
+    pub(crate) fn insert_material(
+        &mut self,
+        descriptor: RenderMaterialDescriptor,
+        params: &MaterialParams,
+    ) {
+        let texture = descriptor
+            .texture
+            .as_ref()
+            .and_then(|id| self.tables.textures.get(id));
         let bind_group =
-            self.material_bind_group(&descriptor.id, &params, texture.unwrap_or(&self.white));
+            self.material_bind_group(&descriptor.id, params, texture.unwrap_or(&self.white));
         let id = descriptor.id.clone();
         self.tables.materials.insert(
             id.clone(),
@@ -828,11 +900,18 @@ impl Renderer {
     ) -> GpuMesh {
         let device = &self.gpu.device;
         let mut bounds = Aabb::EMPTY;
+        let mut positions = Vec::with_capacity(vertices.len() / VERTEX_FLOATS);
         for vertex in vertices.chunks_exact(VERTEX_FLOATS) {
-            bounds.include(Vec3::new(vertex[0], vertex[1], vertex[2]));
+            let position = Vec3::new(vertex[0], vertex[1], vertex[2]);
+            bounds.include(position);
+            positions.push(position);
         }
         GpuMesh {
             bounds,
+            cpu: std::sync::Arc::new(crate::tables::CpuGeometry {
+                positions,
+                indices: indices.to_vec(),
+            }),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -850,18 +929,79 @@ impl Renderer {
     }
 }
 
+/// Upload RGBA8 pixels (sRGB or linear) with nearest or linear filtering and
+/// repeat or clamp wrapping.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn upload_rgba_texture(
+    gpu: &crate::Gpu,
+    label: &str,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    srgb: bool,
+    nearest: bool,
+    repeat: bool,
+) -> GpuTexture {
+    let texture = gpu.device.create_texture_with_data(
+        &gpu.queue,
+        &wgpu::TextureDescriptor {
+            label: Some(label),
+            size: crate::target::extent(width, height),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: if srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            },
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        pixels,
+    );
+    let filter = if nearest {
+        wgpu::FilterMode::Nearest
+    } else {
+        wgpu::FilterMode::Linear
+    };
+    let address = if repeat {
+        wgpu::AddressMode::Repeat
+    } else {
+        wgpu::AddressMode::ClampToEdge
+    };
+    GpuTexture {
+        size: (width, height),
+        view: texture.create_view(&Default::default()),
+        sampler: gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(label),
+            address_mode_u: address,
+            address_mode_v: address,
+            mag_filter: filter,
+            min_filter: filter,
+            ..Default::default()
+        }),
+    }
+}
+
 /// What a material bind group's uniform carries.
 pub(crate) struct MaterialParams {
     pub roughness: f32,
     pub alpha_cutoff: f32,
     pub flags: u32,
+    /// Metalness 0 for Engine materials; GLB materials carry their own.
+    pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
 }
 
 impl MaterialParams {
     /// A retained material's uniform. A voxel surface's own alpha policy
     /// applies to it, as the Three lane's voxel surface specialization did.
-    fn of(descriptor: &RenderMaterialDescriptor, texture_size: Option<(u32, u32)>) -> Self {
+    pub(crate) fn of(
+        descriptor: &RenderMaterialDescriptor,
+        texture_size: Option<(u32, u32)>,
+    ) -> Self {
         let cutoff = match (&descriptor.voxel_surface, descriptor.alpha_mode) {
             (Some(surface), _) => match surface.alpha_mode {
                 VoxelSurfaceAlphaModeDescriptor::Mask { cutoff } => Some(cutoff),
@@ -879,6 +1019,7 @@ impl MaterialParams {
             alpha_cutoff: cutoff.unwrap_or(0.0),
             flags: cutoff.map_or(0, |_| FLAG_MASK)
                 | voxel_surface.map_or(0, |_| FLAG_VOXEL_SURFACE),
+            metalness: 0.0,
             voxel_surface,
         }
     }
@@ -903,6 +1044,7 @@ pub(crate) fn material_bind_group(
     floats[0] = params.roughness;
     floats[1] = params.alpha_cutoff;
     floats[2] = f32::from_bits(params.flags);
+    floats[3] = params.metalness;
     if let Some(surface) = &params.voxel_surface {
         floats[4..6].copy_from_slice(&surface.tile_scale);
         floats[6..8].copy_from_slice(&surface.tile_origin);
@@ -950,6 +1092,7 @@ pub(crate) fn builtin_materials(
                 roughness: 1.0,
                 alpha_cutoff: 0.0,
                 flags: FLAG_UNLIT,
+                metalness: 0.0,
                 voxel_surface: None,
             },
             white,
@@ -962,6 +1105,7 @@ pub(crate) fn builtin_materials(
                 roughness: FALLBACK_ROUGHNESS,
                 alpha_cutoff: 0.0,
                 flags: 0,
+                metalness: 0.0,
                 voxel_surface: None,
             },
             white,

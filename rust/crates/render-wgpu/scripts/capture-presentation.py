@@ -69,6 +69,8 @@ for op in frame["ops"]:
         continue
     if source.get("kind") == "resource":
         names.add(source["resource"])
+# Animated mesh GLBs and clip packs are named only in the binding's list.
+names.update(outputs["binding"].get("rendererResources", []))
 for name in sorted(names):
     query = urllib.parse.urlencode({"identity": name, "generation": generation}, safe="")
     request = urllib.request.Request(f"{origin}/__rusty/product/runtime/resource?{query}", headers={"Origin": origin})

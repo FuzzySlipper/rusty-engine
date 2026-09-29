@@ -34,6 +34,11 @@ impl ResourceSource for Resources {
 }
 
 impl Resources {
+    /// Hold resource bytes under their runtime identity.
+    pub fn insert(&mut self, identity: &str, bytes: Vec<u8>) {
+        self.0.insert(identity.to_owned(), bytes);
+    }
+
     /// Admit an RGBA8 image as a resource-backed texture, as the runtime does.
     pub fn texture(
         &mut self,

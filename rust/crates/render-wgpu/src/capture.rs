@@ -159,12 +159,6 @@ impl Renderer {
         else {
             return Err("capture: GLB export stays with the browser output executor".to_owned());
         };
-        if pose.is_some() {
-            return Err(
-                "capture: animated pose sampling is realized with animated meshes (#8788)"
-                    .to_owned(),
-            );
-        }
         let factor = (f64::from((*samples).max(1))).sqrt().ceil() as u32;
         let limit = self.gpu.device.limits().max_texture_dimension_2d;
         let (capture_width, capture_height) = (
@@ -182,6 +176,18 @@ impl Renderer {
                 "capture: the frozen scene's {} op is not realized: {}",
                 issue.op, issue.detail
             ));
+        }
+        // A pose job samples one animated instance of the frozen scene.
+        if let Some(pose) = pose {
+            isolated
+                .set_animated_playback(
+                    pose.handle,
+                    &render_model::AnimatedMeshPlaybackCommand::Sample {
+                        clip: pose.clip.clone(),
+                        normalized_time: pose.normalized_time as f32,
+                    },
+                )
+                .map_err(|detail| format!("capture: pose sample: {detail}"))?;
         }
         let use_environment =
             *use_camera_background && !matches!(isolated.tables.environment, Environment::Default);

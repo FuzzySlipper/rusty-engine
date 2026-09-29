@@ -185,6 +185,7 @@ impl Renderer {
 
     /// Bring GPU rows up to date with the tables. Returns rows uploaded.
     pub(crate) fn prepare(&mut self) -> u32 {
+        self.advance_animations();
         self.propagate_transforms();
         if self.tables.lights_dirty {
             self.upload_lights();
@@ -229,13 +230,21 @@ impl Renderer {
     fn update_subtree(&mut self, root: RenderHandle) {
         let mut stack = vec![root];
         while let Some(handle) = stack.pop() {
-            let parent_state = self
-                .tables
-                .nodes
-                .get(&handle)
-                .and_then(|node| node.parent)
-                .and_then(|parent| self.tables.nodes.get(&parent))
-                .map(|parent| (parent.world, parent.world_visible, parent.world_layer));
+            // A joint-attached child hangs from its parent's posed joint.
+            let parent_state = self.tables.nodes.get(&handle).and_then(|node| {
+                let parent_handle = node.parent?;
+                let parent = self.tables.nodes.get(&parent_handle)?;
+                let joint = node
+                    .parent_joint
+                    .as_deref()
+                    .and_then(|joint| self.joint_pose(parent_handle, joint))
+                    .unwrap_or(glam::Mat4::IDENTITY);
+                Some((
+                    parent.world * joint,
+                    parent.world_visible,
+                    parent.world_layer,
+                ))
+            });
             let Some(node) = self.tables.nodes.get_mut(&handle) else {
                 continue;
             };

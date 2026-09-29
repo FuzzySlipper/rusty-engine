@@ -37,7 +37,7 @@ struct MaterialUniform {
     roughness: f32,
     alpha_cutoff: f32,
     flags: u32,
-    pad: u32,
+    metalness: f32,
     // Voxel surface: xy tile scale, zw tile origin (cells).
     tile: vec4<f32>,
     // Voxel surface: xy sample min, zw sample max (texture uv).
@@ -103,7 +103,7 @@ fn distance_attenuation(distance: f32, range: f32, decay: f32) -> f32 {
     return falloff;
 }
 
-fn brdf_ggx(light: vec3<f32>, view: vec3<f32>, normal: vec3<f32>, roughness: f32) -> vec3<f32> {
+fn brdf_ggx(light: vec3<f32>, view: vec3<f32>, normal: vec3<f32>, roughness: f32, f0: vec3<f32>) -> vec3<f32> {
     let alpha = roughness * roughness;
     let half_vector = normalize(light + view);
     let n_dot_l = clamp(dot(normal, light), 0.0, 1.0);
@@ -111,7 +111,7 @@ fn brdf_ggx(light: vec3<f32>, view: vec3<f32>, normal: vec3<f32>, roughness: f32
     let n_dot_h = clamp(dot(normal, half_vector), 0.0, 1.0);
     let v_dot_h = clamp(dot(view, half_vector), 0.0, 1.0);
     let fresnel_weight = exp2((-5.55473 * v_dot_h - 6.98316) * v_dot_h);
-    let fresnel = vec3<f32>(0.04) * (1.0 - fresnel_weight) + vec3<f32>(fresnel_weight);
+    let fresnel = f0 * (1.0 - fresnel_weight) + vec3<f32>(fresnel_weight);
     let a2 = alpha * alpha;
     let gv = n_dot_l * sqrt(a2 + (1.0 - a2) * n_dot_v * n_dot_v);
     let gl = n_dot_v * sqrt(a2 + (1.0 - a2) * n_dot_l * n_dot_l);
@@ -163,7 +163,10 @@ fn standard_radiance(
     normal: vec3<f32>,
     world_position: vec3<f32>,
     roughness: f32,
+    metalness: f32,
 ) -> vec3<f32> {
+    // MeshStandardMaterial: metals tint specular and lose diffuse.
+    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
     let view = normalize(frame.camera.xyz - world_position);
     var irradiance = vec3<f32>(0.0);
     var specular = vec3<f32>(0.0);
@@ -198,10 +201,10 @@ fn standard_radiance(
             }
             let incident = color * attenuation * clamp(dot(normal, direction), 0.0, 1.0);
             irradiance += incident;
-            specular += incident * brdf_ggx(direction, view, normal, roughness);
+            specular += incident * brdf_ggx(direction, view, normal, roughness, f0);
         }
     }
-    return albedo * irradiance / PI + specular;
+    return albedo * (1.0 - metalness) * irradiance / PI + specular;
 }
 
 @fragment
@@ -228,7 +231,7 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
         return base;
     }
     let roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
-    let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness)
+    let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness, material.metalness)
         + row.emission.rgb;
     return vec4<f32>(radiance, base.a);
 }

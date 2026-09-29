@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+mod animated;
 mod apply;
 mod batch;
 mod camera;
@@ -27,8 +28,10 @@ mod compose;
 mod composition;
 mod effects;
 mod frame;
+mod glb;
 mod gpu;
 mod particles;
+mod pick;
 mod pipelines;
 mod primitives;
 mod resources;
@@ -40,6 +43,7 @@ mod voxel;
 
 use std::collections::HashMap;
 
+pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{TargetReadout, TargetStatus, ViewCompositionReadout};
@@ -122,6 +126,11 @@ pub struct Renderer {
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
+    /// The Engine presentation timeline animated poses advance on.
+    animation_time: f64,
+    animation_facts: Vec<animated::AnimationFact>,
+    /// Realization generation per source entity, as the runtime reads it.
+    animation_generations: HashMap<u64, u64>,
     /// Counts applied deltas; offscreen composition targets re-render when
     /// it moves past the value they were drawn at.
     scene_generation: u64,
@@ -190,6 +199,9 @@ impl Renderer {
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
+            animation_time: 0.0,
+            animation_facts: Vec::new(),
+            animation_generations: HashMap::new(),
             scene_generation: 0,
             compose: compose::Compose::new(device),
             composition: Default::default(),
@@ -239,6 +251,8 @@ impl Renderer {
             lights: self.tables.lights.len(),
             atlases: self.tables.atlases.len(),
             voxel_objects: self.tables.voxel_objects.len(),
+            animated_meshes: self.tables.animated_assets.len(),
+            animated_instances: self.tables.animated.len(),
             shadow_layers: self.shadows.layers as usize,
         }
     }
@@ -254,6 +268,8 @@ pub struct TableCounts {
     pub lights: usize,
     pub atlases: usize,
     pub voxel_objects: usize,
+    pub animated_meshes: usize,
+    pub animated_instances: usize,
     pub shadow_layers: usize,
 }
 

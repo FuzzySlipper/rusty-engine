@@ -15,7 +15,7 @@ struct MaterialUniform {
     roughness: f32,
     alpha_cutoff: f32,
     flags: u32,
-    pad: u32,
+    metalness: f32,
     tile: vec4<f32>,
     sample_rect: vec4<f32>,
 };

@@ -154,6 +154,12 @@ impl std::fmt::Display for PresentationWorldError {
 impl std::error::Error for PresentationWorldError {}
 
 impl PresentationWorld {
+    /// The Engine presentation timeline: retained animated playback is
+    /// positioned on it, and a renderer poses animated meshes on it.
+    pub fn elapsed_seconds(&self) -> f64 {
+        self.elapsed_seconds
+    }
+
     pub fn advance_elapsed(&mut self, seconds: f64) {
         if seconds.is_finite() && seconds >= 0.0 {
             self.elapsed_seconds += seconds;
