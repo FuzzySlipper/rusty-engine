@@ -10,6 +10,8 @@
 //!
 //! Only this crate depends on kira and cpal.
 
+mod opus;
+
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -24,6 +26,7 @@ use kira::{
     AudioManager, AudioManagerSettings, Capacities, Decibels, Easing, Panning, PlaybackRate,
     StartTime, Tween,
 };
+use render_model::AudioContainer;
 use render_presentation::{
     AudioBus, AudioBusControl, AudioClipRef, AudioEmitter, AudioHandle, AudioProjectionDiagnostic,
     AudioProjectionDiagnosticCode, AudioProjectionOp, AudioSignalHandle, AudioSourceDescriptor,
@@ -118,7 +121,22 @@ pub struct AudioRealizationReadout {
 #[derive(Clone)]
 enum ClipData {
     Static(Box<StaticSoundData>),
-    Encoded(Arc<[u8]>),
+    Encoded { bytes: Arc<[u8]>, opus: bool },
+}
+
+/// A fresh streaming decoder over encoded clip bytes. Opus uses its own
+/// decoder; symphonia decodes Vorbis, MP3 and FLAC.
+fn streaming_data(
+    bytes: Arc<[u8]>,
+    opus: bool,
+) -> Result<StreamingSoundData<FromFileError>, FromFileError> {
+    if opus {
+        Ok(StreamingSoundData::from_decoder(opus::OggOpusDecoder::new(
+            bytes,
+        )?))
+    } else {
+        StreamingSoundData::from_cursor(Cursor::new(bytes))
+    }
 }
 
 enum Sound {
@@ -695,10 +713,10 @@ impl<B: Backend> AudioRealizer<B> {
                     .map_err(|error| decode_failed(&error))?,
             ))
         } else {
+            let opus = AudioContainer::identify(&bytes) == Some(AudioContainer::Opus);
             // Probe once so a codec failure reports on the op that used it.
-            StreamingSoundData::from_cursor(Cursor::new(Arc::clone(&bytes)))
-                .map_err(|error| decode_failed(&error))?;
-            ClipData::Encoded(bytes)
+            streaming_data(Arc::clone(&bytes), opus).map_err(|error| decode_failed(&error))?;
+            ClipData::Encoded { bytes, opus }
         };
         self.clips.insert(clip.content_hash.clone(), data.clone());
         Ok(data)
@@ -713,7 +731,7 @@ impl<B: Backend> AudioRealizer<B> {
             ClipData::Static(data) => Some(data.duration().as_secs_f64()),
             // Streaming durations come from container metadata that the
             // Engine does not admit; use the Engine's when it has one.
-            ClipData::Encoded(_) => clip.duration_seconds,
+            ClipData::Encoded { .. } => clip.duration_seconds,
         })
     }
 
@@ -767,8 +785,8 @@ impl<B: Backend> AudioRealizer<B> {
                 .map_err(|error| host_failure(&error))?;
                 (Sound::Static(handle), Some(duration))
             }
-            ClipData::Encoded(bytes) => {
-                let data = StreamingSoundData::from_cursor(Cursor::new(bytes))
+            ClipData::Encoded { bytes, opus } => {
+                let data = streaming_data(bytes, opus)
                     .map_err(|error| decode_failed(&error))?
                     .with_settings(
                         StreamingSoundSettings::new()

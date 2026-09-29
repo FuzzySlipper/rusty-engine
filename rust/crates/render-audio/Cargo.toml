@@ -9,4 +9,7 @@ workspace = true
 [dependencies]
 kira = { version = "0.12", default-features = false, features = ["cpal", "wav", "pcm", "ogg", "vorbis", "mp3", "flac"] }
 mint = "0.5"
+opus-decoder = "0.1"
+symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
+render-model.workspace = true
 render-presentation.workspace = true

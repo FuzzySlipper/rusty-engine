@@ -65,8 +65,10 @@ baseline, and Shutdown stops every voice. Natural completions and device
 diagnostics become the same realization facts the browser reports.
 
 WAV decodes once per clip; Vorbis, MP3 and FLAC stream from their encoded bytes
-per voice (symphonia). **Opus is not decoded on the device path** and reports
-`decodeFailed`. The listener stays at the origin and entity-attached voices
+per voice (symphonia). Opus streams the same way: symphonia demuxes the Ogg
+stream and seeks, and the pure-Rust `opus-decoder` (MIT/Apache-2.0, no FFI)
+decodes it. Its output matches libopus for the fixture, and seeks decode 80 ms of
+pre-roll. The listener stays at the origin and entity-attached voices
 report `hostFailure`, as in the browser realization today. Spatial voices use
 kira's linear distance falloff between 1 and `attenuation` rather than Web
 Audio's inverse model. The browser realization stays the development default

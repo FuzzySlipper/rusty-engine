@@ -45,6 +45,8 @@ RENDER_PRESENTATION_FORBIDDEN = (
 EXTERNAL_DEPENDENCY_OWNERS = {
     "cpal": "render-audio",
     "kira": "render-audio",
+    "opus-decoder": "render-audio",
+    "symphonia": "render-audio",
 }
 
 

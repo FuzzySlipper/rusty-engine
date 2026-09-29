@@ -124,6 +124,7 @@ fn one_shots_complete_for_every_decoded_container() {
         (2, "sha256:ogg"),
         (3, "sha256:mp3"),
         (4, "sha256:flac"),
+        (5, "sha256:opus"),
     ] {
         let mut realizer = realizer();
         apply(&mut realizer, &[emit(7, signal, descriptor(hash, false))]);
@@ -156,30 +157,8 @@ fn one_shots_complete_for_every_decoded_container() {
 }
 
 #[test]
-fn opus_reports_a_decode_diagnostic_for_its_signal() {
-    let mut realizer = realizer();
-    apply(
-        &mut realizer,
-        &[emit(3, 9, descriptor("sha256:opus", false))],
-    );
-    let facts = realizer.take_facts();
-    let [RealizedAudioFact::Diagnostic {
-        diagnostic,
-        signal_handle,
-    }] = facts.as_slice()
-    else {
-        panic!("expected one diagnostic, got {facts:?}");
-    };
-    assert_eq!(diagnostic.code, AudioProjectionDiagnosticCode::DecodeFailed);
-    assert_eq!(diagnostic.sequence, 3);
-    // The signal's clip ownership is released by the diagnostic, as by a
-    // browser decode failure.
-    assert_eq!(*signal_handle, Some(AudioSignalHandle::new(9)));
-}
-
-#[test]
 fn a_looping_baseline_voice_resumes_from_the_engine_cursor() {
-    for hash in ["sha256:wav", "sha256:ogg"] {
+    for hash in ["sha256:wav", "sha256:ogg", "sha256:opus"] {
         let mut realizer = realizer();
         // 1.25 s into a 1 s loop is 0.25 s into the clip.
         let mut looped = descriptor(hash, true);
