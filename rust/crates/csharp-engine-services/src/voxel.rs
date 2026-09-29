@@ -101,9 +101,7 @@ impl RuntimeSpatialBridge {
         self.edit_scene(request.session, |session| {
             let scene = Arc::make_mut(&mut session.scene);
             match engine_spatial::VoxelEditService::apply(scene, &edits) {
-                Ok(receipt) => {
-                    Ok(native_edit_receipt(&receipt))
-                }
+                Ok(receipt) => Ok(native_edit_receipt(&receipt)),
                 Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
                     let revision = scene.source_revision().raw();
                     Ok(NativeVoxelEditReceipt {
@@ -127,9 +125,7 @@ impl RuntimeSpatialBridge {
         self.edit_scene(request.session, |session| {
             let scene = Arc::make_mut(&mut session.scene);
             match VoxelChunkResidencyService::apply(scene, &operations) {
-                Ok(receipt) => {
-                    Ok(native_residency_receipt(&receipt))
-                }
+                Ok(receipt) => Ok(native_residency_receipt(&receipt)),
                 // A batch that changes nothing is an ordinary outcome.
                 Err(VoxelChunkResidencyApplyError::Rejected(
                     VoxelChunkResidencyRejection::NoChanges { retained },

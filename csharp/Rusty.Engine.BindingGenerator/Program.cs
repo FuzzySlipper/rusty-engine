@@ -296,6 +296,11 @@ internal sealed class BindingModel
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice") continue;
             if (field.Type.Contains('*', StringComparison.Ordinal)) { Fail(family, method, signature, $"result element {value.Name}.{field.Name} has unsupported pointer {field.Type}"); continue; }
+            if (field.Array is FixedArray array)
+            {
+                ValidateFixedType(family, method, signature, Bare(array.ElementType), structs, enums, seen, $"result element fixed-array element {value.Name}.{field.Name}");
+                continue;
+            }
             if (structs.TryGetValue(nested, out Struct? nestedValue) && nestedValue is not null)
             {
                 ValidateResultElement(family, method, signature, nestedValue, structs, enums, seen);
@@ -1123,12 +1128,14 @@ internal static class Emit
     {
         "NativeUtf8Slice" => $"CopyUtf8({value})",
         "NativeByteSlice" => $"CopyBytes({value})",
+        "NativeAnimationFeedbackText" => FromNativeExpression(field, value),
         string type when model.Structs.ContainsKey(type) => $"CopyResultMetadata({value})",
         _ => FromNativeExpression(field, value),
     };
     private static string ResultMetadataFromNativeExpression(BindingModel model, Field field, string value) => BindingModel.Bare(field.Type) switch
     {
         "NativeUtf8Slice" => $"CopyUtf8({value})",
+        "NativeAnimationFeedbackText" => FromNativeExpression(field, value),
         string type when model.Structs.ContainsKey(type) => $"CopyResultMetadata({value})",
         _ => FromNativeExpression(field, value),
     };
@@ -1144,7 +1151,8 @@ internal static class Emit
         void Include(Field field)
         {
             string type = BindingModel.Bare(field.Type);
-            if (type is "NativeUtf8Slice" or "NativeByteSlice" || !model.Structs.TryGetValue(type, out Struct? value) || !names.Add(type)) return;
+            // Inline animation text has its own FromNative conversion.
+            if (type is "NativeUtf8Slice" or "NativeByteSlice" or "NativeAnimationFeedbackText" || !model.Structs.TryGetValue(type, out Struct? value) || !names.Add(type)) return;
             foreach (Field nested in value.Fields) Include(nested);
         }
         foreach (Struct copied in model.Structs.Values.Where(copied => HasResultMetadata(model, copied)))

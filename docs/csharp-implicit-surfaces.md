@@ -549,8 +549,8 @@ textures remain shared and unchanged. Matte keeps textures and sets PBR roughnes
 predominantly integer unit-face meshes; skinned/morph geometry stays authored.
 
 A changed nonzero `boundsRequest` asks for the displayed pose's world-space bounds
-once after the next renderer animation update. `Animation.ReadRealizationFactAt`
-returns `MeshInspection` with the logical object, renderer generation,
+once after the next renderer animation update. `Animation.ReadRealization().Facts`
+then contains a `MeshInspection` fact with the logical object, renderer generation,
 `BoundsRequest`, `HasBounds`, `BoundsMin`, `BoundsMax`, and `VoxelNormalMeshes`.
 No bounds means an empty/unmeasurable mesh, not a zero-sized box. Match the object
 and request before consuming; cancel pending camera actions when the user moves

@@ -228,7 +228,7 @@ pub(crate) unsafe extern "C" fn destroy_emitter(
 
 pub(crate) unsafe extern "C" fn read(
     context: *mut c_void,
-    result: *mut NativePresentationFactsReadout,
+    result: *mut NativePresentationFactsResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     crate::appearance::appearance_operation(context, operation_error, || {
@@ -239,24 +239,6 @@ pub(crate) unsafe extern "C" fn read(
             return 0;
         };
         unsafe { *result = bridge.presentation_readout() };
-        ABI_OK
-    })
-}
-
-pub(crate) unsafe extern "C" fn read_diagnostic_at(
-    context: *mut c_void,
-    request: NativePresentationDiagnosticAtRequest,
-    result: *mut NativePresentationDiagnosticAtReceipt,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    crate::appearance::appearance_operation(context, operation_error, || {
-        if result.is_null() {
-            return 0;
-        }
-        let Some(bridge) = (unsafe { bridge(context) }) else {
-            return 0;
-        };
-        unsafe { *result = bridge.presentation_diagnostic(request) };
         ABI_OK
     })
 }

@@ -157,7 +157,6 @@ fn engine_api(
             update_emitter: crate::presentation::update_emitter,
             destroy_emitter: crate::presentation::destroy_emitter,
             read: crate::presentation::read,
-            read_diagnostic_at: crate::presentation::read_diagnostic_at,
             create_ghost_plate: crate::presentation::create_ghost_plate,
             update_ghost_plate: crate::presentation::update_ghost_plate,
             recapture_ghost_plate: crate::presentation::recapture_ghost_plate,

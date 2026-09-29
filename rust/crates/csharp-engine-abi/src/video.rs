@@ -45,33 +45,29 @@ pub enum NativeVideoFailureCode {
     HostFailure = 3,
 }
 
+/// Borrowed realization feedback: every retained fact. `facts` points into
+/// Video bridge storage and stays valid until the next call on the same
+/// context; the generated managed binding copies it before returning.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeVideoRealizationReadout {
-    pub retained_fact_count: u32,
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVideoRealizationResult {
+    pub facts: *const NativeVideoRealizationFact,
+    pub facts_len: usize,
     pub evicted_fact_count: u64,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeVideoRealizationFactAtRequest {
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeVideoRealizationFactAtReceipt {
-    pub present: bool,
+pub struct NativeVideoRealizationFact {
     pub kind: NativeVideoRealizationFactKind,
     pub fact_id: u64,
     pub handle: NativeVideoPlaybackHandle,
     pub failure: NativeVideoFailureCode,
 }
 
-impl Default for NativeVideoRealizationFactAtReceipt {
+impl Default for NativeVideoRealizationFact {
     fn default() -> Self {
         Self {
-            present: false,
             kind: NativeVideoRealizationFactKind::None,
             fact_id: 0,
             handle: NativeVideoPlaybackHandle::default(),

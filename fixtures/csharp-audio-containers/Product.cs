@@ -70,11 +70,10 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     [DebugCommand("audio.proof.inspect", Description = "Read admission and browser realization facts.")]
     public string Inspect()
     {
-        AudioRealizationReadout realization = context.Engine.Audio.ReadRealization();
+        AudioRealizationResult realization = context.Engine.Audio.ReadRealization();
         List<string> facts = [];
-        for (uint index = 0; index < realization.RetainedFactCount; index++)
-            facts.Add(context.Engine.Audio.ReadRealizationFactAt(new(index)).ToString());
-        return $"{context.Engine.Audio.Read()};realization={realization};facts={string.Join(";", facts)}";
+        foreach (AudioRealizationFact fact in realization.Facts.Span) facts.Add(fact.ToString());
+        return $"{context.Engine.Audio.Read()};evicted={realization.EvictedFactCount};facts={string.Join(";", facts)}";
     }
     [DebugCommand("audio.proof.stop")]
     public void Stop()

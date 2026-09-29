@@ -336,15 +336,20 @@ pub struct NativePresentationParticleEmissionReceipt {
     pub max_reserved_particles: u32,
 }
 
+/// Borrowed presentation facts. Both diagnostic lists point into Graphics
+/// bridge storage and stay valid until the next call on the same context; the
+/// generated managed binding copies them before returning.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativePresentationFactsReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationFactsResult {
+    pub billboard_diagnostics: *const NativePresentationDiagnostic,
+    pub billboard_diagnostics_len: usize,
+    pub particle_diagnostics: *const NativePresentationDiagnostic,
+    pub particle_diagnostics_len: usize,
     pub active_billboards: u32,
     pub active_emitters: u32,
     pub reserved_particles: u32,
     pub emitted_bursts: u64,
-    pub billboard_diagnostic_count: u32,
-    pub particle_diagnostic_count: u32,
 }
 
 #[repr(u32)]
@@ -376,15 +381,7 @@ pub enum NativePresentationDiagnosticCode {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativePresentationDiagnosticAtRequest {
-    pub domain: NativePresentationDiagnosticDomain,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativePresentationDiagnosticAtReceipt {
-    pub present: bool,
+pub struct NativePresentationDiagnostic {
     pub code: NativePresentationDiagnosticCode,
     pub sequence: u32,
     pub logical_id: u64,
@@ -592,10 +589,9 @@ pub type NativeDestroyGhostPlatePresentation = unsafe extern "C" fn(
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
-impl Default for NativePresentationDiagnosticAtReceipt {
+impl Default for NativePresentationDiagnostic {
     fn default() -> Self {
         Self {
-            present: false,
             code: NativePresentationDiagnosticCode::None,
             sequence: 0,
             logical_id: 0,

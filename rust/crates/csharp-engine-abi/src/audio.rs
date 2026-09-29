@@ -185,8 +185,11 @@ pub struct NativeAudioBusMutedRequest {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeAudioReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioResult {
+    /// Retained diagnostics; borrowed like [`NativeAudioRealizationResult::facts`].
+    pub diagnostics: *const NativeAudioDiagnostic,
+    pub diagnostics_len: usize,
     /// Engine projector state, not browser-realized playback state.
     pub active_voices: u32,
     /// Retained voices whose Engine-owned desired state is paused. This is not
@@ -194,8 +197,6 @@ pub struct NativeAudioReadout {
     pub paused_voices: u32,
     pub admitted_clips: u32,
     pub emitted_signals: u64,
-    /// Number of diagnostics currently retained for indexed readout.
-    pub retained_diagnostic_count: u32,
     /// Cumulative number of diagnostics evicted from the retained readout.
     pub evicted_diagnostic_count: u64,
 }
@@ -241,14 +242,7 @@ pub struct NativeAudioBusReadRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAudioDiagnosticAtRequest {
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeAudioDiagnosticAtReceipt {
-    pub present: bool,
+pub struct NativeAudioDiagnostic {
     pub code: NativeAudioDiagnosticCode,
     pub sequence: u32,
     /// Retained voice identity when the diagnostic is voice-scoped; zero for
@@ -257,28 +251,24 @@ pub struct NativeAudioDiagnosticAtReceipt {
     pub voice_value: u64,
 }
 
-/// Aggregate realization-feedback readout. This is a committed copied store
-/// populated between product calls, not the NativeAudioReadout projector.
+/// Borrowed realization feedback: every retained fact, committed between
+/// product calls (not the Audio projector readout). `facts` points into Audio
+/// bridge storage and stays valid until the next call on the same context;
+/// the generated managed binding copies it before returning.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAudioRealizationReadout {
-    pub retained_fact_count: u32,
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioRealizationResult {
+    pub facts: *const NativeAudioRealizationFact,
+    pub facts_len: usize,
     pub evicted_fact_count: u64,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeAudioRealizationFactAtRequest {
-    pub index: u32,
-}
-
-/// Indexed copied realization fact. `signal_handle` is set only for a
-/// one-shot completion, `voice_value` only for retained voice/voice-scoped
-/// diagnostic facts, and `code` only for diagnostics.
+/// One realization fact. `signal_handle` is set only for a one-shot
+/// completion, `voice_value` only for retained voice/voice-scoped diagnostic
+/// facts, and `code` only for diagnostics.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeAudioRealizationFactAtReceipt {
-    pub present: bool,
+pub struct NativeAudioRealizationFact {
     pub kind: NativeAudioRealizationFactKind,
     pub fact_id: u64,
     pub sequence: u32,
@@ -287,10 +277,9 @@ pub struct NativeAudioRealizationFactAtReceipt {
     pub code: NativeAudioDiagnosticCode,
 }
 
-impl Default for NativeAudioRealizationFactAtReceipt {
+impl Default for NativeAudioRealizationFact {
     fn default() -> Self {
         Self {
-            present: false,
             kind: NativeAudioRealizationFactKind::None,
             fact_id: 0,
             sequence: 0,
@@ -301,10 +290,9 @@ impl Default for NativeAudioRealizationFactAtReceipt {
     }
 }
 
-impl Default for NativeAudioDiagnosticAtReceipt {
+impl Default for NativeAudioDiagnostic {
     fn default() -> Self {
         Self {
-            present: false,
             code: NativeAudioDiagnosticCode::None,
             sequence: 0,
             voice_value: 0,

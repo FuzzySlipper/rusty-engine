@@ -417,13 +417,7 @@ pub type NativeReadVideo = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeReadVideoRealization = unsafe extern "C" fn(
     *mut c_void,
-    *mut NativeVideoRealizationReadout,
-    *mut crate::NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadVideoRealizationFactAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVideoRealizationFactAtRequest,
-    *mut NativeVideoRealizationFactAtReceipt,
+    *mut NativeVideoRealizationResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAudioClipFromContent = unsafe extern "C" fn(
@@ -488,7 +482,7 @@ pub type NativeSetAudioBusMuted = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeReadAudio = unsafe extern "C" fn(
     *mut c_void,
-    *mut NativeAudioReadout,
+    *mut NativeAudioResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadAudioVoice = unsafe extern "C" fn(
@@ -503,21 +497,9 @@ pub type NativeReadAudioBus = unsafe extern "C" fn(
     *mut NativeAudioBusReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeReadAudioDiagnosticAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeAudioDiagnosticAtRequest,
-    *mut NativeAudioDiagnosticAtReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
 pub type NativeReadAudioRealization = unsafe extern "C" fn(
     *mut c_void,
-    *mut NativeAudioRealizationReadout,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadAudioRealizationFactAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeAudioRealizationFactAtRequest,
-    *mut NativeAudioRealizationFactAtReceipt,
+    *mut NativeAudioRealizationResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateMaterial = unsafe extern "C" fn(
@@ -822,13 +804,7 @@ pub type NativeDestroyPresentationEmitter = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeReadPresentationFacts = unsafe extern "C" fn(
     *mut c_void,
-    *mut NativePresentationFactsReadout,
-    *mut crate::NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadPresentationDiagnosticAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativePresentationDiagnosticAtRequest,
-    *mut NativePresentationDiagnosticAtReceipt,
+    *mut NativePresentationFactsResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeOpenAnimatedMesh = unsafe extern "C" fn(
@@ -975,13 +951,7 @@ pub type NativeReadAnimation = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeReadAnimationRealization = unsafe extern "C" fn(
     *mut c_void,
-    *mut NativeAnimationRealizationReadout,
-    *mut crate::NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadAnimationRealizationFactAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeAnimationRealizationFactAtRequest,
-    *mut NativeAnimationRealizationFactAtReceipt,
+    *mut NativeAnimationRealizationResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateCamera = unsafe extern "C" fn(
@@ -1354,7 +1324,6 @@ pub struct NativePresentationApi {
     pub update_emitter: NativeUpdatePresentationEmitter,
     pub destroy_emitter: NativeDestroyPresentationEmitter,
     pub read: NativeReadPresentationFacts,
-    pub read_diagnostic_at: NativeReadPresentationDiagnosticAt,
     pub create_ghost_plate: NativeCreateGhostPlatePresentation,
     pub update_ghost_plate: NativeUpdateGhostPlatePresentation,
     pub recapture_ghost_plate: NativeRecaptureGhostPlatePresentation,
@@ -1443,7 +1412,6 @@ pub struct NativeAnimationApi {
     pub read_controller: NativeReadAnimationController,
     pub read: NativeReadAnimation,
     pub read_realization: NativeReadAnimationRealization,
-    pub read_realization_fact_at: NativeReadAnimationRealizationFactAt,
 }
 
 #[repr(C)]
@@ -1465,9 +1433,7 @@ pub struct NativeAudioApi {
     pub read: NativeReadAudio,
     pub read_voice: NativeReadAudioVoice,
     pub read_bus: NativeReadAudioBus,
-    pub read_diagnostic_at: NativeReadAudioDiagnosticAt,
     pub read_realization: NativeReadAudioRealization,
-    pub read_realization_fact_at: NativeReadAudioRealizationFactAt,
 }
 
 #[repr(C)]
@@ -1480,7 +1446,6 @@ pub struct NativeVideoApi {
     pub skip: NativeSkipVideo,
     pub read: NativeReadVideo,
     pub read_realization: NativeReadVideoRealization,
-    pub read_realization_fact_at: NativeReadVideoRealizationFactAt,
 }
 
 #[repr(C)]

@@ -83,14 +83,13 @@ impl AudioRealizationFact {
         }
     }
 
-    fn receipt(&self) -> NativeAudioRealizationFactAtReceipt {
+    fn native(&self) -> NativeAudioRealizationFact {
         match *self {
             Self::NaturalCompletionOneShot {
                 fact_id,
                 sequence,
                 signal_handle,
-            } => NativeAudioRealizationFactAtReceipt {
-                present: true,
+            } => NativeAudioRealizationFact {
                 kind: NativeAudioRealizationFactKind::NaturalCompletionOneShot,
                 fact_id,
                 sequence,
@@ -102,8 +101,7 @@ impl AudioRealizationFact {
                 fact_id,
                 sequence,
                 voice_handle,
-            } => NativeAudioRealizationFactAtReceipt {
-                present: true,
+            } => NativeAudioRealizationFact {
                 kind: NativeAudioRealizationFactKind::NaturalCompletionRetainedVoice,
                 fact_id,
                 sequence,
@@ -117,8 +115,7 @@ impl AudioRealizationFact {
                 sequence,
                 signal_handle,
                 voice_handle,
-            } => NativeAudioRealizationFactAtReceipt {
-                present: true,
+            } => NativeAudioRealizationFact {
                 kind: NativeAudioRealizationFactKind::Diagnostic,
                 fact_id,
                 sequence,
@@ -150,6 +147,8 @@ pub(crate) struct RuntimeAudioBridge {
     diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
     content: Option<*const RuntimeContentBridge>,
+    /// Backing of the latest borrowed Audio result.
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 
 impl RuntimeAudioBridge {
@@ -177,6 +176,7 @@ impl RuntimeAudioBridge {
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
             content: None,
+            borrowed: Default::default(),
         }
     }
 
@@ -989,7 +989,7 @@ impl RuntimeAudioBridge {
         })
     }
 
-    fn read(&mut self) -> Result<NativeAudioReadout, CsharpEngineServicesError> {
+    fn read(&mut self) -> Result<NativeAudioResult, CsharpEngineServicesError> {
         let staged = self.staged.as_ref().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_CALL",
@@ -997,47 +997,51 @@ impl RuntimeAudioBridge {
             )
         })?;
         let readout = staged.state.projector.readout();
-        Ok(NativeAudioReadout {
+        let diagnostics = readout
+            .diagnostics
+            .iter()
+            .map(|diagnostic| NativeAudioDiagnostic {
+                code: diagnostic_code(diagnostic.code),
+                sequence: diagnostic.sequence,
+                voice_value: diagnostic.handle.map_or(0, AudioHandle::raw),
+            })
+            .collect::<Box<[_]>>();
+        let result = NativeAudioResult {
+            diagnostics: diagnostics.as_ptr(),
+            diagnostics_len: diagnostics.len(),
             active_voices: readout.active_sources,
             paused_voices: readout.paused_sources,
             admitted_clips: staged.state.clips.len() as u32,
             emitted_signals: readout.emitted_signals,
-            retained_diagnostic_count: readout.retained_diagnostic_count,
             evicted_diagnostic_count: readout.evicted_diagnostic_count,
-        })
+        };
+        self.borrowed.hold(diagnostics);
+        Ok(result)
     }
 
     fn read_realization(
         &mut self,
-    ) -> Result<NativeAudioRealizationReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeAudioRealizationResult, CsharpEngineServicesError> {
         self.staged.as_ref().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_CALL",
                 "audio service was called outside a product call",
             )
         })?;
-        Ok(NativeAudioRealizationReadout {
-            retained_fact_count: self.realized_facts.len() as u32,
+        let facts = self
+            .realized_facts
+            .iter()
+            .map(AudioRealizationFact::native)
+            .collect::<Box<[_]>>();
+        let result = NativeAudioRealizationResult {
+            facts: facts.as_ptr(),
+            facts_len: facts.len(),
             evicted_fact_count: self
                 .renderer_evicted_fact_count
                 .saturating_add(self.local_evicted_fact_count),
-        })
-    }
-
-    fn read_realization_fact_at(
-        &mut self,
-        request: NativeAudioRealizationFactAtRequest,
-    ) -> Result<NativeAudioRealizationFactAtReceipt, CsharpEngineServicesError> {
-        self.staged.as_ref().ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_CALL",
-                "audio service was called outside a product call",
-            )
-        })?;
-        Ok(self.realized_facts.get(request.index as usize).map_or_else(
-            NativeAudioRealizationFactAtReceipt::default,
-            AudioRealizationFact::receipt,
-        ))
+        };
+        self.borrowed.hold(facts);
+        Ok(result)
     }
 
     fn read_voice(
@@ -1079,34 +1083,6 @@ impl RuntimeAudioBridge {
         Ok(NativeAudioBusReadout {
             volume: readout.volume,
             muted: readout.muted,
-        })
-    }
-
-    fn read_diagnostic_at(
-        &mut self,
-        request: NativeAudioDiagnosticAtRequest,
-    ) -> Result<NativeAudioDiagnosticAtReceipt, CsharpEngineServicesError> {
-        let staged = self.staged.as_ref().ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_CALL",
-                "audio service was called outside a product call",
-            )
-        })?;
-        let Some(diagnostic) = staged
-            .state
-            .projector
-            .readout()
-            .diagnostics
-            .get(request.index as usize)
-            .cloned()
-        else {
-            return Ok(NativeAudioDiagnosticAtReceipt::default());
-        };
-        Ok(NativeAudioDiagnosticAtReceipt {
-            present: true,
-            code: diagnostic_code(diagnostic.code),
-            sequence: diagnostic.sequence,
-            voice_value: diagnostic.handle.map_or(0, AudioHandle::raw),
         })
     }
 }
@@ -1492,7 +1468,7 @@ pub(crate) unsafe extern "C" fn set_audio_bus_muted(
 }
 pub(crate) unsafe extern "C" fn read_audio(
     context: *mut c_void,
-    result: *mut NativeAudioReadout,
+    result: *mut NativeAudioResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if !operation_error.is_null() {
@@ -1569,36 +1545,9 @@ pub(crate) unsafe extern "C" fn read_audio_bus(
         }
     }
 }
-pub(crate) unsafe extern "C" fn read_audio_diagnostic_at(
-    context: *mut c_void,
-    request: NativeAudioDiagnosticAtRequest,
-    result: *mut NativeAudioDiagnosticAtReceipt,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    if !operation_error.is_null() {
-        unsafe { *operation_error = std::mem::zeroed() };
-    }
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
-    match bridge.read_diagnostic_at(request) {
-        Ok(value) => {
-            unsafe {
-                *result = value;
-            }
-            ABI_OK
-        }
-        Err(error) => {
-            bridge.operation_diagnostics.retain(&error, operation_error);
-            0
-        }
-    }
-}
-
 pub(crate) unsafe extern "C" fn read_audio_realization(
     context: *mut c_void,
-    result: *mut NativeAudioRealizationReadout,
+    result: *mut NativeAudioRealizationResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     if !operation_error.is_null() {
@@ -1609,33 +1558,6 @@ pub(crate) unsafe extern "C" fn read_audio_realization(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
     match bridge.read_realization() {
-        Ok(value) => {
-            unsafe {
-                *result = value;
-            }
-            ABI_OK
-        }
-        Err(error) => {
-            bridge.operation_diagnostics.retain(&error, operation_error);
-            0
-        }
-    }
-}
-
-pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
-    context: *mut c_void,
-    request: NativeAudioRealizationFactAtRequest,
-    result: *mut NativeAudioRealizationFactAtReceipt,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    if !operation_error.is_null() {
-        unsafe { *operation_error = std::mem::zeroed() };
-    }
-    if context.is_null() || result.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
-    match bridge.read_realization_fact_at(request) {
         Ok(value) => {
             unsafe {
                 *result = value;
@@ -1667,15 +1589,21 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         read: read_audio,
         read_voice: read_audio_voice,
         read_bus: read_audio_bus,
-        read_diagnostic_at: read_audio_diagnostic_at,
         read_realization: read_audio_realization,
-        read_realization_fact_at: read_audio_realization_fact_at,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Copies a borrowed result slice before the next call, as generated C# does.
+    fn copied<T: Copy>(values: *const T, len: usize) -> Vec<T> {
+        if len == 0 {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(values, len) }.to_vec()
+    }
 
     fn wav() -> Arc<[u8]> {
         let mut bytes = vec![0_u8; 48];
@@ -1957,20 +1885,9 @@ mod tests {
         }
 
         let readout = bridge.read().expect("diagnostic readout");
-        assert_eq!(readout.retained_diagnostic_count, 1);
+        let diagnostics = copied(readout.diagnostics, readout.diagnostics_len);
+        assert_eq!(diagnostics.len(), 1);
         assert_eq!(readout.evicted_diagnostic_count, 0);
-        assert!(
-            bridge
-                .read_diagnostic_at(NativeAudioDiagnosticAtRequest { index: 0 })
-                .expect("oldest retained diagnostic")
-                .present
-        );
-        assert!(
-            !bridge
-                .read_diagnostic_at(NativeAudioDiagnosticAtRequest { index: 1 })
-                .expect("out-of-window diagnostic")
-                .present
-        );
     }
 
     #[test]
@@ -2225,20 +2142,21 @@ mod tests {
             .expect("initial owner snapshot");
         bridge.begin_call();
         assert_eq!(
-            bridge
-                .read_realization()
-                .expect("committed realization readout"),
-            NativeAudioRealizationReadout {
-                retained_fact_count: 1,
-                evicted_fact_count: 3,
-            }
+            {
+                let result = bridge
+                    .read_realization()
+                    .expect("committed realization readout");
+                (
+                    copied(result.facts, result.facts_len).len(),
+                    result.evicted_fact_count,
+                )
+            },
+            (1, 3)
         );
+        let result = bridge.read_realization().expect("realization facts");
         assert_eq!(
-            bridge
-                .read_realization_fact_at(NativeAudioRealizationFactAtRequest { index: 0 })
-                .expect("indexed realization fact"),
-            NativeAudioRealizationFactAtReceipt {
-                present: true,
+            copied(result.facts, result.facts_len)[0],
+            NativeAudioRealizationFact {
                 kind: NativeAudioRealizationFactKind::NaturalCompletionOneShot,
                 fact_id: 4,
                 sequence: 2,
@@ -2272,12 +2190,10 @@ mod tests {
         bridge.end_call();
         bridge.reset_realized_feedback();
         bridge.begin_call();
-        assert_eq!(
-            bridge
-                .read_realization()
-                .expect("replacement owner readout"),
-            NativeAudioRealizationReadout::default()
-        );
+        let replaced = bridge
+            .read_realization()
+            .expect("replacement owner readout");
+        assert_eq!((replaced.facts_len, replaced.evicted_fact_count), (0, 0));
     }
 
     #[test]
@@ -2429,11 +2345,9 @@ mod tests {
             )
             .expect("terminal signal diagnostic");
         bridge.begin_call();
+        let result = bridge.read_realization().expect("diagnostic readout");
         assert_eq!(
-            bridge
-                .read_realization_fact_at(NativeAudioRealizationFactAtRequest { index: 0 })
-                .expect("diagnostic readout")
-                .signal_handle,
+            copied(result.facts, result.facts_len)[0].signal_handle,
             signal.value,
             "the public realization receipt retains the terminal signal identity"
         );

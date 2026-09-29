@@ -1745,7 +1745,7 @@ const MAX_PRESENTATION_DIAGNOSTICS: usize = 128;
 #[derive(Clone, Copy)]
 struct StoredPresentationDiagnostic {
     domain: NativePresentationDiagnosticDomain,
-    receipt: NativePresentationDiagnosticAtReceipt,
+    receipt: NativePresentationDiagnostic,
 }
 
 #[derive(Clone)]
@@ -2094,35 +2094,26 @@ impl RuntimeAppearanceBridge {
     }
 
     fn read_animation_realization(
-        &self,
-    ) -> Result<NativeAnimationRealizationReadout, CsharpEngineServicesError> {
+        &mut self,
+    ) -> Result<NativeAnimationRealizationResult, CsharpEngineServicesError> {
         if self.staged.is_none() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_CALL",
                 "animation service was called outside a product call",
             ));
         }
-        Ok(NativeAnimationRealizationReadout {
-            retained_fact_count: self.animation_realization_facts.len() as u32,
-            evicted_fact_count: self.animation_realization_evicted,
-        })
-    }
-
-    fn read_animation_realization_fact_at(
-        &self,
-        request: NativeAnimationRealizationFactAtRequest,
-    ) -> Result<NativeAnimationRealizationFactAtReceipt, CsharpEngineServicesError> {
-        if self.staged.is_none() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_CALL",
-                "animation service was called outside a product call",
-            ));
-        }
-        Ok(self
+        let facts = self
             .animation_realization_facts
-            .get(request.index as usize)
+            .iter()
             .map(animation_realization_receipt)
-            .unwrap_or_default())
+            .collect::<Box<[_]>>();
+        let result = NativeAnimationRealizationResult {
+            facts: facts.as_ptr(),
+            facts_len: facts.len(),
+            evicted_fact_count: self.animation_realization_evicted,
+        };
+        self.borrowed.hold(facts);
+        Ok(result)
     }
 
     /// Takes the finished call, with the renderer releases for resources it
@@ -2602,7 +2593,7 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
-    pub(crate) fn presentation_readout(&self) -> NativePresentationFactsReadout {
+    pub(crate) fn presentation_readout(&mut self) -> NativePresentationFactsResult {
         let state = self
             .staged
             .as_ref()
@@ -2610,28 +2601,28 @@ impl RuntimeAppearanceBridge {
             .unwrap_or(&self.state);
         let billboards = state.billboard_projector.readout();
         let particles = state.particle_projector.readout();
-        NativePresentationFactsReadout {
+        let diagnostics = |domain| {
+            self.presentation_diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.domain == domain)
+                .map(|diagnostic| diagnostic.receipt)
+                .collect::<Box<[_]>>()
+        };
+        let billboard_diagnostics = diagnostics(NativePresentationDiagnosticDomain::Billboard);
+        let particle_diagnostics = diagnostics(NativePresentationDiagnosticDomain::Particle);
+        let result = NativePresentationFactsResult {
+            billboard_diagnostics: billboard_diagnostics.as_ptr(),
+            billboard_diagnostics_len: billboard_diagnostics.len(),
+            particle_diagnostics: particle_diagnostics.as_ptr(),
+            particle_diagnostics_len: particle_diagnostics.len(),
             active_billboards: billboards.active_billboards,
             active_emitters: particles.active_emitters,
             reserved_particles: particles.reserved_particles,
             emitted_bursts: particles.emitted_bursts,
-            billboard_diagnostic_count: self
-                .presentation_diagnostic_count(NativePresentationDiagnosticDomain::Billboard),
-            particle_diagnostic_count: self
-                .presentation_diagnostic_count(NativePresentationDiagnosticDomain::Particle),
-        }
-    }
-
-    pub(crate) fn presentation_diagnostic(
-        &self,
-        request: NativePresentationDiagnosticAtRequest,
-    ) -> NativePresentationDiagnosticAtReceipt {
-        self.presentation_diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.domain == request.domain)
-            .nth(request.index as usize)
-            .map(|diagnostic| diagnostic.receipt)
-            .unwrap_or_default()
+        };
+        self.borrowed
+            .hold((billboard_diagnostics, particle_diagnostics));
+        result
     }
 
     /// Replaces the renderer-owned latest ghost snapshot for the active
@@ -2821,15 +2812,6 @@ impl RuntimeAppearanceBridge {
         self.operation_error = Some(error);
     }
 
-    fn presentation_diagnostic_count(&self, domain: NativePresentationDiagnosticDomain) -> u32 {
-        self.presentation_diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.domain == domain)
-            .count()
-            .try_into()
-            .unwrap_or(u32::MAX)
-    }
-
     fn record_presentation_diagnostic(
         &mut self,
         domain: NativePresentationDiagnosticDomain,
@@ -2843,8 +2825,7 @@ impl RuntimeAppearanceBridge {
         self.presentation_diagnostics
             .push(StoredPresentationDiagnostic {
                 domain,
-                receipt: NativePresentationDiagnosticAtReceipt {
-                    present: true,
+                receipt: NativePresentationDiagnostic {
                     code,
                     sequence,
                     logical_id,
@@ -9774,7 +9755,7 @@ pub(crate) unsafe extern "C" fn read_animation(
 
 pub(crate) unsafe extern "C" fn read_animation_realization(
     context: *mut c_void,
-    result: *mut NativeAnimationRealizationReadout,
+    result: *mut NativeAnimationRealizationResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     appearance_operation(context, operation_error, || {
@@ -9783,19 +9764,6 @@ pub(crate) unsafe extern "C" fn read_animation_realization(
         })
     })
 }
-pub(crate) unsafe extern "C" fn read_animation_realization_fact_at(
-    context: *mut c_void,
-    request: NativeAnimationRealizationFactAtRequest,
-    result: *mut NativeAnimationRealizationFactAtReceipt,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    appearance_operation(context, operation_error, || {
-        animation_result(context, result, |bridge| {
-            bridge.read_animation_realization_fact_at(request)
-        })
-    })
-}
-
 pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnimationApi {
     NativeAnimationApi {
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
@@ -9831,7 +9799,6 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         read_controller: read_animation_controller,
         read: read_animation,
         read_realization: read_animation_realization,
-        read_realization_fact_at: read_animation_realization_fact_at,
     }
 }
 
@@ -9849,11 +9816,8 @@ fn animation_feedback_text(value: &str) -> NativeAnimationFeedbackText {
 }
 fn animation_realization_receipt(
     fact: &AnimationRealizationFact,
-) -> NativeAnimationRealizationFactAtReceipt {
-    let mut out = NativeAnimationRealizationFactAtReceipt {
-        present: true,
-        ..Default::default()
-    };
+) -> NativeAnimationRealizationFact {
+    let mut out = NativeAnimationRealizationFact::default();
     match fact {
         AnimationRealizationFact::Playback {
             fact_id,
@@ -13918,12 +13882,12 @@ pub(super) mod tests {
         assert_eq!(after.reserved_particles, before.reserved_particles);
         assert_eq!(after.emitted_bursts, before.emitted_bursts);
         assert_eq!(
-            after.billboard_diagnostic_count,
-            before.billboard_diagnostic_count
+            after.billboard_diagnostics_len,
+            before.billboard_diagnostics_len
         );
         assert_eq!(
-            after.particle_diagnostic_count,
-            before.particle_diagnostic_count
+            after.particle_diagnostics_len,
+            before.particle_diagnostics_len
         );
         let _ = emitter;
     }
@@ -13984,19 +13948,13 @@ pub(super) mod tests {
             .presentation_create_billboard(&descriptor)
             .expect_err("duplicate billboard");
         bridge.record_operation_error(error);
-        assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
-        assert_eq!(
-            bridge
-                .presentation_diagnostic(NativePresentationDiagnosticAtRequest {
-                    domain: NativePresentationDiagnosticDomain::Billboard,
-                    index: 0
-                })
-                .logical_id,
-            7
-        );
+        let facts = bridge.presentation_readout();
+        assert_eq!(facts.billboard_diagnostics_len, 1);
+        // Copy the borrowed diagnostic before the next call, as generated C# does.
+        assert_eq!(unsafe { *facts.billboard_diagnostics }.logical_id, 7);
         let call = bridge.take_staged_call();
         bridge.commit(call);
-        assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
+        assert_eq!(bridge.presentation_readout().billboard_diagnostics_len, 1);
     }
 
     #[test]
@@ -14212,7 +14170,7 @@ pub(super) mod tests {
             .presentation_update_structured_billboard(owner, &invalid)
             .expect_err("invalid meter update");
         bridge.record_operation_error(error);
-        assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
+        assert_eq!(bridge.presentation_readout().billboard_diagnostics_len, 1);
         let call = bridge.take_staged_call();
         bridge.commit(call);
         let retained = bridge
@@ -14398,7 +14356,7 @@ pub(super) mod tests {
             .presentation_update_emitter(owner, &descriptor(&invalid))
             .expect_err("invalid collision update");
         bridge.record_operation_error(error);
-        assert_eq!(bridge.presentation_readout().particle_diagnostic_count, 1);
+        assert_eq!(bridge.presentation_readout().particle_diagnostics_len, 1);
         let call = bridge.take_staged_call();
         bridge.commit(call);
         let retained = bridge

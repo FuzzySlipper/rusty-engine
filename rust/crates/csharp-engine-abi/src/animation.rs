@@ -123,26 +123,24 @@ pub enum NativeAnimationRealizationFactKind {
     MeshInspection = 6,
 }
 
+/// Borrowed realization feedback: every retained fact. `facts` points into
+/// Animation bridge storage and stays valid until the next call on the same
+/// context; the generated managed binding copies it before returning.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeAnimationRealizationReadout {
-    pub retained_fact_count: u32,
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationRealizationResult {
+    pub facts: *const NativeAnimationRealizationFact,
+    pub facts_len: usize,
     pub evicted_fact_count: u64,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeAnimationRealizationFactAtRequest {
-    pub index: u32,
-}
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeAnimationRealizationFactAtReceipt {
+pub struct NativeAnimationRealizationFact {
     pub bounds_request: u32,
     pub bounds_min: crate::NativeVec3,
     pub bounds_max: crate::NativeVec3,
     pub has_bounds: bool,
     pub voxel_normal_meshes: u32,
-    pub present: bool,
     pub kind: NativeAnimationRealizationFactKind,
     pub fact_id: u64,
     pub object_id: u64,

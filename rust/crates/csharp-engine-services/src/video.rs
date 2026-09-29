@@ -67,6 +67,8 @@ pub(crate) struct RuntimeVideoBridge {
     renderer_evicted: u64,
     accepted_through: Option<u64>,
     content: Option<*const RuntimeContentBridge>,
+    /// Backing of the latest borrowed Video result.
+    borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 
 impl RuntimeVideoBridge {
@@ -85,6 +87,7 @@ impl RuntimeVideoBridge {
             renderer_evicted: 0,
             accepted_through: None,
             content: None,
+            borrowed: Default::default(),
         }
     }
     pub(crate) fn bind_content(&mut self, content: &RuntimeContentBridge) {
@@ -269,52 +272,43 @@ impl RuntimeVideoBridge {
     }
     fn read_realization(
         &mut self,
-    ) -> Result<NativeVideoRealizationReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeVideoRealizationResult, CsharpEngineServicesError> {
         let _ = self.staged()?;
-        Ok(NativeVideoRealizationReadout {
-            retained_fact_count: self.facts.len() as u32,
-            evicted_fact_count: self.evicted.saturating_add(self.renderer_evicted),
-        })
-    }
-    fn read_fact(
-        &mut self,
-        request: NativeVideoRealizationFactAtRequest,
-    ) -> Result<NativeVideoRealizationFactAtReceipt, CsharpEngineServicesError> {
-        let _ = self.staged()?;
-        let Some(fact) = self.facts.get(request.index as usize).copied() else {
-            return Ok(NativeVideoRealizationFactAtReceipt::default());
-        };
-        Ok(match fact {
-            VideoRealizationFact::Completed { fact_id, handle } => {
-                NativeVideoRealizationFactAtReceipt {
-                    present: true,
+        let facts = self
+            .facts
+            .iter()
+            .map(|fact| match *fact {
+                VideoRealizationFact::Completed { fact_id, handle } => NativeVideoRealizationFact {
                     kind: NativeVideoRealizationFactKind::Completed,
                     fact_id,
                     handle: NativeVideoPlaybackHandle { value: handle },
                     failure: NativeVideoFailureCode::None,
-                }
-            }
-            VideoRealizationFact::Skipped { fact_id, handle } => {
-                NativeVideoRealizationFactAtReceipt {
-                    present: true,
+                },
+                VideoRealizationFact::Skipped { fact_id, handle } => NativeVideoRealizationFact {
                     kind: NativeVideoRealizationFactKind::Skipped,
                     fact_id,
                     handle: NativeVideoPlaybackHandle { value: handle },
                     failure: NativeVideoFailureCode::None,
-                }
-            }
-            VideoRealizationFact::Failed {
-                fact_id,
-                handle,
-                failure,
-            } => NativeVideoRealizationFactAtReceipt {
-                present: true,
-                kind: NativeVideoRealizationFactKind::Failed,
-                fact_id,
-                handle: NativeVideoPlaybackHandle { value: handle },
-                failure,
-            },
-        })
+                },
+                VideoRealizationFact::Failed {
+                    fact_id,
+                    handle,
+                    failure,
+                } => NativeVideoRealizationFact {
+                    kind: NativeVideoRealizationFactKind::Failed,
+                    fact_id,
+                    handle: NativeVideoPlaybackHandle { value: handle },
+                    failure,
+                },
+            })
+            .collect::<Box<[_]>>();
+        let result = NativeVideoRealizationResult {
+            facts: facts.as_ptr(),
+            facts_len: facts.len(),
+            evicted_fact_count: self.evicted.saturating_add(self.renderer_evicted),
+        };
+        self.borrowed.hold(facts);
+        Ok(result)
     }
 }
 
@@ -401,8 +395,7 @@ pub(crate) unsafe extern "C" fn skip_video(
     }
 }
 call!(read_video, read => NativeVideoReadout);
-call!(read_video_realization, read_realization => NativeVideoRealizationReadout);
-call!(read_video_fact, read_fact, request: NativeVideoRealizationFactAtRequest => NativeVideoRealizationFactAtReceipt);
+call!(read_video_realization, read_realization => NativeVideoRealizationResult);
 
 pub(crate) fn api(bridge: &mut RuntimeVideoBridge) -> NativeVideoApi {
     NativeVideoApi {
@@ -413,7 +406,6 @@ pub(crate) fn api(bridge: &mut RuntimeVideoBridge) -> NativeVideoApi {
         skip: skip_video,
         read: read_video,
         read_realization: read_video_realization,
-        read_realization_fact_at: read_video_fact,
     }
 }
 
@@ -502,14 +494,16 @@ mod tests {
             .expect("bounded renderer feedback");
         bridge.begin_call();
         let readout = bridge.read_realization().expect("read realization");
-        assert_eq!(readout.retained_fact_count, 1);
+        assert_eq!(readout.facts_len, 1);
+        let fact = unsafe { *readout.facts };
+        assert_eq!(fact.fact_id, 7);
         assert_eq!(readout.evicted_fact_count, 3);
         bridge.end_call();
 
         bridge.reset_realized_feedback();
         bridge.begin_call();
         let reset = bridge.read_realization().expect("read reset realization");
-        assert_eq!(reset.retained_fact_count, 0);
+        assert_eq!(reset.facts_len, 0);
         assert_eq!(reset.evicted_fact_count, 0);
     }
 }

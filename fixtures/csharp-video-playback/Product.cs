@@ -50,11 +50,10 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
     [DebugCommand("video.proof.inspect")]
     public string Inspect()
     {
-        VideoRealizationReadout readout = context.Engine.Video.ReadRealization();
+        VideoRealizationResult readout = context.Engine.Video.ReadRealization();
         List<string> facts = [];
-        for (uint index = 0; index < readout.RetainedFactCount; index++)
-            facts.Add(context.Engine.Video.ReadRealizationFactAt(new(index)).ToString());
-        return $"active={active.Value};readout={readout};facts={string.Join(";", facts)}";
+        foreach (VideoRealizationFact fact in readout.Facts.Span) facts.Add(fact.ToString());
+        return $"active={active.Value};evicted={readout.EvictedFactCount};facts={string.Join(";", facts)}";
     }
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     public void Start() { }
