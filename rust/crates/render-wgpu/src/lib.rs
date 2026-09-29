@@ -53,7 +53,7 @@ use std::collections::HashMap;
 pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
-pub use composition::{TargetReadout, TargetStatus, ViewCompositionReadout};
+pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use export::export_glb;
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;

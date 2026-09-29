@@ -7,9 +7,15 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use product_dev_host::ProductDevFrameStream;
-use render_stream::{
-    FrameStreamer, Gpu, RendererOptions, ResourceSource, SceneDriver, SceneState, StreamFormat,
+use render_host_contracts::{
+    RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
+    RendererViewTarget, RendererViewport, RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
 };
+use render_stream::{
+    FrameStreamer, Gpu, RendererCameraPose, RendererOptions, RendererViewComposition,
+    ResourceSource, SceneDriver, SceneState, StreamFormat,
+};
+use runtime_publication::RuntimePublication;
 
 fn state(step: u64, held: bool) -> SceneState {
     SceneState {
@@ -132,5 +138,69 @@ fn frames_follow_viewers_and_simulation_time() {
     let inspection = streamer.inspection();
     assert!(inspection.on_demand && !inspection.pending);
     assert_eq!(inspection.last_drawn.unwrap().sequence, drawn.sequence);
+
+    // Each frame records the camera it drew from: the product's camera,
+    // then the observer that replaced it in the primary view (#8841).
+    let product = RendererCompositionCamera {
+        id: "main".to_owned(),
+        pose: RendererCameraPose {
+            position: [0.0, 1.0, 4.0],
+            pitch_degrees: -10.0,
+            yaw_degrees: 0.0,
+        },
+        basis: None,
+        projection: RendererCameraProjection::Perspective {
+            fov_y_degrees: 60.0,
+            near: 0.1,
+            far: 100.0,
+        },
+        motion: None,
+    };
+    let composition = RendererViewComposition {
+        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
+        cameras: vec![product],
+        targets: Vec::new(),
+        views: vec![RendererCompositionView {
+            id: "main".to_owned(),
+            camera_id: "main".to_owned(),
+            target: RendererViewTarget::Primary,
+            viewport: RendererViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            order: 0,
+        }],
+        presentations: Vec::new(),
+    };
+    scene.apply(
+        &[RuntimePublication::ViewComposition(composition)],
+        &NoResources,
+        &|_| None,
+        state(11, true),
+    );
+    let own = streamer.draw_now(wait).expect("a requested frame");
+    let near = |actual: [f64; 3], expected: [f64; 3]| {
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() < 1e-3)
+    };
+    assert_eq!(own.cameras.len(), 1);
+    assert!(!own.cameras[0].observer);
+    assert!(near(own.cameras[0].pose.position, [0.0, 1.0, 4.0]));
+    assert!((own.cameras[0].pose.pitch_degrees + 10.0).abs() < 1e-3);
+    let observer = RendererCameraPose {
+        position: [3.0, 2.0, 1.0],
+        pitch_degrees: -20.0,
+        yaw_degrees: 45.0,
+    };
+    scene.set_observer(Some(observer));
+    let observed = streamer.draw_now(wait).expect("a requested frame");
+    assert!(observed.cameras[0].observer);
+    assert!(near(observed.cameras[0].pose.position, observer.position));
+    assert!((observed.cameras[0].pose.yaw_degrees - 45.0).abs() < 1e-3);
+    assert!(observed.cameras[0].offscreen.is_none(), "no offscreen view");
     drop(streamer);
 }

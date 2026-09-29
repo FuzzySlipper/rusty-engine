@@ -292,7 +292,11 @@ The world is realized either by the browser's Three surface or, with
   waits until the canvas shows that frame. `engine.renderer.presentation`
   describes the last drawn frame in the browser observation's shape, with
   `frameSequence`, `simulationStep`, `held` and `observer` added and
-  `captureCorrelation: "frame-sequence"`. The observer and drawing mode belong
+  `captureCorrelation: "frame-sequence"`. Its `views.cameras` are the poses
+  the frame drew from (motion sampled, or the observer's where it replaced a
+  primary view's camera, marked `observer`, with `offscreenPose` for that
+  camera's offscreen views); `views.sourceCameras` are the product's
+  descriptors. The observer and drawing mode belong
   to the runtime, so every attached page sees them. Held simulation time is
   the runtime's own. Nothing asks for a renderer pick.
 - **Not yet in this mode:** ghost plate realization feedback (#8842).

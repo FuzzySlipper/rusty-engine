@@ -67,3 +67,45 @@ In step 8, `comparison.engine_presentation` reports `same_runtime`, `same_surfac
 - `scripts/dependency_boundary_check.py`: passed. `render-stream` now also names `render-host-contracts`.
 - `pnpm run build` in `render/`: passes.
 - `pnpm --filter product-browser-host test` (106 pass) and `--filter application-host test` (44 pass).
+
+## Review fix: submitted cameras are the ones the frame drew from
+
+**Finding.** `engine.renderer.presentation` copied the composition's camera
+descriptors into both `views.cameras` and `views.sourceCameras`. An observed
+frame therefore reported the product's pose as submitted
+(`responses/04-capture-observer.json`: observer at `[0, 6, 3]`, pitch
+−14.62, but `cameras` at `[-7, 1.62, 3]`, pitch 0). The crew-services
+comparator reads `views.cameras`, so two different observer viewpoints
+compared as `same_submitted_cameras: true`. Interpolated product cameras
+also reported their descriptor instead of the sampled pose.
+
+**Fix.**
+- **`render-wgpu`.** `Renderer::drawn_cameras()` reports, aligned with the
+  installed composition's cameras, what the last composition frame drew
+  from:
+  - a camera's pose and basis at the frame's presentation time (motion
+    sampled);
+  - where an observer replaced it in primary views, the observer's pose,
+    marked `observer`, and the sampled pose its offscreen views still drew
+    (`offscreen`). A camera that only offscreen views use is never replaced.
+- **`render-stream`.** Each `DrawnFrame` records those cameras right after
+  drawing.
+- **Runtime** (`frame_output.rs`). `views.cameras` is each descriptor with
+  the drawn `pose` and `basis`, plus `observer` and, when present,
+  `offscreenPose`/`offscreenBasis`. `views.sourceCameras` keeps the
+  descriptors as authored.
+- The composition now resolves camera and target names once, when it is
+  installed (#8849), so these facts come from the same indices the frame drew
+  with.
+
+**Evidence.**
+
+| Test | What it checks |
+|---|---|
+| `render-wgpu` `tests/views.rs` `drawn_cameras_report_the_sampled_and_observer_poses_each_view_drew_from` | A motion camera drawn halfway between samples reports `[0.5, 0.6, 1.0]` (not the descriptor's latest `[1.0, …]`), and the frame's pixels equal a composition drawn from that pose. With an observer, the primary camera reports the observer pose (`observer: true`) and keeps its sampled pose as `offscreen`. An offscreen-only camera is untouched. A different observer viewpoint gives a different report. |
+| `render-stream` `tests/stream.rs` | A drawn frame records the product camera, then, after `set_observer`, the observer's pose with `observer: true`. |
+| `csharp-product-runtime` `frame_output::tests::submitted_cameras_carry_the_drawn_pose_and_keep_the_offscreen_one` | The JSON mapping: drawn `pose`, `observer`, `offscreenPose`, and the descriptor's id and projection. |
+
+A live crew-services session again needs Doom on a current pair (#8861). The
+chain from renderer to observation JSON is covered by the three tests above.
+

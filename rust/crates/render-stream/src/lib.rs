@@ -131,6 +131,10 @@ pub struct DrawnFrame {
     pub composition: Option<Arc<RendererViewComposition>>,
     pub composition_revision: u64,
     pub observer: Option<RendererCameraPose>,
+    /// How each of `composition`'s cameras drew this frame: its sampled
+    /// pose, or the observer's where the observer replaced it in primary
+    /// views (`Renderer::drawn_cameras`).
+    pub cameras: Vec<render_wgpu::DrawnCamera>,
 }
 
 /// The inspection state and the last drawn frame.
@@ -545,8 +549,10 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
             composition: scene.composition.clone(),
             composition_revision: scene.composition_revision,
             observer: scene.observer,
+            cameras: Vec::new(),
         };
         scene.renderer.render_view_composition(target, driver.now());
+        drawn.cameras = scene.renderer.drawn_cameras();
         scene.collect_facts();
         let (held, step) = (scene.held, scene.step);
         drop(scene);

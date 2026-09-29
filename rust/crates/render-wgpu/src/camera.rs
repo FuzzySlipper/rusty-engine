@@ -12,9 +12,9 @@ use std::collections::VecDeque;
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 
-use crate::convert::world_vec3;
+use crate::convert::{world_array, world_vec3};
 use render_host_contracts::{
-    RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
+    RendererCameraBasis, RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
     RendererCameraProjection, RendererCompositionCamera,
 };
 
@@ -60,6 +60,27 @@ pub(crate) fn pose_from_degrees(pose: &RendererCameraPose) -> CameraPose {
         orientation: Quat::from_rotation_y(-(pose.yaw_degrees as f32).to_radians())
             * Quat::from_rotation_x((pose.pitch_degrees as f32).to_radians()),
     }
+}
+
+/// A pose as the Engine describes cameras: position, yaw (zero faces -Z,
+/// positive turns toward +X) and pitch in degrees, and its basis. The inverse
+/// of [`pose_from_degrees`] for poses without roll.
+pub(crate) fn pose_readout(pose: CameraPose) -> (RendererCameraPose, RendererCameraBasis) {
+    let forward = pose.orientation * Vec3::NEG_Z;
+    let right = pose.orientation * Vec3::X;
+    let up = pose.orientation * Vec3::Y;
+    (
+        RendererCameraPose {
+            position: world_array(pose.position),
+            yaw_degrees: f64::from(forward.x.atan2(-forward.z).to_degrees()),
+            pitch_degrees: f64::from(forward.y.clamp(-1.0, 1.0).asin().to_degrees()),
+        },
+        RendererCameraBasis {
+            forward: world_array(forward),
+            right: world_array(right),
+            up: world_array(up),
+        },
+    )
 }
 
 pub(crate) fn projection_matrix(projection: &RendererCameraProjection, aspect: f32) -> Mat4 {

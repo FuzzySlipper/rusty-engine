@@ -362,7 +362,7 @@ impl FrameOutput {
             json!({
                 "schemaVersion": 1,
                 "revision": frame.composition_revision,
-                "cameras": composition.cameras,
+                "cameras": drawn_cameras(&composition.cameras, &frame.cameras),
                 "sourceCameras": composition.cameras,
                 "targets": composition.targets,
                 "views": composition.views,
@@ -512,4 +512,83 @@ fn primary_camera_pose(composition: &RendererViewComposition) -> Option<Renderer
         .iter()
         .find(|camera| camera.id == view.camera_id)
         .map(|camera| camera.pose)
+}
+
+/// The submitted cameras: each composition camera with the pose and basis it
+/// drew from in this frame (motion sampled, or the observer's where the
+/// observer replaced it in primary views). `observer` marks the latter, and
+/// `offscreenPose` keeps the sampled pose its offscreen views still drew.
+/// The authored descriptors stay in `sourceCameras`.
+fn drawn_cameras(
+    descriptors: &[render_host_contracts::RendererCompositionCamera],
+    drawn: &[render_wgpu::DrawnCamera],
+) -> Vec<Value> {
+    descriptors
+        .iter()
+        .enumerate()
+        .map(|(index, descriptor)| {
+            let mut camera = json!(descriptor);
+            if let (Some(drawn), Value::Object(fields)) = (drawn.get(index), &mut camera) {
+                fields.insert("pose".to_owned(), json!(drawn.pose));
+                fields.insert("basis".to_owned(), json!(drawn.basis));
+                fields.insert("observer".to_owned(), json!(drawn.observer));
+                if let Some((pose, basis)) = &drawn.offscreen {
+                    fields.insert("offscreenPose".to_owned(), json!(pose));
+                    fields.insert("offscreenBasis".to_owned(), json!(basis));
+                }
+            }
+            camera
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use render_host_contracts::{
+        RendererCameraBasis, RendererCameraPose, RendererCameraProjection,
+        RendererCompositionCamera,
+    };
+
+    #[test]
+    fn submitted_cameras_carry_the_drawn_pose_and_keep_the_offscreen_one() {
+        let pose = |x: f64, yaw: f64| RendererCameraPose {
+            position: [x, 1.0, 2.0],
+            pitch_degrees: 0.0,
+            yaw_degrees: yaw,
+        };
+        let basis = RendererCameraBasis {
+            forward: [0.0, 0.0, -1.0],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+        };
+        let descriptor = RendererCompositionCamera {
+            id: "player".to_owned(),
+            pose: pose(0.0, 0.0),
+            basis: None,
+            projection: RendererCameraProjection::Perspective {
+                fov_y_degrees: 60.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            motion: None,
+        };
+        let drawn = render_wgpu::DrawnCamera {
+            pose: pose(5.0, 30.0),
+            basis,
+            observer: true,
+            offscreen: Some((pose(0.5, 0.0), basis)),
+        };
+        let cameras = drawn_cameras(std::slice::from_ref(&descriptor), &[drawn]);
+        let camera = &cameras[0];
+        assert_eq!(camera["id"], "player");
+        assert_eq!(camera["pose"]["position"], json!([5.0, 1.0, 2.0]));
+        assert_eq!(camera["pose"]["yawDegrees"], 30.0);
+        assert_eq!(camera["observer"], true);
+        assert_eq!(camera["offscreenPose"]["position"], json!([0.5, 1.0, 2.0]));
+        assert_eq!(camera["projection"], json!(descriptor.projection));
+        // A frame drawn before any camera report keeps the descriptor.
+        let unreported = drawn_cameras(std::slice::from_ref(&descriptor), &[]);
+        assert_eq!(unreported[0], json!(descriptor));
+    }
 }

@@ -208,6 +208,114 @@ fn camera_motion_interpolates_on_the_host_clock_and_holds_when_samples_stop() {
     assert_eq!(cameras[0].sample_id.as_deref(), Some("2"));
 }
 
+fn close(actual: &[f64; 3], expected: [f64; 3]) -> bool {
+    actual
+        .iter()
+        .zip(expected)
+        .all(|(actual, expected)| (actual - expected).abs() < 1e-3)
+}
+
+#[test]
+fn drawn_cameras_report_the_sampled_and_observer_poses_each_view_drew_from() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(room());
+    // "moving" draws the main view and an offscreen inset; "top" only the
+    // inset. Motion puts "moving" halfway between two samples.
+    let sample = |x: f64, id: &str, time: f64| {
+        let mut moving = camera("moving", [x, 0.6, 1.0], 20.0, -6.0);
+        moving.motion = Some(RendererCameraMotion {
+            sample_id: id.to_owned(),
+            sample_time_seconds: time,
+            delay_seconds: 0.1,
+            interpolation: RendererCameraInterpolation::Pose,
+            cut: false,
+        });
+        let mut view = composition(
+            vec![moving, camera("top", [0.0, 7.0, -4.3], 0.0, -90.0)],
+            vec![
+                primary_view("main", "moving", viewport(0.0, 0.0, 1.0, 1.0), 0),
+                RendererCompositionView {
+                    id: "inset-moving".to_owned(),
+                    camera_id: "moving".to_owned(),
+                    target: RendererViewTarget::Offscreen {
+                        target_id: "inset".to_owned(),
+                        target_revision: 1,
+                    },
+                    viewport: viewport(0.0, 0.0, 0.5, 1.0),
+                    order: 0,
+                },
+                RendererCompositionView {
+                    id: "inset-top".to_owned(),
+                    camera_id: "top".to_owned(),
+                    target: RendererViewTarget::Offscreen {
+                        target_id: "inset".to_owned(),
+                        target_revision: 1,
+                    },
+                    viewport: viewport(0.5, 0.0, 0.5, 1.0),
+                    order: 1,
+                },
+            ],
+        );
+        view.targets.push(RendererCompositionTarget {
+            id: "inset".to_owned(),
+            revision: 1,
+            width: 64,
+            height: 32,
+            color: RendererTargetColor::Rgba8Srgb,
+            depth: RendererTargetDepth::Depth24,
+            sampling: RendererTargetSampling::Nearest,
+        });
+        view
+    };
+    harness
+        .renderer
+        .set_view_composition(&sample(0.0, "1", 0.0), 0.0);
+    harness
+        .renderer
+        .set_view_composition(&sample(1.0, "2", 0.1), 0.1);
+
+    // Halfway through the motion, the drawn pose is the sampled one, not the
+    // descriptor's latest position.
+    let (_, halfway) = harness.composition(0.15);
+    let drawn = harness.renderer.drawn_cameras();
+    assert_eq!(drawn.len(), 2);
+    assert!(!drawn[0].observer && drawn[0].offscreen.is_none());
+    assert!(close(&drawn[0].pose.position, [0.5, 0.6, 1.0]), "{drawn:?}");
+    assert!((drawn[0].pose.yaw_degrees - 20.0).abs() < 1e-3);
+    assert!((drawn[0].pose.pitch_degrees + 6.0).abs() < 1e-3);
+    assert!(close(&drawn[1].pose.position, [0.0, 7.0, -4.3]));
+    // The pixels are that viewpoint's.
+    let mut expected = sample(0.5, "3", 0.0);
+    expected.cameras[0].motion = None;
+    let mut reference = Harness::new(RendererOptions::default());
+    reference.apply(room());
+    reference.renderer.set_view_composition(&expected, 0.0);
+    assert_eq!(reference.composition(0.0).1, halfway);
+
+    // An observer replaces "moving" in the primary view only: the report
+    // says so, and keeps the sampled pose its offscreen view still drew.
+    let observer = camera("observer", [2.0, 1.5, 2.0], 35.0, -20.0);
+    harness.renderer.set_observer(Some(observer.pose));
+    let (_, observed) = harness.composition(0.15);
+    assert_ne!(observed, halfway);
+    let drawn = harness.renderer.drawn_cameras();
+    assert!(drawn[0].observer);
+    assert!(close(&drawn[0].pose.position, [2.0, 1.5, 2.0]));
+    assert!((drawn[0].pose.yaw_degrees - 35.0).abs() < 1e-3);
+    assert!((drawn[0].pose.pitch_degrees + 20.0).abs() < 1e-3);
+    let (offscreen, _) = drawn[0].offscreen.as_ref().expect("offscreen pose");
+    assert!(close(&offscreen.position, [0.5, 0.6, 1.0]));
+    // "top" is offscreen only: the observer does not touch it.
+    assert!(!drawn[1].observer && drawn[1].offscreen.is_none());
+    assert!(close(&drawn[1].pose.position, [0.0, 7.0, -4.3]));
+
+    // A different observer viewpoint is a different report.
+    let other = camera("observer", [-2.0, 1.5, 2.0], -35.0, -20.0);
+    harness.renderer.set_observer(Some(other.pose));
+    harness.composition(0.15);
+    assert_ne!(harness.renderer.drawn_cameras()[0].pose, drawn[0].pose);
+}
+
 #[test]
 fn an_observer_pose_replaces_the_primary_view_camera_until_it_is_cleared() {
     let mut harness = Harness::new(RendererOptions::default());

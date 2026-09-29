@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 
 use render_host_contracts::{
-    RendererCameraPose, RendererCompositionCamera, RendererCompositionTarget,
+    RendererCameraBasis, RendererCameraPose, RendererCompositionCamera, RendererCompositionTarget,
     RendererTargetSampling, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 
@@ -49,14 +49,59 @@ struct CompositionTarget {
 #[derive(Default)]
 pub(crate) struct ViewComposition {
     composition: Option<RendererViewComposition>,
-    targets: HashMap<String, CompositionTarget>,
-    motions: HashMap<String, CameraMotion>,
+    /// Aligned with the composition's targets.
+    targets: Vec<CompositionTarget>,
+    /// Aligned with the composition's cameras.
+    motions: Vec<CameraMotion>,
+    /// The frame's passes, resolved when the composition is installed: a
+    /// frame indexes cameras and targets and looks no name up.
+    plan: Plan,
     /// Counts installed compositions on this renderer.
     revision: u64,
     /// Counts composition frames rendered.
     frame: u64,
     /// Inspection camera that replaces the primary views' poses.
     observer: Option<CameraPose>,
+    /// What the last composition frame drew from, for
+    /// [`Renderer::drawn_cameras`]: each camera's sampled pose, the
+    /// observer then, and each camera's primary/offscreen use.
+    drawn_poses: Vec<CameraPose>,
+    drawn_observer: Option<CameraPose>,
+    drawn_use: Vec<CameraUse>,
+}
+
+/// A composition's passes with every name resolved to an index.
+#[derive(Default)]
+struct Plan {
+    /// Offscreen views grouped by target, targets in the order their first
+    /// view draws: (target, [(view, camera)]), each in (order, id) order.
+    offscreen: Vec<(usize, Vec<(usize, usize)>)>,
+    /// Primary views and presentations in (order, id) order.
+    steps: Vec<PrimaryStep>,
+    /// Per camera: which kinds of view draw from it.
+    cameras: Vec<CameraUse>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CameraUse {
+    primary: bool,
+    offscreen: bool,
+}
+
+/// How one composition camera drew in the last composition frame, aligned
+/// with that composition's cameras ([`Renderer::drawn_cameras`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawnCamera {
+    /// The pose its primary views drew from: the observer while one replaced
+    /// it, otherwise its pose at the frame's presentation time (motion
+    /// sampled). A camera only offscreen views use reports that sampled pose.
+    pub pose: RendererCameraPose,
+    pub basis: RendererCameraBasis,
+    /// Its primary views drew from the observer.
+    pub observer: bool,
+    /// While the observer replaced it in primary views: the sampled pose its
+    /// offscreen views still drew from.
+    pub offscreen: Option<(RendererCameraPose, RendererCameraBasis)>,
 }
 
 /// Whether an offscreen target shows the current scene.
@@ -123,8 +168,87 @@ fn ordered<'a, T>(items: impl Iterator<Item = (&'a str, u64, T)>) -> Vec<T> {
 }
 
 enum PrimaryStep {
-    View(usize),
-    Presentation(usize),
+    View { view: usize, camera: usize },
+    Presentation { presentation: usize, target: usize },
+}
+
+impl Plan {
+    fn new(composition: &RendererViewComposition) -> Self {
+        let cameras: HashMap<&str, usize> = composition
+            .cameras
+            .iter()
+            .enumerate()
+            .map(|(index, camera)| (camera.id.as_str(), index))
+            .collect();
+        let targets: HashMap<&str, usize> = composition
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| (target.id.as_str(), index))
+            .collect();
+        let mut plan = Plan {
+            cameras: vec![CameraUse::default(); composition.cameras.len()],
+            ..Plan::default()
+        };
+        // A view naming a missing camera or target draws nothing.
+        let offscreen = ordered(composition.views.iter().enumerate().filter_map(
+            |(index, view)| {
+                let RendererViewTarget::Offscreen { target_id, .. } = &view.target else {
+                    return None;
+                };
+                let camera = *cameras.get(view.camera_id.as_str())?;
+                let target = *targets.get(target_id.as_str())?;
+                Some((view.id.as_str(), view.order, (index, camera, target)))
+            },
+        ));
+        for (view, camera, target) in offscreen {
+            plan.cameras[camera].offscreen = true;
+            match plan
+                .offscreen
+                .iter_mut()
+                .find(|(existing, _)| *existing == target)
+            {
+                Some((_, passes)) => passes.push((view, camera)),
+                None => plan.offscreen.push((target, vec![(view, camera)])),
+            }
+        }
+        let views = composition
+            .views
+            .iter()
+            .enumerate()
+            .filter_map(|(index, view)| {
+                (view.target == RendererViewTarget::Primary)
+                    .then(|| cameras.get(view.camera_id.as_str()))
+                    .flatten()
+                    .map(|camera| {
+                        let step = PrimaryStep::View {
+                            view: index,
+                            camera: *camera,
+                        };
+                        (view.id.as_str(), view.order, step)
+                    })
+            });
+        let presentations =
+            composition
+                .presentations
+                .iter()
+                .enumerate()
+                .filter_map(|(index, presentation)| {
+                    let target = *targets.get(presentation.source_target_id.as_str())?;
+                    let step = PrimaryStep::Presentation {
+                        presentation: index,
+                        target,
+                    };
+                    Some((presentation.id.as_str(), presentation.order, step))
+                });
+        plan.steps = ordered(views.chain(presentations));
+        for step in &plan.steps {
+            if let PrimaryStep::View { camera, .. } = step {
+                plan.cameras[*camera].primary = true;
+            }
+        }
+        plan
+    }
 }
 
 impl Renderer {
@@ -137,25 +261,39 @@ impl Renderer {
         time_seconds: f64,
     ) {
         let state = &mut self.composition;
-        let mut targets = HashMap::with_capacity(composition.targets.len());
-        for descriptor in &composition.targets {
-            let target = match state.targets.remove(&descriptor.id) {
+        // Names are resolved here, once per installed composition.
+        let mut previous_targets: HashMap<String, CompositionTarget> = state
+            .targets
+            .drain(..)
+            .map(|target| (target.descriptor.id.clone(), target))
+            .collect();
+        state.targets = composition
+            .targets
+            .iter()
+            .map(|descriptor| match previous_targets.remove(&descriptor.id) {
                 Some(mut current) if current.descriptor == *descriptor => {
                     current.stale = true;
                     current
                 }
                 _ => composition_target(&self.gpu, &self.compose, descriptor),
-            };
-            targets.insert(descriptor.id.clone(), target);
-        }
-        state.targets = targets;
-        let mut motions = HashMap::with_capacity(composition.cameras.len());
-        for camera in &composition.cameras {
-            let mut motion = state.motions.remove(&camera.id).unwrap_or_default();
-            motion.receive(camera, time_seconds);
-            motions.insert(camera.id.clone(), motion);
-        }
-        state.motions = motions;
+            })
+            .collect();
+        let mut previous_motions: HashMap<String, CameraMotion> = state
+            .composition
+            .iter()
+            .flat_map(|previous| previous.cameras.iter().map(|camera| camera.id.clone()))
+            .zip(state.motions.drain(..))
+            .collect();
+        state.motions = composition
+            .cameras
+            .iter()
+            .map(|camera| {
+                let mut motion = previous_motions.remove(&camera.id).unwrap_or_default();
+                motion.receive(camera, time_seconds);
+                motion
+            })
+            .collect();
+        state.plan = Plan::new(composition);
         state.composition = Some(composition.clone());
         state.revision += 1;
     }
@@ -201,11 +339,9 @@ impl Renderer {
     pub fn view_composition_readout(&self) -> ViewCompositionReadout {
         let state = &self.composition;
         let composition = state.composition.as_ref();
-        let targets = composition
-            .map(|composition| &composition.targets[..])
-            .unwrap_or_default()
+        let targets = state
+            .targets
             .iter()
-            .filter_map(|descriptor| state.targets.get(&descriptor.id))
             .map(|target| TargetReadout {
                 id: target.descriptor.id.clone(),
                 revision: target.descriptor.revision,
@@ -221,10 +357,12 @@ impl Renderer {
                 last_refreshed_frame: target.last_refreshed_frame,
             })
             .collect();
-        let mut cameras: Vec<CameraSampleReadout> = state
-            .motions
+        let mut cameras: Vec<CameraSampleReadout> = composition
+            .map(|composition| &composition.cameras[..])
+            .unwrap_or_default()
             .iter()
-            .map(|(id, motion)| motion.readout(id))
+            .zip(&state.motions)
+            .map(|(camera, motion)| motion.readout(&camera.id))
             .collect();
         cameras.sort_by(|a, b| a.camera_id.cmp(&b.camera_id));
         ViewCompositionReadout {
@@ -310,55 +448,42 @@ impl Renderer {
             lights: self.lights.world.count,
             ..FrameStats::default()
         };
-        let Some(composition) = self.composition.composition.clone() else {
+        // Taken for the frame and restored after it: the view passes below
+        // borrow the renderer mutably, and the frame copies nothing.
+        let Some(composition) = self.composition.composition.take() else {
             self.clear_target(&primary);
             return stats;
         };
-        let mut poses = HashMap::with_capacity(composition.cameras.len());
-        for camera in &composition.cameras {
-            let pose = self
-                .composition
-                .motions
-                .get_mut(&camera.id)
-                .and_then(|motion| motion.pose(time_seconds))
-                .unwrap_or_else(|| camera::descriptor_pose(camera));
-            poses.insert(camera.id.as_str(), (pose, camera));
+        let plan = std::mem::take(&mut self.composition.plan);
+        let mut poses = std::mem::take(&mut self.composition.drawn_poses);
+        poses.clear();
+        for (camera, motion) in composition
+            .cameras
+            .iter()
+            .zip(&mut self.composition.motions)
+        {
+            poses.push(
+                motion
+                    .pose(time_seconds)
+                    .unwrap_or_else(|| camera::descriptor_pose(camera)),
+            );
         }
 
-        // Offscreen views, grouped by target in (order, id) order.
-        let offscreen = ordered(
-            composition
-                .views
-                .iter()
-                .filter_map(|view| match &view.target {
-                    RendererViewTarget::Offscreen { target_id, .. } => {
-                        Some((view.id.as_str(), view.order, (view, target_id.as_str())))
-                    }
-                    RendererViewTarget::Primary => None,
-                }),
-        );
-        let mut target_ids: Vec<&str> = Vec::new();
-        for (_, target_id) in &offscreen {
-            if !target_ids.contains(target_id) {
-                target_ids.push(target_id);
-            }
-        }
         let clear = self.environment_clear();
-        for target_id in target_ids {
-            let Some(target) = self.composition.targets.get(target_id) else {
-                continue;
-            };
+        for (target_index, views) in &plan.offscreen {
+            let target = &self.composition.targets[*target_index];
             let (width, height) = (target.descriptor.width, target.descriptor.height);
             let (color, depth) = (target.color.clone(), target.depth.clone());
-            let mut passes = Vec::new();
-            for (view, _) in offscreen.iter().filter(|(_, id)| *id == target_id) {
-                let Some((pose, camera)) = poses.get(view.camera_id.as_str()) else {
-                    continue;
-                };
-                let area = pixel_viewport(&view.viewport, width, height);
-                let matrices = camera::camera_matrices(*pose, &camera.projection, area.aspect());
-                passes.push((area, matrices));
-            }
+            let passes: Vec<(PixelRect, CameraMatrices)> = views
+                .iter()
+                .map(|(view, camera)| {
+                    let area = pixel_viewport(&composition.views[*view].viewport, width, height);
+                    let projection = &composition.cameras[*camera].projection;
+                    let matrices =
+                        camera::camera_matrices(poses[*camera], projection, area.aspect());
+                    (area, matrices)
+                })
+                .collect();
             let cameras: Vec<CameraMatrices> =
                 passes.iter().map(|(_, matrices)| *matrices).collect();
             let fresh = !target.stale
@@ -395,65 +520,96 @@ impl Renderer {
                 });
                 stats.offscreen_views += 1;
             }
-            if let Some(target) = self.composition.targets.get_mut(target_id) {
-                target.stale = false;
-                target.drawn = Some((self.scene_generation, cameras));
-                target.last_refreshed_frame = Some(frame);
-            }
+            let target = &mut self.composition.targets[*target_index];
+            target.stale = false;
+            target.drawn = Some((self.scene_generation, cameras));
+            target.last_refreshed_frame = Some(frame);
         }
 
         // Primary views and presentations, in (order, id) order.
-        let steps = ordered(
-            composition
-                .views
-                .iter()
-                .enumerate()
-                .filter(|(_, view)| view.target == RendererViewTarget::Primary)
-                .map(|(index, view)| (view.id.as_str(), view.order, PrimaryStep::View(index)))
-                .chain(composition.presentations.iter().enumerate().map(
-                    |(index, presentation)| {
-                        (
-                            presentation.id.as_str(),
-                            presentation.order,
-                            PrimaryStep::Presentation(index),
-                        )
-                    },
-                )),
-        );
         let whole = PixelRect::whole(primary.width, primary.height);
-        let first_covers = matches!(steps.first(), Some(PrimaryStep::View(index))
-            if pixel_viewport(&composition.views[*index].viewport, primary.width, primary.height) == whole);
+        let first_covers = matches!(plan.steps.first(), Some(PrimaryStep::View { view, .. })
+            if pixel_viewport(&composition.views[*view].viewport, primary.width, primary.height) == whole);
         if !first_covers {
             self.clear_target(&primary);
         }
-        for (position, step) in steps.iter().enumerate() {
+        let observer = self.composition.observer;
+        for (position, step) in plan.steps.iter().enumerate() {
             match step {
-                PrimaryStep::View(index) => {
-                    let view = &composition.views[*index];
-                    let Some((pose, camera)) = poses.get(view.camera_id.as_str()) else {
-                        continue;
-                    };
-                    let pose = self.composition.observer.unwrap_or(*pose);
-                    let area = pixel_viewport(&view.viewport, primary.width, primary.height);
+                PrimaryStep::View { view, camera } => {
+                    let pose = observer.unwrap_or(poses[*camera]);
+                    let area = pixel_viewport(
+                        &composition.views[*view].viewport,
+                        primary.width,
+                        primary.height,
+                    );
                     let start = if position == 0 && first_covers {
                         PassStart::Target
                     } else {
                         PassStart::Viewport
                     };
-                    stats += self.draw_primary_view(&primary, area, pose, camera, start);
+                    stats += self.draw_primary_view(
+                        &primary,
+                        area,
+                        pose,
+                        &composition.cameras[*camera],
+                        start,
+                    );
                 }
-                PrimaryStep::Presentation(index) => {
-                    let presentation = &composition.presentations[*index];
+                PrimaryStep::Presentation {
+                    presentation,
+                    target,
+                } => {
                     let area = pixel_viewport(
-                        &presentation.destination.viewport,
+                        &composition.presentations[*presentation]
+                            .destination
+                            .viewport,
                         primary.width,
                         primary.height,
                     );
-                    self.present_target(&primary, area, &presentation.source_target_id);
+                    self.present_target(&primary, area, *target);
                 }
             }
         }
+        let state = &mut self.composition;
+        state.drawn_use.clone_from(&plan.cameras);
+        state.drawn_observer = observer;
+        state.drawn_poses = poses;
+        state.plan = plan;
+        state.composition = Some(composition);
         stats
+    }
+
+    /// How each camera of the installed composition drew in the last
+    /// composition frame, aligned with its cameras: the observer where it
+    /// replaced a camera in primary views, otherwise the sampled pose.
+    pub fn drawn_cameras(&self) -> Vec<DrawnCamera> {
+        let state = &self.composition;
+        state
+            .drawn_poses
+            .iter()
+            .zip(&state.drawn_use)
+            .map(|(sampled, used)| match state.drawn_observer {
+                Some(observer) if used.primary => {
+                    let (pose, basis) = camera::pose_readout(observer);
+                    DrawnCamera {
+                        pose,
+                        basis,
+                        observer: true,
+                        offscreen: used.offscreen.then(|| camera::pose_readout(*sampled)),
+                    }
+                }
+                _ => {
+                    let (pose, basis) = camera::pose_readout(*sampled);
+                    DrawnCamera {
+                        pose,
+                        basis,
+                        observer: false,
+                        offscreen: None,
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Clear the whole target to the environment colour and depth.
@@ -491,9 +647,9 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
     }
 
-    fn present_target(&mut self, primary: &TargetView<'_>, area: PixelRect, source: &str) {
+    fn present_target(&mut self, primary: &TargetView<'_>, area: PixelRect, target: usize) {
         self.compose.prepare_blit(&self.gpu.device, primary.key());
-        let Some(target) = self.composition.targets.get(source) else {
+        let Some(target) = self.composition.targets.get(target) else {
             return;
         };
         let mut encoder = self
