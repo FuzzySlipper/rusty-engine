@@ -174,6 +174,16 @@ pub(crate) enum NodeKind {
     Sprite(Box<SpriteInstanceDescriptor>),
 }
 
+/// One node's GPU-side row: a derived twin of `PresentationWorld`'s node,
+/// rebuilt from deltas, never an authority. It holds only what encoding a
+/// view and picking need: hierarchy links (parent, joint parent, children),
+/// local and propagated world matrices, visibility and layer, the realized
+/// kind, and the node's parts. Gameplay-facing facts, entity or product
+/// identities and anything read back by another crate do not belong here and
+/// are refused at review; metadata that picking reports lives in `metadata`.
+/// World matrices are propagated here each frame (dirty subtrees only)
+/// because joint attachments follow poses only this crate evaluates; other
+/// consumers ask `PresentationWorld` for positions instead (#8848).
 pub(crate) struct NodeRow {
     pub parent: Option<RenderHandle>,
     pub parent_joint: Option<String>,

@@ -40,7 +40,7 @@ mod primitives;
 mod resources;
 mod shadows;
 mod surface;
-pub mod tables;
+mod tables;
 mod target;
 mod voxel;
 
