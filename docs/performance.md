@@ -141,7 +141,8 @@ compare a software renderer or reduced-resolution run against a hardware run.
 The crossover and HTTP lanes use the same canonical staged Product under both
 CoreCLR and NativeAOT. `fixtures/csharp-crossover-performance` consumes the public
 SDK staging targets with an explicit Engine contributor override. The runner
-packs the current SDK, stages a Release bundle through `VerifyRustyEngineAot`,
+packs the current SDK, stages one Release bundle for both loaders through
+`StageRustyEngineCombinedProduct`,
 and launches the current Rust host with `--product` and each `--loader`. It does
 not handwrite manifests or ABI glue. This measures one small demand-mode UI
 publication; it is not a full game or graphics workload. Loader, runtime and

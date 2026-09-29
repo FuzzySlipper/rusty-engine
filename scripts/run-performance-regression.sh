@@ -41,7 +41,7 @@ dotnet restore "$CROSSOVER_FIXTURE" \
 dotnet msbuild "$CROSSOVER_FIXTURE" \
   -nologo \
   -verbosity:quiet \
-  -t:VerifyRustyEngineAot \
+  -t:StageRustyEngineCombinedProduct \
   -p:Configuration=Release \
   -p:RustyEngineFixtureSdkVersion="$SDK_VERSION"
 

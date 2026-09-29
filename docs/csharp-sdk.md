@@ -414,8 +414,15 @@ the Product, or repair the mismatch with handwritten interop.
 NativeAOT is an explicit fidelity/release check, not the edit-run loop:
 
 ```bash
-dotnet msbuild /path/to/Example.Game.csproj -t:VerifyRustyEngineAot
+dotnet msbuild /path/to/Example.Game.csproj -restore -t:VerifyRustyEngineAot
 ```
+
+It publishes the project for `linux-x64` as a NativeAOT shared library and
+stages `native/<Product>.so` with the Product UI and content. It does not build
+or stage CoreCLR, and its `product.json` lists only `nativeAot`. Each staging
+target's manifest lists exactly the runtime artifacts that target staged. To
+run both loaders against one bundle (for example, to compare them), use
+`-t:StageRustyEngineCombinedProduct`, which stages both and lists both.
 
 Engine contributors may run `rusty dev --engine-source
 /absolute/rusty-engine`. That explicit option selects the source checkout's

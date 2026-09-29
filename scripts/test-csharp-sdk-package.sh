@@ -475,10 +475,14 @@ if [[ "$coreclr_smoke" == true ]]; then
 fi
 
 if [[ "$run_aot" == true ]]; then
+    # NativeAOT starts from a clean copy of the product: it must not need a
+    # CoreCLR build or stage first.
+    aot_dir="$work_dir/aot-consumer"
+    rsync -a --exclude obj --exclude bin "$consumer_dir/" "$aot_dir/"
     (
-        cd "$consumer_dir"
+        cd "$aot_dir"
         DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-            dotnet msbuild Consumer.csproj -t:VerifyRustyEngineAot \
+            dotnet msbuild Consumer.csproj -restore -t:VerifyRustyEngineAot \
                 -p:RustyEngineProductBindHost=127.0.0.1 \
                 -p:RustyEngineProductPort=40821 \
                 -p:RustyEngineProductLiveDebug=true \
@@ -489,26 +493,45 @@ if [[ "$run_aot" == true ]]; then
         cat "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log" >&2
         exit 1
     fi
-    [[ -f "$staged_product_directory/native/Consumer.so" ]] || {
+    aot_staged="$aot_dir/obj/Rusty.Engine/Product"
+    [[ -f "$aot_staged/native/Consumer.so" ]] || {
         echo "test-csharp-sdk-package: explicit linux-x64 NativeAOT verification did not stage its module." >&2
         exit 1
     }
-    jq -e '.nativeAot.module == "native/Consumer.so" and .coreclr.assembly == "coreclr/Consumer.dll"' \
-        "$staged_product_directory/product.json" >/dev/null || {
-        echo "test-csharp-sdk-package: NativeAOT staging did not preserve the same Product bundle." >&2
+    if [[ -e "$aot_staged/coreclr" || -e "$aot_dir/bin/Debug/net10.0/Consumer.dll" ]]; then
+        echo "test-csharp-sdk-package: NativeAOT staging built or staged the CoreCLR product." >&2
+        exit 1
+    fi
+    jq -e '.nativeAot.module == "native/Consumer.so" and (.coreclr | not) and .server.liveDebug == true' \
+        "$aot_staged/product.json" >/dev/null || {
+        echo "test-csharp-sdk-package: NativeAOT manifest does not list exactly the staged module." >&2
+        exit 1
+    }
+    [[ -f "$aot_staged/ui/main.js" && -f "$aot_staged/content/mixed/texture.png" && -f "$aot_staged/content/.rusty-bundles.json" ]] || {
+        echo "test-csharp-sdk-package: NativeAOT staging did not stage Product UI/content." >&2
         exit 1
     }
     # Exercise the generated package consumer through the native loader too.
-    # A checked legacy composition is not the downstream NativeAOT path.
     cargo run --manifest-path "$repo_root/Cargo.toml" -p csharp-product-runtime --bin rusty-product-host --locked -- \
-        --library "$staged_product_directory/native/Consumer.so" \
+        --library "$aot_staged/native/Consumer.so" \
         --bundle-dir "$host_bundle_dir" \
-        --content-dir "$staged_product_directory/content" \
+        --content-dir "$aot_staged/content" \
         --mode realtime \
         --persistence-root "$work_dir/aot-persistence" \
         --direct-intent runtime.exercise=payload:runtime.exercise.payload \
         --port 0 \
         --exercise
+    # A combined bundle is explicit and lists both loaders' artifacts.
+    (
+        cd "$aot_dir"
+        DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+            dotnet msbuild Consumer.csproj -t:StageRustyEngineCombinedProduct > "$work_dir/combined-staging.log" 2>&1
+    )
+    jq -e '.nativeAot.module == "native/Consumer.so" and .coreclr.assembly == "coreclr/Consumer.dll"' \
+        "$aot_staged/product.json" >/dev/null && [[ -f "$aot_staged/coreclr/Consumer.dll" ]] || {
+        echo "test-csharp-sdk-package: combined staging did not list both loaders." >&2
+        exit 1
+    }
 elif grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log"; then
     echo "test-csharp-sdk-package: CoreCLR product build emitted compiler or analyzer warnings." >&2
     cat "$work_dir/coreclr-staging.log" >&2
