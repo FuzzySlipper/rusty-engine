@@ -89,6 +89,11 @@ as a playback (`decodeFailed`) instead of playing in the browser's decoder.
   - `render-audio` decodes the fixture's tone with the codec delay trimmed
     (880 zero crossings per second), seeks continuously, and a realizer
     soundtrack plays, pauses and stops on the mock backend.
+- **Dagger in the streaming mode** (headless Chromium, on `91d7f9aa4`).
+  - Clicking Begin plays `anim0000` in the browser's video element over the
+    page, as before (`screenshots/dagger-anim0000-stream.png`): 3.7 s in,
+    not paused.
+  - The stream kept delivering (964 frames).
 - **Product clips.**
   - `RUSTY_VIDEO_CLIPS=<dagger cinematics> cargo test --release -p
     render-video -- --ignored` opens and decodes every one of the 33
