@@ -45,11 +45,9 @@ JSON bytes through `IEngineContext.Diagnostics.ReadRenderer()`, refreshed once a
 second; the generated binding copies and releases the Engine byte lease before
 returning. Reading it never draws a frame or synchronizes the GPU.
 
-The renderer's own frame cost is measured on a captured presentation baseline
-with `cargo run --release -p render-wgpu --example render_capture -- <capture
-dir> out.png 1280 720 --frames=200`, which reports the mean frame time with
-readback. Nothing captures a new baseline since the browser stopped receiving
-graphics (#8792); #8869 owns a Rust capture or the example's retirement.
+The renderer's own frame cost is read the same way, on the running product:
+`engine.renderer` reports the median render, readback and encode milliseconds
+of the recent streamed frames.
 
 ## Repeatable baseline artifacts
 
