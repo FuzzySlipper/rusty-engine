@@ -2204,11 +2204,16 @@ function viewCompositionFrame(): RenderFrameDiff {
 function readCompositionPixels(
   context: WebGLRenderingContext | WebGL2RenderingContext,
 ): readonly (readonly [number, number, number, number])[] {
+  // Red then green cube, first in the overview presentation (upper right),
+  // then in the primary front-inset view (lower left). The composition owns the
+  // primary canvas, so area outside both is clear colour. The points stay
+  // inside each cube at the software renderer's quarter-resolution backing
+  // buffer, before and after the canvas is narrowed.
   const positions = [
     [0.69, 0.71],
     [0.8, 0.71],
-    [0.35, 0.45],
-    [0.55, 0.45],
+    [0.15, 0.23],
+    [0.225, 0.23],
   ] as const;
   return positions.map(([x, y]) => {
     const pixel = new Uint8Array(4);
