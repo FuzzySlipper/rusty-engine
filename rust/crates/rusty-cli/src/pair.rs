@@ -132,6 +132,103 @@ fn pin_value_range(text: &str) -> Result<Option<(usize, usize)>, String> {
     Ok(Some((start, end)))
 }
 
+/// What a product's `Directory.Build.props` declares next to the pin, so every
+/// restore (plain `dotnet` included) finds exactly the pinned SDK in the shared
+/// cache and an uninstalled pin fails with the fix instead of NU1301.
+pub const FEED_DECLARATION: &str = r#"    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(RUSTY_ENGINE_CACHE)</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+  <Target Name="RequireRustyEnginePair" BeforeTargets="Restore;_GenerateRestoreGraph" Condition="!Exists('$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed')">
+    <Error Text="Rusty Engine pair $(RustyEnginePackageVersion) is not installed: run `rusty install` in this repository." />
+  </Target>"#;
+const FEED_MARKER: &str = "/pairs/$(RustyEnginePackageVersion)/sdk-feed";
+pub const EXACT_VERSION: &str = "[$(RustyEnginePackageVersion)]";
+const SHAPE_SKIPPED_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".runtime",
+    "bin",
+    "obj",
+    "node_modules",
+    "target",
+    "dist",
+    "local",
+];
+
+/// Ways the product's project files let a restore pick the wrong SDK: the pair
+/// feed is not declared beside the pin, or a `Rusty.Engine` reference is a
+/// NuGet minimum rather than exactly the pin.
+pub fn shape_problems(pin: &Pin) -> Result<Vec<String>, String> {
+    let mut problems = Vec::new();
+    let props = fs::read_to_string(&pin.file).map_err(|error| {
+        format!(
+            "RUSTY_PIN: could not read `{}`: {error}",
+            pin.file.display()
+        )
+    })?;
+    if !props.contains(FEED_MARKER) {
+        problems.push(format!(
+            "`{}` does not declare the pinned pair's feed, so plain dotnet can restore a different Rusty.Engine. Add after the <{PIN_ELEMENT}> line (closing its PropertyGroup):\n{FEED_DECLARATION}",
+            pin.file.display()
+        ));
+    }
+    let root = pin.file.parent().unwrap_or(Path::new("."));
+    let mut loose = Vec::new();
+    collect_loose_references(root, &mut loose)?;
+    for (file, version) in loose {
+        problems.push(format!(
+            "`{}` references Rusty.Engine as `{version}`, which NuGet treats as a minimum; use Version=\"{EXACT_VERSION}\"",
+            file.display()
+        ));
+    }
+    Ok(problems)
+}
+
+fn collect_loose_references(
+    directory: &Path,
+    loose: &mut Vec<(PathBuf, String)>,
+) -> Result<(), String> {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Ok(());
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if !SHAPE_SKIPPED_DIRECTORIES.contains(&name.as_ref()) {
+                collect_loose_references(&path, loose)?;
+            }
+            continue;
+        }
+        if !(name.ends_with(".csproj") || name.ends_with(".props") || name.ends_with(".targets")) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for version in rusty_engine_reference_versions(&text) {
+            if version != EXACT_VERSION {
+                loose.push((path.clone(), version));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `Version` of each `<PackageReference Include="Rusty.Engine" ...>`.
+fn rusty_engine_reference_versions(text: &str) -> Vec<String> {
+    text.match_indices("Include=\"Rusty.Engine\"")
+        .filter_map(|(at, _)| {
+            let element = &text[at..at + text[at..].find('>')?];
+            let start = element.find("Version=\"")? + "Version=\"".len();
+            let end = start + element[start..].find('"')?;
+            Some(element[start..end].to_owned())
+        })
+        .collect()
+}
+
 pub fn validate_version(version: &str) -> Result<(), String> {
     let valid = !version.is_empty()
         && !version.starts_with('.')
@@ -548,6 +645,39 @@ mod tests {
             rewritten,
             PROPS.replace("0.1.0-dev.aaaaaaaaaaaa", "0.1.0-dev.bbbbbbbbbbbb")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shape_flags_a_missing_feed_and_minimum_references() {
+        let root = env::temp_dir().join(format!("rusty-shape-{}", std::process::id()));
+        fs::create_dir_all(root.join("src/Game")).unwrap();
+        fs::write(root.join(PIN_FILE), PROPS).unwrap();
+        fs::write(
+            root.join("src/Game/Game.csproj"),
+            r#"<PackageReference Include="Rusty.Engine" Version="$(RustyEnginePackageVersion)" />"#,
+        )
+        .unwrap();
+        let pin = Pin::find(&root).unwrap().unwrap();
+        let problems = shape_problems(&pin).unwrap();
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].contains("RestoreAdditionalProjectSources"));
+        assert!(problems[1].contains("minimum"));
+
+        fs::write(
+            root.join(PIN_FILE),
+            PROPS.replace(
+                "    <Other>kept</Other>\n",
+                &format!("{FEED_DECLARATION}\n  <PropertyGroup>\n"),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/Game/Game.csproj"),
+            r#"<PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]">"#,
+        )
+        .unwrap();
+        assert!(shape_problems(&pin).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

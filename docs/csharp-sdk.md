@@ -16,15 +16,26 @@ curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scri
 ```
 
 Start a new product from [rusty-template](https://github.com/FuzzySlipper/rusty-template),
-which is kept on a current pair. An existing product needs one pin in its
-`Directory.Build.props` and a package reference that uses it:
+which is kept on a current pair. An existing product needs one pin plus its feed
+declaration in `Directory.Build.props` and exact package references:
 
 ```xml
-<RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
+<Project>
+  <PropertyGroup>
+    <RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(RUSTY_ENGINE_CACHE)</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+  <Target Name="RequireRustyEnginePair" BeforeTargets="Restore;_GenerateRestoreGraph" Condition="!Exists('$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed')">
+    <Error Text="Rusty Engine pair $(RustyEnginePackageVersion) is not installed: run `rusty install` in this repository." />
+  </Target>
+</Project>
 ```
 
 ```xml
-<PackageReference Include="Rusty.Engine" Version="$(RustyEnginePackageVersion)" />
+<PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]" />
 ```
 
 The project also declares its entry type, product facts, UI and content
@@ -71,7 +82,8 @@ release information.
 | `rusty status` says `ready no` | It lists each missing item: pin, installed pair, .NET 10 SDK, `curl`/`tar`. |
 | `RUSTY_PAIR_NOT_INSTALLED` | Run `rusty install` in the product repository. Installed pairs work offline. |
 | `RUSTY_PIN_MISSING` | Run from the product repository (or pass `--project`); add the pin above. |
-| `NU1101: Unable to find package Rusty.Engine` from plain `dotnet` | Restore once through `rusty build`/`rusty dev`, or `export $(rusty env)` (CI: `rusty env >> "$GITHUB_ENV"`). |
+| `Rusty Engine pair … is not installed` from a restore | Run `rusty install`. |
+| `NU1101`/`NU1603` for Rusty.Engine, or types missing after `rusty update` | The project files let NuGet pick another SDK. `rusty status` names the missing feed declaration or loose reference and prints the fix. |
 | `RUSTY_NETWORK` | Only install and update need the network; everything else uses the cache. |
 | `RUSTY_DEV_RUNTIME_IDENTITY` or an ABI identity mismatch | The package and runtime are from different pairs. Reinstall the pinned pair; never add version negotiation or handwritten interop. |
 | hostfxr or CoreCLR fails to load | `rusty dev` sets `DOTNET_ROOT` from `dotnet` on `PATH`; set it yourself when running the host another way. |

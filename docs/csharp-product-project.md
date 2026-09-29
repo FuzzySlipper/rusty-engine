@@ -6,17 +6,13 @@ The ordinary product project: package reference, product facts, bundled files, s
 
 `Rusty.Engine` is one immutable NuGet package containing the public C# service
 surface, managed helpers, generated contracts, and the product generator. An
-ordinary Product repository pins one pair in its `Directory.Build.props` and
-references only the package; `rusty` supplies the package source:
-
-```xml
-<!-- Directory.Build.props -->
-<RustyEnginePackageVersion>0.1.0-dev.EXACT</RustyEnginePackageVersion>
-```
+ordinary Product repository pins one pair in its `Directory.Build.props`, which
+also declares that pair's feed (see [distribution](csharp-distribution.md#use-a-pair-from-a-product)),
+and references only the package, exactly:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Rusty.Engine" Version="$(RustyEnginePackageVersion)" />
+  <PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]" />
 </ItemGroup>
 ```
 

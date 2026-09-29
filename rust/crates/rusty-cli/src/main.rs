@@ -35,10 +35,6 @@ const UI_SOURCE_ROOT_PROPERTY: &str = "RustyEngineProductUiSourceRoot";
 const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
 const CONTENT_ROOT_PROPERTY: &str = "RustyEngineProductContentRoot";
 const CONTENT_BUNDLE_ITEM: &str = "RustyEngineContentBundle";
-/// MSBuild reads environment variables as properties, so restores started by
-/// `rusty` (and by the pair's own `rusty dev`) find the pinned SDK package in
-/// the shared cache without a product-local feed.
-const RESTORE_SOURCES_VARIABLE: &str = "RestoreAdditionalProjectSources";
 const REQUIRED_DOTNET_MAJOR: u32 = 10;
 const BOOTSTRAP_URL: &str =
     "https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh";
@@ -82,7 +78,6 @@ fn run() -> Result<ExitCode, String> {
         CommandName::Install(options) => install(&options),
         CommandName::Update(options) => update(&options),
         CommandName::Status(options) => status(&options),
-        CommandName::Env(options) => product_env(&options),
     }
 }
 
@@ -110,7 +105,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
             pinned_pair_if_installed(&options.project)?
         };
         if let Some((pin, pair)) = pinned {
-            use_sdk_feed(&pair);
+            warn_shape(&pin);
             if options.runtime.is_none() {
                 let runtime = pair.runtime_pack();
                 diagnostic(
@@ -469,7 +464,6 @@ enum CommandName {
     Install(InstallOptions),
     Update(UpdateOptions),
     Status(StatusOptions),
-    Env(StatusOptions),
 }
 
 #[derive(Debug)]
@@ -543,10 +537,6 @@ impl Arguments {
             "status" => match help(status_usage) {
                 Some(help) => return Ok(help),
                 None => CommandName::Status(parse_status(rest, "status", status_usage)?),
-            },
-            "env" => match help(env_usage) {
-                Some(help) => return Ok(help),
-                None => CommandName::Env(parse_status(rest, "env", env_usage)?),
             },
             other => {
                 return Err(format!(
@@ -737,7 +727,6 @@ commands:
   update    move the pin to a newer published pair, install it, and list what changed
   build     restore, build and stage the product; --aot also publishes NativeAOT
   dev       build and run the product on its pinned runtime, rebuilding on source changes
-  env       print the environment that lets plain dotnet commands restore the pinned SDK
 
 Run `rusty <command> --help` for a command's options.
 
@@ -796,8 +785,8 @@ Restores against the pinned SDK in the shared cache, builds, and stages the Core
 (the SDK target StageRustyEngineCoreClrProduct). --aot runs VerifyRustyEngineAot, which also
 publishes the NativeAOT product. Compiler output and dotnet's exit code are passed through.
 
-After one restore through rusty, plain `dotnet build` also resolves the SDK package; before
-that, `export $(rusty env)` gives plain dotnet commands the same package source.
+Plain `dotnet build`, `dotnet test` and `dotnet run` resolve the same SDK: the product's
+Directory.Build.props declares the pinned pair's feed (`rusty status` checks it).
 
 Examples:
   rusty build --project src/Game/Game.csproj
@@ -839,19 +828,6 @@ Examples:
   rusty update --check
   rusty update
   rusty update --to 0.1.0-dev.abc123def456"
-        .to_owned()
-}
-
-fn env_usage() -> String {
-    "usage: rusty env [--project <path>]
-
-Prints NAME=value lines that let plain dotnet commands (tests, tools, IDE builds) restore the
-pinned SDK from the shared cache, the same way `rusty build` and `rusty dev` do. The pair must
-be installed. Paths are printed as-is, so this suits paths without spaces.
-
-Examples:
-  export $(rusty env)
-  rusty env >> \"$GITHUB_ENV\"      # GitHub Actions"
         .to_owned()
 }
 
@@ -1004,6 +980,17 @@ fn require_pin(start: &Path) -> Result<Pin, String> {
     })
 }
 
+/// Tells `build` and `dev` users about project files that let plain dotnet
+/// restore a different SDK; the rusty command itself still proceeds.
+fn warn_shape(pin: &Pin) {
+    match pair::shape_problems(pin) {
+        Ok(problems) => problems
+            .iter()
+            .for_each(|problem| eprintln!("RUSTY_PROJECT_SHAPE: {problem}")),
+        Err(error) => eprintln!("{error}"),
+    }
+}
+
 fn not_installed(pin: &Pin) -> String {
     format!(
         "RUSTY_PAIR_NOT_INSTALLED: Engine pair {} (pinned in `{}`) is not installed; run `rusty install` in the product repository.",
@@ -1028,15 +1015,6 @@ fn pinned_pair_if_installed(project: &Path) -> Result<Option<(Pin, InstalledPair
         return Ok(None);
     };
     Ok(pair::installed(&pin.version)?.map(|pair| (pin, pair)))
-}
-
-fn use_sdk_feed(pair: &InstalledPair) {
-    let feed = pair.sdk_feed().display().to_string();
-    let sources = match env::var(RESTORE_SOURCES_VARIABLE) {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing};{feed}"),
-        _ => feed,
-    };
-    env::set_var(RESTORE_SOURCES_VARIABLE, sources);
 }
 
 /// The CoreCLR host locates the runtime through DOTNET_ROOT. A per-user SDK
@@ -1118,8 +1096,8 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
     }
     if options.engine_source.is_none() {
         if let Some(pin) = Pin::find(&product_start(Some(&project))?)? {
-            let pair = pair::installed(&pin.version)?.ok_or_else(|| not_installed(&pin))?;
-            use_sdk_feed(&pair);
+            pair::installed(&pin.version)?.ok_or_else(|| not_installed(&pin))?;
+            warn_shape(&pin);
         }
     }
     let mut arguments = vec![
@@ -1244,18 +1222,6 @@ fn update(options: &UpdateOptions) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn product_env(options: &StatusOptions) -> Result<ExitCode, String> {
-    let pin = require_pin(&product_start(options.project.as_deref())?)?;
-    let pair = pair::installed(&pin.version)?.ok_or_else(|| not_installed(&pin))?;
-    println!("{RESTORE_SOURCES_VARIABLE}={}", pair.sdk_feed().display());
-    if env::var_os("DOTNET_ROOT").is_none() {
-        if let Some(root) = dotnet_root_from_path() {
-            println!("DOTNET_ROOT={}", root.display());
-        }
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
 fn status(options: &StatusOptions) -> Result<ExitCode, String> {
     let start = product_start(options.project.as_deref())?;
     let mut problems = Vec::new();
@@ -1278,6 +1244,16 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
                     ));
                 }
             }
+            let shape = pair::shape_problems(&pin)?;
+            println!(
+                "project shape  {}",
+                if shape.is_empty() {
+                    "exact pin, pair feed declared"
+                } else {
+                    "needs changes"
+                }
+            );
+            problems.extend(shape);
         }
         None => {
             println!("pin            none at or above {}", start.display());

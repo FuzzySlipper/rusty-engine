@@ -24,16 +24,32 @@ shared cache. Service managers and Den brokers that start commands with their
 own `PATH` may not include `~/.local/bin`; launch configurations use
 `PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`.
 
-A product pins exactly one pair with one element in its `Directory.Build.props`,
-which its projects also use for the package reference:
+A product pins exactly one pair with one element in its `Directory.Build.props`.
+The same file declares that pair's feed in the shared cache, and every project
+references the package exactly (brackets; a bare version is a NuGet minimum and
+can resolve a different dev pair from `~/.nuget/packages`):
 
 ```xml
-<RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
+<Project>
+  <PropertyGroup>
+    <RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(RUSTY_ENGINE_CACHE)</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
+    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+  <Target Name="RequireRustyEnginePair" BeforeTargets="Restore;_GenerateRestoreGraph" Condition="!Exists('$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed')">
+    <Error Text="Rusty Engine pair $(RustyEnginePackageVersion) is not installed: run `rusty install` in this repository." />
+  </Target>
+</Project>
 ```
 
 ```xml
-<PackageReference Include="Rusty.Engine" Version="$(RustyEnginePackageVersion)" />
+<PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]" />
 ```
+
+`rusty update` rewrites only the version element. `rusty status` reports a
+product whose feed declaration or references are missing and prints the fix.
 
 From the product repository:
 
@@ -51,11 +67,9 @@ rusty update
   Every product shares the cache, and an installed pair needs no network.
   `--archive <pair.tar.gz>` installs an archive obtained another way; keep its
   `.sha256` beside it.
-- `rusty dev` and `rusty build` restore the SDK package from the cached pair's
-  `sdk-feed`, so a product needs no feed of its own. After one restore through
-  `rusty`, plain `dotnet build` also finds the package; before that (for
-  example in CI running test projects), `export $(rusty env)` or
-  `rusty env >> "$GITHUB_ENV"` gives plain `dotnet` the same feed. `rusty dev` runs the
+- Every restore, `rusty build` and plain `dotnet build`/`test`/`run` alike,
+  resolves exactly the pin from the cached pair's `sdk-feed`; an uninstalled pin
+  fails with "run `rusty install`". `rusty dev` runs the
   pinned pair's own `runtime-pack/bin/rusty`, whose supervisor matches its
   host, and sets `DOTNET_ROOT` from `dotnet` on `PATH` when it is unset.
 - `rusty update` is the only thing that moves the pin. It installs the target
