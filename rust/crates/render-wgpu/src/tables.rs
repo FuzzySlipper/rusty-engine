@@ -77,6 +77,9 @@ pub(crate) struct GpuMesh {
     pub bounds: Aabb,
     /// Positions and indices kept for picking.
     pub cpu: std::sync::Arc<CpuGeometry>,
+    /// Line-list indices for wireframe parts, built on first use: every
+    /// triangle's three edges, as Three's wireframe attribute has them.
+    pub edges: std::sync::OnceLock<wgpu::Buffer>,
 }
 
 #[derive(Default)]
@@ -197,9 +200,13 @@ pub(crate) type PartId = u32;
 pub(crate) struct Part {
     pub node: RenderHandle,
     pub mesh: MeshRef,
+    /// Triangle index range; a wireframe part draws its edges instead.
     pub first_index: u32,
     pub index_count: u32,
     pub material: MaterialRef,
+    /// Draw the range's triangle edges as lines (`Material.wireframe`,
+    /// animated mesh inspection).
+    pub wireframe: bool,
 }
 
 /// How a part draws, fixed when its node's parts are derived.
@@ -246,6 +253,7 @@ struct BatchKey {
     first_index: u32,
     index_count: u32,
     material: MaterialRef,
+    wireframe: bool,
 }
 
 #[derive(Default)]
@@ -351,6 +359,7 @@ impl Parts {
             first_index: part.first_index,
             index_count: part.index_count,
             material: part.material.clone(),
+            wireframe: part.wireframe,
         };
         if let Some((id, references)) = self.keys.get_mut(&key) {
             *references += 1;
@@ -370,6 +379,7 @@ impl Parts {
             first_index: part.first_index,
             index_count: part.index_count,
             material: part.material,
+            wireframe: part.wireframe,
         };
         if let Some((id, references)) = self.keys.get_mut(&key) {
             *references -= 1;

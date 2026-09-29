@@ -7,6 +7,9 @@ use crate::{target, Gpu, GpuError};
 pub struct WindowSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    /// The window is a primary destination: passes draw multisampled and
+    /// resolve into the swapchain image.
+    multisampled: wgpu::TextureView,
     depth_view: wgpu::TextureView,
 }
 
@@ -52,7 +55,13 @@ impl WindowSurface {
         };
         surface.configure(&gpu.device, &config);
         Ok(Self {
-            depth_view: target::depth_texture(gpu, config.width, config.height),
+            multisampled: target::multisampled_color(gpu, config.width, config.height, format),
+            depth_view: target::multisampled_depth(
+                gpu,
+                config.width,
+                config.height,
+                target::PRIMARY_SAMPLES,
+            ),
             surface,
             config,
         })
@@ -73,7 +82,9 @@ impl WindowSurface {
 
     fn reconfigure(&mut self, gpu: &Gpu) {
         self.surface.configure(&gpu.device, &self.config);
-        self.depth_view = target::depth_texture(gpu, self.config.width, self.config.height);
+        let (width, height) = (self.config.width, self.config.height);
+        self.multisampled = target::multisampled_color(gpu, width, height, self.config.format);
+        self.depth_view = target::multisampled_depth(gpu, width, height, target::PRIMARY_SAMPLES);
     }
 
     /// Acquire the next swapchain image, let `draw` encode into it, and
@@ -93,10 +104,17 @@ impl WindowSurface {
             _ => return Err(PresentSkip::Unavailable),
         };
         let view = frame.texture.create_view(&Default::default());
+        let (color, resolve) = if target::PRIMARY_SAMPLES > 1 {
+            (&self.multisampled, Some(&view))
+        } else {
+            (&view, None)
+        };
         draw(target::TargetView {
-            color: &view,
+            color,
+            resolve,
             depth: &self.depth_view,
             format: self.config.format,
+            samples: target::PRIMARY_SAMPLES,
             width: self.config.width,
             height: self.config.height,
         });

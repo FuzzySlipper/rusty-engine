@@ -2,7 +2,7 @@
 //! target, presenting an offscreen target into the primary output, and the
 //! capture conversion to an encoded image. One pipeline set per colour format.
 
-use crate::target::{DEPTH_FORMAT, OFFSCREEN_FORMAT};
+use crate::target::{ColorTarget, DEPTH_FORMAT, OFFSCREEN_FORMAT};
 use crate::Gpu;
 
 /// How a linear capture becomes its encoded image.
@@ -18,7 +18,7 @@ pub(crate) struct Conversion {
 const PARAMS_BYTES: u64 = 48;
 
 struct FormatPipelines {
-    format: wgpu::TextureFormat,
+    format: ColorTarget,
     clear_color_depth: wgpu::RenderPipeline,
     clear_depth: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
@@ -141,7 +141,7 @@ impl Compose {
         label: &str,
         layout: &wgpu::PipelineLayout,
         fragment: &str,
-        target: wgpu::ColorTargetState,
+        (target, samples): (wgpu::ColorTargetState, u32),
         depth: bool,
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -161,7 +161,10 @@ impl Compose {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &self.shader,
                 entry_point: Some(fragment),
@@ -173,11 +176,12 @@ impl Compose {
         })
     }
 
-    fn format_index(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> usize {
+    fn format_index(&mut self, device: &wgpu::Device, format: ColorTarget) -> usize {
         if let Some(index) = self.formats.iter().position(|set| set.format == format) {
             return index;
         }
-        let color = wgpu::ColorTargetState::from(format);
+        let color = wgpu::ColorTargetState::from(format.format);
+        let samples = format.samples;
         let depth_only = wgpu::ColorTargetState {
             write_mask: wgpu::ColorWrites::empty(),
             ..color.clone()
@@ -189,7 +193,7 @@ impl Compose {
                 "render-wgpu clear viewport",
                 &self.clear_pipeline_layout,
                 "fs_clear",
-                color.clone(),
+                (color.clone(), samples),
                 true,
             ),
             clear_depth: self.pipeline(
@@ -197,7 +201,7 @@ impl Compose {
                 "render-wgpu clear viewport depth",
                 &self.clear_pipeline_layout,
                 "fs_clear",
-                depth_only,
+                (depth_only, samples),
                 true,
             ),
             blit: self.pipeline(
@@ -205,7 +209,7 @@ impl Compose {
                 "render-wgpu present target",
                 &self.blit_pipeline_layout,
                 "fs_blit",
-                color,
+                (color, samples),
                 false,
             ),
         };
@@ -214,7 +218,7 @@ impl Compose {
     }
 
     /// Make the viewport clear for `format` ready and set its colour.
-    pub fn prepare_clear(&mut self, gpu: &Gpu, format: wgpu::TextureFormat, color: [f32; 4]) {
+    pub fn prepare_clear(&mut self, gpu: &Gpu, format: ColorTarget, color: [f32; 4]) {
         self.format_index(&gpu.device, format);
         gpu.queue
             .write_buffer(&self.clear_params, 0, &params_bytes(color, 1.0, false, 1));
@@ -225,7 +229,7 @@ impl Compose {
     pub fn clear_viewport(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         color: bool,
     ) {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
@@ -263,7 +267,7 @@ impl Compose {
     }
 
     /// Make the presentation blit for `format` ready.
-    pub fn prepare_blit(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+    pub fn prepare_blit(&mut self, device: &wgpu::Device, format: ColorTarget) {
         self.format_index(device, format);
     }
 
@@ -272,7 +276,7 @@ impl Compose {
     pub fn blit(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         source: &wgpu::BindGroup,
     ) {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
@@ -298,7 +302,7 @@ impl Compose {
                 "render-wgpu capture convert",
                 &self.convert_pipeline_layout,
                 "fs_convert",
-                wgpu::ColorTargetState::from(OFFSCREEN_FORMAT),
+                (wgpu::ColorTargetState::from(OFFSCREEN_FORMAT), 1),
                 false,
             ));
         }

@@ -2,7 +2,7 @@
 //! target colour format (offscreen RGBA8 sRGB, and whatever a surface uses).
 
 use crate::batch::Pass;
-use crate::target::DEPTH_FORMAT;
+use crate::target::{ColorTarget, DEPTH_FORMAT};
 
 /// Interleaved position (3), normal (3), uv (2), linear RGBA colour (4;
 /// white unless a static mesh supplies vertex colours).
@@ -23,7 +23,7 @@ pub(crate) struct Layouts {
 }
 
 pub(crate) struct Pipelines {
-    pub format: wgpu::TextureFormat,
+    pub target: ColorTarget,
     pub opaque: wgpu::RenderPipeline,
     pub opaque_mirrored: wgpu::RenderPipeline,
     pub opaque_double_sided: wgpu::RenderPipeline,
@@ -207,7 +207,8 @@ impl Layouts {
         }
     }
 
-    pub fn pipelines(&self, device: &wgpu::Device, format: wgpu::TextureFormat) -> Pipelines {
+    pub fn pipelines(&self, device: &wgpu::Device, target: ColorTarget) -> Pipelines {
+        let format = target.format;
         let world = |label, topology, cull_mode, front_face, blend: bool| {
             let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -236,7 +237,7 @@ impl Layouts {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: target.multisample(),
                 fragment: Some(wgpu::FragmentState {
                     module: &self.shader,
                     entry_point: Some("fs_world"),
@@ -270,7 +271,7 @@ impl Layouts {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: target.multisample(),
             fragment: Some(wgpu::FragmentState {
                 module: &self.shader,
                 entry_point: Some("fs_sky"),
@@ -282,7 +283,7 @@ impl Layouts {
         });
         let (ccw, cw) = (wgpu::FrontFace::Ccw, wgpu::FrontFace::Cw);
         Pipelines {
-            format,
+            target,
             opaque: world("render-wgpu opaque", triangles, back, ccw, false),
             opaque_mirrored: world("render-wgpu opaque mirrored", triangles, back, cw, false),
             opaque_double_sided: world(

@@ -212,22 +212,37 @@ impl Renderer {
                 if let Some(visible) = visible {
                     node.visible = *visible;
                 }
+                // A view material applies to primitive nodes, including their
+                // replaced payloads. No Engine producer sends one for another
+                // kind (the appearance projector recreates on material
+                // changes), and Three swapped such a node's materials for one
+                // flat colour, so it is reported rather than guessed at.
                 let mut rebuild = false;
-                if let (
-                    Some(material),
-                    NodeKind::Primitive {
-                        material: current, ..
-                    },
-                ) = (material, &mut node.kind)
-                {
-                    *current = *material;
-                    rebuild = true;
+                let mut unrealized_material = false;
+                match (material, &mut node.kind) {
+                    (
+                        Some(material),
+                        NodeKind::Primitive {
+                            material: current, ..
+                        },
+                    ) => {
+                        *current = *material;
+                        rebuild = true;
+                    }
+                    (Some(_), NodeKind::Group) | (None, _) => {}
+                    (Some(_), _) => unrealized_material = true,
                 }
                 if transform.is_some() || visible.is_some() {
                     self.tables.dirty_nodes.insert(*handle);
                 }
                 if rebuild {
                     self.rebuild_parts(*handle);
+                }
+                if unrealized_material {
+                    return Err(
+                        "a view material applies only to primitive nodes; the rest of the update applied"
+                            .to_owned(),
+                    );
                 }
             }
             RenderDiff::Destroy { handle } => self.destroy_node(*handle),
@@ -475,7 +490,9 @@ impl Renderer {
                 material,
                 has_payload,
             } => {
-                let unlit = |mesh, first_index, index_count| {
+                // Three drew `wireframe` primitives with a wireframe basic
+                // material; lines and points ignore it.
+                let unlit = |mesh, first_index, index_count, wireframe| {
                     (
                         Part {
                             node: handle,
@@ -483,6 +500,7 @@ impl Renderer {
                             first_index,
                             index_count,
                             material: MaterialRef::Unlit,
+                            wireframe,
                         },
                         PartRow {
                             color: material.color,
@@ -513,6 +531,9 @@ impl Renderer {
                                     first_index: *start,
                                     index_count: *count,
                                     material: material_ref,
+                                    // Three applied the node's view material,
+                                    // wireframe included, to uploaded meshes.
+                                    wireframe: material.wireframe,
                                 },
                                 PartRow {
                                     color: mul(color, material.color),
@@ -522,16 +543,23 @@ impl Renderer {
                         }
                     }
                 } else {
+                    let wireframe = material.wireframe;
                     match geometry {
                         Geometry::Group => {}
-                        Geometry::Line { .. } => parts.push(unlit(MeshRef::Payload(handle), 0, 2)),
-                        Geometry::Cube => parts.push(unlit(MeshRef::Builtin(Builtin::Cube), 0, 0)),
-                        Geometry::Sphere => {
-                            parts.push(unlit(MeshRef::Builtin(Builtin::Sphere), 0, 0))
+                        Geometry::Line { .. } => {
+                            parts.push(unlit(MeshRef::Payload(handle), 0, 2, false))
                         }
-                        Geometry::Quad => parts.push(unlit(MeshRef::Builtin(Builtin::Quad), 0, 0)),
+                        Geometry::Cube => {
+                            parts.push(unlit(MeshRef::Builtin(Builtin::Cube), 0, 0, wireframe))
+                        }
+                        Geometry::Sphere => {
+                            parts.push(unlit(MeshRef::Builtin(Builtin::Sphere), 0, 0, wireframe))
+                        }
+                        Geometry::Quad => {
+                            parts.push(unlit(MeshRef::Builtin(Builtin::Quad), 0, 0, wireframe))
+                        }
                         Geometry::Point => {
-                            parts.push(unlit(MeshRef::Builtin(Builtin::Point), 0, 0))
+                            parts.push(unlit(MeshRef::Builtin(Builtin::Point), 0, 0, false))
                         }
                     }
                 }
@@ -570,6 +598,7 @@ impl Renderer {
                                 first_index: *start,
                                 index_count: *count,
                                 material: material_ref,
+                                wireframe: false,
                             },
                             PartRow { color, emission },
                         ));
@@ -607,6 +636,7 @@ impl Renderer {
                                     first_index: *start,
                                     index_count: *count,
                                     material: material_ref,
+                                    wireframe: false,
                                 },
                                 PartRow { color, emission },
                             ));
@@ -615,6 +645,13 @@ impl Renderer {
                 }
             }
             NodeKind::AnimatedMesh(_) => {
+                // Inspection draws the instance as a wireframe, as Three's
+                // mesh inspection cloned its materials with `wireframe`.
+                let wireframe = self
+                    .tables
+                    .animated
+                    .get(&handle)
+                    .is_some_and(|instance| instance.inspection.wireframe);
                 for (mesh, index_count, material) in animated_parts {
                     let (color, emission) = match &material {
                         MaterialRef::Retained(id) => match self.tables.materials.get(id) {
@@ -636,6 +673,7 @@ impl Renderer {
                             first_index: 0,
                             index_count,
                             material,
+                            wireframe,
                         },
                         PartRow { color, emission },
                     ));
@@ -651,6 +689,10 @@ impl Renderer {
             }
             let mesh = self.mesh(&part.mesh);
             let bounds = mesh.map_or(Aabb::EMPTY, |mesh| mesh.bounds);
+            if let (true, Some(mesh)) = (part.wireframe, mesh) {
+                mesh.edges
+                    .get_or_init(|| edge_buffer(&self.gpu.device, &mesh.cpu.indices));
+            }
             let descriptor = match &part.material {
                 MaterialRef::Retained(id) => {
                     self.tables.materials.get(id).map(|row| &row.descriptor)
@@ -660,7 +702,7 @@ impl Renderer {
             let class = PartClass {
                 blend: row.color[3] < 1.0 || descriptor.is_some_and(blends),
                 double_sided: descriptor.is_some_and(|descriptor| descriptor.double_sided),
-                lines: mesh.is_some_and(|mesh| mesh.topology == Topology::Lines),
+                lines: part.wireframe || mesh.is_some_and(|mesh| mesh.topology == Topology::Lines),
             };
             let id = self.tables.parts.insert(part, row, bounds, class);
             self.tables.parts.write(id, &world, shown, layer);
@@ -912,6 +954,7 @@ impl Renderer {
                 positions,
                 indices: indices.to_vec(),
             }),
+            edges: Default::default(),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -1219,6 +1262,28 @@ pub(crate) fn light_row(light: &LightDescriptor, world: &Mat4) -> Option<[f32; 1
             ],
         )),
     }
+}
+
+/// A line-list index buffer with each triangle's three edges (a-b, b-c,
+/// c-a). Edge `i` of a triangle range `[start, start + count)` sits at
+/// `[start * 2, (start + count) * 2)`.
+pub(crate) fn edge_buffer(device: &wgpu::Device, indices: &[u32]) -> wgpu::Buffer {
+    let mut edges = Vec::with_capacity(indices.len() * 2);
+    for triangle in indices.chunks_exact(3) {
+        edges.extend_from_slice(&[
+            triangle[0],
+            triangle[1],
+            triangle[1],
+            triangle[2],
+            triangle[2],
+            triangle[0],
+        ]);
+    }
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("render-wgpu wireframe edges"),
+        contents: bytemuck::cast_slice(&edges),
+        usage: wgpu::BufferUsages::INDEX,
+    })
 }
 
 fn mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {

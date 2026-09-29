@@ -31,7 +31,7 @@ use crate::camera::{self, CameraPose};
 use crate::capture::{CaptureBackground, CaptureRequest};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::tables::{transform_matrix, Aabb};
-use crate::target::DEPTH_FORMAT;
+use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{Renderer, RendererOptions, ResourceSource};
 
 /// Capture colour: sRGB like the Three lane's capture target.
@@ -88,7 +88,7 @@ pub(crate) struct GhostPipelines {
     layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     sampler: wgpu::Sampler,
-    by_format: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    by_format: Vec<(ColorTarget, wgpu::RenderPipeline)>,
 }
 
 impl GhostPipelines {
@@ -169,7 +169,7 @@ impl GhostPipelines {
         }
     }
 
-    fn ensure(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+    fn ensure(&mut self, device: &wgpu::Device, format: ColorTarget) {
         if self
             .by_format
             .iter()
@@ -200,12 +200,12 @@ impl GhostPipelines {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: format.multisample(),
             fragment: Some(wgpu::FragmentState {
                 module: &self.shader,
                 entry_point: Some("fs_ghost"),
                 compilation_options: Default::default(),
-                targets: &[Some(format.into())],
+                targets: &[Some(format.format.into())],
             }),
             multiview_mask: None,
             cache: None,
@@ -213,7 +213,7 @@ impl GhostPipelines {
         self.by_format.push((format, pipeline));
     }
 
-    fn get(&self, format: wgpu::TextureFormat) -> Option<&wgpu::RenderPipeline> {
+    fn get(&self, format: ColorTarget) -> Option<&wgpu::RenderPipeline> {
         self.by_format
             .iter()
             .find(|(existing, _)| *existing == format)
@@ -512,12 +512,7 @@ impl Renderer {
     }
 
     /// Choose each plate's sector for the view about to be encoded.
-    pub(crate) fn select_ghost_sectors(
-        &mut self,
-        eye: Vec3,
-        view: u64,
-        format: wgpu::TextureFormat,
-    ) {
+    pub(crate) fn select_ghost_sectors(&mut self, eye: Vec3, view: u64, format: ColorTarget) {
         if self.ghosts.is_empty() {
             return;
         }
@@ -550,7 +545,7 @@ impl Renderer {
     pub(crate) fn draw_ghost_plates(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
     ) -> u32 {
         let Some(pipeline) = self.ghost_pipelines.get(format) else {
             return 0;

@@ -7,25 +7,90 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// Offscreen colour is sRGB-encoded RGBA8, the byte layout readback returns.
 pub(crate) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-/// What one render call draws into.
+/// Samples per pixel of the primary destination (the offscreen primary
+/// target and the window surface). Three created its canvas with
+/// `antialias: true`; its render targets and captures stayed single-sample,
+/// and so do ours.
+pub(crate) const PRIMARY_SAMPLES: u32 = 4;
+
+/// What a pipeline must match to draw into a target: colour format and
+/// sample count. Pipeline caches are keyed by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ColorTarget {
+    pub format: wgpu::TextureFormat,
+    pub samples: u32,
+}
+
+impl ColorTarget {
+    pub fn multisample(self) -> wgpu::MultisampleState {
+        wgpu::MultisampleState {
+            count: self.samples,
+            ..Default::default()
+        }
+    }
+}
+
+/// What one render call draws into. With `samples > 1`, `color` and `depth`
+/// are multisampled and every pass resolves `color` into `resolve`.
 #[derive(Clone, Copy)]
 pub(crate) struct TargetView<'a> {
     pub color: &'a wgpu::TextureView,
+    pub resolve: Option<&'a wgpu::TextureView>,
     pub depth: &'a wgpu::TextureView,
     pub format: wgpu::TextureFormat,
+    pub samples: u32,
     pub width: u32,
     pub height: u32,
 }
 
+impl TargetView<'_> {
+    pub fn key(&self) -> ColorTarget {
+        ColorTarget {
+            format: self.format,
+            samples: self.samples,
+        }
+    }
+}
+
 pub(crate) fn depth_texture(gpu: &Gpu, width: u32, height: u32) -> wgpu::TextureView {
+    multisampled_depth(gpu, width, height, 1)
+}
+
+pub(crate) fn multisampled_depth(
+    gpu: &Gpu,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> wgpu::TextureView {
     gpu.device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("render-wgpu depth"),
             size: extent(width, height),
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
+}
+
+/// A multisampled colour attachment that passes resolve from.
+pub(crate) fn multisampled_color(
+    gpu: &Gpu,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureView {
+    gpu.device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("render-wgpu multisampled colour"),
+            size: extent(width, height),
+            mip_level_count: 1,
+            sample_count: PRIMARY_SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
@@ -41,9 +106,12 @@ pub(crate) fn extent(width: u32, height: u32) -> wgpu::Extent3d {
 }
 
 /// An offscreen colour and depth target of one size, with a readback buffer.
+/// It is a primary destination: passes draw multisampled and resolve into
+/// the single-sample colour that readback copies.
 pub struct OffscreenTarget {
     color: wgpu::Texture,
     color_view: wgpu::TextureView,
+    multisampled: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     readback: wgpu::Buffer,
     padded_row: u32,
@@ -74,7 +142,8 @@ impl OffscreenTarget {
         });
         Self {
             color_view: color.create_view(&Default::default()),
-            depth_view: depth_texture(gpu, width, height),
+            multisampled: multisampled_color(gpu, width, height, OFFSCREEN_FORMAT),
+            depth_view: multisampled_depth(gpu, width, height, PRIMARY_SAMPLES),
             color,
             readback,
             padded_row,
@@ -95,13 +164,26 @@ impl OffscreenTarget {
     }
 
     pub(crate) fn view(&self) -> TargetView<'_> {
+        let (color, resolve) = if PRIMARY_SAMPLES > 1 {
+            (&self.multisampled, Some(&self.color_view))
+        } else {
+            (&self.color_view, None)
+        };
         TargetView {
-            color: &self.color_view,
+            color,
+            resolve,
             depth: &self.depth_view,
             format: OFFSCREEN_FORMAT,
+            samples: PRIMARY_SAMPLES,
             width: self.width,
             height: self.height,
         }
+    }
+
+    /// The single-sample colour readback copies: the resolve target of
+    /// primary passes, or a plain output a conversion pass writes directly.
+    pub(crate) fn resolved_color(&self) -> &wgpu::TextureView {
+        &self.color_view
     }
 
     /// Copy the last rendered frame to CPU memory as tightly packed,

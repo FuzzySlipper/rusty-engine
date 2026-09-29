@@ -18,7 +18,7 @@ use crate::camera::CameraMatrices;
 use crate::effects::EffectsPass;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
-use crate::target::TargetView;
+use crate::target::{ColorTarget, TargetView};
 use crate::{
     srgb_to_linear, OffscreenTarget, PresentSkip, Renderer, WindowSurface, DEFAULT_CLEAR_SRGB,
     NEUTRAL_GROUND_SRGB, NEUTRAL_HEMISPHERE_INTENSITY, NEUTRAL_KEY_INTENSITY, NEUTRAL_KEY_POSITION,
@@ -563,11 +563,23 @@ impl Renderer {
                 MaterialRef::Unlit => &self.unlit_material,
                 MaterialRef::LitFallback => &self.lit_fallback_material,
             };
+            // A wireframe part draws its triangles' edges: two edge indices
+            // per triangle index.
+            let (indices, range) = if part.wireframe {
+                let Some(edges) = mesh.edges.get() else {
+                    continue;
+                };
+                let (first, count) = (part.first_index * 2, part.index_count * 2);
+                (edges, first..first + count)
+            } else {
+                let (first, count) = (part.first_index, part.index_count);
+                (&mesh.indices, first..first + count)
+            };
             pass.set_bind_group(1, material, &[]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(
-                part.first_index..part.first_index + part.index_count,
+                range,
                 0,
                 draw.first_instance..draw.first_instance + draw.instances,
             );
@@ -583,7 +595,7 @@ impl Renderer {
     fn draw_blended<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         parts: &[batch::Batch],
         effects: &EffectsPass,
         eye: Vec3,
@@ -721,8 +733,9 @@ impl Renderer {
         }
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
 
-        let format = view.target.format;
-        let format_index = match self.pipelines.iter().position(|set| set.format == format) {
+        // Format and sample count: every pipeline drawing here must match.
+        let format = view.target.key();
+        let format_index = match self.pipelines.iter().position(|set| set.target == format) {
             Some(index) => index,
             None => {
                 self.pipelines
@@ -781,7 +794,9 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: view.target.color,
                     depth_slice: None,
-                    resolve_target: None,
+                    // A multisampled primary resolves at the end of every
+                    // pass; later passes load the multisampled colour.
+                    resolve_target: view.target.resolve,
                     ops: wgpu::Operations {
                         load: color_load,
                         store: wgpu::StoreOp::Store,

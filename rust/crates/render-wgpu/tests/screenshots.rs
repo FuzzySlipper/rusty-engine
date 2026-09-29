@@ -27,6 +27,10 @@ const WIDTH: u32 = 320;
 const HEIGHT: u32 = 180;
 const CHANNEL_TOLERANCE: u8 = 12;
 const DIFFERING_PIXEL_FRACTION: f64 = 0.002;
+/// Scenes that draw lines: Vulkan lets implementations rasterize
+/// multisampled lines differently (llvmpipe and RADV disagree along them),
+/// so these compare with a wider limit. Triangles still meet the default.
+const LINE_SCENE_PIXEL_FRACTION: f64 = 0.01;
 
 #[derive(Default)]
 struct Resources(HashMap<String, Vec<u8>>);
@@ -90,6 +94,19 @@ impl Harness {
             resources: Resources::default(),
             gpu,
         }
+    }
+
+    /// As [`Self::apply`], returning the ops the renderer reported.
+    fn apply_reporting(&mut self, ops: Vec<RenderDiff>) -> Vec<render_wgpu::ApplyIssue> {
+        let delta = self
+            .world
+            .apply(RenderFrameDiff {
+                schema_version: RENDER_FRAME_SCHEMA_VERSION,
+                publication: None,
+                ops,
+            })
+            .expect("retained model admits the fixture");
+        self.renderer.apply(&delta, &self.resources)
     }
 
     /// Apply ops through the retained model and hand the renderer its delta.
@@ -310,6 +327,10 @@ fn checker(size: u32, a: [u8; 4], b: [u8; 4]) -> Vec<u8> {
 
 /// Compare with the reference, or write it when blessing.
 fn assert_screenshot(name: &str, rgba: &[u8]) {
+    assert_screenshot_within(name, rgba, DIFFERING_PIXEL_FRACTION);
+}
+
+fn assert_screenshot_within(name: &str, rgba: &[u8], limit: f64) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let reference = root.join("tests/screenshots").join(format!("{name}.png"));
     let encoded = encode_png(WIDTH, HEIGHT, rgba).expect("encode screenshot");
@@ -336,14 +357,14 @@ fn assert_screenshot(name: &str, rgba: &[u8]) {
         })
         .count();
     let fraction = differing as f64 / f64::from(WIDTH * HEIGHT);
-    if fraction > DIFFERING_PIXEL_FRACTION {
+    if fraction > limit {
         let out = root.join("../../../target/render-wgpu-screenshots");
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(out.join(format!("{name}.png")), encoded).unwrap();
         panic!(
             "{name}: {:.2}% of pixels differ from the reference (limit {:.2}%); actual written to {}",
             fraction * 100.0,
-            DIFFERING_PIXEL_FRACTION * 100.0,
+            limit * 100.0,
             out.display()
         );
     }
@@ -392,7 +413,7 @@ fn primitives_draw_unlit_over_the_background_colour() {
     ]);
     let (stats, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
     assert_eq!(stats.draws, 5);
-    assert_screenshot("primitives", &pixels);
+    assert_screenshot_within("primitives", &pixels, LINE_SCENE_PIXEL_FRACTION);
 }
 
 #[test]
@@ -723,4 +744,104 @@ fn transparent_parts_sort_by_distance_whatever_their_face_culling() {
         single_sided, double_sided,
         "face culling changed the blend order"
     );
+}
+
+/// The primary target is multisampled, as Three's `antialias: true` canvas:
+/// a black unlit cube on white leaves partially covered pixels along its
+/// edges. Single-sampled, every pixel would be exactly black or white.
+#[test]
+fn primary_targets_antialias_triangle_edges() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![
+        RenderDiff::SetBackgroundColor {
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+        primitive(
+            1,
+            Geometry::Cube,
+            [0.0, 0.0, 0.0, 1.0],
+            transform([0.0, 0.0, -3.0], 30.0, [1.0; 3]),
+        ),
+    ]);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    let partial = pixels
+        .chunks_exact(4)
+        .filter(|pixel| pixel[0] > 8 && pixel[0] < 247)
+        .count();
+    assert!(
+        partial > 100,
+        "only {partial} partially covered edge pixels"
+    );
+}
+
+/// `Material.wireframe` draws a primitive's triangle edges, as Three's
+/// wireframe basic material did: the cube is outlined, not filled.
+#[test]
+fn wireframe_primitives_draw_their_triangle_edges() {
+    let lit_pixels = |wireframe: bool| {
+        let mut harness = Harness::new(RendererOptions::default());
+        let mut cube = RenderNode::new(Geometry::Cube);
+        cube.material = Material {
+            color: [1.0, 1.0, 1.0, 1.0],
+            wireframe,
+        };
+        cube.transform = transform([0.0, 0.0, -3.0], 30.0, [1.0; 3]);
+        harness.apply(vec![
+            RenderDiff::SetBackgroundColor {
+                color: [0.0, 0.0, 0.0, 1.0],
+            },
+            RenderDiff::Create {
+                handle: RenderHandle::new(1),
+                parent: None,
+                node: cube,
+            },
+        ]);
+        let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 15.0));
+        let lit = pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] > 128)
+            .count();
+        (lit, pixels)
+    };
+    let (solid, _) = lit_pixels(false);
+    let (outline, pixels) = lit_pixels(true);
+    assert!(
+        outline > 0 && outline * 2 < solid,
+        "wireframe lit {outline} pixels, solid {solid}"
+    );
+    assert_screenshot_within("wireframe", &pixels, LINE_SCENE_PIXEL_FRACTION);
+}
+
+/// A view material on a static mesh is reported: no Engine producer sends
+/// one (appearance changes recreate the instance), and Three replaced such
+/// a node's materials with one flat colour. The rest of the update applies.
+#[test]
+fn view_materials_on_static_meshes_are_reported_and_the_rest_applies() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/red", [0.8, 0.2, 0.2, 1.0], None),
+        },
+        static_mesh("mesh/red", cube(), "material/red"),
+        instance(
+            1,
+            None,
+            "mesh/red",
+            transform([0.0, 0.0, -3.0], 0.0, [1.0; 3]),
+        ),
+    ]);
+    let issues = harness.apply_reporting(vec![RenderDiff::Update {
+        handle: RenderHandle::new(1),
+        transform: None,
+        material: Some(Material {
+            color: [0.0, 1.0, 0.0, 1.0],
+            wireframe: false,
+        }),
+        visible: Some(false),
+        metadata: None,
+    }]);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].op, "update");
+    let (stats, _) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    assert_eq!(stats.draws, 0, "the visibility in the same update applied");
 }

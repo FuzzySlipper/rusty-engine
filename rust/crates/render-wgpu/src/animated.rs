@@ -138,7 +138,7 @@ pub(crate) struct AnimatedInstance {
     fade: Option<Fade>,
     /// The `once` clip whose end is reported, until any new command.
     completion: Option<String>,
-    inspection: AnimatedMeshInspection,
+    pub(crate) inspection: AnimatedMeshInspection,
     bounds_pending: bool,
     /// Node transforms in instance space, per GLB node.
     pose: Vec<Mat4>,
@@ -578,15 +578,13 @@ impl Renderer {
             instance.bounds_pending = true;
             instance.pose_dirty = true;
         }
-        let matte_changed = inspection.matte != instance.inspection.matte;
+        let restyled = inspection.matte != instance.inspection.matte
+            || inspection.wireframe != instance.inspection.wireframe;
         instance.inspection = inspection.clone();
-        if matte_changed {
+        if restyled {
             self.rebuild_parts(handle);
         }
         let mut unrealized = Vec::new();
-        if inspection.wireframe {
-            unrealized.push("wireframe (#8819)");
-        }
         if inspection.whole_voxel_normals {
             unrealized.push("whole-voxel normals");
         }
@@ -1039,6 +1037,7 @@ impl Renderer {
                 positions: vertex_positions(vertices),
                 indices: indices.to_vec(),
             }),
+            edges: Default::default(),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

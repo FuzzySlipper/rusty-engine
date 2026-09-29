@@ -127,7 +127,7 @@ Two things are not in it yet, and #8788 adds them:
 
 | Item | Here | Why |
 |---|---|---|
-| `samples` > 1 on a capture | Ordered-grid supersampling: ceil(√samples)² texels per pixel, resolved in linear light before tone mapping | Pipelines have no MSAA yet (#8819). A size × factor over the device texture limit fails with a diagnostic. |
+| `samples` > 1 on a capture | Ordered-grid supersampling: ceil(√samples)² texels per pixel, resolved in linear light before tone mapping | Captures are render targets, and stay single-sample as Three's were; #8819 multisamples only the primary destination. A size × factor over the device texture limit fails with a diagnostic. |
 | Capture with a nonzero `PoseObjectId` | Fails with a diagnostic naming #8788 | Deterministic animated pose sampling belongs to animated meshes. |
 | GLB export | Stays with the browser output executor (`capture_image` refuses a GLB job) | The task keeps GLB where it is; #8826 moves it into Rust. |
 | `RendererTargetDepth::None` | The target still gets a depth buffer | Every view pass depth-tests. Drawing in submission order is not a product need. |

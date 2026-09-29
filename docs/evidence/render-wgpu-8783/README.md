@@ -110,14 +110,14 @@ GGX specular (F0 0.04), with Three's roughness floor and geometry roughness.
 | Shadows requested by `shadowIntent` | #8784 |
 | Sprites and billboards (atlases are retained) | #8787 |
 | The viewmodel layer, which Three draws in its own camera pass | #8785 |
-| `SharedBuffer` mesh sources | #8819 (no Rust producer emits them; only the TypeScript contracts and renderer know the variant) |
-| Wireframe primitives (drawn solid) | #8819 |
+| `SharedBuffer` mesh sources | Not realized: no Rust producer emits them. #8819 decided to delete the variant with #8792's contract cleanup. |
+| Wireframe primitives | Realized by #8819 |
 | Vertex colours | not a gap: Three's generic materials never enabled them |
-| An `Update` material on a static mesh instance (retained by `PresentationWorld`) | #8819 |
+| An `Update` material on a static mesh instance (retained by `PresentationWorld`) | Reported as an `ApplyIssue` (#8819): no producer sends one |
 
 **Named differences on the room study.** The sprites and weapon viewmodel are
 missing (#8787 and #8785), as is the HUD, which is DOM UI. There is no
-MSAA; Three rendered with antialiasing (#8819).
+MSAA here; Three rendered with antialiasing. #8819 has since added 4× MSAA to primary targets.
 
 ## Enforced boundary
 

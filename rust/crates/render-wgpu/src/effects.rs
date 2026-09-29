@@ -33,7 +33,7 @@ use crate::particles::{EntityPositions, ParticleIssue};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
 use crate::tables::{GpuMesh, GpuTexture, NodeKind};
-use crate::target::DEPTH_FORMAT;
+use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{srgb_to_linear, ApplyIssue, Gpu, Renderer};
 
 /// Three drew particle billboards as points of `size × 24` pixels.
@@ -137,7 +137,7 @@ fn rows_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
 }
 
 struct FormatPipelines {
-    format: wgpu::TextureFormat,
+    format: ColorTarget,
     sprites: HashMap<SpriteState, wgpu::RenderPipeline>,
     billboard: wgpu::RenderPipeline,
     cube: wgpu::RenderPipeline,
@@ -267,7 +267,7 @@ impl Effects {
         });
     }
 
-    fn format_index(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> usize {
+    fn format_index(&mut self, device: &wgpu::Device, format: ColorTarget) -> usize {
         if let Some(index) = self.formats.iter().position(|set| set.format == format) {
             return index;
         }
@@ -341,7 +341,7 @@ impl Effects {
     fn ensure_sprite_pipeline(
         &mut self,
         device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         state: SpriteState,
     ) {
         let index = self.format_index(device, format);
@@ -388,7 +388,7 @@ impl Effects {
         buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
         topology: wgpu::PrimitiveTopology,
         cull_mode: Option<wgpu::Face>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         state: SpriteState,
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -416,13 +416,13 @@ impl Effects {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: format.multisample(),
             fragment: Some(wgpu::FragmentState {
                 module: &self.shader,
                 entry_point: Some(fragment),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: format.format,
                     blend: state.blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -436,7 +436,7 @@ impl Effects {
     pub fn draw_solid_sprites(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         effects: &EffectsPass,
     ) {
         for (index, (state, textures)) in effects.solid.iter().enumerate() {
@@ -449,7 +449,7 @@ impl Effects {
     pub fn draw_blended_sprite(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         effects: &EffectsPass,
         index: usize,
     ) {
@@ -462,7 +462,7 @@ impl Effects {
     fn draw_sprite(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         state: SpriteState,
         textures: &SpriteTextures,
         instance: u32,
@@ -486,7 +486,7 @@ impl Effects {
     pub fn draw_particles(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        format: wgpu::TextureFormat,
+        format: ColorTarget,
         effects: &EffectsPass,
         cube: Option<&GpuMesh>,
     ) {
@@ -901,7 +901,7 @@ impl Renderer {
                     a.depth.total_cmp(&b.depth)
                 })
         });
-        let format = view.target.format;
+        let format = view.target.key();
         let mut rows = std::mem::take(&mut self.effects.row_scratch);
         rows.clear();
         for draw in &draws {

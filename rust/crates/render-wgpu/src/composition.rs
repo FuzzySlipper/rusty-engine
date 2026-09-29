@@ -341,10 +341,14 @@ impl Renderer {
             if fresh {
                 continue;
             }
+            // Offscreen composition targets stay single-sample, as Three's
+            // render targets were.
             let view = TargetView {
                 color: &color,
+                resolve: None,
                 depth: &depth,
                 format: OFFSCREEN_FORMAT,
+                samples: 1,
                 width,
                 height,
             };
@@ -438,7 +442,7 @@ impl Renderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target.color,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target: target.resolve,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
                     store: wgpu::StoreOp::Store,
@@ -460,7 +464,7 @@ impl Renderer {
     }
 
     fn present_target(&mut self, primary: &TargetView<'_>, area: PixelRect, source: &str) {
-        self.compose.prepare_blit(&self.gpu.device, primary.format);
+        self.compose.prepare_blit(&self.gpu.device, primary.key());
         let Some(target) = self.composition.targets.get(source) else {
             return;
         };
@@ -476,7 +480,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: primary.color,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: primary.resolve,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
@@ -496,8 +500,7 @@ impl Renderer {
                 1.0,
             );
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
-            self.compose
-                .blit(&mut pass, primary.format, &target.present);
+            self.compose.blit(&mut pass, primary.key(), &target.present);
         }
         self.gpu.queue.submit([encoder.finish()]);
     }

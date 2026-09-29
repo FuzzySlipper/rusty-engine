@@ -33,8 +33,8 @@ Captured with `capture-presentation.py` and rendered with `render_capture`.
 
 **Result.** 0 skipped ops.
 - Mean brightness over the figure is 146.2 in Three and 147.3 in wgpu.
-- 1.4% of all pixels differ by more than 12, all at edges; Three has MSAA
-  (#8819).
+- 1.4% of all pixels differ by more than 12, all at edges; Three had MSAA,
+  which #8819 has since added to primary targets.
 - The weapon sits in the same hand at the same angle.
 
 ## Doom E1M1 exit button
@@ -135,7 +135,7 @@ host wiring is #8786/#8790.
 - Posed bounds are realized.
 - `matte` is realized: roughness-1, metalness-0 variants of the bound
   materials.
-- `wireframe` is reported as unrealized (#8819).
+- `wireframe` draws the posed triangles' edges (realized by #8819).
 - `wholeVoxelNormals` is reported as unrealized. No product sets it.
 
 **Picking (`pick.rs`).** `Renderer::pick(&RendererPickRequest, camera, width,

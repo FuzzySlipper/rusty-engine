@@ -35,7 +35,7 @@ uncommitted edits) on its pinned pack `playtest-development-20260928k`.
 - Those pixels are edges and distant texels.
 
 **Named differences:**
-- no MSAA; Three rendered with `antialias: true` (#8819);
+- no MSAA; Three rendered with `antialias: true` (#8819 has since added it to primary targets);
 - the HUD is DOM UI, not the renderer;
 - the exit button is not drawn (#8788).
 
@@ -62,7 +62,7 @@ lights, 169 textures and 4,882 materials. It uses
 **Named differences:**
 - the weapon viewmodel sprite (#8787 sprites, drawn in #8785's viewmodel pass);
 - the HUD is DOM UI;
-- no MSAA (#8819).
+- no MSAA (since added to primary targets by #8819).
 
 ## Screenshot fixtures (`tests/scene.rs`)
 

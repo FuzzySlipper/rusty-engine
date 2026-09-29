@@ -542,3 +542,36 @@ fn bounds_requested_with_a_move_report_the_moved_world_state() {
         "the joint child reported a stale placement"
     );
 }
+
+/// Inspection wireframe draws the posed instance's triangle edges, as
+/// Three's mesh inspection cloned its materials with `wireframe`.
+#[test]
+fn inspection_wireframe_outlines_the_posed_character() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let view = character_view();
+    let (_, solid) = harness.render(&view);
+    harness.apply(vec![RenderDiff::SetAnimatedMeshInspection {
+        handle: RenderHandle::new(BODY),
+        inspection: AnimatedMeshInspection {
+            wireframe: true,
+            ..AnimatedMeshInspection::default()
+        },
+    }]);
+    let (_, outlined) = harness.render(&view);
+    let changed = solid
+        .chunks_exact(4)
+        .zip(outlined.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(changed > 1000, "wireframe changed only {changed} pixels");
+    harness.apply(vec![RenderDiff::SetAnimatedMeshInspection {
+        handle: RenderHandle::new(BODY),
+        inspection: AnimatedMeshInspection::default(),
+    }]);
+    let (_, restored) = harness.render(&view);
+    assert!(
+        restored == solid,
+        "clearing inspection restores the solid body"
+    );
+}

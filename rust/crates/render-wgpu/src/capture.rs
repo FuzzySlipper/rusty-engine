@@ -95,10 +95,13 @@ impl Renderer {
         );
         let color_view = color.create_view(&Default::default());
         let depth_view = depth.create_view(&Default::default());
+        // Captures are render targets: single-sample, as Three's were.
         let target = TargetView {
             color: &color_view,
+            resolve: None,
             depth: &depth_view,
             format: request.format,
+            samples: 1,
             width: request.width,
             height: request.height,
         };
@@ -208,7 +211,7 @@ impl Renderer {
         isolated.compose.convert(
             &self.gpu,
             &source,
-            output.view().color,
+            output.resolved_color(),
             Conversion {
                 factor,
                 exposure: *exposure,

@@ -173,7 +173,7 @@ captured at that moment through `render_capture`.
 - **Doom idle** (room study, `rusty-doom c080e46` on its `playtest-development-20260928k` pack).
   - The armour bonus and ammo clip (cylindrical sprites) and the pistol
     viewmodel (viewport placed) sit in the same places at the same sizes.
-  - Differences: Three's HUD is DOM, and Three renders with MSAA (#8819).
+  - Differences: Three's HUD is DOM, and Three renders with MSAA (since added to primary targets by #8819).
 - **Doom muzzle flash.** Fire, then step the held world one frame at a time
   until the weapon shows `PISGB` with the `PISFA` flash (entity 35001,
   render order 1), and capture both. The flash and firing frame match in
@@ -188,10 +188,11 @@ captured at that moment through `render_capture`.
     the room as in Three.
 
 **Dagger ranged flight: not captured.** The arrow in flight is a static mesh
-(`CreateStaticMeshFromContent`), not a sprite or particle, and its per-flight
-material update is the static-mesh override gap in #8819. The starting
-character also carries no bow, so no ranged release happened in the held
-session. The flight's family is the world family (#8783, #8819).
+(`CreateStaticMeshFromContent`), not a sprite or particle. Its material
+update (`UpdateStaticMeshMaterials`) changes the instance's slot overrides,
+which the appearance projector realizes by recreating the instance, so it
+is not a gap (checked in #8819). The starting character also carries no
+bow, so no ranged release happened in the held session.
 
 **Particles in products.** Doom and Dagger emit none; CraftSurvive and the
 Engine's `csharp-particle-emission` fixture do. The particle evidence here is

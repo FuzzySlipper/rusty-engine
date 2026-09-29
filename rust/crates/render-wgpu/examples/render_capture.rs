@@ -40,6 +40,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let all: Vec<String> = std::env::args().skip(1).collect();
     let default_world_lights = !all.iter().any(|arg| arg == "--no-default-world-lights");
     let default_viewmodel_lights = !all.iter().any(|arg| arg == "--no-default-viewmodel-lights");
+    // `--frames=N`: render N more frames with readback and report the mean
+    // time of each, for cost comparisons (not a benchmark gate).
+    let timed_frames: u32 = all
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--frames="))
+        .map_or(Ok(0), str::parse)?;
     let mut args = all.into_iter().filter(|arg| !arg.starts_with("--"));
     let dir = PathBuf::from(
         args.next()
@@ -89,6 +95,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("frame: {stats:?}");
     fs::write(&out, encode_png(width, height, &target.read_rgba(&gpu))?)?;
     eprintln!("wrote {}", out.display());
+    if timed_frames > 0 {
+        let mut pixels = Vec::new();
+        let started = std::time::Instant::now();
+        for frame in 0..timed_frames {
+            // A new presentation time redraws the whole view.
+            renderer.render_view_composition(&target, f64::from(frame + 1));
+            target.read_rgba_into(&gpu, &mut pixels);
+        }
+        eprintln!(
+            "{timed_frames} frames with readback: {:.2} ms each",
+            started.elapsed().as_secs_f64() * 1000.0 / f64::from(timed_frames)
+        );
+    }
 
     if let Some((source, path)) = capture {
         let camera = view
