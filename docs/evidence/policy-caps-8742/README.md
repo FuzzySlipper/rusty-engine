@@ -25,6 +25,15 @@ caps went in #8738, and voxel edit and residency caps in #8739.
 | Textures | Three unused constants: `MAX_RETAINED_TEXTURES` and the aggregate byte caps. | — |
 | TS live path | `RendererPresentationHostSet` deep-decoded every presentation frame (about 940 lines of decoder) before the hosts ran. The transport re-validated each view composition, which the renderer validates again when it configures it, and deep-copied every UI projection, which the application host validates on ingest. The decoders remain for contract tests. | — |
 
+## Review fix
+
+The dev host's `HttpResponse::text` still cut every text response to 64 KiB,
+so a larger debug result came back incomplete with 200 OK. It no longer
+truncates. `HttpResponse::error`'s 128/512-byte cuts on error codes and details
+went too, because they silently dropped diagnostics. The loopback test
+`live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed` now
+POSTs a command that returns 100 KiB and checks the whole body arrives.
+
 ## Bug fixed on the way
 
 `ProductDevHostError::new` truncated its detail to 512 bytes with

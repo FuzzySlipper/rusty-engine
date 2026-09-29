@@ -324,6 +324,7 @@ impl ProductDevRuntime for FixtureRuntime {
                     "fixture runtime failure",
                 ))
             }
+            "fixture.large" => ProductDevDebugResult::new(true, "x".repeat(100 * 1024)),
             _ => ProductDevDebugResult::new(true, format!("executed {command}")),
         };
         Ok(ProductDevRuntimeReceipt::new(result, Vec::new()).unwrap())
@@ -1743,6 +1744,15 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
     );
     assert!(runtime.starts_with("HTTP/1.1 500 Internal Server Error\r\n"));
     assert!(runtime.contains("FIXTURE_DEBUG_RUNTIME"));
+    // A result past the former 64 KiB bound arrives whole.
+    let large_body = "fixture.large";
+    let large = request(
+        &origin,
+        &format!("POST /__rusty/product/runtime/debug/execute HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{large_body}", large_body.len()),
+    );
+    assert!(large.starts_with("HTTP/1.1 200 OK\r\n"));
+    let (_, body) = large.split_once("\r\n\r\n").unwrap();
+    assert_eq!(body.len(), 100 * 1024);
     assert!(
         !host.termination_requested(),
         "a runtime error is reported; it never ends the host"

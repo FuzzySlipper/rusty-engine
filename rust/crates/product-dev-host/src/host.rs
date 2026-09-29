@@ -3586,20 +3586,14 @@ impl HttpResponse {
     }
 
     fn text(status: u16, text: String) -> Self {
-        Self::bytes(
-            status,
-            "text/plain; charset=utf-8",
-            bounded_text(&text, 64 * 1024).into_bytes(),
-        )
+        Self::bytes(status, "text/plain; charset=utf-8", text.into_bytes())
     }
 
     fn error(status: u16, code: &str, detail: &str) -> Self {
-        let code = bounded_text(code, 128);
-        let detail = bounded_text(detail, 512);
         let body = format!(
             "{{\"accepted\":false,\"error\":{{\"code\":{},\"diagnostic\":{}}}}}",
-            json_string(&code),
-            json_string(&detail)
+            json_string(code),
+            json_string(detail)
         )
         .into_bytes();
         Self::bytes(status, "application/json", body)
@@ -3739,17 +3733,6 @@ fn json_response<T: Serialize>(status: u16, value: &T) -> HttpResponse {
             "response could not be encoded",
         ),
     }
-}
-
-fn bounded_text(value: &str, maximum: usize) -> String {
-    if value.len() <= maximum {
-        return value.to_owned();
-    }
-    let mut end = maximum;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
 }
 
 fn reap_finished_handlers(handlers: &Mutex<Vec<JoinHandle<()>>>) {
