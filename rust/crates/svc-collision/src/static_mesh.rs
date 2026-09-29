@@ -64,7 +64,6 @@ impl Default for StaticMeshTransform {
 pub struct StaticMeshColliderInstance {
     pub id: StaticMeshInstanceId,
     pub asset: StaticMeshAssetId,
-    pub expected_geometry_hash: u64,
     pub transform: StaticMeshTransform,
 }
 
@@ -90,26 +89,12 @@ pub struct StaticMeshHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticMeshCollisionError {
     RevisionExhausted,
-    DuplicateAsset {
-        id: StaticMeshAssetId,
-    },
-    DuplicateInstance {
-        id: StaticMeshInstanceId,
-    },
-    MissingAsset {
-        id: StaticMeshAssetId,
-    },
-    StaleAsset {
-        id: StaticMeshAssetId,
-        expected: u64,
-        actual: u64,
-    },
+    DuplicateAsset { id: StaticMeshAssetId },
+    DuplicateInstance { id: StaticMeshInstanceId },
+    MissingAsset { id: StaticMeshAssetId },
     EmptyGeometry,
     NonFiniteVertex,
-    InvalidTriangleIndex {
-        index: u32,
-        vertex_count: usize,
-    },
+    InvalidTriangleIndex { index: u32, vertex_count: usize },
     InvalidTransform,
     InvalidTriangleMesh,
 }
@@ -224,7 +209,6 @@ impl StaticMeshCollisionProjection {
                 StaticMeshColliderInstance {
                     id: *id,
                     asset: instance.asset,
-                    expected_geometry_hash: instance.geometry_hash,
                     transform,
                 }
             })
@@ -285,10 +269,6 @@ impl StaticMeshCollisionProjection {
         self.commit_projection(next_assets, instances)
     }
 
-    pub fn asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
-        self.assets.get(&id).map(|asset| asset.geometry_hash)
-    }
-
     /// Applies a bounded residency delta without rebuilding unchanged triangle meshes.
     /// Removals precede upserts. Removing an absent identity is idempotent.
     /// Assets still referenced by retained instances cannot be removed.
@@ -315,9 +295,6 @@ impl StaticMeshCollisionProjection {
                     StaticMeshColliderInstance {
                         id: *id,
                         asset: instance.asset,
-                        expected_geometry_hash: next_assets
-                            .get(&instance.asset)
-                            .map_or(instance.geometry_hash, |asset| asset.geometry_hash),
                         transform: instance.transform,
                     },
                 )
@@ -354,13 +331,6 @@ impl StaticMeshCollisionProjection {
             let Some(asset) = next_assets.get(&instance.asset) else {
                 return Err(StaticMeshCollisionError::MissingAsset { id: instance.asset });
             };
-            if instance.expected_geometry_hash != asset.geometry_hash {
-                return Err(StaticMeshCollisionError::StaleAsset {
-                    id: asset.id,
-                    expected: instance.expected_geometry_hash,
-                    actual: asset.geometry_hash,
-                });
-            }
             validate_transform(instance.transform)?;
             if let Some(previous) = self.instances.get(&instance.id).filter(|previous| {
                 previous.asset == instance.asset
@@ -691,12 +661,10 @@ mod tests {
     #[test]
     fn residency_reuses_untouched_geometry_and_rejects_orphaning_atomically() {
         let first = ramp();
-        let hash = first.geometry_hash;
         let mut projection = StaticMeshCollisionProjection::default();
         let first_instance = StaticMeshColliderInstance {
             id: StaticMeshInstanceId(11),
             asset: first.id,
-            expected_geometry_hash: hash,
             transform: StaticMeshTransform::IDENTITY,
         };
         projection
@@ -751,11 +719,9 @@ mod tests {
     #[test]
     fn maintained_topology_identity_depends_only_on_the_resulting_set() {
         let asset = ramp();
-        let hash = asset.geometry_hash;
         let instance = |id, x| StaticMeshColliderInstance {
             id: StaticMeshInstanceId(id),
             asset: StaticMeshAssetId(7),
-            expected_geometry_hash: hash,
             transform: StaticMeshTransform {
                 translation: [x, 0.0, 0.0],
                 ..StaticMeshTransform::IDENTITY
@@ -792,7 +758,6 @@ mod tests {
     #[test]
     fn topology_identity_excludes_only_admitted_mesh_pose() {
         let asset = ramp();
-        let hash = asset.geometry_hash;
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
@@ -801,13 +766,11 @@ mod tests {
                     StaticMeshColliderInstance {
                         id: StaticMeshInstanceId(11),
                         asset: StaticMeshAssetId(7),
-                        expected_geometry_hash: hash,
                         transform: StaticMeshTransform::IDENTITY,
                     },
                     StaticMeshColliderInstance {
                         id: StaticMeshInstanceId(12),
                         asset: StaticMeshAssetId(7),
-                        expected_geometry_hash: hash,
                         transform: StaticMeshTransform {
                             translation: [5.0, 0.0, 0.0],
                             ..StaticMeshTransform::IDENTITY
@@ -825,7 +788,6 @@ mod tests {
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(11),
                     asset: StaticMeshAssetId(7),
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform {
                         translation: [2.0, 0.0, 0.0],
                         ..StaticMeshTransform::IDENTITY
@@ -844,7 +806,6 @@ mod tests {
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(12),
                     asset: StaticMeshAssetId(7),
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform {
                         translation: [6.0, 0.0, 0.0],
                         ..StaticMeshTransform::IDENTITY
@@ -880,7 +841,6 @@ mod tests {
                 StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(id),
                     asset: asset.id,
-                    expected_geometry_hash: asset.geometry_hash,
                     transform: StaticMeshTransform {
                         translation: [(id % 100) as f64 * 2.0, 0.0, (id / 100) as f64 * 2.0],
                         ..StaticMeshTransform::IDENTITY
@@ -906,7 +866,6 @@ mod tests {
     #[test]
     fn ramp_raycast_and_swept_aabb_use_exact_transformed_triangles() {
         let asset = ramp();
-        let hash = asset.geometry_hash;
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
@@ -914,7 +873,6 @@ mod tests {
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(11),
                     asset: StaticMeshAssetId(7),
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform::IDENTITY,
                 }],
             )
@@ -941,9 +899,8 @@ mod tests {
     }
 
     #[test]
-    fn stale_or_invalid_replacement_is_fail_atomic() {
+    fn invalid_replacement_is_fail_atomic() {
         let asset = ramp();
-        let hash = asset.geometry_hash;
         let mut projection = StaticMeshCollisionProjection::default();
         projection
             .replace_all(
@@ -951,7 +908,6 @@ mod tests {
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(11),
                     asset: asset.id,
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform::IDENTITY,
                 }],
             )
@@ -967,14 +923,13 @@ mod tests {
             [asset.clone()],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(11),
-                asset: asset.id,
-                expected_geometry_hash: hash.wrapping_add(1),
+                asset: StaticMeshAssetId(asset.id.0 + 1),
                 transform: StaticMeshTransform::IDENTITY,
             }],
         );
         assert!(matches!(
             rejected,
-            Err(StaticMeshCollisionError::StaleAsset { .. })
+            Err(StaticMeshCollisionError::MissingAsset { .. })
         ));
         assert_eq!(projection.revision(), 1);
         assert_eq!(
@@ -996,7 +951,6 @@ mod tests {
             vec![[0, 1, 2]],
         )
         .unwrap();
-        let hash = asset.geometry_hash;
         let half_sqrt = std::f64::consts::FRAC_1_SQRT_2;
         let mut projection = StaticMeshCollisionProjection::default();
         projection
@@ -1005,7 +959,6 @@ mod tests {
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(41),
                     asset: StaticMeshAssetId(31),
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform {
                         translation: [5.0, 0.0, 0.0],
                         rotation: [0.0, half_sqrt, 0.0, half_sqrt],

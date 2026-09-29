@@ -92,14 +92,12 @@ fn ramp_scene(rise: f64) -> VoxelCollisionScene {
         vec![[0, 1, 2], [1, 3, 2]],
     )
     .unwrap();
-    let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(1),
                 asset: StaticMeshAssetId(1),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform::IDENTITY,
             }],
         )
@@ -129,14 +127,12 @@ fn quarter_step_scene(with_low_ceiling: bool) -> VoxelCollisionScene {
         triangles.extend([[first, first + 2, first + 1], [first, first + 3, first + 2]]);
     }
     let asset = StaticMeshColliderAsset::new(StaticMeshAssetId(41), positions, triangles).unwrap();
-    let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(41),
                 asset: StaticMeshAssetId(41),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform::IDENTITY,
             }],
         )
@@ -157,14 +153,12 @@ fn moving_mesh_scene(translation_x: f64) -> VoxelCollisionScene {
         vec![[0, 2, 1], [1, 2, 3]],
     )
     .unwrap();
-    let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(101),
                 asset: StaticMeshAssetId(101),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform {
                     translation: [translation_x, 1.0, 0.0],
                     ..StaticMeshTransform::IDENTITY
@@ -197,14 +191,12 @@ fn hollow_frame_scene() -> VoxelCollisionScene {
     add_bar(-1.5, -0.7, -0.7, 0.7);
     add_bar(0.7, 1.5, -0.7, 0.7);
     let asset = StaticMeshColliderAsset::new(StaticMeshAssetId(102), positions, triangles).unwrap();
-    let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(102),
                 asset: StaticMeshAssetId(102),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform {
                     translation: [0.0, 1.0, 0.0],
                     ..StaticMeshTransform::IDENTITY
@@ -687,14 +679,12 @@ fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
         vec![[0, 2, 1], [1, 2, 3]],
     )
     .unwrap();
-    let asset_hash = asset.geometry_hash;
     scene
         .apply_static_mesh_residency(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(101),
                 asset: StaticMeshAssetId(101),
-                expected_geometry_hash: asset_hash,
                 transform: StaticMeshTransform {
                     translation: [0.2, 1.0, 0.0],
                     ..StaticMeshTransform::IDENTITY
@@ -750,14 +740,12 @@ fn collision_resident_mesh_is_one_support_authority_and_carries_without_aabb() {
         vec![[0, 2, 1], [1, 2, 3]],
     )
     .unwrap();
-    let changed_hash = changed_asset.geometry_hash;
     scene
         .apply_static_mesh_residency(
             [changed_asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(101),
                 asset: StaticMeshAssetId(101),
-                expected_geometry_hash: changed_hash,
                 transform: StaticMeshTransform {
                     translation: [0.4, 1.0, 0.0],
                     ..StaticMeshTransform::IDENTITY
@@ -1627,14 +1615,12 @@ fn airborne_character_landing_on_steep_ramp_keeps_sliding_down() {
         vec![[0, 1, 2], [1, 3, 2]],
     )
     .unwrap();
-    let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(10),
                 asset: StaticMeshAssetId(10),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform::IDENTITY,
             }],
         )

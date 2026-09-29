@@ -40,14 +40,12 @@ fn static_mesh_projection_joins_world_queries_and_survives_voxel_rebuilds() {
         vec![[0, 1, 2]],
     )
     .unwrap();
-    let hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(23),
                 asset: StaticMeshAssetId(17),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform::IDENTITY,
             }],
         )

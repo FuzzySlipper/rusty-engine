@@ -21,7 +21,6 @@ mod physics;
 mod rigid_body;
 mod trigger;
 mod trigger_codec;
-mod trigger_geometry;
 mod voxel_edit;
 mod voxel_picking;
 mod voxel_primitive;
@@ -76,10 +75,10 @@ pub use svc_collision::{
     DynamicsTetherReadout,
 };
 pub use trigger::{
-    KinematicTriggerDefinition, TriggerGeometrySource, TriggerLifecycleReceipt, TriggerOverlapFact,
-    TriggerOverlapFactKind, TriggerOverlapPage, TriggerOverlapPair, TriggerOverlapReadout,
-    TriggerReconcileCause, TriggerReconcileReceipt, TriggerRestoreReceipt, TriggerVolumeDiagnostic,
-    TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
+    KinematicTriggerDefinition, TriggerCollider, TriggerGeometrySource, TriggerLifecycleReceipt,
+    TriggerOverlapFact, TriggerOverlapFactKind, TriggerOverlapPage, TriggerOverlapPair,
+    TriggerOverlapReadout, TriggerReconcileCause, TriggerReconcileReceipt, TriggerRestoreReceipt,
+    TriggerVolumeDiagnostic, TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
     TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
 };
 pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};
@@ -117,9 +116,8 @@ pub use voxel_template::{
 };
 pub use world_origin::{
     decode_world_origin_state, encode_world_origin_state, PreparedWorldOriginRebase,
-    PreparedWorldOriginSpatialRebase, WorldOriginAffectedTransform, WorldOriginEntity,
-    WorldOriginReadout, WorldOriginRebaseError, WorldOriginRebaseReceipt, WorldOriginRebaseRequest,
-    WorldOriginRebaseService, WorldOriginSpatialRebaseReceipt, WorldOriginState,
+    WorldOriginAffectedTransform, WorldOriginEntity, WorldOriginReadout, WorldOriginRebaseError,
+    WorldOriginRebaseReceipt, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
     DEFAULT_LOCAL_COORDINATE_ENVELOPE, WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
 };
 
@@ -970,10 +968,6 @@ impl VoxelCollisionScene {
         instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
         self.projection.replace_static_meshes(assets, instances)
-    }
-
-    pub fn static_mesh_asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
-        self.projection.static_mesh_asset_geometry_hash(id)
     }
 
     /// Incremental authored collision residency in the current local origin frame.

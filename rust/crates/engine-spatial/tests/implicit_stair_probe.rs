@@ -130,7 +130,6 @@ fn scene(stairs: StaticMesh) -> VoxelCollisionScene {
         .map(|(index, asset)| StaticMeshColliderInstance {
             id: StaticMeshInstanceId((index + 1) as u64),
             asset: asset.id,
-            expected_geometry_hash: asset.geometry_hash,
             transform: StaticMeshTransform::IDENTITY,
         })
         .collect();

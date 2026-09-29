@@ -968,17 +968,21 @@ steering. It also reproduces `StartNotWalkable` from subtracting the box minimum
 Run it with `scripts/test-csharp-sdk-package.sh --coreclr-smoke`.
 
 Spatial trigger definitions remain registered for the session while their
-active state can change. `SetTriggerActive` is revision-guarded: deactivation
-removes current overlaps and publishes bounded exit facts, while reactivation
+active state can change. `ReconcileTriggers` and `RestoreTriggers` read the
+product's collider rows for that call only: a row whose entity is a registered
+trigger is that trigger's world-space AABB, and every other row with enabled
+collision is a candidate subject. `SetTriggerActive` deactivation removes
+current overlaps and publishes bounded exit facts, while reactivation
 publishes no synthetic enter—the next ordinary `ReconcileTriggers` observes
 real geometry and produces any new edge. `RestoreTriggers` accepts the complete
 active trigger ID set plus current projected colliders and replaces the active
 and overlap baseline without producing gameplay facts. Use `ReadTrigger` for
 the current active flag, revision, and overlap count, and consume facts only up
-to the count returned by the operation receipt. Unknown IDs, duplicate state
-changes, duplicate restore IDs, and stale revisions reject without changing
-the session. Disposing the Spatial session destroys the definitions, active
-set, overlaps, and fact history together.
+to the count returned by the operation receipt. The trigger revision counts
+changes to the active and overlap sets; overlap pages use it to fence
+continuations. Unknown IDs, duplicate state changes, and duplicate restore IDs
+reject without changing the session. Disposing the Spatial session destroys the
+definitions, active set, overlaps, and fact history together.
 
 ### Generated level artifact admission
 

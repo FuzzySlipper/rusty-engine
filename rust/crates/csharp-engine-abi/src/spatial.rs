@@ -271,7 +271,6 @@ pub struct NativeSpatialTriggerReconcileRequest {
 pub struct NativeSpatialTriggerSetActiveRequest {
     pub session: NativeSpatialSessionHandle,
     pub trigger: u64,
-    pub expected_revision: u64,
     pub active: bool,
     pub tick: u64,
 }
@@ -294,7 +293,6 @@ pub struct NativeSpatialTriggerLifecycleReceipt {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpatialTriggerRestoreRequest {
     pub session: NativeSpatialSessionHandle,
-    pub expected_revision: u64,
     pub active_triggers: *const u64,
     pub active_triggers_len: usize,
     pub entities: *const NativeSpatialEntityCollider,
@@ -1429,8 +1427,6 @@ pub struct NativeCharacterStepReceipt {
     pub movement: NativeCharacterMovementFact,
     pub tether: NativeCharacterTetherFact,
     pub generation: u64,
-    pub revision_before: u64,
-    pub revision_after: u64,
     pub entity: u64,
     pub command_sequence: u64,
     pub transform_before: NativeTransform,

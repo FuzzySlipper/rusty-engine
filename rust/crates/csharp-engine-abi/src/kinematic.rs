@@ -176,8 +176,6 @@ pub struct NativeKinematicMotionLease {
     pub bodies_considered: u64,
     pub moved_bodies: u64,
     pub blocked_axes: u64,
-    pub revision_before: u64,
-    pub revision_after: u64,
 }
 
 /// Stable non-success status values for `NativeKinematicApi` operations.

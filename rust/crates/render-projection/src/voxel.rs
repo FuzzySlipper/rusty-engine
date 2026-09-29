@@ -699,7 +699,6 @@ mod tests {
         VoxelChunkResidencyOperation, VoxelChunkResidencyService, VoxelEdit, VoxelEditService,
         WorldOrigin, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
     };
-    use entity_state::EntityState;
     use render_model::MaterialUvStrategy;
 
     #[test]
@@ -908,7 +907,6 @@ mod tests {
         )
         .unwrap();
         let mut origin = WorldOriginState::default();
-        let mut entities = EntityState::default();
         let materials = BTreeMap::from([(1, material(1))]);
         let mut projector = VoxelRenderProjector::new();
         let project = |projector: &mut VoxelRenderProjector, scene: &VoxelCollisionScene| {
@@ -930,14 +928,16 @@ mod tests {
 
         let request = WorldOriginRebaseRequest {
             expected_origin_revision: 0,
-            expected_entity_revision: entities.revision(),
             expected_voxel_source_revision: scene.source_revision().raw(),
             expected_static_mesh_revision: scene.static_mesh_collision_revision(),
             target_origin: WorldOrigin::new([100_000, 0, 0]),
             entities: Vec::new(),
         };
+        let prepared = WorldOriginRebaseService
+            .prepare(&origin, &scene, request)
+            .unwrap();
         WorldOriginRebaseService
-            .apply(&mut origin, &mut entities, &mut scene, request)
+            .commit(&mut origin, &mut scene, &prepared)
             .unwrap();
         let update = project(&mut projector, &scene);
 

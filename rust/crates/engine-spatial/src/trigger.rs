@@ -1,30 +1,46 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_ids::EntityId;
-use entity_state::EntityState;
+use core_math::Vec3;
 use serde::{Deserialize, Serialize};
-
-use crate::trigger_geometry::live_aabb;
 
 pub const TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 const MAX_TRIGGER_READ_ITEMS: usize = 100_000;
 
-/// Selects where a registered trigger derives its live AABB during reconciliation.
+/// Selects whether a registered trigger needs enabled collision to sense.
 ///
-/// `ActiveCollision` is the historical behavior: the trigger entity must be
-/// active and expose an enabled collision component in addition to bounds and
-/// a composed world transform. `EntityBounds` derives the same AABB from the
-/// canonical entity lifecycle, bounds, and composed world transform without
-/// consulting the collision component at all, so the trigger entity never has
-/// to become a solid motion obstacle to sense subjects. Subject eligibility is
-/// unaffected: subjects always require active collision regardless of the
-/// trigger's geometry source.
+/// `ActiveCollision` senses only while the trigger's collider is enabled.
+/// `EntityBounds` senses from the collider's AABB whatever its collision
+/// flag, so the trigger never has to become a solid motion obstacle. Subjects
+/// always need enabled collision, whatever the trigger's geometry source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TriggerGeometrySource {
     #[default]
     ActiveCollision,
     EntityBounds,
+}
+
+/// One product collider for a reconcile or restore call: a world-space AABB
+/// and whether its collision is enabled. Registered trigger entities use
+/// their row as trigger geometry; every other row is a potential subject.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TriggerCollider {
+    pub entity: EntityId,
+    pub min: Vec3,
+    pub max: Vec3,
+    pub collision_enabled: bool,
+}
+
+impl TriggerCollider {
+    fn overlaps(&self, other: &Self) -> bool {
+        self.min.x < other.max.x
+            && self.max.x > other.min.x
+            && self.min.y < other.max.y
+            && self.max.y > other.min.y
+            && self.min.z < other.max.z
+            && self.max.z > other.min.z
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +72,7 @@ impl KinematicTriggerDefinition {
 
     /// Selects a non-default trigger geometry source. Existing definitions
     /// keep `ActiveCollision`; `EntityBounds` registers a trigger that senses
-    /// from bounds and composed transform without requiring active collision.
+    /// from its AABB without requiring enabled collision.
     pub const fn with_geometry_source(mut self, geometry: TriggerGeometrySource) -> Self {
         self.geometry = geometry;
         self
@@ -129,10 +145,7 @@ pub enum TriggerVolumeDiagnosticCode {
     InvalidIdentifier,
     InvalidTag,
     StaleEntity,
-    MissingCollision,
     InactiveCollision,
-    MissingBounds,
-    MissingTransform,
     SnapshotDecode,
     SnapshotVersion,
     SnapshotInvariant,
@@ -150,10 +163,7 @@ impl TriggerVolumeDiagnosticCode {
             Self::InvalidIdentifier => "invalid-trigger-identifier",
             Self::InvalidTag => "invalid-trigger-tag",
             Self::StaleEntity => "stale-trigger-entity",
-            Self::MissingCollision => "trigger-missing-collision",
             Self::InactiveCollision => "trigger-inactive-collision",
-            Self::MissingBounds => "trigger-missing-bounds",
-            Self::MissingTransform => "trigger-missing-transform",
             Self::SnapshotDecode => "trigger-snapshot-decode",
             Self::SnapshotVersion => "trigger-snapshot-version",
             Self::SnapshotInvariant => "trigger-snapshot-invariant",
@@ -304,11 +314,9 @@ impl TriggerVolumeSystem {
     pub fn set_active(
         &mut self,
         trigger: EntityId,
-        expected_revision: u64,
         active: bool,
         tick: u64,
     ) -> Result<TriggerLifecycleReceipt, TriggerVolumeError> {
-        self.require_revision(expected_revision)?;
         let currently_active = self.is_active(trigger)?;
         if currently_active == active {
             return Err(TriggerVolumeError {
@@ -363,10 +371,8 @@ impl TriggerVolumeSystem {
     pub fn restore(
         &mut self,
         active_triggers: &[EntityId],
-        entities: &EntityState,
-        expected_revision: u64,
+        colliders: impl IntoIterator<Item = TriggerCollider>,
     ) -> Result<TriggerRestoreReceipt, TriggerVolumeError> {
-        self.require_revision(expected_revision)?;
         let active = active_triggers.iter().copied().collect::<BTreeSet<_>>();
         if active.len() != active_triggers.len() {
             return Err(TriggerVolumeError {
@@ -392,7 +398,7 @@ impl TriggerVolumeSystem {
             .collect::<BTreeSet<_>>();
         let mut candidate = self.clone();
         candidate.inactive_triggers = inactive_triggers;
-        let (active_overlaps, diagnostics) = candidate.compute_overlaps(entities)?;
+        let (active_overlaps, diagnostics) = candidate.compute_overlaps(colliders);
         let changed = candidate.inactive_triggers != self.inactive_triggers
             || active_overlaps != self.active_overlaps;
         let revision_before = self.revision;
@@ -416,11 +422,11 @@ impl TriggerVolumeSystem {
 
     pub fn reconcile(
         &mut self,
-        entities: &EntityState,
+        colliders: impl IntoIterator<Item = TriggerCollider>,
         tick: u64,
         cause: TriggerReconcileCause,
     ) -> Result<TriggerReconcileReceipt, TriggerVolumeError> {
-        let (next, diagnostics) = self.compute_overlaps(entities)?;
+        let (next, diagnostics) = self.compute_overlaps(colliders);
         let exits = self
             .active_overlaps
             .difference(&next)
@@ -685,10 +691,17 @@ impl TriggerVolumeSystem {
 
     fn compute_overlaps(
         &self,
-        entities: &EntityState,
-    ) -> Result<(BTreeSet<TriggerOverlapPair>, Vec<TriggerVolumeDiagnostic>), TriggerVolumeError>
-    {
-        let trigger_ids = self.definitions.keys().copied().collect::<BTreeSet<_>>();
+        colliders: impl IntoIterator<Item = TriggerCollider>,
+    ) -> (BTreeSet<TriggerOverlapPair>, Vec<TriggerVolumeDiagnostic>) {
+        let mut triggers = BTreeMap::new();
+        let mut subjects = Vec::new();
+        for collider in colliders {
+            if self.definitions.contains_key(&collider.entity) {
+                triggers.insert(collider.entity, collider);
+            } else if collider.collision_enabled {
+                subjects.push(collider);
+            }
+        }
         let mut next = BTreeSet::new();
         let mut diagnostics = Vec::new();
         for definition in self.definitions.values() {
@@ -696,57 +709,32 @@ impl TriggerVolumeSystem {
             if self.inactive_triggers.contains(&trigger) {
                 continue;
             }
-            let Some(trigger_bounds) = live_aabb(
-                entities,
-                trigger,
-                true,
-                &mut diagnostics,
-                definition.geometry,
-            ) else {
+            let Some(bounds) = triggers.get(&trigger) else {
+                diagnostics.push(diagnostic(
+                    TriggerVolumeDiagnosticCode::StaleEntity,
+                    Some(trigger),
+                    "trigger entity has no collider row",
+                ));
                 continue;
             };
-            for entity in entities.entities() {
-                if entity.id == trigger || trigger_ids.contains(&entity.id) {
-                    continue;
-                }
-                let Some(subject_bounds) = live_aabb(
-                    entities,
-                    entity.id,
-                    false,
-                    &mut diagnostics,
-                    TriggerGeometrySource::ActiveCollision,
-                ) else {
-                    continue;
-                };
-                if trigger_bounds.overlaps(subject_bounds) {
-                    next.insert(TriggerOverlapPair::new(trigger, entity.id));
-                }
+            if definition.geometry == TriggerGeometrySource::ActiveCollision
+                && !bounds.collision_enabled
+            {
+                diagnostics.push(diagnostic(
+                    TriggerVolumeDiagnosticCode::InactiveCollision,
+                    Some(trigger),
+                    "trigger collision is disabled",
+                ));
+                continue;
             }
+            next.extend(
+                subjects
+                    .iter()
+                    .filter(|subject| bounds.overlaps(subject))
+                    .map(|subject| TriggerOverlapPair::new(trigger, subject.entity)),
+            );
         }
-        diagnostics.sort_by(|left, right| {
-            left.entity
-                .cmp(&right.entity)
-                .then(left.code.cmp(&right.code))
-                .then(left.message.cmp(&right.message))
-        });
-        diagnostics.dedup();
-        Ok((next, diagnostics))
-    }
-
-    fn require_revision(&self, expected_revision: u64) -> Result<(), TriggerVolumeError> {
-        if self.revision == expected_revision {
-            return Ok(());
-        }
-        Err(TriggerVolumeError {
-            diagnostics: vec![diagnostic(
-                TriggerVolumeDiagnosticCode::StaleRevision,
-                None,
-                format!(
-                    "expected trigger revision {expected_revision}, actual {}",
-                    self.revision
-                ),
-            )],
-        })
+        (next, diagnostics)
     }
 }
 

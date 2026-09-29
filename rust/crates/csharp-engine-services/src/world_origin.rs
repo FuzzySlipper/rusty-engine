@@ -4,9 +4,8 @@ use core_ids::EntityId;
 use core_space::{GlobalPosition, WorldOrigin};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    PreparedWorldOriginSpatialRebase, WorldOriginRebaseRequest, WorldOriginRebaseService,
+    PreparedWorldOriginRebase, WorldOriginRebaseRequest, WorldOriginRebaseService,
 };
-use entity_state::{EntityDefinition, EntityState};
 
 use crate::{
     composition::{
@@ -21,7 +20,7 @@ use crate::{
 /// validated Engine candidate and copied local-transform facts.
 pub(crate) struct PreparedWorldOriginOwner {
     pub(crate) session: u64,
-    candidate: PreparedWorldOriginSpatialRebase,
+    candidate: PreparedWorldOriginRebase,
 }
 
 impl RuntimeSpatialBridge {
@@ -36,41 +35,34 @@ impl RuntimeSpatialBridge {
                 "world-origin entity rows",
             )
         }?;
-        let entities = call_entities(rows)?;
-        let candidate = {
-            let session = self.session_mut(request.session)?;
-            let prepared = WorldOriginRebaseService
-                .prepare(
-                    &session.world_origin,
-                    &entities,
-                    session.scene.as_ref(),
-                    WorldOriginRebaseRequest {
-                        expected_origin_revision: request.expected_origin_revision,
-                        // The EntityState above exists only inside this call.
-                        // Managed EntityStore revision ownership is deliberately
-                        // left to its adapter rather than fabricated here.
-                        expected_entity_revision: entities.revision(),
-                        expected_voxel_source_revision: request.expected_voxel_source_revision,
-                        expected_static_mesh_revision: request.expected_static_mesh_revision,
-                        target_origin: WorldOrigin::new([
-                            request.target_cell_x,
-                            request.target_cell_y,
-                            request.target_cell_z,
-                        ]),
-                        entities: rows
-                            .iter()
-                            .map(|row| {
-                                Ok(engine_spatial::WorldOriginEntity {
-                                    entity: EntityId::new(row.entity_id),
-                                    global_position: native_global_position(row.global_position)?,
-                                })
-                            })
-                            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?,
-                    },
-                )
-                .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_PREPARE", error))?;
-            prepared.into_spatial_candidate(session.world_origin)
-        };
+        let entities = rows
+            .iter()
+            .map(|row| {
+                Ok(engine_spatial::WorldOriginEntity {
+                    entity: EntityId::new(row.entity_id),
+                    transform: native_entity_transform(row.local_transform),
+                    global_position: native_global_position(row.global_position)?,
+                })
+            })
+            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+        let session = self.session_mut(request.session)?;
+        let candidate = WorldOriginRebaseService
+            .prepare(
+                &session.world_origin,
+                session.scene.as_ref(),
+                WorldOriginRebaseRequest {
+                    expected_origin_revision: request.expected_origin_revision,
+                    expected_voxel_source_revision: request.expected_voxel_source_revision,
+                    expected_static_mesh_revision: request.expected_static_mesh_revision,
+                    target_origin: WorldOrigin::new([
+                        request.target_cell_x,
+                        request.target_cell_y,
+                        request.target_cell_z,
+                    ]),
+                    entities,
+                },
+            )
+            .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_PREPARE", error))?;
         let value = self.next_world_origin_prepared;
         self.next_world_origin_prepared = self
             .next_world_origin_prepared
@@ -161,7 +153,7 @@ impl RuntimeSpatialBridge {
             })?;
             let mut scene = (*session.scene).clone();
             let receipt = WorldOriginRebaseService
-                .commit_spatial(&mut session.world_origin, &mut scene, &owner.candidate)
+                .commit(&mut session.world_origin, &mut scene, &owner.candidate)
                 .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_COMMIT", error))?;
             let scene = Arc::new(scene);
             session.scene = Arc::clone(&scene);
@@ -202,19 +194,6 @@ impl RuntimeSpatialBridge {
                 )
             })
     }
-}
-
-fn call_entities(
-    rows: &[NativeWorldOriginEntityRow],
-) -> Result<EntityState, CsharpEngineServicesError> {
-    EntityState::from_definitions(rows.iter().map(|row| {
-        EntityDefinition::new(
-            EntityId::new(row.entity_id),
-            format!("product-{}", row.entity_id),
-        )
-        .with_full_transform(native_entity_transform(row.local_transform))
-    }))
-    .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_ENTITY", error))
 }
 
 fn native_global_position(

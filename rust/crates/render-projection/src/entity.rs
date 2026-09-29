@@ -370,17 +370,28 @@ mod tests {
         let mut origin = WorldOriginState::default();
         let request = WorldOriginRebaseRequest {
             expected_origin_revision: 0,
-            expected_entity_revision: state.revision(),
             expected_voxel_source_revision: scene.source_revision().raw(),
             expected_static_mesh_revision: scene.static_mesh_collision_revision(),
             target_origin: WorldOrigin::new([100_000, 0, 0]),
             entities: vec![WorldOriginEntity {
                 entity: id,
+                transform: state.transform(id).unwrap().transform(),
                 global_position: GlobalPosition::from_world([100_000.25, 2.0, 0.0]).unwrap(),
             }],
         };
+        let prepared = WorldOriginRebaseService
+            .prepare(&origin, &scene, request)
+            .unwrap();
         WorldOriginRebaseService
-            .apply(&mut origin, &mut state, &mut scene, request)
+            .commit(&mut origin, &mut scene, &prepared)
+            .unwrap();
+        state
+            .apply_batch(entity_state::EntityCommandBatch::new([
+                entity_state::EntityCommand::SetTranslation {
+                    entity: id,
+                    translation: prepared.affected_transforms()[0].transform.translation,
+                },
+            ]))
             .unwrap();
 
         let update = projector.project(&state, &assets).unwrap();

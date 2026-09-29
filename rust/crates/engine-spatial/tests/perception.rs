@@ -100,14 +100,12 @@ fn retained_static_mesh_occludes_visibility_while_a_clear_target_remains_visible
         vec![[0, 1, 2]],
     )
     .unwrap();
-    let geometry_hash = asset.geometry_hash;
     scene
         .replace_static_mesh_colliders(
             [asset],
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(23),
                 asset: StaticMeshAssetId(17),
-                expected_geometry_hash: geometry_hash,
                 transform: StaticMeshTransform::IDENTITY,
             }],
         )

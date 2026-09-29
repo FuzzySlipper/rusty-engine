@@ -842,10 +842,6 @@ impl CollisionProjection {
         self.static_meshes.replace_all(assets, instances)
     }
 
-    pub fn static_mesh_asset_geometry_hash(&self, id: StaticMeshAssetId) -> Option<u64> {
-        self.static_meshes.asset_geometry_hash(id)
-    }
-
     pub fn apply_static_mesh_residency(
         &mut self,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
@@ -1582,14 +1578,12 @@ mod tests {
             vec![[0, 1, 2]],
         )
         .unwrap();
-        let hash = asset.geometry_hash;
         projection
             .replace_static_meshes(
                 [asset],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(41),
                     asset: StaticMeshAssetId(41),
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform::IDENTITY,
                 }],
             )
@@ -1943,14 +1937,12 @@ mod tests {
             vec![[0, 1, 2]],
         )
         .unwrap();
-        let hash = asset.geometry_hash;
         projection
             .replace_static_meshes(
                 [asset],
                 [StaticMeshColliderInstance {
                     id: StaticMeshInstanceId(9),
                     asset: StaticMeshAssetId(3),
-                    expected_geometry_hash: hash,
                     transform: StaticMeshTransform::IDENTITY,
                 }],
             )

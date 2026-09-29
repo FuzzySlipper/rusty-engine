@@ -152,7 +152,7 @@ fn native_motion_body(row: &NativeKinematicMotionEntityRow) -> KinematicBodyView
 }
 
 /// Resolve product-owned rows directly. Candidates keep each row's rotation
-/// and scale; the call-local revision pair reports 0 -> 1 when any row changed.
+/// and scale.
 fn build_motion_lease(
     bridge: &mut RuntimeSpatialBridge,
     rows: &[NativeKinematicMotionEntityRow],
@@ -231,8 +231,6 @@ fn build_motion_lease(
         bodies_considered: u64::try_from(resolution.bodies_considered).map_err(|_| 0)?,
         moved_bodies: u64::try_from(resolution.moved_bodies).map_err(|_| 0)?,
         blocked_axes: u64::try_from(resolution.blocked_axes).map_err(|_| 0)?,
-        revision_before: 0,
-        revision_after: u64::from(!candidates.is_empty()),
     };
     bridge.kinematic_motion_leases.insert(
         handle_value,
@@ -735,8 +733,6 @@ mod tests {
             bodies_considered: 0,
             moved_bodies: 0,
             blocked_axes: 0,
-            revision_before: 0,
-            revision_after: 0,
         };
         assert_eq!(
             unsafe { (api.run_motion)(api.context, &request, &mut first) },
@@ -745,7 +741,6 @@ mod tests {
         assert_eq!(first.bodies_considered, 2);
         assert_eq!(first.moved_bodies, 1);
         assert_eq!(first.blocked_axes, 1);
-        assert_eq!((first.revision_before, first.revision_after), (0, 1));
         let candidates =
             unsafe { std::slice::from_raw_parts(first.candidates, first.candidates_len) };
         assert_eq!(candidates.len(), 1);

@@ -349,7 +349,6 @@ public sealed class Product : IEngineProduct
             true,
             new ulong[] { 1, 2 }));
         Require(motionPhase.BodiesConsidered == 2 && motionPhase.MovedBodies == 1 && motionPhase.BlockedAxes == 1
-            && motionPhase.RevisionBefore == 0 && motionPhase.RevisionAfter == 1
             && motionPhase.Candidates.Span.Length == 1
             && motionPhase.Candidates.Span[0].EntityId == 1
             && motionPhase.Candidates.Span[0].AfterTransform.Translation == new Vector3(12.0f, 10.0f, 10.0f)

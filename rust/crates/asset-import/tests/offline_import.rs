@@ -207,7 +207,6 @@ fn golden_static_ramp_imports_into_the_shared_trimesh_query_service() {
             .collect(),
     )
     .unwrap();
-    let hash = asset.geometry_hash;
     let mut collision = StaticMeshCollisionProjection::default();
     collision
         .replace_all(
@@ -215,7 +214,6 @@ fn golden_static_ramp_imports_into_the_shared_trimesh_query_service() {
             [StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(2),
                 asset: StaticMeshAssetId(1),
-                expected_geometry_hash: hash,
                 transform: StaticMeshTransform::IDENTITY,
             }],
         )

@@ -681,8 +681,6 @@ sealed class SpatialServiceFake : ISpatialService
         CharacterMotion motion = request.Motion with { LastCommandSequence = request.Command.Sequence };
         return new CharacterStepReceipt(
             1,
-            0,
-            1,
             1,
             request.Command.Sequence,
             before,
@@ -1127,8 +1125,6 @@ sealed class KinematicServiceFake : IKinematicService
                 ReadOnlyMemory<KinematicMotionFact>.Empty,
                 0,
                 0,
-                0,
-                0,
                 0);
         }
         KinematicMotionEntityRow[] rows = request.Rows.ToArray();
@@ -1154,7 +1150,7 @@ sealed class KinematicServiceFake : IKinematicService
             new KinematicMotionFact(mover.EntityId, KinematicMotionFactKind.Blocked, KinematicMotionAxis.Z, Vector3.Zero, Vector3.Zero, 2.0f),
             new KinematicMotionFact(mover.EntityId, KinematicMotionFactKind.Moved, KinematicMotionAxis.X, mover.Transform.Translation, after.Translation, 0.0f),
         };
-        return new KinematicMotionLeaseReceipt(new[] { candidate }, facts, 2, 1, 1, 0, 1);
+        return new KinematicMotionLeaseReceipt(new[] { candidate }, facts, 2, 1, 1);
     }
 }
 

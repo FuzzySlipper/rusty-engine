@@ -22,7 +22,7 @@ use engine_spatial::{
     CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel,
     SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,
     StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource, TriggerOverlapFact,
+    SurfaceMeshOptions, SurfaceMode, TriggerCollider, TriggerGeometrySource, TriggerOverlapFact,
     TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem,
     VoxelCollisionScene, VoxelPickHint, VoxelPickService,
 };
@@ -834,37 +834,14 @@ impl RuntimeSpatialBridge {
                     })?,
             );
         }
-        let geometry = admitted
-            .iter()
-            .map(|asset| (asset.id, asset.geometry_hash))
-            .collect::<BTreeMap<_, _>>();
-        let scene_before = Arc::clone(&self.session_mut(request.session)?.scene);
         let instances = instances
             .iter()
-            .map(|instance| {
-                let asset = StaticMeshAssetId(instance.asset);
-                let expected_geometry_hash = geometry
-                    .get(&asset)
-                    .copied()
-                    .or_else(|| {
-                        removed
-                            .filter(|(assets, _)| !assets.contains(&instance.asset))
-                            .and_then(|_| scene_before.static_mesh_asset_geometry_hash(asset))
-                    })
-                    .ok_or_else(|| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_COLLISION_INSTANCE",
-                            "instance referenced an unavailable asset",
-                        )
-                    })?;
-                Ok(StaticMeshColliderInstance {
-                    id: StaticMeshInstanceId(instance.id),
-                    asset,
-                    expected_geometry_hash,
-                    transform: static_mesh_transform(instance.transform),
-                })
+            .map(|instance| StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(instance.id),
+                asset: StaticMeshAssetId(instance.asset),
+                transform: static_mesh_transform(instance.transform),
             })
-            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+            .collect::<Vec<_>>();
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
             let mut candidate = (*session.scene).clone();
@@ -997,7 +974,6 @@ impl RuntimeSpatialBridge {
             let instance = StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(asset_id),
                 asset: asset.id,
-                expected_geometry_hash: asset.geometry_hash,
                 transform: StaticMeshTransform::IDENTITY,
             };
             (vec![asset], vec![instance])
@@ -2609,14 +2585,13 @@ impl RuntimeSpatialBridge {
         let entities =
             unsafe { borrowed_slice(request.entities, request.entities_len, "trigger entities") }
                 .map_err(SpatialTriggerOperationError::Service)?;
-        let state = entity_state(entities).map_err(SpatialTriggerOperationError::Service)?;
         let cause = native_trigger_cause(request.cause);
         let session = self
             .session_mut(request.session)
             .map_err(SpatialTriggerOperationError::Service)?;
         let receipt = session
             .triggers
-            .reconcile(&state, request.tick, cause)
+            .reconcile(trigger_colliders(entities), request.tick, cause)
             .map_err(SpatialTriggerOperationError::Trigger)?;
         session.last_trigger_facts = receipt.facts.clone();
         Ok(NativeSpatialTriggerReceipt {
@@ -2646,12 +2621,7 @@ impl RuntimeSpatialBridge {
             .map_err(SpatialTriggerOperationError::Service)?;
         let receipt = session
             .triggers
-            .set_active(
-                EntityId::new(request.trigger),
-                request.expected_revision,
-                request.active,
-                request.tick,
-            )
+            .set_active(EntityId::new(request.trigger), request.active, request.tick)
             .map_err(SpatialTriggerOperationError::Trigger)?;
         session.last_trigger_facts = receipt.facts.clone();
         Ok(NativeSpatialTriggerLifecycleReceipt {
@@ -2694,13 +2664,12 @@ impl RuntimeSpatialBridge {
             )
         }
         .map_err(SpatialTriggerOperationError::Service)?;
-        let state = entity_state(entities).map_err(SpatialTriggerOperationError::Service)?;
         let session = self
             .session_mut(request.session)
             .map_err(SpatialTriggerOperationError::Service)?;
         let receipt = session
             .triggers
-            .restore(&active_triggers, &state, request.expected_revision)
+            .restore(&active_triggers, trigger_colliders(entities))
             .map_err(SpatialTriggerOperationError::Trigger)?;
         // Restore establishes a baseline. Enter/exit edges become observable
         // only after subsequent product-driven reconciliation.
@@ -3848,8 +3817,6 @@ fn native_character_receipt(
         },
         tether: native_character_tether_fact(receipt.tether),
         generation: receipt.generation,
-        revision_before: receipt.revision_before,
-        revision_after: receipt.revision_after,
         entity: receipt.entity.raw(),
         command_sequence: receipt.command_sequence,
         transform_before: NativeTransform {
@@ -5480,6 +5447,17 @@ fn validate_entity_collider(
 ) -> Result<(), CsharpEngineServicesError> {
     validate_aabb(native_vec3_value(value.min), native_vec3_value(value.max))?;
     Ok(())
+}
+
+fn trigger_colliders(
+    values: &[NativeSpatialEntityCollider],
+) -> impl Iterator<Item = TriggerCollider> + '_ {
+    values.iter().map(|value| TriggerCollider {
+        entity: EntityId::new(value.entity),
+        min: native_vec3_value(value.min),
+        max: native_vec3_value(value.max),
+        collision_enabled: value.enabled,
+    })
 }
 
 pub(crate) fn entity_state(
@@ -7750,13 +7728,11 @@ mod tests {
             StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(9),
                 asset: StaticMeshAssetId(7),
-                expected_geometry_hash: asset.geometry_hash,
                 transform: StaticMeshTransform::IDENTITY,
             },
             StaticMeshColliderInstance {
                 id: StaticMeshInstanceId(10),
                 asset: StaticMeshAssetId(7),
-                expected_geometry_hash: asset.geometry_hash,
                 transform: StaticMeshTransform::IDENTITY,
             },
         ];
@@ -8508,30 +8484,6 @@ mod tests {
         );
         assert_eq!(read.trigger, 41);
 
-        let duplicate_entities = [
-            NativeSpatialEntityCollider {
-                entity: 41,
-                min: NativeVec3::default(),
-                max: NativeVec3 {
-                    x: 1.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
-                enabled: true,
-                ..Default::default()
-            },
-            NativeSpatialEntityCollider {
-                entity: 41,
-                min: NativeVec3::default(),
-                max: NativeVec3 {
-                    x: 1.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
-                enabled: true,
-                ..Default::default()
-            },
-        ];
         let mut reconcile = NativeSpatialTriggerReceipt::default();
         receipt = unsafe { std::mem::zeroed() };
         assert_eq!(
@@ -8542,8 +8494,8 @@ mod tests {
                         session,
                         tick: 7,
                         cause: NativeSpatialTriggerCause::Scheduled,
-                        entities: duplicate_entities.as_ptr(),
-                        entities_len: duplicate_entities.len(),
+                        entities: std::ptr::null(),
+                        entities_len: 1,
                     },
                     &mut reconcile,
                     &mut receipt,
@@ -8555,7 +8507,7 @@ mod tests {
         assert_eq!(copied_utf8(receipt.operation), "ReconcileTriggers");
         assert_eq!(receipt.diagnostics.diagnostics_len, 1);
         let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
-        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_SPATIAL_ENTITY");
+        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_SPATIAL_POINTER");
         assert!(!copied_utf8(diagnostic.message).is_empty());
         assert_eq!(
             unsafe {
@@ -8581,6 +8533,128 @@ mod tests {
         assert_eq!(unchanged.trigger, read.trigger);
         assert_eq!(unchanged.revision, read.revision);
         assert_eq!(unchanged.overlap_count, read.overlap_count);
+    }
+
+    #[test]
+    fn trigger_reconcile_reports_enter_stay_and_exit_from_collider_rows() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.register_trigger)(
+                    api.context,
+                    &NativeSpatialTriggerRegisterRequest {
+                        session,
+                        trigger: 41,
+                        scope: utf8("fixture.zone"),
+                        tag: utf8("fixture"),
+                        geometry: NativeSpatialTriggerGeometry::ActiveCollision,
+                    },
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let cube = |entity, x: f32, half: f32| NativeSpatialEntityCollider {
+            entity,
+            min: NativeVec3 {
+                x: x - half,
+                y: -half,
+                z: -half,
+            },
+            max: NativeVec3 {
+                x: x + half,
+                y: half,
+                z: half,
+            },
+            enabled: true,
+            ..Default::default()
+        };
+        let mut reconcile = |tick, subject_x: Option<f32>| {
+            let mut rows = vec![cube(41, 0.0, 0.5)];
+            rows.extend(subject_x.map(|x| cube(50, x, 0.25)));
+            let mut receipt = NativeSpatialTriggerReceipt::default();
+            assert_eq!(
+                unsafe {
+                    (api.reconcile_triggers)(
+                        api.context,
+                        &NativeSpatialTriggerReconcileRequest {
+                            session,
+                            tick,
+                            cause: NativeSpatialTriggerCause::Movement,
+                            entities: rows.as_ptr(),
+                            entities_len: rows.len(),
+                        },
+                        &mut receipt,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+            let mut fact = NativeSpatialTriggerFactAtReceipt::default();
+            let first = (receipt.fact_count == 1).then(|| {
+                assert_eq!(
+                    unsafe {
+                        (api.read_trigger_fact_at)(
+                            api.context,
+                            NativeSpatialTriggerFactAtRequest { session, index: 0 },
+                            &mut fact,
+                        )
+                    },
+                    ABI_OK
+                );
+                assert!(fact.present && fact.trigger == 41 && fact.subject == 50);
+                fact.enter
+            });
+            (receipt, first)
+        };
+
+        let (outside, fact) = reconcile(1, Some(2.0));
+        assert_eq!((outside.fact_count, outside.revision, fact), (0, 0, None));
+        let (entered, fact) = reconcile(2, Some(0.5));
+        assert_eq!(
+            (entered.fact_count, entered.revision, fact),
+            (1, 1, Some(true))
+        );
+        let (stayed, fact) = reconcile(3, Some(-0.5));
+        assert_eq!(
+            (stayed.fact_count, stayed.continued_count, fact),
+            (0, 1, None)
+        );
+        assert_eq!(stayed.revision, 1);
+        let (exited, fact) = reconcile(4, Some(-2.0));
+        assert_eq!(
+            (exited.fact_count, exited.revision, fact),
+            (1, 2, Some(false))
+        );
+        assert_eq!(exited.active_overlap_count, 0);
+
+        // A removed subject row exits like any other departure; a trigger
+        // without a row senses nothing and reports why.
+        reconcile(5, Some(0.0));
+        let (removed, fact) = reconcile(6, None);
+        assert_eq!((removed.fact_count, fact), (1, Some(false)));
+        let mut receipt = NativeSpatialTriggerReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.reconcile_triggers)(
+                    api.context,
+                    &NativeSpatialTriggerReconcileRequest {
+                        session,
+                        tick: 7,
+                        cause: NativeSpatialTriggerCause::Scheduled,
+                        entities: std::ptr::null(),
+                        entities_len: 0,
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!((receipt.fact_count, receipt.diagnostic_count), (0, 1));
     }
 
     #[test]
@@ -8670,7 +8744,6 @@ mod tests {
                     &NativeSpatialTriggerSetActiveRequest {
                         session,
                         trigger: 41,
-                        expected_revision: 1,
                         active: false,
                         tick: 2,
                     },
@@ -8730,10 +8803,9 @@ mod tests {
         );
         assert!(!read.active && read.revision == 2 && read.overlap_count == 0);
 
-        for (trigger, expected_revision, active, code) in [
-            (41, 2, false, "duplicate-trigger-lifecycle"),
-            (999, 2, false, "missing-trigger-definition"),
-            (41, 1, true, "stale-trigger-revision"),
+        for (trigger, active, code) in [
+            (41, false, "duplicate-trigger-lifecycle"),
+            (999, false, "missing-trigger-definition"),
         ] {
             error = unsafe { std::mem::zeroed() };
             assert_eq!(
@@ -8743,7 +8815,6 @@ mod tests {
                         &NativeSpatialTriggerSetActiveRequest {
                             session,
                             trigger,
-                            expected_revision,
                             active,
                             tick: 3,
                         },
@@ -8762,7 +8833,6 @@ mod tests {
                     &NativeSpatialTriggerSetActiveRequest {
                         session,
                         trigger: 41,
-                        expected_revision: 2,
                         active: true,
                         tick: 4,
                     },
@@ -8782,7 +8852,6 @@ mod tests {
                     api.context,
                     &NativeSpatialTriggerRestoreRequest {
                         session,
-                        expected_revision: 3,
                         active_triggers: active.as_ptr(),
                         active_triggers_len: active.len(),
                         entities: entities.as_ptr(),
@@ -8824,7 +8893,6 @@ mod tests {
                     api.context,
                     &NativeSpatialTriggerRestoreRequest {
                         session,
-                        expected_revision: 4,
                         active_triggers: duplicate_active.as_ptr(),
                         active_triggers_len: duplicate_active.len(),
                         entities: entities.as_ptr(),
@@ -8839,29 +8907,6 @@ mod tests {
         assert_eq!(
             take_operation_diagnostic_code(&api, error),
             "duplicate-trigger-lifecycle"
-        );
-        error = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe {
-                (api.restore_triggers)(
-                    api.context,
-                    &NativeSpatialTriggerRestoreRequest {
-                        session,
-                        expected_revision: 3,
-                        active_triggers: active.as_ptr(),
-                        active_triggers_len: active.len(),
-                        entities: entities.as_ptr(),
-                        entities_len: entities.len(),
-                    },
-                    &mut restored,
-                    &mut error,
-                )
-            },
-            0
-        );
-        assert_eq!(
-            take_operation_diagnostic_code(&api, error),
-            "stale-trigger-revision"
         );
 
         assert_eq!(

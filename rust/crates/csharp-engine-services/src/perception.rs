@@ -354,14 +354,12 @@ mod tests {
             vec![[0, 1, 2]],
         )
         .expect("valid retained mesh");
-        let geometry_hash = asset.geometry_hash;
         scene
             .replace_static_mesh_colliders(
                 [asset],
                 [engine_spatial::StaticMeshColliderInstance {
                     id: engine_spatial::StaticMeshInstanceId(23),
                     asset: engine_spatial::StaticMeshAssetId(17),
-                    expected_geometry_hash: geometry_hash,
                     transform: engine_spatial::StaticMeshTransform::IDENTITY,
                 }],
             )
