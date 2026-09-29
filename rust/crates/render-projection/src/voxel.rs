@@ -182,9 +182,7 @@ impl VoxelRenderProjector {
                 .filter(|previous| previous.asset_id == instance.asset_id);
             let replace_all = previous.is_some_and(|previous| previous.material_slots != *slots);
             let visit = match previous {
-                Some(previous)
-                    if !replace_all && previous.mesh_lineage == scene.mesh_lineage() =>
-                {
+                Some(previous) if !replace_all && previous.mesh_lineage == scene.mesh_lineage() => {
                     if previous.source_revision == revision {
                         ChunkVisit::None
                     } else if previous.source_revision.checked_add(1) == Some(revision) {
@@ -241,9 +239,7 @@ impl VoxelRenderProjector {
         let retired: Vec<String> = self
             .last_instances
             .iter()
-            .filter(|(id, previous)| {
-                current.get(id.as_str()) != Some(&previous.asset_id.as_str())
-            })
+            .filter(|(id, previous)| current.get(id.as_str()) != Some(&previous.asset_id.as_str()))
             .map(|(id, _)| id.clone())
             .collect();
         for instance_id in retired {
@@ -268,8 +264,7 @@ impl VoxelRenderProjector {
             let instance = plan.instance;
             let scene = instance.scene;
             let root_key = VoxelRenderKey::Root(instance.instance_id.clone());
-            let (snapshot, root) = match self.last_instances.entry(instance.instance_id.clone())
-            {
+            let (snapshot, root) = match self.last_instances.entry(instance.instance_id.clone()) {
                 Entry::Occupied(entry) => {
                     let snapshot = entry.into_mut();
                     let handle = self
@@ -463,9 +458,9 @@ impl ChunkProjection<'_> {
                 handle
             }
         };
-        if previous.is_none_or(|previous| {
-            previous.content_hash != chunk.content_hash || self.replace_all
-        }) {
+        if previous
+            .is_none_or(|previous| previous.content_hash != chunk.content_hash || self.replace_all)
+        {
             self.operations.push(RenderDiff::ReplaceMeshPayload {
                 handle,
                 payload: voxel_mesh_payload_with_material_slots(chunk, self.slots),
@@ -545,7 +540,6 @@ fn instances_by_id<'a>(
     values.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
     values
 }
-
 
 fn root_node(instance: &VoxelProjectionInstance<'_>) -> RenderNode {
     RenderNode {
@@ -1261,7 +1255,10 @@ mod tests {
                     } => {
                         assert!(!self.nodes.contains_key(handle), "{handle:?} created twice");
                         if let Some(parent) = parent {
-                            assert!(self.nodes.contains_key(parent), "parent {parent:?} not live");
+                            assert!(
+                                self.nodes.contains_key(parent),
+                                "parent {parent:?} not live"
+                            );
                         }
                         self.nodes.insert(
                             *handle,
@@ -1274,7 +1271,10 @@ mod tests {
                         );
                     }
                     RenderDiff::Destroy { handle } => {
-                        assert!(self.nodes.contains_key(handle), "destroy of stale {handle:?}");
+                        assert!(
+                            self.nodes.contains_key(handle),
+                            "destroy of stale {handle:?}"
+                        );
                         let mut doomed = vec![*handle];
                         while let Some(next) = doomed.pop() {
                             self.nodes.remove(&next);
@@ -1293,7 +1293,10 @@ mod tests {
                         node.transform = transform.unwrap_or(node.transform);
                     }
                     RenderDiff::ReplaceMeshPayload { handle, payload } => {
-                        let node = self.nodes.get_mut(handle).expect("payload of a live handle");
+                        let node = self
+                            .nodes
+                            .get_mut(handle)
+                            .expect("payload of a live handle");
                         node.payload = Some(payload.clone());
                     }
                     other => panic!("unexpected operation {other:?}"),
@@ -1389,7 +1392,6 @@ mod tests {
         };
         let mut mapped = false;
         let mut origin = WorldOriginState::default();
-        let mut entities = EntityState::default();
         let mut projector = VoxelRenderProjector::new();
         let mut renderer = Renderer::default();
         let mut partial = 0;
@@ -1428,14 +1430,16 @@ mod tests {
                     let target_origin = WorldOrigin::new([4 * rng.below(3) as i64, 0, 0]);
                     let request = WorldOriginRebaseRequest {
                         expected_origin_revision: origin.revision(),
-                        expected_entity_revision: entities.revision(),
                         expected_voxel_source_revision: scene.source_revision().raw(),
                         expected_static_mesh_revision: scene.static_mesh_collision_revision(),
                         target_origin,
                         entities: Vec::new(),
                     };
+                    let prepared = WorldOriginRebaseService
+                        .prepare(&origin, scene, request)
+                        .unwrap();
                     WorldOriginRebaseService
-                        .apply(&mut origin, &mut entities, scene, request)
+                        .commit(&mut origin, scene, &prepared)
                         .unwrap();
                 }
                 _ => {}
