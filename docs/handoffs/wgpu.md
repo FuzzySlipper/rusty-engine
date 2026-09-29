@@ -1,59 +1,51 @@
 # Lane: wgpu
 
-**Tasks, in order:** #8796, #8783.
-**Start:** when Den doc `rusty-engine/wgpu-bootstrap-crate-survey` exists
-(task #8795, in progress; it did not exist on 2026-09-29).
+**Tasks, in order:** #8783, #8815. **Start:** now.
 Campaign #8782; read Den doc `rusty-engine/desktop-renderer-campaign-2026-09`.
 Owner direction: desktop-first, TypeScript is UI only, enforced crate
 boundaries over prose. Shared protocol: [README.md](README.md).
 
+Round 1 of this lane landed #8796 (`6a88d6c7c`, in review). **Decision:
+write new on raw wgpu 30**, from `rust/prototypes/wgpu-bootstrap/raw`. See Den
+doc `rusty-engine/wgpu-bootstrap-decision`.
+
 ## Tasks
 
-- **#8796: decide whether to bootstrap the renderer.** The candidates are:
-  - (a) a pinned Bevy render cul-de-sac on our device (`RenderCreation::Manual`,
-    headless, driven per tick);
-  - (b) the best library-shaped renderer from the survey;
-  - (c) raw wgpu.
-
-  Render one Doom E1M1 room from a captured `PresentationWorld` to PNG with
-  each candidate that isn't disqualified on paper. Record the measures the task
-  lists. Write Den doc `rusty-engine/wgpu-bootstrap-decision`. Prototype crates
-  stay behind the boundary; nothing goes to production.
 - **#8783: the `render-wgpu` crate.** An offscreen renderer over
   `PresentationWorld`, built as typed handle-keyed tables and a fixed pass
-  pipeline. It must not grow a system scheduler or a second retained world. It
-  also needs:
-  - a screenshot harness that runs without Chromium;
-  - a dependency-boundary check so only this crate depends on wgpu;
+  pipeline. Read the task's updated description: it carries the decision, the
+  parity checklist seed (hemisphere light, equirect sky, per-texture sampler
+  modes, no default shadows or tone mapping) and the owner's "must not grow"
+  list. It also needs:
+  - a Chromium-free screenshot harness: move the prototype's capture script
+    and loader in;
+  - the wgpu row in `EXTERNAL_DEPENDENCY_OWNERS`
+    (`scripts/dependency_boundary_check.py`);
+  - software Vulkan (llvmpipe) for CI;
   - the baseline "files touched per visual capability, by language" measure.
 
-  **Publish the resource-table layout on #8783 early.** The family tasks
-  (#8784, #8785, #8787, #8788) and #8786/#8790 start from it in their own
-  lanes.
+  **Four other lanes wait on you:**
+  - **Table layout.** Publish the resource-table layout on #8783 as a Den
+    message as soon as it is settled. wgpu-scene and wgpu-view start from it.
+  - **Readback.** Post on #8786 when readback is on main (streaming lane).
+  - **Surface presentation.** Post on #8790 when it is on main (desktop
+    lane).
 
-## Inputs from landed work
-
-- **#8737** (`65ff4919`, in review) is the retained delta shape:
-  - `RuntimeAppearanceProjector` (`render-projection/src/runtime_appearance.rs`)
-    turns changed objects into `RenderFrameDiff` ops;
-  - `PresentationWorld` (`render-presentation`) applies them;
-  - products publish only changes through `Graphics.PublishChanges`.
-
-  A pending review fix (animation controller retargeting) does not change that
-  shape.
-- **#8766 and #8767:** the runtime owns browser I/O, and there is no replay.
-- **Doom:** `/home/dev/rusty-doom`. **Dagger:** `/home/dev/rusty-dagger`.
+  Landing the crate skeleton, tables and readback before the full first
+  family is fine if it unblocks them sooner. Say so in the review request.
+- **#8815: delete the prototype workspace** (`rust/prototypes/wgpu-bootstrap`)
+  once `render-wgpu` renders the room-study fixture. Update the "Reproduce"
+  section of `docs/evidence/wgpu-bootstrap-8796/`. It may land inside #8783.
 
 ## Files
 
-- **Owns:** the new `rust/crates/render-wgpu` crate, any prototype crates for
-  #8796, and the dependency-boundary check.
+- **Owns:** the `render-wgpu` crate root, device, tables and pass pipeline;
+  the prototype workspace; the wgpu dependency-boundary row.
 - **Leave alone:** `render-presentation` and `render-model` stay
   renderer-neutral. Read them; if a shape must change, raise it in Den first.
-  The main lane is editing `render-projection` and `render-presentation`
-  descriptors.
 
 ## Evidence
 
-Follow the acceptance for #8796 and #8783. CI needs an adapter (software Vulkan
-or a GPU runner); record which.
+Fixture screenshots from the harness, and the captured Doom room study
+rendered through `render-wgpu` beside the spike's Three reference, with
+differences named.

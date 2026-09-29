@@ -1,47 +1,49 @@
 # Lane: audio
 
-**Task:** #8789. **Start:** now. It consumes `PresentationWorld` audio ops and
-does not depend on the wgpu backend.
+**Tasks, in order:** #8812, #8813, #8814. **Start:** now.
 Campaign #8782; read Den doc `rusty-engine/desktop-renderer-campaign-2026-09`.
 Shared protocol: [README.md](README.md).
 
-## What to do
+Round 1 of this lane landed #8789 (`9dfa0f426`, in review):
+- the `render-audio` crate (kira/cpal/symphonia);
+- `RUSTY_AUDIO_OUTPUT=device` in `csharp-product-runtime/src/audio_output.rs`;
+- the decision record in `docs/evidence/audio-8789/README.md`.
 
-Realize the audio projection ops in the Rust runtime, with one library choice
-(kira, cpal/rodio, or similar). There are seven ops, covering voices, loops,
-emitters, cues and cursors. The rules:
-- cursors advance on Engine update facts, never wall clock;
-- loops resume from the retained baseline;
-- direct sounds and emitter bursts are not replayed on attach.
+These are its follow-ups.
 
-Also decide the browser dev mode's audio path: stream it beside frames, or keep
-the WebAudio realizer until #8792 deletes the TS lane. Base the decision on
-whether the playtest harness and recordings actually need browser audio, and
-record the cost of the option you reject.
+## Tasks
 
-## Inputs
-
-- **Projector:** `render-presentation/src/audio.rs` (`AudioProjector`). The
-  current browser realization is `render/packages/renderer-host/src/audio-host.ts`;
-  it is a reference only, frozen, and deleted later.
-- **Rules:** `docs/architecture.md` and `docs/recorded-audio.md`. #8742
-  (`25dfd514`) removed the Engine's clip count and byte budgets. Clips are
-  admitted as encoded bytes (WAV, Ogg Vorbis/Opus, MP3, FLAC); see the
-  container table in `docs/recorded-audio.md`.
-- **Products:** Dagger (music cues) at `/home/dev/rusty-dagger`; Doom (weapon
-  sounds) at `/home/dev/rusty-doom`.
+- **#8812: decode Opus on the device path.**
+  - Today it reports `decodeFailed`.
+  - Files: `render-audio`, the `EXTERNAL_DEPENDENCY_OWNERS` table in
+    `scripts/dependency_boundary_check.py` if you add a decoder crate,
+    `docs/recorded-audio.md`.
+  - Fixture: `fixtures/audio-containers/tone.opus`.
+- **#8813: give audio realization a listener pose and entity emitter
+  positions.**
+  - `audio_output.rs` passes `NoEntityPositions` and never calls
+    `set_listener` (`render-audio/src/lib.rs`).
+  - **Listener.** `render-presentation` has no camera state. The committed
+    camera is `CameraView` (`csharp-engine-services/src/camera_view.rs`). It
+    reaches the runtime as `RuntimePublication::ViewComposition`, pushed in
+    `csharp-product-runtime/src/lib.rs`. Take the listener pose from there.
+  - **Entity positions.** Take them from the retained presentation world,
+    which `render-audio` already reads.
+  - No new product API, and no wgpu dependency. Don't wire the browser
+    `RendererAudioHost`; #8792 deletes it.
+- **#8814: Doom emits weapon sounds through Audio.**
+  - Downstream only: `/home/agent/dev/rusty-doom`, where
+    `csharp/LoadingBay.Game/LoadingBayWorldServices.cs` holds
+    `LoadingBayAudioPolicy`, plus content imports.
+  - Use Doom's current pair. No Engine change.
 
 ## Files
 
-- **Owns:** a new Rust audio realization crate, plus its wiring into the
-  runtime process behind the desktop lifecycle.
-- **Leave alone:**
-  - `render-presentation/src/audio.rs`: read it; a change to the projector
-    shape goes to Den first, because the main lane is editing other
-    `render-presentation` descriptors;
-  - `csharp-engine-services/src/audio.rs`: shared service code.
+- **Owns:** see the README table.
+- **Leave alone:** `render-presentation/src/audio.rs` (the projector). A shape
+  change goes to Den first.
 
 ## Evidence
 
-A Dagger music cue and a Doom weapon sound through the Rust path, and the
-chosen browser path exercised once.
+Null-sink monitor recordings, as in #8789: an Opus clip, a positioned emitter
+panning with the listener, and a Doom weapon sound.

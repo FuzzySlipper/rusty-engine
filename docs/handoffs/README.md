@@ -1,4 +1,4 @@
-# Parallel lanes, 2026-09-29
+# Parallel lanes, round 2 (2026-09-29)
 
 Open work across campaigns #8723 (architecture reset), #8777 (developer
 experience) and #8782 (wgpu renderer) is split into lanes. A lane is a list of
@@ -6,33 +6,37 @@ Den tasks that edit the same files, so they run in order inside one Claude Code
 instance. Different lanes edit different files, so they run at the same time,
 each in its own git worktree.
 
-Start from your lane's file in this directory. This page is the shared
-protocol and the ownership map.
+Round 1 lanes (build, content, hygiene, release, runtime, voxel-render) are
+finished; their handoffs are in Git history. Start from your lane's file in
+this directory. This page is the shared protocol and the ownership map.
 
 ## Lanes
 
 | Lane | Handoff | Tasks, in order | Start |
 |---|---|---|---|
-| main | none, stays in the original session | review fixes for #8736, #8737, #8739, #8742; then #8798 (with #8759); then #8771 | now |
-| spatial | [spatial.md](spatial.md) | #8754 (with #8755) | now |
-| voxel-render | [voxel-render.md](voxel-render.md) | #8797 | now |
-| build | [build.md](build.md) | #8775, #8776, #8764 | now |
-| runtime | [runtime.md](runtime.md) | #8753, #8772, #8745, #8770 | now; #8770 after the #8736 fix lands |
-| content | [content.md](content.md) | #8743, #8763 | now |
-| hygiene | [hygiene.md](hygiene.md) | #8794, #8752 | now |
-| release | [release.md](release.md) | #8778, #8780 | now |
-| cli | [cli.md](cli.md) | #8779, #8781 | after #8775 is on main |
-| wgpu | [wgpu.md](wgpu.md) | #8796, #8783 | after the #8795 survey document exists |
-| audio | [audio.md](audio.md) | #8789 | now |
-| playtest | [playtest.md](playtest.md) | #8765, #8769 | deferred by the owner; #8769 is in backlog |
+| main | none, stays in the original session | review fixes for tasks whose lane has ended; coordination | now |
+| tooling | [tooling.md](tooling.md) | #8808 (with #8804), #8757, #8803 (with #8774), #8801, #8809, #8816, #8802 | now |
+| abi | [abi.md](abi.md) | #8744, #8799 | now; #8799's runtime-pack evidence needs tooling's #8808 |
+| spatial | [spatial.md](spatial.md) | #8805, #8807, #8806 | now |
+| cli | [cli.md](cli.md) | #8781, #8810, #8800 | now |
+| audio | [audio.md](audio.md) | #8812, #8813, #8814 | now |
+| wgpu | [wgpu.md](wgpu.md) | #8783, #8815 | now |
+| wgpu-scene | [wgpu-scene.md](wgpu-scene.md) | #8784, #8788 | once #8783 publishes its resource-table layout |
+| wgpu-view | [wgpu-view.md](wgpu-view.md) | #8785, #8787 | once #8783 publishes its resource-table layout |
+| streaming | [streaming.md](streaming.md) | #8786 | once #8783 has readback on main |
+| desktop | [desktop.md](desktop.md) | #8790, #8791 | once #8783 has surface presentation on main; #8791's decoder research can start earlier |
+| playtest | [playtest.md](playtest.md) | #8765, #8769 | held by the owner; #8769 is in backlog |
 
 Not assigned yet:
-- **#8744** (result buffers) sweeps every service's result API. It starts after
-  the service lanes (main, spatial, voxel-render) are quiet.
-- **wgpu families #8784, #8785, #8787, #8788, #8790 and #8791** start once #8783
-  publishes its resource-table layout.
-- **#8786** starts once #8783 has readback.
-- **#8792, then #8793** come after all of the above.
+- **#8792, then #8793** (parity gate, delete Three, generate residual TS
+  contracts) come after every wgpu family and the two shells. The first wgpu
+  lane to finish picks them up.
+- **Other campaigns.** #8718 and #8719 (playtest time and observer camera)
+  belong to codex. The older campaigns #7632 and #7694 are in backlog.
+
+Duplicates: #8804 is the same failure as #8808, and #8774 the same as #8803.
+The tooling lane fixes each pair once and closes both tasks with the same
+commit.
 
 ## File ownership
 
@@ -42,28 +46,43 @@ over its changes.
 
 | Lane | Owns |
 |---|---|
-| main | `csharp-product-runtime/src/lib.rs` fault and publication paths (`fault_after_call`); `render-projection/src/runtime_appearance.rs` and `appearance.rs`; `csharp-engine-services/src/appearance.rs`, `content/`, `authored_content.rs`, `persistence.rs`; `engine-spatial/src/lib.rs` mesh neighbourhood and `voxel_edit.rs`; `product-dev-host/src/host.rs` and `model.rs`; `render-presentation` descriptors; `product-browser-host/src/local-transport.ts` |
-| spatial | `csharp-engine-services/src/spatial.rs`, `world_origin.rs`, `kinematic.rs`, character receipts in `csharp-engine-abi`; `engine-spatial/src/trigger.rs`, `world_origin.rs`; `svc-collision/src/static_mesh.rs` guards; `csharp/Rusty.Engine/Entities/EntityKinematicMotion.cs` |
-| voxel-render | `render-projection/src/voxel.rs`; `csharp-engine-services/src/voxel_scene_presentation.rs` |
-| build | `csharp/Rusty.Engine/buildTransitive/Rusty.Engine.targets`; `csharp/Rusty.Engine.ProductGenerator/`; `csharp/Rusty.Engine/Rusty.Engine.csproj`; `rusty-cli` `stage_product` |
-| runtime | `csharp-product-runtime/src/main.rs` and `supervisor.rs`; `runtime-session`; `runtime-ui`; the test-only `render-projection` modules (`entity.rs`, `debug.rs`, `model_preview.rs`, `RetainedNodeProjector`); `engine-inspector` |
-| content | source-root content and UI paths; `content-store`, `content-store-host`, `asset-import`, `authored-scene`; the `rusty dev` reload path |
-| hygiene | `studio/`; `.github/workflows/studio.yml`; `scripts/check-ci-routing.py`; `docs/README.md`; tracked build outputs |
-| release | pair build/publish scripts and the CI workflow that publishes pairs |
-| cli | `rusty-cli` install, update and status commands; `rusty-template` |
-| wgpu | the new `render-wgpu` crate; the dependency boundary check |
-| audio | the new Rust audio realization crate |
+| main | nothing by default; takes returned review fixes wherever they are |
+| tooling | `product-dev-host` (`host.rs`, `session.rs`, `model.rs`); `fixtures/csharp-nativeaot-trial`, `fixtures/csharp-json-persistence`; `scripts/test-runtime-pack.sh`, `scripts/audit-standalone.sh` and the evidence manifests it checks; `render/browser/renderer.browser.spec.ts`; one-line clippy fixes anywhere (#8757) |
+| abi | `csharp-engine-abi` (except `world_origin.rs` and `perception.rs`); lease and result plumbing in `csharp-engine-services`; `csharp/Rusty.Engine.BindingGenerator`, `csharp/Rusty.Engine.ProductGenerator`; `csharp-product-runtime/src/lib.rs` product binding (`from_bound_product`, `optional_callback_pair`); `csharp/Rusty.Engine/NativeProduct/ProductBridge.cs`; `generated_abi_identity.rs` |
+| spatial | `csharp-engine-services/src/perception.rs`, `spatial.rs` (`entity_state`), `world_origin.rs`; `csharp-engine-abi/src/world_origin.rs`, `perception.rs`; `engine-spatial/src/perception.rs`, `world_origin.rs`, `character_controller.rs`; `EntityOriginRebaser.cs`, `EntityCharacterController.cs` |
+| cli | `rusty-cli`; `/home/agent/dev/rusty-template`; the `docs/csharp-sdk.md` split; downstream pins, installer scripts and project files in Dagger, CraftSurvive and the #8810 products |
+| audio | `render-audio`; `csharp-product-runtime/src/audio_output.rs`; `docs/recorded-audio.md`; Doom's audio policy (`LoadingBayWorldServices.cs`) |
+| wgpu | `render-wgpu` crate root, device, tables and pass pipeline; `rust/prototypes/wgpu-bootstrap`; the wgpu row in `scripts/dependency_boundary_check.py` |
+| wgpu-scene | `render-wgpu` modules for meshes, voxel surfaces, lighting, shadows, sky, ghost plates, animated meshes, telemetry |
+| wgpu-view | `render-wgpu` modules for cameras, view composition, viewmodel, multi-view, captures, billboards, sprites, particles |
+| streaming | the runtime's frame stream endpoint; the browser shell canvas in `render/packages/product-browser-host` |
+| desktop | the new desktop shell crate; the video realizer |
 | playtest | `docs/evidence/` for its tasks; `render-presentation/src/video.rs`; the TS video host |
 
-`render-projection/src/retained.rs` (`StableHandleRegistry`) is shared: main
-uses it and runtime deletes `RetainedNodeProjector` next to it. Delete only the
-projector.
+Known overlaps:
+- **`csharp-engine-services/src/dynamics.rs`.** abi (if #8744 starts with
+  Dynamics) and spatial (#8807 sets `expected_origin_revision` there). Spatial
+  keeps its edit to that one field.
+- **Generated bindings.** abi and spatial both change the ABI. Regenerate on
+  conflict; see below.
+- **`render-wgpu`.** The wgpu lane owns the crate root and the shared tables.
+  Family lanes add modules and extend the tables through the layout #8783
+  publishes. A table change goes to Den first.
+- **`docs/csharp-sdk.md`.** cli splits it in one commit (#8781). Everyone else
+  edits only their own section, and keeps other lanes' sections on conflict.
 
 ## Protocol for every lane
 
-1. **Worktree.** `git worktree add /home/agent/dev/worktrees/re-<lane> -b lane/<lane> origin/main`,
-   then work there only. Never edit `/home/agent/dev/rusty-engine`; the main
-   lane uses it.
+1. **Worktree.** `/home/agent/dev/worktrees/re-<lane>` on branch `lane/<lane>`.
+   - **If the directory already exists** (round 1 left spatial, cli, wgpu and
+     audio), check that `git status` is clean, then run
+     `git fetch origin && git switch -C lane/<lane> origin/main` in it. Its
+     build cache is reused.
+   - **Otherwise** run
+     `git worktree add /home/agent/dev/worktrees/re-<lane> -b lane/<lane> origin/main`.
+
+   Work there only. Never edit `/home/agent/dev/rusty-engine`; the main lane
+   uses it.
 2. **Den.** Project `rusty-engine`; sender `claude-code-<lane>`.
    - Before any `update_task`, re-read the task: a description update replaces
      the whole text, and other agents edit tasks concurrently.
@@ -85,18 +104,18 @@ projector.
    `review_request`, metadata `{"type":"review_request","commit":"<sha>"}`, and
    a short account: what was removed, what was kept and why, the evidence,
    migration notes, and follow-ups. Then set the task to `review` and start
-   your next task. Review feedback returns the task to `in_progress`; fix it in
-   your lane.
+   your next task. Review feedback that arrives while your lane is running is
+   yours to fix. Once your lane has ended, the main lane takes it.
 7. **Follow-ups.** File each one as an explicit Den task under the campaign
    before you post the review request, and name it in the message.
-8. **Commit messages** have no `Co-Authored-By` or other attribution lines. The
-   owner rewrote main to remove them.
+8. **Commit messages** have no `Co-Authored-By` or other attribution lines.
 
 ## Shared generated files
 
-- **`render/artifacts/*`** (browser bundles) are ignored build output since
-  #8752. Do not commit them. `pnpm run build` in `render/` rebuilds them, and
-  `scripts/build-runtime-pack.sh` builds them itself.
+- **`render/artifacts/*`** and `rust/crates/renderer-webview-host/artifacts/`
+  are ignored build output since #8752. Do not commit them. `pnpm run build`
+  in `render/` rebuilds them, and `scripts/build-runtime-pack.sh` builds them
+  itself.
 - **`rust/crates/csharp-engine-abi/src/generated_abi_identity.rs`.** On
   conflict, regenerate it with `scripts/generate-csharp-native-bindings.sh`
   (building the SDK also regenerates it).
@@ -107,11 +126,25 @@ projector.
 
 ## Known baseline
 
-- Clippy reports pre-existing lints in `content-store`, `render-presentation`
-  and `csharp-engine-services/src/spatial.rs` (#8757). These are not yours;
-  don't claim them.
-- The workspace tests run with
-  `cargo test --workspace --exclude renderer-webview-host`, because that crate
-  needs GTK.
-- Downstream products pin their SDK. When your change breaks a product API,
-  write migration notes; follow AGENTS.md on downstream pairs.
+- **Tests.** `cargo test --workspace --exclude renderer-webview-host` passes on
+  main (1,145 tests at `a3b43343`).
+  - The GTK/WebKit dev packages are now installed, so `renderer-webview-host`
+    builds too; its check script needs `pnpm --dir render run build:webview-artifact` first.
+- **Clippy.** It still reports the #8757 lints in `product-dev-host/src/model.rs`,
+  `render-presentation/src/frame.rs` and `csharp-engine-services`
+  (`spatial.rs`, `voxel.rs`) until the tooling lane lands #8757. They are not
+  yours.
+- **`scripts/test-runtime-pack.sh`** fails at the NativeAOT fixture (#8808)
+  until tooling fixes it. Say so in your evidence rather than skipping
+  silently.
+- **`scripts/test-csharp-sdk-package.sh`** (`--coreclr-smoke`, `--aot`) passes.
+  It needs `DOTNET_ROOT=/home/agent/.dotnet`, and a `TMPDIR` whose path does not
+  start with the checkout's path.
+- **Temp space.** `/tmp` is a shared tmpfs with a per-user quota, and it has
+  filled up twice. Put large scratch builds in your worktree or your session
+  scratchpad, and delete them when you are done.
+- **Downstream.** Products pin their SDK. When your change breaks a product
+  API, write migration notes; follow AGENTS.md on downstream pairs.
+  Downstream checkouts: `/home/agent/dev/rusty-dagger`,
+  `/home/agent/dev/rusty-doom`, `/home/agent/dev/rusty-craftsurvive`,
+  `/home/agent/dev/rusty-template`.
