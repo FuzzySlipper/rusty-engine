@@ -243,12 +243,7 @@ impl Renderer {
             }
         }
         // Clip packs share the rig; their channels bind by node name.
-        let by_name: HashMap<&str, usize> = model
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, node)| node.name.as_deref().map(|name| (name, index)))
-            .collect();
+        let by_name = channel_targets(&model);
         for pack in &asset.clip_packs {
             let identity =
                 resource_identity("clip-pack-resource", Some(pack.content_hash.as_str()))
@@ -1369,9 +1364,68 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
     bounds
 }
 
+/// Where a clip pack's channels bind in the primary model, by node name.
+/// `asset-import` approved the pack against the primary's rig, whose joint
+/// identities are skin joint node names (unique among joints, never
+/// synthesized). A skin joint therefore takes its name over any other node
+/// that shares it; other named nodes bind by name as well.
+fn channel_targets(model: &GlbModel) -> HashMap<&str, usize> {
+    let mut targets: HashMap<&str, usize> = model
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| node.name.as_deref().map(|name| (name, index)))
+        .collect();
+    for &joint in model.skins.iter().flat_map(|skin| skin.joints.iter()) {
+        if let Some(name) = model.nodes[joint].name.as_deref() {
+            targets.insert(name, joint);
+        }
+    }
+    targets
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(name: &str, mesh: Option<usize>) -> glb::GlbNode {
+        glb::GlbNode {
+            name: Some(name.to_owned()),
+            parent: None,
+            rest: Trs {
+                translation: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+            },
+            mesh,
+            skin: None,
+        }
+    }
+
+    #[test]
+    fn clip_pack_channels_bind_to_the_skin_joint_that_shares_a_name() {
+        // The joint comes first and a mesh node reuses its name; binding by
+        // "last named node wins" would move the joint's channels to the mesh.
+        let model = GlbModel {
+            nodes: vec![
+                node("RightHand", None),
+                node("RightHand", Some(0)),
+                node("Hips", None),
+            ],
+            order: vec![0, 1, 2],
+            meshes: Vec::new(),
+            skins: vec![glb::GlbSkin {
+                joints: vec![0, 2],
+                inverse_binds: vec![Mat4::IDENTITY; 2],
+            }],
+            clips: Vec::new(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+        };
+        let targets = channel_targets(&model);
+        assert_eq!(targets["RightHand"], 0);
+        assert_eq!(targets["Hips"], 2);
+    }
 
     #[test]
     fn loop_modes_wrap_clip_time() {

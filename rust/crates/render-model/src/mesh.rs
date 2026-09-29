@@ -730,8 +730,9 @@ pub struct AnimationClipDescriptor {
 /// A semantic signature for direct clip playback against a particular rig.
 ///
 /// This is deliberately a declared, hash-addressable fact rather than a loose
-/// "humanoid" label. Renderer backends must additionally compare it with the
-/// skeleton and channels they actually decode from the GLB before binding.
+/// "humanoid" label. `asset-import` derives it at admission and decides clip-pack
+/// compatibility with it; renderer backends bind by its joint identities (skin
+/// joint node names) and do not re-validate it (see `docs/architecture.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimationRigSignature {
