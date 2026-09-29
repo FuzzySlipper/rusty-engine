@@ -5,11 +5,12 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "build": "pnpm run build:packages && pnpm run bundle:application-host-artifact && pnpm run bundle:product-browser-host-artifact",
+    "build": "pnpm run build:packages && pnpm run bundle:application-host-artifact && pnpm run bundle:product-browser-host-artifact && pnpm run bundle:live-debug-panel-artifact",
     "build:packages": "pnpm -r build",
     "build:application-host-artifact": "pnpm --filter @rusty-engine/application-host run build && vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "bundle:application-host-artifact": "vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "bundle:product-browser-host-artifact": "vite build --config vite.product-browser-host.config.ts && node scripts/publish-product-browser-host-artifact.mjs && pnpm run check:product-browser-host-artifact-types",
+    "bundle:live-debug-panel-artifact": "vite build --config vite.live-debug-panel.config.ts && node scripts/publish-live-debug-panel-artifact.mjs",
     "build:webview-artifact": "vite build --config vite.webview.config.ts",
     "boundary": "node scripts/check-boundaries.mjs",
     "check:voxel-vignette": "node scripts/check-voxel-vignette-playtest.mjs",
@@ -24,6 +25,8 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@rusty-engine/application-host": "workspace:*",
+    "@rusty-engine/live-debug-client": "workspace:*",
+    "@rusty-engine/live-debug-panel": "workspace:*",
     "@rusty-engine/product-browser-host": "workspace:*",
     "@rusty-engine/render-contracts": "workspace:*",
     "@rusty-engine/renderer-host": "workspace:*",

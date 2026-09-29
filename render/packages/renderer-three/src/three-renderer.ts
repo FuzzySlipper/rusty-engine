@@ -980,7 +980,7 @@ export class ThreeRenderer {
       }));
   }
 
-  /** Lit/wireframe state for uploaded mesh payloads, for Studio diagnostics. */
+  /** Lit/wireframe state for uploaded mesh payloads, for renderer diagnostics. */
   meshPresentationReadout(): readonly RendererMeshPresentationReadout[] {
     return [...this.#handles.entries()]
       .filter(([, entry]) => entry.meshProvenance !== undefined)

@@ -13,7 +13,6 @@ on:
       - 'rust/**'
       - 'csharp/**'
       - 'render/**'
-      - 'studio/**'
       - 'fixtures/**'
       - 'scripts/pack-csharp-sdk.sh'
       - 'scripts/build-runtime-pack.sh'
@@ -90,8 +89,6 @@ jobs:
           test -n "$libclang_path"
           echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
           pnpm --dir render install --frozen-lockfile
-          # The runtime pack takes its live-debug panel from studio/ until #8794 moves it.
-          if [[ -f studio/pnpm-lock.yaml ]]; then pnpm --dir studio install --frozen-lockfile; fi
 
       - name: Build pair
         if: steps.published.outputs.skip != 'true'

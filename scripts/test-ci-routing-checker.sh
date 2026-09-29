@@ -23,18 +23,6 @@ sed -i "/rust\/crates\/render-host-contracts/d" "$PROBE_ROOT.missing-host/.githu
 PROBE_ROOT="$PROBE_ROOT.missing-host" expect_rejection "missing render contract owner"
 rm -rf "$PROBE_ROOT.missing-host"
 
-cp -a "$PROBE_ROOT" "$PROBE_ROOT.broad-studio"
-sed -i "s#render/packages/renderer-three/\\*\\*#render/**#g" "$PROBE_ROOT.broad-studio/.github/workflows/studio.yml"
-PROBE_ROOT="$PROBE_ROOT.broad-studio" expect_rejection "broad Studio renderer routing"
-rm -rf "$PROBE_ROOT.broad-studio"
-
-cp -a "$PROBE_ROOT" "$PROBE_ROOT.studio-render-fixture"
-sed -i "/render\/packages\/renderer-three\/\\*\\*/a\\      - 'fixtures/render/**'" \
-  "$PROBE_ROOT.studio-render-fixture/.github/workflows/studio.yml"
-PROBE_ROOT="$PROBE_ROOT.studio-render-fixture" expect_rejection \
-  "browser-only render fixture routed to Studio"
-rm -rf "$PROBE_ROOT.studio-render-fixture"
-
 cp -a "$PROBE_ROOT" "$PROBE_ROOT.no-cancel"
 sed -i '/^concurrency:/,/^permissions:/d' "$PROBE_ROOT.no-cancel/.github/workflows/docs.yml"
 PROBE_ROOT="$PROBE_ROOT.no-cancel" expect_rejection "missing superseded-run cancellation"

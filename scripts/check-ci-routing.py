@@ -66,7 +66,6 @@ def main() -> None:
             "verify",
             "csharp",
             "render",
-            "studio",
             "docs",
         )
     }
@@ -85,7 +84,7 @@ def main() -> None:
             "!rust/crates/renderer-webview-host/**",
             "scripts/verify.sh",
         },
-        {"csharp/**", "fixtures/csharp-*/**", "render/**", "studio/**", "migration/**"},
+        {"csharp/**", "fixtures/csharp-*/**", "render/**", "migration/**"},
     )
     if "paths-ignore:" in workflows["verify"]:
         fail("verify must use explicit owner paths instead of a repository-wide paths-ignore")
@@ -106,7 +105,7 @@ def main() -> None:
             "scripts/pack-csharp-sdk.sh",
             "scripts/test-csharp-sdk-package.sh",
         },
-        {"Cargo.toml", "Cargo.lock", "rust/**", "render/**", "studio/**"},
+        {"Cargo.toml", "Cargo.lock", "rust/**", "render/**"},
     )
 
     require_paths(
@@ -129,15 +128,11 @@ def main() -> None:
         "scripts/generate-csharp-native-bindings.sh": {"csharp"},
         "scripts/test-csharp-binding-generator-lease-fixture.sh": {"csharp"},
         "render/browser/application-host.browser.spec.ts": {"render"},
-        "render/packages/renderer-three/src/backend.ts": {
-            "render",
-            "studio",
-        },
+        "render/packages/renderer-three/src/backend.ts": {"render"},
         "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": set(),
         "rust/crates/renderer-webview-host/src/lib.rs": set(),
-        "rust/crates/entity-state/src/lib.rs": {"studio", "verify"},
+        "rust/crates/entity-state/src/lib.rs": {"verify"},
         "docs/csharp-sdk.md": {"docs"},
-        "studio/apps/studio-app/src/main.ts": {"studio"},
         ".github/workflows/render.yml": {"docs", "render"},
         "render/artifacts/application-host/index.js": {
             "render",
@@ -155,18 +150,6 @@ def main() -> None:
             fail(
                 f"{path} routes to {sorted(actual)}, expected {sorted(expected)}"
             )
-    require_paths(
-        "studio",
-        workflows["studio"],
-        {
-            "studio/**",
-            "render/packages/render-contracts/**",
-            "render/packages/render-projection/**",
-            "render/packages/renderer-host/**",
-            "render/packages/renderer-three/**",
-        },
-        {"render/**", "render/browser/**", "render/artifacts/**", "fixtures/render/**"},
-    )
     require_paths(
         "docs",
         workflows["docs"],

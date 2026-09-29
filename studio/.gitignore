@@ -1,8 +1,0 @@
-node_modules/
-.nx/
-.angular/
-dist/
-out-tsc/
-coverage/
-playwright-report/
-test-results/

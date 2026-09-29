@@ -54,8 +54,7 @@ cd "$REPO_ROOT"
 pnpm --dir render run build:packages
 pnpm --dir render run bundle:application-host-artifact
 pnpm --dir render run bundle:product-browser-host-artifact
-pnpm --dir render --filter @rusty-engine/live-debug-client run build
-pnpm --dir studio run build:live-debug-panel-artifact
+pnpm --dir render run bundle:live-debug-panel-artifact
 cargo build --locked --release -p csharp-product-runtime \
   --bin rusty-product-host --bin rusty-live-debug
 cargo build --locked --release -p rusty-cli --bin rusty
@@ -67,7 +66,7 @@ install -m 755 target/release/rusty-live-debug "$STAGE/bin/rusty-live-debug"
 install -m 755 target/release/rusty "$STAGE/bin/rusty"
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
-install -m 644 studio/artifacts/live-debug-panel/index.js \
+install -m 644 render/artifacts/live-debug-panel/index.js \
   "$STAGE/share/browser/engine/live-debug-panel/index.js"
 install -m 644 render/packages/product-browser-host/runtime-pack-shell/index.html \
   "$STAGE/share/browser/index.html"
@@ -76,7 +75,7 @@ install -m 644 render/packages/product-browser-host/runtime-pack-shell/main.js \
 find render/packages/live-debug-client/dist -maxdepth 1 -type f \
   ! -name '*.test.*' ! -name '*.tsbuildinfo' \
   -exec install -m 644 {} "$STAGE/share/live-debug-client/" \;
-cp -a studio/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
+cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
 
 # Include the corresponding source and license for our modified MPL component.
 install -d "$STAGE/share/third-party"

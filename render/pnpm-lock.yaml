@@ -14,6 +14,12 @@ importers:
       '@rusty-engine/application-host':
         specifier: workspace:*
         version: link:packages/application-host
+      '@rusty-engine/live-debug-client':
+        specifier: workspace:*
+        version: link:packages/live-debug-client
+      '@rusty-engine/live-debug-panel':
+        specifier: workspace:*
+        version: link:packages/live-debug-panel
       '@rusty-engine/product-browser-host':
         specifier: workspace:*
         version: link:packages/product-browser-host
@@ -62,6 +68,15 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
+
+  packages/live-debug-panel:
+    devDependencies:
+      '@rusty-engine/live-debug-client':
+        specifier: workspace:*
+        version: link:../live-debug-client
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   packages/product-browser-host:
     devDependencies:

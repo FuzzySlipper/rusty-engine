@@ -151,10 +151,6 @@ def owner_for(relative: Path) -> str:
         return f"csharp:{parts[1]}"
     if len(parts) >= 3 and parts[:2] == ("render", "packages"):
         return f"render-package:{parts[2]}"
-    if len(parts) >= 3 and parts[:2] == ("studio", "libs"):
-        return f"studio-lib:{parts[2]}"
-    if len(parts) >= 3 and parts[:2] == ("studio", "apps"):
-        return f"studio-app:{parts[2]}"
     return parts[0] if parts else "root"
 
 

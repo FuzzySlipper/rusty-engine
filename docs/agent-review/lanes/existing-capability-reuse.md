@@ -35,7 +35,7 @@ not actionable. Verify the contract in the actual crate or generated safe C#
 surface before claiming it exists.
 
 Search before concluding: the existing owner may live in `rust/crates/*`,
-`csharp/Rusty.Engine/`, `csharp/Rusty.Engine.ProductGenerator/`, or `studio/`
+`csharp/Rusty.Engine/`, or `csharp/Rusty.Engine.ProductGenerator/`
 depending on what the concept is. Read `AGENTS.md` and the source-owners table
 in `docs/architecture.md` rather than assuming from a directory name.
 

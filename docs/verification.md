@@ -10,13 +10,12 @@ Changes route to their owning lanes; superseded runs are cancelled.
 | Rust | Formatting, Cargo dependency boundaries, mechanism tests, Clippy with warnings as errors |
 | C# | Binding generation and a disposable packaged SDK consumer staged and exercised through the Rust CoreCLR host |
 | Render | TypeScript package boundaries, current browser artifact freshness, compiled unit tests and Chromium behavior |
-| Studio | Studio boundaries, lint, types, tests and build |
 | Docs | Local links and CI owner routing |
 
 Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
-`scripts/verify-render.sh`, `scripts/verify-studio.sh`, or
-`scripts/verify-docs.sh` locally. Renderer and Studio checks require their pnpm
-dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
+`scripts/verify-render.sh`, or `scripts/verify-docs.sh` locally. Renderer
+checks require their pnpm dependencies; C# requires .NET, Clang/libclang and
+the pinned binding tools.
 
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
 C# workflow dispatch option, and SDK release verification. The optional native
