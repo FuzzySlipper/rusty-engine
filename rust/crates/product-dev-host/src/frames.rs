@@ -22,7 +22,7 @@
 //! | 24 | 4 | width in pixels |
 //! | 28 | 4 | height in pixels |
 //! | 32 | 1 | payload format: 1 JPEG, 2 RGBA8 sRGB rows top first |
-//! | 33 | 1 | flags: bit 0 set while the simulation is held |
+//! | 33 | 1 | flags: bit 0 set while the simulation is held; bit 1 set while a video clip covers the frame |
 //! | 34 | 2 | reserved, zero |
 //! | 36 | 4 | payload length in bytes |
 //!
@@ -38,6 +38,9 @@ pub const FRAME_REQUEST_WAIT: Duration = Duration::from_secs(1);
 const FRAME_MAGIC: &[u8; 4] = b"RSF1";
 const FRAME_HEADER_BYTES: usize = 40;
 const FLAG_HELD: u8 = 1;
+/// The page shows such a frame above its UI, as a browser's video element
+/// covered the page.
+const FLAG_VIDEO: u8 = 2;
 /// Largest size a viewer may ask for, per side.
 const MAX_FRAME_SIDE: u32 = 4096;
 /// Size rendered before any viewer states one.
@@ -57,6 +60,8 @@ pub struct ProductDevFrame {
     pub height: u32,
     pub format: ProductDevFrameFormat,
     pub held: bool,
+    /// A playing video clip covers the frame.
+    pub video: bool,
     pub step: u64,
     pub payload: Vec<u8>,
 }
@@ -164,7 +169,7 @@ fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
     bytes.extend_from_slice(&frame.width.to_le_bytes());
     bytes.extend_from_slice(&frame.height.to_le_bytes());
     bytes.push(frame.format as u8);
-    bytes.push(if frame.held { FLAG_HELD } else { 0 });
+    bytes.push(if frame.held { FLAG_HELD } else { 0 } | if frame.video { FLAG_VIDEO } else { 0 });
     bytes.extend_from_slice(&[0, 0]);
     bytes.extend_from_slice(&(frame.payload.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&frame.payload);
@@ -227,6 +232,7 @@ mod tests {
             height: 1,
             format: ProductDevFrameFormat::Rgba8,
             held: step.is_multiple_of(2),
+            video: step.is_multiple_of(3),
             step,
             payload: vec![step as u8; 8],
         }
@@ -247,6 +253,7 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 1);
         assert_eq!(bytes[32], 2);
         assert_eq!(bytes[33], FLAG_HELD);
+        assert_eq!(encode_frame(8, &frame(3))[33], FLAG_VIDEO);
         assert_eq!(u32::from_le_bytes(bytes[36..40].try_into().unwrap()), 8);
         assert_eq!(&bytes[40..], &[4; 8]);
     }

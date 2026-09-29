@@ -298,14 +298,15 @@ impl Renderer {
         }
     }
 
-    /// Draw the playing clip over the whole primary target, letterboxed.
-    pub(crate) fn draw_video(&mut self, target: &TargetView<'_>) {
+    /// Draw the playing clip over the whole primary target, letterboxed, and
+    /// report whether a picture covered it.
+    pub(crate) fn draw_video(&mut self, target: &TargetView<'_>) -> bool {
         let Some(Active {
             planes: Some(planes),
             ..
         }) = &self.video.active
         else {
-            return;
+            return false;
         };
         let (width, height) = (target.width as f32, target.height as f32);
         let (video_width, video_height) = (planes.size.0 as f32, planes.size.1 as f32);
@@ -397,6 +398,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         self.gpu.queue.submit([encoder.finish()]);
+        true
     }
 }
 

@@ -31,7 +31,8 @@ TypeScript UI is composited over it. Decision and measurements:
   in pure Rust by `render-video`) over the whole window, above the UI, as
   the browser's video element covered the page
   ([evidence #8791](evidence/video-8791/README.md)). The streaming mode
-  leaves video to the browser, whose element sits above the page.
+  draws video into its frames and shows those frames above the page
+  ([architecture](architecture.md#streaming-browser-mode)).
 - **Audio.** The shell's runtime plays audio on the output device
   (`RUSTY_AUDIO_OUTPUT=device`, see [recorded audio](recorded-audio.md)),
   video soundtracks included.

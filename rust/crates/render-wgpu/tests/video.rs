@@ -62,8 +62,12 @@ fn play(harness: &mut Harness, asset: &str) {
 }
 
 fn render_at(harness: &mut Harness, seconds: f64) -> Vec<u8> {
+    render_stats_at(harness, seconds).1
+}
+
+fn render_stats_at(harness: &mut Harness, seconds: f64) -> (render_wgpu::FrameStats, Vec<u8>) {
     harness.renderer.set_animation_time(seconds);
-    harness.composition(seconds).1
+    harness.composition(seconds)
 }
 
 fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -74,10 +78,13 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 #[test]
 fn a_playing_clip_covers_the_world_letterboxed_on_the_engine_timeline() {
     let mut harness = room_harness();
-    let world = render_at(&mut harness, 10.0);
+    let (stats, world) = render_stats_at(&mut harness, 10.0);
+    assert!(!stats.video);
     play(&mut harness, CLIP_RESOURCE);
-    // The clip starts at the first render after its play op.
-    let first = render_at(&mut harness, 10.0);
+    // The clip starts at the first render after its play op, and the frame
+    // says a clip covers it (the streamed frame's video flag).
+    let (stats, first) = render_stats_at(&mut harness, 10.0);
+    assert!(stats.video);
     assert_screenshot("video-first-frame", WIDTH, HEIGHT, &first);
     // 320x200 in a 320x180 target: 288x180, with 16-pixel bars at the sides.
     assert_eq!(pixel(&first, 4, 90), [0, 0, 0, 255], "left bar");
@@ -96,7 +103,8 @@ fn a_playing_clip_covers_the_world_letterboxed_on_the_engine_timeline() {
     assert_eq!(harness.renderer.active_video(), Some(HANDLE));
 
     // The end of the clip completes the playback and uncovers the world.
-    let after = render_at(&mut harness, 11.6);
+    let (stats, after) = render_stats_at(&mut harness, 11.6);
+    assert!(!stats.video);
     assert_eq!(
         harness.renderer.take_video_facts(),
         [VideoFact::Completed { handle: HANDLE }]

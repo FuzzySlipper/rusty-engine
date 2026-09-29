@@ -11,10 +11,10 @@
 //! composition, and entity-attached emitters follow the committed graphics
 //! node published for their entity.
 //!
-//! When this process also draws video (the desktop window), a playing clip's
-//! own sound plays here too, from the clip's start, as the browser's video
-//! element played it. The video ops stay in the publications: the runtime's
-//! renderer draws the picture.
+//! When this process also draws video (the desktop window or the streamed
+//! frames), a playing clip's own sound plays here too, from the clip's start,
+//! as the browser's video element played it. The video ops stay in the
+//! publications: the runtime's renderer draws the picture.
 
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
 use render_audio::{AudioEntityPositions, AudioRealizer, RealizedAudioFact};

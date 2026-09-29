@@ -736,9 +736,7 @@ impl Renderer {
                     .err()
                     .map(|detail| ("ghostPlate", detail)),
                 PresentationOp::Video { op, .. } => {
-                    if self.options.video {
-                        self.apply_video_op(op, resources);
-                    }
+                    self.apply_video_op(op, resources);
                     None
                 }
                 // The telemetry overlay is DOM UI (renderer-host's `<pre>` HUD);

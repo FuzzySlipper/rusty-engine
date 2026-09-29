@@ -115,12 +115,6 @@ impl FrameOutput {
                     }
                 };
                 let gpu = Gpu::headless().map_err(|gpu| error(gpu.to_string()))?;
-                // The browser's video element plays over the page UI; a
-                // streamed frame lies under it.
-                let options = RendererOptions {
-                    video: false,
-                    ..options
-                };
                 let driver = SceneDriver::new(gpu, options);
                 let frames = ProductDevFrameStream::new();
                 let streamer =
@@ -386,6 +380,7 @@ impl FrameOutput {
                     "frameSequence": frame.sequence,
                     "simulationStep": frame.step,
                     "held": frame.held,
+                    "video": frame.video,
                     "publicationFrontiers": frontiers(frame.world_revision),
                     "viewRevision": frame.composition_revision,
                     "viewport": viewport,

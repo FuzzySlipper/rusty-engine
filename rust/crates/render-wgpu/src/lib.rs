@@ -101,10 +101,6 @@ pub struct RendererOptions {
     /// them (Three's `lighting.shadows.enabled` host option). Off by
     /// default; C# products do not enable it.
     pub shadows: bool,
-    /// Play video ops. The streaming browser mode leaves them to the
-    /// browser's video element, which covers the page UI; a frame under the
-    /// page cannot.
-    pub video: bool,
 }
 
 impl Default for RendererOptions {
@@ -113,7 +109,6 @@ impl Default for RendererOptions {
             default_world_lights: true,
             default_viewmodel_lights: true,
             shadows: false,
-            video: true,
         }
     }
 }

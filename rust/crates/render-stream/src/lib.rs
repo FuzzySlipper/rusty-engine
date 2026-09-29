@@ -135,6 +135,8 @@ pub struct DrawnFrame {
     /// pose, or the observer's where the observer replaced it in primary
     /// views (`Renderer::drawn_cameras`).
     pub cameras: Vec<render_wgpu::DrawnCamera>,
+    /// A playing video clip covered the frame.
+    pub video: bool,
 }
 
 /// The inspection state and the last drawn frame.
@@ -550,8 +552,12 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
             composition_revision: scene.composition_revision,
             observer: scene.observer,
             cameras: Vec::new(),
+            video: false,
         };
-        scene.renderer.render_view_composition(target, driver.now());
+        drawn.video = scene
+            .renderer
+            .render_view_composition(target, driver.now())
+            .video;
         drawn.cameras = scene.renderer.drawn_cameras();
         scene.collect_facts();
         let (held, step) = (scene.held, scene.step);
@@ -580,6 +586,7 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
             height,
             format,
             held,
+            video: drawn.video,
             step,
             payload,
         });

@@ -270,8 +270,8 @@ The world is realized either by the browser's Three surface or, with
 - **Transport.** A viewer pulls frames one at a time:
   `GET /__rusty/product/runtime/frames?after=N&width=W&height=H` answers with
   the latest frame newer than `N`, or `204` after a second. Each frame is a
-  40-byte `RSF1` header (sequence, simulation step, size, format, held flag)
-  and a JPEG (quality 80) payload; `product-dev-host/src/frames.rs` is the
+  40-byte `RSF1` header (sequence, simulation step, size, format, held and
+  video flags) and a JPEG (quality 80) payload; `product-dev-host/src/frames.rs` is the
   format's source. The renderer draws at the most recent viewer's size.
   `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames, for measurement only.
 - **Browser.** `product-bootstrap.json` carries `renderer.output: "stream"`,
@@ -279,9 +279,16 @@ The world is realized either by the browser's Three surface or, with
   (`product-browser-host`) on the Engine canvas instead of Three. It paints
   the frames under the unchanged product UI, keeps the canvas as the focus,
   pointer-lock and input target, and marks it with
-  `data-rusty-frame-sequence`, `-step` and `-held`. Graphics publications
-  still reach the page and are acknowledged there. Audio, video and the
-  telemetry overlay stay browser presentation hosts.
+  `data-rusty-frame-sequence`, `-step`, `-held` and `-video`. Graphics
+  publications still reach the page and are acknowledged there.
+- **Video.** The runtime renderer plays video clips into the frames, as the
+  desktop window does, and reports their realization facts; the browser's
+  video host receives no ops. A frame a clip covers carries the video flag,
+  and the page shows it above the product UI (z-index 1000, the video
+  element's layer) until a frame without it arrives. The clip's sound plays
+  with the runtime's device audio (`RUSTY_AUDIO_OUTPUT=device`); with
+  browser-realized audio the clip is silent. Audio and the telemetry overlay
+  stay browser presentation hosts.
 - **Inspection.** The runtime renderer answers playtest inspection through
   Engine debug commands the catalog lists only in this mode:
   `engine.renderer.camera` (read; set an observer pose that replaces every

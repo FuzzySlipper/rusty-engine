@@ -115,3 +115,16 @@ as a playback (`decodeFailed`) instead of playing in the browser's decoder.
   clips they are not resynchronized, since they run on the Engine timeline
   and the device clock respectively.
 - **Windows and macOS** decoding was not built here.
+
+## Review follow-up: streamed frames carry video (#8862)
+
+The review asked that cinematics play through the Rust renderer in the
+streaming mode too. [#8862](../stream-video-8862/README.md) does this:
+- stream mode plays video in `render-wgpu`;
+- the frame header flags frames a clip covers, and the page shows those frames
+  above its UI;
+- the browser video host no longer receives video ops.
+
+Dagger's `ANIM0000` → `ANIM0011` → `DAG2` sequence ran through the runtime's
+facts, with each clip's sound on the device path. `RendererOptions::video`,
+described above as off in stream mode, no longer exists.

@@ -1,0 +1,65 @@
+[
+  {
+    "t": 1790695486532,
+    "label": "title",
+    "sequence": 16,
+    "video": "false",
+    "canvasZ": "0",
+    "uiZ": "2",
+    "videoElements": 0
+  },
+  {
+    "t": 1790695489795,
+    "label": "anim0000 +3s",
+    "sequence": 213,
+    "video": "true",
+    "canvasZ": "1000",
+    "uiZ": "2",
+    "videoElements": 0
+  },
+  {
+    "t": 1790695533729,
+    "label": "03-after-anim0000",
+    "sequence": 2846,
+    "video": "true",
+    "canvasZ": "1000",
+    "uiZ": "2",
+    "videoElements": 0
+  },
+  {
+    "t": 1790695546603,
+    "label": "04-dag2",
+    "sequence": 3616,
+    "video": "true",
+    "canvasZ": "1000",
+    "uiZ": "2",
+    "videoElements": 0
+  },
+  {
+    "t": 1790695659429,
+    "label": "video off at 172.9s",
+    "sequence": 10380,
+    "video": "false",
+    "canvasZ": "0",
+    "uiZ": "2",
+    "videoElements": 0
+  },
+  {
+    "t": 1790695661698,
+    "label": "05-after-dag2",
+    "sequence": 10516,
+    "video": "false",
+    "canvasZ": "0",
+    "uiZ": "2",
+    "videoElements": 0
+  },
+  {
+    "t": 1790695664565,
+    "label": "end",
+    "sequence": 10689,
+    "video": "false",
+    "canvasZ": "0",
+    "uiZ": "2",
+    "videoElements": 0
+  }
+]

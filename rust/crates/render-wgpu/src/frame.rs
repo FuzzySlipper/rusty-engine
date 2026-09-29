@@ -49,6 +49,8 @@ pub struct FrameStats {
     /// Sprite nodes sprite preparation examined, across view passes. It
     /// follows the sprite count, not the scene's node count.
     pub sprite_candidates: u32,
+    /// A playing video clip covered the primary target.
+    pub video: bool,
 }
 
 /// What one view pass drew.

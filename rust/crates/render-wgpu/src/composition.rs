@@ -314,7 +314,7 @@ impl Renderer {
     ) -> FrameStats {
         let uploaded = self.prepare();
         let mut stats = self.render_composition(target.view(), time_seconds);
-        self.draw_video(&target.view());
+        stats.video = self.draw_video(&target.view());
         stats.parts_uploaded = uploaded;
         stats
     }
@@ -330,7 +330,7 @@ impl Renderer {
         let mut stats = FrameStats::default();
         surface.present_with(&gpu, |view| {
             stats = self.render_composition(view, time_seconds);
-            self.draw_video(&view);
+            stats.video = self.draw_video(&view);
         })?;
         stats.parts_uploaded = uploaded;
         Ok(stats)

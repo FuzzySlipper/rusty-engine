@@ -319,7 +319,6 @@ impl Renderer {
                 default_world_lights: self.options.default_world_lights && !isolated_lighting,
                 default_viewmodel_lights: false,
                 shadows: false,
-                video: false,
             },
         ));
         source.set_animation_time(self.animation_time);

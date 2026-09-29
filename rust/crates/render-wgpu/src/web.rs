@@ -341,7 +341,7 @@ impl Renderer {
         surface.present_layers(&gpu, |view, finished| {
             stats = self.render_composition(view, time_seconds);
             overlay.draw(finished.color, finished.format);
-            self.draw_video(&finished);
+            stats.video = self.draw_video(&finished);
         })?;
         stats.parts_uploaded = uploaded;
         Ok(stats)

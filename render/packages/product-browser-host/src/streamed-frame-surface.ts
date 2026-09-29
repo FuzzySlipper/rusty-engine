@@ -19,11 +19,13 @@ import type {
  * The runtime renders the world with wgpu; this surface pulls the frames it
  * draws, one request per frame, and paints them on the Engine canvas under
  * the product UI. It
- * realizes nothing of the world itself: frames, view compositions and world
- * presentation ops were already applied in the runtime, so they are
- * acknowledged here. Audio, video and the telemetry overlay stay browser
- * presentation hosts and receive their ops as before. The canvas stays the application's focus,
- * pointer-lock and input target.
+ * realizes nothing of the world itself: frames, view compositions, world
+ * presentation ops and video were already applied in the runtime, so they are
+ * acknowledged here. A frame a video clip covers is shown above the product
+ * UI, as the browser's video element covered the page. Audio and the
+ * telemetry overlay stay browser presentation hosts and receive their ops as
+ * before. The canvas stays the application's focus, pointer-lock and input
+ * target.
  *
  * Wire format: see `rust/crates/product-dev-host/src/frames.rs`.
  */
@@ -34,15 +36,12 @@ const FRAME_MIN_HEADER_BYTES = 40;
 const FRAME_FORMAT_JPEG = 1;
 const FRAME_FORMAT_RGBA8 = 2;
 const FRAME_FLAG_HELD = 1;
+const FRAME_FLAG_VIDEO = 2;
+/** Above the product UI while a video clip covers the frame (the video element's layer). */
+const VIDEO_Z_INDEX = '1000';
 const RETRY_DELAY_MS = 500;
 /** UI-host domains the browser still realizes; the runtime renders the rest. */
-/**
- * Domains the browser still realizes. The browser's video element plays
- * over the page UI, which a streamed frame lies under, so streaming leaves
- * video here; the desktop window draws video over the UI itself (#8791).
- */
-const STREAMED_BROWSER_DOMAINS: ReadonlySet<string> = new Set(['audio', 'video', 'telemetryOverlay']);
-const WINDOW_BROWSER_DOMAINS: ReadonlySet<string> = new Set(['audio', 'telemetryOverlay']);
+const BROWSER_DOMAINS: ReadonlySet<string> = new Set(['audio', 'telemetryOverlay']);
 
 interface StreamedFrame {
   readonly sequence: number;
@@ -51,6 +50,7 @@ interface StreamedFrame {
   readonly height: number;
   readonly format: number;
   readonly held: boolean;
+  readonly video: boolean;
   readonly payload: Uint8Array;
 }
 
@@ -68,6 +68,7 @@ export function parseStreamedFrame(bytes: Uint8Array): StreamedFrame {
     height: header.getUint32(28, true),
     format: header.getUint8(32),
     held: (header.getUint8(33) & FRAME_FLAG_HELD) !== 0,
+    video: (header.getUint8(33) & FRAME_FLAG_VIDEO) !== 0,
     payload: bytes.subarray(headerBytes, headerBytes + header.getUint32(36, true)),
   };
 }
@@ -122,7 +123,7 @@ function mountRuntimeRenderedSurface(
   options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
   streamed: boolean,
 ): RendererSurface {
-  const browserDomains = streamed ? STREAMED_BROWSER_DOMAINS : WINDOW_BROWSER_DOMAINS;
+  const restingZIndex = canvas.style.zIndex;
   const context = streamed ? canvas.getContext('2d', { alpha: false }) : null;
   if (streamed && context === null) throw new Error('the streaming surface needs a 2D canvas context');
   const pixelRatio = options.pixelRatio ?? 1;
@@ -187,6 +188,8 @@ function mountRuntimeRenderedSurface(
     canvas.dataset['rustyFrameSequence'] = String(frame.sequence);
     canvas.dataset['rustyFrameStep'] = String(frame.step);
     canvas.dataset['rustyFrameHeld'] = frame.held ? 'true' : 'false';
+    canvas.dataset['rustyFrameVideo'] = frame.video ? 'true' : 'false';
+    canvas.style.zIndex = frame.video ? VIDEO_Z_INDEX : restingZIndex;
     draw('animationFrame', performance.now());
     drawnSequence = frame.sequence;
   };
@@ -390,7 +393,7 @@ function mountRuntimeRenderedSurface(
     sampleAnimatedMesh: noAnimation,
     applyFrame: () => ({ applied: true, outcome: 'applied', diagnostics: [] }),
     applyPresentation: async (frame: PresentationFrameDiff): Promise<RendererPresentationFrameReceipt> => {
-      const browserOps = frame.ops.filter((op) => browserDomains.has(op.domain));
+      const browserOps = frame.ops.filter((op) => BROWSER_DOMAINS.has(op.domain));
       const runtimeOps = frame.ops.length - browserOps.length;
       if (hosts === null || browserOps.length === 0) {
         return { schemaVersion: 1, applied: runtimeOps, outcome: 'applied', domains: [], diagnostics: [] };
@@ -399,8 +402,8 @@ function mountRuntimeRenderedSurface(
       return { ...receipt, applied: receipt.applied + runtimeOps };
     },
     audioRealizedFacts: () => hosts?.readAudioRealizedFacts() ?? null,
-    videoRealizedFacts: () => hosts?.readVideoRealizedFacts() ?? null,
-    // Animation facts reach the Engine from the runtime's renderer.
+    // Video and animation facts reach the Engine from the runtime's renderer.
+    videoRealizedFacts: () => null,
     animationRealizedFacts: () => null,
     ghostPlateReadout: () => null,
     automaticSubmissionPacing: () => diagnosticsReadout().pacing,
@@ -482,6 +485,7 @@ function mountRuntimeRenderedSurface(
       stop();
       disposed = true;
       resizeObserver.disconnect();
+      canvas.style.zIndex = restingZIndex;
       latest?.bitmap.close();
       latest = null;
     },
