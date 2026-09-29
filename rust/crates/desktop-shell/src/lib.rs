@@ -151,6 +151,7 @@ struct Shell {
 struct Open {
     window: Arc<Window>,
     surface: WindowSurface,
+    settle: placement::Settle,
     #[cfg(feature = "web-overlay")]
     ui: Option<overlay::UiOverlay>,
 }
@@ -163,19 +164,21 @@ impl Shell {
                 self.config.width,
                 self.config.height,
             ));
+        let mut settle = placement::Settle::default();
         if let Some(placement) = self
             .config
             .placement_file
             .as_deref()
             .and_then(placement::Placement::load)
         {
-            attributes = placement.apply(attributes, event_loop);
+            (attributes, settle) = placement.apply(attributes, event_loop);
         }
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
                 .map_err(|error| error.to_string())?,
         );
+        settle.check(&window, false);
         let size = window.inner_size();
         let surface = WindowSurface::create(&self.gpu, window.clone(), size.width, size.height)
             .map_err(|error| error.to_string())?;
@@ -193,6 +196,7 @@ impl Shell {
         self.window = Some(Open {
             window,
             surface,
+            settle,
             #[cfg(feature = "web-overlay")]
             ui,
         });
@@ -274,6 +278,9 @@ impl ApplicationHandler for Shell {
         let Some(open) = &mut self.window else { return };
         if let WindowEvent::Resized(size) = event {
             open.surface.resize(&self.gpu, size.width, size.height);
+        }
+        if let WindowEvent::Moved(_) = event {
+            open.settle.check(&open.window, true);
         }
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {

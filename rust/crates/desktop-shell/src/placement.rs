@@ -2,11 +2,16 @@
 //! small file under the product's persistence root.
 //!
 //! The file is one line: `width height x y maximized`, with `-` for a position
-//! the platform does not report (Wayland). A missing or unreadable file opens
-//! the window at its default size.
+//! the platform does not report (Wayland). `x y` is the client area's
+//! top-left: the platforms place a new window's frame there instead, and
+//! winit's frame position is unreliable where the window manager does not
+//! reparent (KWin's Xwayland reports none), so [`Settle`] moves the frame
+//! once the client area has landed. A missing or unreadable file opens the
+//! window at its default size.
 
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
@@ -14,6 +19,9 @@ use winit::window::{Window, WindowAttributes};
 
 /// Smallest and largest restored side, in physical pixels.
 const SIDE: std::ops::RangeInclusive<u32> = 200..=16384;
+/// The window manager places a new window within this; a later move is the
+/// user's.
+const PLACING: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Placement {
@@ -51,7 +59,7 @@ impl Placement {
     pub(crate) fn of(window: &Window) -> Self {
         Self {
             size: window.inner_size(),
-            position: window.outer_position().ok(),
+            position: window.inner_position().ok(),
             maximized: window.is_maximized(),
         }
     }
@@ -74,20 +82,53 @@ impl Placement {
     }
 
     /// The window opens at this size, and at this position when it still
-    /// falls on a connected monitor.
+    /// falls on a connected monitor. The returned [`Settle`] finishes the
+    /// position once the window exists.
     pub(crate) fn apply(
         &self,
         attributes: WindowAttributes,
         event_loop: &ActiveEventLoop,
-    ) -> WindowAttributes {
+    ) -> (WindowAttributes, Settle) {
         let attributes = attributes
             .with_inner_size(self.size)
             .with_maximized(self.maximized);
         match self.position {
-            Some(position) if on_a_monitor(position, event_loop) => {
-                attributes.with_position(position)
-            }
-            _ => attributes,
+            Some(position) if !self.maximized && on_a_monitor(position, event_loop) => (
+                attributes.with_position(position),
+                Settle(Some((position, Instant::now()))),
+            ),
+            _ => (attributes, Settle(None)),
+        }
+    }
+}
+
+/// A restored client-area position the window has not reached yet.
+#[derive(Debug, Default)]
+pub(crate) struct Settle(Option<(PhysicalPosition<i32>, Instant)>);
+
+impl Settle {
+    /// Call after creating the window and on each move. When the client area
+    /// sits off the saved position by the frame the platform added, move the
+    /// window back by as much, once. The first move, or [`PLACING`], ends it.
+    pub(crate) fn check(&mut self, window: &Window, moved: bool) {
+        let Some((wanted, since)) = self.0 else {
+            return;
+        };
+        let Ok(actual) = window.inner_position() else {
+            self.0 = None;
+            return;
+        };
+        if actual != wanted {
+            // The window was asked for `wanted` as its frame position and its
+            // client area landed at `actual`; asking for the frame that far
+            // back puts the client area at `wanted`.
+            window.set_outer_position(PhysicalPosition::new(
+                2 * wanted.x - actual.x,
+                2 * wanted.y - actual.y,
+            ));
+            self.0 = None;
+        } else if moved || since.elapsed() > PLACING {
+            self.0 = None;
         }
     }
 }

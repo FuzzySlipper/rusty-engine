@@ -48,6 +48,12 @@ TypeScript UI is composited over it. Decision and measurements:
   `desktop-window` under the persistence root. A position that no longer falls
   on a connected monitor is dropped. There is no fullscreen yet; no product
   has asked for it.
+  - The saved position is the client area's. A new window's frame goes where
+    it is asked to, so once the client area has landed the shell moves the
+    window back by the frame's offset. winit's frame position can't be used:
+    KWin's Xwayland does not reparent windows, and winit then reports the
+    client area as the frame, so the window crept down by its title bar on
+    every run ([evidence #8860](evidence/desktop-pack-8860/README.md)).
 
 ## Running
 
