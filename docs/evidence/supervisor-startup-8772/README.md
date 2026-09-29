@@ -33,6 +33,16 @@ Start failures behave as before:
 The headless browser now launches once the first runtime serves. Before, it
 launched when `start` returned, which was the same moment.
 
+**`reload-assets` during startup.** A `reload-assets` frame (#8743) that
+arrives while a runtime is starting is held until `serve`, then forwarded.
+The runtime reads only `serve` as its first stdin line, and it may already have
+read the previous assets.
+
+The first landing of this change (`aaa77389`) forwarded the frame at once. The
+runtime read it as a stop request and exited before serving, and the
+supervisor then exited too (`results/startup-main-aaa77389.json`). The
+follow-up commit on #8772 fixes this.
+
 ## Exercises
 
 **Held runtime** (`scripts/startup_exercise.py`). The runtime child is sent
@@ -43,10 +53,11 @@ SIGSTOP as soon as it appears, so it never reports ready. The Product is the
 |---|---|---|
 | SIGINT to the supervisor group | exits only at the 30 s startup deadline (29.1 s after the signal) | exits after 10.1 s, the bounded stop: logs `shutdown reason=termination-signal`, then kills the runtime |
 | Close supervisor stdin | exits at the deadline (29.1 s) | exits after 10.1 s, `reason=supervisor-stdin-closed`, runtime killed |
-| `replace-runtime` frame | ignored; the supervisor exits at the deadline, and the replacement never serves | the held runtime is killed after 10 s, and the replacement serves at 10.1 s |
+| `replace-runtime` frame | ignored; the supervisor exits at the deadline, and the replacement never serves | the held runtime is killed after 10 s, and the replacement serves at 10.2 s |
+| `reload-assets` frame, then SIGCONT | (on `aaa77389`) the runtime exits before serving; the supervisor exits 1 | the same runtime serves 0.1 s after SIGCONT and logs `assets-reloaded`; stdin EOF then exits 0 |
 
-In every case the supervisor exits 1: the held runtime could not dispose and
-was killed, and the exit reports that.
+In the three stop and replace cases, the supervisor exits 1: the held runtime
+could not dispose and was killed, and the exit reports that.
 
 **Existing paths** (`results/supervisor-exercise-8766-paths.json`). This
 reruns `docs/evidence/runtime-owned-io-8766/scripts/supervisor_exercise.py` on

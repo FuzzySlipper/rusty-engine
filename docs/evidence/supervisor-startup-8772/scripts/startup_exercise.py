@@ -8,8 +8,10 @@ case then asks the supervisor to act and records how long it took:
 - groupSigint: SIGINT to the supervisor's process group (terminal Ctrl+C);
 - stdinEof: close the supervisor's stdin (the `rusty dev` clean stop);
 - restage: a replace-runtime frame; the new runtime must serve.
+- reloadWhileStarting: a reload-assets frame (#8743), then SIGCONT; the held
+  runtime must still serve, since it reads only `serve` before it serves.
 """
-import json, os, signal, socket, struct, subprocess, sys, time
+import json, os, re, signal, socket, struct, subprocess, sys, time
 from pathlib import Path
 
 host, product, port, work, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), Path(sys.argv[4]), Path(sys.argv[5])
@@ -22,9 +24,15 @@ def status(path="/"):
     try:
         s = socket.create_connection(ADDR, timeout=2)
         s.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n".encode())
-        head = s.recv(64)
+        head = b""
+        while b"\r\n" not in head:
+            chunk = s.recv(64)
+            if not chunk:
+                break
+            head += chunk
         s.close()
-        return int(head.split(b" ")[1]) if head else 0
+        match = re.match(rb"HTTP/1\.1 (\d+)", head)
+        return int(match.group(1)) if match else 0
     except OSError:
         return None
 
@@ -113,6 +121,24 @@ started = time.monotonic()
 proc.stdin.close()
 code = wait_exit(proc)
 result["restage"]["thenStdinEof"] = finish(proc, runtime, "restage", started, code)
+
+proc, runtime = held_runtime("reload")
+proc.stdin.write(frame({"kind": "reload-assets"}))
+proc.stdin.flush()
+time.sleep(0.5)
+started = time.monotonic()
+os.kill(runtime, signal.SIGCONT)
+served = None
+while time.monotonic() - started < WAIT and proc.poll() is None:
+    if status() == 200:
+        served = round(time.monotonic() - started, 3)
+        break
+    time.sleep(0.05)
+result["reloadWhileStarting"] = {"servedAfterSigcontSeconds": served, "sameRuntime": children(proc.pid) == [runtime],
+                                 "supervisorAlive": proc.poll() is None}
+started = time.monotonic()
+proc.stdin.close()
+result["reloadWhileStarting"]["thenStdinEof"] = finish(proc, runtime, "reload", started, wait_exit(proc))
 
 out.write_text(json.dumps(result, indent=2))
 print(json.dumps(result, indent=2))

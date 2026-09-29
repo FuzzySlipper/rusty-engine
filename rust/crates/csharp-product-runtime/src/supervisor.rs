@@ -347,6 +347,7 @@ struct RuntimeProcess {
     ready: mpsc::Receiver<()>,
     startup_deadline: Option<Instant>,
     serving: bool,
+    reload_after_serve: bool,
 }
 
 impl RuntimeProcess {
@@ -389,6 +390,7 @@ impl RuntimeProcess {
             ready: ready_rx,
             startup_deadline: None,
             serving: false,
+            reload_after_serve: false,
         })
     }
 
@@ -400,6 +402,9 @@ impl RuntimeProcess {
             unavailable.suspend();
             self.serve()?;
             self.serving = true;
+            if self.reload_after_serve {
+                self.reload_assets()?;
+            }
             return Ok(());
         }
         if let Some(status) = self.exited() {
@@ -430,7 +435,13 @@ impl RuntimeProcess {
             .map_err(|error| format!("DEV_HOST_RUNTIME_SERVE: {error}"))
     }
 
+    /// A starting runtime reads only `serve` first, and may already have read
+    /// the previous assets; it gets the reload right after `serve`.
     fn reload_assets(&mut self) -> Result<(), String> {
+        if !self.serving {
+            self.reload_after_serve = true;
+            return Ok(());
+        }
         let stdin = self
             .stdin
             .as_mut()
