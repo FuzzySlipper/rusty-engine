@@ -7,6 +7,13 @@
 //! [`Particles::advance`], so a held simulation freezes every burst. The
 //! descriptors carry no policy caps since #8798; each emitter's own
 //! `max_particles` is the only bound.
+//!
+//! A billboard visual's texture is a slot in the effects cache. Each emitter
+//! and each live particle holds the slot its visual resolved to (a particle
+//! keeps its emitter's slot from spawn, so an updated visual does not change
+//! particles already alive). `texture_users` counts those holders per slot;
+//! a slot whose count reaches zero is queued in `released` for the cache to
+//! drop, so ownership ends with the last user and nothing is swept per frame.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,6 +34,8 @@ pub(crate) enum EmitterKey {
 
 struct Emitter {
     descriptor: Arc<ParticleEmitterDescriptor>,
+    /// The texture slot of the current visual (`None` for cubes).
+    texture: Option<u32>,
     random: u32,
     carry: f32,
     live: u32,
@@ -35,6 +44,8 @@ struct Emitter {
 pub(crate) struct Particle {
     pub emitter: EmitterKey,
     pub descriptor: Arc<ParticleEmitterDescriptor>,
+    /// The texture slot of the visual it spawned with.
+    pub texture: Option<u32>,
     pub age: f32,
     pub lifetime: f32,
     pub position: Vec3,
@@ -89,6 +100,30 @@ pub(crate) struct Particles {
     emitters: HashMap<EmitterKey, Emitter>,
     pub particles: Vec<Particle>,
     next_burst: u64,
+    /// Emitters and live particles holding each texture slot.
+    texture_users: Vec<u32>,
+    /// Slots whose last holder left, for the cache to drop.
+    released: Vec<u32>,
+}
+
+fn hold(users: &mut Vec<u32>, slot: Option<u32>) {
+    if let Some(slot) = slot {
+        let index = slot as usize;
+        if users.len() <= index {
+            users.resize(index + 1, 0);
+        }
+        users[index] += 1;
+    }
+}
+
+fn let_go(users: &mut [u32], released: &mut Vec<u32>, slot: Option<u32>) {
+    if let Some(slot) = slot {
+        let count = &mut users[slot as usize];
+        *count -= 1;
+        if *count == 0 {
+            released.push(slot);
+        }
+    }
 }
 
 /// Resolves an entity-attached anchor: the entity's retained world position.
@@ -109,9 +144,24 @@ impl Particles {
             .count()
     }
 
+    /// Whether an emitter or a live particle holds this texture slot.
+    pub fn holds_texture(&self, slot: u32) -> bool {
+        self.texture_users
+            .get(slot as usize)
+            .is_some_and(|count| *count > 0)
+    }
+
+    /// Texture slots whose last holder has left since the previous call.
+    pub fn take_released_textures(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.released)
+    }
+
+    /// Apply one op. `texture` is the cache slot of the op's billboard visual
+    /// (`Emit`, `Create`, or an `Update` whose patch changes the visual).
     pub fn apply(
         &mut self,
         op: &ParticleProjectionOp,
+        texture: Option<u32>,
         entities: EntityPositions<'_>,
     ) -> Result<(), ParticleIssue> {
         match op {
@@ -119,7 +169,9 @@ impl Particles {
                 // Each emit is its own burst; the signal id is a product label.
                 self.next_burst += 1;
                 let key = EmitterKey::Burst(self.next_burst);
-                self.emitters.insert(key, emitter(descriptor.clone()));
+                hold(&mut self.texture_users, texture);
+                self.emitters
+                    .insert(key, emitter(descriptor.clone(), texture));
                 let result = self.spawn(key, descriptor.burst_count, entities);
                 self.forget_finished_bursts();
                 result
@@ -129,7 +181,9 @@ impl Particles {
                 if self.emitters.contains_key(&key) {
                     return Err(ParticleIssue::DuplicateHandle);
                 }
-                self.emitters.insert(key, emitter(descriptor.clone()));
+                hold(&mut self.texture_users, texture);
+                self.emitters
+                    .insert(key, emitter(descriptor.clone(), texture));
                 self.spawn(key, descriptor.burst_count, entities)
             }
             ParticleProjectionOp::Update { handle, patch } => {
@@ -138,14 +192,28 @@ impl Particles {
                     .get_mut(&EmitterKey::Retained(*handle))
                     .ok_or(ParticleIssue::UnknownHandle)?;
                 emitter.descriptor = Arc::new(patched(&emitter.descriptor, patch));
+                if patch.visual.is_some() {
+                    hold(&mut self.texture_users, texture);
+                    let prior = std::mem::replace(&mut emitter.texture, texture);
+                    let_go(&mut self.texture_users, &mut self.released, prior);
+                }
                 Ok(())
             }
             ParticleProjectionOp::Destroy { handle } => {
                 let key = EmitterKey::Retained(*handle);
-                self.emitters
+                let emitter = self
+                    .emitters
                     .remove(&key)
                     .ok_or(ParticleIssue::UnknownHandle)?;
-                self.particles.retain(|particle| particle.emitter != key);
+                let (users, released) = (&mut self.texture_users, &mut self.released);
+                let_go(users, released, emitter.texture);
+                self.particles.retain(|particle| {
+                    let keep = particle.emitter != key;
+                    if !keep {
+                        let_go(users, released, particle.texture);
+                    }
+                    keep
+                });
                 Ok(())
             }
         }
@@ -179,6 +247,7 @@ impl Particles {
             }
         }
         let emitters = &mut self.emitters;
+        let (users, released) = (&mut self.texture_users, &mut self.released);
         self.particles.retain_mut(|particle| {
             particle.age += seconds;
             let alive =
@@ -187,6 +256,7 @@ impl Particles {
                 if let Some(emitter) = emitters.get_mut(&particle.emitter) {
                     emitter.live = emitter.live.saturating_sub(1);
                 }
+                let_go(users, released, particle.texture);
             }
             alive
         });
@@ -195,8 +265,14 @@ impl Particles {
     }
 
     fn forget_finished_bursts(&mut self) {
-        self.emitters
-            .retain(|key, emitter| matches!(key, EmitterKey::Retained(_)) || emitter.live > 0);
+        let (users, released) = (&mut self.texture_users, &mut self.released);
+        self.emitters.retain(|key, emitter| {
+            let keep = matches!(key, EmitterKey::Retained(_)) || emitter.live > 0;
+            if !keep {
+                let_go(users, released, emitter.texture);
+            }
+            keep
+        });
     }
 
     fn spawn(
@@ -223,6 +299,14 @@ impl Particles {
             .max_particles
             .saturating_sub(emitter.live);
         let count = requested.min(room);
+        let texture = emitter.texture;
+        if let Some(slot) = texture {
+            let index = slot as usize;
+            if self.texture_users.len() <= index {
+                self.texture_users.resize(index + 1, 0);
+            }
+            self.texture_users[index] += count;
+        }
         self.particles.reserve(count as usize);
         for _ in 0..count {
             let descriptor = emitter.descriptor.clone();
@@ -238,6 +322,7 @@ impl Particles {
             self.particles.push(Particle {
                 emitter: key,
                 descriptor,
+                texture,
                 age: 0.0,
                 lifetime,
                 position: anchor,
@@ -389,9 +474,10 @@ fn sweep_aabb(start: Vec3, end: Vec3, minimum: Vec3, maximum: Vec3) -> Option<(f
     (0.0..=1.0).contains(&enter).then_some((enter, normal))
 }
 
-fn emitter(descriptor: ParticleEmitterDescriptor) -> Emitter {
+fn emitter(descriptor: ParticleEmitterDescriptor, texture: Option<u32>) -> Emitter {
     let seed = descriptor.seed as u32;
     Emitter {
+        texture,
         random: if seed == 0 { 0x9e37_79b9 } else { seed },
         descriptor: Arc::new(descriptor),
         carry: 0.0,
@@ -536,6 +622,7 @@ mod tests {
                 signal_id: "hit".to_owned(),
                 descriptor,
             },
+            None,
             NO_ENTITIES,
         )
     }
@@ -575,6 +662,7 @@ mod tests {
         particles
             .apply(
                 &ParticleProjectionOp::Create { handle, descriptor },
+                None,
                 NO_ENTITIES,
             )
             .unwrap();
@@ -584,7 +672,7 @@ mod tests {
         assert_eq!(particles.particles.len(), 5);
         assert_eq!(issues, vec![ParticleIssue::Dropped(2)]);
         particles
-            .apply(&ParticleProjectionOp::Destroy { handle }, NO_ENTITIES)
+            .apply(&ParticleProjectionOp::Destroy { handle }, None, NO_ENTITIES)
             .unwrap();
         assert!(particles.particles.is_empty());
     }
@@ -619,6 +707,7 @@ mod tests {
                     signal_id: "hit".to_owned(),
                     descriptor,
                 },
+                None,
                 &|entity| (entity == 9).then_some([2.0, 0.0, 0.0]),
             )
             .unwrap();

@@ -13,8 +13,8 @@ use common::*;
 use render_model::*;
 use render_presentation::{
     ParticleAnchor, ParticleColorKey, ParticleEmitterDescriptor, ParticleEmitterHandle,
-    ParticleProjectionOp, ParticleScalarKey, ParticleSpriteRef, ParticleVisual,
-    PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+    ParticleEmitterPatch, ParticleProjectionOp, ParticleScalarKey, ParticleSpriteRef,
+    ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 use render_wgpu::{RendererOptions, TargetStatus};
 
@@ -381,6 +381,105 @@ fn particle_bursts_age_on_engine_time_and_freeze_when_held() {
     let (live, emitters) = harness.renderer.particle_counts();
     assert_eq!(emitters, 1);
     assert!(live > 0 && live < 150, "only the fountain remains: {live}");
+}
+
+#[test]
+fn particle_textures_are_released_when_their_last_emitter_and_particle_leave() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = scene();
+    // Three distinct images, so three content hashes.
+    let mut visual = |id: &str, tint: u8| {
+        let mut image = atlas_image();
+        image[0] = tint;
+        let (op, hash) = harness
+            .resources
+            .texture(id, 16, 8, &image, TextureFilter::Nearest);
+        ops.push(op);
+        ParticleVisual::Billboard {
+            sprite: ParticleSpriteRef {
+                asset: id.to_owned(),
+                content_hash: hash,
+                frame_count: 2,
+            },
+        }
+    };
+    let (a, b, c) = (
+        visual("texture/a", 10),
+        visual("texture/b", 20),
+        visual("texture/c", 30),
+    );
+    harness.apply(ops);
+    let handle = ParticleEmitterHandle::new(1);
+    let mut fountain = emitter(b, [1.2, -0.5, -4.5], 0, 3);
+    fountain.rate_per_second = 40.0;
+    let frame = |ops| particle_frame(ops);
+    let present = |harness: &mut Harness, ops: Vec<ParticleProjectionOp>| {
+        let issues =
+            harness
+                .renderer
+                .apply_presentation(&frame(ops), &harness.resources, NO_ENTITIES);
+        assert!(issues.is_empty(), "{issues:?}");
+    };
+    present(
+        &mut harness,
+        vec![
+            ParticleProjectionOp::Emit {
+                signal_id: "impact".to_owned(),
+                descriptor: emitter(a.clone(), [-1.2, -0.3, -4.0], 48, 7),
+            },
+            ParticleProjectionOp::Create {
+                handle,
+                descriptor: fountain,
+            },
+        ],
+    );
+    for _ in 0..4 {
+        harness.renderer.advance_effects(1.0 / 20.0, NO_ENTITIES);
+    }
+    assert_eq!(harness.renderer.particle_texture_count(), 2);
+
+    // A new visual: particles already alive keep drawing texture B.
+    present(
+        &mut harness,
+        vec![ParticleProjectionOp::Update {
+            handle,
+            patch: ParticleEmitterPatch {
+                visual: Some(c),
+                ..ParticleEmitterPatch::default()
+            },
+        }],
+    );
+    assert_eq!(harness.renderer.particle_texture_count(), 3);
+    harness.renderer.advance_effects(1.0 / 20.0, NO_ENTITIES);
+    assert_eq!(harness.renderer.particle_texture_count(), 3);
+
+    // The burst and B's particles age out; the fountain keeps C and renders.
+    for _ in 0..60 {
+        harness.renderer.advance_effects(1.0 / 20.0, NO_ENTITIES);
+    }
+    assert_eq!(harness.renderer.particle_texture_count(), 1);
+    let eye = camera("eye", [0.0, 1.0, 1.5], 0.0, -10.0);
+    let fountain_only = harness.single(&eye);
+
+    // Destroying the emitter removes its particles, and with them C.
+    present(&mut harness, vec![ParticleProjectionOp::Destroy { handle }]);
+    assert_eq!(harness.renderer.particle_texture_count(), 0);
+    assert_eq!(harness.renderer.particle_counts(), (0, 0));
+    assert_ne!(harness.single(&eye), fountain_only);
+
+    // A later burst loads its texture again into a reused slot.
+    present(
+        &mut harness,
+        vec![ParticleProjectionOp::Emit {
+            signal_id: "impact".to_owned(),
+            descriptor: emitter(a, [-1.2, -0.3, -4.0], 8, 7),
+        }],
+    );
+    assert_eq!(harness.renderer.particle_texture_count(), 1);
+    for _ in 0..60 {
+        harness.renderer.advance_effects(1.0 / 20.0, NO_ENTITIES);
+    }
+    assert_eq!(harness.renderer.particle_texture_count(), 0);
 }
 
 #[test]

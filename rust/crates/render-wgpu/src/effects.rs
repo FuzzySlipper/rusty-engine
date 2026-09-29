@@ -156,9 +156,12 @@ pub(crate) struct Effects {
     cube_rows: Rows,
     formats: Vec<FormatPipelines>,
     sprite_bind_groups: HashMap<SpriteTextures, wgpu::BindGroup>,
-    /// Particle sprite textures, and their index by content hash.
-    particle_textures: Vec<wgpu::BindGroup>,
+    /// Particle sprite textures by slot, and each content hash's slot. A slot
+    /// lives while an emitter or live particle holds it (`Particles`), then
+    /// its binding is dropped and the slot reused.
+    particle_textures: Vec<Option<ParticleTexture>>,
     particle_texture_ids: HashMap<String, u32>,
+    free_particle_slots: Vec<u32>,
     nearest: wgpu::Sampler,
     // Scratch reused across view passes: no per-particle allocation per frame.
     sprite_scratch: Vec<SpriteDraw>,
@@ -249,6 +252,7 @@ impl Effects {
             sprite_bind_groups: HashMap::new(),
             particle_textures: Vec::new(),
             particle_texture_ids: HashMap::new(),
+            free_particle_slots: Vec::new(),
             nearest: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("render-wgpu particle"),
                 ..Default::default()
@@ -508,12 +512,17 @@ impl Effects {
         pass.set_vertex_buffer(0, self.corners.slice(..));
         pass.set_vertex_buffer(1, self.particle_rows.buffer.slice(..));
         for (texture, first, count) in &effects.billboards {
-            if let Some(bind_group) = self.particle_textures.get(*texture as usize) {
-                pass.set_bind_group(1, bind_group, &[]);
+            if let Some(Some(texture)) = self.particle_textures.get(*texture as usize) {
+                pass.set_bind_group(1, &texture.bind_group, &[]);
                 pass.draw(0..4, *first..first + count);
             }
         }
     }
+}
+
+struct ParticleTexture {
+    content_hash: String,
+    bind_group: wgpu::BindGroup,
 }
 
 /// The Three sprite material's alpha and depth state.
@@ -683,15 +692,25 @@ impl Renderer {
                     };
                     let loaded = match visual {
                         Some(ParticleVisual::Billboard { sprite }) => {
-                            self.particle_texture(sprite, resources)
+                            self.particle_texture(sprite, resources).map(Some)
                         }
-                        _ => Ok(()),
+                        _ => Ok(None),
                     };
-                    match loaded.and_then(|()| {
-                        self.particles
-                            .apply(op, entities)
-                            .map_err(|issue| format!("{issue:?}"))
-                    }) {
+                    let result = loaded.and_then(|texture| {
+                        let applied = self
+                            .particles
+                            .apply(op, texture, entities)
+                            .map_err(|issue| format!("{issue:?}"));
+                        // A refused op leaves a freshly loaded slot unheld.
+                        if let Some(slot) = texture {
+                            if !self.particles.holds_texture(slot) {
+                                self.drop_particle_texture(slot);
+                            }
+                        }
+                        applied
+                    });
+                    self.drop_released_particle_textures();
+                    match result {
                         Ok(()) => None,
                         Err(detail) => Some(("particle", detail)),
                     }
@@ -738,8 +757,9 @@ impl Renderer {
             return Vec::new();
         }
         self.scene_generation += 1;
-        self.particles
-            .advance(seconds as f32, entities)
+        let issues = self.particles.advance(seconds as f32, entities);
+        self.drop_released_particle_textures();
+        issues
             .into_iter()
             .map(|issue| ApplyIssue {
                 op: "particle",
@@ -761,19 +781,42 @@ impl Renderer {
         )
     }
 
+    /// Drop the bindings of texture slots no emitter or particle holds.
+    fn drop_released_particle_textures(&mut self) {
+        for slot in self.particles.take_released_textures() {
+            self.drop_particle_texture(slot);
+        }
+    }
+
+    fn drop_particle_texture(&mut self, slot: u32) {
+        if let Some(texture) = self
+            .effects
+            .particle_textures
+            .get_mut(slot as usize)
+            .and_then(Option::take)
+        {
+            self.effects
+                .particle_texture_ids
+                .remove(&texture.content_hash);
+            self.effects.free_particle_slots.push(slot);
+        }
+    }
+
+    /// The live particle texture bindings (a readout for lifecycle checks).
+    pub fn particle_texture_count(&self) -> usize {
+        self.effects.particle_texture_ids.len()
+    }
+
     /// Load a particle sprite once per content hash, from the admitted
-    /// texture resource or the retained texture of the same id.
+    /// texture resource or the retained texture of the same id, and return
+    /// its slot.
     fn particle_texture(
         &mut self,
         sprite: &ParticleSpriteRef,
         resources: &dyn ResourceSource,
-    ) -> Result<(), String> {
-        if self
-            .effects
-            .particle_texture_ids
-            .contains_key(&sprite.content_hash)
-        {
-            return Ok(());
+    ) -> Result<u32, String> {
+        if let Some(slot) = self.effects.particle_texture_ids.get(&sprite.content_hash) {
+            return Ok(*slot);
         }
         let identity = format!(
             "texture-resource/{}",
@@ -809,12 +852,24 @@ impl Renderer {
                     },
                 ],
             });
-        self.effects.particle_texture_ids.insert(
-            sprite.content_hash.clone(),
-            self.effects.particle_textures.len() as u32,
-        );
-        self.effects.particle_textures.push(bind_group);
-        Ok(())
+        let texture = ParticleTexture {
+            content_hash: sprite.content_hash.clone(),
+            bind_group,
+        };
+        let slot = match self.effects.free_particle_slots.pop() {
+            Some(slot) => {
+                self.effects.particle_textures[slot as usize] = Some(texture);
+                slot
+            }
+            None => {
+                self.effects.particle_textures.push(Some(texture));
+                (self.effects.particle_textures.len() - 1) as u32
+            }
+        };
+        self.effects
+            .particle_texture_ids
+            .insert(sprite.content_hash.clone(), slot);
+        Ok(slot)
     }
 
     fn upload_rgba(&self, label: &str, image: &resources::DecodedImage) -> wgpu::TextureView {
@@ -974,11 +1029,7 @@ impl Renderer {
             for (index, particle) in self.particles.particles.iter().enumerate() {
                 let group = match &particle.descriptor.visual {
                     ParticleVisual::Cube => Some(0),
-                    ParticleVisual::Billboard { sprite } => self
-                        .effects
-                        .particle_texture_ids
-                        .get(&sprite.content_hash)
-                        .map(|texture| texture + 1),
+                    ParticleVisual::Billboard { .. } => particle.texture.map(|slot| slot + 1),
                 };
                 if let Some(group) = group {
                     order.push((group, index as u32));
