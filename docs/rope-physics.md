@@ -2,7 +2,7 @@
 
 Campaign #6992 introduced ropes; #8738 moved them into the retained Dynamics
 world. This describes the current source. See
-[SDK use](csharp-sdk.md#bounded-dynamics-ropes) for the generated API.
+[SDK use](csharp-lifecycle.md#bounded-dynamics-ropes) for the generated API.
 
 ## Owners
 

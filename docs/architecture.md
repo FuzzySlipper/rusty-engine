@@ -323,5 +323,5 @@ product applies them through `Dynamics.StepWithReactions` at its chosen update
 order. A reaction is an ordinary impulse at the observed point, with no revision
 check. Attachment selection, reel controls, consequences and presentation remain
 product policy.
-See [character tether use](csharp-sdk.md#character-tethers) and the
+See [character tether use](csharp-lifecycle.md#character-tethers) and the
 [bounded rope contract](rope-physics.md#kinematic-character-coupling).

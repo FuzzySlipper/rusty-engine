@@ -55,7 +55,7 @@ fixed-step boundary.
 Browser RAF and GPU submission run independently. Configured product cameras
 hold the latest published pose by default. The opt-in `CameraView.UpdateCameraSample`
 path samples translation or full camera pose at render time; see [camera
-composition](csharp-sdk.md#retained-camera-composition). This does not introduce
+composition](csharp-lifecycle.md#retained-camera-composition). This does not introduce
 a variable-rate C# callback or move simulation into RAF. Rust work invoked
 synchronously from an update still consumes that update's budget, even if it
 uses worker threads internally. Work that should finish later needs an explicit

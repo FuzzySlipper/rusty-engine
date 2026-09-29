@@ -52,7 +52,7 @@ meaning and Procgen provenance checks belong to the generator/importer or
 product. Convert the Procgen floor schema to the Engine spatial format before
 calling this API; the Engine consumes precomputed navigation facts. Content
 owns byte identity, and `Content.ResolveReference` can select an expected
-digest. See `docs/csharp-sdk.md#generated-level-artifact-admission` and
+digest. See `docs/csharp-lifecycle.md#generated-level-artifact-admission` and
 `fixtures/csharp-spatial-artifact/valid.json` in the Engine repository for the format
 and a complete call example.
 
@@ -71,7 +71,7 @@ retained support in each endpoint's X/Z column within `min(s * 0.25, 0.1) + 0.00
 world units and returns a world-space `NextWaypoint`. This avoids guessing
 levels or scanning cells. A reported walkable count includes every retained
 support level; it does not imply that every point inside the publication box
-is walkable. See `docs/csharp-sdk.md#collision-navigation-coordinates` and the
+is walkable. See `docs/csharp-lifecycle.md#collision-navigation-coordinates` and the
 packaged `fixtures/csharp-navigation-mapping` example in the Engine repository.
 
 ## Particle bursts

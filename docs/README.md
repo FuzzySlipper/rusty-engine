@@ -18,16 +18,19 @@ describes one, it describes what the code does today, not a reason to keep it.
   C# product, and TypeScript lanes.
 - [Rope physics contract](rope-physics.md) records campaign #6992's bounded
   solver design and probes; the proposed services are not yet SDK capabilities.
-- [C# SDK guide](csharp-sdk.md) explains the current product bootstrap,
-  lifecycle, services, generated output, leases, and optional managed helper
-  packages. Ordinary gameplay lives in its entity/mechanics sections:
-  `EntityStore` and Engine adapters, class components, `Stat`/`Track` and live
-  mechanics components, optional `InventoryEdit`, and explicit save/debug.
+- [C# SDK guide](csharp-sdk.md) is the downstream entry page: start, run,
+  update and troubleshoot a product with the `rusty` CLI, then its capability
+  references: [product project, build and staging](csharp-product-project.md),
+  [lifecycle and services](csharp-lifecycle.md),
+  [managed helpers](csharp-helpers.md) (`EntityStore` and Engine adapters,
+  class components, `Stat`/`Track`, optional `InventoryEdit`, explicit
+  save/debug), [offline images](csharp-offline-images.md) and
+  [runtime implicit surfaces](csharp-implicit-surfaces.md).
 - [World interaction and controller aim assistance](controller-interaction.md)
   is the green path for containers/doors, sticky targeting, controller aiming,
   and agent testing without repeated pixel hunting. Start with `interaction.inspect`.
-- [C# SDK/runtime distribution](csharp-distribution.md) explains the exact,
-  verified Linux-x64 release pair used by clean downstream CI.
+- [C# SDK/runtime distribution](csharp-distribution.md) explains the exact
+  Linux-x64 release pair, the pin, the shared cache and release information.
 - [C# product style](csharp-product-style.md) gives a recommended, product-side
   organization that does not require a hidden Engine framework.
 - [C# capability map](csharp-capabilities.md) inventories the current generated

@@ -14,4 +14,4 @@ and admits a valid artifact again.
 Generation rules, required connectivity, portal/socket semantics and Procgen
 provenance remain with the generator/importer or product. This fixture proves
 the Engine spatial admission boundary; it does not consume the Procgen floor
-schema. See `docs/csharp-sdk.md#generated-level-artifact-admission`.
+schema. See `docs/csharp-lifecycle.md#generated-level-artifact-admission`.

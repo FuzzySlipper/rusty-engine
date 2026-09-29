@@ -18,4 +18,4 @@ The Engine mapping is world-aligned: floor each world coordinate divided by
 cell size, using the surface support height for Y. Publication bounds select
 sampling and do not set an origin. For ordinary live feet, use
 `EvaluateNavigationStep` and its world-space `NextWaypoint` instead of guessing
-support levels. See `docs/csharp-sdk.md#collision-navigation-coordinates`.
+support levels. See `docs/csharp-lifecycle.md#collision-navigation-coordinates`.
