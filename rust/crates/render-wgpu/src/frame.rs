@@ -16,7 +16,7 @@ use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
 use crate::shadows::{self, ShadowMaps};
-use crate::tables::{Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
+use crate::tables::{Builtin, Environment, MaterialRef, NodeKind, PART_ROW_FLOATS};
 use crate::target::TargetView;
 use crate::{
     srgb_to_linear, OffscreenTarget, PresentSkip, Renderer, WindowSurface, DEFAULT_CLEAR_SRGB,
@@ -499,7 +499,7 @@ impl Renderer {
                 &self.shadows.layer_bind_group,
                 &[ShadowMaps::layer_offset(layer)],
             );
-            draws += self.draw_batches(&mut pass, &self.casters, |pass| {
+            draws += self.draw_batches(&mut pass, &self.casters.batches, |pass| {
                 self.layouts.shadow.get(pass)
             });
         }
@@ -511,12 +511,12 @@ impl Renderer {
     fn draw_batches<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
-        list: &DrawList,
+        batches: &[batch::Batch],
         pipeline: impl Fn(batch::Pass) -> &'a wgpu::RenderPipeline,
     ) -> u32 {
         let mut current: Option<batch::Pass> = None;
         let mut draws = 0;
-        for draw in &list.batches {
+        for draw in batches {
             let Some(part) = self.tables.parts.meta[draw.part as usize].as_ref() else {
                 continue;
             };
@@ -632,8 +632,10 @@ impl Renderer {
         let view_proj = view.camera.view_proj;
         let eye = view.camera.eye;
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
+        let effects = self.prepare_effects(&view);
         let slot = view.layer as usize;
         if !world_layer
+            && effects.draws() == 0
             && self.views[slot]
                 .as_ref()
                 .is_none_or(|cache| cache.list.batches.is_empty())
@@ -741,7 +743,28 @@ impl Renderer {
                 pass.set_bind_group(1, sky, &[]);
                 pass.draw(0..3, 0..1);
             }
-            draws = self.draw_batches(&mut pass, list, |pass| pipelines.get(pass));
+            // Solid sprites draw between the world's opaque and blended parts.
+            let batches = &list.batches;
+            let blend_start = batches
+                .iter()
+                .position(|batch| batch.pass >= batch::Pass::Blend)
+                .unwrap_or(batches.len());
+            let mut part_draws = self.draw_batches(&mut pass, &batches[..blend_start], |pass| {
+                pipelines.get(pass)
+            });
+            self.effects
+                .draw_sprites(&mut pass, format, &effects, false);
+            part_draws += self.draw_batches(&mut pass, &batches[blend_start..], |pass| {
+                pipelines.get(pass)
+            });
+            self.effects.draw_sprites(&mut pass, format, &effects, true);
+            self.effects.draw_particles(
+                &mut pass,
+                format,
+                &effects,
+                self.builtins.get(&Builtin::Cube),
+            );
+            draws = part_draws + effects.draws();
         }
         self.gpu.queue.submit([encoder.finish()]);
         ViewStats {

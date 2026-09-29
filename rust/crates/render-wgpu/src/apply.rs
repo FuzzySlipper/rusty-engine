@@ -68,6 +68,7 @@ impl Renderer {
             RenderDiff::DefineTexture { texture } => self.define_texture(texture, resources)?,
             RenderDiff::ReleaseTexture { id } => {
                 self.tables.textures.remove(id);
+                self.effects.forget_texture(id);
             }
             RenderDiff::DefineMaterial { material } => self.define_material(material.clone()),
             RenderDiff::ReleaseMaterial { id } => {
@@ -609,6 +610,7 @@ impl Renderer {
         let image = resources::texture_image(texture, resources)?;
         let uploaded = self.upload_texture(texture, image.as_ref());
         self.tables.textures.insert(texture.id.clone(), uploaded);
+        self.effects.forget_texture(&texture.id);
         // Materials sampling this texture and a sky showing it bind the new view.
         let dependents: Vec<RenderMaterialDescriptor> = self
             .tables

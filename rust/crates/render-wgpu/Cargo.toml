@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 render-model.workspace = true
 render-host-contracts.workspace = true
+render-presentation.workspace = true
 # Only this crate may depend on wgpu (scripts/dependency_boundary_check.py).
 wgpu = "30.0.1"
 glam = "0.30"
@@ -17,7 +18,6 @@ bytemuck = "1"
 pollster = "0.4"
 
 [dev-dependencies]
-render-presentation.workspace = true
 # Voxel scene fixtures: real chunk payloads from the scene projector.
 render-projection.workspace = true
 engine-spatial.workspace = true

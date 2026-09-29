@@ -2,11 +2,12 @@
 //!
 //! ```text
 //! python3 rust/crates/render-wgpu/scripts/capture-presentation.py [origin] [dir]
-//! cargo run -p render-wgpu --example render_capture -- <dir> <out.png> [width height] [source capture.png] [--no-default-world-lights]
+//! cargo run -p render-wgpu --example render_capture -- <dir> <out.png> [width height] [source capture.png] [--no-default-world-lights] [--no-default-viewmodel-lights]
 //! ```
 //!
-//! Pass `--no-default-world-lights` for a product whose manifest sets
-//! `defaultLights.world` to `disabled` (Dagger).
+//! Pass `--no-default-world-lights` (or `--no-default-viewmodel-lights`) for a
+//! product whose manifest sets `defaultLights.world` (or `.viewmodel`) to
+//! `disabled`, as Dagger does for the world.
 //!
 //! `<dir>` holds `world-frame.json` (the fresh-attachment presentation-world
 //! frame), `view.json` (the camera composition) and `resources/` (texture and
@@ -38,6 +39,7 @@ impl ResourceSource for DirectoryResources {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let all: Vec<String> = std::env::args().skip(1).collect();
     let default_world_lights = !all.iter().any(|arg| arg == "--no-default-world-lights");
+    let default_viewmodel_lights = !all.iter().any(|arg| arg == "--no-default-viewmodel-lights");
     let mut args = all.into_iter().filter(|arg| !arg.starts_with("--"));
     let dir = PathBuf::from(
         args.next()
@@ -65,6 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &gpu,
         RendererOptions {
             default_world_lights,
+            default_viewmodel_lights,
             ..RendererOptions::default()
         },
     );

@@ -25,8 +25,10 @@ mod camera;
 mod capture;
 mod compose;
 mod composition;
+mod effects;
 mod frame;
 mod gpu;
+mod particles;
 mod pipelines;
 mod primitives;
 mod resources;
@@ -43,6 +45,7 @@ pub use camera::CameraSampleReadout;
 pub use composition::{TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use frame::FrameStats;
 pub use gpu::{AdapterSummary, Gpu, GpuError};
+pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, WindowSurface};
 pub use target::OffscreenTarget;
@@ -124,6 +127,8 @@ pub struct Renderer {
     scene_generation: u64,
     compose: compose::Compose,
     composition: composition::ViewComposition,
+    effects: effects::Effects,
+    particles: particles::Particles,
 }
 
 /// Initial storage sizes; both grow by doubling.
@@ -163,6 +168,7 @@ impl Renderer {
         let white = white_texture(gpu);
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
+        let effects = effects::Effects::new(device, &layouts.frame);
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -187,6 +193,8 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device),
             composition: Default::default(),
+            effects,
+            particles: Default::default(),
         };
         for kind in [
             Builtin::Cube,

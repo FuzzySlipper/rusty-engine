@@ -156,6 +156,54 @@ fn shadow_visibility(layer: u32, position: vec3<f32>) -> f32 {
     return lit / 9.0;
 }
 
+// MeshStandardMaterial with metalness 0 under the pass's light rows: diffuse
+// plus GGX specular, before emission.
+fn standard_radiance(
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    world_position: vec3<f32>,
+    roughness: f32,
+) -> vec3<f32> {
+    let view = normalize(frame.camera.xyz - world_position);
+    var irradiance = vec3<f32>(0.0);
+    var specular = vec3<f32>(0.0);
+    for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
+        let light = lights[index];
+        let kind = u32(light.color_kind.w);
+        let color = light.color_kind.rgb;
+        if kind == 0u {
+            irradiance += color;
+        } else if kind == 1u {
+            irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5);
+        } else {
+            var direction = -normalize(light.direction_decay.xyz);
+            var attenuation = 1.0;
+            if kind != 2u {
+                let to_light = light.position_range.xyz - world_position;
+                let distance = length(to_light);
+                direction = to_light / max(distance, 1e-6);
+                attenuation = distance_attenuation(distance, light.position_range.w, light.direction_decay.w);
+                if kind == 4u {
+                    let angle = dot(-direction, normalize(light.direction_decay.xyz));
+                    attenuation = attenuation * smoothstep(light.extra.x, light.extra.y, angle);
+                }
+            }
+            let shadow = u32(light.extra.w);
+            if shadow > 0u {
+                var layer = shadow - 1u;
+                if kind == 3u {
+                    layer += point_face(world_position - light.position_range.xyz);
+                }
+                attenuation = attenuation * shadow_visibility(layer, world_position);
+            }
+            let incident = color * attenuation * clamp(dot(normal, direction), 0.0, 1.0);
+            irradiance += incident;
+            specular += incident * brdf_ggx(direction, view, normal, roughness);
+        }
+    }
+    return albedo * irradiance / PI + specular;
+}
+
 @fragment
 fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let row = parts[in.part];
@@ -180,44 +228,8 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
         return base;
     }
     let roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
-    let view = normalize(frame.camera.xyz - in.world_position);
-    var irradiance = vec3<f32>(0.0);
-    var specular = vec3<f32>(0.0);
-    for (var index = frame.counts.y; index < frame.counts.y + frame.counts.x; index = index + 1u) {
-        let light = lights[index];
-        let kind = u32(light.color_kind.w);
-        let color = light.color_kind.rgb;
-        if kind == 0u {
-            irradiance += color;
-        } else if kind == 1u {
-            irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5);
-        } else {
-            var direction = -normalize(light.direction_decay.xyz);
-            var attenuation = 1.0;
-            if kind != 2u {
-                let to_light = light.position_range.xyz - in.world_position;
-                let distance = length(to_light);
-                direction = to_light / max(distance, 1e-6);
-                attenuation = distance_attenuation(distance, light.position_range.w, light.direction_decay.w);
-                if kind == 4u {
-                    let angle = dot(-direction, normalize(light.direction_decay.xyz));
-                    attenuation = attenuation * smoothstep(light.extra.x, light.extra.y, angle);
-                }
-            }
-            let shadow = u32(light.extra.w);
-            if shadow > 0u {
-                var layer = shadow - 1u;
-                if kind == 3u {
-                    layer += point_face(in.world_position - light.position_range.xyz);
-                }
-                attenuation = attenuation * shadow_visibility(layer, in.world_position);
-            }
-            let incident = color * attenuation * clamp(dot(normal, direction), 0.0, 1.0);
-            irradiance += incident;
-            specular += incident * brdf_ggx(direction, view, normal, roughness);
-        }
-    }
-    let radiance = base.rgb * irradiance / PI + specular + row.emission.rgb;
+    let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness)
+        + row.emission.rgb;
     return vec4<f32>(radiance, base.a);
 }
 

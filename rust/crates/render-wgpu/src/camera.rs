@@ -20,6 +20,9 @@ use render_host_contracts::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CameraMatrices {
     pub view_proj: Mat4,
+    /// World to view.
+    pub view: Mat4,
+    pub projection: Mat4,
     pub eye: Vec3,
 }
 
@@ -97,8 +100,11 @@ pub(crate) fn camera_matrices(
         pose.orientation * Vec3::NEG_Z,
         pose.orientation * Vec3::Y,
     );
+    let projection = projection_matrix(projection, aspect);
     CameraMatrices {
-        view_proj: projection_matrix(projection, aspect) * view,
+        view_proj: projection * view,
+        view,
+        projection,
         eye: pose.position,
     }
 }
