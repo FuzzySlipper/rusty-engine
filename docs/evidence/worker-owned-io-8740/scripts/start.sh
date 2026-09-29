@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch one topology against a staged Product directory.
 #   RUSTY_PACK_BIN  runtime-pack bin directory (the prototype needs the
-#                   experiment/8740-worker-owned-io host binary for `owned`)
+#                   host binary from 365ecf6a or later for `owned`)
 #   RUSTY_PRODUCT   staged Product directory (contains product.json)
 #   RUSTY_WORK      scratch directory for persistence roots
 # Usage: start.sh worker|owned|inprocess

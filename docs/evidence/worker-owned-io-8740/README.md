@@ -26,7 +26,8 @@ Topologies (`scripts/start.sh`):
 | `owned` (prototype) | supervisor + CoreCLR runtime | runtime, on the supervisor's listener |
 | `inprocess` (reference) | one | the single process; **no signal isolation** (#8686) |
 
-The prototype is on branch `experiment/8740-worker-owned-io` (`e9802516`).
+The prototype landed on main as `365ecf6a` (originally `e9802516` on a
+deleted experiment branch).
 It is about 150 lines:
 - a supervisor mode (`--worker-owned-io`) that binds the listener, clears
   close-on-exec on it, and spawns the ordinary in-process host in its own
