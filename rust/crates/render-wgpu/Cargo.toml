@@ -23,6 +23,13 @@ fontdue = "0.9.4"
 wuff = "0.2.9"
 # GLB export writes its glTF JSON document.
 serde_json.workspace = true
+# The desktop shell's UI overlay: Chromium (CEF) off-screen rendering imported
+# into this crate's device. Off by default: its build downloads CEF.
+welding = { version = "=0.14.1", default-features = false, features = ["wgpu-30", "cef-runtime"], optional = true }
+dpi = { version = "0.1.2", optional = true }
+
+[features]
+web-overlay = ["dep:welding", "dep:dpi"]
 
 [dev-dependencies]
 # Voxel scene fixtures: real chunk payloads from the scene projector.

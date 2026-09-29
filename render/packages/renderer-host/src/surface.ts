@@ -146,8 +146,11 @@ export class RendererSurfaceLightingError extends Error {
   }
 }
 
-/** `streamed-frames` shows frames the runtime renders (the streaming browser mode). */
-export type RendererBackendFamily = 'threejs' | 'streamed-frames';
+/**
+ * `streamed-frames` shows frames the runtime renders (the streaming browser
+ * mode); `desktop-window` lets the desktop shell's window show through.
+ */
+export type RendererBackendFamily = 'threejs' | 'streamed-frames' | 'desktop-window';
 
 export interface RendererBackendDiagnostics {
   readonly family: RendererBackendFamily;

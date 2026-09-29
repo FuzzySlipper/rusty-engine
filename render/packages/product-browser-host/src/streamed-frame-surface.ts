@@ -36,6 +36,7 @@ const FRAME_FORMAT_RGBA8 = 2;
 const FRAME_FLAG_HELD = 1;
 const RETRY_DELAY_MS = 500;
 /** UI-host domains the browser still realizes; the runtime renders the rest. */
+/** Domains the browser still realizes; the runtime renders every other one. */
 const BROWSER_PRESENTATION_DOMAINS: ReadonlySet<string> = new Set(['audio', 'video', 'telemetryOverlay']);
 
 interface StreamedFrame {
@@ -96,8 +97,28 @@ export function mountStreamedFrameSurface(
   canvas: HTMLCanvasElement,
   options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
 ): RendererSurface {
-  const context = canvas.getContext('2d', { alpha: false });
-  if (context === null) throw new Error('the streaming surface needs a 2D canvas context');
+  return mountRuntimeRenderedSurface(canvas, options, true);
+}
+
+/**
+ * Mounts the desktop shell's surface: the runtime presents the world to the
+ * native window under this page, so the canvas stays transparent and only
+ * the input, focus and browser presentation hosts remain.
+ */
+export function mountWindowSurface(
+  canvas: HTMLCanvasElement,
+  options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
+): RendererSurface {
+  return mountRuntimeRenderedSurface(canvas, options, false);
+}
+
+function mountRuntimeRenderedSurface(
+  canvas: HTMLCanvasElement,
+  options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
+  streamed: boolean,
+): RendererSurface {
+  const context = streamed ? canvas.getContext('2d', { alpha: false }) : null;
+  if (streamed && context === null) throw new Error('the streaming surface needs a 2D canvas context');
   const pixelRatio = options.pixelRatio ?? 1;
   let hosts: RendererPresentationHostSet | null = options.presentationHosts ?? null;
   let composition: RendererViewComposition | null = options.viewComposition ?? null;
@@ -125,7 +146,7 @@ export function mountStreamedFrameSurface(
 
   const draw = (source: 'animationFrame' | 'explicit', timeMs: number): RendererSurfaceSubmissionSample => {
     const started = performance.now();
-    if (latest !== null) context.drawImage(latest.bitmap, 0, 0, canvas.width, canvas.height);
+    if (latest !== null) context?.drawImage(latest.bitmap, 0, 0, canvas.width, canvas.height);
     lastDrawDurationMs = performance.now() - started;
     const interval = lastDrawSourceMs === null ? null : timeMs - lastDrawSourceMs;
     lastDrawSourceMs = timeMs;
@@ -223,7 +244,7 @@ export function mountStreamedFrameSurface(
     if (canvas.width === width && canvas.height === height) return;
     canvas.width = width;
     canvas.height = height;
-    if (latest !== null) context.drawImage(latest.bitmap, 0, 0, width, height);
+    if (latest !== null) context?.drawImage(latest.bitmap, 0, 0, width, height);
   };
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(canvas);
@@ -243,8 +264,10 @@ export function mountStreamedFrameSurface(
     if (running || disposed) return;
     running = true;
     resize();
-    pulling = new AbortController();
-    pull(pulling);
+    if (streamed) {
+      pulling = new AbortController();
+      pull(pulling);
+    }
     animationFrame = requestAnimationFrame(onAnimationFrame);
   };
 
@@ -271,7 +294,7 @@ export function mountStreamedFrameSurface(
 
   const diagnosticsReadout = (): RendererSurfaceDiagnosticsReadout => ({
     schemaVersion: 1,
-    renderer: 'render-wgpu (streamed)',
+    renderer: streamed ? 'render-wgpu (streamed)' : 'render-wgpu (desktop window)',
     vendor: null,
     canvas: {
       cssWidth: canvas.clientWidth,
@@ -329,7 +352,7 @@ export function mountStreamedFrameSurface(
   const surface: RendererSurface = {
     kind: 'rusty_renderer_surface.v1',
     backend: {
-      family: 'streamed-frames',
+      family: streamed ? 'streamed-frames' : 'desktop-window',
       implementation: 'rusty-engine-renderer-backend',
       publicContract: 'rusty-renderer-surface.v1',
     },

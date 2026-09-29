@@ -297,7 +297,11 @@ impl Renderer {
         stats
     }
 
-    fn render_composition(&mut self, primary: TargetView<'_>, time_seconds: f64) -> FrameStats {
+    pub(crate) fn render_composition(
+        &mut self,
+        primary: TargetView<'_>,
+        time_seconds: f64,
+    ) -> FrameStats {
         self.composition.frame += 1;
         let frame = self.composition.frame;
         let mut stats = FrameStats {

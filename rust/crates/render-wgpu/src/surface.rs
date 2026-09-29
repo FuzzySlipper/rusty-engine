@@ -1,6 +1,8 @@
 //! Window surface presentation for the desktop shell. The shell owns the
 //! window; this module owns the wgpu surface configuration and depth buffer.
 
+use std::sync::Arc;
+
 use crate::{target, Gpu, GpuError};
 
 /// A configured presentation surface for one window.
@@ -23,6 +25,24 @@ pub enum PresentSkip {
 }
 
 impl WindowSurface {
+    /// A surface for `window` on a device made by [`Gpu::for_display`] for
+    /// the window's display.
+    pub fn create<W>(gpu: &Gpu, window: Arc<W>, width: u32, height: u32) -> Result<Self, GpuError>
+    where
+        W: wgpu::rwh::HasWindowHandle
+            + wgpu::rwh::HasDisplayHandle
+            + std::fmt::Debug
+            + Send
+            + Sync
+            + 'static,
+    {
+        let surface = gpu
+            .instance
+            .create_surface(window)
+            .map_err(|error| GpuError::Surface(error.to_string()))?;
+        Self::new(gpu, surface, width, height)
+    }
+
     pub(crate) fn new(
         gpu: &Gpu,
         surface: wgpu::Surface<'static>,
@@ -50,7 +70,13 @@ impl WindowSurface {
                 .first()
                 .copied()
                 .unwrap_or(wgpu::CompositeAlphaMode::Auto),
-            view_formats: Vec::new(),
+            // Overlays blend in gamma space through the non-sRGB view, as a
+            // browser composites its page.
+            view_formats: if format.is_srgb() {
+                vec![format.remove_srgb_suffix()]
+            } else {
+                Vec::new()
+            },
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&gpu.device, &config);
@@ -94,6 +120,17 @@ impl WindowSurface {
         gpu: &Gpu,
         draw: impl FnOnce(target::TargetView<'_>),
     ) -> Result<(), PresentSkip> {
+        self.present_layers(gpu, |view, _| draw(view))
+    }
+
+    /// As [`Self::present_with`], and `draw` also gets the finished image as
+    /// a single-sample, non-sRGB view, to encode overlays over it in gamma
+    /// space after the scene is resolved.
+    pub(crate) fn present_layers(
+        &mut self,
+        gpu: &Gpu,
+        draw: impl FnOnce(target::TargetView<'_>, target::TargetView<'_>),
+    ) -> Result<(), PresentSkip> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -109,15 +146,31 @@ impl WindowSurface {
         } else {
             (&view, None)
         };
-        draw(target::TargetView {
-            color,
-            resolve,
-            depth: &self.depth_view,
-            format: self.config.format,
-            samples: target::PRIMARY_SAMPLES,
-            width: self.config.width,
-            height: self.config.height,
+        let gamma = self.config.format.remove_srgb_suffix();
+        let gamma_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(gamma),
+            ..Default::default()
         });
+        draw(
+            target::TargetView {
+                color,
+                resolve,
+                depth: &self.depth_view,
+                format: self.config.format,
+                samples: target::PRIMARY_SAMPLES,
+                width: self.config.width,
+                height: self.config.height,
+            },
+            target::TargetView {
+                color: &gamma_view,
+                resolve: None,
+                depth: &self.depth_view,
+                format: gamma,
+                samples: 1,
+                width: self.config.width,
+                height: self.config.height,
+            },
+        );
         gpu.queue.present(frame);
         Ok(())
     }

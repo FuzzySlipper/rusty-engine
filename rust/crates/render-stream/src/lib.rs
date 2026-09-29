@@ -1,10 +1,13 @@
-//! Frames the runtime renders with `render-wgpu`, streamed to the browser
-//! shell through the development host's frame route.
+//! The runtime's `render-wgpu` renderer, and its frames streamed to the
+//! browser shell through the development host's frame route.
 //!
-//! The runtime applies each product call's renderer publications here, on its
-//! own thread, as it commits them. A render thread draws the committed scene
-//! offscreen while a viewer is attached, reads it back, encodes it and hands
-//! it to [`ProductDevFrameStream`]. It draws as soon as a change is applied:
+//! The runtime applies each product call's renderer publications to a
+//! [`SceneDriver`], on its own thread, as it commits them. Something else
+//! draws the committed scene: the stream's render thread ([`FrameStreamer`])
+//! offscreen, or the desktop shell to its window.
+//!
+//! The render thread draws the committed scene while a viewer is attached,
+//! reads it back, encodes it and hands it to [`ProductDevFrameStream`]. It draws as soon as a change is applied:
 //! every step while the simulation runs, and once per change while it is
 //! held, so the last frame stays on screen and inspection can still redraw
 //! it.
@@ -27,8 +30,10 @@ use std::time::{Duration, Instant};
 
 use product_dev_host::{ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream};
 pub use render_host_contracts::{RendererCameraPose, RendererViewComposition};
-pub use render_wgpu::{AnimationFact, EntityPositions, RendererOptions, ResourceSource};
-use render_wgpu::{Gpu, OffscreenTarget, Renderer};
+use render_wgpu::OffscreenTarget;
+pub use render_wgpu::{
+    AnimationFact, EntityPositions, Gpu, Renderer, RendererOptions, ResourceSource,
+};
 use runtime_publication::RuntimePublication;
 
 /// Size drawn for an explicit request while no viewer states one.
@@ -48,20 +53,21 @@ pub enum StreamFormat {
     Rgba8,
 }
 
-/// The runtime's handle on the streamed renderer. Dropping it stops the
-/// render thread.
-pub struct FrameStreamer {
-    shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
-}
-
-struct Shared {
+/// The committed scene in a renderer on one device, as the runtime's product
+/// calls leave it.
+pub struct SceneDriver {
     gpu: Gpu,
     options: RendererOptions,
     epoch: Instant,
     scene: Mutex<Scene>,
     wake: Condvar,
-    frames: Arc<ProductDevFrameStream>,
+}
+
+/// The stream's render thread over a [`SceneDriver`]. Dropping it stops the
+/// thread.
+pub struct FrameStreamer {
+    driver: Arc<SceneDriver>,
+    thread: Option<JoinHandle<()>>,
 }
 
 struct Scene {
@@ -161,16 +167,10 @@ pub struct StreamStats {
     pub last_skip: Option<String>,
 }
 
-impl FrameStreamer {
-    /// Opens a headless device and starts the render thread. Frames go to
-    /// `frames` whenever a viewer is attached there.
-    pub fn start(
-        options: RendererOptions,
-        format: StreamFormat,
-        frames: Arc<ProductDevFrameStream>,
-    ) -> Result<Self, String> {
-        let gpu = Gpu::headless().map_err(|error| error.to_string())?;
-        let shared = Arc::new(Shared {
+impl SceneDriver {
+    /// A renderer for the committed scene on `gpu`.
+    pub fn new(gpu: Gpu, options: RendererOptions) -> Arc<Self> {
+        Arc::new(Self {
             scene: Mutex::new(Scene {
                 renderer: Renderer::new(&gpu, options),
                 dirty: true,
@@ -196,23 +196,6 @@ impl FrameStreamer {
             options,
             epoch: Instant::now(),
             wake: Condvar::new(),
-            frames,
-        });
-        let waker = Arc::downgrade(&shared);
-        shared.frames.set_demand_waker(move || {
-            if let Some(shared) = waker.upgrade() {
-                shared.scene().dirty = true;
-                shared.wake.notify_all();
-            }
-        });
-        let thread_shared = Arc::clone(&shared);
-        let thread = std::thread::Builder::new()
-            .name("rusty-render-stream".to_owned())
-            .spawn(move || render_loop(&thread_shared, format))
-            .map_err(|error| format!("could not start the render thread: {error}"))?;
-        Ok(Self {
-            shared,
-            thread: Some(thread),
         })
     }
 
@@ -228,11 +211,11 @@ impl FrameStreamer {
         entities: EntityPositions<'_>,
         state: SceneState,
     ) {
-        let now = self.shared.now();
-        let mut scene = self.shared.scene();
+        let now = self.now();
+        let mut scene = self.scene();
         if scene.apply(publications, resources, entities, state, now) {
             drop(scene);
-            self.shared.wake.notify_all();
+            self.wake.notify_all();
         }
     }
 
@@ -246,9 +229,9 @@ impl FrameStreamer {
         entities: EntityPositions<'_>,
         state: SceneState,
     ) {
-        let now = self.shared.now();
-        let mut scene = self.shared.scene();
-        scene.renderer = Renderer::new(&self.shared.gpu, self.shared.options);
+        let now = self.now();
+        let mut scene = self.scene();
+        scene.renderer = Renderer::new(&self.gpu, self.options);
         let observer = scene.observer;
         scene.renderer.set_observer(observer);
         scene.renderer_id += 1;
@@ -260,51 +243,117 @@ impl FrameStreamer {
         scene.apply(baseline, resources, entities, state, now);
         scene.dirty = true;
         drop(scene);
-        self.shared.wake.notify_all();
+        self.wake.notify_all();
     }
 
     /// Whether the simulation is held, and the step the scene shows, for a
     /// lifecycle change no product call published (pause, time mode). A held
     /// scene is drawn once per change instead of continuously.
     pub fn set_simulation(&self, held: bool, step: u64) {
-        let mut scene = self.shared.scene();
+        let mut scene = self.scene();
         if scene.held != held || scene.step != step {
             scene.held = held;
             scene.step = step;
             scene.dirty = true;
             drop(scene);
-            self.shared.wake.notify_all();
+            self.wake.notify_all();
         }
     }
 
     /// Draws the primary views from `pose` instead of the product's cameras,
     /// or from the product's cameras again with `None`.
     pub fn set_observer(&self, pose: Option<RendererCameraPose>) {
-        let mut scene = self.shared.scene();
+        let mut scene = self.scene();
         scene.observer = pose;
         scene.renderer.set_observer(pose);
         scene.dirty = true;
         drop(scene);
-        self.shared.wake.notify_all();
+        self.wake.notify_all();
+    }
+
+    /// Animation facts the drawn frames produced since the last call.
+    pub fn take_animation_facts(&self) -> Vec<AnimationFact> {
+        std::mem::take(&mut self.scene().animation_facts)
+    }
+
+    /// Draw the committed scene: `draw` renders with the renderer at the
+    /// presentation time it is given, to its own target. Facts the frame
+    /// produced are kept for [`Self::take_animation_facts`].
+    pub fn draw<R>(&self, draw: impl FnOnce(&mut Renderer, f64) -> R) -> R {
+        let now = self.now();
+        let mut scene = self.scene();
+        scene.dirty = false;
+        let result = draw(&mut scene.renderer, now);
+        scene.collect_facts();
+        result
+    }
+
+    /// Ops the renderer could not realize, by op, and the last one's detail.
+    pub fn skipped_ops(&self) -> (BTreeMap<&'static str, u64>, Option<String>) {
+        let scene = self.scene();
+        (scene.skipped_ops.clone(), scene.last_skip.clone())
+    }
+
+    /// The device the renderer draws with.
+    pub fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
+
+    fn scene(&self) -> MutexGuard<'_, Scene> {
+        self.scene
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The presentation clock camera motion is sampled on.
+    fn now(&self) -> f64 {
+        self.epoch.elapsed().as_secs_f64()
+    }
+}
+
+impl FrameStreamer {
+    /// Starts the render thread over `driver`. Frames go to `frames`
+    /// whenever a viewer is attached there.
+    pub fn start(
+        driver: Arc<SceneDriver>,
+        format: StreamFormat,
+        frames: Arc<ProductDevFrameStream>,
+    ) -> Result<Self, String> {
+        let waker = Arc::downgrade(&driver);
+        frames.set_demand_waker(move || {
+            if let Some(driver) = waker.upgrade() {
+                driver.scene().dirty = true;
+                driver.wake.notify_all();
+            }
+        });
+        let thread_driver = Arc::clone(&driver);
+        let thread = std::thread::Builder::new()
+            .name("rusty-render-stream".to_owned())
+            .spawn(move || render_loop(&thread_driver, &frames, format))
+            .map_err(|error| format!("could not start the render thread: {error}"))?;
+        Ok(Self {
+            driver,
+            thread: Some(thread),
+        })
     }
 
     /// On demand, changes wait for [`Self::draw_now`] instead of drawing.
     pub fn set_on_demand(&self, on_demand: bool) {
-        let mut scene = self.shared.scene();
+        let mut scene = self.driver.scene();
         scene.on_demand = on_demand;
         drop(scene);
-        self.shared.wake.notify_all();
+        self.driver.wake.notify_all();
     }
 
     /// Draws a frame of the current scene, even on demand or with no viewer,
     /// and waits up to `timeout` for it to be published.
     pub fn draw_now(&self, timeout: Duration) -> Option<DrawnFrame> {
-        let mut scene = self.shared.scene();
+        let mut scene = self.driver.scene();
         scene.requested += 1;
         let request = scene.requested;
-        self.shared.wake.notify_all();
+        self.driver.wake.notify_all();
         let (scene, _) = self
-            .shared
+            .driver
             .wake
             .wait_timeout_while(scene, timeout, |scene| {
                 scene.answered < request && !scene.stop
@@ -316,7 +365,7 @@ impl FrameStreamer {
     }
 
     pub fn inspection(&self) -> StreamInspection {
-        let scene = self.shared.scene();
+        let scene = self.driver.scene();
         StreamInspection {
             on_demand: scene.on_demand,
             held: scene.held,
@@ -327,13 +376,8 @@ impl FrameStreamer {
         }
     }
 
-    /// Animation facts the drawn frames produced since the last call.
-    pub fn take_animation_facts(&self) -> Vec<AnimationFact> {
-        std::mem::take(&mut self.shared.scene().animation_facts)
-    }
-
     pub fn stats(&self) -> StreamStats {
-        let scene = self.shared.scene();
+        let scene = self.driver.scene();
         let costs = &scene.stats;
         let median = |value: fn(&FrameCost) -> f64| {
             let mut values: Vec<f64> = costs.iter().map(value).collect();
@@ -347,7 +391,7 @@ impl FrameStreamer {
             _ => 0.0,
         };
         let total_bytes: usize = costs.iter().skip(1).map(|cost| cost.bytes).sum();
-        let adapter = self.shared.gpu.adapter_summary();
+        let adapter = self.driver.gpu.adapter_summary();
         StreamStats {
             adapter: format!("{} ({})", adapter.name, adapter.backend),
             frames: costs.len(),
@@ -373,26 +417,20 @@ impl FrameStreamer {
 
 impl Drop for FrameStreamer {
     fn drop(&mut self) {
-        self.shared.scene().stop = true;
-        self.shared.wake.notify_all();
+        self.driver.scene().stop = true;
+        self.driver.wake.notify_all();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
 
-impl Shared {
-    fn scene(&self) -> MutexGuard<'_, Scene> {
-        self.scene.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// The presentation clock camera motion is sampled on.
-    fn now(&self) -> f64 {
-        self.epoch.elapsed().as_secs_f64()
-    }
-}
-
 impl Scene {
+    fn collect_facts(&mut self) {
+        let animation = self.renderer.take_animation_facts();
+        self.animation_facts.extend(animation);
+    }
+
     /// Applies publications and the state they reach under the caller's
     /// lock. Returns whether anything changed.
     fn apply(
@@ -446,11 +484,11 @@ impl Scene {
     }
 }
 
-fn render_loop(shared: &Shared, format: StreamFormat) {
+fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: StreamFormat) {
     let mut target: Option<OffscreenTarget> = None;
     let mut pixels = Vec::new();
     loop {
-        let mut scene = shared.scene();
+        let mut scene = driver.scene();
         let size = loop {
             if scene.stop {
                 return;
@@ -458,14 +496,14 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             // A running simulation applies a change every step, so frames
             // follow the simulation rate; a held scene draws once per change.
             // On demand, only requests draw.
-            let wanted = shared.frames.wanted_size();
+            let wanted = frames.wanted_size();
             if scene.requested > scene.answered {
                 break wanted.unwrap_or(UNWATCHED_SIZE);
             }
             if let Some(size) = wanted.filter(|_| scene.dirty && !scene.on_demand) {
                 break size;
             }
-            scene = shared
+            scene = driver
                 .wake
                 .wait_timeout(scene, IDLE_WAIT)
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -473,10 +511,10 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
         };
         let target = match &mut target {
             Some(target) => {
-                target.resize(&shared.gpu, size.0, size.1);
+                target.resize(&driver.gpu, size.0, size.1);
                 target
             }
-            None => target.insert(OffscreenTarget::new(&shared.gpu, size.0, size.1)),
+            None => target.insert(OffscreenTarget::new(&driver.gpu, size.0, size.1)),
         };
         let started = Instant::now();
         scene.dirty = false;
@@ -494,17 +532,19 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             composition_revision: scene.composition_revision,
             observer: scene.observer,
         };
-        scene.renderer.render_view_composition(target, shared.now());
-        let facts = scene.renderer.take_animation_facts();
-        scene.animation_facts.extend(facts);
+        scene.renderer.render_view_composition(target, driver.now());
+        scene.collect_facts();
         let (held, step) = (scene.held, scene.step);
         drop(scene);
         let rendered = Instant::now();
-        target.read_rgba_into(&shared.gpu, &mut pixels);
+        target.read_rgba_into(&driver.gpu, &mut pixels);
         let read = Instant::now();
         let (width, height) = target.size();
         let (format, payload) = match format {
-            StreamFormat::Jpeg => (ProductDevFrameFormat::Jpeg, encode_jpeg(&pixels, width, height)),
+            StreamFormat::Jpeg => (
+                ProductDevFrameFormat::Jpeg,
+                encode_jpeg(&pixels, width, height),
+            ),
             StreamFormat::Rgba8 => (ProductDevFrameFormat::Rgba8, pixels.clone()),
         };
         let encoded = Instant::now();
@@ -515,7 +555,7 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             encode_ms: ms(encoded - read),
             bytes: payload.len(),
         };
-        drawn.sequence = shared.frames.publish(ProductDevFrame {
+        drawn.sequence = frames.publish(ProductDevFrame {
             width,
             height,
             format,
@@ -524,7 +564,7 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             payload,
         });
         (drawn.width, drawn.height) = (width, height);
-        let mut scene = shared.scene();
+        let mut scene = driver.scene();
         if scene.stats.len() == STATS_WINDOW {
             scene.stats.pop_front();
         }
@@ -532,7 +572,7 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
         scene.answered = scene.answered.max(request);
         scene.last_drawn = Some(drawn);
         drop(scene);
-        shared.wake.notify_all();
+        driver.wake.notify_all();
     }
 }
 

@@ -523,6 +523,8 @@ pub struct CsharpProductRuntimeConfig {
     persistence_root: Option<PathBuf>,
     diagnostics: ProductDevLog,
     renderer_options: render_stream::RendererOptions,
+    /// The desktop shell's device, for `RUSTY_RENDER_OUTPUT=window`.
+    window_gpu: Option<render_stream::Gpu>,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -540,11 +542,19 @@ impl CsharpProductRuntimeConfig {
             persistence_root: None,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
             renderer_options: render_stream::RendererOptions::default(),
+            window_gpu: None,
         }
     }
 
+    /// The desktop shell's device: with `RUSTY_RENDER_OUTPUT=window` the
+    /// runtime's renderer is built on it and the shell draws it.
+    pub fn with_window_gpu(mut self, gpu: render_stream::Gpu) -> Self {
+        self.window_gpu = Some(gpu);
+        self
+    }
+
     /// The product manifest's default light rigs, for a renderer in this
-    /// process (`RUSTY_RENDER_OUTPUT=stream`).
+    /// process (`RUSTY_RENDER_OUTPUT`).
     pub fn with_default_lights(mut self, world: bool, viewmodel: bool) -> Self {
         self.renderer_options.default_world_lights = world;
         self.renderer_options.default_viewmodel_lights = viewmodel;
@@ -944,11 +954,13 @@ mod audio_output;
 mod frame_output;
 mod render_output;
 
-/// Whether `RUSTY_RENDER_OUTPUT=stream` selects frames rendered and
-/// streamed by this process over browser realization.
-pub fn render_output_streams() -> Result<bool, CsharpProductRuntimeError> {
-    frame_output::stream_selected()
+/// Where `RUSTY_RENDER_OUTPUT` has this process draw the world instead of
+/// the browser: `stream` or `window`.
+pub fn render_output_mode() -> Result<Option<&'static str>, CsharpProductRuntimeError> {
+    frame_output::render_output_mode()
 }
+
+pub use render_stream::{Gpu, Renderer, SceneDriver};
 
 /// A loaded trusted C# product adapted to the existing local browser host.
 mod playtest;
@@ -1060,7 +1072,10 @@ impl CsharpProductRuntime {
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let audio_output = audio_output::AudioOutput::from_environment()?;
-        let frame_output = frame_output::FrameOutput::from_environment(config.renderer_options)?;
+        let frame_output = frame_output::FrameOutput::from_environment(
+            config.renderer_options,
+            config.window_gpu.as_ref(),
+        )?;
         let render_outputs = render_output::OutputExecutor::start(config.renderer_options)
             .map_err(|error| {
                 CsharpProductRuntimeError::new(
@@ -2681,11 +2696,18 @@ impl CsharpProductRuntime {
         }
     }
 
-    /// The host serves these frames when this process renders the world.
+    /// The host serves these frames when this process streams the world.
     pub fn frame_stream(&self) -> Option<Arc<product_dev_host::ProductDevFrameStream>> {
         self.frame_output
             .as_ref()
-            .map(frame_output::FrameOutput::frames)
+            .and_then(frame_output::FrameOutput::frames)
+    }
+
+    /// The renderer the desktop shell draws, with `RUSTY_RENDER_OUTPUT=window`.
+    pub fn scene_driver(&self) -> Option<Arc<SceneDriver>> {
+        self.frame_output
+            .as_ref()
+            .map(frame_output::FrameOutput::driver)
     }
 
     /// Rebind input for a same-incarnation control fence. The browser keeps

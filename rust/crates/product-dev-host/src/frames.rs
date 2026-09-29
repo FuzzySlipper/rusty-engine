@@ -187,7 +187,9 @@ pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
     let (mut after, mut width, mut height) = (None, None, None);
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (name, value) = pair.split_once('=').ok_or("malformed frame query")?;
-        let value = value.parse::<u64>().map_err(|_| "frame query values are integers")?;
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| "frame query values are integers")?;
         let slot = match name {
             "after" => &mut after,
             "width" => &mut width,
@@ -255,7 +257,9 @@ mod tests {
         assert_eq!(stream.wanted_size(), None);
         stream.publish(frame(1));
         stream.publish(frame(2));
-        let first = stream.next_after(0, Some((64, 32)), Duration::ZERO).unwrap();
+        let first = stream
+            .next_after(0, Some((64, 32)), Duration::ZERO)
+            .unwrap();
         assert_eq!(sequence(&first), 2);
         assert_eq!(stream.wanted_size(), Some((64, 32)));
         assert!(stream.next_after(2, None, Duration::ZERO).is_none());
@@ -287,7 +291,10 @@ mod tests {
     fn frame_query_takes_after_and_both_sides_or_neither() {
         assert_eq!(
             frame_request(PRODUCT_DEV_FRAMES_PATH),
-            Ok(FrameRequest { after: 0, size: None })
+            Ok(FrameRequest {
+                after: 0,
+                size: None
+            })
         );
         assert_eq!(
             frame_request("/__rusty/product/runtime/frames?after=12&width=1280&height=720"),

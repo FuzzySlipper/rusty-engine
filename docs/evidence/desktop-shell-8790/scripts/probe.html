@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font:16px sans-serif;color:#fff}
+#game{position:absolute;left:0;top:0;width:100%;height:100%}
+#panel{position:absolute;left:12px;top:12px;background:rgba(0,0,0,.55);padding:8px 12px;border-radius:4px;white-space:pre;font:14px monospace}
+#menu{position:absolute;right:24px;top:24px;width:160px;height:40px}
+</style></head><body>
+<canvas id="game" tabindex="0"></canvas>
+<div id="panel">waiting</div>
+<button id="menu">Menu</button>
+<script>
+const game = document.getElementById('game');
+const state = { lock: 'none', dx: 0, dy: 0, moves: 0, keys: [], clicks: [], wheel: 0, menu: 0 };
+const show = () => { document.getElementById('panel').textContent =
+  'lock: ' + state.lock + '\nlocked motion: ' + state.moves + ' events, dx=' + state.dx + ' dy=' + state.dy +
+  '\nkeys: ' + state.keys.slice(-8).join(' ') + '\nclicks: ' + state.clicks.slice(-4).join(' ') +
+  '\nwheel: ' + state.wheel + '\nmenu clicks: ' + state.menu; };
+game.addEventListener('pointerdown', e => { state.clicks.push('game@' + e.clientX + ',' + e.clientY); game.focus(); game.requestPointerLock(); show(); });
+document.getElementById('menu').addEventListener('click', () => { state.menu++; show(); });
+document.addEventListener('pointerlockchange', () => { state.lock = document.pointerLockElement === game ? 'locked' : 'none'; show(); });
+document.addEventListener('pointermove', e => { if (document.pointerLockElement === game) { state.moves++; state.dx += e.movementX; state.dy += e.movementY; show(); } });
+document.addEventListener('keydown', e => { state.keys.push(e.code + (e.repeat ? '*' : '')); show(); });
+document.addEventListener('wheel', e => { state.wheel += e.deltaY; show(); });
+for (const t of ['mousedown','pointerdown','click']) document.addEventListener(t, e => console.log('probe ' + t + ' ' + e.target.id + ' ' + e.clientX + ',' + e.clientY), true);
+window.addEventListener('error', e => console.log('probe error ' + e.message));
+show();
+</script></body></html>

@@ -3,6 +3,7 @@ import {
   loadProductBrowserRendererInitialContent,
   mountProductBrowserHost,
   mountStreamedFrameSurface,
+  mountWindowSurface,
 } from './engine/product-browser-host.js';
 
 const root = document.querySelector('#application');
@@ -36,9 +37,16 @@ if (defaultLights === null
 }
 // `stream`: the runtime renders the world and this page shows its frames.
 const rendererOutput = bootstrap?.renderer?.output;
-if (rendererOutput !== undefined && rendererOutput !== 'stream') {
+// `window`: the runtime presents the world to the desktop shell's window
+// under this page, which must let it show through.
+if (rendererOutput !== undefined && rendererOutput !== 'stream' && rendererOutput !== 'window') {
   throw new Error('Product bootstrap has an invalid renderer output');
 }
+if (rendererOutput === 'window') {
+  document.documentElement.style.background = 'transparent';
+  document.body.style.background = 'transparent';
+}
+const runtimeSurfaces = { stream: mountStreamedFrameSurface, window: mountWindowSurface };
 const cursorMode = bootstrap?.input?.cursorMode;
 if (cursorMode !== 'pointer-lock' && cursorMode !== 'unlocked') {
   throw new Error('Product bootstrap has an invalid input cursor mode');
@@ -64,7 +72,7 @@ void mountProductBrowserHost({
   renderer: {
     initialContent: rendererInitialContent,
     lighting: { defaultLights },
-    ...(rendererOutput === 'stream' ? { mountSurface: mountStreamedFrameSurface } : {}),
+    ...(rendererOutput === undefined ? {} : { mountSurface: runtimeSurfaces[rendererOutput] }),
   },
   ...(uiProjection === undefined ? {} : { uiProjection }),
   mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),

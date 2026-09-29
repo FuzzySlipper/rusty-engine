@@ -44,6 +44,8 @@ mod surface;
 mod tables;
 mod target;
 mod voxel;
+#[cfg(feature = "web-overlay")]
+pub mod web;
 
 use std::collections::HashMap;
 

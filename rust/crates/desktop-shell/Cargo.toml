@@ -1,0 +1,30 @@
+[package]
+name = "desktop-shell"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+render-wgpu.workspace = true
+# Only this crate may depend on winit (scripts/dependency_boundary_check.py).
+winit = "0.30"
+
+[features]
+# The product UI over the scene, through Chromium off-screen rendering. Off by
+# default: its build downloads CEF (see docs/desktop-shell.md).
+web-overlay = ["render-wgpu/web-overlay"]
+
+[dev-dependencies]
+render-model.workspace = true
+render-host-contracts.workspace = true
+# The #8790 overlay spike (patterns 1 and 2) only.
+wry.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gtk = "0.18"
+
+[[example]]
+name = "shell_demo"
+required-features = ["web-overlay"]

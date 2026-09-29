@@ -1,5 +1,5 @@
 import { installPlaytestInspection } from './playtest-inspection.js';
-import { mountStreamedFrameSurface } from './streamed-frame-surface.js';
+import { mountStreamedFrameSurface, mountWindowSurface } from './streamed-frame-surface.js';
 import {
   mountRustyApplication,
   type RustyApplicationFrame,
@@ -1347,9 +1347,11 @@ export async function mountProductBrowserHostWithApplication(
 ): Promise<ProductBrowserHost> {
   validateOptions(options);
   const realtimeAdvanceOwner = options.realtimeAdvanceOwner ?? 'browser';
-  // The streaming browser mode: the runtime renders the world, so its
-  // renderer owns held time, drawing and the observer camera.
-  const runtimeRenderer = options.renderer?.mountSurface === mountStreamedFrameSurface;
+  // The streaming browser mode and the desktop window: the runtime renders
+  // the world, so its renderer owns held time, drawing and the observer
+  // camera.
+  const runtimeRenderer = options.renderer?.mountSurface === mountStreamedFrameSurface
+    || options.renderer?.mountSurface === mountWindowSurface;
   const transport = options.transport;
   const queue = createOperationQueue();
   let state: ProductBrowserHostReadout['state'] = 'starting';

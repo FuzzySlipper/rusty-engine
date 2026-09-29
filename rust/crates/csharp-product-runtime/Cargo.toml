@@ -30,6 +30,12 @@ runtime-input.workspace = true
 runtime-lifecycle.workspace = true
 runtime-timeline.workspace = true
 runtime-ui.workspace = true
+desktop-shell = { workspace = true, optional = true }
+
+[features]
+# The desktop shell: a native window with the product UI through Chromium.
+# Off by default; its build downloads CEF (see docs/desktop-shell.md).
+desktop = ["dep:desktop-shell", "desktop-shell/web-overlay"]
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

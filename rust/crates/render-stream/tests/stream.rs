@@ -7,7 +7,9 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use product_dev_host::ProductDevFrameStream;
-use render_stream::{FrameStreamer, RendererOptions, ResourceSource, SceneState, StreamFormat};
+use render_stream::{
+    FrameStreamer, Gpu, RendererOptions, ResourceSource, SceneDriver, SceneState, StreamFormat,
+};
 
 fn state(step: u64, held: bool) -> SceneState {
     SceneState {
@@ -53,12 +55,10 @@ fn header(frame: &[u8]) -> Header {
 #[test]
 fn frames_follow_viewers_and_simulation_time() {
     let frames = ProductDevFrameStream::new();
-    let streamer = FrameStreamer::start(
-        RendererOptions::default(),
-        StreamFormat::Rgba8,
-        frames.clone(),
-    )
-    .expect("a headless adapter");
+    let gpu = Gpu::headless().expect("a headless adapter");
+    let scene = SceneDriver::new(gpu, RendererOptions::default());
+    let streamer = FrameStreamer::start(scene.clone(), StreamFormat::Rgba8, frames.clone())
+        .expect("the render thread starts");
     let wait = Duration::from_secs(5);
     // A new viewer gets the held scene: with no composition, the clear colour.
     let first = frames.next_after(0, Some((64, 32)), wait).unwrap();
@@ -71,21 +71,30 @@ fn frames_follow_viewers_and_simulation_time() {
     // Running: each applied step draws a frame that shows that step.
     let mut running = Vec::new();
     for step in 1..=10 {
-        streamer.apply(&[], &NoResources, &|_| None, state(step, false));
-        let after = running.last().map_or(head.sequence, |last: &Header| last.sequence);
+        scene.apply(&[], &NoResources, &|_| None, state(step, false));
+        let after = running
+            .last()
+            .map_or(head.sequence, |last: &Header| last.sequence);
         if let Some(frame) = frames.next_after(after, None, wait) {
             let shown = header(&frame);
-            assert_eq!(shown.step, step, "a frame shows the step it was applied with");
+            assert_eq!(
+                shown.step, step,
+                "a frame shows the step it was applied with"
+            );
             running.push(shown);
         }
     }
-    assert!(running.len() >= 5, "only {} frames while running", running.len());
+    assert!(
+        running.len() >= 5,
+        "only {} frames while running",
+        running.len()
+    );
     assert!(!running.last().unwrap().held);
     let last = running.last().unwrap();
 
     // Held again: one frame shows the change, then nothing until the next one.
     // A lifecycle change no call published (pause) draws once.
-    streamer.set_simulation(true, 8);
+    scene.set_simulation(true, 8);
     let mut after = last.sequence;
     let held = loop {
         let head = header(&frames.next_after(after, None, wait).unwrap());
@@ -101,7 +110,7 @@ fn frames_follow_viewers_and_simulation_time() {
 
     // A held call's step lands with its changes: one frame, at the new
     // step, and no second frame for the same change.
-    streamer.apply(&[], &NoResources, &|_| None, state(9, true));
+    scene.apply(&[], &NoResources, &|_| None, state(9, true));
     let stepped = header(&frames.next_after(held.sequence, None, wait).unwrap());
     assert_eq!((stepped.step, stepped.held), (9, true));
     assert!(frames
@@ -111,7 +120,7 @@ fn frames_follow_viewers_and_simulation_time() {
 
     // On demand: a change waits for a request, which draws exactly one frame.
     streamer.set_on_demand(true);
-    streamer.apply(&[], &NoResources, &|_| None, state(10, true));
+    scene.apply(&[], &NoResources, &|_| None, state(10, true));
     assert!(frames
         .next_after(held.sequence, None, Duration::from_millis(300))
         .is_none());

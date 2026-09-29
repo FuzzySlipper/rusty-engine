@@ -56,6 +56,10 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "wgpu-hal": "render-wgpu",
     "wgpu-types": "render-wgpu",
     "wuff": "render-wgpu",
+    # The desktop shell's UI overlay (Chromium off-screen rendering).
+    "cef": "render-wgpu",
+    "welding": "render-wgpu",
+    "winit": "desktop-shell",
 }
 
 

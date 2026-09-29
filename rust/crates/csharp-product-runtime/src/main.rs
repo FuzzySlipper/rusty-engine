@@ -26,6 +26,8 @@ use runtime_input::{
 };
 use runtime_lifecycle::RuntimeInstanceId;
 
+#[cfg(feature = "desktop")]
+mod desktop;
 mod headless_browser;
 mod product_bundle;
 #[cfg(unix)]
@@ -82,6 +84,8 @@ fn set_fault_signal_action(action: libc::sighandler_t) {
 fn main() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     set_fault_signal_action(libc::SIG_DFL);
+    #[cfg(feature = "desktop")]
+    desktop::run_chromium_subprocess()?;
     let mut args = match Invocation::parse()? {
         Invocation::Identity { machine_readable } => {
             print_runtime_identity(machine_readable);
@@ -99,21 +103,29 @@ fn main() -> Result<(), String> {
         }
         return supervisor::run(args);
     }
+    // The window's device must exist before the product loads, so its
+    // renderer is built on it.
+    #[cfg(feature = "desktop")]
+    let desktop = desktop::Desktop::open_if_selected()?;
     let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
     let (library, runtimeconfig) = args.selected_artifacts()?;
+    #[allow(unused_mut)]
+    let mut runtime_config = args.runtime_config().with_diagnostics(diagnostics.clone());
+    #[cfg(feature = "desktop")]
+    if let Some(desktop) = &desktop {
+        runtime_config = runtime_config.with_window_gpu(desktop.gpu());
+    }
     let mut runtime = match args.loader {
-        ProductLoader::NativeAot => CsharpProductRuntime::load_admitted(
-            library,
-            content,
-            args.runtime_config().with_diagnostics(diagnostics.clone()),
-        ),
+        ProductLoader::NativeAot => {
+            CsharpProductRuntime::load_admitted(library, content, runtime_config)
+        }
         ProductLoader::CoreClr => CsharpProductRuntime::load_coreclr_admitted(
             library,
             runtimeconfig.expect("CoreCLR Product manifest declares runtimeconfig"),
             content,
-            args.runtime_config().with_diagnostics(diagnostics.clone()),
+            runtime_config,
         ),
     }
     .map_err(|error| error.to_string())?;
@@ -168,6 +180,8 @@ fn main() -> Result<(), String> {
         // for it, and hands this process sole use of the descriptor number.
         config = config.with_listener(unsafe { TcpListener::from_raw_fd(fd) });
     }
+    #[cfg(feature = "desktop")]
+    let scene_driver = runtime.scene_driver();
     let host = ProductDevHost::start(runtime, config).map_err(|error| error.to_string())?;
     if args.exercise {
         let mut stream = TcpStream::connect(host.address()).map_err(|error| error.to_string())?;
@@ -229,17 +243,45 @@ fn main() -> Result<(), String> {
             host.origin()
         ));
         print_line("Press Ctrl+C to stop.");
+        #[cfg(feature = "desktop")]
+        let title = args.product.as_ref().map_or_else(
+            || "Rusty Engine".to_owned(),
+            |product| product.title.clone(),
+        );
         // Only a runtime serving under the supervisor receives asset reloads.
         let reload_assets = args
             .serve_listener_fd
             .and(args.product.take())
             .map(|product| asset_reloader(host.asset_reload(), product));
-        wait_for_process_termination(
-            args.supervised || args.serve_listener_fd.is_some(),
-            &host,
-            termination,
-            reload_assets,
-        );
+        let supervised = args.supervised || args.serve_listener_fd.is_some();
+        #[cfg(feature = "desktop")]
+        if let (Some(desktop), Some(driver)) = (desktop, scene_driver) {
+            // The window owns the main thread. The usual stop conditions
+            // (signal, supervisor stdin, host stop) close it through the
+            // shared flag, and closing it stops the host the same way.
+            let origin = host.origin().to_string();
+            return std::thread::scope(|scope| {
+                let waiter = Arc::clone(&termination);
+                let host = &host;
+                scope.spawn(move || {
+                    wait_for_process_termination(
+                        supervised,
+                        host,
+                        Arc::clone(&waiter),
+                        reload_assets,
+                    );
+                    waiter.store(true, Ordering::Relaxed);
+                });
+                desktop.run(
+                    title,
+                    &origin,
+                    args.persistence_root.as_deref(),
+                    driver,
+                    Arc::clone(&termination),
+                )
+            });
+        }
+        wait_for_process_termination(supervised, &host, termination, reload_assets);
     }
     Ok(())
 }

@@ -1,19 +1,24 @@
-//! The world rendered in this process and streamed to the browser shell.
+//! The world rendered in this process: streamed to the browser shell, or
+//! presented to the desktop shell's window.
 //!
-//! `RUSTY_RENDER_OUTPUT=stream` starts a `render-wgpu` renderer when the
-//! runtime loads. Each committed call's renderer publications are applied to
-//! it as they are committed, and the host serves the frames it draws at
-//! `/__rusty/product/runtime/frames`. The browser shell then shows those
-//! frames under the product UI instead of realizing the world with Three.
-//! The publications still reach the browser; its stream surface ignores the
-//! world and realizes only audio and video.
+//! `RUSTY_RENDER_OUTPUT` selects it. With `stream`, a `render-wgpu` renderer
+//! starts on a headless device when the runtime loads, and the host serves
+//! the frames it draws at `/__rusty/product/runtime/frames`. With `window`,
+//! the renderer is built on the desktop shell's device
+//! ([`crate::CsharpProductRuntimeConfig::with_window_gpu`]) and the shell
+//! draws it to its window. Either way each committed call's renderer
+//! publications are applied as they are committed, and the browser shell
+//! shows the product UI without realizing the world with Three. The
+//! publications still reach the browser; its surface ignores the world and
+//! realizes only audio and video.
 //!
 //! Animation facts reach the Engine from this renderer, through the same
 //! realization feedback the browser reports.
 //! `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of JPEG, to
 //! measure what the encoder saves.
 //!
-//! Playtest inspection reaches this renderer through Engine debug commands:
+//! Playtest inspection reaches the streamed renderer through Engine debug
+//! commands (the window takes only the observer camera):
 //! `engine.renderer.camera` (the observer camera), `engine.renderer.drawing`
 //! (continuous or on-demand) and `engine.renderer.frame` (draw one frame now
 //! and wait for it). `engine.renderer.presentation` describes the last drawn
@@ -28,16 +33,17 @@ use csharp_engine_services::{AnimationRealizationFact, EngineServiceSet};
 use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::RendererViewTarget;
 use render_stream::{
-    AnimationFact, DrawnFrame, FrameStreamer, RendererCameraPose, RendererOptions,
-    RendererViewComposition, ResourceSource, SceneState, StreamFormat, StreamStats,
+    AnimationFact, DrawnFrame, FrameStreamer, Gpu, RendererCameraPose, RendererOptions,
+    RendererViewComposition, ResourceSource, SceneDriver, SceneState, StreamFormat, StreamStats,
 };
-use serde_json::{json, Value};
 use runtime_publication::RuntimePublication;
+use serde_json::{json, Value};
 
 use crate::CsharpProductRuntimeError;
 
 pub(crate) const RENDER_OUTPUT_ENV: &str = "RUSTY_RENDER_OUTPUT";
 const RENDER_OUTPUT_STREAM: &str = "stream";
+const RENDER_OUTPUT_WINDOW: &str = "window";
 const STREAM_FORMAT_ENV: &str = "RUSTY_RENDER_STREAM_FORMAT";
 /// The Engine's realization feedback admits this many facts per report.
 const MAX_FACTS_PER_REPORT: usize = 128;
@@ -52,55 +58,80 @@ pub(crate) fn is_inspection_command(command: &str) -> bool {
     )
 }
 
-/// Whether this process renders the world and streams it. An unset variable
-/// keeps browser realization; an unknown value is an error rather than a
-/// silent fallback.
-pub(crate) fn stream_selected() -> Result<bool, CsharpProductRuntimeError> {
+/// Where this process's renderer draws: `stream` or `window`. An unset
+/// variable keeps browser realization (`None`); an unknown value is an error
+/// rather than a silent fallback.
+pub(crate) fn render_output_mode() -> Result<Option<&'static str>, CsharpProductRuntimeError> {
     match std::env::var_os(RENDER_OUTPUT_ENV) {
-        None => Ok(false),
-        Some(value) if value == RENDER_OUTPUT_STREAM => Ok(true),
+        None => Ok(None),
+        Some(value) if value == RENDER_OUTPUT_STREAM => Ok(Some(RENDER_OUTPUT_STREAM)),
+        Some(value) if value == RENDER_OUTPUT_WINDOW => Ok(Some(RENDER_OUTPUT_WINDOW)),
         Some(_) => Err(CsharpProductRuntimeError::new(
             "CSHARP_RENDER_OUTPUT",
-            format!("{RENDER_OUTPUT_ENV} must be `{RENDER_OUTPUT_STREAM}` when set"),
+            format!(
+                "{RENDER_OUTPUT_ENV} must be `{RENDER_OUTPUT_STREAM}` or `{RENDER_OUTPUT_WINDOW}` when set"
+            ),
         )),
     }
 }
 
 pub(crate) struct FrameOutput {
-    streamer: FrameStreamer,
-    frames: Arc<ProductDevFrameStream>,
+    driver: Arc<SceneDriver>,
+    /// The stream's render thread and frame route, when frames are streamed.
+    stream: Option<(FrameStreamer, Arc<ProductDevFrameStream>)>,
     next_fact_id: u64,
 }
 
 impl FrameOutput {
     pub(crate) fn from_environment(
         options: RendererOptions,
+        window_gpu: Option<&Gpu>,
     ) -> Result<Option<Self>, CsharpProductRuntimeError> {
-        if !stream_selected()? {
-            return Ok(None);
-        }
-        let format = match std::env::var(STREAM_FORMAT_ENV).as_deref() {
-            Err(_) | Ok("jpeg") => StreamFormat::Jpeg,
-            Ok("rgba") => StreamFormat::Rgba8,
-            Ok(_) => {
-                return Err(CsharpProductRuntimeError::new(
-                    "CSHARP_RENDER_OUTPUT",
-                    format!("{STREAM_FORMAT_ENV} must be `jpeg` or `rgba` when set"),
-                ))
+        let error =
+            |message: String| CsharpProductRuntimeError::new("CSHARP_RENDER_OUTPUT", message);
+        let (driver, stream) = match render_output_mode()? {
+            None => return Ok(None),
+            Some(RENDER_OUTPUT_WINDOW) => {
+                let gpu = window_gpu.ok_or_else(|| {
+                    error(format!(
+                        "{RENDER_OUTPUT_ENV}={RENDER_OUTPUT_WINDOW} needs the desktop shell (a runtime built with the `desktop` feature)"
+                    ))
+                })?;
+                (SceneDriver::new(gpu.clone(), options), None)
+            }
+            Some(_) => {
+                let format = match std::env::var(STREAM_FORMAT_ENV).as_deref() {
+                    Err(_) | Ok("jpeg") => StreamFormat::Jpeg,
+                    Ok("rgba") => StreamFormat::Rgba8,
+                    Ok(_) => {
+                        return Err(error(format!(
+                            "{STREAM_FORMAT_ENV} must be `jpeg` or `rgba` when set"
+                        )))
+                    }
+                };
+                let gpu = Gpu::headless().map_err(|gpu| error(gpu.to_string()))?;
+                let driver = SceneDriver::new(gpu, options);
+                let frames = ProductDevFrameStream::new();
+                let streamer =
+                    FrameStreamer::start(Arc::clone(&driver), format, Arc::clone(&frames))
+                        .map_err(error)?;
+                (driver, Some((streamer, frames)))
             }
         };
-        let frames = ProductDevFrameStream::new();
-        let streamer = FrameStreamer::start(options, format, Arc::clone(&frames))
-            .map_err(|message| CsharpProductRuntimeError::new("CSHARP_RENDER_OUTPUT", message))?;
         Ok(Some(Self {
-            streamer,
-            frames,
+            driver,
+            stream,
             next_fact_id: 1,
         }))
     }
 
-    pub(crate) fn frames(&self) -> Arc<ProductDevFrameStream> {
-        Arc::clone(&self.frames)
+    /// The renderer the desktop shell draws.
+    pub(crate) fn driver(&self) -> Arc<SceneDriver> {
+        Arc::clone(&self.driver)
+    }
+
+    pub(crate) fn frames(&self) -> Option<Arc<ProductDevFrameStream>> {
+        self.stream.as_ref().map(|(_, frames)| Arc::clone(frames))
     }
 
     /// Applies a committed call's renderer publications, with the simulation
@@ -111,7 +142,7 @@ impl FrameOutput {
         outputs: &[RuntimePublication],
         simulation: Simulation,
     ) {
-        self.streamer.apply(
+        self.driver.apply(
             outputs,
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
@@ -127,7 +158,7 @@ impl FrameOutput {
         baseline: &[RuntimePublication],
         simulation: Simulation,
     ) {
-        self.streamer.rebaseline(
+        self.driver.rebaseline(
             baseline,
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
@@ -138,13 +169,13 @@ impl FrameOutput {
     /// Follows a lifecycle or time-mode change that no product call
     /// published.
     pub(crate) fn follow_simulation(&self, simulation: Simulation) {
-        self.streamer.set_simulation(simulation.held, simulation.step);
+        self.driver.set_simulation(simulation.held, simulation.step);
     }
 
     /// Reports what the drawn frames observed since the last call. Call
     /// between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
-        let facts = self.streamer.take_animation_facts();
+        let facts = self.driver.take_animation_facts();
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
             let facts: Vec<_> = chunk
                 .iter()
@@ -157,11 +188,14 @@ impl FrameOutput {
     /// Runs an inspection command (see [`is_inspection_command`]). A change
     /// draws a frame and waits for it; the answer carries that frame.
     pub(crate) fn execute_inspection(&self, command: &str) -> Result<Value, String> {
+        let Some((streamer, _)) = &self.stream else {
+            return self.execute_window_inspection(command);
+        };
         let words: Vec<&str> = command.split_whitespace().collect();
         let drawn = match words.as_slice() {
             ["engine.renderer.camera"] | ["engine.renderer.drawing"] => None,
             ["engine.renderer.camera", "none"] => {
-                self.streamer.set_observer(None);
+                self.driver.set_observer(None);
                 self.draw_now()?
             }
             ["engine.renderer.camera", x, y, z, yaw, pitch] => {
@@ -172,7 +206,7 @@ impl FrameOutput {
                         .filter(|value| value.is_finite())
                         .ok_or("camera values must be finite numbers")
                 };
-                self.streamer.set_observer(Some(RendererCameraPose {
+                self.driver.set_observer(Some(RendererCameraPose {
                     position: [number(x)?, number(y)?, number(z)?],
                     yaw_degrees: number(yaw)?,
                     pitch_degrees: number(pitch)?,
@@ -180,7 +214,7 @@ impl FrameOutput {
                 self.draw_now()?
             }
             ["engine.renderer.drawing", mode @ ("continuous" | "on-demand")] => {
-                self.streamer.set_on_demand(*mode == "on-demand");
+                streamer.set_on_demand(*mode == "on-demand");
                 None
             }
             ["engine.renderer.frame"] => self.draw_now()?,
@@ -192,7 +226,7 @@ impl FrameOutput {
                 )
             }
         };
-        let inspection = self.streamer.inspection();
+        let inspection = streamer.inspection();
         let camera = inspection.observer.or_else(|| {
             inspection
                 .composition
@@ -209,8 +243,43 @@ impl FrameOutput {
         }))
     }
 
+    /// The desktop window draws every frame itself; only the observer
+    /// camera applies to it.
+    fn execute_window_inspection(&self, command: &str) -> Result<Value, String> {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let pose = |values: &[&str]| -> Result<RendererCameraPose, String> {
+            let number = |value: &str| {
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or("camera values must be finite numbers")
+            };
+            Ok(RendererCameraPose {
+                position: [number(values[0])?, number(values[1])?, number(values[2])?],
+                yaw_degrees: number(values[3])?,
+                pitch_degrees: number(values[4])?,
+            })
+        };
+        match words.as_slice() {
+            ["engine.renderer.camera", "none"] => self.driver.set_observer(None),
+            ["engine.renderer.camera", values @ ..] if values.len() == 5 => {
+                self.driver.set_observer(Some(pose(values)?));
+            }
+            _ => {
+                return Err("the desktop window draws every frame; it takes only \
+                     engine.renderer.camera [none | x y z yawDegrees pitchDegrees]"
+                    .to_owned())
+            }
+        }
+        Ok(json!({ "drawing": "continuous", "output": RENDER_OUTPUT_WINDOW }))
+    }
+
     fn draw_now(&self) -> Result<Option<DrawnFrame>, String> {
-        self.streamer
+        let Some((streamer, _)) = &self.stream else {
+            return Ok(None);
+        };
+        streamer
             .draw_now(INSPECTION_FRAME_WAIT)
             .map(Some)
             .ok_or_else(|| "the renderer did not draw the requested frame in time".to_owned())
@@ -220,8 +289,16 @@ impl FrameOutput {
     /// frame, in the browser surface's shape. Rendering and the runtime share
     /// one process, so the observation always belongs to `runtime`.
     pub(crate) fn presentation(&self, runtime: Value) -> Value {
-        let inspection = self.streamer.inspection();
-        let Some(frame) = inspection.last_drawn else {
+        let inspection = self
+            .stream
+            .as_ref()
+            .map(|(streamer, _)| streamer.inspection());
+        let Some((inspection, frame)) = inspection.and_then(|inspection| {
+            inspection
+                .last_drawn
+                .clone()
+                .map(|frame| (inspection, frame))
+        }) else {
             return json!({
                 "schemaVersion": 1,
                 "runtime": runtime,
@@ -232,9 +309,7 @@ impl FrameOutput {
                 "worldReadiness": "unavailable",
             });
         };
-        let frontiers = |revision: u64| {
-            json!([{ "stream": render_presentation::PRESENTATION_WORLD_STREAM, "revision": revision }])
-        };
+        let frontiers = |revision: u64| json!([{ "stream": render_presentation::PRESENTATION_WORLD_STREAM, "revision": revision }]);
         let viewport = json!({
             "cssWidth": frame.width,
             "cssHeight": frame.height,
@@ -286,6 +361,16 @@ impl FrameOutput {
 
     /// What the recent streamed frames cost, for `engine.renderer.*`.
     pub(crate) fn stats_json(&self) -> serde_json::Value {
+        let Some((streamer, route)) = &self.stream else {
+            let (skipped_ops, last_skip) = self.driver.skipped_ops();
+            let adapter = self.driver.gpu().adapter_summary();
+            return serde_json::json!({
+                "adapter": format!("{} ({})", adapter.name, adapter.backend),
+                "output": RENDER_OUTPUT_WINDOW,
+                "skippedOps": skipped_ops,
+                "lastSkip": last_skip,
+            });
+        };
         let StreamStats {
             adapter,
             frames,
@@ -297,10 +382,10 @@ impl FrameOutput {
             bytes_per_second,
             skipped_ops,
             last_skip,
-        } = self.streamer.stats();
+        } = streamer.stats();
         serde_json::json!({
             "adapter": adapter,
-            "viewerSize": self.frames.wanted_size(),
+            "viewerSize": route.wanted_size(),
             "recentFrames": frames,
             "framesPerSecond": frames_per_second,
             "medianMs": { "render": render_ms, "readback": readback_ms, "encode": encode_ms },

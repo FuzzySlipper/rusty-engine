@@ -43,6 +43,8 @@ describes one, it describes what the code does today, not a reason to keep it.
   support, sparse block state, Engine call affinity and voxel budget measurements.
 - [Runtime profiling](runtime-profiling.md) explains callback timing, runtime
   correlation, and optimized Rust CPU captures.
+- [Desktop shell](desktop-shell.md) is the native window: `render-wgpu` on a
+  window surface with the product UI composited through Chromium.
 - [Verification notes](verification.md) describe the report-only Playwright
   warning-delta capture and compatible-baseline comparison.
 

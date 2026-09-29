@@ -9,8 +9,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="$REPO_ROOT/target/runtime-pack/linux-x64"
 
 usage() {
-  echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>]" >&2
+  echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop]" >&2
 }
+
+# --desktop builds the host with the desktop shell and ships Chromium's
+# runtime in lib/cef. CEF's build downloads it into CEF_PATH (default
+# target/cef); building it needs cmake and ninja.
+DESKTOP=0
 
 while (($#)); do
   case "$1" in
@@ -18,6 +23,10 @@ while (($#)); do
       (($# >= 2)) || { usage; exit 2; }
       OUTPUT="$2"
       shift 2
+      ;;
+    --desktop)
+      DESKTOP=1
+      shift
       ;;
     --help)
       usage
@@ -55,7 +64,12 @@ pnpm --dir render run build:packages
 pnpm --dir render run bundle:application-host-artifact
 pnpm --dir render run bundle:product-browser-host-artifact
 pnpm --dir render run bundle:live-debug-panel-artifact
-cargo build --locked --release -p csharp-product-runtime \
+HOST_FEATURES=()
+if ((DESKTOP)); then
+  export CEF_PATH="${CEF_PATH:-$REPO_ROOT/target/cef}"
+  HOST_FEATURES=(--features desktop)
+fi
+cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
   --bin rusty-product-host --bin rusty-live-debug
 cargo build --locked --release -p rusty-cli --bin rusty
 
@@ -76,6 +90,24 @@ find render/packages/live-debug-client/dist -maxdepth 1 -type f \
   ! -name '*.test.*' ! -name '*.tsbuildinfo' \
   -exec install -m 644 {} "$STAGE/share/live-debug-client/" \;
 cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
+
+if ((DESKTOP)); then
+  # Only what Chromium loads at run time: the library (stripped of its
+  # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, the ANGLE
+  # and SwiftShader GL/Vulkan libraries, and one locale.
+  CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_linux_x86_64/libcef.so' -print -quit)")"
+  [[ -f "$CEF_DIST/libcef.so" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
+  install -d "$STAGE/lib/cef/locales" "$STAGE/share/third-party/cef"
+  strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
+  for file in chrome_100_percent.pak chrome_200_percent.pak resources.pak icudtl.dat \
+    v8_context_snapshot.bin libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 \
+    vk_swiftshader_icd.json; do
+    install -m 644 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
+  done
+  chmod 755 "$STAGE/lib/cef/"*.so "$STAGE/lib/cef/libvulkan.so.1"
+  install -m 644 "$CEF_DIST/locales/en-US.pak" "$STAGE/lib/cef/locales/en-US.pak"
+  install -m 644 "$CEF_DIST/CREDITS.html" "$STAGE/share/third-party/cef/CREDITS.html"
+fi
 
 # Include the corresponding source and license for our modified MPL component.
 install -d "$STAGE/share/third-party"

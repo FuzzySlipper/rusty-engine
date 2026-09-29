@@ -198,11 +198,10 @@ impl ProductBundle {
             },
             ui_projection: self.ui_projection.as_ref(),
             renderer: ProductBootstrapRenderer {
-                // The shell shows the runtime's frames instead of realizing
-                // the world itself.
-                output: csharp_product_runtime::render_output_streams()
-                    .map_err(|error| error.to_string())?
-                    .then_some("stream"),
+                // The shell shows the runtime's frames, or lets the desktop
+                // window show through, instead of realizing the world itself.
+                output: csharp_product_runtime::render_output_mode()
+                    .map_err(|error| error.to_string())?,
                 lighting: ProductBootstrapLighting {
                     default_lights: ProductBootstrapDefaultLights {
                         world: self.renderer_lighting.world.as_str(),
