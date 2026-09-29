@@ -26,6 +26,7 @@ use crate::{
     MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS, MAX_SUBSCRIBER_QUEUE_EVENTS,
 };
 
+use crate::frames::ProductDevFrameStream;
 use crate::session::ProductDevOperationOwner;
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
@@ -53,6 +54,7 @@ pub struct ProductDevHostConfig {
     diagnostics: ProductDevLog,
     accept_decision_hook: Option<AcceptDecisionHook>,
     listener: Option<Arc<TcpListener>>,
+    frames: Option<Arc<ProductDevFrameStream>>,
 }
 
 impl ProductDevHostConfig {
@@ -65,6 +67,7 @@ impl ProductDevHostConfig {
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
             accept_decision_hook: None,
             listener: None,
+            frames: None,
         }
     }
 
@@ -78,6 +81,12 @@ impl ProductDevHostConfig {
     /// Selects an explicit trusted development-network listener. Loopback is
     /// the default; `0.0.0.0` is intended for a foreground owner such as
     /// den-serve that publishes the resulting LAN origin.
+    /// Serve the runtime's rendered frames at `/__rusty/product/runtime/frames`.
+    pub fn with_frame_stream(mut self, frames: Arc<ProductDevFrameStream>) -> Self {
+        self.frames = Some(frames);
+        self
+    }
+
     pub fn with_bind_host(mut self, bind_host: Ipv4Addr) -> Self {
         self.bind_host = bind_host;
         self
@@ -154,6 +163,7 @@ impl ProductDevHost {
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
+            frames: config.frames,
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let listener_state = Arc::clone(&state);
@@ -342,6 +352,7 @@ struct HostState<R> {
     /// The last readout put on the output stream. Readouts are published
     /// only when they change what a browser shows, not every tick.
     published_readout: Mutex<Option<crate::ProductDevRuntimeReadout>>,
+    frames: Option<Arc<ProductDevFrameStream>>,
 }
 
 /// Small process-local observation state. It intentionally has no runtime
@@ -1125,6 +1136,16 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
     }
     if request.method == "GET" && request.path == "/__rusty/product/runtime/outputs/fresh" {
         handle_sse(stream, state, request);
+        return;
+    }
+    if request.method == "GET"
+        && request
+            .path
+            .split('?')
+            .next()
+            .is_some_and(|route| route == crate::frames::PRODUCT_DEV_FRAMES_PATH)
+    {
+        handle_frames(stream, &state, &request);
         return;
     }
     // Preserve the browser attachment correlation before dispatch consumes the
@@ -2263,6 +2284,31 @@ fn encode_runtime_result<T: Serialize>(value: &T) -> Result<Vec<u8>, ProductDevH
     }
 }
 
+fn handle_frames<R: ProductDevRuntime>(
+    mut stream: TcpStream,
+    state: &HostState<R>,
+    request: &HttpRequest,
+) {
+    let response = match (&state.frames, crate::frames::frame_request(&request.path)) {
+        (None, _) => HttpResponse::error(
+            404,
+            "DEV_HOST_FRAMES",
+            "this runtime does not render frames",
+        ),
+        (Some(_), Err(detail)) => HttpResponse::error(400, "DEV_HOST_FRAMES_REQUEST", detail),
+        (Some(frames), Ok(frame_request)) => match frames.next_after(
+            frame_request.after,
+            frame_request.size,
+            crate::frames::FRAME_REQUEST_WAIT,
+        ) {
+            Some(frame) => HttpResponse::bytes(200, "application/x-rusty-frame", frame),
+            None => HttpResponse::bytes(204, "application/x-rusty-frame", Vec::new()),
+        },
+    };
+    let _ = stream.set_nodelay(true);
+    let _ = write_response(&mut stream, response);
+}
+
 fn handle_sse<R: ProductDevRuntime>(
     mut stream: TcpStream,
     state: Arc<HostState<R>>,
@@ -3252,6 +3298,7 @@ mod tests {
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
+            frames: None,
         });
         let (held, held_ready) = std::sync::mpsc::channel();
         let (release, release_owner) = std::sync::mpsc::channel();
@@ -3685,6 +3732,7 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     stream.set_write_timeout(Some(SOCKET_TIMEOUT))?;
     let reason = match response.status {
         200 => "OK",
+        204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",

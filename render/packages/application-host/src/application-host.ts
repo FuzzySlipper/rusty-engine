@@ -491,6 +491,14 @@ export interface RustyApplicationRendererOptions {
   ) => readonly [number, number, number] | null;
   /** Observe the one Engine-owned renderer cadence without creating another RAF. */
   readonly onCadence?: (timeMs: number) => void;
+  /**
+   * Mount this surface on the Engine canvas instead of the Three surface. The
+   * streaming browser mode passes one that shows frames the runtime renders.
+   */
+  readonly mountSurface?: (
+    canvas: HTMLCanvasElement,
+    options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
+  ) => RendererSurface | Promise<RendererSurface>;
 }
 
 export interface RustyApplicationLightingOptions {
@@ -579,7 +587,11 @@ const failureFrameResizeCleanups = new WeakMap<HTMLElement, () => void>();
 export async function mountRustyApplication(
   options: RustyApplicationHostOptions,
 ): Promise<RustyApplicationHost> {
-  return mountRustyApplicationWithEnvironment(options, BROWSER_ENVIRONMENT);
+  const mountSurface = options.renderer?.mountSurface;
+  return mountRustyApplicationWithEnvironment(
+    options,
+    mountSurface === undefined ? BROWSER_ENVIRONMENT : { mountSurface },
+  );
 }
 
 /** Internal injection seam for focused host lifecycle tests. Not exported by the package root. */

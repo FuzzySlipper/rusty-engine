@@ -41,6 +41,7 @@ impl CsharpProductRuntime {
                 };
                 self.lifecycle.reset_realtime_baseline();
                 self.playtest_time = mode;
+                self.follow_simulation_with_frames();
             }
             ["engine.time.advance", milliseconds] => {
                 if self.playtest_time == TimeMode::Realtime {

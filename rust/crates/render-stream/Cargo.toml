@@ -1,0 +1,16 @@
+[package]
+name = "render-stream"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+render-wgpu.workspace = true
+render-presentation.workspace = true
+runtime-publication.workspace = true
+product-dev-host.workspace = true
+# Only this crate may depend on the frame encoder
+# (scripts/dependency_boundary_check.py).
+jpeg-encoder = { version = "0.6", features = ["simd"] }

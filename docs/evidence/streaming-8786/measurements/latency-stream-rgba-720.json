@@ -1,0 +1,23 @@
+{
+ "label": "stream-rgba-720",
+ "origin": "http://127.0.0.1:4394",
+ "viewport": [
+  1280,
+  720
+ ],
+ "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 9070 XT (RADV GFX1201) (0x00007550)), radv)",
+ "bytesPerSecond": {
+  "sse": 66257,
+  "frames": 295150012,
+  "other": 400
+ },
+ "inputToVisibleChangeMs": {
+  "trials": 15,
+  "measured": 15,
+  "median": 45.6,
+  "p90": 145.3,
+  "min": 28.2,
+  "max": 188.7
+ },
+ "blankSamples": 0
+}

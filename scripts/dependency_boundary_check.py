@@ -44,6 +44,7 @@ RENDER_PRESENTATION_FORBIDDEN = (
 # device or backend library stays behind that crate's own API.
 EXTERNAL_DEPENDENCY_OWNERS = {
     "cpal": "render-audio",
+    "jpeg-encoder": "render-stream",
     "kira": "render-audio",
     "opus-decoder": "render-audio",
     "symphonia": "render-audio",

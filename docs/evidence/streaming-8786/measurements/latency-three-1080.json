@@ -1,0 +1,23 @@
+{
+ "label": "three-1080",
+ "origin": "http://127.0.0.1:4394",
+ "viewport": [
+  1920,
+  1080
+ ],
+ "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 9070 XT (RADV GFX1201) (0x00007550)), radv)",
+ "bytesPerSecond": {
+  "sse": 67519,
+  "frames": 0,
+  "other": 400
+ },
+ "inputToVisibleChangeMs": {
+  "trials": 40,
+  "measured": 40,
+  "median": 31.4,
+  "p90": 50.2,
+  "min": 23.8,
+  "max": 84.1
+ },
+ "blankSamples": 0
+}

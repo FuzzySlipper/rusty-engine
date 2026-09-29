@@ -146,7 +146,8 @@ export class RendererSurfaceLightingError extends Error {
   }
 }
 
-export type RendererBackendFamily = 'threejs';
+/** `streamed-frames` shows frames the runtime renders (the streaming browser mode). */
+export type RendererBackendFamily = 'threejs' | 'streamed-frames';
 
 export interface RendererBackendDiagnostics {
   readonly family: RendererBackendFamily;

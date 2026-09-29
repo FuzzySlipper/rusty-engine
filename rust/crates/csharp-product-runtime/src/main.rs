@@ -142,6 +142,9 @@ fn main() -> Result<(), String> {
         .with_bind_host(args.bind_host())
         .with_live_debug(args.live_debug())
         .with_diagnostics(diagnostics);
+    if let Some(frames) = runtime.frame_stream() {
+        config = config.with_frame_stream(frames);
+    }
     #[cfg(unix)]
     if let Some(fd) = args.serve_listener_fd {
         use std::os::fd::FromRawFd;
@@ -677,7 +680,10 @@ impl Arguments {
         )
         .with_physical_mappings(physical_mappings);
         if let Some(product) = &self.product {
-            config = config.with_input_cursor_mode(product.input_cursor_mode.native());
+            let (world_lights, viewmodel_lights) = product.default_lights();
+            config = config
+                .with_input_cursor_mode(product.input_cursor_mode.native())
+                .with_default_lights(world_lights, viewmodel_lights);
         }
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());

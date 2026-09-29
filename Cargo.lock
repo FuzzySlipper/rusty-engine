@@ -884,6 +884,7 @@ dependencies = [
  "render-host-contracts",
  "render-model",
  "render-presentation",
+ "render-stream",
  "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
@@ -2433,6 +2434,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b454d911ac55068f53495488d8ccd0646eaa540c033a28ee15b07838afafb01f"
+
+[[package]]
 name = "js-sys"
 version = "0.3.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3964,6 +3971,17 @@ dependencies = [
  "svc-mesh",
  "voxel-asset",
  "voxel-object-runtime",
+]
+
+[[package]]
+name = "render-stream"
+version = "0.1.0"
+dependencies = [
+ "jpeg-encoder",
+ "product-dev-host",
+ "render-presentation",
+ "render-wgpu",
+ "runtime-publication",
 ]
 
 [[package]]

@@ -1,0 +1,307 @@
+//! The rendered-frame route: `GET /__rusty/product/runtime/frames`.
+//!
+//! When the runtime renders in process, a viewer pulls the frames it draws
+//! one request at a time: `?after=<sequence>` answers with the latest frame
+//! newer than `sequence`, waiting for one when there is none yet, and `204 No
+//! Content` when none arrives in time. There is no history and no replay; a
+//! viewer that starts with `after=0` gets the latest frame. Because a viewer
+//! asks for the next frame only when it can take one, a slow viewer skips
+//! frames instead of queueing them in socket buffers.
+//!
+//! `width` and `height` state the size the viewer shows. The renderer draws
+//! at the most recent viewer's size; other viewers scale what they receive.
+//!
+//! A frame is a fixed little-endian header followed by its payload:
+//!
+//! | offset | size | field |
+//! |---|---|---|
+//! | 0 | 4 | magic `RSF1` |
+//! | 4 | 4 | header length in bytes (40) |
+//! | 8 | 8 | sequence, from 1, increasing per published frame |
+//! | 16 | 8 | Engine simulation step the frame shows |
+//! | 24 | 4 | width in pixels |
+//! | 28 | 4 | height in pixels |
+//! | 32 | 1 | payload format: 1 JPEG, 2 RGBA8 sRGB rows top first |
+//! | 33 | 1 | flags: bit 0 set while the simulation is held |
+//! | 34 | 2 | reserved, zero |
+//! | 36 | 4 | payload length in bytes |
+//!
+//! A reader skips header bytes past the fields it knows, so later fields
+//! extend the header without a new magic.
+
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+pub const PRODUCT_DEV_FRAMES_PATH: &str = "/__rusty/product/runtime/frames";
+/// How long one request waits for a newer frame before answering 204.
+pub const FRAME_REQUEST_WAIT: Duration = Duration::from_secs(1);
+const FRAME_MAGIC: &[u8; 4] = b"RSF1";
+const FRAME_HEADER_BYTES: usize = 40;
+const FLAG_HELD: u8 = 1;
+/// Largest size a viewer may ask for, per side.
+const MAX_FRAME_SIDE: u32 = 4096;
+/// Size rendered before any viewer states one.
+const DEFAULT_FRAME_SIZE: (u32, u32) = (1280, 720);
+/// A viewer is still watching this long after its last request ended.
+const VIEWER_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductDevFrameFormat {
+    Jpeg = 1,
+    Rgba8 = 2,
+}
+
+/// One rendered frame, before the stream numbers it.
+pub struct ProductDevFrame {
+    pub width: u32,
+    pub height: u32,
+    pub format: ProductDevFrameFormat,
+    pub held: bool,
+    pub step: u64,
+    pub payload: Vec<u8>,
+}
+
+/// The latest rendered frame and the viewers asking for newer ones. The
+/// runtime's renderer publishes into it; the host's frame route reads it.
+#[derive(Default)]
+pub struct ProductDevFrameStream {
+    state: Mutex<FrameState>,
+    changed: Condvar,
+    demand_waker: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+}
+
+#[derive(Default)]
+struct FrameState {
+    sequence: u64,
+    latest: Option<Arc<[u8]>>,
+    size: Option<(u32, u32)>,
+    waiting: usize,
+    last_request: Option<Instant>,
+}
+
+impl FrameState {
+    fn watched(&self) -> bool {
+        self.waiting > 0
+            || self
+                .last_request
+                .is_some_and(|last| last.elapsed() < VIEWER_GRACE)
+    }
+}
+
+impl ProductDevFrameStream {
+    pub fn new() -> Arc<Self> {
+        Arc::default()
+    }
+
+    /// Called when viewers start watching or ask for a new size, so the
+    /// renderer need not poll for demand.
+    pub fn set_demand_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
+        *self.demand_waker.lock().expect("frame waker lock") = Some(Box::new(waker));
+    }
+
+    /// The size to render, or `None` while nobody watches.
+    pub fn wanted_size(&self) -> Option<(u32, u32)> {
+        let state = self.state();
+        state
+            .watched()
+            .then(|| state.size.unwrap_or(DEFAULT_FRAME_SIZE))
+    }
+
+    pub fn publish(&self, frame: ProductDevFrame) {
+        let mut state = self.state();
+        state.sequence += 1;
+        state.latest = Some(encode_frame(state.sequence, &frame));
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    /// The latest encoded frame (header and payload) newer than `after`,
+    /// waiting up to `timeout` for one. `size` is the size this viewer shows.
+    pub fn next_after(
+        &self,
+        after: u64,
+        size: Option<(u32, u32)>,
+        timeout: Duration,
+    ) -> Option<Arc<[u8]>> {
+        let mut state = self.state();
+        let demand_changed = !state.watched() || size.is_some_and(|size| state.size != Some(size));
+        if size.is_some() {
+            state.size = size;
+        }
+        state.waiting += 1;
+        if demand_changed {
+            drop(state);
+            if let Some(waker) = &*self.demand_waker.lock().expect("frame waker lock") {
+                waker();
+            }
+            state = self.state();
+        }
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |state| state.sequence <= after)
+            .expect("frame stream lock");
+        state.waiting -= 1;
+        state.last_request = Some(Instant::now());
+        (state.sequence > after)
+            .then(|| state.latest.clone())
+            .flatten()
+    }
+
+    fn state(&self) -> MutexGuard<'_, FrameState> {
+        self.state.lock().expect("frame stream lock")
+    }
+}
+
+fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
+    let mut bytes = Vec::with_capacity(FRAME_HEADER_BYTES + frame.payload.len());
+    bytes.extend_from_slice(FRAME_MAGIC);
+    bytes.extend_from_slice(&(FRAME_HEADER_BYTES as u32).to_le_bytes());
+    bytes.extend_from_slice(&sequence.to_le_bytes());
+    bytes.extend_from_slice(&frame.step.to_le_bytes());
+    bytes.extend_from_slice(&frame.width.to_le_bytes());
+    bytes.extend_from_slice(&frame.height.to_le_bytes());
+    bytes.push(frame.format as u8);
+    bytes.push(if frame.held { FLAG_HELD } else { 0 });
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&(frame.payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&frame.payload);
+    bytes.into()
+}
+
+/// A viewer's frame request: `?after=N[&width=W&height=H]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameRequest {
+    pub after: u64,
+    pub size: Option<(u32, u32)>,
+}
+
+pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
+    let query = match path.split_once('?') {
+        Some((PRODUCT_DEV_FRAMES_PATH, query)) => query,
+        None if path == PRODUCT_DEV_FRAMES_PATH => "",
+        _ => return Err("unknown frame route"),
+    };
+    let (mut after, mut width, mut height) = (None, None, None);
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').ok_or("malformed frame query")?;
+        let value = value.parse::<u64>().map_err(|_| "frame query values are integers")?;
+        let slot = match name {
+            "after" => &mut after,
+            "width" => &mut width,
+            "height" => &mut height,
+            _ => return Err("unknown frame query parameter"),
+        };
+        if slot.replace(value).is_some() {
+            return Err("repeated frame query parameter");
+        }
+    }
+    let side = |value: u64| {
+        u32::try_from(value)
+            .ok()
+            .filter(|value| (1..=MAX_FRAME_SIDE).contains(value))
+            .ok_or("frame size must be 1..=4096 pixels per side")
+    };
+    let size = match (width, height) {
+        (Some(width), Some(height)) => Some((side(width)?, side(height)?)),
+        (None, None) => None,
+        _ => return Err("frame query needs both width and height"),
+    };
+    Ok(FrameRequest {
+        after: after.unwrap_or(0),
+        size,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(step: u64) -> ProductDevFrame {
+        ProductDevFrame {
+            width: 2,
+            height: 1,
+            format: ProductDevFrameFormat::Rgba8,
+            held: step.is_multiple_of(2),
+            step,
+            payload: vec![step as u8; 8],
+        }
+    }
+
+    fn sequence(frame: &[u8]) -> u64 {
+        u64::from_le_bytes(frame[8..16].try_into().unwrap())
+    }
+
+    #[test]
+    fn a_frame_is_its_header_then_its_payload() {
+        let bytes = encode_frame(7, &frame(4));
+        assert_eq!(&bytes[..4], b"RSF1");
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 40);
+        assert_eq!(sequence(&bytes), 7);
+        assert_eq!(u64::from_le_bytes(bytes[16..24].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 1);
+        assert_eq!(bytes[32], 2);
+        assert_eq!(bytes[33], FLAG_HELD);
+        assert_eq!(u32::from_le_bytes(bytes[36..40].try_into().unwrap()), 8);
+        assert_eq!(&bytes[40..], &[4; 8]);
+    }
+
+    #[test]
+    fn a_viewer_gets_the_latest_frame_then_only_newer_ones() {
+        let stream = ProductDevFrameStream::new();
+        assert_eq!(stream.wanted_size(), None);
+        stream.publish(frame(1));
+        stream.publish(frame(2));
+        let first = stream.next_after(0, Some((64, 32)), Duration::ZERO).unwrap();
+        assert_eq!(sequence(&first), 2);
+        assert_eq!(stream.wanted_size(), Some((64, 32)));
+        assert!(stream.next_after(2, None, Duration::ZERO).is_none());
+        stream.publish(frame(3));
+        stream.publish(frame(4));
+        let skipped = stream.next_after(2, None, Duration::ZERO).unwrap();
+        assert_eq!(sequence(&skipped), 4);
+    }
+
+    #[test]
+    fn a_waiting_request_takes_the_next_frame_and_wakes_the_renderer() {
+        let stream = ProductDevFrameStream::new();
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&woken);
+        let publisher = Arc::clone(&stream);
+        stream.set_demand_waker(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            publisher.publish(frame(9));
+        });
+        let next = stream.next_after(0, None, Duration::from_secs(5)).unwrap();
+        assert_eq!(sequence(&next), 1);
+        assert_eq!(stream.wanted_size(), Some(DEFAULT_FRAME_SIZE));
+        // Watching already, at the same size: no second wake.
+        assert!(stream.next_after(1, None, Duration::ZERO).is_none());
+        assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn frame_query_takes_after_and_both_sides_or_neither() {
+        assert_eq!(
+            frame_request(PRODUCT_DEV_FRAMES_PATH),
+            Ok(FrameRequest { after: 0, size: None })
+        );
+        assert_eq!(
+            frame_request("/__rusty/product/runtime/frames?after=12&width=1280&height=720"),
+            Ok(FrameRequest {
+                after: 12,
+                size: Some((1280, 720))
+            })
+        );
+        for bad in [
+            "/__rusty/product/runtime/frames?width=1280",
+            "/__rusty/product/runtime/frames?width=0&height=720",
+            "/__rusty/product/runtime/frames?width=5000&height=720",
+            "/__rusty/product/runtime/frames?after=1&after=2",
+            "/__rusty/product/runtime/frames?after=-1",
+            "/__rusty/product/runtime/frames?depth=1",
+        ] {
+            assert!(frame_request(bad).is_err(), "{bad}");
+        }
+    }
+}

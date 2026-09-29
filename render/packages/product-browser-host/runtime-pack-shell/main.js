@@ -2,6 +2,7 @@ import {
   createProductBrowserLocalHttpAdapter,
   loadProductBrowserRendererInitialContent,
   mountProductBrowserHost,
+  mountStreamedFrameSurface,
 } from './engine/product-browser-host.js';
 
 const root = document.querySelector('#application');
@@ -33,6 +34,11 @@ if (defaultLights === null
   || (defaultLights.viewmodel !== 'neutral' && defaultLights.viewmodel !== 'disabled')) {
   throw new Error('Product bootstrap has an invalid default lighting declaration');
 }
+// `stream`: the runtime renders the world and this page shows its frames.
+const rendererOutput = bootstrap?.renderer?.output;
+if (rendererOutput !== undefined && rendererOutput !== 'stream') {
+  throw new Error('Product bootstrap has an invalid renderer output');
+}
 const cursorMode = bootstrap?.input?.cursorMode;
 if (cursorMode !== 'pointer-lock' && cursorMode !== 'unlocked') {
   throw new Error('Product bootstrap has an invalid input cursor mode');
@@ -55,7 +61,11 @@ void mountProductBrowserHost({
     maximumWheelDelta: 64,
     selectedController: { index: 0 },
   },
-  renderer: { initialContent: rendererInitialContent, lighting: { defaultLights } },
+  renderer: {
+    initialContent: rendererInitialContent,
+    lighting: { defaultLights },
+    ...(rendererOutput === 'stream' ? { mountSurface: mountStreamedFrameSurface } : {}),
+  },
   ...(uiProjection === undefined ? {} : { uiProjection }),
   mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),
 }).catch((error) => {

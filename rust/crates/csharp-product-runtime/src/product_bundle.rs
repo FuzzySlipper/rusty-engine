@@ -169,6 +169,11 @@ impl ProductBundle {
         }
     }
 
+    /// The manifest's world and viewmodel default light rigs, on or off.
+    pub(super) fn default_lights(&self) -> (bool, bool) {
+        self.renderer_lighting.enabled()
+    }
+
     pub(super) fn browser_entries(
         &self,
         resources: &[ProductDevRendererResource],
@@ -193,6 +198,11 @@ impl ProductBundle {
             },
             ui_projection: self.ui_projection.as_ref(),
             renderer: ProductBootstrapRenderer {
+                // The shell shows the runtime's frames instead of realizing
+                // the world itself.
+                output: csharp_product_runtime::render_output_streams()
+                    .map_err(|error| error.to_string())?
+                    .then_some("stream"),
                 lighting: ProductBootstrapLighting {
                     default_lights: ProductBootstrapDefaultLights {
                         world: self.renderer_lighting.world.as_str(),
@@ -551,6 +561,14 @@ struct ProductRendererLighting {
     viewmodel: ProductDefaultLights,
 }
 impl ProductRendererLighting {
+    /// Whether the world and viewmodel default rigs are on.
+    fn enabled(&self) -> (bool, bool) {
+        (
+            matches!(self.world, ProductDefaultLights::Neutral),
+            matches!(self.viewmodel, ProductDefaultLights::Neutral),
+        )
+    }
+
     fn from_manifest(value: ManifestRenderer) -> Result<Self, String> {
         Ok(Self {
             world: ProductDefaultLights::parse(
@@ -684,6 +702,8 @@ struct ProductBootstrapInput {
 }
 #[derive(Serialize)]
 struct ProductBootstrapRenderer {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<&'static str>,
     lighting: ProductBootstrapLighting,
 }
 #[derive(Serialize)]

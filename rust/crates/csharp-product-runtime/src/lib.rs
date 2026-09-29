@@ -513,6 +513,7 @@ pub struct CsharpProductRuntimeConfig {
     /// Products choose only relative scopes beneath this root.
     persistence_root: Option<PathBuf>,
     diagnostics: ProductDevLog,
+    renderer_options: render_stream::RendererOptions,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -529,7 +530,16 @@ impl CsharpProductRuntimeConfig {
             input_cursor_mode: NativeInputCursorMode::PointerLock,
             persistence_root: None,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
+            renderer_options: render_stream::RendererOptions::default(),
         }
+    }
+
+    /// The product manifest's default light rigs, for a renderer in this
+    /// process (`RUSTY_RENDER_OUTPUT=stream`).
+    pub fn with_default_lights(mut self, world: bool, viewmodel: bool) -> Self {
+        self.renderer_options.default_world_lights = world;
+        self.renderer_options.default_viewmodel_lights = viewmodel;
+        self
     }
 
     /// Adds typed standard-runtime physical mappings to create-time host
@@ -922,6 +932,14 @@ fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProd
 }
 
 mod audio_output;
+mod frame_output;
+
+/// Whether `RUSTY_RENDER_OUTPUT=stream` selects frames rendered and
+/// streamed by this process over browser realization.
+pub fn render_output_streams() -> Result<bool, CsharpProductRuntimeError> {
+    frame_output::stream_selected()
+}
+
 /// A loaded trusted C# product adapted to the existing local browser host.
 mod playtest;
 
@@ -958,6 +976,8 @@ pub struct CsharpProductRuntime {
     pending_update_attribution: Option<ProductDevUpdateAttribution>,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
+    /// Present when this process renders the world and streams its frames.
+    frame_output: Option<frame_output::FrameOutput>,
 }
 
 // The development host serializes every call with one mutex. The native handle
@@ -1028,6 +1048,7 @@ impl CsharpProductRuntime {
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let audio_output = audio_output::AudioOutput::from_environment()?;
+        let frame_output = frame_output::FrameOutput::from_environment(config.renderer_options)?;
         let mut input_mappings = CompiledInputMappings::standard(
             config.direct_intents.clone(),
             config.physical_mappings.clone(),
@@ -1149,6 +1170,10 @@ impl CsharpProductRuntime {
             // baseline; the device does not play before Start.
             audio_output::take_audio_ops(&mut initial_output);
         }
+        if let Some(frames) = &frame_output {
+            // The renderer shows the created world before Start publishes it.
+            frames.realize(&services, &initial_output);
+        }
         let initial_output = Some(initial_output);
         observe_product_runtime(&api, handle, lifecycle.readout());
         if let Some(replacement) = initial_input_mapping_replacement {
@@ -1175,6 +1200,7 @@ impl CsharpProductRuntime {
             diagnostics: config.diagnostics,
             pending_update_attribution: None,
             audio_output,
+            frame_output,
         })
     }
 
@@ -1926,6 +1952,9 @@ impl CsharpProductRuntime {
         if let Some(audio) = &mut self.audio_output {
             audio.report(&mut self.services)?;
         }
+        if let Some(frames) = &mut self.frame_output {
+            frames.report(&mut self.services);
+        }
         self.services
             .begin_update_call(ui_binding(&self.lifecycle), facts);
         let callback_started = Instant::now();
@@ -2039,18 +2068,24 @@ impl CsharpProductRuntime {
                         if let Some(audio) = &mut self.audio_output {
                             audio.realize(&self.services, &mut outputs);
                         }
+                        if let Some(frames) = &self.frame_output {
+                            frames.realize(&self.services, &outputs);
+                        }
                         outputs.retain(|output| !is_empty_frame(output));
                         finished.outputs = outputs;
                     }
                     Err(error) => {
                         finished.failure.get_or_insert(error);
+                        self.rebaseline_frames();
                     }
                 }
             }
             Err(error) => {
                 finished.failure.get_or_insert(error.into());
+                self.rebaseline_frames();
             }
         }
+        self.follow_simulation_with_frames();
         finished
     }
 
@@ -2553,6 +2588,7 @@ impl CsharpProductRuntime {
         if let Some(audio) = &mut self.audio_output {
             audio.rebaseline(&self.services)?;
         }
+        self.rebaseline_frames();
         self.follow_lifecycle_with_audio();
         self.services.reset_animation_realization_owner();
         self.services.reset_ghost_plate_realization_owner();
@@ -2563,6 +2599,7 @@ impl CsharpProductRuntime {
     /// advance otherwise, so the device holds its position. Shutdown ends
     /// every voice.
     fn follow_lifecycle_with_audio(&mut self) {
+        self.follow_simulation_with_frames();
         let Some(audio) = &mut self.audio_output else {
             return;
         };
@@ -2570,6 +2607,52 @@ impl CsharpProductRuntime {
             RuntimeState::Shutdown => audio.silence(),
             state => audio.set_suspended(state != RuntimeState::Running),
         }
+    }
+
+    /// Streamed frames are drawn continuously only while simulation time
+    /// moves: a paused product or held inspection time draws once per change.
+    pub(crate) fn follow_simulation_with_frames(&self) {
+        if let Some(frames) = &self.frame_output {
+            frames.follow_simulation(
+                self.lifecycle.state() != RuntimeState::Running
+                    || self.playtest_time != playtest::TimeMode::Realtime,
+                self.lifecycle.readout().admitted_simulation_steps(),
+            );
+        }
+    }
+
+    /// Rebuilds the streamed renderer from the committed world. Renderer
+    /// work a failed call did not publish would otherwise be missing from it.
+    fn rebaseline_frames(&self) {
+        let Some(frames) = &self.frame_output else {
+            return;
+        };
+        match self
+            .services
+            .snapshot_outputs(ui_binding(&self.lifecycle))
+            .map_err(CsharpProductRuntimeError::from)
+            .and_then(service_outputs)
+        {
+            Ok(baseline) => frames.rebaseline(&self.services, &baseline),
+            Err(error) => {
+                let _ = self.diagnostics.publish(
+                    ProductDevLogEvent::new(
+                        ProductDevLogSeverity::Warning,
+                        ProductDevLogDisposition::Degraded,
+                        "csharp-runtime",
+                        error.code(),
+                        error.detail(),
+                    )
+                    .expect("bounded frame baseline diagnostic")
+                    .with_runtime(self.binding()),
+                );
+            }
+        }
+    }
+
+    /// The host serves these frames when this process renders the world.
+    pub fn frame_stream(&self) -> Option<Arc<product_dev_host::ProductDevFrameStream>> {
+        self.frame_output.as_ref().map(frame_output::FrameOutput::frames)
     }
 
     /// Rebind input for a same-incarnation control fence. The browser keeps
@@ -2657,6 +2740,10 @@ impl CsharpProductRuntime {
         } else {
             renderer_diagnostics_summary(snapshot, self.renderer_metrics_visible)
         };
+        let mut summary = summary;
+        if let (Some(frames), Some(object)) = (&self.frame_output, summary.as_object_mut()) {
+            object.insert("stream".to_owned(), frames.stats_json());
+        }
         let message = serde_json::to_string_pretty(&summary).map_err(|error| {
             ProductDevRuntimeError::new(
                 "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",

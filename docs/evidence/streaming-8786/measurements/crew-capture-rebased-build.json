@@ -1,0 +1,224 @@
+{
+  "application_renderer": "unavailable",
+  "capture_id": "1eaef9c2-92b4-43aa-912c-a12e8a5453dc",
+  "engine_presentation": {
+    "available": false,
+    "command": "engine.renderer.presentation",
+    "completed_at": "2026-09-29T12:18:42.268611743Z",
+    "evidence_path": "/home/agent/.local/state/crew-playtest-local/presentation-d0717fbb-9476-4131-a2bb-036d3879fed6.json",
+    "facts": {
+      "available": false,
+      "captureCorrelation": "unavailable",
+      "observationAgeMs": 291,
+      "observationRuntime": {
+        "controlRevision": "1",
+        "generation": "1",
+        "instanceId": "2432437"
+      },
+      "presentation": null,
+      "runtime": {
+        "controlRevision": "1",
+        "generation": "1",
+        "instanceId": "2432437"
+      },
+      "schemaVersion": 1,
+      "stream": {
+        "adapter": "AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)",
+        "bytesPerSecond": 5378613.23416608,
+        "framesPerSecond": 58.936699674132306,
+        "lastSkip": null,
+        "medianBytesPerFrame": 89697.0,
+        "medianMs": {
+          "encode": 4.264483,
+          "readback": 1.253574,
+          "render": 0.537331
+        },
+        "recentFrames": 120,
+        "skippedOps": {},
+        "viewerSize": [
+          1280,
+          720
+        ]
+      },
+      "worldReadiness": "unavailable"
+    },
+    "frame_correlation": "unavailable",
+    "http_status": 200,
+    "observation_completed_at": "2026-09-29T12:18:42.273819846Z",
+    "observation_requested_at": "2026-09-29T12:18:42.258887807Z",
+    "origin": "http://127.0.0.1:4394",
+    "query_id": "d0717fbb-9476-4131-a2bb-036d3879fed6",
+    "raw_result": "{\n  \"available\": false,\n  \"captureCorrelation\": \"unavailable\",\n  \"observationAgeMs\": 291,\n  \"observationRuntime\": {\n    \"controlRevision\": \"1\",\n    \"generation\": \"1\",\n    \"instanceId\": \"2432437\"\n  },\n  \"presentation\": null,\n  \"runtime\": {\n    \"controlRevision\": \"1\",\n    \"generation\": \"1\",\n    \"instanceId\": \"2432437\"\n  },\n  \"schemaVersion\": 1,\n  \"stream\": {\n    \"adapter\": \"AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)\",\n    \"bytesPerSecond\": 5378613.23416608,\n    \"framesPerSecond\": 58.936699674132306,\n    \"lastSkip\": null,\n    \"medianBytesPerFrame\": 89697.0,\n    \"medianMs\": {\n      \"encode\": 4.264483,\n      \"readback\": 1.253574,\n      \"render\": 0.537331\n    },\n    \"recentFrames\": 120,\n    \"skippedOps\": {},\n    \"viewerSize\": [\n      1280,\n      720\n    ]\n  },\n  \"worldReadiness\": \"unavailable\"\n}",
+    "requested_at": "2026-09-29T12:18:42.261579762Z",
+    "session_id": "3f3e54ab-34eb-4b0d-9334-3a80e2ab380a",
+    "source": "Engine browser feedback; separate from screenshot"
+  },
+  "engine_presentation_state": "unavailable",
+  "engine_readiness": "unavailable",
+  "frame_correlation": "unavailable",
+  "gpu_completion": "unavailable",
+  "hardware_acceleration": "unavailable",
+  "label": "",
+  "metadata_path": "/home/agent/.local/state/crew-playtest-local/capture-1eaef9c2-92b4-43aa-912c-a12e8a5453dc.json",
+  "observation": {
+    "artifact_id": "8f336480-fbef-4b23-83fe-b2da9e5f0184",
+    "canvases": [
+      {
+        "backing": {
+          "height": 720,
+          "width": 1280
+        },
+        "css": {
+          "height": 720,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        }
+      }
+    ],
+    "capture_ended_at": "2026-09-29T12:18:42.420794233Z",
+    "capture_ended_at_ns": 1790684322420794233,
+    "capture_started_at": "2026-09-29T12:18:42.273841566Z",
+    "capture_started_at_ns": 1790684322273841566,
+    "console": [],
+    "cursor": {
+      "x": 0,
+      "y": 0
+    },
+    "dom_assistance": [],
+    "event": "observation",
+    "events_path": "/home/agent/.local/state/crew-playtest-local/browser/3f3e54ab-34eb-4b0d-9334-3a80e2ab380a/events.jsonl",
+    "frame_freshness": "not measured",
+    "game_readiness": "unknown",
+    "height": 720,
+    "lease_id": "3f3e54ab-34eb-4b0d-9334-3a80e2ab380a",
+    "metadata_path": "/home/agent/.local/state/crew-playtest-local/browser/3f3e54ab-34eb-4b0d-9334-3a80e2ab380a/8f336480-fbef-4b23-83fe-b2da9e5f0184.json",
+    "page_errors": [],
+    "path": "/home/agent/.local/state/crew-playtest-local/browser/3f3e54ab-34eb-4b0d-9334-3a80e2ab380a/8f336480-fbef-4b23-83fe-b2da9e5f0184.png",
+    "pointer_lock": false,
+    "renderer": "unknown",
+    "source": "headless Chromium screenshot through the private Playwright context",
+    "title": "Loading Bay — Doom E1M1",
+    "url": "http://127.0.0.1:4394/",
+    "viewport": {
+      "device_pixel_ratio": 1,
+      "height": 720,
+      "width": 1280
+    },
+    "width": 1280
+  },
+  "overlay_policy": "preserve",
+  "path": "/home/agent/.local/state/crew-playtest-local/browser/3f3e54ab-34eb-4b0d-9334-3a80e2ab380a/8f336480-fbef-4b23-83fe-b2da9e5f0184.png",
+  "pool_activity": {
+    "after": {
+      "active_count": 1,
+      "capacity": 10,
+      "observed_at": "2026-09-29T12:18:42.449132865Z",
+      "queued_starts": 0,
+      "slots": [
+        {
+          "game": "rusty-doom",
+          "occupied": true,
+          "phase": "connected",
+          "session_id": "3f3e54ab-34eb-4b0d-9334-3a80e2ab380a",
+          "slot_id": "slot-1"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-2"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-3"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-4"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-5"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-6"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-7"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-8"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-9"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-10"
+        }
+      ]
+    },
+    "before": {
+      "active_count": 1,
+      "capacity": 10,
+      "observed_at": "2026-09-29T12:18:42.258886554Z",
+      "queued_starts": 0,
+      "slots": [
+        {
+          "game": "rusty-doom",
+          "occupied": true,
+          "phase": "connected",
+          "session_id": "3f3e54ab-34eb-4b0d-9334-3a80e2ab380a",
+          "slot_id": "slot-1"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-2"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-3"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-4"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-5"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-6"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-7"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-8"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-9"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-10"
+        }
+      ]
+    },
+    "performance_isolated": false,
+    "slot_id": "slot-1"
+  },
+  "recorded_at": "2026-09-29T12:18:42.449019511Z",
+  "session_id": "3f3e54ab-34eb-4b0d-9334-3a80e2ab380a",
+  "slot_id": "slot-1",
+  "supplied_assistance": null,
+  "supplied_metadata_source": "caller; not independently verified",
+  "supplied_viewpoint": null
+}

@@ -55,7 +55,8 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
 | Dynamics bodies and ropes | Rust | `svc-collision::DynamicsSolver` keeps one live Rapier world per Dynamics world (bodies, static colliders, rope joints) and changes it in place. The Dynamics bridge maps generated handles onto it, owns chains, and binds Spatial collision scenes. See [rope physics](rope-physics.md). |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
-| wgpu realization | Rust | [`render-wgpu`](../rust/crates/render-wgpu) applies `PresentationWorld` deltas to typed GPU tables and renders offscreen (with readback) or to a window surface. It is the only crate that may depend on wgpu. The runtime does not drive it yet: the streaming mode (#8786) and desktop shell (#8790) wire it in, and Three stays the browser realizer until #8792. |
+| wgpu realization | Rust | [`render-wgpu`](../rust/crates/render-wgpu) applies `PresentationWorld` deltas to typed GPU tables and renders offscreen (with readback) or to a window surface. It is the only crate that may depend on wgpu. The runtime drives it in the streaming browser mode (below); the desktop shell (#8790) wires it in next, and Three stays the default browser realizer until #8792. |
+| Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) owns the runtime's `render-wgpu` renderer in the streaming browser mode: it applies each committed call's publications, draws offscreen on its own thread, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-dev-host` serves them at `/__rusty/product/runtime/frames`. |
 | Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
 | Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser DTOs and applies delivery byte limits. Input acknowledgements and the runtime readout remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
@@ -247,6 +248,43 @@ seeking on ordinary weight updates. A ghost plate retains its capture-time graph
 resource definitions, lights, and sampled animation pose. The backend rebuilds
 its capture bank from that immutable input, including after a reconnect; only
 explicit recapture replaces the source pose.
+
+### Streaming browser mode
+
+The world is realized either by the browser's Three surface or, with
+`RUSTY_RENDER_OUTPUT=stream`, by `render-wgpu` in the runtime process
+(`csharp-product-runtime/src/frame_output.rs`, `render-stream`). In that mode:
+
+- **Runtime.** Each finished product call's frame, presentation and view
+  composition publications are applied to the renderer as they are committed.
+  A call whose renderer work was lost, or a world replacement, rebuilds the
+  renderer from the committed snapshot. Animation facts from drawn frames
+  reach the Engine through the ordinary animation realization feedback. The
+  renderer draws when a change is applied: every step while the simulation
+  runs, once per change while it is paused or inspection time is held. It
+  takes the product manifest's default light rigs.
+- **Transport.** A viewer pulls frames one at a time:
+  `GET /__rusty/product/runtime/frames?after=N&width=W&height=H` answers with
+  the latest frame newer than `N`, or `204` after a second. Each frame is a
+  40-byte `RSF1` header (sequence, simulation step, size, format, held flag)
+  and a JPEG (quality 80) payload; `product-dev-host/src/frames.rs` is the
+  format's source. The renderer draws at the most recent viewer's size.
+  `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames, for measurement only.
+- **Browser.** `product-bootstrap.json` carries `renderer.output: "stream"`,
+  and the runtime-pack shell mounts `mountStreamedFrameSurface`
+  (`product-browser-host`) on the Engine canvas instead of Three. It paints
+  the frames under the unchanged product UI, keeps the canvas as the focus,
+  pointer-lock and input target, and marks it with
+  `data-rusty-frame-sequence`, `-step` and `-held`. Graphics publications
+  still reach the page and are acknowledged there. Audio, video and the
+  telemetry overlay stay browser presentation hosts.
+- **Not yet in this mode:** the playtest observer camera, on-demand drawing,
+  renderer pick and the `engine.renderer.presentation` observation (#8841; it
+  reports `available: false`, while `engine.renderer.status` adds the stream's
+  frame rate and per-stage costs), ghost plate realization feedback (#8842),
+  `RenderOutput` image jobs (#8826) and billboard labels (#8827).
+
+Measured costs and the encoding decision: `docs/evidence/streaming-8786/`.
 
 The public C# service is `Graphics`; `Appearance` remains a resource/fact name.
 Facts can form a hierarchy, so equipment and layered visuals compose with

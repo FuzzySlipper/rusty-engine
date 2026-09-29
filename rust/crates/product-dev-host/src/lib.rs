@@ -17,6 +17,7 @@
 
 mod bundle;
 mod error;
+mod frames;
 mod host;
 mod log;
 mod model;
@@ -29,6 +30,10 @@ pub use bundle::{
     PRODUCT_DEV_RENDERER_PRELOAD_PATH,
 };
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
+pub use frames::{
+    ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream, FRAME_REQUEST_WAIT,
+    PRODUCT_DEV_FRAMES_PATH,
+};
 pub use host::{
     ProductDevAssetReload, ProductDevHost, ProductDevHostConfig, RunningProductDevHost,
 };

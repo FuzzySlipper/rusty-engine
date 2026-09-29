@@ -733,6 +733,11 @@ impl EngineServiceSet {
         self.audio.snapshot_frame()
     }
 
+    /// The Engine presentation timeline the committed world has reached.
+    pub fn presentation_elapsed_seconds(&self) -> f64 {
+        self.presentation_world.elapsed_seconds()
+    }
+
     /// World-space origin of the committed graphics node published for an
     /// entity, for entity-attached audio emitters.
     pub fn entity_world_position(&self, entity: u64) -> Option<[f32; 3]> {
@@ -759,6 +764,15 @@ impl EngineServiceSet {
         &self,
         identity: &str,
     ) -> Option<crate::appearance::CsharpRenderResource> {
+        self.borrowed_renderer_resource(identity).cloned()
+    }
+
+    /// As [`Self::renderer_resource`], without cloning, for an in-process
+    /// renderer that reads the bytes while it holds the services.
+    pub fn borrowed_renderer_resource(
+        &self,
+        identity: &str,
+    ) -> Option<&crate::appearance::CsharpRenderResource> {
         self.appearance
             .state
             .render_resources
@@ -768,7 +782,6 @@ impl EngineServiceSet {
             .chain(self.video.render_resources())
             .chain(self.render_output.resources())
             .find(|resource| resource.identity() == identity)
-            .cloned()
     }
 
     pub fn render_resources(&self) -> Vec<CsharpRenderResource> {

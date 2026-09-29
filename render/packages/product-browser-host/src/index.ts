@@ -14,6 +14,10 @@ export {
   createProductBrowserLocalHttpAdapter,
 } from './local-transport.js';
 export { loadProductBrowserRendererInitialContent } from './renderer-preload.js';
+export {
+  PRODUCT_BROWSER_FRAME_STREAM_PATH,
+  mountStreamedFrameSurface,
+} from './streamed-frame-surface.js';
 export { ProductBrowserDynamicRendererResources } from './dynamic-renderer-resources.js';
 export type {
   ProductBrowserBundleAsset,
