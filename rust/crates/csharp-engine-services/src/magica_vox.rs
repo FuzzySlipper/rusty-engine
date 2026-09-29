@@ -698,10 +698,10 @@ fn settings_hash(options: MagicaVoxelAdmissionOptions) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn options() -> MagicaVoxelAdmissionOptions {
+    pub(crate) fn options() -> MagicaVoxelAdmissionOptions {
         MagicaVoxelAdmissionOptions {
             cell_size: 0.25,
             pivot_policy: NativeMagicaVoxelPivotPolicy::BaseCenter,
@@ -715,7 +715,7 @@ mod tests {
         }
     }
 
-    fn fixture(voxels: &[[u8; 4]]) -> Vec<u8> {
+    pub(crate) fn fixture(voxels: &[[u8; 4]]) -> Vec<u8> {
         let mut children = Vec::new();
         children.extend_from_slice(b"SIZE");
         children.extend_from_slice(&12u32.to_le_bytes());

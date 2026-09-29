@@ -130,7 +130,17 @@ voxel asset publish, kinematic motion, and sprite advance.
 
 ## Not changed
 
-- **`MagicaVoxelAdmissionStatus.PaletteLeaseExhausted`** keeps its name. The
-  ABI enum value is now reachable only when a stored hash fails to encode.
+- **`MagicaVoxelAdmissionStatus.PaletteLeaseExhausted` (13)** was removed
+  afterwards in #8829.
+  - It had also been the fallback for an unknown object handle, which now
+    reports `InvalidRequest`.
+  - The palette's source hash is converted once at admission. A digest that
+    fails to convert rejects the admission with `CanonicalObject`, so the read
+    can no longer fail on it.
+  - No product, fixture or doc referenced the value.
+  - Evidence: the new
+    `magica_palette_read_reports_its_rejections_by_status` test (success, a
+    non-MagicaVoxel object, an unknown handle), `test-runtime-pack.sh`, and the
+    CoreCLR smoke.
 - **The remaining `Read*At` index calls in Spatial and World Origin** are
   #8818.

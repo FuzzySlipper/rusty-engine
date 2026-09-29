@@ -58,7 +58,7 @@ struct RetainedVoxelObject {
 #[derive(Debug, Clone)]
 struct RetainedMagicaVoxelPalette {
     rows: Vec<MagicaVoxelPaletteRow>,
-    source_hash: String,
+    source_hash: NativeVoxelContentHash,
     source_byte_count: u64,
 }
 
@@ -245,7 +245,7 @@ impl RuntimeVoxelContentBridge {
         let palette = self
             .object(object_handle)?
             .magica_palette
-            .clone()
+            .as_ref()
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_CONTENT_MAGICA",
@@ -267,7 +267,7 @@ impl RuntimeVoxelContentBridge {
         let result = NativeMagicaVoxelPaletteResult {
             palette: rows.as_ptr(),
             palette_len: rows.len(),
-            source_hash: hash(&palette.source_hash)?,
+            source_hash: palette.source_hash,
             source_byte_count: palette.source_byte_count,
         };
         Ok((result, MagicaVoxelPaletteBacking { _rows: rows }))
@@ -1363,9 +1363,13 @@ fn admit_magica_bytes(
 ) -> Result<NativeVoxelObjectHandle, i32> {
     let admission =
         admit_magica_vox(bytes, asset_id, source_path, options).map_err(magica_status)?;
+    // The admitted digest is Engine-produced SHA-256 hex; a conversion failure
+    // means the admitted object is not in canonical form.
+    let source_hash = hash(&admission.source_hash)
+        .map_err(|_| NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32)?;
     let palette = RetainedMagicaVoxelPalette {
         rows: admission.palette,
-        source_hash: admission.source_hash,
+        source_hash,
         source_byte_count: admission.source_byte_count,
     };
     let object =
@@ -1396,7 +1400,7 @@ unsafe extern "C" fn read_magica_voxel_palette(
         Err(error) if error.code() == "CSHARP_VOXEL_CONTENT_MAGICA" => {
             NativeMagicaVoxelAdmissionStatus::NotMagicaVoxelObject as i32
         }
-        Err(_) => NativeMagicaVoxelAdmissionStatus::PaletteLeaseExhausted as i32,
+        Err(_) => NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32,
     }
 }
 
@@ -3544,6 +3548,49 @@ mod tests {
         assert_eq!(
             unsafe { (api.destroy_annotation)(api.context, annotation_handle) },
             ABI_OK
+        );
+    }
+
+    #[test]
+    fn magica_palette_read_reports_its_rejections_by_status() {
+        use crate::magica_vox::tests::{fixture, options};
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let context = std::ptr::from_mut(&mut bridge).cast();
+        let source = fixture(&[[0, 0, 0, 1], [1, 0, 0, 2]]);
+        let magica = admit_magica_bytes(
+            &mut bridge,
+            &source,
+            "voxel-object/palette".to_owned(),
+            "palette.vox".to_owned(),
+            options(),
+        )
+        .unwrap();
+        let mut palette = unsafe { std::mem::zeroed::<NativeMagicaVoxelPaletteResult>() };
+        assert_eq!(
+            unsafe { read_magica_voxel_palette(context, magica, &mut palette) },
+            ABI_OK
+        );
+        assert_eq!(palette.palette_len, 2);
+        assert_ne!(palette.source_hash, NativeVoxelContentHash::default());
+
+        let plain =
+            voxel_object_runtime::admit_voxel_object(&object(), Default::default()).unwrap();
+        let plain = bridge
+            .insert_object_with_magica_palette(plain, None)
+            .unwrap();
+        assert_eq!(
+            unsafe { read_magica_voxel_palette(context, plain, &mut palette) },
+            NativeMagicaVoxelAdmissionStatus::NotMagicaVoxelObject as i32
+        );
+        assert_eq!(
+            unsafe {
+                read_magica_voxel_palette(
+                    context,
+                    NativeVoxelObjectHandle { value: 999 },
+                    &mut palette,
+                )
+            },
+            NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32
         );
     }
 

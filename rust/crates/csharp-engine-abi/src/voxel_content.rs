@@ -142,7 +142,6 @@ pub enum NativeMagicaVoxelAdmissionStatus {
     CanonicalObject = 10,
     HandleExhausted = 11,
     NotMagicaVoxelObject = 12,
-    PaletteLeaseExhausted = 13,
 }
 
 /// A fixed SHA-256 fact. The words are big-endian groups from the canonical
