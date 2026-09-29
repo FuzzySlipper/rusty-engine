@@ -419,7 +419,12 @@ fn static_instances_batch_cull_and_keep_the_instance_list_while_nothing_changes(
         metadata: None,
     }]);
     let (moved, _) = harness.render(&view);
-    assert_eq!((moved.parts_uploaded, moved.draws), (1, 3));
+    // The drawn set is unchanged, so no instance ids upload (review of
+    // fcdbeb388).
+    assert_eq!(
+        (moved.parts_uploaded, moved.draws, moved.instances_uploaded),
+        (1, 3, 0)
+    );
 
     // Turning away culls a different set.
     let (turned, _) = harness.render(&camera([0.0, 3.0, 9.0], 60.0, -20.0));

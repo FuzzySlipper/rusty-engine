@@ -122,6 +122,8 @@ pub struct Renderer {
     /// Part ids: the caster list, then the world and viewmodel view lists.
     instances_buffer: wgpu::Buffer,
     casters: batch::DrawList,
+    /// The caster ids are in the instance buffer.
+    casters_uploaded: bool,
     /// Per view layer (world, viewmodel): the last draw list.
     views: [Option<frame::ViewCache>; 2],
     shadows: shadows::ShadowMaps,
@@ -198,6 +200,7 @@ impl Renderer {
             lights: Default::default(),
             instances_buffer,
             casters: batch::DrawList::default(),
+            casters_uploaded: false,
             views: Default::default(),
             shadows,
             frame_bind_group,

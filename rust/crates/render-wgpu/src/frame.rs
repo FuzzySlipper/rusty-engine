@@ -83,6 +83,8 @@ impl AddAssign<ViewStats> for FrameStats {
 pub(crate) struct ViewCache {
     view_proj: Mat4,
     pub list: DrawList,
+    /// A part moved or regrouped: re-cull, but keep the list to compare.
+    stale: bool,
 }
 
 /// Which retained layers a view pass draws.
@@ -196,11 +198,23 @@ impl Renderer {
             self.tables.environment_dirty = false;
         }
         let uploaded = self.upload_parts();
-        if std::mem::take(&mut self.tables.parts.changed) {
-            // Casters lead the instance buffer; each layer's view list is
-            // rebuilt behind them on its next pass.
-            self.casters = batch::caster_list(&self.tables.parts, 0);
-            self.views = Default::default();
+        let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
+        let moved = std::mem::take(&mut self.tables.parts.moved);
+        if regrouped {
+            // Casters lead the instance buffer; they upload again only if
+            // their ids changed.
+            let casters = batch::caster_list(&self.tables.parts, 0);
+            if casters != self.casters {
+                self.casters = casters;
+                self.casters_uploaded = false;
+            }
+        }
+        if regrouped || moved {
+            // Each layer re-culls on its next pass and uploads only a
+            // different list.
+            for view in self.views.iter_mut().flatten() {
+                view.stale = true;
+            }
             self.shadows.stale = true;
         }
         uploaded
@@ -421,7 +435,7 @@ impl Renderer {
         let slot = layer as usize;
         if self.views[slot]
             .as_ref()
-            .is_some_and(|view| view.view_proj == *view_proj)
+            .is_some_and(|view| view.view_proj == *view_proj && !view.stale)
         {
             return 0;
         }
@@ -436,12 +450,7 @@ impl Renderer {
             eye,
             base,
         );
-        let unchanged = self.views[slot]
-            .as_ref()
-            .is_some_and(|view| view.list == list);
-        let casters_current = self.views.iter().any(Option::is_some);
         let needed = u64::from(self.casters.instances() + 2 * slots).max(1) * 4;
-        let mut uploaded = 0;
         if needed > self.instances_buffer.size() {
             self.instances_buffer = storage_buffer(
                 &self.gpu.device,
@@ -449,20 +458,27 @@ impl Renderer {
                 needed.next_power_of_two(),
             );
             self.rebind_frame();
-            // A new buffer starts empty: the other layer's list re-uploads too.
+            // A new buffer starts empty: everything uploads again.
             self.views = Default::default();
+            self.casters_uploaded = false;
+        }
+        let mut uploaded = 0;
+        if !self.casters_uploaded {
             uploaded += self.upload_instances(0, &self.casters.ids);
-            uploaded += self.upload_instances(base, &list.ids);
-        } else if !unchanged {
-            // A rebuilt caster list dropped every cached view: upload it once.
-            if !casters_current {
-                uploaded += self.upload_instances(0, &self.casters.ids);
-            }
+            self.casters_uploaded = true;
+        }
+        // Lists carry their instance offsets, so a moved base compares
+        // different and uploads.
+        let unchanged = self.views[slot]
+            .as_ref()
+            .is_some_and(|view| view.list == list);
+        if !unchanged {
             uploaded += self.upload_instances(base, &list.ids);
         }
         self.views[slot] = Some(ViewCache {
             view_proj: *view_proj,
             list,
+            stale: false,
         });
         uploaded
     }

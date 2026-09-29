@@ -164,6 +164,8 @@ fn repeating_playback_advances_on_the_engine_timeline_and_the_weapon_follows() {
     let (moved, later) = harness.render(&character_view());
     // The body's parts and the attached weapon's row are rewritten.
     assert!(moved.parts_uploaded >= 2, "{moved:?}");
+    // Posing rewrites rows, not the drawn set: no instance ids upload.
+    assert_eq!(moved.instances_uploaded, 0, "{moved:?}");
     assert_ne!(start, later);
 }
 

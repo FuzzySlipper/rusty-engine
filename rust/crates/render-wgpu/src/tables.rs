@@ -259,9 +259,12 @@ pub(crate) struct Parts {
     pub dirty: HashSet<PartId>,
     /// Rows past the GPU buffer's capacity force a buffer reallocation.
     pub grown: bool,
-    /// Any part was added, removed, moved or shown/hidden since the draw
-    /// lists were built.
-    pub changed: bool,
+    /// A part was added or removed, or changed visibility, layer or winding,
+    /// since the draw lists were built: batches may regroup.
+    pub regrouped: bool,
+    /// A part's world transform was rewritten: culling and blend order may
+    /// change, the batches do not.
+    pub moved: bool,
     /// Batch keys in use: key, reference count.
     keys: HashMap<BatchKey, (u32, u32)>,
     free_keys: Vec<u32>,
@@ -295,7 +298,7 @@ impl Parts {
             (self.meta.len() - 1) as PartId
         };
         self.dirty.insert(id);
-        self.changed = true;
+        self.regrouped = true;
         id
     }
 
@@ -305,7 +308,7 @@ impl Parts {
         }
         self.dirty.remove(&id);
         self.free.push(id);
-        self.changed = true;
+        self.regrouped = true;
     }
 
     /// Write a part's world state into its GPU row and mark it for upload.
@@ -330,12 +333,16 @@ impl Parts {
         out[32..35].copy_from_slice(&row.emission);
         out[35] = 0.0;
         let state = &mut self.state[id as usize];
+        let mirrored = world.determinant() < 0.0;
+        if state.mirrored != mirrored || state.shown != shown || state.layer != layer {
+            self.regrouped = true;
+        }
         state.world_bounds = state.local_bounds.transformed(world);
-        state.mirrored = world.determinant() < 0.0;
+        state.mirrored = mirrored;
         state.shown = shown;
         state.layer = layer;
         self.dirty.insert(id);
-        self.changed = true;
+        self.moved = true;
     }
 
     fn acquire_key(&mut self, part: &Part) -> u32 {
