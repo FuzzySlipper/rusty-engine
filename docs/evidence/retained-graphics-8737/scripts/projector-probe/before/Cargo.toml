@@ -1,0 +1,14 @@
+[package]
+name = "projector-probe-before"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+render-model = { path = "../../../../../../../rusty-engine-64a9b164/rust/crates/render-model" }
+render-projection = { path = "../../../../../../../rusty-engine-64a9b164/rust/crates/render-projection" }
+
+[profile.release]
+debug = false

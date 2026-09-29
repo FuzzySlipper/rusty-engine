@@ -753,7 +753,7 @@ pub struct NativeSpriteAppearanceReplaceRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAppearanceFact {
     pub object_id: u64,
-    /// Optional parent from the same complete retained snapshot. Both values
+    /// Optional parent object, retained or in the same batch. Both values
     /// identify product facts; renderer handles remain Engine-owned.
     pub has_parent_object: bool,
     pub parent_object_id: u64,
@@ -796,25 +796,31 @@ pub struct NativeStaticMeshContentReferenceRequest {
     pub color: NativeColor,
 }
 
-/// Retained child-to-joint binding within a complete appearance snapshot.
-/// The child's existing parent_object_id selects the animated body. Its local
-/// transform uses glTF right-handed +Y-up meters, relative to the named joint.
+/// Joint binding for one changed child object. The child's parent_object_id
+/// selects the animated body. Its local transform uses glTF right-handed +Y-up
+/// meters, relative to the named joint.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMeshJointAttachment {
     pub child_object_id: u64,
     pub joint: NativeUtf8Slice,
 }
+
+/// A batch of retained object changes. Each upsert is that object's complete
+/// current fact, including its joint attachment if listed; objects not named
+/// keep their retained values. Removing an absent object does nothing.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAttachedAppearanceSnapshotRequest {
-    pub facts: *const NativeAppearanceFact,
-    pub facts_len: usize,
+pub struct NativeAppearanceChangesRequest {
+    pub upserts: *const NativeAppearanceFact,
+    pub upserts_len: usize,
+    pub removals: *const u64,
+    pub removals_len: usize,
     pub attachments: *const NativeMeshJointAttachment,
     pub attachments_len: usize,
 }
-pub type NativePublishAttachedAppearanceSnapshot = unsafe extern "C" fn(
+pub type NativePublishAppearanceChanges = unsafe extern "C" fn(
     *mut std::ffi::c_void,
-    *const NativeAttachedAppearanceSnapshotRequest,
+    *const NativeAppearanceChangesRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;

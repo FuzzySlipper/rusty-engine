@@ -110,14 +110,14 @@ static or animated mesh admission. Publish ordinary body and child
 its transform taken from the descriptor. Then use:
 
 ```csharp
-engine.Graphics.PublishAttachedSnapshot(new(facts,
+engine.Graphics.PublishChanges(new(facts, ReadOnlyMemory<ulong>.Empty,
     new MeshJointAttachment[] { new(childObjectId, attachment.Joint) }));
 ```
 
-This is a complete snapshot, like `PublishSnapshot`. Omitted bindings return
-children to their retained parent root. The Engine checks the actual admitted
-rig, reports missing/ambiguous joints with the requested name and target, and
-preserves the prior staged snapshot on rejection. Joint names are case-sensitive;
+An attachment belongs to the child's fact: upserting the child without one
+returns it to its parent's root, and `PublishSnapshot` keeps it unchanged. The
+Engine checks the actual admitted rig, reports a missing or ambiguous joint
+with the requested name and object, and changes nothing on rejection. Joint names are case-sensitive;
 unnamed or duplicate source joints are diagnosed by normal glTF admission.
 Arbitrary non-skin node/socket lookup is not implied by the joint API.
 

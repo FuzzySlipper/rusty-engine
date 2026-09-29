@@ -565,9 +565,24 @@ catch loads or a breakage policy. See the [physics contract](rope-physics.md).
 Use `context.Graphics` for resources and retained facts; `Appearance` still
 names a selected visual resource. `AppearanceFact` carries `ObjectId`,
 `HasParentObject`, `ParentObjectId`, local `Transform`, `Appearance`, `Visible`,
-and `Layer`. A complete snapshot may contain parents and children in either
-input order; the Engine validates the hierarchy and publishes parents first.
-`EntityGraphicsProjection` also accepts an optional parent `EntityId`.
+and `Layer`. The Engine retains each object's last fact.
+
+- `Graphics.PublishChanges(new(upserts, removals, attachments))` creates or
+  updates the listed objects and removes the listed identities. Its cost follows
+  the batch, not the world: objects not named are not examined. Each upsert is
+  that object's complete fact. An unchanged upsert does nothing, and removing
+  an absent object does nothing.
+- `Graphics.PublishSnapshot(facts)` makes the facts the complete object set and
+  removes every omitted object. It compares each fact with the retained one, so
+  it still costs time per object. Use it when a product already rebuilds all
+  its facts; publish moving objects with `PublishChanges`.
+
+Either call may list parents and children in any order; the Engine validates
+the hierarchy against the state after the whole batch and creates parents
+first. A removed object's children must be removed or moved in the same batch.
+A refused call changes nothing. Changing an appearance in place, such as its
+materials or sprite frame, updates the objects showing it without republishing
+them. `EntityGraphicsProjection` also accepts an optional parent `EntityId`.
 
 - Attached equipment: publish the actor and equipment as ordinary facts, with
   the equipment parent naming the actor. Product code selects equipment and

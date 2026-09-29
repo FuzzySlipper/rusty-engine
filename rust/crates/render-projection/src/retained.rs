@@ -62,6 +62,13 @@ impl<K: Ord> StableHandleRegistry<K> {
         self.handles.is_empty()
     }
 
+    /// Whether `count` more handles fit in the namespace.
+    pub(crate) fn can_allocate(&self, count: usize) -> bool {
+        self.next_local
+            .checked_add(count as u64)
+            .is_some_and(|end| end <= LOCAL_HANDLE_MASK + 1)
+    }
+
     pub(crate) fn remove(&mut self, key: &K) -> Option<RenderHandle> {
         self.handles.remove(key)
     }

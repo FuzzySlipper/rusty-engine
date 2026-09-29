@@ -47,7 +47,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         new(BodyId, false, 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One), body!, true, RenderLayer.Scene),
         new(WeaponId, true, BodyId, attachment.Transform, weapon!, true, RenderLayer.Scene),
     ];
-    private void Publish(string joint) => engine.Graphics.PublishAttachedSnapshot(new(Facts(), new MeshJointAttachment[] { new(WeaponId, joint) }));
+    private void Publish(string joint) => engine.Graphics.PublishChanges(new(Facts(), ReadOnlyMemory<ulong>.Empty, new MeshJointAttachment[] { new(WeaponId, joint) }));
     [DebugCommand("attachment.pose")]
     public string Pose(float normalizedTime)
     {

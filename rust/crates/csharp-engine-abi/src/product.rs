@@ -1450,7 +1450,7 @@ pub struct NativeGraphicsApi {
     pub read_sprite_playback: NativeReadSpritePlayback,
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
-    pub publish_attached_snapshot: NativePublishAttachedAppearanceSnapshot,
+    pub publish_changes: NativePublishAppearanceChanges,
     pub destroy_operation_diagnostic_lease: NativeDestroyAnimationOperationDiagnosticLease,
     pub create_light: NativeCreateLight,
     pub update_light: NativeUpdateLight,

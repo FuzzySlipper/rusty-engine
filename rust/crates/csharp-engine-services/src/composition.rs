@@ -95,7 +95,7 @@ fn engine_api(
         authored_content: crate::authored_content::api(authored_content_bridge),
         content_store: crate::content_store::api(content_store_bridge),
         graphics: NativeGraphicsApi {
-            publish_attached_snapshot: crate::appearance::publish_attached_snapshot,
+            publish_changes: crate::appearance::publish_appearance_changes,
             destroy_operation_diagnostic_lease:
                 crate::appearance::destroy_animation_admission_diagnostic,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),

@@ -1,0 +1,51 @@
+{
+  "mode": "snapshot",
+  "verdict": "GRAPHICS_EXERCISE_PASSED",
+  "facts": {
+    "mode": "snapshot",
+    "updates": 400,
+    "publishUsP50": 7000.0,
+    "publishUsP95": 9521.3,
+    "publishUsMax": 14939.0,
+    "eventUs": [
+      6419.6,
+      5956.6,
+      13594.6,
+      10457.1,
+      7040.3,
+      7988.6
+    ],
+    "retainedObjects": 3952,
+    "resources": 2,
+    "missingJoint": "missing joint 'MissingHand8737' on target object 20000 (mesh-animation/c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674)"
+  },
+  "freshRendererBaseline": {
+    "operationCounts": {
+      "defineMaterial": 1,
+      "defineStaticMesh": 1,
+      "defineAnimatedMesh": 1,
+      "setSkyBackground": 1,
+      "create": 51,
+      "createStaticMeshInstance": 3900,
+      "createAnimatedMeshInstance": 1,
+      "setParentJoint": 1,
+      "busControl": 6
+    },
+    "joints": [
+      "RightHand"
+    ],
+    "hiddenObjects": 10,
+    "staticMeshDefinitions": [
+      "mesh/runtime-1"
+    ]
+  },
+  "errors": [],
+  "log": [
+    "C# CoreCLR product host listening at http://127.0.0.1:40851",
+    "Press Ctrl+C to stop.",
+    "WARNING: radv is not a conformant Vulkan implementation, testing use only.",
+    "RUSTY_HEADLESS_BROWSER started pid=3928951 executable=/home/agent/.local/bin/chromium url=http://127.0.0.1:40851 profile=/tmp/rusty-product-headless-3928941-1790648413085751760-0",
+    "GRAPHICS_FACTS {\"mode\":\"snapshot\",\"updates\":400,\"publishUsP50\":7000.0,\"publishUsP95\":9521.3,\"publishUsMax\":14939.0,\"eventUs\":[6419.6,5956.6,13594.6,10457.1,7040.3,7988.6],\"retainedObjects\":3952,\"resources\":2,\"missingJoint\":\"missing joint 'MissingHand8737' on target object 20000 (mesh-animation/c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674)\"}",
+    "GRAPHICS_EXERCISE_PASSED"
+  ]
+}

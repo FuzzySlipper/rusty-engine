@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <Nullable>enable</Nullable>
+    <RustyEngineProductEntryType>GraphicsExercise.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>fixture.graphics-exercise</RustyEngineProductId>
+    <RustyEngineProductTitle>Graphics exercise</RustyEngineProductTitle>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <!-- The animated body (with a RightHand joint) comes from the joint-attachment fixture. -->
+    <RustyEngineProductContentRoot>$(RustyEngineExerciseContentRoot)</RustyEngineProductContentRoot>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineProductLiveDebug>true</RustyEngineProductLiveDebug>
+    <DefineConstants Condition="'$(RustyEngineExerciseOldApi)' == 'true'">$(DefineConstants);OLD_GRAPHICS_API</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineExerciseSdkVersion)" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+[package]
+name = "projector-probe-after"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+render-model = { path = "../../../../../../rust/crates/render-model" }
+render-projection = { path = "../../../../../../rust/crates/render-projection" }
+
+[profile.release]
+debug = false

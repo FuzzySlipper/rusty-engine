@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-mod authored;
+mod appearance;
 mod debug;
 mod entity;
 mod material;
@@ -12,7 +12,7 @@ mod runtime_appearance;
 mod voxel;
 mod voxel_object;
 
-pub use authored::*;
+pub use appearance::*;
 pub use debug::*;
 pub use entity::*;
 pub use material::*;

@@ -26,8 +26,8 @@ use render_presentation::{
     ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 use render_projection::{
-    Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
-    RuntimeLightFact,
+    Appearance, AppearanceProjectionError, RuntimeAppearanceCatalog, RuntimeAppearanceFact,
+    RuntimeAppearanceProjector, RuntimeLightFact,
 };
 use runtime_diagnostics::RuntimeDiagnosticsSink;
 use std::{
@@ -1547,11 +1547,7 @@ pub(crate) struct RuntimeAppearanceData {
     next_light: u64,
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
-    retained_appearances: BTreeMap<u64, u64>,
-    joint_attachments: BTreeMap<u64, String>,
     next_material: u64,
-    retained_object_count: u32,
-    retained_light_count: u32,
     pub(crate) render_resources: RenderResourceSlots,
     resource_paths: BTreeMap<(String, NativeTextureFilter, NativeTextureWrap), u64>,
     resource_identities: BTreeMap<String, u64>,
@@ -1859,11 +1855,7 @@ impl RuntimeAppearanceBridge {
             next_light: 1,
             materials: BTreeMap::new(),
             appearance_materials: BTreeMap::new(),
-            retained_appearances: BTreeMap::new(),
-            joint_attachments: BTreeMap::new(),
             next_material: 1,
-            retained_object_count: 0,
-            retained_light_count: 0,
             render_resources: RenderResourceSlots::default(),
             resource_paths: BTreeMap::new(),
             resource_identities: BTreeMap::new(),
@@ -2079,8 +2071,8 @@ impl RuntimeAppearanceBridge {
             .take()
             .expect("every product call begins an appearance call");
         if std::mem::take(&mut call.resource_releases_pending) {
-            match call.state.projector.reconcile_resources() {
-                Ok(projection) => push_extra_frame(&mut call, projection.frame),
+            match call.state.projector.reconcile() {
+                Ok(frame) => push_extra_frame(&mut call, frame),
                 Err(error) => {
                     call.release_error = Some(CsharpEngineServicesError::new(
                         "CSHARP_RESOURCE_RELEASE",
@@ -3700,9 +3692,8 @@ impl RuntimeAppearanceBridge {
         let next_light = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
         })?;
-        let mut lights = staged.state.lights.clone();
-        lights.insert(handle, fact);
-        project_candidate_lights(staged, lights)?;
+        project_light_change(staged, std::slice::from_ref(&fact), &[])?;
+        staged.state.lights.insert(handle, fact);
         staged.state.next_light = next_light;
         Ok(NativeLightHandle { value: handle })
     }
@@ -3713,12 +3704,13 @@ impl RuntimeAppearanceBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let replacement = runtime_light_fact(request.replacement)?;
         let staged = self.staged_mut()?;
-        if !staged.state.lights.contains_key(&request.light.value) {
+        let Some(previous) = staged.state.lights.get(&request.light.value) else {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_LIGHT_HANDLE",
                 "light handle is not live",
             ));
-        }
+        };
+        let previous = previous.light_id;
         if staged.state.lights.iter().any(|(handle, candidate)| {
             *handle != request.light.value && candidate.light_id == replacement.light_id
         }) {
@@ -3727,9 +3719,14 @@ impl RuntimeAppearanceBridge {
                 "logical light id is already owned by a different live light",
             ));
         }
-        let mut lights = staged.state.lights.clone();
-        lights.insert(request.light.value, replacement);
-        project_candidate_lights(staged, lights)
+        let removals: &[u64] = if previous == replacement.light_id {
+            &[]
+        } else {
+            &[previous]
+        };
+        project_light_change(staged, std::slice::from_ref(&replacement), removals)?;
+        staged.state.lights.insert(request.light.value, replacement);
+        Ok(())
     }
 
     fn replace_light(
@@ -3738,12 +3735,14 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
         let replacement = runtime_light_fact(request.replacement)?;
         let staged = self.staged_mut()?;
-        let mut lights = staged.state.lights.clone();
-        lights.remove(&request.light.value);
-        if lights
-            .values()
-            .any(|candidate| candidate.light_id == replacement.light_id)
-        {
+        let previous = staged
+            .state
+            .lights
+            .get(&request.light.value)
+            .map(|light| light.light_id);
+        if staged.state.lights.iter().any(|(handle, candidate)| {
+            *handle != request.light.value && candidate.light_id == replacement.light_id
+        }) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_LIGHT_LOGICAL_ID",
                 "logical light id is already owned by a live light",
@@ -3753,18 +3752,23 @@ impl RuntimeAppearanceBridge {
         let next_light = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
         })?;
-        lights.insert(handle, replacement);
-        project_candidate_lights(staged, lights)?;
+        let removals: Vec<u64> = previous
+            .filter(|previous| *previous != replacement.light_id)
+            .into_iter()
+            .collect();
+        project_light_change(staged, std::slice::from_ref(&replacement), &removals)?;
+        staged.state.lights.remove(&request.light.value);
+        staged.state.lights.insert(handle, replacement);
         staged.state.next_light = next_light;
         Ok(NativeLightHandle { value: handle })
     }
 
     fn destroy_light(&mut self, light: NativeLightHandle) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
-        if staged.state.lights.contains_key(&light.value) {
-            let mut lights = staged.state.lights.clone();
-            lights.remove(&light.value);
-            project_candidate_lights(staged, lights)?;
+        if let Some(fact) = staged.state.lights.get(&light.value) {
+            let id = fact.light_id;
+            project_light_change(staged, &[], &[id])?;
+            staged.state.lights.remove(&light.value);
         }
         // A successful replacement turns the prior generated owner into a
         // tombstone, so a later IDisposable release is ordinary teardown.
@@ -4026,9 +4030,9 @@ impl RuntimeAppearanceBridge {
         let staged = self.staged_mut()?;
         if staged
             .state
-            .retained_appearances
-            .values()
-            .any(|retained| *retained == appearance.value)
+            .appearances
+            .get(&appearance.value)
+            .is_some_and(|identity| staged.state.projector.appearance_in_use(identity))
         {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_APPEARANCE_IN_USE",
@@ -4088,19 +4092,19 @@ impl RuntimeAppearanceBridge {
         if staged
             .state
             .projector
-            .resources_mut()
+            .resources()
             .static_meshes
             .iter()
             .any(|mesh| mesh.asset == mesh_asset)
         {
-            let projection = staged
+            let frame = staged
                 .state
                 .projector
                 .release_static_mesh(&mesh_asset)
                 .map_err(|error| {
                     CsharpEngineServicesError::new("CSHARP_MESH_RELEASE", format!("{error:?}"))
                 })?;
-            push_extra_frame(staged, projection.frame);
+            push_extra_frame(staged, frame);
         }
         let resources = staged.state.projector.resources_mut();
         resources
@@ -4721,7 +4725,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         let asset = mesh.asset.clone();
-        let projection = staged
+        let frame = staged
             .state
             .projector
             .release_static_mesh(&asset)
@@ -4729,7 +4733,7 @@ impl RuntimeAppearanceBridge {
                 CsharpEngineServicesError::new("CSHARP_MESH_RELEASE", format!("{error:?}"))
             })?;
         staged.state.mesh_resources.remove(&resource.value);
-        push_extra_frame(staged, projection.frame);
+        push_extra_frame(staged, frame);
         Ok(())
     }
 
@@ -6529,8 +6533,12 @@ impl RuntimeAppearanceBridge {
         // one selection in a single update without a callback-order gate.
         if let Some(target) = instance.last_playback_target.filter(|target| {
             staged.state.projector.object_handle(instance.object_id) == Some(*target)
-                && staged.state.retained_appearances.get(&instance.object_id)
-                    == Some(&instance.appearance)
+                && staged.state.projector.object_appearance(instance.object_id)
+                    == staged
+                        .state
+                        .appearances
+                        .get(&instance.appearance)
+                        .map(String::as_str)
         }) {
             let frame = render_model::RenderFrameDiff::try_from_ops(vec![
                 render_model::RenderDiff::SetAnimatedMeshPlayback {
@@ -7676,187 +7684,127 @@ impl RuntimeAppearanceBridge {
         })
     }
 
+    /// Makes the given facts the complete retained object set. A snapshot
+    /// cannot name joints, so each object keeps its attachment.
     unsafe fn stage_snapshot(
         &mut self,
         facts: *const NativeAppearanceFact,
         fact_count: usize,
     ) -> Result<(), CsharpEngineServicesError> {
-        unsafe { self.stage_attached_snapshot(facts, fact_count, BTreeMap::new()) }
+        // SAFETY: the callback is synchronous and the pointer/length pair came from C#.
+        let facts = unsafe { borrowed_slice(facts, fact_count, "appearance facts") }?;
+        let projector = &self.staged_ref()?.state.projector;
+        let joints: BTreeMap<u64, String> = facts
+            .iter()
+            .filter_map(|fact| {
+                let joint = projector.object_joint(fact.object_id)?;
+                Some((fact.object_id, joint.to_owned()))
+            })
+            .collect();
+        let attachments = joints
+            .iter()
+            .map(|(object, joint)| (*object, joint.as_str()))
+            .collect();
+        self.stage_changes(facts, None, &attachments)
     }
 
-    unsafe fn stage_attached_snapshot(
+    /// Applies changed objects, removals and joint attachments to the
+    /// retained scene. With no removal list the facts are the complete object
+    /// set. Only the named objects are examined.
+    fn stage_changes(
         &mut self,
-        facts: *const NativeAppearanceFact,
-        fact_count: usize,
-        attachments: BTreeMap<u64, String>,
+        facts: &[NativeAppearanceFact],
+        removals: Option<&[u64]>,
+        attachments: &BTreeMap<u64, &str>,
     ) -> Result<(), CsharpEngineServicesError> {
-        if fact_count > 0 && facts.is_null() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VISUAL_FACTS_POINTER",
-                "C# visual snapshot had facts without a facts pointer",
-            ));
-        }
-        // SAFETY: a non-empty snapshot was checked above and the callback is synchronous.
-        let facts = if fact_count == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(facts, fact_count) }
-        };
-        let appearances = &self.staged_ref()?.state.appearances;
+        let staged = self.staged_mut()?;
+        let state: &mut RuntimeAppearanceData = &mut staged.state;
         let mut owned = Vec::with_capacity(facts.len());
-        let mut retained_appearances = BTreeMap::new();
         for fact in facts {
-            let appearance = appearances.get(&fact.appearance.value).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_APPEARANCE_HANDLE",
-                    "visual fact used an unknown appearance handle",
-                )
-            })?;
+            let appearance = state
+                .appearances
+                .get(&fact.appearance.value)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_APPEARANCE_HANDLE",
+                        "visual fact used an unknown appearance handle",
+                    )
+                })?;
             owned.push(RuntimeAppearanceFact {
                 object_id: fact.object_id,
                 parent_object_id: fact.has_parent_object.then_some(fact.parent_object_id),
-                appearance: appearance.clone(),
-                transform: Transform {
-                    translation: [
-                        fact.transform.translation.x,
-                        fact.transform.translation.y,
-                        fact.transform.translation.z,
-                    ],
-                    rotation: [
-                        fact.transform.rotation.x,
-                        fact.transform.rotation.y,
-                        fact.transform.rotation.z,
-                        fact.transform.rotation.w,
-                    ],
-                    scale: [
-                        fact.transform.scale.x,
-                        fact.transform.scale.y,
-                        fact.transform.scale.z,
-                    ],
-                },
+                appearance,
+                transform: native_transform(fact.transform),
                 visible: fact.visible,
                 layer: native_render_layer(fact.layer)?,
+                joint: attachments.get(&fact.object_id).copied(),
             });
-            retained_appearances.insert(fact.object_id, fact.appearance.value);
         }
-        let staged = self.staged_mut()?;
-        for controller in staged.state.animation_controllers.values() {
-            if !controller.projected {
-                continue;
-            }
-            let instance = staged
-                .state
-                .animation_instances
-                .get(&controller.instance)
-                .expect("live controller retains its instance");
-            if retained_appearances.get(&instance.object_id) != Some(&instance.appearance) {
+        for child in attachments.keys() {
+            if !owned.iter().any(|fact| fact.object_id == *child) {
                 return Err(CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                    "remove a projected controller before publishing a snapshot that removes or replaces its animated target",
+                    "CSHARP_JOINT_ATTACHMENT",
+                    format!("attachment child object {child} is not among the changed objects"),
                 ));
             }
         }
-        for ghost in staged.state.ghost_plates.values() {
-            if !retained_appearances.contains_key(&ghost.source_object_id) {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_GHOST_PLATE_SNAPSHOT_ORDER",
-                    "dispose ghost plate presentations before publishing a snapshot that removes their source object",
-                ));
-            }
-        }
-        for (child, joint) in &attachments {
-            let child_fact = owned
+
+        // Objects that animation controllers or ghost plates depend on must
+        // keep their appearance.
+        if !state.animation_controllers.is_empty() || !state.ghost_plates.is_empty() {
+            let changed: BTreeMap<u64, &str> = owned
                 .iter()
-                .find(|fact| fact.object_id == *child)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_JOINT_ATTACHMENT",
-                        format!("attachment child object {child} is missing from the snapshot"),
-                    )
-                })?;
-            let parent_id = child_fact.parent_object_id.ok_or_else(|| {
+                .map(|fact| (fact.object_id, fact.appearance))
+                .collect();
+            let next_appearance = |object: u64| match changed.get(&object) {
+                Some(appearance) => Some(*appearance),
+                None if removals.is_none_or(|removals| removals.contains(&object)) => None,
+                None => state.projector.object_appearance(object),
+            };
+            for controller in state.animation_controllers.values() {
+                if !controller.projected {
+                    continue;
+                }
+                let instance = state
+                    .animation_instances
+                    .get(&controller.instance)
+                    .expect("live controller retains its instance");
+                if next_appearance(instance.object_id)
+                    != state
+                        .appearances
+                        .get(&instance.appearance)
+                        .map(String::as_str)
+                {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_ANIMATION_SNAPSHOT_ORDER",
+                        "remove a projected controller before removing or replacing its animated target",
+                    ));
+                }
+            }
+            for ghost in state.ghost_plates.values() {
+                if next_appearance(ghost.source_object_id).is_none() {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_GHOST_PLATE_SNAPSHOT_ORDER",
+                        "dispose ghost plate presentations before removing their source object",
+                    ));
+                }
+            }
+        }
+
+        let projected = match removals {
+            None => state.projector.project(&owned),
+            Some(removals) => state.projector.apply(&owned, removals),
+        };
+        let frame = projected.map_err(|error| match error {
+            AppearanceProjectionError::JointAttachment { id, joint, problem } => {
                 CsharpEngineServicesError::new(
                     "CSHARP_JOINT_ATTACHMENT",
-                    format!("child {child} has no parent for joint '{joint}'"),
+                    format!("object {id} cannot follow joint '{joint}': {problem:?}"),
                 )
-            })?;
-            let parent = owned
-                .iter()
-                .find(|fact| fact.object_id == parent_id)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_JOINT_ATTACHMENT",
-                        format!("missing target object {parent_id} for joint '{joint}'"),
-                    )
-                })?;
-            let asset = match staged.state.projector.appearance_mut(&parent.appearance) {
-                Some(Appearance::AnimatedMesh { asset, .. }) => asset.clone(),
-                _ => {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_JOINT_ATTACHMENT",
-                        format!(
-                            "target object {parent_id} is not an animated mesh for joint '{joint}'"
-                        ),
-                    ))
-                }
-            };
-            let count = staged
-                .state
-                .projector
-                .resources_mut()
-                .animated_meshes
-                .iter()
-                .find(|mesh| mesh.asset == asset)
-                .and_then(|mesh| mesh.rig.as_ref())
-                .map_or(0, |rig| {
-                    rig.joints
-                        .iter()
-                        .filter(|candidate| candidate.id == *joint)
-                        .count()
-                });
-            if count != 1 {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_JOINT_ATTACHMENT",
-                    format!(
-                        "{} joint '{joint}' on target object {parent_id} ({asset})",
-                        if count == 0 { "missing" } else { "ambiguous" }
-                    ),
-                ));
             }
-        }
-        let mut projection = staged.state.projector.project(&owned).map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}"))
+            error => CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}")),
         })?;
-        staged.state.retained_object_count = narrow_retained_count(
-            projection.retained_objects,
-            "retained object count exceeded u32",
-        )?;
-        staged.state.retained_light_count = narrow_retained_count(
-            projection.retained_lights,
-            "retained light count exceeded u32",
-        )?;
-        for fact in &owned {
-            if attachments.contains_key(&fact.object_id)
-                || staged.state.joint_attachments.contains_key(&fact.object_id)
-            {
-                let handle = staged
-                    .state
-                    .projector
-                    .object_handle(fact.object_id)
-                    .expect("projected snapshot object");
-                projection.frame.ops.push(RenderDiff::SetParentJoint {
-                    handle,
-                    joint: attachments.get(&fact.object_id).cloned(),
-                });
-            }
-        }
-        // Projection publication counts must include the new retained relation facts.
-        if let Some(publication) = &mut projection.frame.publication {
-            publication.operation_count = projection.frame.ops.len() as u32;
-        }
-        staged.state.retained_appearances = retained_appearances;
-        staged.state.joint_attachments = attachments;
-        append_projection_frame(staged, projection.frame)?;
+        append_projection_frame(staged, frame)?;
         self.flush_all_animations()?;
         Ok(())
     }
@@ -8134,6 +8082,23 @@ fn command_clip(command: &AnimatedMeshPlaybackCommand) -> Option<&str> {
     }
 }
 
+fn native_transform(value: NativeTransform) -> Transform {
+    Transform {
+        translation: [
+            value.translation.x,
+            value.translation.y,
+            value.translation.z,
+        ],
+        rotation: [
+            value.rotation.x,
+            value.rotation.y,
+            value.rotation.z,
+            value.rotation.w,
+        ],
+        scale: [value.scale.x, value.scale.y, value.scale.z],
+    }
+}
+
 fn native_render_layer(value: NativeRenderLayer) -> Result<RenderLayer, CsharpEngineServicesError> {
     match value {
         NativeRenderLayer::Scene => Ok(RenderLayer::Scene),
@@ -8173,30 +8138,20 @@ fn require_projectable_controller(
     Ok(())
 }
 
-/// Projects a candidate light set and retains it only when projection succeeds,
-/// so a refused light operation leaves the staged lights unchanged.
-fn project_candidate_lights(
+/// Projects changed lights. A refused change leaves the retained lights unchanged.
+fn project_light_change(
     staged: &mut RuntimeAppearanceCall,
-    lights: BTreeMap<u64, RuntimeLightFact>,
+    facts: &[RuntimeLightFact],
+    removals: &[u64],
 ) -> Result<(), CsharpEngineServicesError> {
-    let facts: Vec<RuntimeLightFact> = lights.values().cloned().collect();
-    let projection = staged
+    let frame = staged
         .state
         .projector
-        .project_lights(&facts)
+        .apply_lights(facts, removals)
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_LIGHT_PROJECTION", format!("{error:?}"))
         })?;
-    staged.state.lights = lights;
-    staged.state.retained_object_count = narrow_retained_count(
-        projection.retained_objects,
-        "retained object count exceeded u32",
-    )?;
-    staged.state.retained_light_count = narrow_retained_count(
-        projection.retained_lights,
-        "retained light count exceeded u32",
-    )?;
-    append_projection_frame(staged, projection.frame)
+    append_projection_frame(staged, frame)
 }
 
 fn append_projection_frame(
@@ -8230,14 +8185,6 @@ fn snapshot_presentation_sequence(length: usize) -> Result<u32, CsharpEngineServ
             "retained presentation baseline has too many operations",
         )
     })
-}
-
-fn narrow_retained_count(
-    value: usize,
-    message: &'static str,
-) -> Result<u32, CsharpEngineServicesError> {
-    u32::try_from(value)
-        .map_err(|_| CsharpEngineServicesError::new("CSHARP_PRESENTATION_READOUT", message))
 }
 
 fn runtime_light_fact(
@@ -9352,7 +9299,8 @@ pub(crate) unsafe extern "C" fn read_presentation(
         };
         unsafe {
             *result = NativePresentationReadout {
-                retained_object_count: state.retained_object_count,
+                retained_object_count: u32::try_from(state.projector.retained_objects())
+                    .unwrap_or(u32::MAX),
                 appearance_count,
                 material_count,
                 resource_count,
@@ -10752,81 +10700,57 @@ pub(crate) unsafe extern "C" fn read_texture_info(
     })
 }
 
-pub(crate) unsafe extern "C" fn publish_attached_snapshot(
+pub(crate) unsafe extern "C" fn publish_appearance_changes(
     context: *mut c_void,
-    request: *const NativeAttachedAppearanceSnapshotRequest,
-    receipt: *mut NativeOperationErrorReceipt,
+    request: *const NativeAppearanceChangesRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    let request = unsafe { &*request };
-    let backup = bridge.staged.clone();
-    let outcome = (|| {
-        let rows = unsafe {
-            crate::composition::borrowed_slice(
-                request.attachments,
-                request.attachments_len,
-                "joint attachments",
-            )
-        }?;
-        let mut attachments = BTreeMap::new();
-        for row in rows {
-            let joint = unsafe { borrowed_utf8(row.joint.bytes, row.joint.len, "joint name") }?;
-            if joint.is_empty()
-                || attachments
-                    .insert(row.child_object_id, joint.to_owned())
-                    .is_some()
-            {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_JOINT_ATTACHMENT",
-                    format!(
-                        "empty joint or duplicate attachment for child {}",
-                        row.child_object_id
-                    ),
-                ));
-            }
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
         }
-        unsafe { bridge.stage_attached_snapshot(request.facts, request.facts_len, attachments) }
-    })();
-    match outcome {
-        Ok(()) => ABI_OK,
-        Err(error) => {
-            bridge.staged = backup;
-            if !receipt.is_null() {
-                let value = bridge.next_admission_diagnostic;
-                bridge.next_admission_diagnostic += 1;
-                let text = |s: &str| NativeUtf8Slice {
-                    bytes: s.as_ptr(),
-                    len: s.len(),
-                };
-                let lease = AnimationAdmissionDiagnostic {
-                    readout: vec![NativeEngineDiagnostic {
-                        code: text(error.code()),
-                        message: text(error.detail()),
-                        source: text(""),
-                    }]
-                    .into_boxed_slice(),
-                    _error: error,
-                };
-                unsafe {
-                    *receipt = NativeOperationErrorReceipt {
-                        service: text("Graphics"),
-                        operation: text("PublishAttachedSnapshot"),
-                        status: 0,
-                        diagnostics: NativeEngineDiagnosticLease {
-                            handle: NativeEngineDiagnosticLeaseHandle { value },
-                            diagnostics: lease.readout.as_ptr(),
-                            diagnostics_len: lease.readout.len(),
-                        },
-                    };
+        // SAFETY: context points at a box retained by `CsharpProductRuntime`.
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        // SAFETY: the request and its spans are borrowed for this synchronous call.
+        let request = unsafe { &*request };
+        let outcome = (|| {
+            let facts = unsafe {
+                borrowed_slice(request.upserts, request.upserts_len, "appearance facts")
+            }?;
+            let removals =
+                unsafe { borrowed_slice(request.removals, request.removals_len, "removals") }?;
+            let rows = unsafe {
+                borrowed_slice(
+                    request.attachments,
+                    request.attachments_len,
+                    "joint attachments",
+                )
+            }?;
+            let mut attachments = BTreeMap::new();
+            for row in rows {
+                let joint = unsafe { borrowed_utf8(row.joint.bytes, row.joint.len, "joint name") }?;
+                if joint.trim().is_empty()
+                    || attachments.insert(row.child_object_id, joint).is_some()
+                {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_JOINT_ATTACHMENT",
+                        format!(
+                            "empty joint or duplicate attachment for child {}",
+                            row.child_object_id
+                        ),
+                    ));
                 }
-                bridge.admission_diagnostics.insert(value, lease);
             }
-            0
+            bridge.stage_changes(facts, Some(removals), &attachments)
+        })();
+        match outcome {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.operation_error = Some(error);
+                0
+            }
         }
-    }
+    })
 }
 
 /// Runs one graphics operation and returns its refusal through the receipt.
@@ -10992,7 +10916,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn attached_snapshot_rejects_missing_joint_without_poisoning_or_mutating_call() {
+    fn joint_change_rejects_missing_joint_without_poisoning_or_mutating_call() {
         const BODY: &[u8] = include_bytes!(
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
@@ -11024,16 +10948,18 @@ pub(super) mod tests {
             child_object_id: 8,
             joint: text("RightHand"),
         }];
-        let mut request = NativeAttachedAppearanceSnapshotRequest {
-            facts: facts.as_ptr(),
-            facts_len: facts.len(),
+        let mut request = NativeAppearanceChangesRequest {
+            upserts: facts.as_ptr(),
+            upserts_len: facts.len(),
+            removals: std::ptr::null(),
+            removals_len: 0,
             attachments: attachments.as_ptr(),
             attachments_len: 1,
         };
         let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
         let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
-            unsafe { publish_attached_snapshot(context, &request, &mut receipt) },
+            unsafe { publish_appearance_changes(context, &request, &mut receipt) },
             ABI_OK
         );
         let outputs = bridge.staged_ref().unwrap().outputs.len();
@@ -11043,7 +10969,7 @@ pub(super) mod tests {
         }];
         request.attachments = missing.as_ptr();
         assert_eq!(
-            unsafe { publish_attached_snapshot(context, &request, &mut receipt) },
+            unsafe { publish_appearance_changes(context, &request, &mut receipt) },
             0
         );
         let message = unsafe {
@@ -11055,17 +10981,15 @@ pub(super) mod tests {
         }
         .unwrap();
         assert!(message.contains("MissingHand"));
-        assert!(message.contains("target object 7"));
+        assert!(message.contains("MissingJoint"));
         assert_eq!(bridge.staged_ref().unwrap().outputs.len(), outputs);
-        assert_eq!(
-            bridge.staged_ref().unwrap().state.joint_attachments[&8],
-            "RightHand"
-        );
         assert!(bridge.operation_error.is_none());
         assert_eq!(
             unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
             ABI_OK
         );
+        // A snapshot cannot name joints, so it keeps the attachment.
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.unwrap();
         let call = bridge.take_staged_call();
         let mut world = render_presentation::PresentationWorld::default();
         for output in call.outputs {
@@ -12021,8 +11945,8 @@ pub(super) mod tests {
         assert_eq!(readout.parent_object_id, 7);
         assert_eq!(readout.descriptor.kind, NativeLightKind::Point);
         let staged = bridge.take_staged_call();
-        assert_eq!(staged.state.retained_object_count, 1);
-        assert_eq!(staged.state.retained_light_count, 1);
+        assert_eq!(staged.state.projector.retained_objects(), 1);
+        assert_eq!(staged.state.projector.retained_lights(), 1);
         assert!(matches!(
             staged.render_ops().as_slice(),
             [
@@ -12061,7 +11985,7 @@ pub(super) mod tests {
         let staged = bridge.take_staged_call();
         assert_eq!(staged.state.lights.len(), 1);
         assert!(staged.state.lights.contains_key(&light.value));
-        assert_eq!(staged.state.retained_light_count, 1);
+        assert_eq!(staged.state.projector.retained_lights(), 1);
     }
 
     #[test]
