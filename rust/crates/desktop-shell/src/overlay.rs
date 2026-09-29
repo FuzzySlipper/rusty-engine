@@ -25,9 +25,24 @@ const LOCK_EXIT: &str = "rusty-desktop:pointer-unlock";
 /// a shell-backed one: `requestPointerLock` asks the shell to grab the
 /// cursor, `document.pointerLockElement` reports the element, and the shell
 /// feeds raw motion back through `__rustyDesktopMotion`.
-const POINTER_LOCK_SHIM: &str = r#"(() => {
+///
+/// The off-screen page also keeps Chromium's focus while the native window is
+/// in the background, so the shell reports window focus through
+/// `__rustyDesktopFocus`: the page gets `blur`/`focus` on `window` and
+/// `document.hasFocus()` follows the native window, as in a browser tab.
+const PAGE_SHIM: &str = r#"(() => {
   if (window.__rustyDesktopMotion) return;
   let locked = null;
+  let windowFocused = true;
+  const hasFocus = Document.prototype.hasFocus;
+  Document.prototype.hasFocus = function () {
+    return windowFocused && hasFocus.call(this);
+  };
+  window.__rustyDesktopFocus = (focused) => {
+    if (windowFocused === focused) return;
+    windowFocused = focused;
+    window.dispatchEvent(new FocusEvent(focused ? 'focus' : 'blur'));
+  };
   const change = () => document.dispatchEvent(new Event('pointerlockchange'));
   Object.defineProperty(Document.prototype, 'pointerLockElement', {
     configurable: true,
@@ -72,6 +87,7 @@ pub(crate) struct UiOverlay {
     modifiers: ModifiersState,
     buttons: [bool; 3],
     grabbed: bool,
+    focused: bool,
     motion: (f64, f64),
 }
 
@@ -100,6 +116,7 @@ impl UiOverlay {
             modifiers: ModifiersState::empty(),
             buttons: [false; 3],
             grabbed: false,
+            focused: window.has_focus(),
             motion: (0.0, 0.0),
         })
     }
@@ -124,7 +141,10 @@ impl UiOverlay {
                 NavigationEvent::LoadStart { .. } | NavigationEvent::LoadEnd { .. } => {
                     // Before the page's scripts ask for a lock, and again
                     // after, since a load start may still see the old page.
-                    let _ = self.page.execute_script(POINTER_LOCK_SHIM);
+                    let _ = self.page.execute_script(PAGE_SHIM);
+                    if !self.focused {
+                        self.report_focus();
+                    }
                     if matches!(event, NavigationEvent::LoadStart { .. }) {
                         self.release(window, false);
                     }
@@ -186,6 +206,13 @@ impl UiOverlay {
         }
     }
 
+    /// Tell the page whether the native window has focus.
+    fn report_focus(&mut self) {
+        let _ = self
+            .page
+            .execute_script(&format!("window.__rustyDesktopFocus({});", self.focused));
+    }
+
     pub(crate) fn window_event(&mut self, window: &Window, event: &WindowEvent) {
         match event {
             WindowEvent::Resized(size) => {
@@ -194,9 +221,20 @@ impl UiOverlay {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let _ = self.page.set_scale_factor(*scale_factor as f32);
             }
-            WindowEvent::Focused(false) => self.release(window, true),
+            WindowEvent::Focused(false) => {
+                self.release(window, true);
+                // Buttons and modifiers released while another window has
+                // focus never reach this one; the page clears its own held
+                // input on the blur.
+                self.buttons = [false; 3];
+                self.modifiers = ModifiersState::empty();
+                self.focused = false;
+                self.report_focus();
+            }
             WindowEvent::Focused(true) => {
+                self.focused = true;
                 let _ = self.page.focus();
+                self.report_focus();
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {

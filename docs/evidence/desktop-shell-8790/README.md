@@ -192,3 +192,50 @@ combat.observe` answers over loopback, and `engine.renderer.status` reports
   Absolute motion arrives once. A physical mouse was not available.
 - **Window placement.** The window opens at 1280×720; nothing restores its
   size or position yet.
+
+## Review fix: focus loss reaches the page without pointer lock
+
+The review of `bdaa9cedf` found that `Focused(false)` only ended a pointer
+lock. Outside a lock the page was never told the window lost focus. Chromium's
+off-screen page keeps its own focus, so it got no `blur`, and
+`application-host`'s input capture never cleared its held input. The shell
+also kept its held-button and modifier flags.
+
+**Fix (`desktop-shell/src/overlay.rs`).**
+- The page shim (previously only the pointer-lock shim) now also reports
+  window focus. `window.__rustyDesktopFocus(false)` dispatches `blur` on
+  `window` and makes `document.hasFocus()` false; `true` dispatches `focus`.
+  With `hasFocus()` false, controller sampling also stops while the window is
+  in the background, as in a browser tab.
+- On focus loss the shell ends any lock (as before), clears its held buttons
+  and modifiers, and reports the loss.
+- A page that loads while the window is unfocused is told so once the shim is
+  installed.
+
+**Probe.** Doom ran in window mode on X11 in the private headless KWin, driven
+through XTest, with `RUSTY_CEF_SWITCHES=remote-debugging-port=9333` so the page
+could be read over CDP (`scripts/mouse_probe.py`, `scripts/cdp.mjs`):
+1. hold the right mouse button on the canvas (it does not request a lock);
+2. map an xterm, which takes focus, and release the button over it;
+3. refocus the shell through its title bar and move over the canvas.
+
+| Pack | `blur` seen | `hasFocus()` while unfocused | `pointermove.buttons` after refocus |
+|---|---|---|---|
+| Before (`fbc78ee4c` desktop pack) | no | `true` | `[2, 2, 2]`: the button is still held |
+| After (this fix) | yes, then `focus` on refocus | `false` | `[0, 0, 0]` |
+
+`scripts/focus_probe.py` runs the keyboard version. It holds W, moves focus
+to the xterm, releases W there, and refocuses. With the fix, the player stops
+at focus loss and stays still after refocus, both unlocked (after Escape) and
+locked.
+
+The keyboard case also passes before the fix: winit sends synthetic key
+releases for held keys when a window loses focus, and the shell forwards
+them. It sends no synthetic mouse-button release, which is why the mouse case
+failed.
+
+**Checks.**
+- `cargo clippy -p desktop-shell --all-targets -D warnings`, with and without
+  `web-overlay`, and stable clippy.
+- `cargo fmt --check`.
+- The runtime pack was built with `--desktop`.

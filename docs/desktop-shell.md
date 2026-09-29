@@ -23,6 +23,10 @@ TypeScript UI is composited over it. Decision and measurements:
   so the shell provides it: `requestPointerLock` grabs the native cursor and
   raw mouse motion reaches the page as `pointermove` events with
   `movementX`/`movementY`. Escape and focus loss end the lock.
+  The off-screen page keeps Chromium's focus while the window is in the
+  background, so the shell reports window focus to it: focus loss sends the
+  page a `blur` and makes `document.hasFocus()` false, and the input capture
+  clears its held input on that `blur`, as in a browser, locked or not.
 - **Video.** `render-wgpu` plays video clips (WebM, VP9 profile 0, decoded
   in pure Rust by `render-video`) over the whole window, above the UI, as
   the browser's video element covered the page
