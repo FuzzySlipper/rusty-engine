@@ -231,7 +231,9 @@ its diagnostics remain visible.
 
 Playback cursors advance from admitted Engine update facts. Audio baselines
 resume loops and preserve paused or completed voices; direct sounds and emitter
-creation bursts are not replayed. Continuous emitters restart their cosmetic
+creation bursts are not replayed. Audio is realized either by the browser or,
+with `RUSTY_AUDIO_OUTPUT=device`, by `render-audio` on the runtime's output
+device ([recorded audio](recorded-audio.md#device-realization)). Continuous emitters restart their cosmetic
 simulation from their retained descriptor. Animation baselines carry playback
 cursors and per-clip controller phases, suppressing historical cues and
 completion callbacks. Controller phase anchors initialize fresh realization;

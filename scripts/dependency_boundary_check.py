@@ -40,6 +40,12 @@ RENDER_PRESENTATION_FORBIDDEN = (
     | RENDER_HOST_BACKEND_PACKAGES
     | {"render-projection"}
 )
+# External crates that exactly one workspace crate may depend on, so a
+# device or backend library stays behind that crate's own API.
+EXTERNAL_DEPENDENCY_OWNERS = {
+    "cpal": "render-audio",
+    "kira": "render-audio",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -182,7 +188,24 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                 violations,
             )
 
+    add_external_owner_violations(metadata, violations)
     return sorted(violations)
+
+
+def add_external_owner_violations(metadata: dict[str, Any], violations: set[str]) -> None:
+    workspace_ids = set(metadata["workspace_members"])
+    for package in metadata["packages"]:
+        if package["id"] not in workspace_ids:
+            continue
+        for dependency in package.get("dependencies", []):
+            if dependency.get("kind") == "dev":
+                continue
+            owner = EXTERNAL_DEPENDENCY_OWNERS.get(dependency["name"])
+            if owner is not None and package["name"] != owner:
+                violations.add(
+                    f"{package['name']} depends on {dependency['name']}, "
+                    f"which only {owner} may depend on"
+                )
 
 
 def add_forbidden_render_paths(

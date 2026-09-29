@@ -1,0 +1,12 @@
+[package]
+name = "render-audio"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira = { version = "0.12", default-features = false, features = ["cpal", "wav", "pcm", "ogg", "vorbis", "mp3", "flac"] }
+mint = "0.5"
+render-presentation.workspace = true

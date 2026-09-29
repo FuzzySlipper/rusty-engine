@@ -50,7 +50,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install architecture audit dependency
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep libasound2-dev
 
       - name: Verify
         run: ./scripts/verify.sh

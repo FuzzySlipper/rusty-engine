@@ -733,6 +733,22 @@ impl EngineServiceSet {
             .collect()
     }
 
+    /// Committed retained-audio baseline (voices at their Engine cursors and
+    /// bus state) for an in-process audio realization.
+    pub fn audio_snapshot_frame(
+        &self,
+    ) -> Result<render_presentation::PresentationFrameDiff, CsharpEngineServicesError> {
+        self.audio.snapshot_frame()
+    }
+
+    /// Encoded bytes of an admitted audio clip, shared without copying.
+    pub fn audio_clip_bytes(&self, content_hash: &str) -> Option<Arc<[u8]>> {
+        self.audio
+            .render_resources()
+            .find(|resource| resource.content_hash() == content_hash)
+            .map(CsharpRenderResource::shared_bytes)
+    }
+
     pub fn renderer_resource(
         &self,
         identity: &str,

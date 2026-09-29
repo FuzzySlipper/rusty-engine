@@ -47,11 +47,30 @@ Release/reset/disposal clears the media source, releases its decoder and revokes
 its object URL. Dropping clip ownership also drops an inactive encoded cache.
 
 CoreCLR and NativeAOT hosts deliver the same admitted resources to the same
-browser audio implementation. The dev-host bundle and embedded webview use that
-implementation too; neither Rust composition decodes audio. Headless admission
-alone does not play sound. Decoding runs in the browser media pipeline, not in
-an admitted C# update or Rust simulation step; publication does not await a
-whole-track decode. Browser codec availability still governs realization.
+browser audio implementation by default. Headless admission alone does not play
+sound. Decoding runs in the browser media pipeline, not in an admitted C#
+update or Rust simulation step; publication does not await a whole-track
+decode. Browser codec availability still governs browser realization.
+
+## Device realization
+
+`RUSTY_AUDIO_OUTPUT=device` makes the runtime process play committed audio on
+its default output device (`render-audio`, kira over cpal; on Linux the host
+links `libasound.so.2`). The device opens when the runtime loads and closes when
+it drops; an unknown value or a device that will not open fails the load. Audio
+ops are then removed from the published presentation, so the browser neither
+plays nor reports them. The device follows the runtime: it plays only while the
+product runs, a binding change (Start, Restart, fault) replays the committed
+baseline, and Shutdown stops every voice. Natural completions and device
+diagnostics become the same realization facts the browser reports.
+
+WAV decodes once per clip; Vorbis, MP3 and FLAC stream from their encoded bytes
+per voice (symphonia). **Opus is not decoded on the device path** and reports
+`decodeFailed`. The listener stays at the origin and entity-attached voices
+report `hostFailure`, as in the browser realization today. Spatial voices use
+kira's linear distance falloff between 1 and `attenuation` rather than Web
+Audio's inverse model. The browser realization stays the development default
+until the TypeScript renderer lane is deleted.
 
 See [fixture provenance and browser regression](../fixtures/audio-containers/README.md).
 Product code chooses tracks, loops, crossfades and music policy. The standard

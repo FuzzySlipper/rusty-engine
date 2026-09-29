@@ -157,6 +157,24 @@ class DependencyBoundaryTests(unittest.TestCase):
         )
         self.assertNotEqual(dependency_boundary_check.find_violations(build_metadata), [])
 
+    def test_only_the_owner_may_depend_on_an_owned_external_crate(self) -> None:
+        metadata = metadata_fixture(["render-audio", "csharp-product-runtime"], [])
+        packages = {package["name"]: package for package in metadata["packages"]}
+        packages["render-audio"]["dependencies"] = [{"name": "kira", "kind": None}]
+        packages["csharp-product-runtime"]["dependencies"] = [
+            {"name": "render-audio", "kind": None},
+            {"name": "cpal", "kind": "dev"},
+        ]
+        self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
+
+        packages["csharp-product-runtime"]["dependencies"].append(
+            {"name": "kira", "kind": "build"}
+        )
+        self.assertEqual(
+            dependency_boundary_check.find_violations(metadata),
+            ["csharp-product-runtime depends on kira, which only render-audio may depend on"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

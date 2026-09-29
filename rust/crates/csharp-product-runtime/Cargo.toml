@@ -20,6 +20,7 @@ csharp-engine-abi.workspace = true
 csharp-engine-services.workspace = true
 product-dev-host.workspace = true
 runtime-diagnostics.workspace = true
+render-audio.workspace = true
 render-presentation.workspace = true
 runtime-input.workspace = true
 runtime-lifecycle.workspace = true

@@ -22,6 +22,7 @@ members = [
     "rust/crates/environment-authoring",
     "rust/crates/render-model",
     "rust/crates/render-presentation",
+    "rust/crates/render-audio",
     "rust/crates/render-projection",
     "rust/crates/engine-spatial",
     "rust/crates/entity-state",
@@ -70,6 +71,7 @@ environment-authoring = { path = "rust/crates/environment-authoring" }
 engine-spatial = { path = "rust/crates/engine-spatial" }
 render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
+render-audio = { path = "rust/crates/render-audio" }
 render-projection = { path = "rust/crates/render-projection" }
 entity-state = { path = "rust/crates/entity-state" }
 voxel-asset = { path = "rust/crates/voxel-asset" }

@@ -972,6 +972,7 @@ fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProd
     })
 }
 
+mod audio_output;
 /// A loaded trusted C# product adapted to the existing local browser host.
 mod playtest;
 
@@ -1006,6 +1007,8 @@ pub struct CsharpProductRuntime {
     shutdown_called: bool,
     diagnostics: ProductDevLog,
     pending_update_attribution: Option<ProductDevUpdateAttribution>,
+    /// Present when audio plays on this process's output device.
+    audio_output: Option<audio_output::AudioOutput>,
 }
 
 // The development host serializes every call with one mutex. The native handle
@@ -1075,6 +1078,7 @@ impl CsharpProductRuntime {
         load_api: impl FnOnce() -> Result<LoadedProductApi, CsharpProductRuntimeError>,
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
+        let audio_output = audio_output::AudioOutput::from_environment()?;
         let mut input_mappings = CompiledInputMappings::standard(
             config.direct_intents.clone(),
             config.physical_mappings.clone(),
@@ -1190,6 +1194,12 @@ impl CsharpProductRuntime {
                 return Err(error);
             }
         };
+        let mut initial_output = initial_output;
+        if audio_output.is_some() {
+            // Retained voices from create reach the device in the Start
+            // baseline; the device does not play before Start.
+            audio_output::take_audio_ops(&mut initial_output);
+        }
         let initial_output = Some(initial_output);
         observe_product_runtime(&api, handle, lifecycle.readout());
         if let Some(replacement) = initial_input_mapping_replacement {
@@ -1215,6 +1225,7 @@ impl CsharpProductRuntime {
             shutdown_called: false,
             diagnostics: config.diagnostics,
             pending_update_attribution: None,
+            audio_output,
         })
     }
 
@@ -1963,6 +1974,9 @@ impl CsharpProductRuntime {
             .iter()
             .map(NativeInputOwned::as_native)
             .collect();
+        if let Some(audio) = &mut self.audio_output {
+            audio.report(&mut self.services)?;
+        }
         self.services
             .begin_update_call(ui_binding(&self.lifecycle), facts);
         let callback_started = Instant::now();
@@ -2073,6 +2087,9 @@ impl CsharpProductRuntime {
                 finished.input_mapping_replacement = call.take_input_mapping_replacement();
                 match service_outputs(call.take_output()) {
                     Ok(mut outputs) => {
+                        if let Some(audio) = &mut self.audio_output {
+                            audio.realize(&self.services, &mut outputs);
+                        }
                         outputs.retain(|output| !is_empty_frame(output));
                         finished.outputs = outputs;
                     }
@@ -2250,6 +2267,7 @@ impl CsharpProductRuntime {
         // The product's own lifecycle callback ran (or threw); the transition
         // still applies, so a failure lands in the lifecycle's new state.
         transition(&mut self.lifecycle).map_err(lifecycle_error)?;
+        self.follow_lifecycle_with_audio();
         if let Some(failure) = finished.failure {
             self.fault_after_call(
                 Some(&failure),
@@ -2288,10 +2306,14 @@ impl CsharpProductRuntime {
     }
 
     fn snapshot_outputs(&self) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
-        service_outputs(
+        let mut outputs = service_outputs(
             self.services
                 .snapshot_outputs(ui_binding(&self.lifecycle))?,
-        )
+        )?;
+        if self.audio_output.is_some() {
+            audio_output::take_audio_ops(&mut outputs);
+        }
+        Ok(outputs)
     }
 
     fn receipt(
@@ -2578,9 +2600,26 @@ impl CsharpProductRuntime {
     fn rebind_input(&mut self, reason: InputClearReason) -> Result<(), CsharpProductRuntimeError> {
         self.rebind_input_in_place(reason)?;
         self.services.reset_audio_realization_owner();
+        if let Some(audio) = &mut self.audio_output {
+            audio.rebaseline(&self.services)?;
+        }
+        self.follow_lifecycle_with_audio();
         self.services.reset_animation_realization_owner();
         self.services.reset_ghost_plate_realization_owner();
         Ok(())
+    }
+
+    /// Device audio plays only while the product runs: Engine cursors do not
+    /// advance otherwise, so the device holds its position. Shutdown ends
+    /// every voice.
+    fn follow_lifecycle_with_audio(&mut self) {
+        let Some(audio) = &mut self.audio_output else {
+            return;
+        };
+        match self.lifecycle.state() {
+            RuntimeState::Shutdown => audio.silence(),
+            state => audio.set_suspended(state != RuntimeState::Running),
+        }
     }
 
     /// Rebind input for a same-incarnation control fence. The browser keeps
