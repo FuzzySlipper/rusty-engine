@@ -551,6 +551,35 @@ fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteApp
 
 #[cfg(test)]
 #[test]
+fn a_released_body_stays_servable_through_the_next_call() {
+    // #8771: output of the releasing call can still name the body; the
+    // browser fetches it after the call, so it stays until the call after next.
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("texture")
+        .handle;
+    bridge
+        .destroy_resource(texture)
+        .expect("release in the same call");
+    bridge.end_call();
+    let released =
+        |bridge: &RuntimeAppearanceBridge| bridge.state.recently_released_resources().count();
+    assert_eq!(released(&bridge), 1, "after the releasing call");
+    bridge.begin_call();
+    bridge.end_call();
+    assert_eq!(released(&bridge), 1, "through the next call");
+    bridge.begin_call();
+    bridge.end_call();
+    assert_eq!(released(&bridge), 0, "gone after that");
+}
+
+#[cfg(test)]
+#[test]
 fn sprite_atlas_admits_more_frames_than_the_former_cap() {
     // 5,000 frames: past the former 4,096.
     let mut content_resources = BTreeMap::new();
@@ -1499,6 +1528,17 @@ thread_local! {
 }
 
 /// Monotonic slots keep stale handles invalid while released payloads leave memory.
+impl RuntimeAppearanceData {
+    /// Released bodies the browser may still fetch for recent output.
+    pub(crate) fn recently_released_resources(
+        &self,
+    ) -> impl Iterator<Item = &CsharpRenderResource> {
+        self.released_this_call
+            .iter()
+            .chain(&self.released_last_call)
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct RenderResourceSlots {
     entries: BTreeMap<usize, CsharpRenderResource>,
@@ -1579,6 +1619,12 @@ pub(crate) struct RuntimeAppearanceData {
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
     next_material: u64,
     pub(crate) render_resources: RenderResourceSlots,
+    /// Bodies released during the current call, and during the call before
+    /// it. The browser fetches a body after it receives the call's output, so
+    /// a texture defined and released within one call (#8771) stays servable
+    /// for one more call instead of forcing a renderer rebaseline.
+    released_this_call: Vec<CsharpRenderResource>,
+    released_last_call: Vec<CsharpRenderResource>,
     resource_paths: BTreeMap<(String, NativeTextureFilter, NativeTextureWrap), u64>,
     resource_identities: BTreeMap<String, u64>,
     /// Each explicit resource admission gives the caller one releasable owner.
@@ -1890,6 +1936,8 @@ impl RuntimeAppearanceBridge {
             appearance_materials: BTreeMap::new(),
             next_material: 1,
             render_resources: RenderResourceSlots::default(),
+            released_this_call: Vec::new(),
+            released_last_call: Vec::new(),
             resource_paths: BTreeMap::new(),
             resource_identities: BTreeMap::new(),
             resource_open_counts: BTreeMap::new(),
@@ -2028,7 +2076,11 @@ impl RuntimeAppearanceBridge {
     fn begin_call_with_update(&mut self, admitted_update: Option<NativeProductUpdateFacts>) {
         // Move the state into the call and leave the idle placeholder behind,
         // so the call's first write does not copy the whole graphics state.
-        let state = std::mem::replace(&mut self.state, self.idle_state.clone());
+        let mut state = std::mem::replace(&mut self.state, self.idle_state.clone());
+        if !state.released_this_call.is_empty() || !state.released_last_call.is_empty() {
+            let released = std::mem::take(&mut state.released_this_call);
+            state.released_last_call = released;
+        }
         self.staged = Some(RuntimeAppearanceCall {
             state,
             admitted_update,
@@ -10361,6 +10413,7 @@ fn remove_resource(
     state.resource_paths.retain(|_, mapped| *mapped != handle);
     state.resource_open_counts.remove(&handle);
     state.animation_clip_pack_resources.remove(&handle);
+    state.released_this_call.push(resource.clone());
     Ok(resource)
 }
 

@@ -1,0 +1,23 @@
+{
+  "mode": "next",
+  "kind": "mesh",
+  "seconds": 20,
+  "finalState": "ready",
+  "finalFailure": null,
+  "stateSamples": {
+    "ready": 189,
+    "degraded": 0,
+    "failed": 0,
+    "other": 0
+  },
+  "network": {
+    "resource200": 0,
+    "resource404": 0,
+    "resourceOther": 0,
+    "fresh": 1
+  },
+  "freshStreamsAfterFirstReady": 0,
+  "churnCreated": 22,
+  "churnReleased": 22,
+  "pageErrors": []
+}

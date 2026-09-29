@@ -735,6 +735,7 @@ impl EngineServiceSet {
             .state
             .render_resources
             .iter()
+            .chain(self.appearance.state.recently_released_resources())
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
             .chain(self.render_output.resources())
@@ -752,6 +753,7 @@ impl EngineServiceSet {
             .state
             .render_resources
             .iter()
+            .chain(self.appearance.state.recently_released_resources())
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
             .chain(self.render_output.resources())
