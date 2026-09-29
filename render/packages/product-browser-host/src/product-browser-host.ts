@@ -76,13 +76,6 @@ export type ProductBrowserHostFaultDisposition =
   | 'resync-required'
   | 'terminal';
 
-/** Closed source-owned recovery facts for a rejected runtime result. */
-export interface ProductBrowserRuntimeRecovery {
-  readonly mutation: 'not-applied' | 'committed' | 'unknown';
-  readonly invalidatedScope: 'none' | 'input' | 'outputs' | 'incarnation';
-  readonly nextAction: 'continue' | 'rebaseline' | 'replace-incarnation';
-}
-
 export interface ProductBrowserRuntimeOperationResult {
   readonly accepted: boolean;
   readonly code: string;
@@ -94,7 +87,6 @@ export interface ProductBrowserRuntimeOperationResult {
   /** Last simulation step admitted before a resync-required operation result. */
   readonly admittedThrough?: string;
   readonly readout?: ProductBrowserRuntimeReadout;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 
@@ -113,7 +105,6 @@ export interface ProductBrowserRuntimeInputResult {
   readonly nextInputSequence?: string;
   readonly binding?: RustyApplicationRuntimeIdentity;
   readonly readout?: ProductBrowserRuntimeReadout;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 
@@ -157,7 +148,6 @@ export interface ProductBrowserAudioFeedbackResult {
   readonly runtime: RustyApplicationRuntimeIdentity;
   /** The accepted submitted boundary; absent when the fixed report had no facts. */
   readonly acceptedThroughFactId?: string;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 
@@ -194,7 +184,6 @@ export interface ProductBrowserAnimationFeedbackResult {
   readonly disposition: ProductBrowserHostFaultDisposition;
   readonly runtime: RustyApplicationRuntimeIdentity;
   readonly acceptedThroughFactId?: string;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 
@@ -227,7 +216,6 @@ export interface ProductBrowserGhostPlateFeedbackResult {
   readonly code: string;
   readonly disposition: ProductBrowserHostFaultDisposition;
   readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 
@@ -256,7 +244,6 @@ export interface ProductBrowserRendererDiagnosticsFeedbackResult {
   readonly code: string;
   readonly disposition: ProductBrowserHostFaultDisposition;
   readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 
@@ -282,7 +269,6 @@ export interface ProductBrowserTimelineCompletionResult {
   readonly ticket: string;
   readonly binding?: RustyApplicationRuntimeIdentity;
   readonly readout?: ProductBrowserRuntimeReadout;
-  readonly recovery?: ProductBrowserRuntimeRecovery;
   readonly diagnostic?: string;
 }
 

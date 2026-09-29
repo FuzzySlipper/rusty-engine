@@ -397,17 +397,11 @@ test('local transport posts large deep timeline data as a detached immutable sna
   adapter.dispose();
 });
 
-test('rejected runtime recovery facts remain decoded result facts rather than transport failures', async () => {
-  const recovery = {
-    mutation: 'not-applied',
-    invalidatedScope: 'none',
-    nextAction: 'continue',
-  } as const;
+test('rejected runtime results remain decoded result facts rather than transport failures', async () => {
   const rejected = {
     accepted: false,
     code: 'CSHARP_NEW_SOURCE_REJECTION',
     disposition: 'rejected-recoverable',
-    recovery,
     diagnostic: 'runtime rejected before admission',
   } as const;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -432,24 +426,24 @@ test('rejected runtime recovery facts remain decoded result facts rather than tr
     eventSource: FakeEventSource,
   });
 
-  assert.deepEqual((await adapter.advanceRealtime('1')).recovery, recovery);
-  assert.deepEqual((await adapter.input([])).recovery, recovery);
-  assert.deepEqual((await adapter.reportAudioFeedback({
+  assert.equal((await adapter.advanceRealtime('1')).disposition, 'rejected-recoverable');
+  assert.equal((await adapter.input([])).disposition, 'rejected-recoverable');
+  assert.equal((await adapter.reportAudioFeedback({
     runtime: RUNTIME, replaceOwner: false, evictedFactCount: '0', facts: [],
-  })).recovery, recovery);
-  assert.deepEqual((await adapter.reportAnimationFeedback({
+  })).disposition, 'rejected-recoverable');
+  assert.equal((await adapter.reportAnimationFeedback({
     runtime: RUNTIME, replaceOwner: false, evictedFactCount: '0', facts: [],
-  })).recovery, recovery);
-  assert.deepEqual((await adapter.reportGhostPlateFeedback({
+  })).disposition, 'rejected-recoverable');
+  assert.equal((await adapter.reportGhostPlateFeedback({
     runtime: RUNTIME, replaceOwner: false, facts: [],
-  })).recovery, recovery);
-  assert.deepEqual((await adapter.reportRendererDiagnostics?.({
+  })).disposition, 'rejected-recoverable');
+  assert.equal((await adapter.reportRendererDiagnostics?.({
     runtime: RUNTIME, snapshot: { schemaVersion: 1 },
-  } as never))?.recovery, recovery);
-  assert.deepEqual((await adapter.completeTimeline?.({
+  } as never))?.disposition, 'rejected-recoverable');
+  assert.equal((await adapter.completeTimeline?.({
     ticket: '1', runtime: RUNTIME, correlation: 'request-1', outcome: { kind: 'success' },
     provenance: { correlation: 'request-1' },
-  }))?.recovery, recovery);
+  }))?.disposition, 'rejected-recoverable');
   adapter.dispose();
 });
 

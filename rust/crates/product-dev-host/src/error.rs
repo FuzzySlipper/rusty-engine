@@ -1,13 +1,6 @@
 use std::{fmt, io};
 
-/// Product-dev spellings remain public for transport and API continuity. The
-/// host-neutral runtime/session vocabulary owns their representation and wire
-/// names.
-pub use runtime_session::{
-    RuntimeInvalidatedScope as ProductDevInvalidatedScope,
-    RuntimeMutationCertainty as ProductDevMutationCertainty,
-    RuntimeNextAction as ProductDevNextAction, RuntimeRecovery as ProductDevRuntimeRecovery,
-};
+use crate::ProductDevFaultDisposition;
 
 /// A stable, bounded diagnostic emitted by the development host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,47 +50,35 @@ impl From<runtime_diagnostics::RuntimeDiagnosticsError> for ProductDevHostError 
 pub struct ProductDevRuntimeError {
     code: String,
     diagnostic: String,
-    recovery: ProductDevRuntimeRecovery,
+    disposition: ProductDevFaultDisposition,
 }
 
 impl ProductDevRuntimeError {
-    /// Constructs an unclassified runtime failure.  Unknown failures are
-    /// intentionally conservative: once a runtime operation may have crossed
-    /// into product or Engine ownership, replacement is required.  Known
-    /// source conditions should use one of the classified constructors below.
+    /// Constructs a failure that may have crossed into product or Engine
+    /// ownership. Known source conditions use one of the constructors below.
     pub fn new(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
-        Self::with_recovery(
-            code,
-            diagnostic,
-            ProductDevRuntimeRecovery::incarnation_tainted(),
-        )
+        Self::with_disposition(code, diagnostic, ProductDevFaultDisposition::Terminal)
     }
 
     /// Constructs a failure known to have been rejected before mutation.
     pub fn new_not_applied(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
-        Self::with_recovery(code, diagnostic, ProductDevRuntimeRecovery::not_applied())
-    }
-
-    /// Constructs a failure whose retained output projection must be rebuilt,
-    /// but whose runtime incarnation is still the current owner.
-    pub fn new_output_rebaseline(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
-        Self::with_recovery(
+        Self::with_disposition(
             code,
             diagnostic,
-            ProductDevRuntimeRecovery::output_rebaseline(),
+            ProductDevFaultDisposition::RejectedRecoverable,
         )
     }
 
     /// Keeps the complete diagnostic, including multiline managed stack traces.
-    pub fn with_recovery(
+    fn with_disposition(
         code: impl Into<String>,
         diagnostic: impl Into<String>,
-        recovery: ProductDevRuntimeRecovery,
+        disposition: ProductDevFaultDisposition,
     ) -> Self {
         Self {
             code: code.into(),
             diagnostic: diagnostic.into(),
-            recovery,
+            disposition,
         }
     }
 
@@ -109,7 +90,7 @@ impl ProductDevRuntimeError {
         &self.diagnostic
     }
 
-    pub const fn recovery(&self) -> ProductDevRuntimeRecovery {
-        self.recovery
+    pub const fn disposition(&self) -> ProductDevFaultDisposition {
+        self.disposition
     }
 }

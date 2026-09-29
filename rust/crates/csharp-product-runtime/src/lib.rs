@@ -2335,7 +2335,6 @@ impl CsharpProductRuntime {
         if self.pending_recovery_outputs.is_empty() {
             self.pending_inputs.clear();
         }
-        let recovery = error.recovery();
         self.publish_diagnostic_as(&error, ProductDevFaultDisposition::ResyncRequired);
         let result = ProductDevOperationResult::resync_required(
             operation,
@@ -2349,7 +2348,6 @@ impl CsharpProductRuntime {
                 .map(CanonicalU64::new),
             error.code().to_owned(),
             error.diagnostic().to_owned(),
-            recovery,
         )
         .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, self.take_pending_recovery_outputs())

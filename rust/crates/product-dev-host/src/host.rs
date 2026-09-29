@@ -2183,9 +2183,9 @@ where
                     )
                     .expect("runtime diagnostics are bounded"),
                 );
-                let mutation = error.recovery().mutation();
+                let disposition = error.disposition();
                 return Ok((match error_result(error) {
-                    Ok(result) => json_response(200, &result).with_runtime_mutation(mutation),
+                    Ok(result) => json_response(200, &result).with_runtime_error(disposition),
                     Err(host_error) => {
                         HttpResponse::error(500, host_error.code(), host_error.detail())
                     }
@@ -3574,14 +3574,11 @@ impl HttpResponse {
         self
     }
 
-    fn with_runtime_mutation(mut self, mutation: crate::ProductDevMutationCertainty) -> Self {
-        self.commit_disposition = Some(match mutation {
-            crate::ProductDevMutationCertainty::NotApplied => CommitDisposition::NotApplied,
-            crate::ProductDevMutationCertainty::Unknown => CommitDisposition::Unknown,
-            crate::ProductDevMutationCertainty::Committed => {
-                self.delivery_certainty = Some(ResponseDeliveryCertainty::Settled);
-                CommitDisposition::Committed
-            }
+    /// Only a failure rejected before mutation is known not to have applied.
+    fn with_runtime_error(mut self, disposition: crate::ProductDevFaultDisposition) -> Self {
+        self.commit_disposition = Some(match disposition {
+            crate::ProductDevFaultDisposition::RejectedRecoverable => CommitDisposition::NotApplied,
+            _ => CommitDisposition::Unknown,
         });
         self
     }

@@ -44,7 +44,6 @@ export type {
   ProductBrowserRealtimeAdvanceOwner,
   ProductBrowserRuntimeOperationResult,
   ProductBrowserRuntimeOperationKind,
-  ProductBrowserRuntimeRecovery,
   ProductBrowserRuntimeOutput,
   ProductBrowserRuntimeReadout,
   ProductBrowserRuntimeTerminalFailure,

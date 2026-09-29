@@ -1761,7 +1761,7 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
 }
 
 #[test]
-fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
+fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
     let bundle = || {
         ProductDevBundle::new(vec![ProductDevBundleEntry::new(
             "index.html",
@@ -1786,7 +1786,8 @@ fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
         "{rejected}"
     );
     assert!(rejected.contains("DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED"));
-    assert!(rejected.contains("\"mutation\":\"not-applied\""));
+    assert!(rejected.contains("\"disposition\":\"rejected-recoverable\""));
+    assert!(!rejected.contains("\"recovery\""));
     assert!(!rejected.contains("X-Rusty-Output-Through:"));
     assert!(!host.termination_requested());
     let accepted = request(&host.origin(), "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
@@ -1807,7 +1808,7 @@ fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
         "{rejected}"
     );
     assert!(rejected.contains("FIXTURE_CALLBACK_UNKNOWN"));
-    assert!(rejected.contains("\"mutation\":\"unknown\""));
+    assert!(rejected.contains("\"disposition\":\"terminal\""));
     assert!(
         !host.termination_requested(),
         "a runtime error is reported; it never ends the host"
