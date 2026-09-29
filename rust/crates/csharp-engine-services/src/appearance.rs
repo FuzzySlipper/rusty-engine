@@ -9,21 +9,22 @@ use render_presentation::{
     validate_animation_catalog, AnimationCatalog, AnimationClipAsset, AnimationCondition,
     AnimationControllerService, AnimationGraphDefinition, AnimationMotionDefinition,
     AnimationParameterDefinition, AnimationParameterKind, AnimationParameterValue,
-    AnimationProjectionTarget, AnimationProjector, AnimationStateDefinition,
-    AnimationTransitionDefinition, AnimationTransitionFactMoment, BillboardAlignment,
-    BillboardAnchor, BillboardContent, BillboardDescriptor, BillboardEdgeBehavior,
-    BillboardFontRef, BillboardHandle, BillboardIndicator, BillboardLayer, BillboardLayoutPolicy,
-    BillboardLayoutSizing, BillboardMeter, BillboardMeterFillDirection, BillboardOverlapBehavior,
-    BillboardPatch, BillboardProjectionDiagnosticCode, BillboardProjectionOp, BillboardProjector,
-    BillboardSafeArea, BillboardStatusCue, BillboardStyle, BillboardTextureRef,
-    GhostPlateAnchorPolicy, GhostPlateCaptureLighting, GhostPlateCaptureLightingMode,
-    GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlateHandle,
-    GhostPlateMapping, GhostPlatePatch, GhostPlatePlacement, GhostPlateProjectionOp,
-    GhostPlateProjector, GhostPlateShellMode, ParticleAnchor, ParticleCollisionDescriptor,
-    ParticleCollisionLimitBehavior, ParticleCollisionVolume, ParticleEmissionAdmissionOutcome,
-    ParticleEmitterDescriptor, ParticleEmitterHandle, ParticleEmitterPatch,
-    ParticleProjectionDiagnosticCode, ParticleProjectionOp, ParticleProjector, ParticleSpriteRef,
-    ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+    AnimationProjectionDescriptor, AnimationProjectionTarget, AnimationProjector,
+    AnimationStateDefinition, AnimationTransitionDefinition, AnimationTransitionFactMoment,
+    BillboardAlignment, BillboardAnchor, BillboardContent, BillboardDescriptor,
+    BillboardEdgeBehavior, BillboardFontRef, BillboardHandle, BillboardIndicator, BillboardLayer,
+    BillboardLayoutPolicy, BillboardLayoutSizing, BillboardMeter, BillboardMeterFillDirection,
+    BillboardOverlapBehavior, BillboardPatch, BillboardProjectionDiagnosticCode,
+    BillboardProjectionOp, BillboardProjector, BillboardSafeArea, BillboardStatusCue,
+    BillboardStyle, BillboardTextureRef, GhostPlateAnchorPolicy, GhostPlateCaptureLighting,
+    GhostPlateCaptureLightingMode, GhostPlateCaptureSettings, GhostPlateConfig,
+    GhostPlateDescriptor, GhostPlateHandle, GhostPlateMapping, GhostPlatePatch,
+    GhostPlatePlacement, GhostPlateProjectionOp, GhostPlateProjector, GhostPlateShellMode,
+    ParticleAnchor, ParticleCollisionDescriptor, ParticleCollisionLimitBehavior,
+    ParticleCollisionVolume, ParticleEmissionAdmissionOutcome, ParticleEmitterDescriptor,
+    ParticleEmitterHandle, ParticleEmitterPatch, ParticleProjectionDiagnosticCode,
+    ParticleProjectionOp, ParticleProjector, ParticleSpriteRef, ParticleVisual,
+    PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 use render_projection::{
     Appearance, AppearanceProjectionError, RuntimeAppearanceCatalog, RuntimeAppearanceFact,
@@ -1714,6 +1715,9 @@ struct AnimationController {
     projected: bool,
     last_target: Option<RenderHandle>,
     last_revision: Option<u64>,
+    /// The projection detached because its target object was recreated; the
+    /// next flush recreates it on the new target with the same clip phases.
+    detached: Option<AnimationProjectionDescriptor>,
 }
 
 #[cfg(test)]
@@ -2066,22 +2070,21 @@ impl RuntimeAppearanceBridge {
     /// released. A release failure is kept on the call for the caller.
     pub(crate) fn take_staged_call(&mut self) -> RuntimeAppearanceCall {
         self.operation_error = None;
-        let mut call = self
+        let pending = self
             .staged
-            .take()
-            .expect("every product call begins an appearance call");
-        if std::mem::take(&mut call.resource_releases_pending) {
-            match call.state.projector.reconcile() {
-                Ok(frame) => push_extra_frame(&mut call, frame),
-                Err(error) => {
-                    call.release_error = Some(CsharpEngineServicesError::new(
-                        "CSHARP_RESOURCE_RELEASE",
-                        format!("{error:?}"),
-                    ))
-                }
+            .as_mut()
+            .is_some_and(|call| std::mem::take(&mut call.resource_releases_pending));
+        if pending {
+            if let Err(error) = self.publish_resource_releases() {
+                self.staged
+                    .as_mut()
+                    .expect("every product call begins an appearance call")
+                    .release_error = Some(error);
             }
         }
-        call
+        self.staged
+            .take()
+            .expect("every product call begins an appearance call")
     }
 
     pub(crate) fn commit(&mut self, call: RuntimeAppearanceCall) {
@@ -4089,27 +4092,10 @@ impl RuntimeAppearanceBridge {
         // must not become invisible resource retainers.
         let suffix = appearance.value.to_string();
         let mesh_asset = format!("mesh/native-{suffix}");
-        if staged
-            .state
-            .projector
-            .resources()
-            .static_meshes
-            .iter()
-            .any(|mesh| mesh.asset == mesh_asset)
-        {
-            let frame = staged
-                .state
-                .projector
-                .release_static_mesh(&mesh_asset)
-                .map_err(|error| {
-                    CsharpEngineServicesError::new("CSHARP_MESH_RELEASE", format!("{error:?}"))
-                })?;
-            push_extra_frame(staged, frame);
-        }
         let resources = staged.state.projector.resources_mut();
         resources
             .static_meshes
-            .retain(|mesh| mesh.asset != format!("mesh/native-{suffix}"));
+            .retain(|mesh| mesh.asset != mesh_asset);
         resources.materials.retain(|material| {
             !material
                 .id
@@ -4725,15 +4711,15 @@ impl RuntimeAppearanceBridge {
             ));
         }
         let asset = mesh.asset.clone();
-        let frame = staged
+        staged
             .state
             .projector
-            .release_static_mesh(&asset)
-            .map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_MESH_RELEASE", format!("{error:?}"))
-            })?;
+            .resources_mut()
+            .static_meshes
+            .retain(|mesh| mesh.asset != asset);
         staged.state.mesh_resources.remove(&resource.value);
-        push_extra_frame(staged, frame);
+        // The release is published with the call's other resource changes.
+        staged.resource_releases_pending = true;
         Ok(())
     }
 
@@ -7043,6 +7029,7 @@ impl RuntimeAppearanceBridge {
                 projected: false,
                 last_target: None,
                 last_revision: None,
+                detached: None,
             },
         );
         Ok(NativeAnimationControllerHandle { value: handle })
@@ -7469,6 +7456,28 @@ impl RuntimeAppearanceBridge {
         }
         let targets = BTreeSet::from([target]);
         let meta = PresentationOpMeta::new(sequence);
+        if let Some(mut descriptor) = controller.detached.take() {
+            // Its target was recreated: create the same projection on the new
+            // target, then update it below if the state has since moved on.
+            let revision = descriptor.controller.revision;
+            descriptor.target = target;
+            let op = controller
+                .projector
+                .create_from_descriptor(&assets, &targets, descriptor, meta)
+                .map_err(|diagnostic| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_ANIMATION_PROJECTION",
+                        diagnostic.message,
+                    )
+                })?;
+            controller.projected = true;
+            controller.last_target = Some(target);
+            controller.last_revision = Some(revision);
+            let mut frame = PresentationFrameDiff::new();
+            frame.ops.push(op);
+            push_presentation_frame(staged, frame);
+            return self.flush_animation_controller(controller_handle);
+        }
         let op = if controller.projected {
             controller
                 .projector
@@ -7804,9 +7813,22 @@ impl RuntimeAppearanceBridge {
             }
             error => CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}")),
         })?;
+        detach_retargeted_controllers(staged)?;
         append_projection_frame(staged, frame)?;
         self.flush_all_animations()?;
         Ok(())
+    }
+
+    /// Publishes the call's resource releases and any appearance changes
+    /// still pending in the projector.
+    fn publish_resource_releases(&mut self) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let frame = staged.state.projector.reconcile().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_RESOURCE_RELEASE", format!("{error:?}"))
+        })?;
+        detach_retargeted_controllers(staged)?;
+        push_extra_frame(staged, frame);
+        self.flush_all_animations()
     }
 }
 
@@ -8152,6 +8174,46 @@ fn project_light_change(
             CsharpEngineServicesError::new("CSHARP_LIGHT_PROJECTION", format!("{error:?}"))
         })?;
     append_projection_frame(staged, frame)
+}
+
+/// Detaches every projected animation controller whose target the projector
+/// has just recreated. Its Destroy goes out before the graphics frame that
+/// removes the old target; the next flush recreates it on the new target.
+fn detach_retargeted_controllers(
+    staged: &mut RuntimeAppearanceCall,
+) -> Result<(), CsharpEngineServicesError> {
+    let data: &mut RuntimeAppearanceData = &mut staged.state;
+    let mut frame = PresentationFrameDiff::new();
+    for controller in data.animation_controllers.values_mut() {
+        if !controller.projected {
+            continue;
+        }
+        let Some(instance) = data.animation_instances.get(&controller.instance) else {
+            continue;
+        };
+        let current = data.projector.object_handle(instance.object_id);
+        if current.is_none() || current == controller.last_target {
+            continue;
+        }
+        let (op, descriptor) = controller
+            .projector
+            .detach_entity(
+                instance.object_id,
+                PresentationOpMeta::new(staged.presentation_frames),
+            )
+            .map_err(|diagnostic| {
+                CsharpEngineServicesError::new("CSHARP_ANIMATION_PROJECTION", diagnostic.message)
+            })?;
+        frame.ops.push(op);
+        controller.projected = false;
+        controller.last_target = None;
+        controller.last_revision = None;
+        controller.detached = Some(descriptor);
+    }
+    if !frame.ops.is_empty() {
+        push_presentation_frame(staged, frame);
+    }
+    Ok(())
 }
 
 fn append_projection_frame(
@@ -12568,7 +12630,8 @@ pub(super) mod tests {
         bridge
             .destroy_appearance(second)
             .expect("last static appearance release");
-        let staged = bridge.staged.as_mut().unwrap();
+        // Releases are published with the call's other resource changes.
+        let mut staged = bridge.take_staged_call();
         assert!(staged.state.render_resources.is_empty());
         assert!(staged.render_frames().iter().any(|frame| frame.ops.iter().any(|op| {
             matches!(op, render_model::RenderDiff::ReleaseStaticMesh { asset } if asset == &format!("mesh/native-{}", first.value))
@@ -13416,6 +13479,217 @@ pub(super) mod tests {
         assert_eq!(readout.admitted_meshes, 1);
         assert_eq!(readout.admitted_clip_packs, 1);
         assert_eq!(readout.retained_clip_pack_associations, 1);
+    }
+
+    /// Opens a call and creates an animated appearance with a live animation
+    /// controller for object 7. Returns the appearance and the controller.
+    fn animated_controller_setup() -> (
+        RuntimeAppearanceBridge,
+        NativeAppearanceHandle,
+        NativeAnimationControllerHandle,
+    ) {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let path = b"character.glb";
+        let graph_id = b"controller";
+        let idle = b"idle";
+
+        bridge.begin_call();
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted animated GLB");
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .expect("animated appearance");
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 7,
+            })
+            .expect("retained animation instance");
+        let graph = bridge
+            .create_animation_graph(&NativeAnimationGraphCreateRequest {
+                resource,
+                graph_id: NativeUtf8Slice {
+                    bytes: graph_id.as_ptr(),
+                    len: graph_id.len(),
+                },
+                version: 1,
+                initial_state_id: NativeUtf8Slice {
+                    bytes: idle.as_ptr(),
+                    len: idle.len(),
+                },
+            })
+            .expect("animation graph");
+        bridge
+            .define_animation_state(&NativeAnimationStateDefinitionRequest {
+                graph,
+                state_id: NativeUtf8Slice {
+                    bytes: idle.as_ptr(),
+                    len: idle.len(),
+                },
+                motion_kind: NativeAnimationMotionKind::Clip,
+                clip_a: NativeUtf8Slice {
+                    bytes: idle.as_ptr(),
+                    len: idle.len(),
+                },
+                clip_b: NativeUtf8Slice {
+                    bytes: std::ptr::null(),
+                    len: 0,
+                },
+                parameter_id: NativeUtf8Slice {
+                    bytes: std::ptr::null(),
+                    len: 0,
+                },
+                minimum_milli: 0,
+                maximum_milli: 0,
+                speed_milli: 1000,
+            })
+            .expect("idle graph state");
+        let controller = bridge
+            .create_animation_controller(NativeAnimationControllerCreateRequest {
+                graph,
+                instance,
+                tick_duration_millis: 16,
+            })
+            .expect("animation controller");
+        (bridge, appearance, controller)
+    }
+
+    fn animation_ops(output: &RuntimeAppearanceCallOutput) -> Vec<&'static str> {
+        let RuntimeAppearanceCallOutput::Presentation(frame) = output else {
+            return Vec::new();
+        };
+        frame
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                PresentationOp::Animation { op, .. } => Some(match op {
+                    render_presentation::AnimationProjectionOp::Create { .. } => "create",
+                    render_presentation::AnimationProjectionOp::Update { .. } => "update",
+                    render_presentation::AnimationProjectionOp::Destroy { .. } => "destroy",
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The controller's projected target after the open call.
+    fn controller_target(bridge: &RuntimeAppearanceBridge) -> Option<RenderHandle> {
+        bridge.staged.as_ref().and_then(|call| {
+            call.outputs.iter().rev().find_map(|output| match output {
+                RuntimeAppearanceCallOutput::Presentation(frame) => {
+                    frame.ops.iter().rev().find_map(|op| match op {
+                        PresentationOp::Animation {
+                            op:
+                                render_presentation::AnimationProjectionOp::Create {
+                                    descriptor, ..
+                                },
+                            ..
+                        } => Some(descriptor.target),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        })
+    }
+
+    #[test]
+    fn animation_controller_follows_its_target_when_the_target_is_recreated() {
+        // #8737 review: a layer change recreates the object with a new
+        // renderer handle, and the controller must follow it.
+        let (mut bridge, appearance, _controller) = animated_controller_setup();
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("controller target");
+        bridge.end_call();
+
+        bridge.begin_call();
+        let old = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .object_handle(7);
+        let viewmodel = NativeAppearanceFact {
+            layer: NativeRenderLayer::Viewmodel,
+            ..fact
+        };
+        bridge
+            .stage_changes(&[viewmodel], Some(&[]), &BTreeMap::new())
+            .expect("a layer change keeps the controller");
+        let new = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .object_handle(7);
+        assert_ne!(new, old);
+        let outputs = &bridge.staged_ref().unwrap().outputs;
+        let order: Vec<_> = outputs
+            .iter()
+            .map(|output| match output {
+                RuntimeAppearanceCallOutput::Frame(_) => vec!["frame"],
+                other => animation_ops(other),
+            })
+            .filter(|ops| !ops.is_empty())
+            .collect();
+        // The old projection goes before the frame that removes its target;
+        // the new one follows the frame that creates the new target.
+        assert_eq!(order, vec![vec!["destroy"], vec!["frame"], vec!["create"]]);
+        assert_eq!(controller_target(&bridge), new);
+        bridge.end_call();
+
+        // Recreating the parent recreates the animated child too.
+        bridge.begin_call();
+        let parent_appearance = bridge.create_primitive(primitive_request()).unwrap();
+        let parent = NativeAppearanceFact {
+            object_id: 3,
+            appearance: parent_appearance,
+            ..appearance_fact(parent_appearance)
+        };
+        let child = NativeAppearanceFact {
+            has_parent_object: true,
+            parent_object_id: 3,
+            ..viewmodel
+        };
+        bridge
+            .stage_changes(&[parent, child], Some(&[]), &BTreeMap::new())
+            .expect("reparent under a new parent");
+        bridge.end_call();
+        bridge.begin_call();
+        let before = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .object_handle(7);
+        let hidden_layer_parent = NativeAppearanceFact {
+            layer: NativeRenderLayer::Viewmodel,
+            ..parent
+        };
+        bridge
+            .stage_changes(&[hidden_layer_parent], Some(&[]), &BTreeMap::new())
+            .expect("recreating the parent keeps the child's controller");
+        let after = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .projector
+            .object_handle(7);
+        assert_ne!(after, before);
+        assert_eq!(controller_target(&bridge), after);
+        bridge.end_call();
     }
 
     #[test]

@@ -397,13 +397,40 @@ impl AnimationProjector {
         state: &AnimationControllerState,
         meta: PresentationOpMeta,
     ) -> Result<PresentationOp, AnimationProjectionDiagnostic> {
+        self.create_from_descriptor(
+            assets,
+            targets,
+            AnimationProjectionDescriptor {
+                target: projection.target,
+                asset: state.asset_id.clone(),
+                content_hash: projection.content_hash,
+                tick_duration_millis: projection.tick_duration_millis,
+                controller: AnimationControllerProjectionState::from_state_with_tick_duration(
+                    state,
+                    projection.tick_duration_millis,
+                ),
+            },
+            meta,
+        )
+    }
+
+    /// Creates a projection from a complete descriptor, for example one kept
+    /// by [`Self::detach_entity`] when its target was recreated. The clip
+    /// phases it carries continue rather than restart.
+    pub fn create_from_descriptor(
+        &mut self,
+        assets: &impl PresentationAssetLookup,
+        targets: &impl RenderTargetLookup,
+        descriptor: AnimationProjectionDescriptor,
+        meta: PresentationOpMeta,
+    ) -> Result<PresentationOp, AnimationProjectionDiagnostic> {
         let handle = AnimationProjectionHandle::new(self.next_handle);
         let Some(next_handle) = self.next_handle.checked_add(1) else {
             let diagnostic = AnimationProjectionDiagnostic {
                 code: AnimationProjectionDiagnosticCode::HandleExhausted,
                 sequence: meta.sequence,
                 handle: None,
-                target: Some(projection.target),
+                target: Some(descriptor.target),
                 message: diagnostic_message(AnimationProjectionDiagnosticCode::HandleExhausted)
                     .to_string(),
             };
@@ -414,19 +441,7 @@ impl AnimationProjector {
             assets,
             targets,
             meta,
-            AnimationProjectionOp::Create {
-                handle,
-                descriptor: AnimationProjectionDescriptor {
-                    target: projection.target,
-                    asset: state.asset_id.clone(),
-                    content_hash: projection.content_hash,
-                    tick_duration_millis: projection.tick_duration_millis,
-                    controller: AnimationControllerProjectionState::from_state_with_tick_duration(
-                        state,
-                        projection.tick_duration_millis,
-                    ),
-                },
-            },
+            AnimationProjectionOp::Create { handle, descriptor },
         )?;
         self.next_handle = next_handle;
         Ok(result)
@@ -497,6 +512,26 @@ impl AnimationProjector {
             meta,
             op: AnimationProjectionOp::Destroy { handle },
         })
+    }
+
+    /// Destroys the projection for `entity` and returns its descriptor, so
+    /// the same controller can be recreated on a new target.
+    pub fn detach_entity(
+        &mut self,
+        entity: u64,
+        meta: PresentationOpMeta,
+    ) -> Result<(PresentationOp, AnimationProjectionDescriptor), AnimationProjectionDiagnostic>
+    {
+        let descriptor = self
+            .entity_handles
+            .get(&entity)
+            .and_then(|handle| self.active.get(handle))
+            .cloned();
+        let op = self.destroy_entity(entity, meta)?;
+        Ok((
+            op,
+            descriptor.expect("a destroyed projection had a descriptor"),
+        ))
     }
 
     pub fn handle(&self, entity: u64) -> Option<AnimationProjectionHandle> {

@@ -208,6 +208,39 @@ in the probe). A product that moves few objects should publish them with
   - `scripts/test-runtime-pack.sh` passes (CoreCLR and NativeAOT fixture
     bundles, which publish graphics snapshots).
 
+## Review fix: animation controllers follow a recreated target
+
+The incremental projector recreates an object, with a new renderer handle,
+when its parent, layer or structural appearance changes. It also recreates the
+object's subtree. A projected animation controller kept its old target. The
+next flush then sent an `Update` for an unchanged revision and failed with
+`animation controller revision is not newer`.
+
+Now:
+- `detach_retargeted_controllers` runs before the graphics frame is published,
+  both in `stage_changes` and in the call-end resource reconcile. Each
+  projected controller whose object's handle changed gets its projection
+  destroyed (`AnimationProjector::detach_entity`). That Destroy goes out
+  before the frame that removes the old target, as the renderer requires. The
+  controller keeps the projection's descriptor.
+- The flush right after the frame recreates it on the new target with that
+  descriptor (`AnimationProjector::create_from_descriptor`). Clip phases
+  therefore continue rather than restart. If the state has moved on, a normal
+  `Update` follows.
+- The two mesh-release paths (disposing an inline-mesh appearance, disposing a
+  mesh resource) now join the call-end resource reconcile instead of
+  projecting immediately. Every retained-graphics frame then goes through the
+  two publish points above. `RuntimeAppearanceProjector::release_static_mesh`
+  is gone.
+
+`animation_controller_follows_its_target_when_the_target_is_recreated` covers
+two cases:
+- **A direct layer change.** It asserts the output order: animation destroy,
+  then the graphics frame, then animation create, with the new target.
+- **Recreating the animated object's parent.**
+
+Without the detach step, the test fails with the reviewer's error.
+
 ## Reproduction
 
 ```sh

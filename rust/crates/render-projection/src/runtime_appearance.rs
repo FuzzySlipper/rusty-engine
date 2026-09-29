@@ -202,22 +202,6 @@ impl RuntimeAppearanceProjector {
         &mut self.catalog.resources
     }
 
-    /// Releases one static mesh now. Failure keeps the mesh.
-    pub fn release_static_mesh(
-        &mut self,
-        asset: &str,
-    ) -> Result<RenderFrameDiff, AppearanceProjectionError> {
-        let meshes = &mut self.catalog.resources.static_meshes;
-        let Some(index) = meshes.iter().position(|mesh| mesh.asset == asset) else {
-            return Ok(RenderFrameDiff::default());
-        };
-        let mesh = meshes.remove(index);
-        self.resources_dirty = true;
-        self.reconcile().inspect_err(|_| {
-            self.catalog.resources.static_meshes.insert(index, mesh);
-        })
-    }
-
     /// Projects catalog and resource changes made since the last projection.
     pub fn reconcile(&mut self) -> Result<RenderFrameDiff, AppearanceProjectionError> {
         self.change(&[], &[], &[], &[])
@@ -1430,14 +1414,12 @@ mod tests {
         assert_eq!(kinds(&projector.reconcile().unwrap()), ["inspection"]);
         assert_eq!(projector.object_handle(1), handle);
 
-        assert_eq!(
-            kinds(&projector.release_static_mesh("mesh/triangle").unwrap()),
-            ["release-mesh"]
-        );
-        assert!(projector
-            .release_static_mesh("mesh/triangle")
-            .unwrap()
-            .is_empty());
+        projector
+            .resources_mut()
+            .static_meshes
+            .retain(|mesh| mesh.asset != "mesh/triangle");
+        assert_eq!(kinds(&projector.reconcile().unwrap()), ["release-mesh"]);
+        assert!(projector.reconcile().unwrap().is_empty());
     }
 
     #[test]
