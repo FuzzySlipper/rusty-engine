@@ -39,12 +39,12 @@ public sealed class EntityOriginRebaser
 
     /// <summary>
     /// Captures every active Transform/global-position root and asks Engine to
-    /// prepare a rebased origin and collision scene. Product code chooses when and
-    /// where to rebase by passing the target cell explicitly.
+    /// prepare their rebased local transforms. Commit moves the origin and
+    /// rebases the live collision scene. Product code chooses when and where to
+    /// rebase by passing the target cell explicitly.
     /// </summary>
     public EntityOriginRebaserPrepared Prepare(long targetCellX, long targetCellY, long targetCellZ)
     {
-        WorldOriginReadout origin = _worldOrigins.Read(new WorldOriginReadRequest(_session));
         IReadOnlyList<EntityComponents<Transform, WorldOriginGlobalPosition>> joined = _entities.Query(
             EngineComponentTypes.Transform,
             _globalPositions);
@@ -57,9 +57,6 @@ public sealed class EntityOriginRebaser
 
         WorldOriginPrepared native = _worldOrigins.Prepare(new WorldOriginPrepareRequest(
             _session,
-            origin.Revision,
-            origin.VoxelSourceRevision,
-            origin.StaticMeshRevision,
             targetCellX,
             targetCellY,
             targetCellZ,

@@ -16,8 +16,8 @@ use crate::{
 };
 
 /// Disposable native ownership retained between the product's explicit
-/// prepare/read/commit calls. It contains no product entity state: only the
-/// validated Engine candidate and copied local-transform facts.
+/// prepare/read/commit calls: the target origin and the rebased local
+/// transforms. It holds no scene and no product entity state.
 pub(crate) struct PreparedWorldOriginOwner {
     pub(crate) session: u64,
     candidate: PreparedWorldOriginRebase,
@@ -49,11 +49,7 @@ impl RuntimeSpatialBridge {
         let candidate = WorldOriginRebaseService
             .prepare(
                 &session.world_origin,
-                session.scene.as_ref(),
                 WorldOriginRebaseRequest {
-                    expected_origin_revision: request.expected_origin_revision,
-                    expected_voxel_source_revision: request.expected_voxel_source_revision,
-                    expected_static_mesh_revision: request.expected_static_mesh_revision,
                     target_origin: WorldOrigin::new([
                         request.target_cell_x,
                         request.target_cell_y,
@@ -99,17 +95,18 @@ impl RuntimeSpatialBridge {
         request: NativeWorldOriginPreparedReadRequest,
     ) -> Result<NativeWorldOriginPreparedReadout, CsharpEngineServicesError> {
         let owner = self.prepared_world_origin(request.prepared)?;
-        let origin = owner.candidate.origin();
+        let target = owner.candidate.target_origin().cell();
+        let local_envelope = self
+            .sessions
+            .get(&owner.session)
+            .map_or(0.0, |session| session.world_origin.local_envelope());
         Ok(NativeWorldOriginPreparedReadout {
             present: true,
-            target_cell_x: origin.origin.cell()[0],
-            target_cell_y: origin.origin.cell()[1],
-            target_cell_z: origin.origin.cell()[2],
-            candidate_revision: origin.revision,
-            candidate_voxel_source_revision: owner.candidate.scene_source_revision(),
-            candidate_static_mesh_revision: owner.candidate.scene_static_mesh_revision(),
+            target_cell_x: target[0],
+            target_cell_y: target[1],
+            target_cell_z: target[2],
             affected_entity_count: owner.candidate.affected_transforms().len() as u32,
-            local_envelope: origin.local_envelope,
+            local_envelope,
         })
     }
 
@@ -151,9 +148,8 @@ impl RuntimeSpatialBridge {
                     "C# used an unknown or disposed spatial session",
                 )
             })?;
-            let mut scene = (*session.scene).clone();
-            let receipt = WorldOriginRebaseService
-                .commit(&mut session.world_origin, &mut scene, &owner.candidate)
+            let (scene, receipt) = WorldOriginRebaseService
+                .commit(&mut session.world_origin, &session.scene, &owner.candidate)
                 .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_COMMIT", error))?;
             let scene = Arc::new(scene);
             session.scene = Arc::clone(&scene);
@@ -419,9 +415,6 @@ mod tests {
     ) -> NativeWorldOriginPrepareRequest {
         NativeWorldOriginPrepareRequest {
             session,
-            expected_origin_revision: 0,
-            expected_voxel_source_revision: 0,
-            expected_static_mesh_revision: 0,
             target_cell_x: target_x,
             target_cell_y: 0,
             target_cell_z: 0,
@@ -458,7 +451,7 @@ mod tests {
             ABI_OK
         );
         assert_eq!(summary.target_cell_x, 100);
-        assert_eq!(summary.candidate_revision, 1);
+        assert_eq!(summary.local_envelope, 16_384.0);
         assert_eq!(summary.affected_entity_count, 1);
 
         let mut affected = NativeWorldOriginAffectedAtReceipt::default();
@@ -501,72 +494,57 @@ mod tests {
     }
 
     #[test]
-    fn stale_origin_or_voxel_scene_rejects_commit_without_publishing_candidate() {
+    fn commit_rebases_the_live_scene_and_keeps_edits_made_after_prepare() {
         let mut bridge = RuntimeSpatialBridge::new();
         let spatial_api = spatial::api(&mut bridge);
         let voxel_api = crate::voxel::api(&mut bridge);
         let world_origin_api = api(&mut bridge);
         let session = session(&spatial_api);
+        let prepare = |target_x, rows: &[NativeWorldOriginEntityRow]| {
+            let mut prepared = NativeWorldOriginPreparedHandle::default();
+            assert_eq!(
+                unsafe {
+                    (world_origin_api.prepare)(
+                        world_origin_api.context,
+                        &prepare_request(session, target_x, rows),
+                        &mut prepared,
+                    )
+                },
+                ABI_OK
+            );
+            prepared
+        };
+        let commit = |prepared| {
+            let mut receipt = NativeWorldOriginCommitReceipt::default();
+            assert_eq!(
+                unsafe {
+                    (world_origin_api.commit)(
+                        world_origin_api.context,
+                        NativeWorldOriginCommitRequest { prepared },
+                        &mut receipt,
+                    )
+                },
+                ABI_OK
+            );
+            receipt
+        };
+
+        // Two prepared rebases commit in either order; the last one wins.
         let rows = [row(7, 50.0, 50)];
-        let request = prepare_request(session, 50, &rows);
-        let mut stale_origin = NativeWorldOriginPreparedHandle::default();
-        let mut stale_scene = NativeWorldOriginPreparedHandle::default();
-        assert_eq!(
-            unsafe {
-                (world_origin_api.prepare)(world_origin_api.context, &request, &mut stale_origin)
-            },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe {
-                (world_origin_api.prepare)(world_origin_api.context, &request, &mut stale_scene)
-            },
-            ABI_OK
-        );
+        let to_50 = prepare(50, &rows);
+        let to_75 = prepare(75, &rows);
+        assert_eq!(commit(to_75).origin_after_cell_x, 75);
+        let last = commit(to_50);
+        assert_eq!((last.revision_before, last.revision_after), (1, 2));
+        assert_eq!(last.origin_before_cell_x, 75);
+        assert_eq!(last.origin_after_cell_x, 50);
 
-        let mut first_receipt = NativeWorldOriginCommitReceipt::default();
-        assert_eq!(
-            unsafe {
-                (world_origin_api.commit)(
-                    world_origin_api.context,
-                    NativeWorldOriginCommitRequest {
-                        prepared: stale_origin,
-                    },
-                    &mut first_receipt,
-                )
-            },
-            ABI_OK
-        );
-        let mut rejected = NativeWorldOriginCommitReceipt::default();
-        assert_eq!(
-            unsafe {
-                (world_origin_api.commit)(
-                    world_origin_api.context,
-                    NativeWorldOriginCommitRequest {
-                        prepared: stale_scene,
-                    },
-                    &mut rejected,
-                )
-            },
-            0
-        );
-        let scene = bridge.collision_source().scene(session).unwrap();
-        assert_eq!(scene.world_origin().cell(), [50, 0, 0]);
-
-        let rows = [row(8, 50.0, 50)];
-        let mut stale_voxel = NativeWorldOriginPreparedHandle::default();
-        let mut request = prepare_request(session, 75, &rows);
-        request.expected_origin_revision = 1;
-        assert_eq!(
-            unsafe {
-                (world_origin_api.prepare)(world_origin_api.context, &request, &mut stale_voxel)
-            },
-            ABI_OK
-        );
+        // A voxel edit between prepare and commit survives the rebase.
+        let to_60 = prepare(60, &rows);
         let edits = [NativeVoxelEdit {
             state: 0,
             kind: NativeVoxelEditKind::Set,
-            address: NativeVoxelAddress { x: 1, y: 0, z: 0 },
+            address: NativeVoxelAddress { x: 51, y: 0, z: 0 },
             material_slot: 1,
         }];
         let mut voxel_receipt = NativeVoxelEditReceipt::default();
@@ -586,23 +564,19 @@ mod tests {
             },
             ABI_OK
         );
+        let receipt = commit(to_60);
         assert_eq!(
-            unsafe {
-                (world_origin_api.commit)(
-                    world_origin_api.context,
-                    NativeWorldOriginCommitRequest {
-                        prepared: stale_voxel,
-                    },
-                    &mut rejected,
-                )
-            },
-            0
+            receipt.voxel_source_revision,
+            voxel_receipt.accepted_revision
         );
         let scene = bridge.collision_source().scene(session).unwrap();
-        assert_eq!(scene.world_origin().cell(), [50, 0, 0]);
+        assert_eq!(scene.world_origin().cell(), [60, 0, 0]);
         assert_eq!(
-            scene.source_revision().raw(),
-            voxel_receipt.accepted_revision
+            scene
+                .raycast([-8.5, 3.0, 0.5], [0.0, -1.0, 0.0], 4.0)
+                .unwrap()
+                .voxel,
+            [51, 0, 0]
         );
     }
 }

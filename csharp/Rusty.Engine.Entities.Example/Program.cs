@@ -968,9 +968,6 @@ sealed class WorldOriginServiceFake : IWorldOriginService
             prepared.Request.TargetCellX,
             prepared.Request.TargetCellY,
             prepared.Request.TargetCellZ,
-            InitialRevision + 1,
-            0,
-            0,
             checked((uint)prepared.Facts.Length),
             16_384.0f);
     }

@@ -1,7 +1,8 @@
 use crate::{NativeSpatialSessionHandle, NativeTransform};
 
-/// Opaque, disposable prepared rebase retained by the Engine until C# commits
-/// or cancels it. The value has no product-state meaning.
+/// Opaque, disposable prepared rebase (target origin and rebased root
+/// transforms) retained by the Engine until C# commits or cancels it. The
+/// value has no product-state meaning.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeWorldOriginPreparedHandle {
@@ -22,8 +23,8 @@ pub struct NativeWorldOriginGlobalPosition {
 }
 
 /// One product-owned root entity supplied for a single rebase attempt. The
-/// Engine copies the row into a call-local validation state and never retains
-/// it as an entity-world mirror.
+/// Engine keeps only its rebased local transform, in the prepared handle, and
+/// never retains it as an entity-world mirror.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeWorldOriginEntityRow {
@@ -36,9 +37,6 @@ pub struct NativeWorldOriginEntityRow {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeWorldOriginPrepareRequest {
     pub session: NativeSpatialSessionHandle,
-    pub expected_origin_revision: u64,
-    pub expected_voxel_source_revision: u64,
-    pub expected_static_mesh_revision: u64,
     pub target_cell_x: i64,
     pub target_cell_y: i64,
     pub target_cell_z: i64,
@@ -77,9 +75,6 @@ pub struct NativeWorldOriginPreparedReadout {
     pub target_cell_x: i64,
     pub target_cell_y: i64,
     pub target_cell_z: i64,
-    pub candidate_revision: u64,
-    pub candidate_voxel_source_revision: u64,
-    pub candidate_static_mesh_revision: u64,
     pub affected_entity_count: u32,
     pub local_envelope: f32,
 }
@@ -99,6 +94,8 @@ pub struct NativeWorldOriginAffectedAtReceipt {
     pub local_transform: NativeTransform,
 }
 
+/// Moves the session origin to the prepared target and rebases the live
+/// collision scene, keeping any edits made since prepare.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeWorldOriginCommitRequest {

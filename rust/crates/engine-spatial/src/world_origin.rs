@@ -86,21 +86,16 @@ pub struct WorldOriginEntity {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldOriginRebaseRequest {
-    pub expected_origin_revision: u64,
-    pub expected_voxel_source_revision: u64,
-    pub expected_static_mesh_revision: u64,
     pub target_origin: WorldOrigin,
     pub entities: Vec<WorldOriginEntity>,
 }
 
-/// A prepared origin and collision-scene candidate plus the rebased local
-/// transforms the product publishes through its own state.
+/// A prepared target origin plus the rebased local transforms the product
+/// publishes through its own state. It holds no scene: commit rebases the
+/// live collision scene, so edits made after prepare are kept.
+#[derive(Debug, Clone, PartialEq)]
 pub struct PreparedWorldOriginRebase {
-    expected_origin_revision: u64,
-    expected_voxel_source_revision: u64,
-    expected_static_mesh_revision: u64,
-    candidate_origin: WorldOriginState,
-    candidate_scene: VoxelCollisionScene,
+    target_origin: WorldOrigin,
     affected_transforms: Vec<WorldOriginAffectedTransform>,
 }
 
@@ -127,16 +122,8 @@ impl PreparedWorldOriginRebase {
         &self.affected_transforms
     }
 
-    pub const fn origin(&self) -> WorldOriginReadout {
-        self.candidate_origin.readout()
-    }
-
-    pub const fn scene_source_revision(&self) -> u64 {
-        self.candidate_scene.source_revision().raw()
-    }
-
-    pub fn scene_static_mesh_revision(&self) -> u64 {
-        self.candidate_scene.static_mesh_collision_revision()
+    pub const fn target_origin(&self) -> WorldOrigin {
+        self.target_origin
     }
 }
 
@@ -147,19 +134,6 @@ pub enum WorldOriginRebaseError {
         axis: usize,
     },
     OriginRevisionExhausted,
-    StaleOrigin {
-        expected: u64,
-        actual: u64,
-    },
-    StaleVoxelScene {
-        expected: u64,
-        actual: u64,
-    },
-    StaleStaticMeshes {
-        expected: u64,
-        actual: u64,
-    },
-    SceneOriginMismatch,
     Position {
         entity: EntityId,
         reason: GlobalPositionError,
@@ -184,27 +158,15 @@ impl std::error::Error for WorldOriginRebaseError {}
 pub struct WorldOriginRebaseService;
 
 impl WorldOriginRebaseService {
+    /// Computes each root's local transform in the target frame. The result
+    /// depends only on global positions, the target and the session envelope,
+    /// so it stays valid whatever changes before commit.
     pub fn prepare(
         self,
         origin: &WorldOriginState,
-        scene: &VoxelCollisionScene,
         request: WorldOriginRebaseRequest,
     ) -> Result<PreparedWorldOriginRebase, WorldOriginRebaseError> {
-        validate_guards(
-            origin,
-            scene,
-            request.expected_origin_revision,
-            request.expected_voxel_source_revision,
-            request.expected_static_mesh_revision,
-        )?;
         validate_origin(request.target_origin)?;
-        let revision_after = origin
-            .revision
-            .checked_add(1)
-            .ok_or(WorldOriginRebaseError::OriginRevisionExhausted)?;
-        let candidate_scene = scene
-            .rebased_candidate(request.target_origin, revision_after)
-            .map_err(WorldOriginRebaseError::SpatialCandidate)?;
         let affected_transforms = request
             .entities
             .into_iter()
@@ -226,81 +188,42 @@ impl WorldOriginRebaseService {
             })
             .collect::<Result<Vec<_>, WorldOriginRebaseError>>()?;
         Ok(PreparedWorldOriginRebase {
-            expected_origin_revision: request.expected_origin_revision,
-            expected_voxel_source_revision: request.expected_voxel_source_revision,
-            expected_static_mesh_revision: request.expected_static_mesh_revision,
-            candidate_origin: WorldOriginState {
-                origin: request.target_origin,
-                revision: revision_after,
-                local_envelope: origin.local_envelope,
-            },
-            candidate_scene,
+            target_origin: request.target_origin,
             affected_transforms,
         })
     }
 
-    /// Publishes a prepared origin and collision scene. The product applies
-    /// the prepared local transforms itself. The scene checks stop a candidate
-    /// built before a voxel or static-mesh change from overwriting it.
+    /// Moves the origin and returns the live collision scene rebased into it,
+    /// for the caller to install in place of `scene`. The product applies the
+    /// prepared local transforms itself.
     pub fn commit(
         self,
         origin: &mut WorldOriginState,
-        scene: &mut VoxelCollisionScene,
+        scene: &VoxelCollisionScene,
         prepared: &PreparedWorldOriginRebase,
-    ) -> Result<WorldOriginRebaseReceipt, WorldOriginRebaseError> {
-        validate_guards(
-            origin,
-            scene,
-            prepared.expected_origin_revision,
-            prepared.expected_voxel_source_revision,
-            prepared.expected_static_mesh_revision,
-        )?;
+    ) -> Result<(VoxelCollisionScene, WorldOriginRebaseReceipt), WorldOriginRebaseError> {
         let revision_before = origin.revision;
+        let revision_after = revision_before
+            .checked_add(1)
+            .ok_or(WorldOriginRebaseError::OriginRevisionExhausted)?;
+        let rebased = scene
+            .rebased_candidate(prepared.target_origin, revision_after)
+            .map_err(WorldOriginRebaseError::SpatialCandidate)?;
         let origin_before = origin.origin;
-        *origin = prepared.candidate_origin;
-        *scene = prepared.candidate_scene.clone();
-        Ok(WorldOriginRebaseReceipt {
+        origin.origin = prepared.target_origin;
+        origin.revision = revision_after;
+        let receipt = WorldOriginRebaseReceipt {
             revision_before,
-            revision_after: origin.revision,
+            revision_after,
             origin_before,
             origin_after: origin.origin,
-            voxel_source_revision: scene.source_revision().raw(),
-            static_mesh_revision: scene.static_mesh_collision_revision(),
+            voxel_source_revision: rebased.source_revision().raw(),
+            static_mesh_revision: rebased.static_mesh_collision_revision(),
             entity_count: prepared.affected_transforms.len(),
             local_envelope: origin.local_envelope,
-        })
+        };
+        Ok((rebased, receipt))
     }
-}
-
-fn validate_guards(
-    origin: &WorldOriginState,
-    scene: &VoxelCollisionScene,
-    expected_origin: u64,
-    expected_voxels: u64,
-    expected_static_meshes: u64,
-) -> Result<(), WorldOriginRebaseError> {
-    if expected_origin != origin.revision {
-        return Err(WorldOriginRebaseError::StaleOrigin {
-            expected: expected_origin,
-            actual: origin.revision,
-        });
-    }
-    if expected_voxels != scene.source_revision().raw() {
-        return Err(WorldOriginRebaseError::StaleVoxelScene {
-            expected: expected_voxels,
-            actual: scene.source_revision().raw(),
-        });
-    }
-    if expected_static_meshes != scene.static_mesh_collision_revision() {
-        return Err(WorldOriginRebaseError::StaleStaticMeshes {
-            expected: expected_static_meshes,
-            actual: scene.static_mesh_collision_revision(),
-        });
-    }
-    if scene.world_origin() != origin.origin || scene.rebase_revision() != origin.revision {
-        return Err(WorldOriginRebaseError::SceneOriginMismatch);
-    }
-    Ok(())
 }
 
 fn validate_origin(origin: WorldOrigin) -> Result<(), WorldOriginRebaseError> {

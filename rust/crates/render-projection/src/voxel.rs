@@ -920,17 +920,12 @@ mod tests {
         let chunk = projector.chunk_handle("world", [6_250, 0, 0]).unwrap();
 
         let request = WorldOriginRebaseRequest {
-            expected_origin_revision: 0,
-            expected_voxel_source_revision: scene.source_revision().raw(),
-            expected_static_mesh_revision: scene.static_mesh_collision_revision(),
             target_origin: WorldOrigin::new([100_000, 0, 0]),
             entities: Vec::new(),
         };
-        let prepared = WorldOriginRebaseService
-            .prepare(&origin, &scene, request)
-            .unwrap();
-        WorldOriginRebaseService
-            .commit(&mut origin, &mut scene, &prepared)
+        let prepared = WorldOriginRebaseService.prepare(&origin, request).unwrap();
+        (scene, _) = WorldOriginRebaseService
+            .commit(&mut origin, &scene, &prepared)
             .unwrap();
         let update = project(&mut projector, &scene);
 
@@ -1475,16 +1470,11 @@ mod tests {
                     let scene = &mut placed[0].scene;
                     let target_origin = WorldOrigin::new([4 * rng.below(3) as i64, 0, 0]);
                     let request = WorldOriginRebaseRequest {
-                        expected_origin_revision: origin.revision(),
-                        expected_voxel_source_revision: scene.source_revision().raw(),
-                        expected_static_mesh_revision: scene.static_mesh_collision_revision(),
                         target_origin,
                         entities: Vec::new(),
                     };
-                    let prepared = WorldOriginRebaseService
-                        .prepare(&origin, scene, request)
-                        .unwrap();
-                    WorldOriginRebaseService
+                    let prepared = WorldOriginRebaseService.prepare(&origin, request).unwrap();
+                    (*scene, _) = WorldOriginRebaseService
                         .commit(&mut origin, scene, &prepared)
                         .unwrap();
                 }

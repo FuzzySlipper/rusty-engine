@@ -61,7 +61,11 @@ registrations and debug output identifies them with `store=` / `stores=`.
 
 `DynamicsWorld` remains a disposable native simulation owner. `WorldOrigin`
 continues to mean the spatial coordinate origin. Neither is a managed entity
-store. The Rust spatial implementation's internal physics type is unchanged.
+store. `EntityOriginRebaser.Prepare` computes each root's local transform in
+the target frame from its global position; `Commit` moves the origin and
+rebases the live collision scene. Voxel or collision edits made between the
+two are kept, and several prepared rebases may commit in any order: the last
+commit decides the origin. The Rust spatial implementation's internal physics type is unchanged.
 
 `EntityStore` now accepts ordinary classes and value components in the same
 store. Unused whole-store snapshot/restore, callback mutation batches, component

@@ -3060,9 +3060,6 @@ mod tests {
         );
         let prepare = NativeWorldOriginPrepareRequest {
             session,
-            expected_origin_revision: origin.revision,
-            expected_voxel_source_revision: origin.voxel_source_revision,
-            expected_static_mesh_revision: origin.static_mesh_revision,
             target_cell_x: 5,
             target_cell_y: 0,
             target_cell_z: 0,

@@ -3,11 +3,11 @@ use core_math::Vec3;
 use core_space::{GlobalPosition, WorldOrigin};
 use engine_spatial::{
     decode_world_origin_state, encode_world_origin_state, KinematicTriggerDefinition,
-    MaterialVoxel, SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, TriggerCollider,
-    TriggerReconcileCause, TriggerVolumeSystem, VoxelCollisionScene, VoxelEdit, VoxelEditService,
-    WorldOriginAffectedTransform, WorldOriginEntity, WorldOriginRebaseError,
-    WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
+    MaterialVoxel, PreparedWorldOriginRebase, SpatialCollisionHit, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
+    TriggerCollider, TriggerReconcileCause, TriggerVolumeSystem, VoxelCollisionScene, VoxelEdit,
+    VoxelEditService, WorldOriginAffectedTransform, WorldOriginEntity, WorldOriginRebaseError,
+    WorldOriginRebaseReceipt, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
 };
 use entity_state::{EntityTransform, Quat};
 
@@ -73,18 +73,25 @@ fn bindings() -> Vec<WorldOriginEntity> {
 }
 
 fn request(
-    origin: &WorldOriginState,
-    scene: &VoxelCollisionScene,
     target_origin: WorldOrigin,
     entities: Vec<WorldOriginEntity>,
 ) -> WorldOriginRebaseRequest {
     WorldOriginRebaseRequest {
-        expected_origin_revision: origin.revision(),
-        expected_voxel_source_revision: scene.source_revision().raw(),
-        expected_static_mesh_revision: scene.static_mesh_collision_revision(),
         target_origin,
         entities,
     }
+}
+
+fn commit(
+    origin: &mut WorldOriginState,
+    scene: &mut VoxelCollisionScene,
+    prepared: &PreparedWorldOriginRebase,
+) -> WorldOriginRebaseReceipt {
+    let (rebased, receipt) = WorldOriginRebaseService
+        .commit(origin, scene, prepared)
+        .unwrap();
+    *scene = rebased;
+    receipt
 }
 
 fn rebase(
@@ -94,15 +101,9 @@ fn rebase(
     entities: Vec<WorldOriginEntity>,
 ) -> Vec<WorldOriginAffectedTransform> {
     let prepared = WorldOriginRebaseService
-        .prepare(
-            origin,
-            scene,
-            request(origin, scene, target_origin, entities),
-        )
+        .prepare(origin, request(target_origin, entities))
         .unwrap();
-    WorldOriginRebaseService
-        .commit(origin, scene, &prepared)
-        .unwrap();
+    commit(origin, scene, &prepared);
     prepared.affected_transforms().to_vec()
 }
 
@@ -141,14 +142,11 @@ fn rebase_keeps_voxel_nav_trigger_and_static_mesh_continuous() {
     let prepared = WorldOriginRebaseService
         .prepare(
             &origin,
-            &scene,
-            request(&origin, &scene, WorldOrigin::new([FAR_X, 0, 0]), bindings()),
+            request(WorldOrigin::new([FAR_X, 0, 0]), bindings()),
         )
         .unwrap();
-    assert_eq!(prepared.origin().revision, 1);
-    let receipt = WorldOriginRebaseService
-        .commit(&mut origin, &mut scene, &prepared)
-        .unwrap();
+    assert_eq!(prepared.target_origin(), WorldOrigin::new([FAR_X, 0, 0]));
+    let receipt = commit(&mut origin, &mut scene, &prepared);
 
     assert_eq!(receipt.origin_after, WorldOrigin::new([FAR_X, 0, 0]));
     assert_eq!(receipt.entity_count, 2);
@@ -259,21 +257,18 @@ fn repeated_positive_and_negative_rebases_do_not_accumulate_or_alias() {
 }
 
 #[test]
-fn failed_prepare_and_stale_commit_publish_nothing_and_snapshots_are_typed() {
+fn failed_prepare_publishes_nothing_edits_after_prepare_survive_and_snapshots_are_typed() {
     let (mut origin, mut scene) = fixture();
     let origin_before = origin.readout();
     let scene_origin_before = scene.world_origin();
-    let rebase_revision_before = scene.rebase_revision();
 
     // A root beyond the local envelope of the target origin cannot be placed.
     let unreachable = request(
-        &origin,
-        &scene,
         WorldOrigin::new([0, 0, 0]),
         vec![root(SUBJECT, FAR_X as f64, 1.0)],
     );
     assert!(matches!(
-        WorldOriginRebaseService.prepare(&origin, &scene, unreachable),
+        WorldOriginRebaseService.prepare(&origin, unreachable),
         Err(WorldOriginRebaseError::Position {
             entity: SUBJECT,
             ..
@@ -282,13 +277,11 @@ fn failed_prepare_and_stale_commit_publish_nothing_and_snapshots_are_typed() {
     assert_eq!(origin.readout(), origin_before);
     assert_eq!(scene.world_origin(), scene_origin_before);
 
-    // A voxel edit after prepare makes the candidate scene stale; committing it
-    // would discard the edit.
+    // Commit rebases the live scene, so an edit made after prepare is kept.
     let prepared = WorldOriginRebaseService
         .prepare(
             &origin,
-            &scene,
-            request(&origin, &scene, WorldOrigin::new([FAR_X, 0, 0]), bindings()),
+            request(WorldOrigin::new([FAR_X, 0, 0]), bindings()),
         )
         .unwrap();
     VoxelEditService::apply(
@@ -298,15 +291,16 @@ fn failed_prepare_and_stale_commit_publish_nothing_and_snapshots_are_typed() {
         }],
     )
     .unwrap();
-    let scene_source_before = scene.source_revision();
-    assert!(matches!(
-        WorldOriginRebaseService.commit(&mut origin, &mut scene, &prepared),
-        Err(WorldOriginRebaseError::StaleVoxelScene { .. })
-    ));
-    assert_eq!(origin.readout(), origin_before);
-    assert_eq!(scene.world_origin(), scene_origin_before);
-    assert_eq!(scene.rebase_revision(), rebase_revision_before);
-    assert_eq!(scene.source_revision(), scene_source_before);
+    let edited_source = scene.source_revision();
+    let receipt = commit(&mut origin, &mut scene, &prepared);
+    assert_eq!(receipt.origin_after, WorldOrigin::new([FAR_X, 0, 0]));
+    assert_eq!(scene.source_revision(), edited_source);
+    assert!(scene
+        .raycast([2.5, 3.0, 0.5], [0.0, -1.0, 0.0], 4.0)
+        .is_none());
+    assert!(scene
+        .raycast([1.5, 3.0, 0.5], [0.0, -1.0, 0.0], 4.0)
+        .is_some());
 
     let encoded = encode_world_origin_state(origin).unwrap();
     assert_eq!(decode_world_origin_state(&encoded).unwrap(), origin);
