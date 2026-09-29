@@ -1,7 +1,8 @@
 # Parallel lanes, round 2 (2026-09-29)
 
 Open work across campaigns #8723 (architecture reset), #8777 (developer
-experience) and #8782 (wgpu renderer) is split into lanes. A lane is a list of
+experience), #8782 (wgpu renderer) and #8831 (downstream products) is split
+into lanes. A lane is a list of
 Den tasks that edit the same files, so they run in order inside one Claude Code
 instance. Different lanes edit different files, so they run at the same time,
 each in its own git worktree.
@@ -25,6 +26,7 @@ this directory. This page is the shared protocol and the ownership map.
 | wgpu-view | [wgpu-view.md](wgpu-view.md) | #8785, #8787 | once #8783 publishes its resource-table layout |
 | streaming | [streaming.md](streaming.md) | #8786 | once #8783 has readback on main |
 | desktop | [desktop.md](desktop.md) | #8790, #8791 | once #8783 has surface presentation on main; #8791's decoder research can start earlier |
+| downstream | [downstream.md](downstream.md) | #8832 now; then #8834, #8835, #8838, #8839, #8833, #8836, #8837 | CraftSurvive now; the rest once #8744, #8799 and #8807 land |
 | playtest | [playtest.md](playtest.md) | #8765, #8769 | held by the owner; #8769 is in backlog |
 
 Not assigned yet:
@@ -57,6 +59,7 @@ over its changes.
 | wgpu-view | `render-wgpu` modules for cameras, view composition, viewmodel, multi-view, captures, billboards, sprites, particles |
 | streaming | the runtime's frame stream endpoint; the browser shell canvas in `render/packages/product-browser-host` |
 | desktop | the new desktop shell crate; the video realizer |
+| downstream | the product repositories (CraftSurvive, Dungeon, Underworld, D20, Roguelike, Crawler, Rifles, Space); `docs/evidence/downstream-*`; no Engine source |
 | playtest | `docs/evidence/` for its tasks; `render-presentation/src/video.rs`; the TS video host |
 
 Known overlaps:
