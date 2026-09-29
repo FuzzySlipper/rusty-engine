@@ -6,6 +6,9 @@ uses the ordinary C# update/input path. Admitted updates retain `Realtime` mode
 and the configured nonzero fixed delta; manual clock control is not a demand
 product update. Switching back to realtime clears the
 wall-time baseline. Holding does not stop input admission or renderer inspection.
+While held, the host still queues posted input; each live-debug command hands
+the queued input to the runtime before it runs. So a key pressed before
+`engine.time.advance` is held during the steps it admits.
 
 Native live-debug commands (require the ordinary live-debug opt-in):
 

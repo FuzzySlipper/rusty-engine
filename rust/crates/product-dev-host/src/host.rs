@@ -1489,6 +1489,27 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
         .with_locked_timed(
             || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
             |runtime| {
+                if state.realtime_scheduler_enabled {
+                    // Input accepted before this command reaches the runtime
+                    // first; `engine.time.advance` steps held time with it.
+                    let errors = crate::scheduler::deliver_queued_input(
+                        &state.runtime,
+                        runtime,
+                        state.input_mailbox.drain(),
+                        &mut |receipt| publish_scheduled_input_receipt(state, receipt),
+                        &mut |receipt| publish_scheduled_receipt(state, receipt),
+                    );
+                    for error in errors {
+                        publish_host_diagnostic(
+                            &state.diagnostics,
+                            ProductDevLogSeverity::Warning,
+                            disposition_for_runtime_error(&error),
+                            error.code(),
+                            error.diagnostic(),
+                            [],
+                        );
+                    }
+                }
                 let result = runtime.execute_debug(command);
                 let receipt = match state.runtime.finish_call(runtime, result) {
                     Ok(receipt) => receipt,
@@ -3237,6 +3258,144 @@ mod tests {
             serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(overflow)).unwrap();
         assert_eq!(overflow_wire["result"]["accepted"], false);
         assert_eq!(overflow_wire["result"]["disposition"], "resync-required");
+    }
+
+    /// A realtime runtime whose playtest time is held: the scheduler idles, so
+    /// only debug commands advance it. It records the order of its calls.
+    struct HeldRealtimeRuntime(Arc<Mutex<Vec<String>>>);
+
+    impl crate::ProductDevRuntime for HeldRealtimeRuntime {
+        fn realtime_schedule_state(&self) -> crate::ProductDevRuntimeScheduleState {
+            crate::ProductDevRuntimeScheduleState::Paused
+        }
+
+        fn realtime_schedule_interval(&self) -> Option<Duration> {
+            Some(Duration::from_millis(1))
+        }
+
+        fn lifecycle(
+            &mut self,
+            _operation: crate::ProductDevLifecycleOperation,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn input(
+            &mut self,
+            batch: crate::ProductDevInputBatch,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevInputResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("input {}", batch.events().len()));
+            Err(blocking_runtime_error())
+        }
+
+        fn execute_debug(
+            &mut self,
+            command: &str,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevDebugResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            self.0.lock().unwrap().push(command.to_owned());
+            crate::ProductDevRuntimeReceipt::new(
+                crate::ProductDevDebugResult::new(true, String::new()),
+                Vec::new(),
+            )
+            .map_err(|error| crate::ProductDevRuntimeError::new(error.code(), error.detail()))
+        }
+
+        fn advance_realtime(
+            &mut self,
+            _observed_time_ns: CanonicalU64,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn admit_demand_step(
+            &mut self,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn admit_external_step(
+            &mut self,
+            _step: CanonicalU64,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn complete_timeline(
+            &mut self,
+            _completion: crate::ProductDevTimelineCompletion,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevTimelineCompletionResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+    }
+
+    #[test]
+    fn a_debug_command_takes_the_input_queued_before_it() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let state = HostState {
+            bundle: Arc::new(RwLock::new(
+                ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                    "index.html",
+                    "text/html; charset=utf-8",
+                    Vec::new(),
+                )
+                .unwrap()])
+                .unwrap(),
+            )),
+            runtime: Arc::new(ProductDevOperationOwner::new(HeldRealtimeRuntime(
+                Arc::clone(&calls),
+            ))),
+            input_mailbox: Arc::new(HostInputMailbox::default()),
+            telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
+            realtime_scheduler_enabled: true,
+            outputs: Arc::new(Mutex::new(OutputBus::default())),
+            output_wake: Arc::new(OutputWake::default()),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            scheduler_wake: Arc::new(SchedulerWake::default()),
+            bind_host: Ipv4Addr::LOCALHOST,
+            expected_port: 0,
+            live_debug_enabled: true,
+            diagnostics: ProductDevLog::new(Default::default()).unwrap(),
+            connections: AtomicUsize::new(0),
+            subscribers: AtomicUsize::new(0),
+            published_readout: Mutex::new(None),
+            frames: None,
+        };
+        // Held time: nothing ticks, so the key waits in the mailbox.
+        let queued = invoke_input(&state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"14","context":"gameplay.default","fact":{"kind":"key","code":"key-w","edge":"pressed"}}]}"#);
+        assert_eq!(queued.status, 200);
+        assert_eq!(state.input_mailbox.len(), 1);
+
+        invoke_debug_execute(&state, b"engine.time.advance 500");
+        assert_eq!(state.input_mailbox.len(), 0);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["input 1", "engine.time.advance 500"],
+            "the steps the command runs must see the key pressed before it"
+        );
     }
 
     #[test]

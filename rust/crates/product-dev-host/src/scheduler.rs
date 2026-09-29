@@ -45,22 +45,8 @@ where
         .with_locked_timed(
             begin,
             |runtime| {
-                let (batches, overflowed) = drain();
-                let mut input_errors = Vec::new();
-                if overflowed {
-                    let result = runtime.recover_input_overflow();
-                    match owner.finish_call(runtime, result) {
-                        Ok(receipt) => publish(receipt),
-                        Err(error) => input_errors.push(error),
-                    }
-                }
-                for batch in batches {
-                    let result = runtime.input(batch);
-                    match owner.finish_call(runtime, result) {
-                        Ok(receipt) => publish_input(receipt),
-                        Err(error) => input_errors.push(error),
-                    }
-                }
+                let input_errors =
+                    deliver_queued_input(owner, runtime, drain(), &mut publish_input, &mut publish);
                 let result = runtime.advance_realtime(observed_time_ns);
                 let result = owner.finish_call(runtime, result);
                 let attribution = runtime.take_update_attribution();
@@ -75,6 +61,40 @@ where
             finish,
         )
         .map_err(|_| runtime_poisoned())?
+}
+
+/// Hands one host-mailbox snapshot to the runtime input owner in arrival
+/// order, inside the caller's runtime owner scope. A realtime advance does this
+/// first, and so does a debug command: held playtest time advances only through
+/// debug commands, so input accepted before one must reach the steps it runs.
+pub(crate) fn deliver_queued_input<R, I, P>(
+    owner: &ProductDevOperationOwner<R>,
+    runtime: &mut R,
+    (batches, overflowed): (Vec<ProductDevInputBatch>, bool),
+    publish_input: &mut I,
+    publish: &mut P,
+) -> Vec<ProductDevRuntimeError>
+where
+    R: ProductDevRuntime,
+    I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
+    P: FnMut(ProductDevRuntimeReceipt<ProductDevOperationResult>),
+{
+    let mut input_errors = Vec::new();
+    if overflowed {
+        let result = runtime.recover_input_overflow();
+        match owner.finish_call(runtime, result) {
+            Ok(receipt) => publish(receipt),
+            Err(error) => input_errors.push(error),
+        }
+    }
+    for batch in batches {
+        let result = runtime.input(batch);
+        match owner.finish_call(runtime, result) {
+            Ok(receipt) => publish_input(receipt),
+            Err(error) => input_errors.push(error),
+        }
+    }
+    input_errors
 }
 
 #[cfg(test)]
