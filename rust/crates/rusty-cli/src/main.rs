@@ -839,7 +839,9 @@ runtime pack and SDK feed paths, the pairs in the shared cache, and missing or m
 prerequisites. Exits 1 when the product cannot run yet. Works offline.
 
 The project-shape check covers the whole repository, or with --project <product.csproj> only that
-project, the projects it references and the .props/.targets files above them.
+project, the projects it references and the .props/.targets files above them. A reference that
+follows the pin must be exact; a project that pins Rusty.Engine its own way is listed as a note and
+does not affect readiness.
 
 Examples:
   rusty status
@@ -987,7 +989,8 @@ fn require_pin(start: &Path) -> Result<Pin, String> {
 /// restore a different SDK; the rusty command itself still proceeds.
 fn warn_shape(pin: &Pin, project: &Path) {
     match pair::shape_problems(pin, Some(project)) {
-        Ok(problems) => problems
+        Ok(shape) => shape
+            .problems
             .iter()
             .for_each(|problem| eprintln!("RUSTY_PROJECT_SHAPE: {problem}")),
         Err(error) => eprintln!("{error}"),
@@ -1260,13 +1263,16 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
             let shape = pair::shape_problems(&pin, selected.as_deref())?;
             println!(
                 "project shape  {}",
-                if shape.is_empty() {
+                if shape.problems.is_empty() {
                     "exact pin, pair feed declared"
                 } else {
                     "needs changes"
                 }
             );
-            problems.extend(shape);
+            for note in &shape.notes {
+                println!("               note: {note}");
+            }
+            problems.extend(shape.problems);
         }
         None => {
             println!("pin            none at or above {}", start.display());

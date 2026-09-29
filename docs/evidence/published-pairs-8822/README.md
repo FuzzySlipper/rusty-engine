@@ -122,3 +122,9 @@ Rerun on git archives, with the CLI from this change:
 |---|---|---|---|
 | `96a972a` (reviewed) | needs changes, exit 1 (names only the legacy prototype) | ready, exit 0 | ready, exit 0 |
 | `main` (`4ab29c9`) | ready, exit 0 | ready, exit 0 | ready, exit 0 |
+
+Follow-up from the #8828 rereview: `4ab29c9` masked the scanner, so it is
+reverted (asset-pipeline `b9231da`). A project that pins Rusty.Engine its own
+way is now a note that does not affect readiness. asset-pipeline `b9231da`
+reports ready in repository mode (exit 0, with one note naming the
+prototype), and ready with `--project` App or Bake.

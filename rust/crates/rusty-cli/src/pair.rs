@@ -145,6 +145,7 @@ pub const FEED_DECLARATION: &str = r#"    <RustyEngineCache Condition="'$(RustyE
   </Target>"#;
 const FEED_MARKER: &str = "/pairs/$(RustyEnginePackageVersion)/sdk-feed";
 pub const EXACT_VERSION: &str = "[$(RustyEnginePackageVersion)]";
+const PIN_PROPERTY: &str = "$(RustyEnginePackageVersion)";
 const SHAPE_SKIPPED_DIRECTORIES: &[&str] = &[
     ".git",
     ".runtime",
@@ -162,8 +163,9 @@ const SHAPE_SKIPPED_DIRECTORIES: &[&str] = &[
 /// that project, its `ProjectReference` closure, and the `.props`/`.targets`
 /// files in their directories up to the pin are checked, so an unrelated
 /// project in the same repository does not make the product unready.
-pub fn shape_problems(pin: &Pin, project: Option<&Path>) -> Result<Vec<String>, String> {
+pub fn shape_problems(pin: &Pin, project: Option<&Path>) -> Result<ProductShape, String> {
     let mut problems = Vec::new();
+    let mut notes = Vec::new();
     let props = fs::read_to_string(&pin.file).map_err(|error| {
         format!(
             "RUSTY_PIN: could not read `{}`: {error}",
@@ -187,12 +189,28 @@ pub fn shape_problems(pin: &Pin, project: Option<&Path>) -> Result<Vec<String>, 
         None => collect_loose_references(root, &mut loose)?,
     }
     for (file, version) in loose {
-        problems.push(format!(
-            "`{}` references Rusty.Engine as `{version}`, which NuGet treats as a minimum; use Version=\"{EXACT_VERSION}\"",
-            file.display()
-        ));
+        if version.contains(PIN_PROPERTY) {
+            problems.push(format!(
+                "`{}` references Rusty.Engine as `{version}`, which NuGet treats as a minimum; use Version=\"{EXACT_VERSION}\"",
+                file.display()
+            ));
+        } else {
+            notes.push(format!(
+                "`{}` references Rusty.Engine as `{version}`, outside the repository pin; rusty does not install or check it",
+                file.display()
+            ));
+        }
     }
-    Ok(problems)
+    Ok(ProductShape { problems, notes })
+}
+
+/// Problems make a product unready: its pin feed is not declared, or a
+/// reference that follows the pin is a NuGet minimum. Notes name projects that
+/// pin Rusty.Engine some other way (a retained prototype with its own
+/// version); they are reported but do not affect the pinned product.
+pub struct ProductShape {
+    pub problems: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 fn collect_loose_references(
@@ -778,7 +796,7 @@ mod tests {
         )
         .unwrap();
         let pin = Pin::find(&root).unwrap().unwrap();
-        let problems = shape_problems(&pin, None).unwrap();
+        let problems = shape_problems(&pin, None).unwrap().problems;
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems[0].contains("RestoreAdditionalProjectSources"));
         assert!(problems[1].contains("minimum"));
@@ -796,7 +814,7 @@ mod tests {
             r#"<PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]">"#,
         )
         .unwrap();
-        assert!(shape_problems(&pin, None).unwrap().is_empty());
+        assert!(shape_problems(&pin, None).unwrap().problems.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -861,9 +879,12 @@ mod tests {
         let pin = Pin::find(&root).unwrap().unwrap();
         let app = root.join("src/App/App.csproj");
 
-        assert!(shape_problems(&pin, Some(&app)).unwrap().is_empty());
+        assert!(shape_problems(&pin, Some(&app))
+            .unwrap()
+            .problems
+            .is_empty());
         assert_eq!(
-            shape_problems(&pin, None).unwrap().len(),
+            shape_problems(&pin, None).unwrap().problems.len(),
             1,
             "repository scan sees legacy"
         );
@@ -873,9 +894,34 @@ mod tests {
             format!("<Project>{minimum}</Project>"),
         )
         .unwrap();
-        let problems = shape_problems(&pin, Some(&app)).unwrap();
+        let problems = shape_problems(&pin, Some(&app)).unwrap().problems;
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("Lib.csproj"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_project_with_its_own_version_is_a_note_not_a_problem() {
+        let root = env::temp_dir().join(format!("rusty-own-{}", std::process::id()));
+        fs::create_dir_all(root.join("legacy/Old")).unwrap();
+        fs::write(
+            root.join(PIN_FILE),
+            PROPS.replace(
+                "    <Other>kept</Other>\n",
+                &format!("{FEED_DECLARATION}\n  <PropertyGroup>\n"),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("legacy/Old/Old.csproj"),
+            r#"<Project><PropertyGroup><OldVersion>0.1.0-dev.old</OldVersion></PropertyGroup><PackageReference Include="Rusty.Engine" Version="$(OldVersion)" /></Project>"#,
+        )
+        .unwrap();
+        let pin = Pin::find(&root).unwrap().unwrap();
+        let shape = shape_problems(&pin, None).unwrap();
+        assert!(shape.problems.is_empty(), "{:?}", shape.problems);
+        assert_eq!(shape.notes.len(), 1);
+        assert!(shape.notes[0].contains("outside the repository pin"));
         fs::remove_dir_all(root).unwrap();
     }
 

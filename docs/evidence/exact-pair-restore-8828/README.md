@@ -165,3 +165,36 @@ the check covers the project, its `ProjectReference` closure, and the
 the same repository no longer makes the product unready. Without `--project`
 it scans the repository. A unit test covers a referenced library that is
 checked and an unrelated legacy project that is not.
+
+## Review fix: projects outside the repository pin
+
+The rereview found that an unrelated retained prototype still decided
+readiness. asset-pipeline's `MicroVoxel.Host` pins its own
+`RustyEngineSdkPackageVersion`, and `status` repository mode required that
+project to migrate before the Workbench counted as ready. asset-pipeline
+`4ab29c9`, which repinned it, masked the scanner rather than fixing it, and
+is reverted in `b9231da`.
+
+The check now separates two cases:
+
+- **Problems (affect readiness):** the pin file does not declare the feed, or
+  a reference that follows the pin (`$(RustyEnginePackageVersion)`) is not
+  exact. This is the #8828 hazard.
+- **Notes (listed, no effect on readiness):** a `Rusty.Engine` reference with
+  any other version, meaning a project that pins itself, such as a retained
+  prototype. `status` prints it as
+  `note: … outside the repository pin; rusty does not install or check it`.
+
+Together with the `--project` scoping, this is re-verified on git archives
+with this build:
+
+| asset-pipeline | repository | `--project` App | `--project` Bake |
+|---|---|---|---|
+| `96a972a` (reviewed, prototype untouched) | ready, exit 0, 1 note | ready, exit 0 | ready, exit 0 |
+| `b9231da` (main, prototype restored) | ready, exit 0, 1 note | ready, exit 0 | ready, exit 0 |
+
+The parser probes still give include-first, version-first and child-Version
+minimums exit 1, and the exact control exit 0. The other eleven products
+report ready with no notes. There are 27 unit tests plus 1 integration test,
+including one where a project with its own version is a note rather than a
+problem.
