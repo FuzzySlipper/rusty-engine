@@ -1,0 +1,106 @@
+name: pair
+
+# Build, exercise and publish the matched Linux-x64 C# SDK/runtime pair for
+# each main revision that changes what the pair contains. The consumer check
+# and the publication use the same archive. Documentation-only changes do not
+# produce a pair.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust/**'
+      - 'csharp/**'
+      - 'render/**'
+      - 'studio/**'
+      - 'fixtures/**'
+      - 'scripts/pack-csharp-sdk.sh'
+      - 'scripts/build-runtime-pack.sh'
+      - 'scripts/generate-csharp-native-bindings.sh'
+      - 'scripts/*-csharp-release-pair.sh'
+      - 'scripts/fixtures/**'
+      - '.github/workflows/pair.yml'
+      - '!**/*.md'
+  workflow_dispatch:
+
+# Publications run one at a time and are never cancelled midway.
+concurrency:
+  group: csharp-pair-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  pair:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Skip an already published revision
+        id: published
+        run: |
+          version=$(./scripts/build-csharp-release-pair.sh --print-version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ $(gh release view "csharp-sdk-v$version" --json isDraft --jq .isDraft 2>/dev/null) == false ]]; then
+            echo "csharp-sdk-v$version is already published"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust
+        if: steps.published.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install .NET SDK
+        if: steps.published.outputs.skip != 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install pnpm
+        if: steps.published.outputs.skip != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        if: steps.published.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Restore Rust build cache
+        if: steps.published.outputs.skip != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-pair
+          workspaces: . -> target
+
+      - name: Install pair build dependencies
+        if: steps.published.outputs.skip != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep
+          libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
+          test -n "$libclang_path"
+          echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          pnpm --dir render install --frozen-lockfile
+          # The runtime pack takes its live-debug panel from studio/ until #8794 moves it.
+          if [[ -f studio/pnpm-lock.yaml ]]; then pnpm --dir studio install --frozen-lockfile; fi
+
+      - name: Build pair
+        if: steps.published.outputs.skip != 'true'
+        run: ./scripts/build-csharp-release-pair.sh --output "$RUNNER_TEMP/pair"
+
+      - name: Exercise the pair with a packaged consumer
+        if: steps.published.outputs.skip != 'true'
+        run: ./scripts/test-csharp-release-pair.sh "$RUNNER_TEMP"/pair/*.tar.gz
+
+      - name: Publish the exercised pair
+        if: steps.published.outputs.skip != 'true'
+        run: ./scripts/publish-csharp-release-pair.sh "$RUNNER_TEMP"/pair/*.tar.gz

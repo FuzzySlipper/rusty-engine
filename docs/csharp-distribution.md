@@ -4,7 +4,8 @@ An ordinary downstream product consumes one exact release pair: a Linux-x64
 archive containing a local `Rusty.Engine` NuGet feed, its matching runtime
 pack, and a checksummed pairing manifest. This is a file contract, not a
 GitHub-specific setup: obtain the archive and its adjacent `.sha256` file from
-the distribution channel available to your environment.
+the distribution channel available to your environment (see
+[Find a published pair](#find-a-published-pair)).
 
 Every pair has a version derived from one Engine commit, for example
 `0.1.0-dev.abc123def456`. The archive name, package version, SDK-generated ABI
@@ -52,32 +53,47 @@ nuspec/props identity, runtime manifest, and the runtime host's `--identity`
 output. A `RUSTY_ENGINE_PAIR_*` error means replace
 the entire pair with one unmodified matching release artifact.
 
-## Produce a pair as an Engine contributor
+## Find a published pair
 
-From a clean Engine checkout, build to a new output directory. The script
-derives the version from `HEAD`, refuses any tracked or untracked changes, and
-never replaces an output path:
+CI publishes every pair as GitHub release `csharp-sdk-v<version>` with the
+archive, its checksum, and a small `pair-release.json` that names the version,
+source revision, archive URL and SHA-256, and ABI identity. The newest
+published pair is GitHub's Latest release, so these two URLs are stable:
+
+```text
+https://github.com/FuzzySlipper/rusty-engine/releases/latest/download/pair-release.json
+https://github.com/FuzzySlipper/rusty-engine/releases/download/csharp-sdk-v<version>/pair-release.json
+```
+
+Latest only makes an update available. A product keeps its explicit pin until
+someone changes it.
+
+## How pairs are published
+
+The `pair` workflow (`.github/workflows/pair.yml`) owns publication. For each
+`main` push that changes Rust, C#, the browser shell, fixtures, or the pair
+scripts, it builds the pair with `scripts/build-csharp-release-pair.sh`,
+exercises that archive with `scripts/test-csharp-release-pair.sh`, and
+publishes the same archive with `scripts/publish-csharp-release-pair.sh`.
+Documentation-only changes do not produce a pair. Run the workflow by hand
+(`gh workflow run pair.yml`) to retry a failed publication.
+
+- A revision that already has a published release is skipped; its bytes never
+  change.
+- Assets are uploaded to a draft, then one edit publishes the release and moves
+  Latest. A failed build, consumer check or upload leaves Latest where it was.
+- Latest only moves forward: a late publication of an older revision stays
+  available by tag without replacing a newer pair.
+
+Contributors do not publish pairs by hand. To inspect a pair locally, build one
+from a clean checkout into a new directory and exercise it:
 
 ```bash
 ./scripts/build-csharp-release-pair.sh --output /tmp/rusty-engine-release
+./scripts/test-csharp-release-pair.sh /tmp/rusty-engine-release/*.tar.gz
 ```
-
-The contributor publishes the verified local artifact; GitHub Actions does
-not rebuild or publish another pair when its tag appears. After pushing the
-source commit, publish the archive with:
-
-```bash
-./scripts/publish-csharp-release-pair.sh /tmp/rusty-engine-release/*.tar.gz
-```
-
-This reuses the pair verifier, reads the source revision and version from the
-archive, and publishes it with its checksum under `csharp-sdk-v<version>`.
-An existing release is not replaced. Install these published bytes in
-consumers; do not independently rebuild a pair under the same version.
 
 Ordinary C# CI still exercises the generated SDK/CoreCLR path. When NativeAOT
 fidelity needs verification, run `./scripts/verify-csharp.sh --aot` or dispatch
-the C# workflow with its `nativeaot` input. A disposable distribution consumer
-can be exercised with `./scripts/test-csharp-release-pair.sh <pair.tar.gz>`.
-Choose these checks for the changed boundary rather than repeating them merely
-to publish an already verified artifact.
+the C# workflow with its `nativeaot` input, or pass `--aot` to
+`test-csharp-release-pair.sh`.

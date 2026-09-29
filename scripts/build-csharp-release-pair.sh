@@ -8,9 +8,10 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 output=""
+print_version=0
 
 usage() {
-    echo "usage: scripts/build-csharp-release-pair.sh --output <new-directory>" >&2
+    echo "usage: scripts/build-csharp-release-pair.sh (--output <new-directory> | --print-version)" >&2
 }
 
 while (($#)); do
@@ -19,6 +20,10 @@ while (($#)); do
             (($# >= 2)) || { usage; exit 2; }
             output=$2
             shift 2
+            ;;
+        --print-version)
+            print_version=1
+            shift
             ;;
         --help)
             usage
@@ -31,6 +36,11 @@ while (($#)); do
     esac
 done
 
+version="0.1.0-dev.$(git -C "$repo_root" rev-parse --short=12 HEAD)"
+if ((print_version)); then
+    printf '%s\n' "$version"
+    exit 0
+fi
 [[ -n "$output" ]] || { usage; exit 2; }
 if [[ "$output" != /* ]]; then
     output="$repo_root/$output"
@@ -47,8 +57,6 @@ if [[ -e "$output" ]]; then
 fi
 
 revision=$(git rev-parse HEAD)
-short_revision=$(git rev-parse --short=12 HEAD)
-version="0.1.0-dev.$short_revision"
 pair_name="rusty-engine-csharp-pair-$version-linux-x64"
 archive_name="$pair_name.tar.gz"
 archive_path="$output/$archive_name"
