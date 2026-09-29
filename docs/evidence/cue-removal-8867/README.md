@@ -72,7 +72,12 @@ change. It shows three changes and nothing else:
 
 ## Migration
 
-Products call nothing that was removed, so no source changes. The fingerprint
-change means each product rebuilds on the pair published from this change
-(`rusty update`, then build), as with any ABI change. Doom and Dagger move to
-that pair once it is published.
+Products call nothing that was removed, so they need no source changes. The
+fingerprint change means each product rebuilds on a pair from this change
+(`rusty update`, then build), as with any ABI change. `0.1.0-dev.e9511434c81a`
+is the first such pair.
+
+Doom (`788c784`) and Dagger (`c4248c9`) moved to `0.1.0-dev.b67d90d5b601`, the
+current pair, with `rusty update` alone. `rusty dev` rebuilt both against the
+new SDK and ran them streamed. `parity-capture.mjs` ran unchanged and recorded
+no page errors, and the frames match the #8792 captures.
