@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use engine_spatial::{
     DynamicsBodyId, DynamicsBodyInput, DynamicsShape, DynamicsSolver, MaterialVoxel,
-    VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyOperation,
-    VoxelChunkResidencyService, VoxelCollisionScene, VoxelEdit, VoxelEditService,
+    SurfaceMeshOptions, SurfaceMode, VoxelChunkIdentity, VoxelChunkPayload,
+    VoxelChunkResidencyOperation, VoxelChunkResidencyService, VoxelCollisionScene, VoxelEdit,
+    VoxelEditService,
 };
 
 const CHUNK: i64 = 8;
@@ -292,4 +293,84 @@ fn an_edit_keeps_distant_colliders_and_a_resting_body_asleep() {
     let ball = solver.body(DynamicsBodyId(1)).unwrap();
     assert!(ball.sleeping);
     assert!((ball.translation[1] - 1.4).abs() < 0.05);
+}
+
+/// Every chunk mesh of `scene` matches a scene built in one pass from its
+/// voxels with the same surface mode.
+fn assert_reconstructed_meshes_match(scene: &VoxelCollisionScene, context: &str) {
+    let fresh = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        scene.voxel_size(),
+        scene.chunk_size(),
+        scene.material_voxels(),
+        scene.mesh_options(),
+    )
+    .unwrap();
+    let meshes = |scene: &VoxelCollisionScene| {
+        scene
+            .mesh_chunks()
+            .map(|chunk| (chunk.chunk, chunk.content_hash))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(meshes(scene), meshes(&fresh), "{context}");
+}
+
+fn solid_slab(mode: SurfaceMode) -> VoxelCollisionScene {
+    // x 0..16, y 0..6, z 0..6: two chunks along x, one along y and z.
+    let voxels = (0..16).flat_map(|x| {
+        (0..6).flat_map(move |y| {
+            (0..6).map(move |z| MaterialVoxel {
+                state: 0,
+                address: [x, y, z],
+                material_slot: 1,
+            })
+        })
+    });
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK as u32,
+        voxels,
+        SurfaceMeshOptions {
+            mode,
+            ..SurfaceMeshOptions::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn reconstructed_surface_edits_two_cells_from_a_boundary_match_a_fresh_build() {
+    // Found in #8739 review: clearing [6,3,3] changed chunk [1,0,0]'s Dual
+    // Contouring mesh, because each chunk's payload carried every halo vertex.
+    for mode in [SurfaceMode::DualContouring, SurfaceMode::MarchingCubes] {
+        for address in [[6, 3, 3], [7, 3, 3], [8, 3, 3], [9, 3, 3], [7, 5, 5]] {
+            let mut scene = solid_slab(mode);
+            VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address }]).unwrap();
+            assert_reconstructed_meshes_match(&scene, &format!("{mode:?} clear {address:?}"));
+        }
+    }
+}
+
+#[test]
+fn random_reconstructed_surface_edits_match_a_fresh_build() {
+    for mode in [SurfaceMode::DualContouring, SurfaceMode::MarchingCubes] {
+        let mut scene = solid_slab(mode);
+        let mut rng = Lcg(0x8739);
+        for step in 0..60 {
+            let address = [rng.next(18) - 1, rng.next(8) - 1, rng.next(8) - 1];
+            let edit = if rng.next(2) == 0 {
+                VoxelEdit::Clear { address }
+            } else {
+                VoxelEdit::Set {
+                    address,
+                    material_slot: 1 + rng.next(2) as u16,
+                }
+            };
+            if let Err(error) = VoxelEditService::apply(&mut scene, &[edit]) {
+                // Setting a voxel to what it already holds changes nothing.
+                assert!(format!("{error:?}").contains("NoChanges"), "{error:?}");
+                continue;
+            }
+            assert_reconstructed_meshes_match(&scene, &format!("{mode:?} step {step} {edit:?}"));
+        }
+    }
 }

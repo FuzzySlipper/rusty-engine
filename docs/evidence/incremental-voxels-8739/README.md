@@ -202,6 +202,31 @@ Products pin their SDK version, so nothing breaks until they move.
 - **`LiveSubstrateProof`:** its background-preparation and history-policy proof
   steps use `ApplyResidency` instead.
 
+## Review fix: reconstructed surfaces
+
+With Dual Contouring, clearing a voxel two cells inside a chunk changed the
+neighbouring chunk's mesh, but only the owning chunk was rebuilt. The cause
+was in the mesher, not the dirty-chunk rule:
+- each chunk samples its whole one-chunk halo;
+- `svc-mesh` `dual_contouring` emitted a vertex for every active cell in that
+  halo, including cells only neighbouring chunks' quads use.
+
+A chunk's payload therefore changed whenever anything near it changed.
+
+Owned chunk meshing now keeps only the vertices its own quads reference, in
+cell order. A quad a chunk owns depends only on cells within one voxel of its
+edge, so the existing boundary-cell rule is exact for reconstructed surfaces
+too. Standalone and explicit scalar meshing are unchanged. Dual Contouring
+chunk payloads no longer carry unused halo vertices, so their content hashes
+change.
+
+In `tests/voxel_local_changes.rs`:
+- `reconstructed_surface_edits_two_cells_from_a_boundary_match_a_fresh_build`
+  runs the review case and its neighbours for both reconstructed modes. Before
+  the fix it reproduces the reviewer's hash (13465877434649881627).
+- `random_reconstructed_surface_edits_match_a_fresh_build` compares every chunk
+  mesh after each of 60 random edits, again for both modes.
+
 ## Found, not fixed here
 
 - **Renderer projection still revisits every chunk.** The voxel render

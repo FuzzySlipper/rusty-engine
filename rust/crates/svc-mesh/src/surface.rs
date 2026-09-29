@@ -812,12 +812,39 @@ fn dual_contouring(
             count: indices.len() as u32 - start,
         });
     }
-    let positions = active
-        .values()
+    // A chunk samples its whole one-chunk halo, so `active` also holds
+    // vertices of cells that only neighbouring chunks' quads use. Keep only
+    // the vertices this chunk's quads reference, in cell order, so the chunk
+    // depends on its own surface and not on changes elsewhere in the halo.
+    let mut vertices: Vec<&DualVertex> = active.values().collect();
+    if owner.is_some() && !field.is_explicit() {
+        let mut used = vec![false; vertices.len()];
+        for index in &indices {
+            used[*index as usize] = true;
+        }
+        let mut remap = vec![0_u32; vertices.len()];
+        let mut next = 0_u32;
+        for (index, keep) in used.iter().enumerate() {
+            if *keep {
+                remap[index] = next;
+                next += 1;
+            }
+        }
+        for index in &mut indices {
+            *index = remap[*index as usize];
+        }
+        vertices = vertices
+            .into_iter()
+            .zip(used)
+            .filter_map(|(vertex, keep)| keep.then_some(vertex))
+            .collect();
+    }
+    let positions = vertices
+        .iter()
         .map(|vertex| vertex.position)
         .collect::<Vec<_>>();
-    let normals = active
-        .values()
+    let normals = vertices
+        .iter()
         .map(|vertex| vertex.normal)
         .collect::<Vec<_>>();
     finalize_raw(
@@ -829,7 +856,7 @@ fn dual_contouring(
             groups,
             stats: MeshStats {
                 surface_mode: SurfaceMode::DualContouring,
-                vertices: active.len() as u32,
+                vertices: vertices.len() as u32,
                 indices: total_indices as u32,
                 triangles: (total_indices / 3) as u32,
                 quads: (total_indices / 6) as u32,
