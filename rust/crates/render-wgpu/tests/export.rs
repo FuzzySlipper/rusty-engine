@@ -298,6 +298,87 @@ fn animated_meshes_keep_skins_clips_and_joint_attachments_and_reopen() {
     assert!(document.skins().count() >= 1);
 }
 
+/// `glb` with one more scene root, an empty node named `name`.
+fn with_extra_root(glb: &[u8], name: &str) -> Vec<u8> {
+    let json_length = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&glb[20..20 + json_length]).unwrap();
+    let nodes = document["nodes"].as_array_mut().unwrap();
+    nodes.push(serde_json::json!({ "name": name }));
+    let index = nodes.len() - 1;
+    let scene = document["scene"].as_u64().unwrap_or(0) as usize;
+    document["scenes"][scene]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!(index));
+    let mut text = serde_json::to_vec(&document).unwrap();
+    text.resize(text.len().next_multiple_of(4), b' ');
+    let bin = &glb[20 + json_length..];
+    let total = 12 + 8 + text.len() + bin.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&text);
+    out.extend_from_slice(bin);
+    out
+}
+
+#[test]
+fn a_joint_attachment_follows_the_skin_joint_when_another_node_shares_its_name() {
+    // A non-joint root also named RightHand: the renderer attaches to the
+    // skin joint, and so must the export.
+    let bytes = with_extra_root(
+        &fixture("csharp-joint-attachments/content/body.glb"),
+        "RightHand",
+    );
+    let (body, body_bytes) = admit_bytes("body.glb", &bytes);
+    let mut resources = Resources::default();
+    hold(&mut resources, &body, body_bytes);
+    let world = world(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: body.clone(),
+        },
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle: RenderHandle::new(BODY),
+            parent: None,
+            instance: AnimatedMeshInstanceDescriptor {
+                inspection: AnimatedMeshInspection::default(),
+                asset: body.asset.clone(),
+                transform: Transform::IDENTITY,
+                visible: true,
+                material_overrides: Vec::new(),
+                playback: None,
+                metadata: RenderMetadata::default(),
+            },
+        },
+        primitive(5, Some(BODY), Geometry::Cube, [0.8, 0.2, 0.1, 1.0]),
+        RenderDiff::SetParentJoint {
+            handle: RenderHandle::new(5),
+            joint: Some("RightHand".to_owned()),
+        },
+    ]);
+    let exported = export(&world, BODY, true, &resources).unwrap();
+    let document = gltf::Gltf::from_slice(&exported).expect("a valid GLB");
+    assert_eq!(
+        document
+            .nodes()
+            .filter(|node| node.name() == Some("RightHand"))
+            .count(),
+        2
+    );
+    let hand = document
+        .skins()
+        .flat_map(|skin| skin.joints().collect::<Vec<_>>())
+        .find(|joint| joint.name() == Some("RightHand"))
+        .expect("the RightHand skin joint");
+    assert!(hand
+        .children()
+        .any(|node| node.name() == Some("primitive 5")));
+}
+
 #[test]
 fn a_reopened_character_renders_the_sampled_pose_as_the_original_did() {
     let mut harness = Harness::new(RendererOptions::default());

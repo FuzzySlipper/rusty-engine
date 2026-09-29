@@ -361,21 +361,7 @@ impl Renderer {
                 rigid.insert((mesh_index as u32, primitive_index as u32), mesh);
             }
         }
-        let mut joint_counts: HashMap<String, Vec<usize>> = HashMap::new();
-        for skin in &model.skins {
-            for joint in &skin.joints {
-                if let Some(name) = &model.nodes[*joint].name {
-                    let entry = joint_counts.entry(name.clone()).or_default();
-                    if !entry.contains(joint) {
-                        entry.push(*joint);
-                    }
-                }
-            }
-        }
-        let joints = joint_counts
-            .into_iter()
-            .filter_map(|(name, nodes)| (nodes.len() == 1).then(|| (name, nodes[0])))
-            .collect();
+        let joints = joint_nodes(&model);
         let slots = asset
             .embedded_material_slots
             .iter()
@@ -1397,6 +1383,27 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
 /// identities are skin joint node names (unique among joints, never
 /// synthesized). A skin joint therefore takes its name over any other node
 /// that shares it; other named nodes bind by name as well.
+/// The skin joints retained children attach to, by name: a name shared by
+/// two different joints names neither. Nodes that are not skin joints never
+/// take a joint's name. Rendering and GLB export attach by this rule.
+pub(crate) fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
+    let mut joint_counts: HashMap<String, Vec<usize>> = HashMap::new();
+    for skin in &model.skins {
+        for joint in &skin.joints {
+            if let Some(name) = &model.nodes[*joint].name {
+                let entry = joint_counts.entry(name.clone()).or_default();
+                if !entry.contains(joint) {
+                    entry.push(*joint);
+                }
+            }
+        }
+    }
+    joint_counts
+        .into_iter()
+        .filter_map(|(name, nodes)| (nodes.len() == 1).then(|| (name, nodes[0])))
+        .collect()
+}
+
 fn channel_targets(model: &GlbModel) -> HashMap<&str, usize> {
     let mut targets: HashMap<&str, usize> = model
         .nodes

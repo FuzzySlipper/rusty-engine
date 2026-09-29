@@ -30,7 +30,7 @@ use render_model::{
 };
 use serde_json::{json, Value};
 
-use crate::animated::decode_animated_asset;
+use crate::animated::{decode_animated_asset, joint_nodes};
 use crate::glb::{GlbAlpha, GlbClip, GlbModel, GlbTexture, Interp, Path};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::primitives;
@@ -503,8 +503,8 @@ struct Writer<'a> {
     /// A static mesh asset's streams and its groups.
     static_geometry: HashMap<String, (Streams, Groups)>,
     builtin_geometry: HashMap<Builtin, Streams>,
-    /// Per written animated instance, its uniquely named rig nodes, which
-    /// retained children attach to by joint name.
+    /// Per written animated instance, its skin joints by name, which
+    /// retained children attach to.
     joints: HashMap<RenderHandle, HashMap<String, usize>>,
 }
 
@@ -1021,17 +1021,12 @@ impl<'a> Writer<'a> {
                 self.animation(id, &clips[id], &nodes);
             }
         }
-        // Retained children name joints by node name, where it is unique.
-        let mut joints: HashMap<String, usize> = HashMap::new();
-        let mut repeated = std::collections::HashSet::new();
-        for (glb_index, node) in model.nodes.iter().enumerate() {
-            if let Some(name) = &node.name {
-                if joints.insert(name.clone(), nodes[glb_index]).is_some() {
-                    repeated.insert(name.clone());
-                }
-            }
-        }
-        joints.retain(|name, _| !repeated.contains(name));
+        // Retained children attach to skin joints as the renderer attaches
+        // them.
+        let joints = joint_nodes(&model)
+            .into_iter()
+            .map(|(name, glb_index)| (name, nodes[glb_index]))
+            .collect();
         self.joints.insert(handle, joints);
         Ok(())
     }

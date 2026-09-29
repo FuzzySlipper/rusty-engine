@@ -102,7 +102,10 @@ page for agent and audio sessions.
   - With `IncludeAnimations`, every resolved clip is written under its
     descriptor id, clip packs included. The clip resolution is now one
     function (`decode_animated_asset`) shared with rendering.
-  - Retained children attached to a joint hang from that joint's node.
+  - Retained children attached to a joint hang from that joint's node. The
+    joint is resolved by the renderer's own rule (`joint_nodes`): names
+    unique among skin joints, so a non-joint node sharing a joint's name
+    does not take it (review of `551e69588`).
 - **Lights.** Point, spot and directional lights inside the selection become
   `KHR_lights_punctual` on a child node at the light's position and direction.
 - **Explicit failures**, each naming the node, as `docs/csharp-offline-images.md`
@@ -150,6 +153,10 @@ page for agent and audio sessions.
     within the screenshot tolerance on all but 2% of the character's pixels.
   - `sprites_voxel_surfaces_and_ambient_lights_fail_the_export_by_name`, plus
     a punctual point light.
+  - `a_joint_attachment_follows_the_skin_joint_when_another_node_shares_its_name`:
+    `body.glb` with an extra root node named `RightHand`. The attached cube
+    hangs from the skin joint, and the test fails on the name rule first
+    submitted.
 - **`csharp-engine-services`.**
   `results_arrive_at_the_next_call_and_cancelled_jobs_stay_cancelled` replaces
   the chunk test.
