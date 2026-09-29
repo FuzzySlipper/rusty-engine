@@ -1,0 +1,20 @@
+> [6.79s] script:/home/agent/dev/rusty-engine/docs/evidence/doom-device-audio-8821/drive-door-and-pistol.py
+{"t": 0.06, "event": "start", "position": [-7, 0.9, 3], "door": "closed"}
+{"t": 0.06, "event": "tracks", "health": 100}
+{"t": 0.45, "event": "fire-pressed", "target": null, "ammo": {"bullets": 50, "shells": 0}}
+{"t": 7.49, "event": "waypoint", "target": [-7.0, -2.0], "position": [-7.0594563, 0.9197493, -1.1022407]}
+{"t": 13.31, "event": "waypoint", "target": [-13.0, -2.0], "position": [-12.0032425, 0.9197493, -1.8497504]}
+{"t": 20.56, "event": "waypoint", "target": [-13.0, -16.5], "position": [-12.935048, 0.9199987, -15.51803]}
+{"t": 27.39, "event": "waypoint", "target": [-0.5, -16.5], "position": [-1.4706424, 0.91999865, -16.42204]}
+{"t": 27.79, "event": "fire-pressed", "target": 31001, "targetHealth": 30, "ammo": {"bullets": 69, "shells": 0}, "aimHit": {"present": true, "kind": "Entity", "entity": 31001, "distance": 3.8572006366677813, "range": 70}}
+{"t": 28.6, "event": "fire-pressed", "target": 31001, "targetHealth": 15, "ammo": {"bullets": 68, "shells": 0}, "aimHit": {"present": true, "kind": "Entity", "entity": 31001, "distance": 3.8572006366677813, "range": 70}}
+{"t": 29.41, "event": "fire-pressed", "target": 31002, "targetHealth": 30, "ammo": {"bullets": 67, "shells": 0}, "aimHit": {"present": true, "kind": "Entity", "entity": 31002, "distance": 11.139038641207463, "range": 70}}
+{"t": 30.21, "event": "fire-pressed", "target": 31002, "targetHealth": 15, "ammo": {"bullets": 66, "shells": 0}, "aimHit": {"present": true, "kind": "Entity", "entity": 31002, "distance": 10.859040400851814, "range": 70}}
+{"t": 37.63, "event": "waypoint", "target": [-0.5, -29.5], "position": [-0.5739547, 0.9200003, -28.4887]}
+{"t": 42.99, "event": "waypoint", "target": [1.5, -30.8], "position": [0.82875484, 0.9200003, -30.05151]}
+{"t": 48.53, "event": "waypoint", "target": [4.5, -31.8], "position": [3.537339, 0.9200003, -31.341282]}
+{"t": 53.98, "event": "waypoint", "target": [6.6, -32.4], "position": [5.616637, 0.9200003, -32.059994]}
+{"t": 53.98, "event": "door-candidate", "selected": null, "distance": 2.5856318, "yawDelta": -160.92999382190357, "pitchDelta": 0, "visibility": "Visible", "reason": "OutsideQuery"}
+{"t": 54.95, "event": "use-pressed", "selected": {"id": 20000, "revision": 2}, "reason": "Ready"}
+{"t": 56.95, "event": "door", "state": "open", "position": [7.8300004, 0.9199989, -32.059994]}
+{"t": 56.95, "event": "end", "health": 100, "ammo": {"bullets": 65, "shells": 0}, "dead": false}

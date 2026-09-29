@@ -1,0 +1,6 @@
+recording 82.26 s at 48000 Hz
+DSPISTOL.wav: best 0.999; above 0.6: 5: 7.08 s (0.999), 34.41 s (0.999), 35.22 s (0.999), 36.03 s (0.999), 36.84 s (0.999)
+DSDOROPN.wav: best 0.999; above 0.6: 1: 61.44 s (0.999)
+DSSHOTGN.wav: best 0.141; above 0.6: 0: none
+DSPUNCH.wav: best 0.283; above 0.6: 0: none
+DSDORCLS.wav: best 0.068; above 0.6: 0: none
