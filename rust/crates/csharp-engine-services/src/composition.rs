@@ -741,6 +741,20 @@ impl EngineServiceSet {
         self.audio.snapshot_frame()
     }
 
+    /// World-space origin of the committed graphics node published for an
+    /// entity, for entity-attached audio emitters.
+    pub fn entity_world_position(&self, entity: u64) -> Option<[f32; 3]> {
+        self.presentation_world.entity_world_position(entity)
+    }
+
+    /// The committed camera/view composition, for a realization that needs
+    /// the current listener without waiting for the next camera change.
+    pub fn view_composition(
+        &self,
+    ) -> Result<render_host_contracts::RendererViewComposition, CsharpEngineServicesError> {
+        self.camera_view.snapshot_composition()
+    }
+
     /// Encoded bytes of an admitted audio clip, shared without copying.
     pub fn audio_clip_bytes(&self, content_hash: &str) -> Option<Arc<[u8]>> {
         self.audio

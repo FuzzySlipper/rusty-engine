@@ -817,6 +817,7 @@ dependencies = [
  "netcorehost",
  "product-dev-host",
  "render-audio",
+ "render-host-contracts",
  "render-model",
  "render-presentation",
  "runtime-diagnostics",

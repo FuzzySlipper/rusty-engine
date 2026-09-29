@@ -399,14 +399,16 @@ impl<B: Backend> AudioRealizer<B> {
         });
     }
 
-    /// Sets the listener pose (orientation as an x, y, z, w quaternion).
-    /// Without a call the listener stays at the origin, as the browser
-    /// realization's listener does today.
-    pub fn set_listener(&mut self, position: [f32; 3], orientation: [f32; 4]) {
+    /// Places the listener at a camera pose. `forward` and `up` need not be
+    /// unit length; a degenerate basis keeps the previous orientation.
+    /// Without a call the listener stays at the origin facing -Z.
+    pub fn set_listener_pose(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) {
         self.listener
             .set_position(mint::Vector3::from(position), IMMEDIATE);
-        self.listener
-            .set_orientation(mint::Quaternion::from(orientation), IMMEDIATE);
+        if let Some(orientation) = listener_orientation(forward, up) {
+            self.listener
+                .set_orientation(mint::Quaternion::from(orientation), IMMEDIATE);
+        }
     }
 
     /// Notices sounds that ended on the device and follows entity-attached
@@ -842,6 +844,45 @@ fn emitter_position(
 
 fn add(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
     [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
+}
+
+/// The `[x, y, z, w]` rotation taking kira's listener frame (+X right, +Y
+/// up, -Z forward) to the given world forward and up.
+fn listener_orientation(forward: [f32; 3], up: [f32; 3]) -> Option<[f32; 4]> {
+    let normalize = |v: [f32; 3]| {
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        (length.is_finite() && length > f32::EPSILON).then(|| v.map(|c| c / length))
+    };
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let forward = normalize(forward)?;
+    let right = normalize(cross(forward, up))?;
+    let up = cross(right, forward);
+    let back = forward.map(|c| -c);
+    // Columns of the rotation matrix are the local axes in world space.
+    let (m00, m01, m02) = (right[0], up[0], back[0]);
+    let (m10, m11, m12) = (right[1], up[1], back[1]);
+    let (m20, m21, m22) = (right[2], up[2], back[2]);
+    let trace = m00 + m11 + m22;
+    let quaternion = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        [(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s]
+    } else if m00 > m11 && m00 > m22 {
+        let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
+        [0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s]
+    } else if m11 > m22 {
+        let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
+        [(m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s]
+    } else {
+        let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
+        [(m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s]
+    };
+    Some(quaternion)
 }
 
 fn loop_region(looping: bool) -> Option<Region> {

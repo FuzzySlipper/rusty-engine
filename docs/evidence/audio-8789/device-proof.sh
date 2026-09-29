@@ -17,6 +17,9 @@ mkdir -p "$WORK"
 parec --device="$SINK.monitor" --file-format=wav --format=s16le --rate=48000 --channels=2 \
   "$WORK/device.wav" &
 RECORDER=$!
+RECORD_START="$(date +%s.%N)"
+# Seconds since the recording started, to match steps to recording windows.
+elapsed() { echo "$(date +%s.%N) - $RECORD_START" | bc | xargs printf '%.2f'; }
 # A packaged CoreCLR host is supervised and stops when stdin closes; the
 # script holds a FIFO open as that stdin and closes it to shut down.
 mkfifo "$WORK/host.stdin"
@@ -70,14 +73,14 @@ event = {"runtime": json.loads(runtime), "sequence": sequence, "context": "gamep
 print(json.dumps({"batch": [event]}))
 PY
 )"
-    echo "> $line" >>"$WORK/live-debug.log"
+    echo "> [$(elapsed)s] $line" >>"$WORK/live-debug.log"
     curl --silent -H "Origin: $ORIGIN" -H "Content-Type: application/json" \
       --data "$body" "$ORIGIN/__rusty/product/runtime/input" >>"$WORK/live-debug.log"
     echo >>"$WORK/live-debug.log"
     continue
   fi
   if [[ "$line" == post:* ]]; then
-    echo "> $line" >>"$WORK/live-debug.log"
+    echo "> [$(elapsed)s] $line" >>"$WORK/live-debug.log"
     runtime="$(grep -o '{"kind":"binding","runtime":{[^}]*}' "$WORK/outputs.sse" | tail -n 1 \
       | sed 's/.*"runtime"://')"
     curl --silent -H "Origin: $ORIGIN" -H "Content-Type: application/json" \
@@ -90,7 +93,7 @@ PY
     sleep "${line#sleep:}"
     continue
   fi
-  echo "> $line" >>"$WORK/live-debug.log"
+  echo "> [$(elapsed)s] $line" >>"$WORK/live-debug.log"
   "$RUNTIME/bin/rusty-live-debug" --origin "$ORIGIN" --command "$line" >>"$WORK/live-debug.log" 2>&1
   echo >>"$WORK/live-debug.log"
 done

@@ -523,3 +523,95 @@ fn stop_all_silences_one_shots_and_voices() {
         "a stop is not a natural completion"
     );
 }
+
+fn spatial(hash: &str, emitter: AudioEmitter, looping: bool) -> AudioSourceDescriptor {
+    AudioSourceDescriptor {
+        spatial_blend: 1.0,
+        attenuation: 20.0,
+        emitter,
+        ..descriptor(hash, looping)
+    }
+}
+
+/// Settles a pose change (kira interpolates listener and track positions over
+/// one buffer), then measures.
+fn settled_peaks(realizer: &mut AudioRealizer<CaptureBackend>) -> [f32; 2] {
+    realizer.backend_mut().render_peaks(0.02);
+    realizer.backend_mut().render_peaks(0.1)
+}
+
+#[test]
+fn the_listener_pose_pans_and_attenuates_world_emitters() {
+    let mut realizer = capture_realizer();
+    realizer.apply(
+        &[restore(
+            1,
+            spatial(
+                "sha256:wav",
+                AudioEmitter::World3d {
+                    position: [0.0, 0.0, 3.0],
+                },
+                true,
+            ),
+            AudioVoiceDesiredState::Playing,
+            0.0,
+        )],
+        &Clips::fixtures(),
+        &NoEntityPositions,
+    );
+    // Facing +X, world +Z is on the listener's right.
+    realizer.set_listener_pose([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let [left, right] = settled_peaks(&mut realizer);
+    assert!(right > 2.0 * left, "facing +X: left {left}, right {right}");
+    // Facing -X, the same emitter is on the left.
+    realizer.set_listener_pose([0.0; 3], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let [left, right] = settled_peaks(&mut realizer);
+    assert!(left > 2.0 * right, "facing -X: left {left}, right {right}");
+    // Moving away along -Z to 15 m from the emitter attenuates it.
+    let near = left.max(right);
+    realizer.set_listener_pose([0.0, 0.0, -12.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let far = {
+        let [left, right] = settled_peaks(&mut realizer);
+        left.max(right)
+    };
+    assert!(far < 0.5 * near, "near {near}, far {far}");
+}
+
+struct MovingEntity(std::cell::Cell<[f32; 3]>);
+
+impl AudioEntityPositions for MovingEntity {
+    fn entity_position(&self, entity: u64) -> Option<[f32; 3]> {
+        (entity == 9).then(|| self.0.get())
+    }
+}
+
+#[test]
+fn an_entity_attached_voice_follows_its_entity() {
+    let mut realizer = capture_realizer();
+    let entity = MovingEntity(std::cell::Cell::new([0.0, 0.0, 3.0]));
+    realizer.set_listener_pose([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    realizer.apply(
+        &[restore(
+            1,
+            spatial(
+                "sha256:wav",
+                AudioEmitter::EntityAttached {
+                    entity: 9,
+                    offset: [0.0, 1.0, 0.0],
+                },
+                true,
+            ),
+            AudioVoiceDesiredState::Playing,
+            0.0,
+        )],
+        &Clips::fixtures(),
+        &entity,
+    );
+    assert_eq!(realizer.take_facts(), []);
+    let [left, right] = settled_peaks(&mut realizer);
+    assert!(right > 2.0 * left, "entity on the right: {left} {right}");
+    entity.0.set([0.0, 0.0, -3.0]);
+    realizer.refresh(&entity);
+    let [left, right] = settled_peaks(&mut realizer);
+    assert!(left > 2.0 * right, "entity moved left: {left} {right}");
+}

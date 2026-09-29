@@ -6,9 +6,14 @@
 //! published presentation so no second realization plays them or reports
 //! feedback for them. Natural completions and device diagnostics reach the
 //! Engine through the same realization facts the browser reports.
+//!
+//! The listener follows the camera of the primary view in the committed view
+//! composition, and entity-attached emitters follow the committed graphics
+//! node published for their entity.
 
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
-use render_audio::{AudioRealizer, NoEntityPositions, RealizedAudioFact};
+use render_audio::{AudioEntityPositions, AudioRealizer, RealizedAudioFact};
+use render_host_contracts::{RendererViewComposition, RendererViewTarget};
 use render_presentation::{PresentationFrameDiff, PresentationOp};
 use runtime_publication::RuntimePublication;
 
@@ -47,20 +52,27 @@ impl AudioOutput {
     }
 
     /// Plays a committed call's audio ops and removes them from its
-    /// publications.
+    /// publications, then follows the call's camera and entity changes.
     pub(crate) fn realize(
         &mut self,
         services: &EngineServiceSet,
         outputs: &mut [RuntimePublication],
     ) {
+        for output in outputs.iter() {
+            if let RuntimePublication::ViewComposition(composition) = output {
+                self.follow_camera(composition);
+            }
+        }
+        let entities = EngineEntities(services);
         let ops = take_audio_ops(outputs);
         if !ops.is_empty() {
             self.realizer.apply(
                 &ops,
                 &|hash: &str| services.audio_clip_bytes(hash),
-                &NoEntityPositions,
+                &entities,
             );
         }
+        self.realizer.refresh(&entities);
     }
 
     /// Replaces the realization with the committed baseline after the
@@ -71,11 +83,12 @@ impl AudioOutput {
         services: &EngineServiceSet,
     ) -> Result<(), CsharpProductRuntimeError> {
         let baseline = services.audio_snapshot_frame()?;
+        self.follow_camera(&services.view_composition()?);
         self.realizer.reset();
         self.realizer.apply(
             &baseline.ops,
             &|hash: &str| services.audio_clip_bytes(hash),
-            &NoEntityPositions,
+            &EngineEntities(services),
         );
         Ok(())
     }
@@ -87,7 +100,7 @@ impl AudioOutput {
         &mut self,
         services: &mut EngineServiceSet,
     ) -> Result<(), CsharpProductRuntimeError> {
-        self.realizer.refresh(&NoEntityPositions);
+        self.realizer.refresh(&EngineEntities(services));
         self.realizer
             .retain_clips(|hash| services.audio_clip_bytes(hash).is_some());
         let facts = self.realizer.take_facts();
@@ -99,6 +112,14 @@ impl AudioOutput {
             services.ingest_audio_realization_feedback(false, 0, facts)?;
         }
         Ok(())
+    }
+
+    /// Moves the listener to the primary view's camera. A composition with
+    /// no primary view leaves the listener where it was.
+    fn follow_camera(&mut self, composition: &RendererViewComposition) {
+        if let Some((position, forward, up)) = primary_listener(composition) {
+            self.realizer.set_listener_pose(position, forward, up);
+        }
     }
 
     pub(crate) fn set_suspended(&mut self, suspended: bool) {
@@ -142,6 +163,58 @@ impl AudioOutput {
     }
 }
 
+struct EngineEntities<'a>(&'a EngineServiceSet);
+
+impl AudioEntityPositions for EngineEntities<'_> {
+    fn entity_position(&self, entity: u64) -> Option<[f32; 3]> {
+        self.0.entity_world_position(entity)
+    }
+}
+
+type ListenerPose = ([f32; 3], [f32; 3], [f32; 3]);
+
+/// Position, forward and up of the camera shown by the lowest-ordered primary
+/// view. Without an explicit basis, yaw 0 faces -Z, positive yaw turns right
+/// and positive pitch looks up, as the renderer draws the camera.
+fn primary_listener(composition: &RendererViewComposition) -> Option<ListenerPose> {
+    let view = composition
+        .views
+        .iter()
+        .filter(|view| matches!(view.target, RendererViewTarget::Primary))
+        .min_by(|left, right| left.order.cmp(&right.order).then(left.id.cmp(&right.id)))?;
+    let camera = composition
+        .cameras
+        .iter()
+        .find(|camera| camera.id == view.camera_id)?;
+    let position = camera.pose.position.map(|value| value as f32);
+    if let Some(basis) = camera.basis {
+        return Some((
+            position,
+            basis.forward.map(|value| value as f32),
+            basis.up.map(|value| value as f32),
+        ));
+    }
+    let (yaw, pitch) = (
+        camera.pose.yaw_degrees.to_radians(),
+        camera.pose.pitch_degrees.to_radians(),
+    );
+    let forward = [
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        -yaw.cos() * pitch.cos(),
+    ];
+    let up = [
+        -yaw.sin() * pitch.sin(),
+        pitch.cos(),
+        yaw.cos() * pitch.sin(),
+    ];
+    Some((
+        position,
+        forward.map(|value| value as f32),
+        up.map(|value| value as f32),
+    ))
+}
+
 /// Removes audio ops from presentation publications, in order. A frame's
 /// publication stamp counts its own ops, so the count follows the removal;
 /// its revisions are unchanged.
@@ -183,6 +256,71 @@ mod tests {
     };
 
     use super::*;
+
+    fn composition(views: serde_json::Value) -> RendererViewComposition {
+        let camera = |id: &str, yaw: f64, pitch: f64| {
+            serde_json::json!({
+                "id": id,
+                "pose": { "position": [1.0, 2.0, 3.0], "pitchDegrees": pitch, "yawDegrees": yaw },
+                "projection": { "kind": "perspective", "fovYDegrees": 60.0, "near": 0.1, "far": 100.0 }
+            })
+        };
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "cameras": [camera("side", 90.0, 0.0), camera("down", 0.0, -90.0)],
+            "targets": [],
+            "views": views,
+            "presentations": []
+        }))
+        .expect("composition")
+    }
+
+    fn view(id: &str, camera: &str, order: u64, target: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "cameraId": camera,
+            "target": target,
+            "viewport": { "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 },
+            "order": order
+        })
+    }
+
+    fn close(actual: [f32; 3], expected: [f32; 3]) -> bool {
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected).abs() < 1e-5)
+    }
+
+    #[test]
+    fn the_listener_is_the_lowest_ordered_primary_view_camera() {
+        let primary = serde_json::json!({ "kind": "primary" });
+        let offscreen =
+            serde_json::json!({ "kind": "offscreen", "targetId": "minimap", "targetRevision": 1 });
+        let (position, forward, up) = primary_listener(&composition(serde_json::json!([
+            view("map", "down", 0, offscreen),
+            view("late", "down", 5, primary.clone()),
+            view("main", "side", 1, primary),
+        ])))
+        .expect("primary view");
+        assert_eq!(position, [1.0, 2.0, 3.0]);
+        // Yaw 90 turns right from -Z to +X.
+        assert!(close(forward, [1.0, 0.0, 0.0]), "{forward:?}");
+        assert!(close(up, [0.0, 1.0, 0.0]), "{up:?}");
+
+        let (_, forward, up) = primary_listener(&composition(serde_json::json!([view(
+            "main",
+            "down",
+            0,
+            serde_json::json!({ "kind": "primary" })
+        )])))
+        .expect("primary view");
+        // Pitch -90 looks straight down with up along -Z.
+        assert!(close(forward, [0.0, -1.0, 0.0]), "{forward:?}");
+        assert!(close(up, [0.0, 0.0, -1.0]), "{up:?}");
+
+        assert!(primary_listener(&composition(serde_json::json!([]))).is_none());
+    }
 
     #[test]
     fn audio_ops_leave_the_publication_and_its_count_follows() {

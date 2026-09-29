@@ -1,0 +1,30 @@
+> [2.28s] audio.proof.face 0
+camera yaw 0
+
+> [2.30s] audio.proof.world
+AudioReadout { ActiveVoices = 1, PausedVoices = 0, AdmittedClips = 5, EmittedSignals = 0, RetainedDiagnosticCount = 0, EvictedDiagnosticCount = 0 };realization=AudioRealizationReadout { RetainedFactCount = 0, EvictedFactCount = 0 };facts=
+
+> [3.82s] audio.proof.face 180
+camera yaw 180
+
+> [5.34s] audio.proof.face 90
+camera yaw 90
+
+> [6.85s] audio.proof.stop
+audio.proof.stop executed.
+
+> [7.57s] audio.proof.face 0
+camera yaw 0
+
+> [7.57s] audio.proof.entity 3 0
+entity 900 at (3, 0, 0)
+
+> [9.08s] audio.proof.entity -3 0
+entity 900 at (-3, 0, 0)
+
+> [10.60s] audio.proof.entity 0 -15
+entity 900 at (0, 0, -15)
+
+> [12.10s] audio.proof.stop
+audio.proof.stop executed.
+
