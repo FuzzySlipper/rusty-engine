@@ -77,6 +77,10 @@ driven headless through `rusty-live-debug`:
   identically. So this is not a result of the move; it probably depends on the
   product UI entering gameplay mode, which headless driving skips.
 - Keyboard walking on the new pair was therefore not observed.
+- **Correction (#8855).** The cause was product-side, not headless:
+  `UuLocomotionPolicy` never passed the frame's movement into the step's
+  `PlanarIntent`. Underworld `dcdbddf` fixes it; see
+  `docs/evidence/character-substeps-8855/README.md`.
 
 The long-running orphaned session on port 4177 (main checkout, pre-#8810
 `.runtime` pack) was left alone. The main checkout still has the old working
