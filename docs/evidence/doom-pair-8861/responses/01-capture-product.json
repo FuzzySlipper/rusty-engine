@@ -1,0 +1,87 @@
+{
+  "state": "submitted",
+  "submitted": {
+    "frameSequence": 1468,
+    "observer": null,
+    "views": {
+      "cameras": [
+        {
+          "basis": {
+            "forward": [
+              0.0,
+              0.0,
+              -1.0
+            ],
+            "right": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          "id": "csharp-camera-1",
+          "observer": false,
+          "pose": {
+            "pitchDegrees": 0.0,
+            "position": [
+              -7.0,
+              1.6200000047683716,
+              3.0
+            ],
+            "yawDegrees": 0.0
+          },
+          "projection": {
+            "far": 100.0,
+            "fovYDegrees": 90.0,
+            "kind": "perspective",
+            "near": 0.1
+          }
+        }
+      ],
+      "presentations": [],
+      "revision": 1459,
+      "schemaVersion": 1,
+      "sourceCameras": [
+        {
+          "id": "csharp-camera-1",
+          "pose": {
+            "pitchDegrees": 0.0,
+            "position": [
+              -7.0,
+              1.6200000047683716,
+              3.0
+            ],
+            "yawDegrees": 0.0
+          },
+          "projection": {
+            "far": 100.0,
+            "fovYDegrees": 90.0,
+            "kind": "perspective",
+            "near": 0.1
+          }
+        }
+      ],
+      "targets": [],
+      "views": [
+        {
+          "cameraId": "csharp-camera-1",
+          "id": "csharp-view-0",
+          "order": 0,
+          "target": {
+            "kind": "primary"
+          },
+          "viewport": {
+            "height": 1.0,
+            "width": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          }
+        }
+      ]
+    }
+  }
+}
