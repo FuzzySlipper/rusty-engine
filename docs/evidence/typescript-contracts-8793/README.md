@@ -209,3 +209,6 @@ difference is the transparent page background, which the same
 
 - #8869: `render_capture` lost its capture source with #8792.
   `capture-presentation.py`, which could no longer work, is deleted here.
+- #8870: product UIs still hand-declare the UI context and projection envelope
+  they consume (Dagger's `ProductUiContext`, the `live-debug-panel.d.ts`
+  copies). The runtime pack should ship those declarations.
