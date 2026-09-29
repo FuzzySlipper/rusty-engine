@@ -3,6 +3,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The SDK owns the product's native interop and service implementations. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RustyEngineGeneratedBindingsDir Condition="'$(RustyEngineGeneratedBindingsDir)' == ''">$(MSBuildProjectDirectory)/obj/Generated</RustyEngineGeneratedBindingsDir>
     <RustyEngineGeneratedInputsDir Condition="'$(RustyEngineGeneratedInputsDir)' == ''">$(RustyEngineGeneratedBindingsDir)/GeneratedInputs</RustyEngineGeneratedInputsDir>
     <RustyEngineGenerateBindings Condition="'$(RustyEngineGenerateBindings)' == ''">true</RustyEngineGenerateBindings>
@@ -11,7 +13,7 @@
     <PackageId>Rusty.Engine</PackageId>
     <PackageVersion Condition="'$(PackageVersion)' == ''">0.1.0-local</PackageVersion>
     <Authors>Rusty Engine</Authors>
-    <Description>Generated Rusty Engine C# SDK and NativeAOT product bootstrap.</Description>
+    <Description>Rusty Engine C# SDK: Engine services, native interop and product bootstrap.</Description>
     <PackageTags>rusty-engine;csharp;nativeaot</PackageTags>
     <PackageReleaseNotes Condition="'$(RustyEnginePackageAbiIdentity)' != ''">Product ABI identity: $(RustyEnginePackageAbiIdentity).</PackageReleaseNotes>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
@@ -20,6 +22,9 @@
     <Compile Remove="buildTransitive/Tasks/**/*.cs" />
     <Compile Include="$(RustyEngineGeneratedBindingsDir)/EngineContracts.g.cs" Visible="false" />
     <Compile Include="$(RustyEngineGeneratedBindingsDir)/EngineValues.g.cs" Visible="false" />
+    <Compile Include="$(RustyEngineGeneratedInputsDir)/Interop.g.cs" Visible="false" />
+    <Compile Include="$(RustyEngineGeneratedInputsDir)/EngineServiceImplementations.g.cs" Visible="false" />
+    <Compile Include="$(RustyEngineGeneratedInputsDir)/AbiIdentity.g.cs" Visible="false" />
     <None Include="PACKAGE_README.md" Pack="true" PackagePath="PACKAGE_README.md" />
     <None Include="$(RustyEngineProductGeneratorPath)" Pack="true" PackagePath="buildTransitive/analyzers" Visible="false" />
     <None Include="$(RustyEnginePackageMetadataDir)/Rusty.Engine.props" Pack="true" PackagePath="buildTransitive" />
@@ -34,6 +39,6 @@
     <Error Condition="!Exists('$(RustyEnginePackageMetadataDir)/Rusty.Engine.props')" Text="Rusty.Engine package metadata must be staged by scripts/pack-csharp-sdk.sh." />
     <MSBuild Projects="$(MSBuildThisFileDirectory)../Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
              Targets="Build"
-             Properties="Configuration=$(Configuration);RustyEngineGeneratedBindingsDir=$(RustyEngineGeneratedBindingsDir);RustyEngineGeneratedInputsDir=$(RustyEngineGeneratedInputsDir);RustyEngineGenerateBindings=$(RustyEngineGenerateBindings)" />
+             Properties="Configuration=$(Configuration)" />
   </Target>
 </Project>

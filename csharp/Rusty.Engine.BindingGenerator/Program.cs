@@ -565,6 +565,8 @@ internal static class Emit
             foreach (Field field in value.Fields) output.AppendLine($"    {RawFieldDeclaration(field)}");
             output.AppendLine("}").AppendLine();
         }
+        // Native code fills these function-table fields; C# never assigns them.
+        output.AppendLine("#pragma warning disable CS0649");
         foreach (Callback callback in model.Callbacks.Values.OrderBy(value => value.Name, StringComparer.Ordinal)) output.AppendLine($"internal unsafe struct {callback.Name} {{ internal delegate* unmanaged[Cdecl]<{string.Join(", ", callback.Parameters.Select(RawType))}, {RawType(callback.ReturnType)}> Pointer; }}");
         return output.ToString();
     }
@@ -573,7 +575,7 @@ internal static class Emit
     {
         StringBuilder output = Header("internal NativeProduct service implementation input");
         output.AppendLine("using System.Buffers;").AppendLine("using System.Linq;").AppendLine("using System.Text;").AppendLine("using Rusty.Engine;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
-        output.AppendLine("// Injected into the NativeProduct compilation. Public Rusty.Engine has contracts and values only.");
+        output.AppendLine("// Compiled into Rusty.Engine beside the public contracts and values.");
         output.AppendLine("internal static unsafe class NativeCall").AppendLine("{");
         output.AppendLine("    internal static void Require(string service, string operation, int status) { if (status != 1) throw new EngineCallException(service, operation, status); }");
         output.AppendLine("    internal static void Require(string service, string operation, int status, NativeOperationErrorReceipt error, void* context, delegate* unmanaged[Cdecl]<void*, NativeEngineDiagnosticLeaseHandle, int> destroy) { if (status == 1) { if (error.diagnostics.handle.value == 0) return; int disposeStatus = destroy(context, error.diagnostics.handle); Require(service, \"DestroyOperationDiagnosticLease\", disposeStatus); throw new InvalidOperationException($\"Rusty Engine {service}.{operation} returned success with an operation diagnostic lease.\"); } ReadOnlyMemory<EngineDiagnostic> diagnostics = ReadOnlyMemory<EngineDiagnostic>.Empty; string receiptService = service; string receiptOperation = operation; int receiptStatus = error.status == 0 ? status : error.status; try { if (error.diagnostics.handle.value != 0) diagnostics = NativeConversions.CopyLease(error.diagnostics); if (error.service.len != 0) receiptService = NativeConversions.CopyUtf8(error.service); if (error.operation.len != 0) receiptOperation = NativeConversions.CopyUtf8(error.operation); } finally { if (error.diagnostics.handle.value != 0) { int disposeStatus = destroy(context, error.diagnostics.handle); Require(service, \"DestroyOperationDiagnosticLease\", disposeStatus); } } throw new EngineCallException(receiptService, receiptOperation, receiptStatus, diagnostics); }");

@@ -50,8 +50,10 @@ the generated composition below `obj`; a Product must not check in a
 Product code implements `IEngineProduct`, accepts `ProductCreateContext`, and
 keeps `IEngineContext` or the named services it needs. Exactly one concrete
 `RustyEngineProductEntryType` is declared. The generator supplies both CoreCLR
-and NativeAOT bind implementations without assembly scanning or product-side
-registration infrastructure.
+and NativeAOT bind export without assembly scanning or product-side
+registration infrastructure. The export is safe C#; the interop, service
+implementations and product lifetime are compiled into `Rusty.Engine`, so a
+product project needs no `AllowUnsafeBlocks`.
 
 ### Diagnosing native service refusals
 

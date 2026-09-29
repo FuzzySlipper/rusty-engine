@@ -4,7 +4,6 @@
     <OutputType>Library</OutputType>
     <PublishAot>true</PublishAot>
     <NativeLib>Shared</NativeLib>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
     <StripSymbols>true</StripSymbols>
   </PropertyGroup>

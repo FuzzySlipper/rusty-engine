@@ -51,18 +51,13 @@ dotnet restore "$repo_root/csharp/Rusty.Engine/Rusty.Engine.csproj"
 dotnet build "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" --no-restore
 "$repo_root/scripts/generate-csharp-native-bindings.sh" "$generated_dir" "$generated_inputs_dir"
 
-# The generator embeds the generated ABI inputs. Build it into this package's
-# private output and intermediate directories so MSBuild cannot reuse an
-# analyzer compiled for an earlier function-table shape.
+# The analyzer does not depend on the ABI; the interop it once embedded is
+# compiled into Rusty.Engine below. Build it into this package's private output.
 dotnet build "$repo_root/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj" \
     --no-restore \
     --configuration Release \
-    --target Rebuild \
     -p:OutputPath="$product_generator_output_dir/" \
-    -p:IntermediateOutputPath="$product_generator_intermediate_dir/" \
-    -p:RustyEngineGeneratedBindingsDir="$generated_dir" \
-    -p:RustyEngineGeneratedInputsDir="$generated_inputs_dir" \
-    -p:RustyEngineGenerateBindings=false
+    -p:IntermediateOutputPath="$product_generator_intermediate_dir/"
 if [[ ! -f "$product_generator_path" ]]; then
     echo "pack-csharp-sdk: product generator build did not produce $product_generator_path" >&2
     exit 1

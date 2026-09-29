@@ -33,8 +33,9 @@ C# product application and state
 Rusty.Engine safe services and optional managed helpers
   │  generated contracts/values plus product-side composition helpers
   ▼
-generated product bootstrap and C ABI function table
-  │  generated CoreCLR/NativeAOT binds, copied values, explicit leases
+Rusty.Engine native bridge and C ABI function table
+  │  compiled interop and service implementations, copied values, explicit leases;
+  │  a small generated product export selects the product and its debug catalog
   ▼
 Rust Engine services and runtime host
   │  lifecycle, input, renderer, spatial mechanisms, content, persistence
@@ -58,8 +59,8 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser DTOs and applies delivery byte limits. Input acknowledgements and the runtime readout remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
-| Safe C# contracts | Generated C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles generated contracts and values from ignored `obj/Generated` output. |
-| Product bootstrap | Generated C# | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator) produces the internal versioned bind path and service implementations for CoreCLR and NativeAOT. |
+| Safe C# contracts and native bridge | Generated and handwritten C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles the generated contracts, values, internal interop and service implementations from ignored `obj/Generated` output, plus the handwritten [`ProductBridge`](../csharp/Rusty.Engine/NativeProduct/ProductBridge.cs) that implements the product ABI table and lifetime. |
+| Product bootstrap | Generated C# | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator) emits only what depends on the product: a safe `rusty_product_bind_v1` export naming the product constructor, and the product's debug command catalog. It serves CoreCLR and NativeAOT alike. |
 | Product lifecycle and host | Rust | [`csharp-product-runtime`](../rust/crates/csharp-product-runtime) loads the product and drives its lifecycle. |
 | Product logic | Downstream C# | The product implements the generated `IEngineProduct` contract and owns its own state and code organization. |
 | UI and host/backend implementation | TypeScript/host | DOM UI and explicit Engine host/backend work only; not downstream gameplay ownership or game-rendering substitution. |

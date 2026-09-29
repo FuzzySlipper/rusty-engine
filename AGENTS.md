@@ -86,9 +86,10 @@ Den document `rusty-engine/architecture-reset-2026-09` for the campaign charter.
 - The current `scripts/generate-csharp-native-bindings.sh` runs pinned cbindgen
   and ClangSharp, generating the header plus raw and safe C# inputs under ignored
   `obj/Generated` paths. Generated files are never edited or checked in.
-- `csharp/Rusty.Engine` is the public safe service/value surface;
-  `csharp/Rusty.Engine.ProductGenerator` generates the internal CoreCLR and
-  NativeAOT bind entrypoints and service implementations. Ordinary products
+- `csharp/Rusty.Engine` is the public safe service/value surface and compiles
+  the internal interop, service implementations and product bridge;
+  `csharp/Rusty.Engine.ProductGenerator` generates each product's small safe
+  CoreCLR/NativeAOT bind export and debug catalog. Ordinary products
   consume the immutable SDK package and must not handwrite P/Invoke, exported
   entrypoints, unsafe native calls, parallel declarations, or checked
   composition projects.
