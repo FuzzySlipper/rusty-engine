@@ -46,7 +46,9 @@ over a runtime HTTP endpoint because the endpoint would need port discovery in
   `RustyEngineProductUiBuildCommand` with MSBuild `Inputs`/`Outputs`:
   - inputs: files under the UI source root except the output, the project
     file, and `RustyEngineProductUiInput` extras;
-  - outputs: a stamp plus the UI entry.
+  - outputs: a stamp plus the UI entry. The stamp lists the files the last
+    UI build produced, and the build reruns when any of them is missing (see
+    the review fix below).
 
   So an unchanged or C#-only build skips the UI compiler, and a missing output
   reruns it.
@@ -159,3 +161,40 @@ logs its own `assets-reloaded` or `DEV_HOST_ASSET_RELOAD` result.
   so asset-only restages run it too.
 - **`ProductDevRuntime` implementers** get a defaulted `reload_content`; no
   change is needed.
+
+## Review fixes
+
+**A missing secondary UI output did not rebuild.** `Outputs` named only the
+stamp and the entry. With a multi-module UI, deleting an imported module left
+both in place, so the build skipped and staging then removed the module from
+the staged UI.
+- The fix: the stamp now lists every file under the UI root after a
+  successful build (`WriteLinesToFile`, which also creates the stamp's
+  directory; `Touch` did not). `_CheckRustyEngineProductUiOutputs` runs first
+  and deletes the stamp when a listed file is gone.
+- Why not list every output in `Outputs`: MSBuild would then compare
+  timestamps against the oldest output. A compiler that leaves unchanged
+  modules untouched (`tsc --incremental`, most bundlers) would rerun on every
+  C#-only build. The check here is existence only.
+- Evidence: the reviewer's MSBuild probe (`main.js` imports `dep.js`) run
+  against both versions of the targets file.
+
+  | Step | Old targets | New targets |
+  |---|---|---|
+  | first build | 1 build, stages `dep.js main.js` | 1 build, stages `dep.js main.js` |
+  | unchanged | — | skipped |
+  | delete `out/dep.js` | skipped; staged UI is `main.js` only | rebuilt; stages `dep.js main.js` |
+  | unchanged | — | skipped |
+  | source edited | — | rebuilt |
+
+**A failed content reload still published the new UI.**
+`ProductDevAssetReload::reload` swapped the served bundle and then ran the
+fallible content reload. It now runs the content reload first and swaps the
+UI only when that succeeds, so a reported failure leaves both old.
+`a_failed_content_reload_keeps_the_served_ui` covers both orders of outcome.
+
+**Checks.**
+- `product-dev-host` passes (73 tests). Its clippy run still stops at the
+  #8757 `model.rs` lint only.
+- `scripts/test-csharp-sdk-package.sh --coreclr-smoke` passes with the
+  changed targets.

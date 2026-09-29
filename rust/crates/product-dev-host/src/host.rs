@@ -296,11 +296,14 @@ pub struct ProductDevAssetReload {
 }
 
 impl ProductDevAssetReload {
+    /// Content admission can fail, so it runs first; a failed reload leaves
+    /// the old UI served with the old content.
     pub fn reload(&self, bundle: ProductDevBundle) -> Result<(), ProductDevRuntimeError> {
+        (self.content)()?;
         *self.bundle.write().map_err(|_| {
             ProductDevRuntimeError::new("DEV_HOST_BUNDLE", "bundle lock poisoned")
         })? = bundle;
-        (self.content)()
+        Ok(())
     }
 }
 
@@ -2670,6 +2673,32 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_content_reload_keeps_the_served_ui() {
+        fn bundle(body: &[u8]) -> ProductDevBundle {
+            ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                "index.html",
+                "text/html; charset=utf-8",
+                body.to_vec(),
+            )
+            .unwrap()])
+            .unwrap()
+        }
+        let served = Arc::new(RwLock::new(bundle(b"old UI")));
+        let reload = |content: Result<(), ProductDevRuntimeError>| ProductDevAssetReload {
+            bundle: Arc::clone(&served),
+            content: Arc::new(move || content.clone()),
+        };
+        let failed = reload(Err(ProductDevRuntimeError::new(
+            "CONTENT_BUNDLE_INDEX",
+            "invalid index",
+        )));
+        assert!(failed.reload(bundle(b"new UI")).is_err());
+        assert_eq!(served.read().unwrap().get("/").unwrap().bytes(), b"old UI");
+        reload(Ok(())).reload(bundle(b"new UI")).unwrap();
+        assert_eq!(served.read().unwrap().get("/").unwrap().bytes(), b"new UI");
+    }
 
     #[test]
     fn response_delivery_certainty_distinguishes_receipts_mailbox_and_observations() {

@@ -81,17 +81,40 @@
            Text="RustyEngineProductInputCursorMode must be pointer-lock or unlocked." />
   </Target>
 
+  <!-- The stamp lists the files the last UI build produced. When any of them
+       is gone, dropping the stamp makes the next build run the command. This
+       checks existence only, so a compiler that leaves unchanged modules
+       untouched is not rebuilt on every C# build. -->
+  <Target Name="_CheckRustyEngineProductUiOutputs"
+          Condition="'$(RustyEngineProductUiBuildCommand)' != '' and Exists('$(_RustyEngineProductUiBuildStamp)')">
+    <ReadLinesFromFile File="$(_RustyEngineProductUiBuildStamp)">
+      <Output TaskParameter="Lines" ItemName="_RustyEngineProductUiBuiltFile" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <_RustyEngineProductUiMissingFile Include="@(_RustyEngineProductUiBuiltFile)"
+                                        Condition="!Exists('%(Identity)')" />
+    </ItemGroup>
+    <Delete Files="$(_RustyEngineProductUiBuildStamp)"
+            Condition="'@(_RustyEngineProductUiMissingFile)' != ''" />
+  </Target>
+
   <!-- A product with a compiled DOM companion names its command and inputs.
        Ordinary MSBuild incrementality skips the command when no input is
-       newer than the last successful build and the entry output exists, so
-       C#-only and unchanged builds do not recompile the UI. -->
+       newer than the last successful build and its outputs exist, so C#-only
+       and unchanged builds do not recompile the UI. -->
   <Target Name="BuildRustyEngineProductUi"
           Condition="'$(RustyEngineProductUiBuildCommand)' != ''"
+          DependsOnTargets="_CheckRustyEngineProductUiOutputs"
           Inputs="@(RustyEngineProductUiInput);$(MSBuildProjectFullPath)"
           Outputs="$(_RustyEngineProductUiBuildStamp);$(RustyEngineProductUiRoot)/$(RustyEngineProductUiEntry)">
     <MakeDir Directories="$(RustyEngineProductUiRoot)" />
     <Exec Command="$(RustyEngineProductUiBuildCommand)" />
-    <Touch Files="$(_RustyEngineProductUiBuildStamp)" AlwaysCreate="true" />
+    <ItemGroup>
+      <_RustyEngineProductUiOutput Include="$(RustyEngineProductUiRoot)/**/*" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(_RustyEngineProductUiBuildStamp)"
+                      Lines="@(_RustyEngineProductUiOutput->'%(FullPath)')"
+                      Overwrite="true" />
   </Target>
 
   <!-- UI and content only. `rusty dev` runs this alone for UI or bundle
