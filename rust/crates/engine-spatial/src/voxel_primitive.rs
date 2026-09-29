@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     validate_voxel_address, validate_voxel_material_slot, VoxelAuthorityValidationError, VoxelEdit,
-    MAX_VOXEL_EDITS_PER_TRANSACTION,
 };
+
+/// Bounds how many edits one primitive may expand into before allocating.
+pub const MAX_VOXEL_EDITS_PER_TRANSACTION: usize = 4_096;
 
 /// Donor-compatible line thickness remains deliberately small and reviewable.
 pub const MAX_VOXEL_LINE_RADIUS: u32 = 4;

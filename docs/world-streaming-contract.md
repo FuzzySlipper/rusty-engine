@@ -48,13 +48,11 @@ A quarter turn maps authored +X to world -Z. State zero preserves ordinary
 unrotated cells. Material IDs retain their own 1–4095 range; never pack state
 into material IDs. Empty cells have state zero.
 
-`VoxelEdit.State`, `VoxelReadout.State` and `VoxelAtReceipt.State` provide write
-and read access. `VoxelResidencyTransaction.States` is either empty (all default)
+`VoxelEdit.State` and `VoxelReadout.State` provide write and read access. `VoxelResidencyTransaction.States` is either empty (all default)
 or parallel to the complete material-slot array; operations use the same offsets.
 Input arrays are copied before the call returns. State-only changes advance
 source/projection revisions, invalidate affected meshes and participate in chunk
-and authority hashes. Undo/redo and history export/restore preserve both sides
-of state changes. History schema **4** records this expanded authority.
+and authority hashes.
 
 GreedyCubes groups only cells with equal material **and state**. It rotates
 texture coordinates and maps geometric faces back to authored local faces.
@@ -97,7 +95,7 @@ product code.
 `SimulationScheduler.Advance` executes callbacks synchronously on the caller's
 admitted update path. It does not start workers, preempt expensive work or make
 an Engine call asynchronous. Split work into bounded pieces before scheduling
-it. Synchronous ApplyResidency still blocks until it returns; use the preparation path below to overlap projection building.
+it. ApplyResidency blocks until it returns; it rebuilds only the changed chunks.
 
 Pure product computation may run on product-owned workers using **copied,
 product-owned values only**, without Engine services, retained leases, mutable
@@ -108,40 +106,23 @@ Do not await a worker that needs a callback-held Engine operation. This is
 ordinary C# computation, not an Engine worker facility or a second simulation
 clock. Content/persistence service calls still belong on the callback lane.
 
-### Engine-owned background residency preparation
+### Residency and edits apply in place
 
-Within an admitted callback, call `Voxel.StartResidencyPreparation(transaction)`.
-It copies the inputs and retains an immutable scene snapshot. One worker per
-Spatial session builds the normal collision/navigation/mesh candidate; no managed
-pointer, Engine lease or product authority crosses into that worker.
+`Voxel.ApplyResidency` admits, replaces and evicts whole chunks, and
+`Voxel.ApplyEdits` changes cells. Both write into the live scene and rebuild
+only the changed chunks' meshes and colliders and the affected navigation cells.
+Neither takes an expected revision or content hash. Admitting an identical chunk
+or evicting a non-resident one is a no-op; a batch that changes nothing returns
+a receipt with zero changes, and an edit batch returns `NoChanges`.
 
-In later callbacks, call `PollResidencyPreparation(new(session, id))`.
-Pending is nonblocking. Ready exposes candidate receipt facts without changing
-the live scene. Call `CommitResidencyPreparation` to publish on the callback lane;
-it returns Pending if preparation is not ready. Commit rechecks source/residency,
-static collision, world-origin/rebase and chunk-lease generations. A conflicting
-edit, rebase, collider update or lease change rejects the stale candidate instead
-of overwriting newer state. Apply the returned revision and refresh ordinary
-VoxelScenePresentation after Committed. History policy is explicit as on
-synchronous residency; ResetToPublishedAuthority resets history at publication.
-
-`CancelResidencyPreparation` discards the candidate and joins the bounded worker.
-Session destruction does the same. Cancellation/teardown can wait for current
-preparation to finish; polling does not. This prevents work retaining a retired
-scene after its owner is gone. A terminal failed poll requires cancellation
-before another start; a commit attempt consumes a ready preparation. Products
-must keep their own generation and requested-region policy, and cancel unwanted
-work during restart. Service calls, including poll/commit/cancel, remain on the
-callback lane. Pure product generation may still use copied-data workers.
-
-Preparation moves expensive projection construction off the callback, but is
-not free: inputs are copied at start, the old and candidate scenes coexist,
-commit checks hashes and may release old allocations, and rendering/upload is
-separate. Measure those phases; no fixed frame-time guarantee is implied.
-See [worker lifecycle tests](../rust/crates/engine-spatial/tests/voxel_preparation.rs)
-and the packaged streaming fixture for executable SDK usage.
+There is no Engine undo history or chunk lease. The product owns undo: it
+applies inverse edits. It also owns which chunks stay resident. The costs are in
+[the voxel budgets](voxel-budgets.md); admitting a chunk costs about what
+building that one chunk costs.
+See [the local change tests](../rust/crates/engine-spatial/tests/voxel_local_changes.rs)
+and the packaged streaming fixture for executable usage.
 
 ## Residency and remesh budgets (#8612)
 
-See [voxel budget measurements](voxel-budgets.md) for limits, CPU/memory evidence,
-geometry diversity and synchronous versus prepared publication costs.
+See [voxel budget measurements](voxel-budgets.md) for limits, CPU/memory evidence
+and geometry diversity.

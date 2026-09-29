@@ -6,9 +6,8 @@ use engine_spatial::{
     CharacterControllerConfig, CharacterControllerService, KinematicTriggerDefinition,
     MaterialVoxel, SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset,
     StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, TriggerReconcileCause,
-    TriggerVolumeSystem, VoxelCollisionScene, VoxelEdit, VoxelEditService, VoxelEditTransaction,
-    WorldOriginEntity, WorldOriginRebaseError, WorldOriginRebaseRequest, WorldOriginRebaseService,
-    WorldOriginState,
+    TriggerVolumeSystem, VoxelCollisionScene, VoxelEdit, VoxelEditService, WorldOriginEntity,
+    WorldOriginRebaseError, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
 };
 use entity_state::{
     CharacterMotionComponent, EntityCommand, EntityCommandBatch, EntityDefinition, EntitySource,
@@ -198,14 +197,7 @@ fn rebase_keeps_controller_support_voxel_nav_trigger_and_static_mesh_continuous(
     let clear = [VoxelEdit::Clear {
         address: [FAR_X + 2, 0, 0],
     }];
-    let edit = VoxelEditService::apply(
-        &mut scene,
-        VoxelEditTransaction {
-            expected_revision: source_revision,
-            edits: &clear,
-        },
-    )
-    .unwrap();
+    let edit = VoxelEditService::apply(&mut scene, &clear).unwrap();
     assert_eq!(edit.fact.changed_min, [FAR_X + 2, 0, 0]);
     assert_eq!(edit.fact.changed_max_inclusive, [FAR_X + 2, 0, 0]);
     assert_eq!(scene.world_origin(), origin.origin());

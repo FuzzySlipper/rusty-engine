@@ -191,9 +191,8 @@ public sealed class Product : IEngineProduct
             new Color(0.3f, 0.6f, 0.9f, 1), default, 1, new Color(1, 1, 1, 1), default, 0, false,
             MaterialAlphaMode.Opaque, 0.5f));
         _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1, 8, VoxelSurfaceMode.GreedyCubes));
-        VoxelSceneReadout scene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
         _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
-            _spatial, scene.SourceRevision, new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(0, 0, 0), 3) }));
+            _spatial, new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(0, 0, 0), 3) }));
         _voxelPresentation = _engine.VoxelScenePresentation.ProjectScene(
             new ProjectVoxelSceneRequest(_spatial, new[] { new VoxelSceneMaterialBinding(3, _voxelMaterial) }));
         PublishUi();

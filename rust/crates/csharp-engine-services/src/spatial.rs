@@ -146,7 +146,6 @@ struct SpatialContentIdentity {
 /// live here: character and ray queries read the call's typed facts directly.
 pub(crate) struct RuntimeSpatialBridge {
     pub(crate) sessions: BTreeMap<u64, SpatialSession>,
-    pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
     pub(crate) voxel_operation_diagnostic_leases:
         BTreeMap<u64, crate::voxel::VoxelOperationDiagnosticLease>,
     trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
@@ -155,7 +154,6 @@ pub(crate) struct RuntimeSpatialBridge {
     sibling_appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
     content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
-    pub(crate) next_voxel_history_export: u64,
     pub(crate) next_voxel_operation_diagnostic_lease: u64,
     next_trigger_diagnostic_lease: u64,
     next_trigger_overlap_page_lease: u64,
@@ -174,11 +172,7 @@ pub(crate) struct SpatialSession {
     config: NativeSpatialSessionConfig,
     pub(crate) scene: Arc<VoxelCollisionScene>,
     pub(crate) world_origin: engine_spatial::WorldOriginState,
-    pub(crate) voxel_history: engine_spatial::VoxelEditHistory,
-    pub(crate) voxel_leases: engine_spatial::VoxelChunkLeaseRegistry,
     pub(crate) last_voxel_dirty_chunks: Vec<[i64; 3]>,
-    pub(crate) voxel_preparation: Option<crate::voxel::PendingVoxelPreparation>,
-    pub(crate) next_voxel_preparation: u64,
     navigation: Option<NavigationState>,
     navigation_revision: u64,
     content_artifact: Option<SpatialContentIdentity>,
@@ -443,6 +437,12 @@ impl SpatialCollisionSource {
             })
     }
 
+    /// Drop the shared copy of a session's scene so the session holds the
+    /// only reference and can mutate it in place. Publish it again afterwards.
+    fn detach(&self, handle: NativeSpatialSessionHandle) {
+        self.scenes.borrow_mut().remove(&handle.value);
+    }
+
     pub(crate) fn publish_scene(
         &self,
         handle: NativeSpatialSessionHandle,
@@ -467,7 +467,6 @@ impl RuntimeSpatialBridge {
     pub(crate) fn new() -> Self {
         Self {
             sessions: BTreeMap::new(),
-            voxel_history_exports: BTreeMap::new(),
             voxel_operation_diagnostic_leases: BTreeMap::new(),
             trigger_diagnostic_leases: BTreeMap::new(),
             trigger_overlap_page_leases: BTreeMap::new(),
@@ -475,7 +474,6 @@ impl RuntimeSpatialBridge {
             sibling_appearance: None,
             content: None,
             next_session: 1,
-            next_voxel_history_export: 1,
             next_voxel_operation_diagnostic_lease: 1,
             next_trigger_diagnostic_lease: 1,
             next_trigger_overlap_page_lease: 1,
@@ -564,6 +562,23 @@ impl RuntimeSpatialBridge {
         self.collision_source.publish_scene(handle, scene);
     }
 
+    /// Change a session's scene in place. Callers mutate it through
+    /// `Arc::make_mut`; with the shared copy detached the session holds the
+    /// only reference, so nothing is cloned. The scene is republished after.
+    pub(crate) fn edit_scene<R>(
+        &mut self,
+        handle: NativeSpatialSessionHandle,
+        edit: impl FnOnce(&mut SpatialSession) -> R,
+    ) -> Result<R, CsharpEngineServicesError> {
+        self.session_mut(handle)?;
+        self.collision_source.detach(handle);
+        let session = self.session_mut(handle)?;
+        let result = edit(session);
+        let scene = Arc::clone(&session.scene);
+        self.publish_scene(handle, scene);
+        Ok(result)
+    }
+
     pub(crate) fn session_mut(
         &mut self,
         handle: NativeSpatialSessionHandle,
@@ -604,11 +619,7 @@ impl RuntimeSpatialBridge {
             value,
             SpatialSession {
                 config,
-                voxel_history: engine_spatial::VoxelEditHistory::new(&scene),
-                voxel_leases: engine_spatial::VoxelChunkLeaseRegistry::default(),
                 last_voxel_dirty_chunks: Vec::new(),
-                voxel_preparation: None,
-                next_voxel_preparation: 1,
                 scene: Arc::clone(&scene),
                 world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,
@@ -654,7 +665,6 @@ impl RuntimeSpatialBridge {
                 ));
             }
             if scene.source_revision().raw() != 0
-                || !session.voxel_history.is_empty()
                 || scene.solid_voxel_count() != 0
                 || scene.resident_chunk_count() != 0
                 || scene.projection_static_mesh_asset_count() != 0
@@ -728,8 +738,6 @@ impl RuntimeSpatialBridge {
             ));
         }
         session.scene = Arc::clone(&prepared.candidate);
-        session.voxel_history = engine_spatial::VoxelEditHistory::new(&prepared.candidate);
-        session.voxel_leases = engine_spatial::VoxelChunkLeaseRegistry::default();
         self.publish_scene(prepared.handle, prepared.candidate);
         Ok(prepared.facts)
     }
@@ -7357,7 +7365,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 0,
                         edits: edits.as_ptr(),
                         edits_len: edits.len(),
                     },
@@ -7394,7 +7401,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 0,
                         edits: admitted.as_ptr(),
                         edits_len: admitted.len(),
                     },
@@ -7511,7 +7517,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: admitted_receipt.accepted_revision,
                         edits: clear.as_ptr(),
                         edits_len: clear.len(),
                     },
@@ -8278,7 +8283,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session: incompatible_content,
-                        expected_revision: 0,
                         edits: edits.as_ptr(),
                         edits_len: edits.len(),
                     },

@@ -31,7 +31,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Material variantMaterial;
     private readonly CharacterControllerConfig config;
     private VoxelScenePresentation? presentation;
-    private VoxelPreparationRequest preparation;
     private string streaming = "pending";
     private string scenario = "idle";
     private int steps;
@@ -42,7 +41,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private CharacterMovementRequest movement;
     private bool stateProof;
     private bool modeProof;
-    private uint pendingObservations;
     private readonly List<IDisposable> owners = [];
 
     public Product(ProductCreateContext context)
@@ -67,10 +65,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         uint[] states = new uint[slots.Length];
         slots[0] = slots[VariantCellIndex] = 1;
         states[VariantCellIndex] = VoxelCellState.Encode(InitialOrientation, Variant);
-        VoxelResidencyOperation[] operations = [new(VoxelResidencyOperationKind.Admit, new(0,0,0), 0, 0, (uint)slots.Length)];
-        VoxelPreparationReceipt started = engine.Voxel.StartResidencyPreparation(new(states, spatial, 0, VoxelResidencyHistoryPolicy.ResetToPublishedAuthority, operations, slots));
-        preparation = new(spatial, started.Preparation);
-        Array.Clear(slots); Array.Clear(states); // The worker must own copied input.
+        VoxelResidencyOperation[] operations = [new(VoxelResidencyOperationKind.Admit, new(0,0,0), 0, (uint)slots.Length)];
+        engine.Voxel.ApplyResidency(new(states, spatial, operations, slots));
+        ExerciseState();
+        presentation = engine.VoxelScenePresentation.ProjectSceneDirectional(new(spatial, new VoxelSceneMaterialBinding[] { new(1,baseMaterial) }, new VoxelSceneFaceMaterialBinding[] { new(Variant,1,SpatialFace.PosY,variantMaterial), new(Variant,1,SpatialFace.PosZ,variantMaterial) }));
+        streaming = "committed";
         StartMovement("swim");
     }
     private void ExerciseModes()
@@ -115,19 +114,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
     public ProductUpdateResult Update(ProductUpdate update)
     {
-        if (streaming == "pending")
-        {
-            var polled = engine.Voxel.PollResidencyPreparation(preparation);
-            if (polled.Status == VoxelPreparationStatus.Pending) pendingObservations++;
-            else
-            {
-                Require(engine.Voxel.ReadScene(new(spatial)).SolidVoxelCount == 0, "prepare published early");
-                Require(engine.Voxel.CommitResidencyPreparation(preparation).Status == VoxelPreparationStatus.Committed, "commit status");
-                ExerciseState();
-                presentation = engine.VoxelScenePresentation.ProjectSceneDirectional(new(spatial, new VoxelSceneMaterialBinding[] { new(1,baseMaterial) }, new VoxelSceneFaceMaterialBinding[] { new(Variant,1,SpatialFace.PosY,variantMaterial), new(Variant,1,SpatialFace.PosZ,variantMaterial) }));
-                streaming = "committed";
-            }
-        }
         for (uint admitted=0; admitted<update.Facts.AdmittedStepCount && steps<VisibleSteps; admitted++) AdvanceMovement();
         Publish();
         return ProductUpdateResult.None;
@@ -137,36 +123,29 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         var address = VariantAddress;
         uint expected = VoxelCellState.Encode(InitialOrientation,Variant);
         Require(engine.Voxel.Read(new(spatial,address)).State == expected,"residency state");
-        ulong revision = engine.Voxel.ReadScene(new(spatial)).SourceRevision;
-        engine.Voxel.ApplyEdits(new(spatial,revision,new VoxelEdit[] { new(VoxelCellState.Encode(EditedOrientation,Variant),VoxelEditKind.Set,address,1) }));
-        engine.Voxel.Undo(new(spatial));
+        uint edited = VoxelCellState.Encode(EditedOrientation,Variant);
+        engine.Voxel.ApplyEdits(new(spatial,new VoxelEdit[] { new(edited,VoxelEditKind.Set,address,1) }));
+        Require(engine.Voxel.Read(new(spatial,address)).State == edited,"state edit");
+        // Undo is product-owned: apply the inverse edit.
+        engine.Voxel.ApplyEdits(new(spatial,new VoxelEdit[] { new(expected,VoxelEditKind.Set,address,1) }));
         Require(engine.Voxel.Read(new(spatial,address)).State == expected,"state undo");
-        engine.Voxel.Redo(new(spatial));
-        ReadOnlyMemory<byte> saved = engine.Voxel.ExportHistory(new(spatial));
-        engine.Voxel.Undo(new(spatial));
-        engine.Voxel.RestoreHistory(new(spatial,saved));
-        Require(engine.Voxel.Read(new(spatial,address)).State == VoxelCellState.Encode(EditedOrientation,Variant),"state restore");
         stateProof = true;
     }
     private void Publish() => engine.Graphics.PublishSnapshot(new AppearanceFact[] { new(CharacterVisualId,false,0,new(position,Quaternion.Identity,CharacterSize),character,true,RenderLayer.Scene) });
     [DebugCommand("streaming.inspect")]
-    public string Inspect() => JsonSerializer.Serialize(new StreamingProof(streaming, modeProof, stateProof, pendingObservations, scenario, steps, new[] {position.X,position.Y,position.Z}, lastStep.Movement.Mode.ToString(), lastStep.Movement.HeadSubmerged, lastStep.Movement.ClimbAttached), ProofJsonContext.Default.StreamingProof);
+    public string Inspect() => JsonSerializer.Serialize(new StreamingProof(streaming, modeProof, stateProof, scenario, steps, new[] {position.X,position.Y,position.Z}, lastStep.Movement.Mode.ToString(), lastStep.Movement.HeadSubmerged, lastStep.Movement.ClimbAttached), ProofJsonContext.Default.StreamingProof);
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     private static void Require(bool condition,string message) { if (!condition) throw new InvalidOperationException(message); }
     public void Attach() { if (presentation is not null) engine.VoxelScenePresentation.RefreshScene(presentation); Publish(); }
     public void Pause() { }
     public void Resume() { }
-    public void Restart()
-    {
-        if (streaming == "pending" && preparation.Preparation != 0) { engine.Voxel.CancelResidencyPreparation(preparation); streaming = "cancelled"; }
-        StartMovement("swim");
-    }
+    public void Restart() => StartMovement("swim");
     public void Shutdown() { }
-    public void Dispose() { if (streaming == "pending" && preparation.Preparation != 0) engine.Voxel.CancelResidencyPreparation(preparation); presentation?.Dispose(); foreach(var owner in owners.AsEnumerable().Reverse()) owner.Dispose(); }
+    public void Dispose() { presentation?.Dispose(); foreach(var owner in owners.AsEnumerable().Reverse()) owner.Dispose(); }
 }
 
 internal sealed record StreamingProof(string Streaming, bool ModeProof, bool StateProof,
-    uint PendingObservations, string Scenario, int Steps, float[] Position, string Mode,
+    string Scenario, int Steps, float[] Position, string Mode,
     bool HeadSubmerged, bool ClimbAttached);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

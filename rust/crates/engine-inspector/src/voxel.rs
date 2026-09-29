@@ -210,7 +210,6 @@ pub fn inspect_voxel_state(scene: &VoxelCollisionScene) -> VoxelStateInspection 
     }
     let chunks = scene
         .mesh_chunks()
-        .iter()
         .map(|chunk| VoxelChunkInspection {
             chunk: chunk.chunk,
             content_hash: format!("{:016x}", chunk.content_hash),
@@ -246,21 +245,7 @@ pub fn inspect_voxel_state(scene: &VoxelCollisionScene) -> VoxelStateInspection 
 
 pub fn describe_voxel_edit_rejection(rejection: &VoxelEditRejection) -> String {
     match rejection {
-        VoxelEditRejection::InvalidState { edit_index, state } => format!("edit rejected: edit {edit_index} state {state} exceeds fifteen bits"),
-        VoxelEditRejection::StaleRevision { expected, actual } => format!(
-            "edit rejected: expected voxel revision {}, actual {}",
-            expected.raw(),
-            actual.raw()
-        ),
-        VoxelEditRejection::RevisionExhausted => {
-            "edit rejected: voxel revision counter is exhausted".to_string()
-        }
-        VoxelEditRejection::EmptyTransaction => {
-            "edit rejected: transaction contains no edits".to_string()
-        }
-        VoxelEditRejection::TooManyEdits { limit, actual } => {
-            format!("edit rejected: {actual} edits exceed limit {limit}")
-        }
+        VoxelEditRejection::InvalidState { edit_index, state } => format!("edit rejected: edit {edit_index} state {state} is invalid for this surface"),
         VoxelEditRejection::CoordinateOutOfBounds {
             edit_index,
             address,
@@ -276,14 +261,6 @@ pub fn describe_voxel_edit_rejection(rejection: &VoxelEditRejection) -> String {
             maximum,
         } => format!(
             "edit rejected: edit {edit_index} material slot {material_slot} exceeds maximum {maximum}"
-        ),
-        VoxelEditRejection::DuplicateAddress {
-            first_index,
-            duplicate_index,
-            address,
-        } => format!(
-            "edit rejected: edits {first_index} and {duplicate_index} repeat voxel [{},{},{}]",
-            address[0], address[1], address[2]
         ),
         VoxelEditRejection::NoChanges => {
             "edit rejected: transaction would not change voxel authority".to_string()
@@ -475,12 +452,13 @@ mod tests {
 
     #[test]
     fn edit_rejection_names_the_exact_voxel_and_indices() {
-        let text = describe_voxel_edit_rejection(&VoxelEditRejection::DuplicateAddress {
-            first_index: 2,
-            duplicate_index: 5,
-            address: [-1, 3, 9],
+        let text = describe_voxel_edit_rejection(&VoxelEditRejection::CoordinateOutOfBounds {
+            edit_index: 5,
+            address: [-1, 3, 9_000_000],
+            axis: 2,
+            limit: 1_000_000,
         });
-        assert!(text.contains("edits 2 and 5"));
-        assert!(text.contains("voxel [-1,3,9]"));
+        assert!(text.contains("edit 5"));
+        assert!(text.contains("voxel [-1,3,9000000]"));
     }
 }

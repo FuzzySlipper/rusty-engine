@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 use engine_spatial::{
     MaterialVoxel, SurfaceMeshOptions, SurfaceMode, VoxelCollisionScene, VoxelEdit,
-    VoxelEditService, VoxelEditTransaction,
+    VoxelEditService,
 };
 use render_model::{MaterialUvStrategy, RenderDiff, RenderMaterialDescriptor, Transform};
 use render_projection::{VoxelProjectionInstance, VoxelRenderProjector};
@@ -73,15 +73,8 @@ fn measure(mode: SurfaceMode, scenario: &str, edits: &[VoxelEdit]) {
     ));
     let incremental_base = project(&mut projector, &scene, "terrain-v1", &materials);
     let incremental_started = Instant::now();
-    let expected_revision = scene.source_revision();
-    let receipt = VoxelEditService::apply(
-        &mut scene,
-        VoxelEditTransaction {
-            expected_revision,
-            edits,
-        },
-    )
-    .expect("representative edit must remain within production limits");
+    let receipt = VoxelEditService::apply(&mut scene, edits)
+        .expect("representative edit must remain within production limits");
     let incremental = project(&mut projector, &scene, "terrain-v1", &materials);
     print_row(
         mode,

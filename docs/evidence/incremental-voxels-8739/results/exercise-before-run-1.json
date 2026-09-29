@@ -1,0 +1,23 @@
+{
+  "verdict": "VOXEL_EXERCISE_PASSED",
+  "facts": {
+    "updates": 600,
+    "editUsP50": 45632.6,
+    "editUsP95": 49242.3,
+    "editUsMax": 57161.3,
+    "residencyUs": 93267.8,
+    "sourceRevision": 607,
+    "residentChunks": 256,
+    "solidVoxels": 16385,
+    "navigationCells": 114688,
+    "groundedUpdates": 540,
+    "characterY": 1.92,
+    "failedEditRejected": true,
+    "rayHitY": 1.0
+  },
+  "errors": [],
+  "log": [
+    "VOXEL_FACTS {\"updates\":600,\"editUsP50\":45632.6,\"editUsP95\":49242.3,\"editUsMax\":57161.3,\"residencyUs\":93267.8,\"sourceRevision\":607,\"residentChunks\":256,\"solidVoxels\":16385,\"navigationCells\":114688,\"groundedUpdates\":540,\"characterY\":1.920,\"failedEditRejected\":true,\"rayHitY\":1.000}",
+    "VOXEL_EXERCISE_PASSED"
+  ]
+}

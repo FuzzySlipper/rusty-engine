@@ -1,6 +1,5 @@
 use crate::{
-    NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeEngineDiagnosticLeaseHandle,
-    NativeOperationErrorReceipt, NativeSpatialSessionHandle,
+    NativeEngineDiagnosticLeaseHandle, NativeOperationErrorReceipt, NativeSpatialSessionHandle,
 };
 use crate::{NativeLightDescriptor, NativeVec3};
 use std::ffi::c_void;
@@ -72,22 +71,6 @@ pub struct NativeVoxelReadout {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelAtReceipt {
-    pub state: u32,
-    pub present: bool,
-    pub address: NativeVoxelAddress,
-    pub material_slot: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeVoxelChunkReadRequest {
     pub session: NativeSpatialSessionHandle,
     pub chunk: NativeVoxelChunkIdentity,
@@ -131,16 +114,14 @@ pub enum NativeVoxelEditKind {
     Clear = 1,
 }
 
-/// The outcome of one voxel edit transaction. `NoChanges` and
-/// `StaleRevision` are expected product-control results; all other failures
-/// stay on the ABI diagnostic lane.
+/// The outcome of one voxel edit transaction. `NoChanges` is an expected
+/// product-control result; other failures stay on the ABI diagnostic lane.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelEditStatus {
     #[default]
     Accepted = 0,
     NoChanges = 1,
-    StaleRevision = 2,
 }
 
 /// Flat edit records are borrowed for one call and copied into the Engine
@@ -158,7 +139,6 @@ pub struct NativeVoxelEdit {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelEditTransaction {
     pub session: NativeSpatialSessionHandle,
-    pub expected_revision: u64,
     pub edits: *const NativeVoxelEdit,
     pub edits_len: usize,
 }
@@ -181,7 +161,6 @@ pub struct NativeVoxelEditReceipt {
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
     pub status: NativeVoxelEditStatus,
-    pub current_revision: u64,
 }
 
 #[repr(u32)]
@@ -200,17 +179,8 @@ pub enum NativeVoxelResidencyOperationKind {
 pub struct NativeVoxelResidencyOperation {
     pub kind: NativeVoxelResidencyOperationKind,
     pub chunk: NativeVoxelChunkIdentity,
-    pub expected_content_hash: u64,
     pub material_offset: u32,
     pub material_count: u32,
-}
-
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NativeVoxelResidencyHistoryPolicy {
-    #[default]
-    RejectIfNonEmpty = 0,
-    ResetToPublishedAuthority = 1,
 }
 
 #[repr(C)]
@@ -219,8 +189,6 @@ pub struct NativeVoxelResidencyTransaction {
     pub states: *const u32,
     pub states_len: usize,
     pub session: NativeSpatialSessionHandle,
-    pub expected_revision: u64,
-    pub history_policy: NativeVoxelResidencyHistoryPolicy,
     pub operations: *const NativeVoxelResidencyOperation,
     pub operations_len: usize,
     pub material_slots: *const u32,
@@ -238,7 +206,6 @@ pub struct NativeVoxelResidencyReceipt {
     pub retained_count: u32,
     pub resident_chunk_count: u64,
     pub resident_solid_voxel_count: u64,
-    pub residency_hash: u64,
     pub authority_hash: u64,
     pub collision_revision: u64,
     pub navigation_revision: u64,
@@ -247,152 +214,6 @@ pub struct NativeVoxelResidencyReceipt {
     pub rebuilt_mesh_chunks: u32,
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
-    pub history_reset: bool,
-    pub history_invalidated_entries: u64,
-    pub history_invalidated_redo_entries: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelChunkLeaseHandle {
-    pub value: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelChunkLeaseRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub chunk: NativeVoxelChunkIdentity,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelChunkLeaseReadRequest {
-    pub lease: NativeVoxelChunkLeaseHandle,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelChunkLeaseReadout {
-    pub present: bool,
-    pub chunk: NativeVoxelChunkIdentity,
-    pub acquired_content_hash: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryCursorReadRequest {
-    pub session: NativeSpatialSessionHandle,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryCursorReadout {
-    pub present: bool,
-    pub index: u64,
-    pub entry_count: u64,
-    pub applied_transaction_present: bool,
-    pub applied_transaction_id: u64,
-    pub undo_depth: u64,
-    pub redo_depth: u64,
-    pub authority_hash: u64,
-    pub history_hash: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryEntryAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryEntryReadout {
-    pub present: bool,
-    pub transaction_id: u64,
-    pub parent_transaction_present: bool,
-    pub parent_transaction_id: u64,
-    pub before_hash: u64,
-    pub after_hash: u64,
-    pub delta_count: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryDeltaAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub entry_index: u32,
-    pub delta_index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryDeltaReadout {
-    pub before_state: u32,
-    pub after_state: u32,
-    pub present: bool,
-    pub address: NativeVoxelAddress,
-    pub before_material_present: bool,
-    pub before_material: u32,
-    pub after_material_present: bool,
-    pub after_material: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryActionRequest {
-    pub session: NativeSpatialSessionHandle,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryReceipt {
-    pub applied: bool,
-    pub cursor_before: u64,
-    pub cursor_after: u64,
-    pub undo_depth: u64,
-    pub redo_depth: u64,
-    pub authority_hash: u64,
-    pub history_hash: u64,
-    pub revision_before: u64,
-    pub revision_after: u64,
-    pub changed_voxels: u32,
-    pub bounds_present: bool,
-    pub changed_min: NativeVoxelAddress,
-    pub changed_max_inclusive: NativeVoxelAddress,
-}
-
-/// Fixed facts of the Engine-owned voxel history document codec. Product code
-/// uses this readout to persist the exact owner schema rather than carrying a
-/// duplicate schema literal.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryCodecInfo {
-    pub schema_version: u32,
-    pub max_encoded_bytes: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryExportRequest {
-    pub session: NativeSpatialSessionHandle,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeVoxelHistoryRestoreRequest {
-    pub session: NativeSpatialSessionHandle,
-    /// Borrowed for this direct call only. Engine decodes and validates the
-    /// entire bounded document before replacing any live session state.
-    pub payload: NativeByteSlice,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelHistoryRestoreReceipt {
-    pub cursor: NativeVoxelHistoryCursorReadout,
-    pub source_revision: u64,
 }
 
 /// Collision policy for one occupied material slot; visuals retain the cell.
@@ -426,8 +247,6 @@ pub type NativeReadVoxelScene = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeReadVoxel =
     unsafe extern "C" fn(*mut c_void, NativeVoxelReadRequest, *mut NativeVoxelReadout) -> i32;
-pub type NativeReadVoxelAt =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelAtRequest, *mut NativeVoxelAtReceipt) -> i32;
 pub type NativeReadVoxelChunk = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelChunkReadRequest,
@@ -449,110 +268,14 @@ pub type NativeReadVoxelDirtyChunkAt = unsafe extern "C" fn(
     NativeVoxelDirtyChunkAtRequest,
     *mut NativeVoxelDirtyChunkAtReceipt,
 ) -> i32;
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NativeVoxelPreparationStatus {
-    #[default]
-    Pending = 0,
-    Ready = 1,
-    Committed = 2,
-    Cancelled = 3,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeVoxelPreparationRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub preparation: u64,
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeVoxelPreparationReceipt {
-    pub preparation: u64,
-    pub status: NativeVoxelPreparationStatus,
-    pub residency: NativeVoxelResidencyReceipt,
-}
-pub type NativeStartVoxelResidencyPreparation = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeVoxelResidencyTransaction,
-    *mut NativeVoxelPreparationReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativePollVoxelResidencyPreparation = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelPreparationRequest,
-    *mut NativeVoxelPreparationReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeCommitVoxelResidencyPreparation = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelPreparationRequest,
-    *mut NativeVoxelPreparationReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeCancelVoxelResidencyPreparation = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelPreparationRequest,
-    *mut NativeVoxelPreparationReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
 pub type NativeApplyVoxelResidency = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelResidencyTransaction,
     *mut NativeVoxelResidencyReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeAcquireVoxelChunkLease = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelChunkLeaseRequest,
-    *mut NativeVoxelChunkLeaseHandle,
-) -> i32;
-pub type NativeDestroyVoxelChunkLease =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelChunkLeaseHandle) -> i32;
-pub type NativeReadVoxelChunkLease = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelChunkLeaseReadRequest,
-    *mut NativeVoxelChunkLeaseReadout,
-) -> i32;
-pub type NativeReadVoxelHistoryCursor = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelHistoryCursorReadRequest,
-    *mut NativeVoxelHistoryCursorReadout,
-) -> i32;
-pub type NativeReadVoxelHistoryEntryAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelHistoryEntryAtRequest,
-    *mut NativeVoxelHistoryEntryReadout,
-) -> i32;
-pub type NativeReadVoxelHistoryDeltaAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelHistoryDeltaAtRequest,
-    *mut NativeVoxelHistoryDeltaReadout,
-) -> i32;
-pub type NativeUndoVoxel = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelHistoryActionRequest,
-    *mut NativeVoxelHistoryReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeRedoVoxel = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelHistoryActionRequest,
-    *mut NativeVoxelHistoryReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
 pub type NativeDestroyVoxelOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
-pub type NativeReadVoxelHistoryCodecInfo =
-    unsafe extern "C" fn(*mut c_void, *mut NativeVoxelHistoryCodecInfo) -> i32;
-pub type NativeExportVoxelHistory =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelHistoryExportRequest, *mut NativeByteLease) -> i32;
-pub type NativeDestroyVoxelHistoryExportLease =
-    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
-pub type NativeRestoreVoxelHistory = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeVoxelHistoryRestoreRequest,
-    *mut NativeVoxelHistoryRestoreReceipt,
-) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -562,29 +285,12 @@ pub struct NativeVoxelApi {
     pub read_scene: NativeReadVoxelScene,
     pub read: NativeReadVoxel,
     pub sample_direct_lighting: NativeSampleVoxelDirectLighting,
-    pub read_at: NativeReadVoxelAt,
     pub read_chunk: NativeReadVoxelChunk,
     pub read_resident_chunk_at: NativeReadVoxelResidentChunkAt,
     pub apply_edits: NativeApplyVoxelEdits,
     pub read_dirty_chunk_at: NativeReadVoxelDirtyChunkAt,
     pub apply_residency: NativeApplyVoxelResidency,
-    pub start_residency_preparation: NativeStartVoxelResidencyPreparation,
-    pub poll_residency_preparation: NativePollVoxelResidencyPreparation,
-    pub commit_residency_preparation: NativeCommitVoxelResidencyPreparation,
-    pub cancel_residency_preparation: NativeCancelVoxelResidencyPreparation,
-    pub acquire_chunk_lease: NativeAcquireVoxelChunkLease,
-    pub destroy_chunk_lease: NativeDestroyVoxelChunkLease,
-    pub read_chunk_lease: NativeReadVoxelChunkLease,
-    pub read_history_cursor: NativeReadVoxelHistoryCursor,
-    pub read_history_entry_at: NativeReadVoxelHistoryEntryAt,
-    pub read_history_delta_at: NativeReadVoxelHistoryDeltaAt,
-    pub undo: NativeUndoVoxel,
-    pub redo: NativeRedoVoxel,
     pub destroy_operation_diagnostic_lease: NativeDestroyVoxelOperationDiagnosticLease,
-    pub read_history_codec_info: NativeReadVoxelHistoryCodecInfo,
-    pub export_history: NativeExportVoxelHistory,
-    pub destroy_history_export_lease: NativeDestroyVoxelHistoryExportLease,
-    pub restore_history: NativeRestoreVoxelHistory,
 }
 
 /// Samples direct incident light at address + offset (in voxel units). Descriptors

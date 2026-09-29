@@ -5,8 +5,7 @@ use engine_spatial::{
     SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
     StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode,
     VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
-    VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelSourceRevision,
-    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    VoxelEditRejection, VoxelEditService, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
 };
 use entity_state::{EntityDefinition, EntityState};
 
@@ -62,13 +61,10 @@ fn static_mesh_projection_joins_world_queries_and_survives_voxel_rebuilds() {
 
     VoxelEditService::apply(
         &mut scene,
-        VoxelEditTransaction {
-            expected_revision: VoxelSourceRevision::INITIAL,
-            edits: &[VoxelEdit::Set {
-                address: [7, 0, 0],
-                material_slot: 1,
-            }],
-        },
+        &[VoxelEdit::Set {
+            address: [7, 0, 0],
+            material_slot: 1,
+        }],
     )
     .unwrap();
     assert_eq!(scene.static_mesh_collision_revision(), 1);
@@ -192,15 +188,18 @@ fn generated_room_is_deterministic_and_seed_changes_canonical_voxels_and_mesh() 
         first.scene.material_voxels(),
         repeated.scene.material_voxels()
     );
-    assert_eq!(first.scene.mesh_chunks(), repeated.scene.mesh_chunks());
+    assert_eq!(
+        first.scene.mesh_chunks().cloned().collect::<Vec<_>>(),
+        repeated.scene.mesh_chunks().cloned().collect::<Vec<_>>()
+    );
     assert_ne!(first.record.pillar_voxel, variation.record.pillar_voxel,);
     assert_ne!(
         first.scene.material_voxels(),
         variation.scene.material_voxels()
     );
     assert_ne!(
-        first.scene.mesh_chunks()[0].content_hash,
-        variation.scene.mesh_chunks()[0].content_hash,
+        first.scene.mesh_chunks().cloned().collect::<Vec<_>>()[0].content_hash,
+        variation.scene.mesh_chunks().cloned().collect::<Vec<_>>()[0].content_hash,
     );
 }
 
@@ -229,7 +228,7 @@ fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world(
         navigation.path_len > 7,
         "route must detour around the pillar"
     );
-    let mesh = &scene.mesh_chunks()[0];
+    let mesh = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
     assert!(mesh.vertices > 0);
     assert!(mesh.quads > 0);
     assert!(mesh.faces_culled > 0);
@@ -278,7 +277,7 @@ fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
     })
     .unwrap();
     let scene = &fixture.scene;
-    let mesh = &scene.mesh_chunks()[0];
+    let mesh = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
 
     assert_eq!(scene.resident_chunk_count(), 1);
     assert!(scene.solid_voxel_count() < 2_000);
@@ -291,7 +290,7 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
     let pillar = fixture.record.pillar_voxel;
     let mut scene = fixture.scene;
     let baseline_voxels = scene.material_voxels().to_vec();
-    let baseline_mesh = scene.mesh_chunks().to_vec();
+    let baseline_mesh = scene.mesh_chunks().cloned().collect::<Vec<_>>();
     let baseline_hash = scene.authority_hash();
     let baseline_navigation_hash = scene.navigation_hash();
     let route_before = route_across_pillar(&scene);
@@ -304,14 +303,7 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
     );
 
     let clear = [VoxelEdit::Clear { address: pillar }];
-    let cleared = VoxelEditService::apply(
-        &mut scene,
-        VoxelEditTransaction {
-            expected_revision: VoxelSourceRevision::INITIAL,
-            edits: &clear,
-        },
-    )
-    .unwrap();
+    let cleared = VoxelEditService::apply(&mut scene, &clear).unwrap();
 
     assert_eq!(cleared.revision_before.raw(), 0);
     assert_eq!(cleared.accepted_revision.raw(), 1);
@@ -337,26 +329,25 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
     );
     assert!(route_across_pillar(&scene).path_len < route_before.path_len);
     assert_ne!(scene.navigation_hash(), baseline_navigation_hash);
-    assert_ne!(scene.mesh_chunks(), baseline_mesh);
+    assert_ne!(
+        scene.mesh_chunks().cloned().collect::<Vec<_>>(),
+        baseline_mesh
+    );
 
     let restore = [VoxelEdit::Set {
         address: pillar,
         material_slot: 3,
     }];
-    let restored = VoxelEditService::apply(
-        &mut scene,
-        VoxelEditTransaction {
-            expected_revision: cleared.accepted_revision,
-            edits: &restore,
-        },
-    )
-    .unwrap();
+    let restored = VoxelEditService::apply(&mut scene, &restore).unwrap();
 
     assert_eq!(restored.accepted_revision.raw(), 2);
     assert_eq!(scene.material_voxels(), baseline_voxels);
     assert_eq!(scene.authority_hash(), baseline_hash);
     assert_eq!(scene.navigation_hash(), baseline_navigation_hash);
-    assert_eq!(scene.mesh_chunks(), baseline_mesh);
+    assert_eq!(
+        scene.mesh_chunks().cloned().collect::<Vec<_>>(),
+        baseline_mesh
+    );
     assert!(scene.contains_point(voxel_center(pillar)));
     assert_eq!(route_across_pillar(&scene).path_len, route_before.path_len);
 }
@@ -366,50 +357,29 @@ fn rejected_edit_leaves_authority_and_every_projection_unchanged() {
     let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
     let mut scene = fixture.scene;
     let before_voxels = scene.material_voxels().to_vec();
-    let before_mesh = scene.mesh_chunks().to_vec();
+    let before_mesh = scene.mesh_chunks().cloned().collect::<Vec<_>>();
     let before_hash = scene.authority_hash();
     let before_navigation = scene.navigation_hash();
     let before_revision = scene.source_revision();
-    let duplicate = [
+    let invalid = [
         VoxelEdit::Clear { address: [1, 1, 1] },
         VoxelEdit::Set {
-            address: [1, 1, 1],
-            material_slot: 2,
+            address: [1, 1, 2],
+            material_slot: 0,
         },
     ];
 
     assert!(matches!(
-        VoxelEditService::apply(
-            &mut scene,
-            VoxelEditTransaction {
-                expected_revision: before_revision,
-                edits: &duplicate,
-            }
-        ),
+        VoxelEditService::apply(&mut scene, &invalid),
         Err(VoxelEditApplyError::Rejected(
-            VoxelEditRejection::DuplicateAddress { .. }
+            VoxelEditRejection::InvalidMaterialSlot { edit_index: 1, .. }
         ))
     ));
     assert_eq!(scene.material_voxels(), before_voxels);
-    assert_eq!(scene.mesh_chunks(), before_mesh);
-    assert_eq!(scene.authority_hash(), before_hash);
-    assert_eq!(scene.navigation_hash(), before_navigation);
-    assert_eq!(scene.source_revision(), before_revision);
-
-    assert!(matches!(
-        VoxelEditService::apply(
-            &mut scene,
-            VoxelEditTransaction {
-                expected_revision: VoxelSourceRevision::new(9),
-                edits: &[VoxelEdit::Clear { address: [1, 1, 1] }],
-            }
-        ),
-        Err(VoxelEditApplyError::Rejected(
-            VoxelEditRejection::StaleRevision { .. }
-        ))
-    ));
-    assert_eq!(scene.material_voxels(), before_voxels);
-    assert_eq!(scene.mesh_chunks(), before_mesh);
+    assert_eq!(
+        scene.mesh_chunks().cloned().collect::<Vec<_>>(),
+        before_mesh
+    );
     assert_eq!(scene.authority_hash(), before_hash);
     assert_eq!(scene.navigation_hash(), before_navigation);
     assert_eq!(scene.source_revision(), before_revision);
@@ -437,42 +407,25 @@ fn accepted_edit_order_does_not_change_authority_receipt_or_projections() {
     ];
     let reverse = [forward[2], forward[1], forward[0]];
 
-    let left_receipt = VoxelEditService::apply(
-        &mut left,
-        VoxelEditTransaction {
-            expected_revision: VoxelSourceRevision::INITIAL,
-            edits: &forward,
-        },
-    )
-    .unwrap();
-    let right_receipt = VoxelEditService::apply(
-        &mut right,
-        VoxelEditTransaction {
-            expected_revision: VoxelSourceRevision::INITIAL,
-            edits: &reverse,
-        },
-    )
-    .unwrap();
+    let left_receipt = VoxelEditService::apply(&mut left, &forward).unwrap();
+    let right_receipt = VoxelEditService::apply(&mut right, &reverse).unwrap();
 
     assert_eq!(left_receipt, right_receipt);
     assert_eq!(left.material_voxels(), right.material_voxels());
     assert_eq!(left.authority_hash(), right.authority_hash());
     assert_eq!(left.navigation_hash(), right.navigation_hash());
-    assert_eq!(left.mesh_chunks(), right.mesh_chunks());
+    assert_eq!(
+        left.mesh_chunks().cloned().collect::<Vec<_>>(),
+        right.mesh_chunks().cloned().collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn interior_and_boundary_edits_publish_exact_incremental_chunk_sets() {
     let mut interior =
         VoxelCollisionScene::from_solid_voxels(1.0, 4, [[1, 0, 0], [2, 0, 0], [8, 0, 0]]).unwrap();
-    let receipt = VoxelEditService::apply(
-        &mut interior,
-        VoxelEditTransaction {
-            expected_revision: VoxelSourceRevision::INITIAL,
-            edits: &[VoxelEdit::Clear { address: [1, 0, 0] }],
-        },
-    )
-    .unwrap();
+    let receipt =
+        VoxelEditService::apply(&mut interior, &[VoxelEdit::Clear { address: [1, 0, 0] }]).unwrap();
     assert_eq!(receipt.dirty_mesh_chunks, vec![[0, 0, 0]]);
     assert_eq!(receipt.rebuilt_mesh_chunks, 1);
     assert_eq!(receipt.reused_mesh_chunks, 1);
@@ -496,18 +449,12 @@ fn interior_and_boundary_edits_publish_exact_incremental_chunk_sets() {
         .unwrap();
         let unaffected_hash = scene
             .mesh_chunks()
-            .iter()
             .find(|chunk| chunk.chunk == [2, 0, 0])
             .unwrap()
             .content_hash;
-        let receipt = VoxelEditService::apply(
-            &mut scene,
-            VoxelEditTransaction {
-                expected_revision: VoxelSourceRevision::INITIAL,
-                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
-            },
-        )
-        .unwrap();
+        let receipt =
+            VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }])
+                .unwrap();
         assert_eq!(receipt.dirty_mesh_chunks, vec![[-1, 0, 0], [0, 0, 0]]);
         assert_eq!(receipt.rebuilt_mesh_chunks, 1);
         assert_eq!(receipt.reused_mesh_chunks, 1);
@@ -515,7 +462,6 @@ fn interior_and_boundary_edits_publish_exact_incremental_chunk_sets() {
         assert_eq!(
             scene
                 .mesh_chunks()
-                .iter()
                 .find(|chunk| chunk.chunk == [2, 0, 0])
                 .unwrap()
                 .content_hash,
@@ -553,14 +499,9 @@ fn greedy_dirty_halo_is_face_only_while_reconstructed_modes_include_edges_and_co
             },
         )
         .unwrap();
-        let receipt = VoxelEditService::apply(
-            &mut scene,
-            VoxelEditTransaction {
-                expected_revision: VoxelSourceRevision::INITIAL,
-                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
-            },
-        )
-        .unwrap();
+        let receipt =
+            VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }])
+                .unwrap();
         let expected = if mode == SurfaceMode::GreedyCubes {
             vec![[-1, 0, 0], [0, -1, 0], [0, 0, -1], [0, 0, 0]]
         } else {
@@ -596,14 +537,9 @@ fn unit_chunks_dirty_both_signed_seam_neighbors() {
             },
         )
         .unwrap();
-        let receipt = VoxelEditService::apply(
-            &mut scene,
-            VoxelEditTransaction {
-                expected_revision: VoxelSourceRevision::INITIAL,
-                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
-            },
-        )
-        .unwrap();
+        let receipt =
+            VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }])
+                .unwrap();
         assert_eq!(
             receipt.dirty_mesh_chunks,
             vec![[-1, 0, 0], [0, 0, 0], [1, 0, 0]],
@@ -626,26 +562,26 @@ fn incremental_mesh_build_failure_leaves_authority_and_chunks_unchanged() {
         VoxelCollisionScene::from_solid_voxels_with_mesh_options(1.0, 8, [[0, 0, 0]], options)
             .unwrap();
     let before_voxels = scene.material_voxels().to_vec();
-    let before_chunks = scene.mesh_chunks().to_vec();
+    let before_chunks = scene.mesh_chunks().cloned().collect::<Vec<_>>();
     let before_revision = scene.source_revision();
 
     assert!(matches!(
         VoxelEditService::apply(
             &mut scene,
-            VoxelEditTransaction {
-                expected_revision: before_revision,
-                edits: &[VoxelEdit::Set {
-                    address: [3, 0, 0],
-                    material_slot: 1,
-                }],
-            },
+            &[VoxelEdit::Set {
+                address: [3, 0, 0],
+                material_slot: 1,
+            }],
         ),
         Err(VoxelEditApplyError::ProjectionBuild(
             CollisionSceneError::Mesh(_)
         ))
     ));
     assert_eq!(scene.material_voxels(), before_voxels);
-    assert_eq!(scene.mesh_chunks(), before_chunks);
+    assert_eq!(
+        scene.mesh_chunks().cloned().collect::<Vec<_>>(),
+        before_chunks
+    );
     assert_eq!(scene.source_revision(), before_revision);
 }
 

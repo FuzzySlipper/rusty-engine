@@ -6,7 +6,6 @@ use errors::{clear_receipt, refuse};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
-    sync::Arc,
 };
 
 use core_math::Vec3;
@@ -51,8 +50,10 @@ enum WorldSlot {
 
 struct DynamicsWorld {
     solver: DynamicsSolver,
-    /// The collision scene last bound as the static environment.
-    scene: Option<Arc<VoxelCollisionScene>>,
+    /// Publication identity of the Spatial scene last bound as the static
+    /// environment. Holding the scene itself would force every voxel edit to
+    /// copy it.
+    bound_scene: Option<u64>,
     /// Authored shape, mass and material per body; pose and velocity live in
     /// the solver.
     bodies: BTreeMap<u64, RigidBodyComponent>,
@@ -232,7 +233,7 @@ impl RuntimeDynamicsBridge {
             value,
             WorldSlot::Active(DynamicsWorld {
                 solver: DynamicsSolver::new(vec3_f64(gravity)),
-                scene: None,
+                bound_scene: None,
                 bodies: BTreeMap::new(),
                 contacts: BTreeMap::new(),
                 invalidated_tethers: BTreeSet::new(),
@@ -266,9 +267,12 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsWorldCollisionBindingRequest,
     ) -> Result<(), CsharpEngineServicesError> {
+        let identity = self
+            .collision_source
+            .cursor_identity(request.spatial_session)?;
         let scene = self.collision_source.scene(request.spatial_session)?;
         let world = self.active_world_mut(request.world.value)?;
-        world.bind_scene(scene);
+        world.bind_scene(identity, &scene);
         Ok(())
     }
 
@@ -276,6 +280,9 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsRebaseWorldOriginRequest,
     ) -> Result<(), CsharpEngineServicesError> {
+        let identity = self
+            .collision_source
+            .cursor_identity(request.spatial_session)?;
         let scene = self.collision_source.scene(request.spatial_session)?;
         let receipt = request.receipt;
         let delta = [
@@ -293,7 +300,7 @@ impl RuntimeDynamicsBridge {
         let delta = <[f64; 3]>::try_from(delta.collect::<Vec<_>>()).expect("three axes");
         let world = self.active_world_mut(request.world.value)?;
         world.solver.translate(delta);
-        world.bind_scene(scene);
+        world.bind_scene(identity, &scene);
         Ok(())
     }
 
@@ -727,16 +734,12 @@ impl RuntimeDynamicsBridge {
 }
 
 impl DynamicsWorld {
-    fn bind_scene(&mut self, scene: Arc<VoxelCollisionScene>) {
-        if self
-            .scene
-            .as_ref()
-            .is_some_and(|bound| Arc::ptr_eq(bound, &scene))
-        {
+    fn bind_scene(&mut self, identity: u64, scene: &VoxelCollisionScene) {
+        if self.bound_scene == Some(identity) {
             return;
         }
         scene.bind_dynamics_environment(&mut self.solver);
-        self.scene = Some(scene);
+        self.bound_scene = Some(identity);
     }
 
     fn body_output(&self, handle: u64) -> DynamicsBodyOutput {
@@ -1853,12 +1856,10 @@ mod tests {
                 })
                 .unwrap();
             let ground = (-6..7).flat_map(|x| (-2..3).map(move |z| [x, -1, z]));
-            bridge
-                .active_world_mut(world.value)
-                .unwrap()
-                .bind_scene(Arc::new(
-                    VoxelCollisionScene::from_solid_voxels(1.0, 8, ground).unwrap(),
-                ));
+            bridge.active_world_mut(world.value).unwrap().bind_scene(
+                u64::MAX,
+                &VoxelCollisionScene::from_solid_voxels(1.0, 8, ground).unwrap(),
+            );
             bridge
                 .create_fixed_chain(NativeDynamicsFixedChainRequest {
                     world,

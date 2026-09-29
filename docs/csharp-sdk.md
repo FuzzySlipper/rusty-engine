@@ -796,15 +796,14 @@ Changing the mode of an existing session is not currently a C# API.
 Immediately after creating a Spatial session, call
 `Voxel.ConfigureMaterialCollision(new(session, declarations))` with
 `VoxelMaterialCollision(slot, collidable)` values from the product's material
-definitions. Do this before residency, edits, or history restoration. Unlisted
-slots collide, preserving the default occupied-cell behavior. Duplicate slots
-and configuration after residency/edits return named operation diagnostics.
+definitions. Unlisted slots collide, preserving the default occupied-cell
+behavior. Duplicate slots return a named operation diagnostic. Configuring again
+later replaces the declarations and updates collision for the whole scene.
 
 A false declaration keeps the canonical voxel, material, and visual mesh while
 excluding that slot from collision and navigation. Rays, sweeps, and character
 steps therefore pass through water and reach solid ground below it. The session
-retains the declarations through edits, undo/redo, residency, restoration, and
-origin rebases. Recreate the session to change this configuration.
+retains the declarations through edits, residency and origin rebases.
 
 Collision has no dependency on Graphics resources or a browser. Authored
 `Solid`, `Collidable`, and `Occludes` metadata on a rendered material alone

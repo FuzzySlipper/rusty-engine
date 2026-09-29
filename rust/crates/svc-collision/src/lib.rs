@@ -988,6 +988,25 @@ impl CollisionProjection {
         self.version += 1;
     }
 
+    /// Replace the colliders of the given chunks with colliders built from the
+    /// supplied contents (`None` drops the chunk). Callers pass contents that
+    /// differ from resident voxels, such as chunks with noncollidable materials
+    /// cleared. Unlisted chunks keep their shapes. One version bump.
+    pub fn reconcile_chunks<'a>(
+        &mut self,
+        chunks: impl IntoIterator<Item = (ChunkCoord, Option<&'a VoxelChunk>)>,
+    ) {
+        for (coord, chunk) in chunks {
+            match chunk {
+                Some(chunk) => self.set_chunk(coord, chunk),
+                None => {
+                    self.chunks.remove(&coord);
+                }
+            }
+        }
+        self.version += 1;
+    }
+
     /// Whether the projection for `chunk` no longer matches `world`'s current data
     /// (content changed, a chunk gained its first solids, or a collider's chunk is
     /// gone). The basis for coordinated, version-checked rebuilds.

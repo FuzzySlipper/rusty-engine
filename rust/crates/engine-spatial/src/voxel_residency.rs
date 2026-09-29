@@ -1,32 +1,20 @@
-//! Explicit, bounded residency transactions for canonical voxel chunks.
-//!
-//! Residency is a mechanism boundary, not a streaming policy. Callers decide
-//! which chunks to source or retain; this module validates complete dense chunk
-//! payloads, guards pinned chunks, prepares every derived projection off to the
-//! side, and publishes one coherent scene revision only after a guarded commit.
+//! Residency changes for canonical voxel chunks. Callers decide which chunks
+//! to load, replace or unload; this module validates dense chunk payloads,
+//! writes them into the scene and rebuilds only the changed chunks' meshes and
+//! colliders and their navigation cells.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_space::{ChunkCoord, ChunkDims};
 use core_voxel::VoxelValue;
 use serde::{Deserialize, Serialize};
+use svc_pathfinding::nav_cells_affected_by_voxel;
 use svc_volume::VoxelChunk;
 
 use crate::{
-    CollisionSceneError, SurfaceMode, VoxelCollisionScene, VoxelEditHistory, VoxelEditHistoryError,
-    VoxelEditHistoryResetReceipt, VoxelProjectionRevisions, VoxelSourceRevision, MAX_SOLID_VOXELS,
-    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    CollisionSceneError, SurfaceMode, VoxelCollisionScene, VoxelProjectionRevisions,
+    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
 };
-
-/// One transaction cannot perform unbounded resident-set churn.
-pub const MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION: usize = 64;
-/// Bounds validation and candidate materialization work for dense payloads.
-pub const MAX_VOXEL_CHUNK_PAYLOAD_SLOTS_PER_TRANSACTION: usize =
-    MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION * 64 * 64 * 64;
-/// Bounds the canonical resident index rebuilt by this mechanism.
-pub const MAX_RESIDENT_VOXEL_CHUNKS: usize = 4_096;
-/// Bounds explicit in-flight ownership evidence retained by one registry.
-pub const MAX_VOXEL_CHUNK_LEASES: usize = 4_096;
 
 /// Stable signed identity of one canonical world chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -114,7 +102,8 @@ impl VoxelChunkPayload {
     }
 }
 
-/// One explicit resident-set operation.
+/// One resident-set operation. Admit and Replace both make the chunk hold the
+/// payload; Evict of a non-resident chunk changes nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelChunkResidencyOperation {
     Admit {
@@ -123,12 +112,10 @@ pub enum VoxelChunkResidencyOperation {
     },
     Replace {
         chunk: VoxelChunkIdentity,
-        expected_content_hash: VoxelChunkContentHash,
         payload: VoxelChunkPayload,
     },
     Evict {
         chunk: VoxelChunkIdentity,
-        expected_content_hash: VoxelChunkContentHash,
     },
 }
 
@@ -140,13 +127,6 @@ impl VoxelChunkResidencyOperation {
             }
         }
     }
-}
-
-/// A caller must name the exact scene revision it observed.
-#[derive(Debug, Clone, Copy)]
-pub struct VoxelChunkResidencyTransaction<'a> {
-    pub expected_scene_source_revision: VoxelSourceRevision,
-    pub operations: &'a [VoxelChunkResidencyOperation],
 }
 
 /// Stable readout for one resident chunk without exposing mutable authority.
@@ -163,156 +143,10 @@ impl ResidentVoxelChunk {
     }
 }
 
-/// Stable identity of one explicit lease. IDs are never reused by a registry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VoxelChunkLeaseId(u64);
-
-impl VoxelChunkLeaseId {
-    pub const fn from_raw(raw: u64) -> Self {
-        Self(raw)
-    }
-
-    pub const fn raw(self) -> u64 {
-        self.0
-    }
-}
-
-/// Evidence retained for each active pin on a resident chunk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VoxelChunkLeaseEvidence {
-    pub lease_id: VoxelChunkLeaseId,
-    pub chunk: VoxelChunkIdentity,
-    pub acquired_content_hash: VoxelChunkContentHash,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoxelChunkLeaseError {
-    ChunkNotResident { chunk: VoxelChunkIdentity },
-    TooManyLeases { limit: usize },
-    LeaseIdentityExhausted,
-    UnknownLease { lease_id: VoxelChunkLeaseId },
-}
-
-impl std::fmt::Display for VoxelChunkLeaseError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{self:?}")
-    }
-}
-
-impl std::error::Error for VoxelChunkLeaseError {}
-
-/// Instance-owned registry for bounded, explicit chunk pins.
-///
-/// Releasing is deliberate; lease handles do not acquire hidden drop behavior.
-#[derive(Debug, Default, Clone)]
-pub struct VoxelChunkLeaseRegistry {
-    next_lease_id: u64,
-    generation: u64,
-    leases: BTreeMap<VoxelChunkLeaseId, VoxelChunkLeaseEvidence>,
-    by_chunk: BTreeMap<VoxelChunkIdentity, BTreeSet<VoxelChunkLeaseId>>,
-}
-
-impl VoxelChunkLeaseRegistry {
-    pub fn evidence_for_lease(
-        &self,
-        lease_id: VoxelChunkLeaseId,
-    ) -> Option<VoxelChunkLeaseEvidence> {
-        self.leases.get(&lease_id).copied()
-    }
-
-    pub fn acquire(
-        &mut self,
-        scene: &VoxelCollisionScene,
-        chunk: VoxelChunkIdentity,
-    ) -> Result<VoxelChunkLeaseEvidence, VoxelChunkLeaseError> {
-        let resident = VoxelChunkResidencyService::resident_chunk(scene, chunk)
-            .ok_or(VoxelChunkLeaseError::ChunkNotResident { chunk })?;
-        if self.leases.len() >= MAX_VOXEL_CHUNK_LEASES {
-            return Err(VoxelChunkLeaseError::TooManyLeases {
-                limit: MAX_VOXEL_CHUNK_LEASES,
-            });
-        }
-        let next = self
-            .next_lease_id
-            .checked_add(1)
-            .ok_or(VoxelChunkLeaseError::LeaseIdentityExhausted)?;
-        let evidence = VoxelChunkLeaseEvidence {
-            lease_id: VoxelChunkLeaseId(next),
-            chunk,
-            acquired_content_hash: resident.content_hash,
-        };
-        self.next_lease_id = next;
-        self.generation = self.generation.wrapping_add(1);
-        self.leases.insert(evidence.lease_id, evidence);
-        self.by_chunk
-            .entry(chunk)
-            .or_default()
-            .insert(evidence.lease_id);
-        Ok(evidence)
-    }
-
-    pub fn release(
-        &mut self,
-        lease_id: VoxelChunkLeaseId,
-    ) -> Result<VoxelChunkLeaseEvidence, VoxelChunkLeaseError> {
-        let evidence = self
-            .leases
-            .remove(&lease_id)
-            .ok_or(VoxelChunkLeaseError::UnknownLease { lease_id })?;
-        let leases = self
-            .by_chunk
-            .get_mut(&evidence.chunk)
-            .expect("active lease has a chunk index entry");
-        leases.remove(&lease_id);
-        if leases.is_empty() {
-            self.by_chunk.remove(&evidence.chunk);
-        }
-        self.generation = self.generation.wrapping_add(1);
-        Ok(evidence)
-    }
-
-    pub fn active_lease_count(&self) -> usize {
-        self.leases.len()
-    }
-
-    pub fn is_pinned(&self, chunk: VoxelChunkIdentity) -> bool {
-        self.by_chunk
-            .get(&chunk)
-            .is_some_and(|leases| !leases.is_empty())
-    }
-
-    pub fn evidence_for(&self, chunk: VoxelChunkIdentity) -> Vec<VoxelChunkLeaseEvidence> {
-        self.by_chunk.get(&chunk).map_or_else(Vec::new, |ids| {
-            ids.iter()
-                .map(|id| self.leases[id])
-                .collect::<Vec<VoxelChunkLeaseEvidence>>()
-        })
-    }
-
-    pub const fn generation(&self) -> u64 {
-        self.generation
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelChunkResidencyRejection {
     InvalidCellStates {
         operation_index: usize,
-    },
-    StaleSceneSourceRevision {
-        expected: VoxelSourceRevision,
-        actual: VoxelSourceRevision,
-    },
-    SceneSourceRevisionExhausted,
-    EmptyTransaction,
-    TooManyOperations {
-        limit: usize,
-        actual: usize,
-    },
-    DuplicateChunk {
-        first_operation_index: usize,
-        duplicate_operation_index: usize,
-        chunk: VoxelChunkIdentity,
     },
     ChunkCoordinateOutOfBounds {
         operation_index: usize,
@@ -341,44 +175,9 @@ pub enum VoxelChunkResidencyRejection {
         material_slot: u16,
         maximum: u16,
     },
-    AggregatePayloadSlotsExceeded {
-        limit: usize,
-        actual: usize,
-    },
-    ResidentChunkLimitExceeded {
-        limit: usize,
-        actual: usize,
-    },
-    ResidentSolidVoxelLimitExceeded {
-        limit: usize,
-        actual: usize,
-    },
-    ChunkAlreadyResident {
-        operation_index: usize,
-        chunk: VoxelChunkIdentity,
-        actual_content_hash: VoxelChunkContentHash,
-    },
-    ChunkNotResident {
-        operation_index: usize,
-        chunk: VoxelChunkIdentity,
-    },
-    StaleChunkContentHash {
-        operation_index: usize,
-        chunk: VoxelChunkIdentity,
-        expected: VoxelChunkContentHash,
-        actual: VoxelChunkContentHash,
-    },
-    ChunkPinned {
-        operation_index: usize,
-        chunk: VoxelChunkIdentity,
-        leases: Vec<VoxelChunkLeaseEvidence>,
-    },
+    /// Every operation already matched the resident set.
     NoChanges {
         retained: Vec<VoxelChunkIdentity>,
-    },
-    HistoryNotEmpty {
-        entry_count: usize,
-        cursor: usize,
     },
 }
 
@@ -393,26 +192,8 @@ impl std::error::Error for VoxelChunkResidencyRejection {}
 #[derive(Debug)]
 pub enum VoxelChunkResidencyApplyError {
     Rejected(VoxelChunkResidencyRejection),
+    /// Rebuilding a changed chunk failed; the change was reverted.
     ProjectionBuild(CollisionSceneError),
-    History(VoxelEditHistoryError),
-    PreparedSceneChanged {
-        expected_revision: VoxelSourceRevision,
-        actual_revision: VoxelSourceRevision,
-        expected_residency_hash: u64,
-        actual_residency_hash: u64,
-    },
-    PreparedOriginChanged {
-        expected_revision: u64,
-        actual_revision: u64,
-    },
-    PreparedStaticCollisionChanged {
-        expected_revision: u64,
-        actual_revision: u64,
-    },
-    PreparedLeaseRegistryChanged {
-        expected_generation: u64,
-        actual_generation: u64,
-    },
 }
 
 impl std::fmt::Display for VoxelChunkResidencyApplyError {
@@ -420,36 +201,12 @@ impl std::fmt::Display for VoxelChunkResidencyApplyError {
         match self {
             Self::Rejected(rejection) => rejection.fmt(formatter),
             Self::ProjectionBuild(error) => write!(formatter, "projection rebuild failed: {error}"),
-            Self::History(error) => write!(formatter, "edit history rejected residency: {error}"),
-            Self::PreparedSceneChanged { .. } => {
-                write!(
-                    formatter,
-                    "voxel residency changed after candidate preparation"
-                )
-            }
-            Self::PreparedOriginChanged { .. } => write!(
-                formatter,
-                "world origin changed after candidate preparation"
-            ),
-            Self::PreparedStaticCollisionChanged { .. } => {
-                write!(
-                    formatter,
-                    "static collision changed after candidate preparation"
-                )
-            }
-            Self::PreparedLeaseRegistryChanged { .. } => {
-                write!(
-                    formatter,
-                    "voxel chunk leases changed after candidate preparation"
-                )
-            }
         }
     }
 }
 
 impl std::error::Error for VoxelChunkResidencyApplyError {}
 
-/// Typed publication evidence for one accepted coherent revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelChunkResidencyReceipt {
     pub revision_before: VoxelSourceRevision,
@@ -461,42 +218,11 @@ pub struct VoxelChunkResidencyReceipt {
     pub dirty_chunks: Vec<VoxelChunkIdentity>,
     pub resident_chunk_count: usize,
     pub resident_solid_voxel_count: usize,
-    pub residency_hash: u64,
     pub authority_hash: u64,
     pub projections: VoxelProjectionRevisions,
     pub rebuilt_mesh_chunks: usize,
     pub reused_mesh_chunks: usize,
     pub removed_mesh_chunks: usize,
-    pub history_reset: Option<VoxelEditHistoryResetReceipt>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoxelResidencyHistoryPolicy {
-    RejectIfNonEmpty,
-    ResetToPublishedAuthority,
-}
-
-/// Complete candidate scene plus the guards observed during preparation.
-#[derive(Debug)]
-pub struct PreparedVoxelChunkResidency {
-    expected_scene_source_revision: VoxelSourceRevision,
-    expected_residency_hash: u64,
-    expected_rebase_revision: u64,
-    expected_world_origin: core_space::WorldOrigin,
-    expected_static_collision_revision: u64,
-    expected_lease_registry_generation: u64,
-    candidate: VoxelCollisionScene,
-    receipt: VoxelChunkResidencyReceipt,
-}
-
-impl PreparedVoxelChunkResidency {
-    pub const fn receipt(&self) -> &VoxelChunkResidencyReceipt {
-        &self.receipt
-    }
-
-    pub const fn candidate_scene(&self) -> &VoxelCollisionScene {
-        &self.candidate
-    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -521,46 +247,17 @@ impl VoxelChunkResidencyService {
             .collect()
     }
 
-    /// Validate and build a complete candidate without mutating the scene.
-    pub fn prepare(
-        scene: &VoxelCollisionScene,
-        leases: &VoxelChunkLeaseRegistry,
-        transaction: VoxelChunkResidencyTransaction<'_>,
-    ) -> Result<PreparedVoxelChunkResidency, VoxelChunkResidencyApplyError> {
-        if transaction.expected_scene_source_revision != scene.source_revision {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::StaleSceneSourceRevision {
-                    expected: transaction.expected_scene_source_revision,
-                    actual: scene.source_revision,
-                },
-            ));
-        }
-        let accepted_revision =
-            scene
-                .source_revision
-                .checked_next()
-                .ok_or(VoxelChunkResidencyApplyError::Rejected(
-                    VoxelChunkResidencyRejection::SceneSourceRevisionExhausted,
-                ))?;
-        if transaction.operations.is_empty() {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::EmptyTransaction,
-            ));
-        }
-        if transaction.operations.len() > MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::TooManyOperations {
-                    limit: MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION,
-                    actual: transaction.operations.len(),
-                },
-            ));
-        }
-
+    /// Apply operations in order. Invalid payloads reject the batch before
+    /// anything changes.
+    pub fn apply(
+        scene: &mut VoxelCollisionScene,
+        operations: &[VoxelChunkResidencyOperation],
+    ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
         let chunk_size = scene.chunk_size;
         let grid_id = scene.voxel_world.grid().id();
-        let mut aggregate_payload_slots = 0usize;
-        let mut operations = BTreeMap::new();
-        for (operation_index, operation) in transaction.operations.iter().enumerate() {
+        let smooth = scene.mesh_options.mode != SurfaceMode::GreedyCubes;
+        let mut validated = Vec::with_capacity(operations.len());
+        for (operation_index, operation) in operations.iter().enumerate() {
             let identity = operation.chunk();
             validate_chunk_identity(identity, chunk_size).map_err(
                 |(axis, voxel_min, voxel_max_inclusive)| {
@@ -576,369 +273,119 @@ impl VoxelChunkResidencyService {
                     )
                 },
             )?;
-            if let Some((first_operation_index, _)) =
-                operations.get(&identity).map(|(index, op)| (*index, op))
-            {
-                return Err(VoxelChunkResidencyApplyError::Rejected(
-                    VoxelChunkResidencyRejection::DuplicateChunk {
-                        first_operation_index,
-                        duplicate_operation_index: operation_index,
-                        chunk: identity,
-                    },
-                ));
-            }
-
-            let validated = match operation {
-                VoxelChunkResidencyOperation::Admit { payload, .. } => {
-                    aggregate_payload_slots = checked_payload_aggregate(
-                        aggregate_payload_slots,
-                        payload.material_slots.len(),
-                    )?;
-                    ValidatedResidencyOperation::Admit(validate_payload(
-                        operation_index,
-                        identity,
-                        chunk_size,
-                        grid_id,
-                        payload,
-                    )?)
-                }
-                VoxelChunkResidencyOperation::Replace {
-                    expected_content_hash,
+            let contents = match operation {
+                VoxelChunkResidencyOperation::Admit { payload, .. }
+                | VoxelChunkResidencyOperation::Replace { payload, .. } => Some(validate_payload(
+                    operation_index,
+                    identity,
+                    chunk_size,
+                    grid_id,
+                    smooth,
                     payload,
-                    ..
-                } => {
-                    aggregate_payload_slots = checked_payload_aggregate(
-                        aggregate_payload_slots,
-                        payload.material_slots.len(),
-                    )?;
-                    ValidatedResidencyOperation::Replace {
-                        expected_content_hash: *expected_content_hash,
-                        chunk: validate_payload(
-                            operation_index,
-                            identity,
-                            chunk_size,
-                            grid_id,
-                            payload,
-                        )?,
-                    }
-                }
-                VoxelChunkResidencyOperation::Evict {
-                    expected_content_hash,
-                    ..
-                } => ValidatedResidencyOperation::Evict {
-                    expected_content_hash: *expected_content_hash,
-                },
+                )?),
+                VoxelChunkResidencyOperation::Evict { .. } => None,
             };
-            operations.insert(identity, (operation_index, validated));
+            validated.push((identity, contents));
         }
 
-        let old_resident: BTreeSet<_> = scene
-            .voxel_world
-            .resident_chunks()
-            .map(|(coordinate, _)| VoxelChunkIdentity::from(coordinate))
-            .collect();
-        let mut candidate_world = scene.voxel_world.clone();
-        let mut admitted = Vec::new();
-        let mut replaced = Vec::new();
-        let mut evicted = Vec::new();
-        let mut retained = Vec::new();
-
-        for (identity, (operation_index, operation)) in operations {
+        let revision_before = scene.source_revision;
+        // The chunks each operation replaced, in order, for accounting and
+        // for putting back if a mesh fails to build.
+        let mut previous: Vec<(ChunkCoord, Option<VoxelChunk>)> = Vec::new();
+        let (mut admitted, mut replaced, mut evicted, mut retained) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for (identity, contents) in validated {
             let coordinate = identity.to_chunk_coord();
-            match operation {
-                ValidatedResidencyOperation::Admit(chunk) => {
-                    if let Some(current) = candidate_world.get(coordinate) {
-                        let actual_content_hash = chunk_content_hash(current);
-                        if actual_content_hash == chunk_content_hash(&chunk) {
-                            retained.push(identity);
-                        } else {
-                            return Err(VoxelChunkResidencyApplyError::Rejected(
-                                VoxelChunkResidencyRejection::ChunkAlreadyResident {
-                                    operation_index,
-                                    chunk: identity,
-                                    actual_content_hash,
-                                },
-                            ));
-                        }
+            let current = scene.voxel_world.get(coordinate);
+            match contents {
+                Some(chunk) => {
+                    if current.is_some_and(|current| current.content_hash() == chunk.content_hash())
+                    {
+                        retained.push(identity);
+                        continue;
+                    }
+                    if current.is_some() {
+                        replaced.push(identity);
                     } else {
-                        candidate_world.insert(coordinate, chunk);
                         admitted.push(identity);
                     }
+                    previous.push((coordinate, scene.voxel_world.insert(coordinate, chunk)));
                 }
-                ValidatedResidencyOperation::Replace {
-                    expected_content_hash,
-                    chunk,
-                } => {
-                    let current = candidate_world.get(coordinate).ok_or({
-                        VoxelChunkResidencyApplyError::Rejected(
-                            VoxelChunkResidencyRejection::ChunkNotResident {
-                                operation_index,
-                                chunk: identity,
-                            },
-                        )
-                    })?;
-                    let actual = chunk_content_hash(current);
-                    if actual != expected_content_hash {
-                        return Err(VoxelChunkResidencyApplyError::Rejected(
-                            VoxelChunkResidencyRejection::StaleChunkContentHash {
-                                operation_index,
-                                chunk: identity,
-                                expected: expected_content_hash,
-                                actual,
-                            },
-                        ));
+                None => match scene.voxel_world.remove(coordinate) {
+                    Some(chunk) => {
+                        evicted.push(identity);
+                        previous.push((coordinate, Some(chunk)));
                     }
-                    reject_if_pinned(leases, operation_index, identity)?;
-                    if actual == chunk_content_hash(&chunk) {
-                        retained.push(identity);
-                    } else {
-                        candidate_world.insert(coordinate, chunk);
-                        replaced.push(identity);
-                    }
-                }
-                ValidatedResidencyOperation::Evict {
-                    expected_content_hash,
-                } => {
-                    let current = candidate_world.get(coordinate).ok_or({
-                        VoxelChunkResidencyApplyError::Rejected(
-                            VoxelChunkResidencyRejection::ChunkNotResident {
-                                operation_index,
-                                chunk: identity,
-                            },
-                        )
-                    })?;
-                    let actual = chunk_content_hash(current);
-                    if actual != expected_content_hash {
-                        return Err(VoxelChunkResidencyApplyError::Rejected(
-                            VoxelChunkResidencyRejection::StaleChunkContentHash {
-                                operation_index,
-                                chunk: identity,
-                                expected: expected_content_hash,
-                                actual,
-                            },
-                        ));
-                    }
-                    reject_if_pinned(leases, operation_index, identity)?;
-                    candidate_world.remove(coordinate);
-                    evicted.push(identity);
-                }
+                    None => retained.push(identity),
+                },
             }
         }
-
-        if admitted.is_empty() && replaced.is_empty() && evicted.is_empty() {
+        if previous.is_empty() {
             return Err(VoxelChunkResidencyApplyError::Rejected(
                 VoxelChunkResidencyRejection::NoChanges { retained },
             ));
         }
 
-        let resident_chunk_count = candidate_world.resident_chunks().count();
-        if resident_chunk_count > MAX_RESIDENT_VOXEL_CHUNKS {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::ResidentChunkLimitExceeded {
-                    limit: MAX_RESIDENT_VOXEL_CHUNKS,
-                    actual: resident_chunk_count,
-                },
-            ));
-        }
-        let resident_solid_voxel_count = candidate_world
-            .resident_chunks()
-            .try_fold(0usize, |aggregate, (_, chunk)| {
-                aggregate.checked_add(chunk.iter().filter(|(_, value)| value.is_solid()).count())
-            })
-            .unwrap_or(usize::MAX);
-        if resident_solid_voxel_count > MAX_SOLID_VOXELS {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::ResidentSolidVoxelLimitExceeded {
-                    limit: MAX_SOLID_VOXELS,
-                    actual: resident_solid_voxel_count,
-                },
-            ));
-        }
-
-        let new_resident: BTreeSet<_> = candidate_world
-            .resident_chunks()
-            .map(|(coordinate, _)| VoxelChunkIdentity::from(coordinate))
+        let changed: BTreeSet<ChunkCoord> =
+            previous.iter().map(|(coordinate, _)| *coordinate).collect();
+        let dirty: BTreeSet<ChunkCoord> = changed
+            .iter()
+            .flat_map(|coordinate| scene.mesh_neighbourhood(*coordinate))
             .collect();
-        let changed = admitted.iter().chain(&replaced).chain(&evicted).copied();
-        let dirty = derive_dirty_chunks(
-            chunk_size,
-            scene.mesh_options.mode,
-            changed,
-            &old_resident,
-            &new_resident,
-        );
-        let dirty_coordinates: BTreeSet<ChunkCoord> =
-            dirty.iter().copied().map(ChunkCoord::from).collect();
-        let mut candidate = VoxelCollisionScene::build_from_voxel_world_at_revision(
-            scene.voxel_size,
-            scene.chunk_size,
-            candidate_world,
-            crate::SceneBuildRevision {
-                source: accepted_revision,
-                world_origin: scene.world_origin,
-                rebase: scene.rebase_revision,
-            },
-            scene.mesh_options,
-            Some((&scene.mesh_chunks, &dirty_coordinates)),
-        )
-        .map_err(VoxelChunkResidencyApplyError::ProjectionBuild)?;
-        candidate.preserve_scene_configuration_from(scene);
-        let candidate_residency_hash = residency_hash(&candidate);
-        let receipt = VoxelChunkResidencyReceipt {
-            revision_before: scene.source_revision,
-            accepted_revision,
+        let meshes = match scene.build_meshes(&dirty) {
+            Ok(meshes) => meshes,
+            Err(error) => {
+                for (coordinate, chunk) in previous.into_iter().rev() {
+                    match chunk {
+                        Some(chunk) => {
+                            scene.voxel_world.insert(coordinate, chunk);
+                        }
+                        None => {
+                            scene.voxel_world.remove(coordinate);
+                        }
+                    }
+                }
+                return Err(VoxelChunkResidencyApplyError::ProjectionBuild(error));
+            }
+        };
+        // Account each changed chunk once: out with what was there first, in
+        // with what is there now.
+        let mut first_previous = BTreeMap::new();
+        for (coordinate, chunk) in previous {
+            first_previous.entry(coordinate).or_insert(chunk);
+        }
+        let mut navigation_cells = BTreeSet::new();
+        for (coordinate, before) in first_previous {
+            if let Some(before) = before {
+                scene.account_chunk(coordinate, &before, false);
+            }
+            if let Some(after) = scene.voxel_world.get(coordinate).cloned() {
+                scene.account_chunk(coordinate, &after, true);
+            }
+            for cell in scene.chunk_cells(coordinate) {
+                navigation_cells.extend(nav_cells_affected_by_voxel(cell, crate::SCENE_NAVIGATION));
+            }
+        }
+        scene.publish_local_change(&changed, &dirty, meshes, navigation_cells);
+
+        let update = &scene.mesh_update;
+        Ok(VoxelChunkResidencyReceipt {
+            revision_before,
+            accepted_revision: scene.source_revision,
             admitted,
             replaced,
             evicted,
             retained,
-            dirty_chunks: dirty,
-            resident_chunk_count,
-            resident_solid_voxel_count,
-            residency_hash: candidate_residency_hash,
-            authority_hash: candidate.authority_hash,
-            projections: candidate.projection_revisions,
-            rebuilt_mesh_chunks: candidate.mesh_update.rebuilt_chunks,
-            reused_mesh_chunks: candidate.mesh_update.reused_chunks,
-            removed_mesh_chunks: candidate.mesh_update.removed_chunks,
-            history_reset: None,
-        };
-        debug_assert!(receipt
-            .projections
-            .is_coherent_with(receipt.accepted_revision));
-        Ok(PreparedVoxelChunkResidency {
-            expected_scene_source_revision: scene.source_revision,
-            expected_residency_hash: residency_hash(scene),
-            expected_rebase_revision: scene.rebase_revision,
-            expected_world_origin: scene.world_origin,
-            expected_static_collision_revision: scene.static_mesh_collision_revision(),
-            expected_lease_registry_generation: leases.generation,
-            candidate,
-            receipt,
+            dirty_chunks: dirty.into_iter().map(VoxelChunkIdentity::from).collect(),
+            resident_chunk_count: scene.resident_chunk_count(),
+            resident_solid_voxel_count: scene.solid_voxel_count,
+            authority_hash: scene.authority_hash,
+            projections: scene.projection_revisions(),
+            rebuilt_mesh_chunks: update.rebuilt_chunks,
+            reused_mesh_chunks: update.reused_chunks,
+            removed_mesh_chunks: update.removed_chunks,
         })
     }
-
-    /// Publish a prepared candidate only if all observed guards still match.
-    pub fn commit(
-        scene: &mut VoxelCollisionScene,
-        leases: &VoxelChunkLeaseRegistry,
-        prepared: PreparedVoxelChunkResidency,
-    ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
-        let (candidate, receipt) = Self::finish_prepared(scene, leases, prepared)?;
-        *scene = candidate;
-        Ok(receipt)
-    }
-
-    /// Validate publication guards and transfer the prepared scene without
-    /// cloning the old scene on the publication thread.
-    pub fn finish_prepared(
-        scene: &VoxelCollisionScene,
-        leases: &VoxelChunkLeaseRegistry,
-        prepared: PreparedVoxelChunkResidency,
-    ) -> Result<(VoxelCollisionScene, VoxelChunkResidencyReceipt), VoxelChunkResidencyApplyError>
-    {
-        let actual_residency_hash = residency_hash(scene);
-        if scene.source_revision != prepared.expected_scene_source_revision
-            || actual_residency_hash != prepared.expected_residency_hash
-        {
-            return Err(VoxelChunkResidencyApplyError::PreparedSceneChanged {
-                expected_revision: prepared.expected_scene_source_revision,
-                actual_revision: scene.source_revision,
-                expected_residency_hash: prepared.expected_residency_hash,
-                actual_residency_hash,
-            });
-        }
-        if scene.rebase_revision != prepared.expected_rebase_revision
-            || scene.world_origin != prepared.expected_world_origin
-        {
-            return Err(VoxelChunkResidencyApplyError::PreparedOriginChanged {
-                expected_revision: prepared.expected_rebase_revision,
-                actual_revision: scene.rebase_revision,
-            });
-        }
-        let actual_static_collision_revision = scene.static_mesh_collision_revision();
-        if actual_static_collision_revision != prepared.expected_static_collision_revision {
-            return Err(
-                VoxelChunkResidencyApplyError::PreparedStaticCollisionChanged {
-                    expected_revision: prepared.expected_static_collision_revision,
-                    actual_revision: actual_static_collision_revision,
-                },
-            );
-        }
-        if leases.generation != prepared.expected_lease_registry_generation {
-            return Err(
-                VoxelChunkResidencyApplyError::PreparedLeaseRegistryChanged {
-                    expected_generation: prepared.expected_lease_registry_generation,
-                    actual_generation: leases.generation,
-                },
-            );
-        }
-        Ok((prepared.candidate, prepared.receipt))
-    }
-
-    /// Prepare and guarded-commit one complete transaction.
-    pub fn apply(
-        scene: &mut VoxelCollisionScene,
-        leases: &VoxelChunkLeaseRegistry,
-        transaction: VoxelChunkResidencyTransaction<'_>,
-    ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
-        let prepared = Self::prepare(scene, leases, transaction)?;
-        Self::commit(scene, leases, prepared)
-    }
-
-    /// Apply residency and update caller-owned global edit history at the same
-    /// no-failure publication boundary. History entries cannot be pruned by
-    /// chunk because they are one global hash chain.
-    pub fn apply_with_history(
-        scene: &mut VoxelCollisionScene,
-        leases: &VoxelChunkLeaseRegistry,
-        history: &mut VoxelEditHistory,
-        history_policy: VoxelResidencyHistoryPolicy,
-        transaction: VoxelChunkResidencyTransaction<'_>,
-    ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
-        history
-            .ensure_scene_at_cursor(scene)
-            .map_err(VoxelChunkResidencyApplyError::History)?;
-        if history_policy == VoxelResidencyHistoryPolicy::RejectIfNonEmpty && !history.is_empty() {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::HistoryNotEmpty {
-                    entry_count: history.entries().len(),
-                    cursor: history.cursor().index,
-                },
-            ));
-        }
-        let prepared = Self::prepare(scene, leases, transaction)?;
-        let mut receipt = Self::commit(scene, leases, prepared)?;
-        receipt.history_reset = Some(history.reset_to_scene(scene));
-        Ok(receipt)
-    }
-}
-
-#[derive(Debug)]
-enum ValidatedResidencyOperation {
-    Admit(VoxelChunk),
-    Replace {
-        expected_content_hash: VoxelChunkContentHash,
-        chunk: VoxelChunk,
-    },
-    Evict {
-        expected_content_hash: VoxelChunkContentHash,
-    },
-}
-
-fn checked_payload_aggregate(
-    current: usize,
-    additional: usize,
-) -> Result<usize, VoxelChunkResidencyApplyError> {
-    let actual = current.saturating_add(additional);
-    if actual > MAX_VOXEL_CHUNK_PAYLOAD_SLOTS_PER_TRANSACTION {
-        return Err(VoxelChunkResidencyApplyError::Rejected(
-            VoxelChunkResidencyRejection::AggregatePayloadSlotsExceeded {
-                limit: MAX_VOXEL_CHUNK_PAYLOAD_SLOTS_PER_TRANSACTION,
-                actual,
-            },
-        ));
-    }
-    Ok(actual)
 }
 
 fn validate_payload(
@@ -946,6 +393,7 @@ fn validate_payload(
     identity: VoxelChunkIdentity,
     chunk_size: u32,
     grid_id: core_space::GridId,
+    smooth: bool,
     payload: &VoxelChunkPayload,
 ) -> Result<VoxelChunk, VoxelChunkResidencyApplyError> {
     let expected_dimensions = [chunk_size; 3];
@@ -977,8 +425,9 @@ fn validate_payload(
             .iter()
             .zip(&payload.material_slots)
             .any(|(state, material)| {
+                // Only greedy cube surfaces can mesh voxel states.
                 core_voxel::VoxelState::from_raw(*state).is_none()
-                    || (*material == 0 && *state != 0)
+                    || (*state != 0 && (*material == 0 || smooth))
             })
     {
         return Err(VoxelChunkResidencyApplyError::Rejected(
@@ -1038,25 +487,6 @@ fn validate_chunk_identity(
     Ok(())
 }
 
-fn reject_if_pinned(
-    leases: &VoxelChunkLeaseRegistry,
-    operation_index: usize,
-    chunk: VoxelChunkIdentity,
-) -> Result<(), VoxelChunkResidencyApplyError> {
-    let evidence = leases.evidence_for(chunk);
-    if evidence.is_empty() {
-        Ok(())
-    } else {
-        Err(VoxelChunkResidencyApplyError::Rejected(
-            VoxelChunkResidencyRejection::ChunkPinned {
-                operation_index,
-                chunk,
-                leases: evidence,
-            },
-        ))
-    }
-}
-
 fn resident_chunk_readout(identity: VoxelChunkIdentity, chunk: &VoxelChunk) -> ResidentVoxelChunk {
     ResidentVoxelChunk {
         chunk: identity,
@@ -1067,101 +497,4 @@ fn resident_chunk_readout(identity: VoxelChunkIdentity, chunk: &VoxelChunk) -> R
 
 fn chunk_content_hash(chunk: &VoxelChunk) -> VoxelChunkContentHash {
     VoxelChunkContentHash::new(chunk.content_hash().0)
-}
-
-fn derive_dirty_chunks(
-    chunk_size: u32,
-    surface_mode: SurfaceMode,
-    changed: impl IntoIterator<Item = VoxelChunkIdentity>,
-    old_resident: &BTreeSet<VoxelChunkIdentity>,
-    new_resident: &BTreeSet<VoxelChunkIdentity>,
-) -> Vec<VoxelChunkIdentity> {
-    let mut dirty = BTreeSet::new();
-    for owner in changed {
-        dirty.insert(owner);
-        let offsets: &[(i64, i64, i64)] = if surface_mode == SurfaceMode::GreedyCubes {
-            &[
-                (-1, 0, 0),
-                (1, 0, 0),
-                (0, -1, 0),
-                (0, 1, 0),
-                (0, 0, -1),
-                (0, 0, 1),
-            ]
-        } else {
-            &SMOOTH_SURFACE_NEIGHBOR_OFFSETS
-        };
-        for &(x, y, z) in offsets {
-            let Some(candidate) = checked_neighbor(owner, x, y, z) else {
-                continue;
-            };
-            if validate_chunk_identity(candidate, chunk_size).is_ok()
-                && (old_resident.contains(&candidate) || new_resident.contains(&candidate))
-            {
-                dirty.insert(candidate);
-            }
-        }
-    }
-    dirty.into_iter().collect()
-}
-
-fn checked_neighbor(
-    owner: VoxelChunkIdentity,
-    x: i64,
-    y: i64,
-    z: i64,
-) -> Option<VoxelChunkIdentity> {
-    Some(VoxelChunkIdentity::new(
-        owner.x.checked_add(x)?,
-        owner.y.checked_add(y)?,
-        owner.z.checked_add(z)?,
-    ))
-}
-
-const SMOOTH_SURFACE_NEIGHBOR_OFFSETS: [(i64, i64, i64); 26] = [
-    (-1, -1, -1),
-    (-1, -1, 0),
-    (-1, -1, 1),
-    (-1, 0, -1),
-    (-1, 0, 0),
-    (-1, 0, 1),
-    (-1, 1, -1),
-    (-1, 1, 0),
-    (-1, 1, 1),
-    (0, -1, -1),
-    (0, -1, 0),
-    (0, -1, 1),
-    (0, 0, -1),
-    (0, 0, 1),
-    (0, 1, -1),
-    (0, 1, 0),
-    (0, 1, 1),
-    (1, -1, -1),
-    (1, -1, 0),
-    (1, -1, 1),
-    (1, 0, -1),
-    (1, 0, 0),
-    (1, 0, 1),
-    (1, 1, -1),
-    (1, 1, 0),
-    (1, 1, 1),
-];
-
-fn residency_hash(scene: &VoxelCollisionScene) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    let mut feed = |bytes: &[u8]| {
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-    };
-    for (coordinate, chunk) in scene.voxel_world.resident_chunks() {
-        for axis in coordinate.to_array() {
-            feed(&axis.to_le_bytes());
-        }
-        feed(&chunk.content_hash().0.to_le_bytes());
-    }
-    hash
 }

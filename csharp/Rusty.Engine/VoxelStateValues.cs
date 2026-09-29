@@ -21,11 +21,10 @@ public readonly partial record struct VoxelEdit
 }
 public readonly partial record struct VoxelResidencyTransaction
 {
-    public VoxelResidencyTransaction(SpatialSession Session, ulong ExpectedRevision,
-        VoxelResidencyHistoryPolicy HistoryPolicy,
+    public VoxelResidencyTransaction(SpatialSession Session,
         System.ReadOnlyMemory<VoxelResidencyOperation> Operations,
         System.ReadOnlyMemory<uint> MaterialSlots)
-        : this(default, Session, ExpectedRevision, HistoryPolicy, Operations, MaterialSlots) { }
+        : this(default, Session, Operations, MaterialSlots) { }
 }
 public readonly partial record struct VoxelSceneFaceMaterialBinding
 {

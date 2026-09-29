@@ -1,0 +1,40 @@
+# before solid 16
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,start_median_us,prepare_median_us,commit_median_us,commit_max_us,concurrent_reads,voxel_value_bytes,material_voxel_bytes
+solid,16,65536,38017,25541,31320,1,96,16640,19519,19621,29,19620,2009,2301,849102,6,32
+VmHWM:	  111184 kB
+# after solid 16
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,voxel_value_bytes,material_voxel_bytes
+solid,16,65536,37360,1312,1500,1,96,16640,1722,1838,6,32
+VmHWM:	   29092 kB
+# before solid 64
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,start_median_us,prepare_median_us,commit_median_us,commit_max_us,concurrent_reads,voxel_value_bytes,material_voxel_bytes
+solid,64,262144,166964,104003,131980,1,384,66560,77064,80736,36,74279,7983,8143,3205819,6,32
+VmHWM:	  423396 kB
+# after solid 64
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,voxel_value_bytes,material_voxel_bytes
+solid,64,262144,144106,1175,1237,1,384,66560,1599,1634,6,32
+VmHWM:	  100244 kB
+# before checker 16
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,start_median_us,prepare_median_us,commit_median_us,commit_max_us,concurrent_reads,voxel_value_bytes,material_voxel_bytes
+checker,16,32768,84507,22934,33313,1,196608,29886464,21168,21541,24,21370,1251,1372,953540,6,32
+VmHWM:	  177532 kB
+# after checker 16
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,voxel_value_bytes,material_voxel_bytes
+checker,16,32768,84870,3991,4762,1,196608,29886464,4639,4834,6,32
+VmHWM:	   49980 kB
+# before sparse 256
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,start_median_us,prepare_median_us,commit_median_us,commit_max_us,concurrent_reads,voxel_value_bytes,material_voxel_bytes
+sparse,256,256,180496,145721,167411,0,1536,266240,156290,159517,35,154027,7707,10042,6468703,6,32
+VmHWM:	  187580 kB
+# after sparse 256
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,voxel_value_bytes,material_voxel_bytes
+sparse,256,256,175609,19,46,0,1536,266240,562,625,6,32
+VmHWM:	   78180 kB
+# before stateful 1
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,start_median_us,prepare_median_us,commit_median_us,commit_max_us,concurrent_reads,voxel_value_bytes,material_voxel_bytes
+stateful,1,4096,3177,2253,2949,1,1536,235520,1978,2109,18,2590,148,242,100170,6,32
+VmHWM:	   11972 kB
+# after stateful 1
+shape,chunks,solid_cells,build_us,edit_median_us,edit_max_us,rebuilt,quads,mesh_capacity_bytes,replace_median_us,replace_max_us,voxel_value_bytes,material_voxel_bytes
+stateful,1,4096,2659,1652,2042,1,1536,235520,2038,2119,6,32
+VmHWM:	    8508 kB

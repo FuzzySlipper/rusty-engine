@@ -60,12 +60,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private VoxelSceneMaterialBinding[] Bindings() => [new(FirstSlot, first), new(SecondSlot, seconds[mode])];
     private void SetSecond(bool present)
     {
-        var revision = engine.Voxel.ReadScene(new(scene)).SourceRevision;
-        engine.Voxel.ApplyEdits(new(scene, revision, new VoxelEdit[] { new(present ? VoxelEditKind.Set : VoxelEditKind.Clear, SecondAddress, SecondSlot) }));
+        engine.Voxel.ApplyEdits(new(scene, new VoxelEdit[] { new(present ? VoxelEditKind.Set : VoxelEditKind.Clear, SecondAddress, SecondSlot) }));
     }
     public void Start()
     {
-        engine.Voxel.ApplyEdits(new(scene, 0, new VoxelEdit[] { new(VoxelEditKind.Set, FirstAddress, FirstSlot) }));
+        engine.Voxel.ApplyEdits(new(scene, new VoxelEdit[] { new(VoxelEditKind.Set, FirstAddress, FirstSlot) }));
         presentation = engine.VoxelScenePresentation.ProjectSceneDirectional(new(scene,
             Bindings(), ReadOnlyMemory<VoxelSceneFaceMaterialBinding>.Empty));
         SetSecond(true);

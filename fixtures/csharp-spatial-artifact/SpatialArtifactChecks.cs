@@ -15,8 +15,7 @@ internal static class SpatialArtifactChecks
     internal static void Run(IEngineContext engine)
     {
         using SpatialSession session = engine.Spatial.CreateSession(new(1, ChunkSize, VoxelSurfaceMode.GreedyCubes));
-        VoxelSceneReadout empty = engine.Voxel.ReadScene(new(session));
-        engine.Voxel.ApplyEdits(new(session, empty.SourceRevision,
+        engine.Voxel.ApplyEdits(new(session,
             new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(8, 0, 0), 1) }));
         VoxelSceneReadout resident = engine.Voxel.ReadScene(new(session));
         Require(resident.ResidentChunkCount > 0, "fixture must start with resident voxel state");

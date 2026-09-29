@@ -44,9 +44,9 @@ The visual path remains the existing renderer's ordinary lights and shadows.
 
 ### Persistence and cost
 
-Persist the source light descriptors alongside `Voxel.ExportHistory` in the
-product's save envelope. On load, use `Voxel.RestoreHistory`, restore the same
-descriptors through `Graphics`, then resample. Handles and derived light samples
+Persist the source light descriptors alongside the product's own voxel data in
+its save envelope. On load, replace the chunks through `Voxel.ApplyResidency`,
+restore the same descriptors through `Graphics`, then resample. Handles and derived light samples
 are not persistence authority. `fixtures/csharp-lighting-sky` demonstrates a
 source-generated JSON envelope that round-trips both values without a second
 Engine voxel store.

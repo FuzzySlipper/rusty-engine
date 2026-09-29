@@ -232,7 +232,6 @@ impl VoxelRenderProjector {
             let chunks: BTreeMap<[i64; 3], &VoxelMeshChunk> = instance
                 .scene
                 .mesh_chunks()
-                .iter()
                 .map(|chunk| (chunk.chunk, chunk))
                 .collect();
             for (coord, chunk) in chunks {
@@ -449,7 +448,7 @@ fn validate_and_snapshot(
                 slot: *slot,
             });
         }
-        if let Some((chunk, slot)) = instance.scene.mesh_chunks().iter().find_map(|chunk| {
+        if let Some((chunk, slot)) = instance.scene.mesh_chunks().find_map(|chunk| {
             if chunk.surface_mode == SurfaceMode::GreedyCubes {
                 return None;
             }
@@ -699,11 +698,9 @@ pub enum VoxelProjectionError {
 mod tests {
     use super::*;
     use engine_spatial::{
-        MaterialVoxel, SurfaceMeshOptions, VoxelChunkIdentity, VoxelChunkLeaseRegistry,
-        VoxelChunkPayload, VoxelChunkResidencyOperation, VoxelChunkResidencyService,
-        VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditService, VoxelEditTransaction,
-        VoxelSourceRevision, WorldOrigin, WorldOriginRebaseRequest, WorldOriginRebaseService,
-        WorldOriginState,
+        MaterialVoxel, SurfaceMeshOptions, VoxelChunkIdentity, VoxelChunkPayload,
+        VoxelChunkResidencyOperation, VoxelChunkResidencyService, VoxelEdit, VoxelEditService,
+        WorldOrigin, WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
     };
     use entity_state::EntityState;
     use render_model::MaterialUvStrategy;
@@ -727,7 +724,7 @@ mod tests {
                 ((1, 7, Direction6::PosZ), 12),
             ]),
         };
-        let chunk = &scene.mesh_chunks()[0];
+        let chunk = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
         let payload = voxel_mesh_payload_with_material_slots(chunk, &mapping);
         for (source, rendered) in chunk.groups.iter().zip(&payload.groups) {
             let expected = match source.direction.unwrap() {
@@ -1068,14 +1065,7 @@ mod tests {
         let left = projector.chunk_handle("room", [-1, 0, 0]).unwrap();
         let removed = projector.chunk_handle("room", [0, 0, 0]).unwrap();
         let unchanged = projector.chunk_handle("room", [2, 0, 0]).unwrap();
-        VoxelEditService::apply(
-            &mut scene,
-            VoxelEditTransaction {
-                expected_revision: VoxelSourceRevision::INITIAL,
-                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
-            },
-        )
-        .unwrap();
+        VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }]).unwrap();
         let update = project(&mut projector, &scene);
         assert_eq!(
             update
@@ -1160,7 +1150,6 @@ mod tests {
     fn residency_admit_replace_and_evict_keep_exact_retained_handles() {
         let mut scene = VoxelCollisionScene::from_material_voxels(1.0, 2, []).unwrap();
         let materials = BTreeMap::from([(1, material(1))]);
-        let leases = VoxelChunkLeaseRegistry::default();
         let mut projector = VoxelRenderProjector::new();
         let project = |projector: &mut VoxelRenderProjector, scene: &VoxelCollisionScene| {
             projector
@@ -1185,20 +1174,16 @@ mod tests {
         };
         VoxelChunkResidencyService::apply(
             &mut scene,
-            &leases,
-            VoxelChunkResidencyTransaction {
-                expected_scene_source_revision: VoxelSourceRevision::INITIAL,
-                operations: &[
-                    VoxelChunkResidencyOperation::Admit {
-                        chunk,
-                        payload: payload(0),
-                    },
-                    VoxelChunkResidencyOperation::Admit {
-                        chunk: untouched,
-                        payload: payload(0),
-                    },
-                ],
-            },
+            &[
+                VoxelChunkResidencyOperation::Admit {
+                    chunk,
+                    payload: payload(0),
+                },
+                VoxelChunkResidencyOperation::Admit {
+                    chunk: untouched,
+                    payload: payload(0),
+                },
+            ],
         )
         .unwrap();
         project(&mut projector, &scene);
@@ -1206,21 +1191,12 @@ mod tests {
         let untouched_handle = projector
             .chunk_handle("terrain", untouched.to_array())
             .unwrap();
-        let expected_content_hash = VoxelChunkResidencyService::resident_chunk(&scene, chunk)
-            .unwrap()
-            .content_hash;
-        let expected_scene_source_revision = scene.source_revision();
         VoxelChunkResidencyService::apply(
             &mut scene,
-            &leases,
-            VoxelChunkResidencyTransaction {
-                expected_scene_source_revision,
-                operations: &[VoxelChunkResidencyOperation::Replace {
-                    chunk,
-                    expected_content_hash,
-                    payload: payload(7),
-                }],
-            },
+            &[VoxelChunkResidencyOperation::Replace {
+                chunk,
+                payload: payload(7),
+            }],
         )
         .unwrap();
         let replaced = project(&mut projector, &scene);
@@ -1241,21 +1217,9 @@ mod tests {
                 .count(),
             1
         );
-
-        let expected_content_hash = VoxelChunkResidencyService::resident_chunk(&scene, chunk)
-            .unwrap()
-            .content_hash;
-        let expected_scene_source_revision = scene.source_revision();
         VoxelChunkResidencyService::apply(
             &mut scene,
-            &leases,
-            VoxelChunkResidencyTransaction {
-                expected_scene_source_revision,
-                operations: &[VoxelChunkResidencyOperation::Evict {
-                    chunk,
-                    expected_content_hash,
-                }],
-            },
+            &[VoxelChunkResidencyOperation::Evict { chunk }],
         )
         .unwrap();
         let evicted = project(&mut projector, &scene);

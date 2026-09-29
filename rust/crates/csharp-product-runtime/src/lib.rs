@@ -5967,7 +5967,6 @@ mod tests {
                         session: NativeSpatialSessionHandle {
                             value: VOXEL_FAILURE_SESSION.load(Ordering::SeqCst),
                         },
-                        expected_revision: 1,
                         edits: clear.as_ptr(),
                         edits_len: clear.len(),
                     },
@@ -6301,7 +6300,6 @@ mod tests {
                     api.voxel.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 0,
                         edits: set.as_ptr(),
                         edits_len: set.len(),
                     },
@@ -6506,7 +6504,6 @@ mod tests {
                     api.voxel.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 1,
                         edits: &edit,
                         edits_len: 1,
                     },

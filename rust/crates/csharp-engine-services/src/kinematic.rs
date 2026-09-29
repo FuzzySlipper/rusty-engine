@@ -539,7 +539,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 0,
                         edits: edits.as_ptr(),
                         edits_len: edits.len(),
                     },

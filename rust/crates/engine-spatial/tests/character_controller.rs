@@ -6,7 +6,7 @@ use engine_spatial::{
     CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
     CharacterControllerService, CharacterMeshInstance, CharacterStepColliders, StaticMeshAssetId,
     StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    VoxelCollisionScene, VoxelEdit, VoxelEditService, VoxelEditTransaction,
+    VoxelCollisionScene, VoxelEdit, VoxelEditService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform, Quat,
@@ -1073,15 +1073,7 @@ fn live_voxel_edit_beneath_character_invalidates_support_and_continues() {
         .step(&mut state, &scene, entity, &config, command(1, Vec2::ZERO))
         .unwrap();
     assert!(grounded.motion_after.grounded);
-    let expected_revision = scene.source_revision();
-    VoxelEditService::apply(
-        &mut scene,
-        VoxelEditTransaction {
-            expected_revision,
-            edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
-        },
-    )
-    .unwrap();
+    VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }]).unwrap();
     let falling = service
         .step(&mut state, &scene, entity, &config, command(2, Vec2::ZERO))
         .unwrap();
@@ -1583,17 +1575,9 @@ fn noncollidable_material_layer_preserves_cells_but_rays_and_characters_reach_fl
             }
         }
     }
-    let expected_revision = scene.source_revision();
-    VoxelEditService::apply(
-        &mut scene,
-        VoxelEditTransaction {
-            expected_revision,
-            edits: &edits,
-        },
-    )
-    .unwrap();
+    VoxelEditService::apply(&mut scene, &edits).unwrap();
     assert_eq!(scene.material_voxels().len(), 100);
-    assert!(!scene.mesh_chunks().is_empty());
+    assert!(scene.mesh_chunks().len() != 0);
     assert_eq!(
         scene
             .raycast([0.5, 8.0, 0.5], [0.0, -1.0, 0.0], 10.0)

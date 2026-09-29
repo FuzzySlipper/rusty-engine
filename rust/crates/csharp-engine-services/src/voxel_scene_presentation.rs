@@ -453,7 +453,7 @@ impl RuntimeVoxelScenePresentationBridge {
             }
         }
         keys.extend(presentation.face_materials.keys().copied());
-        for group in scene.mesh_chunks().iter().flat_map(|chunk| &chunk.groups) {
+        for group in scene.mesh_chunks().flat_map(|chunk| &chunk.groups) {
             if let Some(direction) = group.direction {
                 keys.insert((group.material_slot, group.state >> 2, direction));
             }
@@ -577,7 +577,6 @@ impl RuntimeVoxelScenePresentationBridge {
         };
         let expected = scene
             .mesh_chunks()
-            .iter()
             .flat_map(|chunk| chunk.groups.iter().map(|group| group.material_slot))
             .collect::<BTreeSet<_>>();
         let slots = bindings
@@ -610,7 +609,6 @@ impl RuntimeVoxelScenePresentationBridge {
         if !face_bindings.is_empty()
             && scene
                 .mesh_chunks()
-                .iter()
                 .any(|chunk| chunk.surface_mode != SurfaceMode::GreedyCubes)
         {
             return Err(CsharpEngineServicesError::new(
@@ -839,11 +837,12 @@ fn presentation_readout(
     spatial: &SpatialCollisionSource,
 ) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
     let scene = spatial.scene(presentation.session)?;
+    let chunk_count = scene.mesh_chunks().len();
     Ok(NativeVoxelScenePresentationReadout {
         present: true,
         source_revision: scene.source_revision().raw(),
         mesh_revision: scene.projection_revisions().mesh().raw(),
-        chunk_count: u64::try_from(scene.mesh_chunks().len()).map_err(|_| {
+        chunk_count: u64::try_from(chunk_count).map_err(|_| {
             CsharpEngineServicesError::new(
                 "CSHARP_VOXEL_SCENE_PRESENTATION",
                 "voxel scene chunk count exceeded the C# receipt range",
@@ -1193,7 +1192,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 0,
                         edits: edits.as_ptr(),
                         edits_len: edits.len(),
                     },
@@ -1299,10 +1297,10 @@ mod tests {
             })
             .expect("unused palette entry and override are retained");
         let voxel = crate::voxel::api(&mut spatial);
-        for (revision, kind) in [
-            (1, NativeVoxelEditKind::Set),
-            (2, NativeVoxelEditKind::Clear),
-            (3, NativeVoxelEditKind::Set),
+        for kind in [
+            NativeVoxelEditKind::Set,
+            NativeVoxelEditKind::Clear,
+            NativeVoxelEditKind::Set,
         ] {
             let edits = [NativeVoxelEdit {
                 state: 0,
@@ -1318,7 +1316,6 @@ mod tests {
                         voxel.context,
                         &NativeVoxelEditTransaction {
                             session,
-                            expected_revision: revision,
                             edits: edits.as_ptr(),
                             edits_len: edits.len(),
                         },
@@ -1653,7 +1650,6 @@ mod tests {
                     voxel_api.context,
                     &NativeVoxelEditTransaction {
                         session,
-                        expected_revision: 1,
                         edits: add_slot.as_ptr(),
                         edits_len: add_slot.len(),
                     },

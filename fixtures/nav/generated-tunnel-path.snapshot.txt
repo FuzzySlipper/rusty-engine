@@ -1,6 +1,6 @@
 nav-path 1
 walkable=45
-projection_hash=59b4093625b10e49
+projection_hash=31436e7df5dfbaee
 outcome=Reached
 visited=41
 path_len=9

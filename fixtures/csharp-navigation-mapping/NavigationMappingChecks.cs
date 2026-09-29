@@ -23,11 +23,10 @@ internal static class NavigationMappingChecks
     private static void CheckFloor(IEngineContext engine, VoxelAddress first)
     {
         using SpatialSession session = engine.Spatial.CreateSession(new(CellSize, ChunkSize, VoxelSurfaceMode.GreedyCubes));
-        VoxelSceneReadout empty = engine.Voxel.ReadScene(new(session));
         var edits = new VoxelEdit[FloorCells];
         for (int index = 0; index < FloorCells; index++)
             edits[index] = new(VoxelEditKind.Set, new(first.X + index, first.Y, first.Z), 1);
-        VoxelEditReceipt edit = engine.Voxel.ApplyEdits(new(session, empty.SourceRevision, edits));
+        VoxelEditReceipt edit = engine.Voxel.ApplyEdits(new(session, edits));
         Require(edit.Status == VoxelEditStatus.Accepted, "floor admission failed");
 
         float supportY = (float)((first.Y + 1) * CellSize);

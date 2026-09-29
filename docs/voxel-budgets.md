@@ -1,191 +1,101 @@
-# Voxel residency and remesh budgets
+# Voxel residency and edit costs
 
-Measured for task #8612 on 2026-09-25 against the per-cell-state and background
-preparation implementation accompanying this report. Raw evidence records source
-file hashes and the prior base revision. Measurements use the
-[`voxel_budget` probe](../rust/crates/engine-spatial/examples/voxel_budget.rs).
-These are CPU scene costs, not a browser/GPU or whole-product certification.
+Measured for #8739 on 2026-09-28 with the
+[`voxel_budget`](../rust/crates/engine-spatial/examples/voxel_budget.rs) and
+[`voxel_edit_scaling`](../rust/crates/engine-spatial/examples/voxel_edit_scaling.rs)
+probes. These are CPU scene costs, not browser/GPU or whole-product figures.
+[Raw before/after output](evidence/incremental-voxels-8739/README.md) is kept.
 
-## Existing admission limits
+## How a change is applied
+
+`Voxel.ApplyEdits` and `Voxel.ApplyResidency` write into the scene's chunks in
+place. They then rebuild only:
+- the meshes of the changed chunks, plus resident neighbours whose surfaces
+  touch the change;
+- the colliders of the changed chunks;
+- the navigation cells around the changed voxels.
+
+Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
+keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.
+The authority hash is an order-independent sum maintained per voxel.
+
+A failed edit changes nothing:
+- invalid coordinates, material slots or states are refused before any write;
+- if a touched chunk's mesh cannot be built, the written voxels are reverted.
+
+## Remaining limits
 
 | Boundary | Limit | Owner |
 | --- | ---: | --- |
-| Residency transaction | 64 operations | `engine-spatial/src/voxel_residency.rs` |
-| Resident chunks after a residency transaction | 4,096 | same |
-| Residency chunk leases | 4,096 | same |
-| Payload slots in one residency transaction | 16,777,216 | same (64 × 64³) |
-| Solid cells in a scene | 1,000,000 | `engine-spatial/src/lib.rs` |
-| Cell edits per transaction | 4,096 | `engine-spatial/src/voxel_edit.rs` |
+| Voxel coordinate | ±1,000,000 per axis | `engine-spatial/src/voxel_edit.rs` |
+| Solid material slot | 1–4,095 | same |
 | Chunk edge | 1–64 cells | `engine-spatial/src/lib.rs` |
-| Solid material slot | 1–4,095 | `engine-spatial/src/voxel_edit.rs` |
+| Solid cells in a freshly built scene | 1,000,000 | same |
+| Cells from one box or line primitive | 4,096 | `engine-spatial/src/voxel_primitive.rs` |
 
-These limits reject oversized operations; they are not throughput targets,
-mesh byte budgets or a scheduler. In particular, 4,096 resident chunks does
-not mean 4,096 **filled** chunks: at edge 16 the solid-cell limit permits only
-244 completely filled chunks (999,424 cells), plus a partial chunk.
-The resident-count check belongs to the residency transaction; do not infer
-that every alternative raw constructor has the same count admission gate.
+Edit and residency calls have no per-call operation, payload or resident-chunk
+caps; #8742 reviews the remaining builder and primitive limits.
 
-There is **no global default chunk edge**: `SpatialSessionConfig` requires
-`CollisionChunkSize`, and the storage owner explicitly supports different
-chunk dimensions. The measurements below choose the common **16³** fixture
-size, voxel size 1 and **GreedyCubes** (the default extraction mode).
-At this edge, one dense C# `uint` payload is 16,384 bytes during the call;
-that is not total retained Engine memory. Chunk storage, canonical cell
-lists, collision/navigation projections and meshes are additional.
-
-## Reproduction and conditions
+## Reproduction
 
 ```sh
-cargo build --release -p engine-spatial --example voxel_budget
-# Run each case as its own process so Linux VmHWM is independent.
-target/release/examples/voxel_budget solid 1
-target/release/examples/voxel_budget solid 16
-target/release/examples/voxel_budget solid 64
-target/release/examples/voxel_budget checker 1
-target/release/examples/voxel_budget checker 16
-target/release/examples/voxel_budget sparse 256
-target/release/examples/voxel_budget stateful 1
+cargo build --release -p engine-spatial --example voxel_budget --example voxel_edit_scaling
+target/release/examples/voxel_budget solid 64      # also: solid 16, checker 16, sparse 256, stateful 1
+target/release/examples/voxel_edit_scaling 64      # also: 16
 ```
 
-Host: AMD Ryzen 7 8845HS, 8 cores/16 logical CPUs, Linux 7.2.2-arch1-1,
-x86-64, rustc 1.98.0, Cargo release profile (optimized with debug info).
-One process at a time, ordinary shared development host, no CPU pinning or
-frequency control. No C# host, transport serialization, retained render
-projection, GPU, shadows, product chunk cache, or gameplay workload is included.
-This is a bounded sample, not a statistically established latency percentile.
-[Raw observations](evidence/voxel-budgets/linux-x64-2026-09-25.json) are retained.
+Voxel size 1, 16³ chunks, GreedyCubes. Chunks are separated by one empty chunk
+along X so every surface stays exposed:
+- `solid` fills each chunk;
+- `checker` fills cells with even x+y+z;
+- `sparse` places one cell per chunk;
+- `stateful` fills one chunk with four orientations and four variants.
 
-Chunks are separated by one empty chunk along X, so all six surfaces remain
-exposed and neighbours cannot merge them. `solid` fills each chunk with one
-material; `checker` fills cells with even x+y+z (isolated alternating solids);
-`sparse` places one cell per chunk. Each process constructs a scene, toggles
-one corner cell seven times through the cell-edit service, then replaces that
-same chunk seven times through synchronous residency, then seven times through
-background preparation and guarded commit. `stateful` fills a chunk with four
-orientations and four variants, retaining that pattern during replacements.
-Payload construction is
-outside the replacement timer. Synchronous calls include candidate construction, collision/navigation rebuilding,
-mesh updates and commit. Background start copies/moves already-owned Rust inputs
-and starts a worker; preparation time includes that start and result polling.
-Commit includes guards, swapping the scene Arc, releasing the old scene and
-joining the finished worker. The callback can read the old scene while preparing.
-The generated C# start additionally copies its input spans; that copy is not in
-this Rust-only start timer.
+Each run builds the scene, then:
+- toggles one corner cell seven times through `VoxelEditService`;
+- replaces that chunk seven times through `VoxelChunkResidencyService`.
+
+The host is an AMD Ryzen 7 8845HS running a release build, one process at a
+time, with no CPU pinning.
 
 ## Observed costs
 
-Times are milliseconds. Edit and replace show median / maximum of seven calls.
-Mesh memory is the initial mesh vector **capacity bytes**, including positions,
-normals, tile coordinates, indices and material groups; it excludes enclosing
-objects, allocator overhead and all other state. RSS is Linux process peak
-across construction and all mutation series, including simultaneous old
-and candidate scenes, not steady-state bytes per chunk.
+Milliseconds, as median / maximum of seven calls. "Before" is `c3100825`, where
+every change rebuilt the whole scene.
 
-| Shape / chunks | Solid cells | Build ms | Cell edit ms | Chunk replace ms | Mesh capacity bytes | Peak RSS KiB |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Solid / 1 | 4,096 | 3.52 | 4.15 / 5.31 | 2.02 / 2.19 | 1,040 | 12,912 |
-| Solid / 16 | 65,536 | 48.76 | 55.30 / 70.46 | 20.97 / 23.19 | 16,640 | 111,500 |
-| Solid / 64 | 262,144 | 189.62 | 234.18 / 304.01 | 84.74 / 90.30 | 66,560 | 423,580 |
-| Checker / 1 | 2,048 | 6.35 | 9.33 / 11.72 | 4.69 / 4.98 | 1,867,904 | 17,076 |
-| Checker / 16 | 32,768 | 93.80 | 96.24 / 128.37 | 20.58 / 21.00 | 29,886,464 | 219,020 |
-| Sparse / 256 | 256 | 209.11 | 312.98 / 360.86 | 165.71 / 169.23 | 266,240 | 250,952 |
-| Stateful / 1 | 4,096 | 3.41 | 4.29 / 5.76 | 2.14 / 2.19 | 235,520 | 13,364 |
+| Shape / chunks | Cell edit before | Cell edit after | Chunk replace before | Chunk replace after | Peak RSS before / after |
+| --- | --- | --- | --- | --- | --- |
+| Solid / 16 | 25.5 / 31.3 | 1.31 / 1.50 | 19.5 / 19.6 | 1.72 / 1.84 | 109 / 28 MiB |
+| Solid / 64 | 104.0 / 132.0 | 1.18 / 1.24 | 77.1 / 80.7 | 1.60 / 1.63 | 413 / 98 MiB |
+| Checker / 16 | 22.9 / 33.3 | 3.99 / 4.76 | 21.2 / 21.5 | 4.64 / 4.83 | 173 / 49 MiB |
+| Sparse / 256 | 145.7 / 167.4 | 0.02 / 0.05 | 156.3 / 159.5 | 0.56 / 0.63 | 183 / 76 MiB |
+| Stateful / 1 | 2.25 / 2.95 | 1.65 / 2.04 | 1.98 / 2.11 | 2.04 / 2.12 | 12 / 8 MiB |
 
-| Shape / chunks | Worker start median ms | Preparation median ms | Commit median / max ms |
-| --- | ---: | ---: | ---: |
-| Solid / 1 | 0.024 | 2.04 | 0.07 / 0.19 |
-| Solid / 16 | 0.041 | 25.48 | 1.07 / 1.15 |
-| Solid / 64 | 0.048 | 80.85 | 4.69 / 5.28 |
-| Checker / 1 | 0.015 | 5.81 | 0.06 / 0.17 |
-| Checker / 16 | 0.034 | 20.73 | 0.83 / 2.80 |
-| Sparse / 256 | 0.042 | 157.15 | 7.28 / 7.66 |
-| Stateful / 1 | 0.014 | 2.89 | 0.07 / 0.19 |
+Cost now follows the chunk that changed, not the resident world. What remains
+is that chunk's work: a solid 16³ chunk's mesh and collider, or a checker
+chunk's 12,288-quad mesh. A single-chunk scene costs the same as before.
 
-The solid chunk produces six quads; a checker chunk produces 12,288.
-A 16³ checker chunk consequently has about 1.87 MB of mesh vector capacity
-before any renderer copies. Solidity count alone does not predict mesh cost.
-Sparse scenes still carry dense chunk storage and resident-volume traversal.
-The measured RSS is Engine probe process memory; it does not include a
-product's own chunk payload/cache and must not be used as their estimate.
+`voxel_edit_scaling` clears 1–123 cells inside one chunk of a 16- or 64-chunk
+world:
 
-## Practical scheduling envelope
+| Resident chunks | Before | After |
+| --- | --- | --- |
+| 16 | 12.6–13.1 ms | 0.35–0.39 ms |
+| 64 | 50.6–52.2 ms | 0.38–0.42 ms |
 
-There is no implemented per-tick remesh quota or partial asynchronous commit.
-`RebuiltMeshChunks` counts changed mesh extraction, not total work: the scene
-owner still scans canonical residency and rebuilds collision/navigation, and
-reused mesh payloads also have costs. One changed mesh in a large working set
-can exceed a whole frame. See `build_from_voxel_world_at_revision` in
-[the scene owner](../rust/crates/engine-spatial/src/lib.rs).
+Before also needed a whole-scene clone per call (0.4–1.9 ms). The number of
+cells changed inside one chunk barely matters.
 
-For initial sizing, keep **one in-flight preparation per session** (also the
-implemented ownership limit), prepare **one chunk per request**, and reserve a
-separately measured **8 ms callback publication allowance**. These are starting
-knobs, not a universal 60 Hz guarantee. Synchronous whole-scene reconstruction
-still exceeds a 16.67 ms frame for larger working sets. Background preparation
-moves that work off the callback; the observed commit column measures what
-remains on it. Hash checks and releasing old allocations still scale with the
-resident set. Presentation reconciliation, transport and GPU upload remain
-additional and require product measurements.
+## Memory
 
-State has a concrete storage cost: `size_of::<VoxelValue>()` is **6 bytes** on this
-build (previous material-only layout: 4); `MaterialVoxel` remains **32 bytes**
-with alignment. Stable encoded cells remain four bytes. A 16³ dense value array
-therefore holds 24,576 bytes before its container, versus 16,384 previously.
+`size_of::<VoxelValue>()` is 6 bytes: material, solid tag and 15 state bits.
+A 16³ dense value array is therefore 24,576 bytes before its container.
 Optional C# state input adds 16,384 bytes per 16³ chunk during admission.
-The stateful solid sample produces 1,536 quads rather than six: orientation and
-variant diversity can substantially increase mesh memory even without holes.
 
-Reserve the **old and candidate scene together**, copied request data and renderer
-realizations. The measured RSS peaks include both scenes and worker allocation;
-they are not steady-state bytes per chunk. Use a measured CPU working-set cap
-with headroom, then measure actual retained renderer and GPU memory separately.
-No universal mesh-memory cap is imposed here. Do not extrapolate from smooth
-solid cubes or allocate until the hard admission limit rejects a request.
+Mesh cost depends on the surface, not the solid count. A solid 16³ chunk makes
+six quads; a checker chunk makes 12,288 (about 1.87 MB of vertex capacity). The
+stateful sample makes 1,536 quads, because orientation and variant diversity
+stops greedy merging.
 
-What degrades first: synchronous callback/input latency without preparation;
-preparation latency and memory with large working sets; mesh generation,
-transfer/upload and memory with fragmented or diverse-state surfaces. Eventually
-explicit admission limits reject the transaction. Track `ResidentChunkCount`,
-`SolidVoxelCount`, `DirtyChunkCount`, `RebuiltMeshChunks`, `ReusedMeshChunks`,
-`RemovedMeshChunks`, residency receipts and `ColliderChunkCount`, plus the separate
-start/prepare/commit/presentation timings. A 100 km² world on disk does not specify
-how much can be resident or remeshed per tick.
-
-## Edit transaction cost (#8712)
-
-Single-cell and multi-cell `Voxel.ApplyEdits` use the same native history/edit
-path. A transaction still copies and validates scene voxel data and rebuilds
-collision/navigation for the resident world; only the mesh projection reuses
-unaffected chunks. Cells changed alone therefore do not predict latency.
-
-The resident-scene builder previously constructed and discarded a complete
-collision/navigation/mesh scene before constructing the requested incremental
-scene. It now builds the voxel world directly and projects it once. Validation,
-world origin, empty resident chunks and revision handling remain the same.
-
-Reproduce the core history path with:
-
-```sh
-cargo run --release --locked -p engine-spatial --example voxel_edit_scaling -- 32
-```
-
-The probe uses separated 16-cell chunks, each with a four-cell-high solid slab.
-Every sample starts from the same scene; 1, 7, 33, 41 or 123 interior cells are
-cleared in one chunk. Seven runs per size report median clone/apply time and
-actual changed/rebuilt/reused counts. On the development host, Rust 1.98.1,
-optimized build, the observed apply medians were:
-
-| Resident chunks | 1 cell before / after | 41 cells before / after | 123 cells before / after |
-| --- | --- | --- | --- |
-| 8 | 13.1 / 6.2 ms | 14.1 / 6.3 ms | 13.4 / 6.2 ms |
-| 32 | 60.4 / 25.8 ms | 55.3 / 25.2 ms | 56.9 / 25.0 ms |
-| 64 | 106.4 / 51.9 ms | 113.1 / 55.4 ms | 110.3 / 54.0 ms |
-
-Each sample rebuilt one mesh chunk and reused the rest. Scene clone time was
-measured separately (roughly 0.2–2.4 ms). These are core-path observations, not
-frame-time guarantees or a reproduction of CraftSurvive's exact 198 ms. They
-show substantial avoidable scene-wide cost and residual resident-world cost,
-without a special multi-cell threshold. Comparing product edits also requires
-holding resident scene, affected chunks, geometry and build profile constant.
-Product save/residency/presentation stages are outside this probe.
+Peak RSS above is Engine probe memory only. It excludes the product's own chunk
+data, renderer realizations and GPU memory; measure those separately.

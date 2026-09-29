@@ -1,19 +1,16 @@
 //! Generated direct bridge for the canonical runtime voxel scene.
 //!
-//! This family deliberately aliases the Spatial session rather than owning a
-//! second voxel store. Every accepted edit or residency publication swaps the
-//! same scene Arc used by collision, character motion, and Dynamics bindings.
+//! This family works on the Spatial session's scene rather than owning a
+//! second voxel store. Edits and residency changes mutate that scene in place,
+//! so collision, character motion and Dynamics see them directly.
 
 use std::{ffi::c_void, sync::Arc, time::Instant};
 
 use csharp_engine_abi::*;
 use engine_spatial::{
-    decode_voxel_edit_history, encode_voxel_edit_history, VoxelChunkContentHash,
-    VoxelChunkIdentity, VoxelChunkLeaseId, VoxelChunkPayload, VoxelChunkResidencyOperation,
-    VoxelChunkResidencyService, VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditApplyError,
-    VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelEditHistoryRevertReceipt,
-    VoxelEditRejection, VoxelResidencyHistoryPolicy, MAX_VOXEL_EDIT_HISTORY_BYTES,
-    VOXEL_EDIT_HISTORY_SCHEMA_VERSION,
+    VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyApplyError,
+    VoxelChunkResidencyOperation, VoxelChunkResidencyRejection, VoxelChunkResidencyService,
+    VoxelEdit, VoxelEditApplyError, VoxelEditRejection,
 };
 
 use crate::{
@@ -21,12 +18,9 @@ use crate::{
     spatial::RuntimeSpatialBridge,
 };
 
-const LEASE_ID_MASK: u64 = u32::MAX as u64;
 const VOXEL_SERVICE: &[u8] = b"Voxel";
 const APPLY_EDITS_OPERATION: &[u8] = b"ApplyEdits";
 const APPLY_RESIDENCY_OPERATION: &[u8] = b"ApplyResidency";
-const UNDO_OPERATION: &[u8] = b"Undo";
-const REDO_OPERATION: &[u8] = b"Redo";
 
 /// Voxel mutation failures retain their original Engine diagnostic until the
 /// generated managed call has copied it and released this exact lease.
@@ -122,9 +116,7 @@ impl RuntimeSpatialBridge {
         let address = address(request.address);
         Ok(session
             .scene
-            .material_voxels()
-            .iter()
-            .find(|voxel| voxel.address == address)
+            .material_voxel(address)
             .map(|voxel| NativeVoxelReadout {
                 present: true,
                 address: request.address,
@@ -136,24 +128,6 @@ impl RuntimeSpatialBridge {
                 address: request.address,
                 ..Default::default()
             }))
-    }
-
-    fn read_voxel_at(
-        &mut self,
-        request: NativeVoxelAtRequest,
-    ) -> Result<NativeVoxelAtReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(session
-            .scene
-            .material_voxels()
-            .get(request.index as usize)
-            .map(|voxel| NativeVoxelAtReceipt {
-                present: true,
-                address: native_address(voxel.address),
-                material_slot: u32::from(voxel.material_slot),
-                state: u32::from(voxel.state),
-            })
-            .unwrap_or_default())
     }
 
     fn read_voxel_chunk(
@@ -198,37 +172,25 @@ impl RuntimeSpatialBridge {
             .copied()
             .map(native_edit)
             .collect::<Result<Vec<_>, _>>()?;
-        let (scene, receipt) = {
-            let session = self.session_mut(request.session)?;
-            if session.scene.source_revision().raw() != request.expected_revision {
-                return Ok(native_edit_outcome(
-                    NativeVoxelEditStatus::StaleRevision,
-                    session.scene.source_revision().raw(),
-                ));
+        self.edit_scene(request.session, |session| {
+            let scene = Arc::make_mut(&mut session.scene);
+            match engine_spatial::VoxelEditService::apply(scene, &edits) {
+                Ok(receipt) => {
+                    session.last_voxel_dirty_chunks = receipt.dirty_mesh_chunks.clone();
+                    Ok(native_edit_receipt(&receipt))
+                }
+                Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
+                    let revision = scene.source_revision().raw();
+                    Ok(NativeVoxelEditReceipt {
+                        status: NativeVoxelEditStatus::NoChanges,
+                        revision_before: revision,
+                        accepted_revision: revision,
+                        ..Default::default()
+                    })
+                }
+                Err(error) => Err(voxel_error("CSHARP_VOXEL_EDIT", error.to_string())),
             }
-            let mut scene = (*session.scene).clone();
-            let receipt = match session.voxel_history.apply(&mut scene, &edits) {
-                Ok(receipt) => receipt,
-                Err(VoxelEditHistoryError::Edit(VoxelEditApplyError::Rejected(
-                    VoxelEditRejection::NoChanges,
-                ))) => {
-                    return Ok(native_edit_outcome(
-                        NativeVoxelEditStatus::NoChanges,
-                        session.scene.source_revision().raw(),
-                    ));
-                }
-                Err(error) => {
-                    return Err(voxel_error("CSHARP_VOXEL_EDIT", error.to_string()));
-                }
-            };
-            let edit = native_edit_receipt(&receipt.edit);
-            session.last_voxel_dirty_chunks = receipt.edit.dirty_mesh_chunks.clone();
-            let scene = Arc::new(scene);
-            session.scene = Arc::clone(&scene);
-            (scene, edit)
-        };
-        self.publish_scene(request.session, scene);
-        Ok(receipt)
+        })?
     }
 
     fn read_dirty_chunk_at(
@@ -251,274 +213,40 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeVoxelResidencyTransaction,
     ) -> Result<NativeVoxelResidencyReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        let translated = translate_residency(request, session.scene.chunk_size())?;
-        let policy = match request.history_policy {
-            NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty => {
-                VoxelResidencyHistoryPolicy::RejectIfNonEmpty
+        let chunk_size = self.session_mut(request.session)?.scene.chunk_size();
+        let operations = translate_residency(request, chunk_size)?;
+        self.edit_scene(request.session, |session| {
+            let scene = Arc::make_mut(&mut session.scene);
+            match VoxelChunkResidencyService::apply(scene, &operations) {
+                Ok(receipt) => {
+                    session.last_voxel_dirty_chunks = receipt
+                        .dirty_chunks
+                        .iter()
+                        .map(|chunk| chunk.to_array())
+                        .collect();
+                    Ok(native_residency_receipt(&receipt))
+                }
+                // A batch that changes nothing is an ordinary outcome.
+                Err(VoxelChunkResidencyApplyError::Rejected(
+                    VoxelChunkResidencyRejection::NoChanges { retained },
+                )) => {
+                    let revision = scene.source_revision().raw();
+                    Ok(NativeVoxelResidencyReceipt {
+                        revision_before: revision,
+                        accepted_revision: revision,
+                        retained_count: narrow(retained.len()),
+                        resident_chunk_count: scene.resident_chunk_count() as u64,
+                        resident_solid_voxel_count: scene.solid_voxel_count() as u64,
+                        authority_hash: scene.authority_hash(),
+                        collision_revision: revision,
+                        navigation_revision: revision,
+                        mesh_revision: revision,
+                        ..Default::default()
+                    })
+                }
+                Err(error) => Err(voxel_error("CSHARP_VOXEL_RESIDENCY", error.to_string())),
             }
-            NativeVoxelResidencyHistoryPolicy::ResetToPublishedAuthority => {
-                VoxelResidencyHistoryPolicy::ResetToPublishedAuthority
-            }
-        };
-        let mut scene = (*session.scene).clone();
-        let receipt = VoxelChunkResidencyService::apply_with_history(
-            &mut scene,
-            &session.voxel_leases,
-            &mut session.voxel_history,
-            policy,
-            VoxelChunkResidencyTransaction {
-                expected_scene_source_revision: engine_spatial::VoxelSourceRevision::new(
-                    request.expected_revision,
-                ),
-                operations: &translated,
-            },
-        )
-        .map_err(|error| voxel_error("CSHARP_VOXEL_RESIDENCY", error.to_string()))?;
-        let native = native_residency_receipt(&receipt);
-        session.last_voxel_dirty_chunks = receipt
-            .dirty_chunks
-            .iter()
-            .map(|chunk| chunk.to_array())
-            .collect();
-        let scene = Arc::new(scene);
-        session.scene = Arc::clone(&scene);
-        self.publish_scene(request.session, scene);
-        Ok(native)
-    }
-
-    fn acquire_chunk_lease(
-        &mut self,
-        request: NativeVoxelChunkLeaseRequest,
-    ) -> Result<NativeVoxelChunkLeaseHandle, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        let evidence = session
-            .voxel_leases
-            .acquire(&session.scene, chunk_identity(request.chunk))
-            .map_err(|error| voxel_error("CSHARP_VOXEL_LEASE", error.to_string()))?;
-        Ok(NativeVoxelChunkLeaseHandle {
-            value: encode_lease(request.session, evidence.lease_id),
-        })
-    }
-
-    fn destroy_chunk_lease(
-        &mut self,
-        handle: NativeVoxelChunkLeaseHandle,
-    ) -> Result<(), CsharpEngineServicesError> {
-        let (session_handle, lease_id) = decode_lease(handle)?;
-        let session = self.session_mut(session_handle)?;
-        session
-            .voxel_leases
-            .release(lease_id)
-            .map_err(|error| voxel_error("CSHARP_VOXEL_LEASE", error.to_string()))?;
-        Ok(())
-    }
-
-    fn read_chunk_lease(
-        &mut self,
-        request: NativeVoxelChunkLeaseReadRequest,
-    ) -> Result<NativeVoxelChunkLeaseReadout, CsharpEngineServicesError> {
-        let (session_handle, lease_id) = decode_lease(request.lease)?;
-        let session = self.session_mut(session_handle)?;
-        let evidence = session.voxel_leases.evidence_for_lease(lease_id);
-        Ok(evidence
-            .map(|evidence| NativeVoxelChunkLeaseReadout {
-                present: true,
-                chunk: native_chunk(evidence.chunk.to_array()),
-                acquired_content_hash: evidence.acquired_content_hash.raw(),
-            })
-            .unwrap_or_default())
-    }
-
-    fn read_history_cursor(
-        &mut self,
-        request: NativeVoxelHistoryCursorReadRequest,
-    ) -> Result<NativeVoxelHistoryCursorReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(native_history_cursor(
-            &session.voxel_history.cursor(),
-            session.voxel_history.entries().len(),
-        ))
-    }
-
-    fn read_history_entry_at(
-        &mut self,
-        request: NativeVoxelHistoryEntryAtRequest,
-    ) -> Result<NativeVoxelHistoryEntryReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(session
-            .voxel_history
-            .entries()
-            .get(request.index as usize)
-            .map(native_history_entry)
-            .unwrap_or_default())
-    }
-
-    fn read_history_delta_at(
-        &mut self,
-        request: NativeVoxelHistoryDeltaAtRequest,
-    ) -> Result<NativeVoxelHistoryDeltaReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(session
-            .voxel_history
-            .entries()
-            .get(request.entry_index as usize)
-            .and_then(|entry| entry.deltas.get(request.delta_index as usize))
-            .map(|delta| NativeVoxelHistoryDeltaReadout {
-                before_state: u32::from(delta.before_state),
-                after_state: u32::from(delta.after_state),
-                present: true,
-                address: native_address(delta.address),
-                before_material_present: delta.before_material.is_some(),
-                before_material: u32::from(delta.before_material.unwrap_or_default()),
-                after_material_present: delta.after_material.is_some(),
-                after_material: u32::from(delta.after_material.unwrap_or_default()),
-            })
-            .unwrap_or_default())
-    }
-
-    fn undo_voxel(
-        &mut self,
-        request: NativeVoxelHistoryActionRequest,
-    ) -> Result<NativeVoxelHistoryReceipt, CsharpEngineServicesError> {
-        self.apply_history_action(request.session, true)
-    }
-
-    fn redo_voxel(
-        &mut self,
-        request: NativeVoxelHistoryActionRequest,
-    ) -> Result<NativeVoxelHistoryReceipt, CsharpEngineServicesError> {
-        self.apply_history_action(request.session, false)
-    }
-
-    fn apply_history_action(
-        &mut self,
-        handle: NativeSpatialSessionHandle,
-        undo: bool,
-    ) -> Result<NativeVoxelHistoryReceipt, CsharpEngineServicesError> {
-        let (scene, receipt) = {
-            let session = self.session_mut(handle)?;
-            let mut scene = (*session.scene).clone();
-            let receipt = if undo {
-                session.voxel_history.undo_one(&mut scene)
-            } else {
-                session.voxel_history.redo_one(&mut scene)
-            }
-            .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY", error.to_string()))?;
-            let native = native_history_receipt(&receipt);
-            session.last_voxel_dirty_chunks = scene.mesh_update().dirty_chunks.clone();
-            let scene = Arc::new(scene);
-            session.scene = Arc::clone(&scene);
-            (scene, native)
-        };
-        self.publish_scene(handle, scene);
-        Ok(receipt)
-    }
-
-    fn read_history_codec_info(&mut self) -> NativeVoxelHistoryCodecInfo {
-        NativeVoxelHistoryCodecInfo {
-            schema_version: VOXEL_EDIT_HISTORY_SCHEMA_VERSION,
-            max_encoded_bytes: MAX_VOXEL_EDIT_HISTORY_BYTES as u64,
-        }
-    }
-
-    fn export_history(
-        &mut self,
-        request: NativeVoxelHistoryExportRequest,
-    ) -> Result<NativeByteLease, CsharpEngineServicesError> {
-        let encoded = {
-            let session = self.session_mut(request.session)?;
-            let encoded = encode_voxel_edit_history(&session.voxel_history)
-                .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY_EXPORT", error.to_string()))?;
-            Arc::<[u8]>::from(encoded.into_bytes())
-        };
-        if encoded.len() > MAX_VOXEL_EDIT_HISTORY_BYTES {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_HISTORY_EXPORT",
-                "encoded history exceeded the owner byte limit",
-            ));
-        }
-        let handle = self.next_voxel_history_export;
-        self.next_voxel_history_export = self
-            .next_voxel_history_export
-            .checked_add(1)
-            .ok_or_else(|| voxel_error("CSHARP_VOXEL_HISTORY_EXPORT", "export leases exhausted"))?;
-        let replaced = self.voxel_history_exports.insert(handle, encoded);
-        debug_assert!(replaced.is_none());
-        let bytes: &[u8] = self
-            .voxel_history_exports
-            .get(&handle)
-            .expect("inserted history export");
-        Ok(NativeByteLease {
-            handle: NativeByteLeaseHandle { value: handle },
-            bytes: bytes.as_ptr(),
-            len: bytes.len(),
-        })
-    }
-
-    fn destroy_history_export(
-        &mut self,
-        handle: NativeByteLeaseHandle,
-    ) -> Result<(), CsharpEngineServicesError> {
-        if handle.value == 0 || self.voxel_history_exports.remove(&handle.value).is_none() {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_HISTORY_EXPORT",
-                "unknown or released history export lease",
-            ));
-        }
-        Ok(())
-    }
-
-    fn restore_history(
-        &mut self,
-        request: &NativeVoxelHistoryRestoreRequest,
-    ) -> Result<NativeVoxelHistoryRestoreReceipt, CsharpEngineServicesError> {
-        let payload = unsafe {
-            crate::composition::borrowed_slice(
-                request.payload.bytes,
-                request.payload.len,
-                "voxel history payload",
-            )
-        }?;
-        if payload.len() > MAX_VOXEL_EDIT_HISTORY_BYTES {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_HISTORY_RESTORE",
-                "history payload exceeded the owner byte limit",
-            ));
-        }
-        let payload = std::str::from_utf8(payload).map_err(|_| {
-            voxel_error(
-                "CSHARP_VOXEL_HISTORY_RESTORE",
-                "history payload was not UTF-8",
-            )
-        })?;
-        let live_scene = Arc::clone(&self.session_mut(request.session)?.scene);
-        // Decode and rebuild before taking the mutable session so every codec
-        // failure leaves the live scene, history cursor, and published spatial
-        // projection intact. The owner-side rebuild retains static collision
-        // and rebase context from the live spatial scene.
-        let restored = decode_voxel_edit_history(payload, VoxelEditHistoryLimits::default())
-            .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY_RESTORE", error.to_string()))?;
-        let scene = Arc::new(
-            restored
-                .scene_preserving_runtime_context(&live_scene)
-                .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY_RESTORE", error.to_string()))?,
-        );
-        let receipt = {
-            let session = self.session_mut(request.session)?;
-            session.voxel_history = restored.history;
-            session.last_voxel_dirty_chunks = scene.mesh_update().dirty_chunks.clone();
-            session.scene = Arc::clone(&scene);
-            NativeVoxelHistoryRestoreReceipt {
-                cursor: native_history_cursor(
-                    &session.voxel_history.cursor(),
-                    session.voxel_history.entries().len(),
-                ),
-                source_revision: scene.source_revision().raw(),
-            }
-        };
-        self.publish_scene(request.session, scene);
-        Ok(receipt)
+        })?
     }
 }
 
@@ -597,25 +325,12 @@ fn native_edit_receipt(receipt: &engine_spatial::VoxelEditReceipt) -> NativeVoxe
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
         status: NativeVoxelEditStatus::Accepted,
-        current_revision: receipt.accepted_revision.raw(),
-    }
-}
-
-fn native_edit_outcome(
-    status: NativeVoxelEditStatus,
-    current_revision: u64,
-) -> NativeVoxelEditReceipt {
-    NativeVoxelEditReceipt {
-        status,
-        current_revision,
-        ..Default::default()
     }
 }
 
 fn native_residency_receipt(
     receipt: &engine_spatial::VoxelChunkResidencyReceipt,
 ) -> NativeVoxelResidencyReceipt {
-    let history_reset = receipt.history_reset;
     NativeVoxelResidencyReceipt {
         revision_before: receipt.revision_before.raw(),
         accepted_revision: receipt.accepted_revision.raw(),
@@ -625,7 +340,6 @@ fn native_residency_receipt(
         retained_count: narrow(receipt.retained.len()),
         resident_chunk_count: receipt.resident_chunk_count as u64,
         resident_solid_voxel_count: receipt.resident_solid_voxel_count as u64,
-        residency_hash: receipt.residency_hash,
         authority_hash: receipt.authority_hash,
         collision_revision: receipt.projections.collision().raw(),
         navigation_revision: receipt.projections.navigation().raw(),
@@ -634,61 +348,6 @@ fn native_residency_receipt(
         rebuilt_mesh_chunks: narrow(receipt.rebuilt_mesh_chunks),
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
-        history_reset: history_reset.is_some(),
-        history_invalidated_entries: history_reset
-            .map_or(0, |reset| reset.invalidated_entries as u64),
-        history_invalidated_redo_entries: history_reset
-            .map_or(0, |reset| reset.invalidated_redo_entries as u64),
-    }
-}
-
-fn native_history_cursor(
-    cursor: &engine_spatial::VoxelEditHistoryCursor,
-    entry_count: usize,
-) -> NativeVoxelHistoryCursorReadout {
-    NativeVoxelHistoryCursorReadout {
-        present: true,
-        index: cursor.index as u64,
-        entry_count: entry_count as u64,
-        applied_transaction_present: cursor.applied_transaction_id.is_some(),
-        applied_transaction_id: cursor.applied_transaction_id.unwrap_or_default(),
-        undo_depth: cursor.undo_depth as u64,
-        redo_depth: cursor.redo_depth as u64,
-        authority_hash: cursor.authority_hash,
-        history_hash: cursor.history_hash,
-    }
-}
-
-fn native_history_entry(
-    entry: &engine_spatial::VoxelEditHistoryEntry,
-) -> NativeVoxelHistoryEntryReadout {
-    NativeVoxelHistoryEntryReadout {
-        present: true,
-        transaction_id: entry.transaction_id,
-        parent_transaction_present: entry.parent_transaction_id.is_some(),
-        parent_transaction_id: entry.parent_transaction_id.unwrap_or_default(),
-        before_hash: entry.before_hash,
-        after_hash: entry.after_hash,
-        delta_count: narrow(entry.deltas.len()),
-    }
-}
-
-fn native_history_receipt(receipt: &VoxelEditHistoryRevertReceipt) -> NativeVoxelHistoryReceipt {
-    let bounds = receipt.diff.bounds;
-    NativeVoxelHistoryReceipt {
-        applied: receipt.applied,
-        cursor_before: receipt.cursor_before.index as u64,
-        cursor_after: receipt.cursor_after.index as u64,
-        undo_depth: receipt.cursor_after.undo_depth as u64,
-        redo_depth: receipt.cursor_after.redo_depth as u64,
-        authority_hash: receipt.cursor_after.authority_hash,
-        history_hash: receipt.cursor_after.history_hash,
-        revision_before: receipt.revision_before.raw(),
-        revision_after: receipt.revision_after.raw(),
-        changed_voxels: narrow(receipt.diff.changed_voxels),
-        bounds_present: bounds.is_some(),
-        changed_min: native_address(bounds.map_or([0; 3], |bounds| bounds.min)),
-        changed_max_inclusive: native_address(bounds.map_or([0; 3], |bounds| bounds.max)),
     }
 }
 
@@ -723,27 +382,6 @@ fn address(value: NativeVoxelAddress) -> [i64; 3] {
 
 fn chunk_identity(value: NativeVoxelChunkIdentity) -> VoxelChunkIdentity {
     VoxelChunkIdentity::new(value.x, value.y, value.z)
-}
-
-fn encode_lease(session: NativeSpatialSessionHandle, lease: VoxelChunkLeaseId) -> u64 {
-    ((session.value & LEASE_ID_MASK) << 32) | (lease.raw() & LEASE_ID_MASK)
-}
-
-fn decode_lease(
-    handle: NativeVoxelChunkLeaseHandle,
-) -> Result<(NativeSpatialSessionHandle, VoxelChunkLeaseId), CsharpEngineServicesError> {
-    let session = handle.value >> 32;
-    let lease = handle.value & LEASE_ID_MASK;
-    if session == 0 || lease == 0 {
-        return Err(voxel_error(
-            "CSHARP_VOXEL_LEASE",
-            "invalid voxel chunk lease",
-        ));
-    }
-    Ok((
-        NativeSpatialSessionHandle { value: session },
-        VoxelChunkLeaseId::from_raw(lease),
-    ))
 }
 
 fn narrow(value: usize) -> u32 {
@@ -791,23 +429,6 @@ unsafe extern "C" fn read(
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_voxel(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_at(
-    context: *mut c_void,
-    request: NativeVoxelAtRequest,
-    output: *mut NativeVoxelAtReceipt,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_voxel_at(request) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
@@ -891,19 +512,9 @@ unsafe extern "C" fn configure_material_collision(
                 excluded.insert(slot);
             }
         }
-        let session = bridge.session_mut(request.session)?;
-        if session.scene.source_revision().raw() != 0 || session.scene.resident_chunk_count() != 0 {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_MATERIAL_COLLISION_LIFECYCLE",
-                "configure material collision before residency or edits",
-            ));
-        }
-        let mut scene = (*session.scene).clone();
-        scene.set_noncollidable_materials(excluded);
-        let scene = Arc::new(scene);
-        session.scene = Arc::clone(&scene);
-        bridge.publish_scene(request.session, scene);
-        Ok::<_, CsharpEngineServicesError>(())
+        bridge.edit_scene(request.session, |session| {
+            Arc::make_mut(&mut session.scene).set_noncollidable_materials(excluded);
+        })
     })();
     match result {
         Ok(()) => ABI_OK,
@@ -989,158 +600,6 @@ unsafe extern "C" fn apply_residency(
     }
 }
 
-unsafe extern "C" fn acquire_chunk_lease(
-    context: *mut c_void,
-    request: NativeVoxelChunkLeaseRequest,
-    output: *mut NativeVoxelChunkLeaseHandle,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.acquire_chunk_lease(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn destroy_chunk_lease(
-    context: *mut c_void,
-    handle: NativeVoxelChunkLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.destroy_chunk_lease(handle) {
-        Ok(()) => ABI_OK,
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_chunk_lease(
-    context: *mut c_void,
-    request: NativeVoxelChunkLeaseReadRequest,
-    output: *mut NativeVoxelChunkLeaseReadout,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_chunk_lease(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_history_cursor(
-    context: *mut c_void,
-    request: NativeVoxelHistoryCursorReadRequest,
-    output: *mut NativeVoxelHistoryCursorReadout,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_history_cursor(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_history_entry_at(
-    context: *mut c_void,
-    request: NativeVoxelHistoryEntryAtRequest,
-    output: *mut NativeVoxelHistoryEntryReadout,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_history_entry_at(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_history_delta_at(
-    context: *mut c_void,
-    request: NativeVoxelHistoryDeltaAtRequest,
-    output: *mut NativeVoxelHistoryDeltaReadout,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_history_delta_at(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn undo(
-    context: *mut c_void,
-    request: NativeVoxelHistoryActionRequest,
-    output: *mut NativeVoxelHistoryReceipt,
-    receipt: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    if receipt.is_null() {
-        return 0;
-    }
-    // SAFETY: this borrowed receipt starts empty for every direct callback.
-    unsafe { *receipt = std::mem::zeroed() };
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    match bridge.undo_voxel(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(error) => {
-            retain_voxel_operation_error(bridge, &error, receipt, UNDO_OPERATION);
-            0
-        }
-    }
-}
-
-unsafe extern "C" fn redo(
-    context: *mut c_void,
-    request: NativeVoxelHistoryActionRequest,
-    output: *mut NativeVoxelHistoryReceipt,
-    receipt: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    if receipt.is_null() {
-        return 0;
-    }
-    // SAFETY: this borrowed receipt starts empty for every direct callback.
-    unsafe { *receipt = std::mem::zeroed() };
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    match bridge.redo_voxel(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(error) => {
-            retain_voxel_operation_error(bridge, &error, receipt, REDO_OPERATION);
-            0
-        }
-    }
-}
-
 fn retain_voxel_operation_error(
     bridge: &mut RuntimeSpatialBridge,
     error: &CsharpEngineServicesError,
@@ -1172,67 +631,6 @@ unsafe extern "C" fn destroy_operation_diagnostic_lease(
     i32::from(bridge.destroy_voxel_operation_diagnostic_lease(handle))
 }
 
-unsafe extern "C" fn read_history_codec_info(
-    context: *mut c_void,
-    output: *mut NativeVoxelHistoryCodecInfo,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    unsafe { *output = bridge.read_history_codec_info() };
-    ABI_OK
-}
-
-unsafe extern "C" fn export_history(
-    context: *mut c_void,
-    request: NativeVoxelHistoryExportRequest,
-    output: *mut NativeByteLease,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.export_history(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn destroy_history_export_lease(
-    context: *mut c_void,
-    handle: NativeByteLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.destroy_history_export(handle) {
-        Ok(()) => ABI_OK,
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn restore_history(
-    context: *mut c_void,
-    request: *const NativeVoxelHistoryRestoreRequest,
-    output: *mut NativeVoxelHistoryRestoreReceipt,
-) -> i32 {
-    if context.is_null() || request.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .restore_history(unsafe { &*request })
-    {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
 pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
     NativeVoxelApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
@@ -1240,631 +638,12 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         read_scene,
         read,
         sample_direct_lighting,
-        read_at,
         read_chunk,
         read_resident_chunk_at,
         apply_edits,
         read_dirty_chunk_at,
         apply_residency,
-        start_residency_preparation,
-        poll_residency_preparation,
-        commit_residency_preparation,
-        cancel_residency_preparation,
-        acquire_chunk_lease,
-        destroy_chunk_lease,
-        read_chunk_lease,
-        read_history_cursor,
-        read_history_entry_at,
-        read_history_delta_at,
-        undo,
-        redo,
         destroy_operation_diagnostic_lease,
-        read_history_codec_info,
-        export_history,
-        destroy_history_export_lease,
-        restore_history,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_session(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
-        let spatial = crate::spatial::api(bridge);
-        let mut session = NativeSpatialSessionHandle::default();
-        assert_eq!(
-            unsafe {
-                (spatial.create_session)(
-                    spatial.context,
-                    NativeSpatialSessionConfig {
-                        collision_voxel_size: 1.0,
-                        collision_chunk_size: 8,
-                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
-                    },
-                    &mut session,
-                )
-            },
-            ABI_OK
-        );
-        session
-    }
-
-    #[test]
-    fn material_collision_configuration_survives_edits_and_rejects_late_changes() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let session = create_session(&mut bridge);
-        let api = api(&mut bridge);
-        let materials = [NativeVoxelMaterialCollision {
-            material_slot: 11,
-            collidable: false,
-        }];
-        let request = NativeVoxelMaterialCollisionRequest {
-            session,
-            materials: materials.as_ptr(),
-            materials_len: materials.len(),
-        };
-        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { (api.configure_material_collision)(api.context, &request, &mut receipt) },
-            ABI_OK
-        );
-        let edits = [
-            NativeVoxelEdit {
-                kind: NativeVoxelEditKind::Set,
-                address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
-                material_slot: 1,
-                state: 0,
-            },
-            NativeVoxelEdit {
-                kind: NativeVoxelEditKind::Set,
-                address: NativeVoxelAddress { x: 0, y: 1, z: 0 },
-                material_slot: 11,
-                state: 0,
-            },
-        ];
-        bridge
-            .apply_voxel_edits(&NativeVoxelEditTransaction {
-                session,
-                expected_revision: 0,
-                edits: edits.as_ptr(),
-                edits_len: edits.len(),
-            })
-            .unwrap();
-        let scene = &bridge.session_mut(session).unwrap().scene;
-        assert_eq!(scene.material_voxels().len(), 2);
-        assert_eq!(
-            scene
-                .raycast([0.5, 3.0, 0.5], [0.0, -1.0, 0.0], 5.0)
-                .unwrap()
-                .voxel,
-            [0, 0, 0]
-        );
-        assert_ne!(
-            unsafe { (api.configure_material_collision)(api.context, &request, &mut receipt) },
-            ABI_OK
-        );
-        assert!(bridge
-            .session_mut(session)
-            .unwrap()
-            .scene
-            .noncollidable_materials()
-            .contains(&11));
-    }
-
-    #[test]
-    fn preparation_copies_input_and_publishes_only_on_commit() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let session = create_session(&mut bridge);
-        let operations = [NativeVoxelResidencyOperation {
-            kind: NativeVoxelResidencyOperationKind::Admit,
-            material_count: 512,
-            ..Default::default()
-        }];
-        let mut materials = vec![1u32; 512];
-        let request = NativeVoxelResidencyTransaction {
-            states: std::ptr::null(),
-            states_len: 0,
-            session,
-            expected_revision: 0,
-            history_policy: NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty,
-            operations: operations.as_ptr(),
-            operations_len: operations.len(),
-            material_slots: materials.as_ptr(),
-            material_slots_len: materials.len(),
-        };
-        let started = bridge.start_preparation(&request).unwrap();
-        materials.fill(0);
-        assert!(bridge.start_preparation(&request).is_err());
-        let request = NativeVoxelPreparationRequest {
-            session,
-            preparation: started.preparation,
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while bridge.poll_preparation(request).unwrap().status
-            == NativeVoxelPreparationStatus::Pending
-        {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
-        }
-        assert_eq!(
-            bridge
-                .session_mut(session)
-                .unwrap()
-                .scene
-                .solid_voxel_count(),
-            0
-        );
-        let committed = bridge.commit_preparation(request).unwrap();
-        assert_eq!(committed.status, NativeVoxelPreparationStatus::Committed);
-        assert_eq!(
-            bridge
-                .session_mut(session)
-                .unwrap()
-                .scene
-                .solid_voxel_count(),
-            512
-        );
-        assert!(bridge.commit_preparation(request).is_err());
-    }
-
-    #[test]
-    fn cancelled_preparation_releases_snapshot_and_allows_another_start() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let session = create_session(&mut bridge);
-        let operations = [NativeVoxelResidencyOperation {
-            material_count: 512,
-            ..Default::default()
-        }];
-        let materials = vec![1u32; 512];
-        let request = NativeVoxelResidencyTransaction {
-            states: std::ptr::null(),
-            states_len: 0,
-            session,
-            expected_revision: 0,
-            history_policy: NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty,
-            operations: operations.as_ptr(),
-            operations_len: 1,
-            material_slots: materials.as_ptr(),
-            material_slots_len: materials.len(),
-        };
-        let first = bridge.start_preparation(&request).unwrap();
-        assert_eq!(
-            bridge
-                .cancel_preparation(NativeVoxelPreparationRequest {
-                    session,
-                    preparation: first.preparation
-                })
-                .unwrap()
-                .status,
-            NativeVoxelPreparationStatus::Cancelled
-        );
-        assert_eq!(
-            bridge
-                .session_mut(session)
-                .unwrap()
-                .scene
-                .solid_voxel_count(),
-            0
-        );
-        let second = bridge.start_preparation(&request).unwrap();
-        assert_ne!(first.preparation, second.preparation);
-        bridge
-            .cancel_preparation(NativeVoxelPreparationRequest {
-                session,
-                preparation: second.preparation,
-            })
-            .unwrap();
-    }
-
-    fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {
-        NativeVoxelEdit {
-            state: 0,
-            kind: NativeVoxelEditKind::Set,
-            address,
-            material_slot,
-        }
-    }
-
-    fn copied_utf8(value: NativeUtf8Slice) -> String {
-        let bytes = unsafe { std::slice::from_raw_parts(value.bytes, value.len) };
-        std::str::from_utf8(bytes).unwrap().to_owned()
-    }
-
-    #[test]
-    fn direct_light_sample_uses_live_voxel_occlusion_and_reports_revision() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let session = create_session(&mut bridge);
-        let api = api(&mut bridge);
-        let edits = [set(NativeVoxelAddress { x: 0, y: 0, z: 0 }, 1)];
-        bridge
-            .apply_voxel_edits(&NativeVoxelEditTransaction {
-                session,
-                expected_revision: 0,
-                edits: edits.as_ptr(),
-                edits_len: 1,
-            })
-            .unwrap();
-        let light = NativeLightDescriptor {
-            kind: NativeLightKind::Point,
-            color: NativeVec3 {
-                x: 1.0,
-                y: 1.0,
-                z: 1.0,
-            },
-            intensity: 10.0,
-            enabled: true,
-            position: NativeVec3 {
-                x: 2.5,
-                y: 0.5,
-                z: 0.5,
-            },
-            direction: NativeVec3 {
-                x: 0.0,
-                y: 1.0,
-                z: 0.0,
-            },
-            has_range: true,
-            range: 10.0,
-            decay: 2.0,
-            outer_angle_radians: 0.0,
-            penumbra: 0.0,
-            shadow_intent: NativeLightShadowIntent::Requested,
-        };
-        let mut request = NativeVoxelLightSampleRequest {
-            session,
-            address: NativeVoxelAddress { x: -1, y: 0, z: 0 },
-            offset: NativeVec3 {
-                x: 0.5,
-                y: 0.5,
-                z: 0.5,
-            },
-            normal: NativeVec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            directional_distance: 20.0,
-            lights: &light,
-            lights_len: 1,
-        };
-        let mut result: NativeVoxelLightSample = unsafe { std::mem::zeroed() };
-        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
-            ABI_OK
-        );
-        assert_eq!(result.luminance, 0.0);
-        assert_eq!(result.occluded_lights, 1);
-        assert!(result.source_revision > 0);
-        request.address.x = 1;
-        assert_eq!(
-            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
-            ABI_OK
-        );
-        assert!(result.luminance > 0.0);
-        assert_eq!(result.occluded_lights, 0);
-        request.directional_distance = f32::NAN;
-        assert_eq!(
-            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
-            0
-        );
-        assert_ne!(error.diagnostics.handle.value, 0);
-        bridge.destroy_voxel_operation_diagnostic_lease(error.diagnostics.handle);
-    }
-
-    #[test]
-    fn mutation_callbacks_return_typed_no_change_and_stale_edit_outcomes() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let session = create_session(&mut bridge);
-        let api = api(&mut bridge);
-        let edit = [set(NativeVoxelAddress { x: 1, y: 0, z: 0 }, 2)];
-        let mut accepted = NativeVoxelEditReceipt::default();
-        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-        assert_eq!(
-            unsafe {
-                (api.apply_edits)(
-                    api.context,
-                    &NativeVoxelEditTransaction {
-                        session,
-                        expected_revision: 0,
-                        edits: edit.as_ptr(),
-                        edits_len: edit.len(),
-                    },
-                    &mut accepted,
-                    &mut error,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(error.diagnostics.handle.value, 0);
-        assert_eq!(accepted.status, NativeVoxelEditStatus::Accepted);
-        assert_eq!(accepted.current_revision, accepted.accepted_revision);
-
-        let mut no_change = NativeVoxelEditReceipt::default();
-        let mut no_change_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-        assert_eq!(
-            unsafe {
-                (api.apply_edits)(
-                    api.context,
-                    &NativeVoxelEditTransaction {
-                        session,
-                        expected_revision: accepted.accepted_revision,
-                        edits: edit.as_ptr(),
-                        edits_len: edit.len(),
-                    },
-                    &mut no_change,
-                    &mut no_change_error,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(no_change_error.diagnostics.handle.value, 0);
-        assert_eq!(no_change.status, NativeVoxelEditStatus::NoChanges);
-        assert_eq!(no_change.current_revision, accepted.accepted_revision);
-
-        let mut stale = NativeVoxelEditReceipt::default();
-        let mut stale_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-        assert_eq!(
-            unsafe {
-                (api.apply_edits)(
-                    api.context,
-                    &NativeVoxelEditTransaction {
-                        session,
-                        expected_revision: 0,
-                        edits: edit.as_ptr(),
-                        edits_len: edit.len(),
-                    },
-                    &mut stale,
-                    &mut stale_error,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(stale_error.diagnostics.handle.value, 0);
-        assert_eq!(stale.status, NativeVoxelEditStatus::StaleRevision);
-        assert_eq!(stale.current_revision, accepted.accepted_revision);
-
-        let invalid = [NativeVoxelEdit {
-            state: 0,
-            kind: NativeVoxelEditKind::Set,
-            address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
-            material_slot: u32::from(u16::MAX) + 1,
-        }];
-        let mut invalid_receipt = NativeVoxelEditReceipt::default();
-        let mut invalid_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
-        assert_eq!(
-            unsafe {
-                (api.apply_edits)(
-                    api.context,
-                    &NativeVoxelEditTransaction {
-                        session,
-                        expected_revision: accepted.accepted_revision,
-                        edits: invalid.as_ptr(),
-                        edits_len: invalid.len(),
-                    },
-                    &mut invalid_receipt,
-                    &mut invalid_error,
-                )
-            },
-            0
-        );
-        assert_eq!(invalid_error.status, 0);
-        assert_eq!(copied_utf8(invalid_error.service), "Voxel");
-        assert_eq!(copied_utf8(invalid_error.operation), "ApplyEdits");
-        assert_eq!(invalid_error.diagnostics.diagnostics_len, 1);
-        let diagnostic = unsafe { *invalid_error.diagnostics.diagnostics };
-        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_VOXEL_EDIT");
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(
-                    api.context,
-                    invalid_error.diagnostics.handle,
-                )
-            },
-            ABI_OK
-        );
-    }
-
-    #[test]
-    fn history_export_restore_releases_exact_bytes_and_retains_cursor_and_redo() {
-        let mut bridge = RuntimeSpatialBridge::new();
-        let session = create_session(&mut bridge);
-        let first = [set(NativeVoxelAddress { x: 1, y: 0, z: 0 }, 2)];
-        let second = [set(NativeVoxelAddress { x: 2, y: 0, z: 0 }, 3)];
-        for (expected_revision, edits) in [(0, first.as_slice()), (1, second.as_slice())] {
-            bridge
-                .apply_voxel_edits(&NativeVoxelEditTransaction {
-                    session,
-                    expected_revision,
-                    edits: edits.as_ptr(),
-                    edits_len: edits.len(),
-                })
-                .unwrap();
-        }
-        bridge
-            .undo_voxel(NativeVoxelHistoryActionRequest { session })
-            .unwrap();
-
-        let codec = bridge.read_history_codec_info();
-        let cursor = bridge
-            .read_history_cursor(NativeVoxelHistoryCursorReadRequest { session })
-            .unwrap();
-        let export = bridge
-            .export_history(NativeVoxelHistoryExportRequest { session })
-            .unwrap();
-        assert_eq!(codec.schema_version, VOXEL_EDIT_HISTORY_SCHEMA_VERSION);
-        assert_eq!(codec.max_encoded_bytes, MAX_VOXEL_EDIT_HISTORY_BYTES as u64);
-        assert!(export.len <= MAX_VOXEL_EDIT_HISTORY_BYTES);
-        assert_eq!(cursor.index, 1);
-        assert_eq!(cursor.redo_depth, 1);
-        let bytes = unsafe { std::slice::from_raw_parts(export.bytes, export.len) }.to_vec();
-        bridge.destroy_history_export(export.handle).unwrap();
-        assert!(bridge.destroy_history_export(export.handle).is_err());
-
-        // This is the same direct composition used by the managed helper:
-        // product-selected scope/key and persistence revision carry opaque
-        // codec bytes, while Voxel remains the sole history owner.
-        let persistence_root = tempfile::tempdir().unwrap();
-        let mut persistence = crate::persistence::RuntimePersistenceBridge::new(Some(
-            persistence_root.path().to_path_buf(),
-        ));
-        let persistence_api = crate::persistence::api(&mut persistence);
-        let scope = b"runtime";
-        let key = b"voxel.history";
-        let mut store = NativePersistenceStoreHandle::default();
-        assert_eq!(
-            unsafe {
-                (persistence_api.open_store)(
-                    persistence_api.context,
-                    &NativePersistenceOpenRequest {
-                        scope: NativeUtf8Slice {
-                            bytes: scope.as_ptr(),
-                            len: scope.len(),
-                        },
-                    },
-                    &mut store,
-                )
-            },
-            ABI_OK
-        );
-        let mut save = NativePersistenceSaveReceipt::default();
-        assert_eq!(
-            unsafe {
-                (persistence_api.save)(
-                    persistence_api.context,
-                    &NativePersistenceSaveRequest {
-                        store,
-                        key: NativeUtf8Slice {
-                            bytes: key.as_ptr(),
-                            len: key.len(),
-                        },
-                        revision_guard: NativePersistenceRevisionGuard::Absent,
-                        expected_revision: 0,
-                        payload: NativeByteSlice {
-                            bytes: bytes.as_ptr(),
-                            len: bytes.len(),
-                        },
-                    },
-                    &mut save,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(save.revision, 1);
-
-        let mutation = [set(NativeVoxelAddress { x: 9, y: 0, z: 0 }, 4)];
-        bridge
-            .apply_voxel_edits(&NativeVoxelEditTransaction {
-                session,
-                expected_revision: 3,
-                edits: mutation.as_ptr(),
-                edits_len: mutation.len(),
-            })
-            .unwrap();
-
-        let mut blob = NativePersistenceBlobHandle::default();
-        assert_eq!(
-            unsafe {
-                (persistence_api.load)(
-                    persistence_api.context,
-                    &NativePersistenceLoadRequest {
-                        store,
-                        key: NativeUtf8Slice {
-                            bytes: key.as_ptr(),
-                            len: key.len(),
-                        },
-                    },
-                    &mut blob,
-                )
-            },
-            ABI_OK
-        );
-        let mut blob_info = NativePersistenceBlobInfo {
-            present: false,
-            revision: 0,
-            payload_len: 0,
-        };
-        assert_eq!(
-            unsafe {
-                (persistence_api.describe_blob)(persistence_api.context, blob, &mut blob_info)
-            },
-            ABI_OK
-        );
-        assert_eq!((blob_info.present, blob_info.revision), (true, 1));
-        let mut restored_bytes = vec![0; blob_info.payload_len];
-        assert_eq!(
-            unsafe {
-                (persistence_api.copy_blob)(
-                    persistence_api.context,
-                    &NativePersistenceCopyBlobRequest {
-                        blob,
-                        destination: NativeWritableByteSlice {
-                            bytes: restored_bytes.as_mut_ptr(),
-                            len: restored_bytes.len(),
-                        },
-                    },
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe { (persistence_api.destroy_blob)(persistence_api.context, blob) },
-            ABI_OK
-        );
-
-        let restore = bridge
-            .restore_history(&NativeVoxelHistoryRestoreRequest {
-                session,
-                payload: NativeByteSlice {
-                    bytes: restored_bytes.as_ptr(),
-                    len: restored_bytes.len(),
-                },
-            })
-            .unwrap();
-        assert_eq!(restore.cursor.index, 1);
-        assert_eq!(restore.cursor.undo_depth, 1);
-        assert_eq!(restore.cursor.redo_depth, 1);
-        assert_eq!(restore.source_revision, 3);
-
-        let restored_scene = bridge
-            .read_voxel(NativeVoxelReadRequest {
-                session,
-                address: NativeVoxelAddress { x: 9, y: 0, z: 0 },
-            })
-            .unwrap();
-        assert!(!restored_scene.present);
-        bridge
-            .redo_voxel(NativeVoxelHistoryActionRequest { session })
-            .unwrap();
-        assert!(
-            bridge
-                .read_voxel(NativeVoxelReadRequest {
-                    session,
-                    address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
-                })
-                .unwrap()
-                .present
-        );
-
-        let before_failure = bridge
-            .read_history_cursor(NativeVoxelHistoryCursorReadRequest { session })
-            .unwrap();
-        assert!(bridge
-            .restore_history(&NativeVoxelHistoryRestoreRequest {
-                session,
-                payload: NativeByteSlice {
-                    bytes: b"not voxel history".as_ptr(),
-                    len: b"not voxel history".len(),
-                },
-            })
-            .is_err());
-        assert_eq!(
-            bridge
-                .read_history_cursor(NativeVoxelHistoryCursorReadRequest { session })
-                .unwrap(),
-            before_failure
-        );
     }
 }
 
@@ -1905,248 +684,17 @@ fn translate_residency(
             }
             NativeVoxelResidencyOperationKind::Replace => {
                 let payload = native_payload(*operation, chunk_size, material_slots, states)?;
-                VoxelChunkResidencyOperation::Replace {
-                    chunk,
-                    expected_content_hash: VoxelChunkContentHash::new(
-                        operation.expected_content_hash,
-                    ),
-                    payload,
-                }
+                VoxelChunkResidencyOperation::Replace { chunk, payload }
             }
-            NativeVoxelResidencyOperationKind::Evict => VoxelChunkResidencyOperation::Evict {
-                chunk,
-                expected_content_hash: VoxelChunkContentHash::new(operation.expected_content_hash),
-            },
+            NativeVoxelResidencyOperationKind::Evict => {
+                VoxelChunkResidencyOperation::Evict { chunk }
+            }
         };
         translated.push(translated_operation);
     }
 
     Ok(translated)
 }
-
-pub(crate) struct PendingVoxelPreparation {
-    id: u64,
-    worker: engine_spatial::VoxelResidencyPreparation,
-    ready: Option<engine_spatial::PreparedVoxelChunkResidency>,
-    history_policy: NativeVoxelResidencyHistoryPolicy,
-}
-
-impl RuntimeSpatialBridge {
-    fn start_preparation(
-        &mut self,
-        request: &NativeVoxelResidencyTransaction,
-    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        if session.voxel_preparation.is_some() {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_PREPARATION_BUSY",
-                "one preparation is already owned by this session",
-            ));
-        }
-        let operations = translate_residency(request, session.scene.chunk_size())?;
-        if request.history_policy == NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty
-            && !session.voxel_history.is_empty()
-        {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_HISTORY",
-                "history must be empty or explicitly reset",
-            ));
-        }
-        let id = session.next_voxel_preparation;
-        let next = id.checked_add(1).ok_or_else(|| {
-            voxel_error("CSHARP_VOXEL_PREPARATION", "preparation identity exhausted")
-        })?;
-        let worker = engine_spatial::VoxelResidencyPreparation::start(
-            Arc::clone(&session.scene),
-            session.voxel_leases.clone(),
-            engine_spatial::VoxelSourceRevision::new(request.expected_revision),
-            operations,
-        )
-        .map_err(|e| voxel_error("CSHARP_VOXEL_PREPARATION", e.to_string()))?;
-        session.next_voxel_preparation = next;
-        session.voxel_preparation = Some(PendingVoxelPreparation {
-            id,
-            worker,
-            ready: None,
-            history_policy: request.history_policy,
-        });
-        Ok(NativeVoxelPreparationReceipt {
-            preparation: id,
-            ..Default::default()
-        })
-    }
-
-    fn poll_preparation(
-        &mut self,
-        request: NativeVoxelPreparationRequest,
-    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        let pending = session
-            .voxel_preparation
-            .as_mut()
-            .filter(|p| p.id == request.preparation)
-            .ok_or_else(|| voxel_error("CSHARP_VOXEL_PREPARATION", "unknown preparation"))?;
-        if pending.ready.is_none() {
-            match pending.worker.poll() {
-                engine_spatial::VoxelPreparationPoll::Pending => {}
-                engine_spatial::VoxelPreparationPoll::Ready(result) => {
-                    pending.ready = Some(
-                        (*result)
-                            .map_err(|e| voxel_error("CSHARP_VOXEL_PREPARATION", e.to_string()))?,
-                    )
-                }
-                engine_spatial::VoxelPreparationPoll::WorkerFailed => {
-                    return Err(voxel_error(
-                        "CSHARP_VOXEL_PREPARATION",
-                        "worker exited without a result",
-                    ))
-                }
-            }
-        }
-        Ok(NativeVoxelPreparationReceipt {
-            preparation: pending.id,
-            status: if pending.ready.is_some() {
-                NativeVoxelPreparationStatus::Ready
-            } else {
-                NativeVoxelPreparationStatus::Pending
-            },
-            residency: pending
-                .ready
-                .as_ref()
-                .map(|p| native_residency_receipt(p.receipt()))
-                .unwrap_or_default(),
-        })
-    }
-
-    fn commit_preparation(
-        &mut self,
-        request: NativeVoxelPreparationRequest,
-    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
-        let polled = self.poll_preparation(request)?;
-        if polled.status == NativeVoxelPreparationStatus::Pending {
-            return Ok(polled);
-        }
-        let session = self.session_mut(request.session)?;
-        let mut pending = session
-            .voxel_preparation
-            .take()
-            .expect("validated preparation");
-        if pending.history_policy == NativeVoxelResidencyHistoryPolicy::RejectIfNonEmpty
-            && !session.voxel_history.is_empty()
-        {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_HISTORY",
-                "history changed during preparation",
-            ));
-        }
-        let (scene, mut receipt) = VoxelChunkResidencyService::finish_prepared(
-            &session.scene,
-            &session.voxel_leases,
-            pending.ready.take().expect("ready preparation"),
-        )
-        .map_err(|e| voxel_error("CSHARP_VOXEL_PREPARATION", e.to_string()))?;
-        receipt.history_reset = Some(session.voxel_history.reset_to_scene(&scene));
-        session.last_voxel_dirty_chunks =
-            receipt.dirty_chunks.iter().map(|c| c.to_array()).collect();
-        let scene = Arc::new(scene);
-        session.scene = Arc::clone(&scene);
-        self.publish_scene(request.session, scene);
-        Ok(NativeVoxelPreparationReceipt {
-            preparation: request.preparation,
-            status: NativeVoxelPreparationStatus::Committed,
-            residency: native_residency_receipt(&receipt),
-        })
-    }
-
-    fn cancel_preparation(
-        &mut self,
-        request: NativeVoxelPreparationRequest,
-    ) -> Result<NativeVoxelPreparationReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        if !session
-            .voxel_preparation
-            .as_ref()
-            .is_some_and(|p| p.id == request.preparation)
-        {
-            return Err(voxel_error(
-                "CSHARP_VOXEL_PREPARATION",
-                "unknown preparation",
-            ));
-        }
-        // Explicit cancellation/teardown joins the bounded worker; polling does not.
-        session.voxel_preparation = None;
-        Ok(NativeVoxelPreparationReceipt {
-            preparation: request.preparation,
-            status: NativeVoxelPreparationStatus::Cancelled,
-            ..Default::default()
-        })
-    }
-}
-
-unsafe extern "C" fn start_residency_preparation(
-    context: *mut c_void,
-    request: *const NativeVoxelResidencyTransaction,
-    output: *mut NativeVoxelPreparationReceipt,
-    error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    if context.is_null() || request.is_null() || output.is_null() || error.is_null() {
-        return 0;
-    }
-    unsafe { *error = std::mem::zeroed() };
-    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    match bridge.start_preparation(unsafe { &*request }) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(e) => {
-            retain_voxel_operation_error(bridge, &e, error, b"StartResidencyPreparation");
-            0
-        }
-    }
-}
-
-macro_rules! preparation_callback {
-    ($name:ident,$method:ident,$operation:literal) => {
-        unsafe extern "C" fn $name(
-            context: *mut c_void,
-            request: NativeVoxelPreparationRequest,
-            output: *mut NativeVoxelPreparationReceipt,
-            error: *mut NativeOperationErrorReceipt,
-        ) -> i32 {
-            if context.is_null() || output.is_null() || error.is_null() {
-                return 0;
-            }
-            unsafe { *error = std::mem::zeroed() };
-            let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-            match bridge.$method(request) {
-                Ok(value) => {
-                    unsafe { *output = value };
-                    ABI_OK
-                }
-                Err(e) => {
-                    retain_voxel_operation_error(bridge, &e, error, $operation);
-                    0
-                }
-            }
-        }
-    };
-}
-preparation_callback!(
-    poll_residency_preparation,
-    poll_preparation,
-    b"PollResidencyPreparation"
-);
-preparation_callback!(
-    commit_residency_preparation,
-    commit_preparation,
-    b"CommitResidencyPreparation"
-);
-preparation_callback!(
-    cancel_residency_preparation,
-    cancel_preparation,
-    b"CancelResidencyPreparation"
-);
 
 unsafe extern "C" fn sample_direct_lighting(
     context: *mut c_void,
@@ -2224,5 +772,286 @@ unsafe extern "C" fn sample_direct_lighting(
             retain_voxel_operation_error(bridge, &e, error, b"SampleDirectLighting");
             0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_session(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
+        let spatial = crate::spatial::api(bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial.create_session)(
+                    spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        session
+    }
+
+    #[test]
+    fn material_collision_configuration_survives_edits_and_can_change_later() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let materials = [NativeVoxelMaterialCollision {
+            material_slot: 11,
+            collidable: false,
+        }];
+        let request = NativeVoxelMaterialCollisionRequest {
+            session,
+            materials: materials.as_ptr(),
+            materials_len: materials.len(),
+        };
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.configure_material_collision)(api.context, &request, &mut receipt) },
+            ABI_OK
+        );
+        let edits = [
+            NativeVoxelEdit {
+                kind: NativeVoxelEditKind::Set,
+                address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
+                material_slot: 1,
+                state: 0,
+            },
+            NativeVoxelEdit {
+                kind: NativeVoxelEditKind::Set,
+                address: NativeVoxelAddress { x: 0, y: 1, z: 0 },
+                material_slot: 11,
+                state: 0,
+            },
+        ];
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                edits: edits.as_ptr(),
+                edits_len: edits.len(),
+            })
+            .unwrap();
+        let scene = &bridge.session_mut(session).unwrap().scene;
+        assert_eq!(scene.material_voxels().len(), 2);
+        assert_eq!(
+            scene
+                .raycast([0.5, 3.0, 0.5], [0.0, -1.0, 0.0], 5.0)
+                .unwrap()
+                .voxel,
+            [0, 0, 0]
+        );
+        // Collision can be reconfigured after edits: slot 11 now collides.
+        let collidable = [NativeVoxelMaterialCollision {
+            material_slot: 11,
+            collidable: true,
+        }];
+        let request = NativeVoxelMaterialCollisionRequest {
+            session,
+            materials: collidable.as_ptr(),
+            materials_len: collidable.len(),
+        };
+        assert_eq!(
+            unsafe { (api.configure_material_collision)(api.context, &request, &mut receipt) },
+            ABI_OK
+        );
+        let scene = &bridge.session_mut(session).unwrap().scene;
+        assert!(scene.noncollidable_materials().is_empty());
+        assert_eq!(
+            scene
+                .raycast([0.5, 3.0, 0.5], [0.0, -1.0, 0.0], 5.0)
+                .unwrap()
+                .voxel,
+            [0, 1, 0]
+        );
+    }
+
+    fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {
+        NativeVoxelEdit {
+            state: 0,
+            kind: NativeVoxelEditKind::Set,
+            address,
+            material_slot,
+        }
+    }
+
+    fn copied_utf8(value: NativeUtf8Slice) -> String {
+        let bytes = unsafe { std::slice::from_raw_parts(value.bytes, value.len) };
+        std::str::from_utf8(bytes).unwrap().to_owned()
+    }
+
+    #[test]
+    fn direct_light_sample_uses_live_voxel_occlusion_and_reports_revision() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let edits = [set(NativeVoxelAddress { x: 0, y: 0, z: 0 }, 1)];
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                edits: edits.as_ptr(),
+                edits_len: 1,
+            })
+            .unwrap();
+        let light = NativeLightDescriptor {
+            kind: NativeLightKind::Point,
+            color: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            intensity: 10.0,
+            enabled: true,
+            position: NativeVec3 {
+                x: 2.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            direction: NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            has_range: true,
+            range: 10.0,
+            decay: 2.0,
+            outer_angle_radians: 0.0,
+            penumbra: 0.0,
+            shadow_intent: NativeLightShadowIntent::Requested,
+        };
+        let mut request = NativeVoxelLightSampleRequest {
+            session,
+            address: NativeVoxelAddress { x: -1, y: 0, z: 0 },
+            offset: NativeVec3 {
+                x: 0.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            normal: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            directional_distance: 20.0,
+            lights: &light,
+            lights_len: 1,
+        };
+        let mut result: NativeVoxelLightSample = unsafe { std::mem::zeroed() };
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
+            ABI_OK
+        );
+        assert_eq!(result.luminance, 0.0);
+        assert_eq!(result.occluded_lights, 1);
+        assert!(result.source_revision > 0);
+        request.address.x = 1;
+        assert_eq!(
+            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
+            ABI_OK
+        );
+        assert!(result.luminance > 0.0);
+        assert_eq!(result.occluded_lights, 0);
+        request.directional_distance = f32::NAN;
+        assert_eq!(
+            unsafe { (api.sample_direct_lighting)(api.context, &request, &mut result, &mut error) },
+            0
+        );
+        assert_ne!(error.diagnostics.handle.value, 0);
+        bridge.destroy_voxel_operation_diagnostic_lease(error.diagnostics.handle);
+    }
+
+    #[test]
+    fn mutation_callbacks_return_typed_no_change_outcomes() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let edit = [set(NativeVoxelAddress { x: 1, y: 0, z: 0 }, 2)];
+        let mut accepted = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: edit.as_ptr(),
+                        edits_len: edit.len(),
+                    },
+                    &mut accepted,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(error.diagnostics.handle.value, 0);
+        assert_eq!(accepted.status, NativeVoxelEditStatus::Accepted);
+
+        let mut no_change = NativeVoxelEditReceipt::default();
+        let mut no_change_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: edit.as_ptr(),
+                        edits_len: edit.len(),
+                    },
+                    &mut no_change,
+                    &mut no_change_error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(no_change_error.diagnostics.handle.value, 0);
+        assert_eq!(no_change.status, NativeVoxelEditStatus::NoChanges);
+        assert_eq!(no_change.accepted_revision, accepted.accepted_revision);
+
+        let invalid = [NativeVoxelEdit {
+            state: 0,
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
+            material_slot: u32::from(u16::MAX) + 1,
+        }];
+        let mut invalid_receipt = NativeVoxelEditReceipt::default();
+        let mut invalid_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: invalid.as_ptr(),
+                        edits_len: invalid.len(),
+                    },
+                    &mut invalid_receipt,
+                    &mut invalid_error,
+                )
+            },
+            0
+        );
+        assert_eq!(invalid_error.status, 0);
+        assert_eq!(copied_utf8(invalid_error.service), "Voxel");
+        assert_eq!(copied_utf8(invalid_error.operation), "ApplyEdits");
+        assert_eq!(invalid_error.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *invalid_error.diagnostics.diagnostics };
+        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_VOXEL_EDIT");
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(
+                    api.context,
+                    invalid_error.diagnostics.handle,
+                )
+            },
+            ABI_OK
+        );
     }
 }

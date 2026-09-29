@@ -2,42 +2,54 @@ use core_space::Direction6;
 use engine_spatial::*;
 
 #[test]
-fn state_only_edit_changes_hash_mesh_and_round_trips_history() {
+fn state_only_edit_changes_hash_and_mesh_and_inverse_edits_restore_it() {
     let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[0, 0, 0]]).unwrap();
     let old_hash = scene.authority_hash();
-    let old_mesh = scene.mesh_chunks()[0].content_hash;
-    let mut history = VoxelEditHistory::new(&scene);
+    let old_mesh = scene.mesh_chunks().cloned().collect::<Vec<_>>()[0].content_hash;
     let state = (17 << 2) | 1;
-    history
-        .apply(
-            &mut scene,
-            &[VoxelEdit::SetState {
-                address: [0, 0, 0],
-                material_slot: 1,
-                state,
-            }],
-        )
-        .unwrap();
+    VoxelEditService::apply(
+        &mut scene,
+        &[VoxelEdit::SetState {
+            address: [0, 0, 0],
+            material_slot: 1,
+            state,
+        }],
+    )
+    .unwrap();
     assert_eq!(scene.material_voxels()[0].state, state);
     assert_ne!(scene.authority_hash(), old_hash);
-    assert_ne!(scene.mesh_chunks()[0].content_hash, old_mesh);
-    assert!(scene.mesh_chunks()[0]
+    assert_ne!(
+        scene.mesh_chunks().cloned().collect::<Vec<_>>()[0].content_hash,
+        old_mesh
+    );
+    assert!(scene.mesh_chunks().cloned().collect::<Vec<_>>()[0]
         .groups
         .iter()
         .all(|g| g.state == state));
-    let encoded = encode_voxel_edit_history(&history).unwrap();
-    let mut restored =
-        decode_voxel_edit_history(&encoded, VoxelEditHistoryLimits::default()).unwrap();
-    assert_eq!(restored.scene.material_voxels(), scene.material_voxels());
-    restored.history.undo_one(&mut restored.scene).unwrap();
-    assert_eq!(restored.scene.material_voxels()[0].state, 0);
-    restored.history.redo_one(&mut restored.scene).unwrap();
-    assert_eq!(restored.scene.material_voxels()[0].state, state);
-    history
-        .apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }])
-        .unwrap();
-    history.undo_one(&mut scene).unwrap();
+    let stated_hash = scene.authority_hash();
+    // The product owns undo: it applies the inverse edits itself.
+    VoxelEditService::apply(
+        &mut scene,
+        &[VoxelEdit::SetState {
+            address: [0, 0, 0],
+            material_slot: 1,
+            state: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(scene.authority_hash(), old_hash);
+    VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [0, 0, 0] }]).unwrap();
+    VoxelEditService::apply(
+        &mut scene,
+        &[VoxelEdit::SetState {
+            address: [0, 0, 0],
+            material_slot: 1,
+            state,
+        }],
+    )
+    .unwrap();
     assert_eq!(scene.material_voxels()[0].state, state);
+    assert_eq!(scene.authority_hash(), stated_hash);
 }
 
 #[test]
@@ -59,7 +71,7 @@ fn differing_states_do_not_greedily_merge_and_rotation_selects_local_face() {
         ],
     )
     .unwrap();
-    let chunk = &scene.mesh_chunks()[0];
+    let chunk = &scene.mesh_chunks().cloned().collect::<Vec<_>>()[0];
     assert_eq!(
         chunk.indices.len(),
         60,
@@ -77,26 +89,25 @@ fn differing_states_do_not_greedily_merge_and_rotation_selects_local_face() {
         "world +X uses authored +Z after a quarter turn"
     );
     let standard = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[0, 0, 0], [1, 0, 0]]).unwrap();
-    assert_eq!(standard.mesh_chunks()[0].indices.len(), 36);
+    assert_eq!(
+        standard.mesh_chunks().cloned().collect::<Vec<_>>()[0]
+            .indices
+            .len(),
+        36
+    );
 }
 
 #[test]
 fn residency_preserves_states_and_rejects_invalid_empty_cell_state() {
     let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 2, []).unwrap();
-    let leases = VoxelChunkLeaseRegistry::default();
     let mut payload = VoxelChunkPayload::new([2; 3], vec![1; 8]);
     payload.states = (0..8).collect();
-    let revision = scene.source_revision();
     VoxelChunkResidencyService::apply(
         &mut scene,
-        &leases,
-        VoxelChunkResidencyTransaction {
-            expected_scene_source_revision: revision,
-            operations: &[VoxelChunkResidencyOperation::Admit {
-                chunk: VoxelChunkIdentity::ORIGIN,
-                payload,
-            }],
-        },
+        &[VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::ORIGIN,
+            payload,
+        }],
     )
     .unwrap();
     assert_eq!(
@@ -109,34 +120,31 @@ fn residency_preserves_states_and_rejects_invalid_empty_cell_state() {
     );
     let mut invalid = VoxelChunkPayload::new([2; 3], vec![0; 8]);
     invalid.states = vec![1; 8];
-    assert!(VoxelChunkResidencyService::prepare(
-        &scene,
-        &leases,
-        VoxelChunkResidencyTransaction {
-            expected_scene_source_revision: scene.source_revision(),
-            operations: &[VoxelChunkResidencyOperation::Admit {
-                chunk: VoxelChunkIdentity::new(1, 0, 0),
-                payload: invalid
-            }]
-        }
+    let before = scene.authority_hash();
+    assert!(VoxelChunkResidencyService::apply(
+        &mut scene,
+        &[VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::new(1, 0, 0),
+            payload: invalid
+        }]
     )
     .is_err());
+    assert_eq!(scene.authority_hash(), before);
+    assert_eq!(scene.resident_chunk_count(), 1);
 }
 
 #[test]
 fn invalid_state_is_rejected_without_publication() {
     let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[0, 0, 0]]).unwrap();
     let hash = scene.authority_hash();
-    let mut history = VoxelEditHistory::new(&scene);
-    assert!(history
-        .apply(
-            &mut scene,
-            &[VoxelEdit::SetState {
-                address: [0, 0, 0],
-                material_slot: 1,
-                state: 0x8000
-            }]
-        )
-        .is_err());
+    assert!(VoxelEditService::apply(
+        &mut scene,
+        &[VoxelEdit::SetState {
+            address: [0, 0, 0],
+            material_slot: 1,
+            state: 0x8000
+        }]
+    )
+    .is_err());
     assert_eq!(scene.authority_hash(), hash);
 }

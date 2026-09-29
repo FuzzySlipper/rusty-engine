@@ -54,18 +54,20 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         uint[] slots = new uint[ChunkEdge*ChunkEdge*ChunkEdge];
         for(int z=0;z<RoomWidth;z++) for(int y=0;y<RoomHeight;y++) for(int x=0;x<RoomWidth;x++)
             if(x==0||x==RoomWidth-1||y==0||y==RoomHeight-1||z==0||z==RoomWidth-1) slots[x+ChunkEdge*(y+ChunkEdge*z)] = 1;
-        VoxelResidencyOperation[] ops=[new(VoxelResidencyOperationKind.Admit,new(0,0,0),0,0,(uint)slots.Length)];
-        engine.Voxel.ApplyResidency(new(scene,0,VoxelResidencyHistoryPolicy.ResetToPublishedAuthority,ops,slots));
+        VoxelResidencyOperation[] ops=[new(VoxelResidencyOperationKind.Admit,new(0,0,0),0,(uint)slots.Length)];
+        engine.Voxel.ApplyResidency(new(scene,ops,slots));
         presentation = engine.VoxelScenePresentation.ProjectScene(new(scene,new VoxelSceneMaterialBinding[]{new(1,stone)}));
         litValue = Sample(InsideSample);
         blockedValue = Sample(OutsideSample);
         SetTorch(false); darkValue=Sample(InsideSample); SetTorch(true);
         if (!(litValue>0 && blockedValue==0 && darkValue==0)) throw new InvalidOperationException("light propagation proof failed");
-        var saved = new LightingSave(engine.Voxel.ExportHistory(new(scene)).ToArray(),descriptor);
+        // The product owns its room data and saves it with the light.
+        var saved = new LightingSave(slots,descriptor);
         byte[] bytes=JsonSerializer.SerializeToUtf8Bytes(saved,ProofJsonContext.Default.LightingSave);
         SetTorch(false);
         var restored=JsonSerializer.Deserialize(bytes,ProofJsonContext.Default.LightingSave)!;
-        engine.Voxel.RestoreHistory(new(scene,restored.Scene));
+        VoxelResidencyOperation[] replace=[new(VoxelResidencyOperationKind.Replace,new(0,0,0),0,(uint)restored.Room.Length)];
+        engine.Voxel.ApplyResidency(new(scene,replace,restored.Room));
         descriptor=restored.Torch;
         engine.Graphics.UpdateLight(new(torch,new(TorchId,false,0,descriptor)));
         roundTrip=MathF.Abs(Sample(InsideSample)-litValue)<RoundTripTolerance;
@@ -89,7 +91,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
     public void Dispose(){engine.CameraView.ClearSkyBackground(default); presentation?.Dispose(); torch.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
-internal sealed record LightingSave(byte[] Scene,LightDescriptor Torch);
+internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);
 [JsonSourceGenerationOptions(PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase,IncludeFields=true)]
 [JsonSerializable(typeof(LightingSave))]

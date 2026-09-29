@@ -81,14 +81,52 @@ impl NavProjection {
 
     #[cfg(test)]
     fn without_walkable(mut self, coord: VoxelCoord) -> Self {
-        self.walkable.remove(&coord);
-        self.projection_hash = hash_walkable(&self.walkable);
+        if self.walkable.remove(&coord) {
+            self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(coord));
+        }
         self
     }
 
     pub fn walkable_cells(&self) -> impl Iterator<Item = VoxelCoord> + '_ {
         self.walkable.iter().copied()
     }
+
+    /// Recompute walkability for `cells` after a local voxel or residency
+    /// change. `solid` reports a cell's collision solidity, or `None` outside
+    /// every resident chunk (never walkable). The hash follows each change.
+    pub fn refresh_cells(
+        &mut self,
+        config: NavProjectionConfig,
+        cells: impl IntoIterator<Item = VoxelCoord>,
+        solid: impl Fn(VoxelCoord) -> Option<bool>,
+    ) {
+        let is_solid = |cell| solid(cell).unwrap_or(false);
+        for cell in cells {
+            let walkable = solid(cell) == Some(false)
+                && (!config.require_solid_floor
+                    || is_solid(VoxelCoord::new(cell.x, cell.y - 1, cell.z)))
+                && (0..config.agent_height_voxels)
+                    .all(|dy| !is_solid(VoxelCoord::new(cell.x, cell.y + i64::from(dy), cell.z)));
+            if walkable {
+                if self.walkable.insert(cell) {
+                    self.projection_hash = self.projection_hash.wrapping_add(cell_hash(cell));
+                }
+            } else if self.walkable.remove(&cell) {
+                self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(cell));
+            }
+        }
+    }
+}
+
+/// Cells whose walkability can depend on the voxel at `voxel`: the cells an
+/// agent standing there or just above would occupy, and the cell resting on it.
+pub fn nav_cells_affected_by_voxel(
+    voxel: VoxelCoord,
+    config: NavProjectionConfig,
+) -> impl Iterator<Item = VoxelCoord> {
+    let below = i64::from(config.agent_height_voxels.saturating_sub(1));
+    let above = i64::from(config.require_solid_floor);
+    (voxel.y - below..=voxel.y + above).map(move |y| VoxelCoord::new(voxel.x, y, voxel.z))
 }
 
 /// Path query over an existing nav projection.
@@ -1544,12 +1582,16 @@ pub fn describe_nav_path(projection: &NavProjection, readout: &NavPathReadout) -
     out
 }
 
+/// Order-independent, so local refreshes can maintain it cell by cell.
 fn hash_walkable(walkable: &BTreeSet<VoxelCoord>) -> u64 {
+    walkable
+        .iter()
+        .fold(0u64, |sum, coord| sum.wrapping_add(cell_hash(*coord)))
+}
+
+fn cell_hash(coord: VoxelCoord) -> u64 {
     let mut h = fnv_offset();
-    feed_u64(&mut h, walkable.len() as u64);
-    for coord in walkable {
-        feed_coord(&mut h, *coord);
-    }
+    feed_coord(&mut h, coord);
     h
 }
 
@@ -2424,7 +2466,7 @@ mod tests {
             },
         )
         .expect("planar path");
-        assert_eq!(projection.projection_hash(), 0x59b4_0936_25b1_0e49);
+        assert_eq!(projection.projection_hash(), 0x3143_6e7d_f5df_baee);
         assert_eq!(planar.path_hash, 0x09ed_0284_f7c1_75e1);
 
         let mut world = solid_test_world();
@@ -2739,7 +2781,7 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first.movement_hash, 0);
-        assert_eq!(first.projection_hash, 0x59b4_0936_25b1_0e49);
+        assert_eq!(first.projection_hash, 0x3143_6e7d_f5df_baee);
         assert_eq!(first.path_hash, 0x09ed_0284_f7c1_75e1);
     }
 

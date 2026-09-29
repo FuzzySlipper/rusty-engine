@@ -41,7 +41,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private VoxelSceneMaterialBinding[] Bindings() => materials.Select((material,i)=>new VoxelSceneMaterialBinding((uint)i+1,material)).ToArray();
     public void Start()
     {
-        engine.Voxel.ApplyEdits(new(scene,0,Enumerable.Range(0,Count).Select(i=>new VoxelEdit(VoxelEditKind.Set,new((i%4)*2,0,(i/4)*2),(uint)i+1)).ToArray()));
+        engine.Voxel.ApplyEdits(new(scene,Enumerable.Range(0,Count).Select(i=>new VoxelEdit(VoxelEditKind.Set,new((i%4)*2,0,(i/4)*2),(uint)i+1)).ToArray()));
         presentation=engine.VoxelScenePresentation.ProjectSceneDirectional(new(scene,Bindings(),ReadOnlyMemory<VoxelSceneFaceMaterialBinding>.Empty));
         Reject();
     }
