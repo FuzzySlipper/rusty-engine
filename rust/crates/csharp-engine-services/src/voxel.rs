@@ -86,20 +86,6 @@ impl RuntimeSpatialBridge {
         }))
     }
 
-    fn read_resident_chunk_at(
-        &mut self,
-        request: NativeVoxelResidentChunkAtRequest,
-    ) -> Result<NativeVoxelChunkReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(
-            VoxelChunkResidencyService::resident_chunks(session.scene.as_ref())
-                .get(request.index as usize)
-                .copied()
-                .map(native_chunk_readout)
-                .unwrap_or_default(),
-        )
-    }
-
     fn apply_voxel_edits(
         &mut self,
         request: &NativeVoxelEditTransaction,
@@ -116,7 +102,6 @@ impl RuntimeSpatialBridge {
             let scene = Arc::make_mut(&mut session.scene);
             match engine_spatial::VoxelEditService::apply(scene, &edits) {
                 Ok(receipt) => {
-                    session.last_voxel_dirty_chunks = receipt.dirty_mesh_chunks.clone();
                     Ok(native_edit_receipt(&receipt))
                 }
                 Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
@@ -133,22 +118,6 @@ impl RuntimeSpatialBridge {
         })?
     }
 
-    fn read_dirty_chunk_at(
-        &mut self,
-        request: NativeVoxelDirtyChunkAtRequest,
-    ) -> Result<NativeVoxelDirtyChunkAtReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(session
-            .last_voxel_dirty_chunks
-            .get(request.index as usize)
-            .copied()
-            .map(|chunk| NativeVoxelDirtyChunkAtReceipt {
-                present: true,
-                chunk: native_chunk(chunk),
-            })
-            .unwrap_or_default())
-    }
-
     fn apply_voxel_residency(
         &mut self,
         request: &NativeVoxelResidencyTransaction,
@@ -159,11 +128,6 @@ impl RuntimeSpatialBridge {
             let scene = Arc::make_mut(&mut session.scene);
             match VoxelChunkResidencyService::apply(scene, &operations) {
                 Ok(receipt) => {
-                    session.last_voxel_dirty_chunks = receipt
-                        .dirty_chunks
-                        .iter()
-                        .map(|chunk| chunk.to_array())
-                        .collect();
                     Ok(native_residency_receipt(&receipt))
                 }
                 // A batch that changes nothing is an ordinary outcome.
@@ -383,23 +347,6 @@ unsafe extern "C" fn read_chunk(
     }
 }
 
-unsafe extern "C" fn read_resident_chunk_at(
-    context: *mut c_void,
-    request: NativeVoxelResidentChunkAtRequest,
-    output: *mut NativeVoxelChunkReadout,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_resident_chunk_at(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
 unsafe extern "C" fn configure_material_collision(
     context: *mut c_void,
     request: *const NativeVoxelMaterialCollisionRequest,
@@ -481,23 +428,6 @@ unsafe extern "C" fn apply_edits(
     }
 }
 
-unsafe extern "C" fn read_dirty_chunk_at(
-    context: *mut c_void,
-    request: NativeVoxelDirtyChunkAtRequest,
-    output: *mut NativeVoxelDirtyChunkAtReceipt,
-) -> i32 {
-    if context.is_null() || output.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_dirty_chunk_at(request) {
-        Ok(value) => {
-            unsafe { *output = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
 unsafe extern "C" fn apply_residency(
     context: *mut c_void,
     request: *const NativeVoxelResidencyTransaction,
@@ -537,9 +467,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         read,
         sample_direct_lighting,
         read_chunk,
-        read_resident_chunk_at,
         apply_edits,
-        read_dirty_chunk_at,
         apply_residency,
     }
 }

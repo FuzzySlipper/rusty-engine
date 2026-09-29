@@ -146,7 +146,6 @@ pub(crate) struct SpatialSession {
     config: NativeSpatialSessionConfig,
     pub(crate) scene: Arc<VoxelCollisionScene>,
     pub(crate) world_origin: engine_spatial::WorldOriginState,
-    pub(crate) last_voxel_dirty_chunks: Vec<[i64; 3]>,
     navigation: Option<NavigationState>,
     navigation_revision: u64,
     content_artifact: Option<SpatialContentIdentity>,
@@ -552,7 +551,6 @@ impl RuntimeSpatialBridge {
             value,
             SpatialSession {
                 config,
-                last_voxel_dirty_chunks: Vec::new(),
                 scene: Arc::clone(&scene),
                 world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,

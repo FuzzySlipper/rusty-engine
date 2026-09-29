@@ -83,27 +83,6 @@ pub struct NativeVoxelChunkReadout {
     pub solid_voxel_count: u64,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelResidentChunkAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelDirtyChunkAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeVoxelDirtyChunkAtReceipt {
-    pub present: bool,
-    pub chunk: NativeVoxelChunkIdentity,
-}
-
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelEditKind {
@@ -250,21 +229,11 @@ pub type NativeReadVoxelChunk = unsafe extern "C" fn(
     NativeVoxelChunkReadRequest,
     *mut NativeVoxelChunkReadout,
 ) -> i32;
-pub type NativeReadVoxelResidentChunkAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelResidentChunkAtRequest,
-    *mut NativeVoxelChunkReadout,
-) -> i32;
 pub type NativeApplyVoxelEdits = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelEditTransaction,
     *mut NativeVoxelEditReceipt,
     *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadVoxelDirtyChunkAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeVoxelDirtyChunkAtRequest,
-    *mut NativeVoxelDirtyChunkAtReceipt,
 ) -> i32;
 pub type NativeApplyVoxelResidency = unsafe extern "C" fn(
     *mut c_void,
@@ -282,9 +251,7 @@ pub struct NativeVoxelApi {
     pub read: NativeReadVoxel,
     pub sample_direct_lighting: NativeSampleVoxelDirectLighting,
     pub read_chunk: NativeReadVoxelChunk,
-    pub read_resident_chunk_at: NativeReadVoxelResidentChunkAt,
     pub apply_edits: NativeApplyVoxelEdits,
-    pub read_dirty_chunk_at: NativeReadVoxelDirtyChunkAt,
     pub apply_residency: NativeApplyVoxelResidency,
 }
 
