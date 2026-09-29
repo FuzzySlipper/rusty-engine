@@ -43,9 +43,13 @@ facts. A realtime product has a shape like:
 ```
 
 Input intents/mappings and optional UI-projection identity are declared with
-the corresponding `RustyEngineProduct*` MSBuild items/properties. The SDK owns
-the generated composition below `obj`; a Product must not check in a
-`NativeProduct` bridge, generated bindings, exports, or service-table code.
+the corresponding `RustyEngineProduct*` MSBuild items/properties. Declaring
+`RustyEngineProductEntryType` makes that project the product root: the SDK's
+generator adds its bind export and debug catalog to the project's own
+compilation, and the project builds as a CoreCLR component (runtimeconfig and
+dependencies beside the assembly). There is no second generated project. A
+Product must not check in a `NativeProduct` bridge, generated bindings,
+exports, or service-table code.
 
 Product code implements `IEngineProduct`, accepts `ProductCreateContext`, and
 keeps `IEngineContext` or the named services it needs. Exactly one concrete
@@ -341,8 +345,8 @@ runtime pack:
   --runtime /path/to/runtime-pack
 ```
 
-It builds the ordinary project and stages a loose Product directory in one
-MSBuild invocation, then launches the packaged host through CoreCLR. Staging
+It restores, builds and stages the ordinary project in one MSBuild invocation
+with no nested build, then launches the packaged host through CoreCLR. Staging
 copies only changed UI and content, removes deleted files, and writes
 `product.json` last. When declared inputs change, `rusty dev` routes the edit:
 
@@ -379,7 +383,7 @@ the UI compiler:
 </ItemGroup>
 ```
 
-Do not hook a UI compiler onto the SDK's staging or composition targets
+Do not hook a UI compiler onto the SDK's staging or validation targets
 yourself; that reruns it on every C# edit. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
 session. Use `--debugger` for managed breakpoint sessions; see
@@ -388,11 +392,17 @@ profiling, and the debugger's startup deadline.
 
 For explicit staging without launching, run
 `dotnet msbuild /path/to/Example.Game.csproj -t:StageRustyEngineCoreClrProduct -p:Configuration=Release`.
-A plain `dotnet build` compiles the project but does not request this staging
-target. Use the target (or `rusty dev`) to regenerate `obj/Rusty.Engine/Product`.
+A plain `dotnet build` produces a loadable product assembly but does not stage
+it. Use the target (or `rusty dev`) to regenerate `obj/Rusty.Engine/Product`.
+Staging runs `ValidateRustyEngineProduct`, the project's ordinary `Build`, and
+`StageRustyEngineProductAssets` in that one invocation. A compiled UI uses
+`RustyEngineProductUiBuildCommand` as shown above.
 
-The Product directory has `product.json`, managed output under `coreclr/`, and
-Product-owned `ui/` and `content/`. Engine JavaScript and host binaries stay in
+The Product directory has `product.json`, the project's build output under
+`coreclr/` (the product assembly keeps its own name), and Product-owned `ui/`
+and `content/`. Each stage copies the build output into a fresh `coreclr/`
+directory, because a running worker keeps the previous files mapped until the
+supervisor replaces it. Engine JavaScript and host binaries stay in
 the runtime pack. Product UI is DOM UI and accessibility only; the Engine
 renderer remains the owner of non-UI presentation.
 

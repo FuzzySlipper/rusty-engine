@@ -4,8 +4,6 @@ using Rusty.Engine.Debugging;
 using Rusty.Engine.Entities;
 using Rusty.Engine.NativeProduct;
 
-[assembly: EngineProduct(typeof(EntityStoreDebugFixture.Product))]
-
 namespace EntityStoreDebugFixture;
 
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource

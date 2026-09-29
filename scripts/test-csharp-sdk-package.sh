@@ -6,9 +6,9 @@ usage() {
 }
 
 # The default remains the broad package-consumer proof.  CI's ordinary C# path
-# uses --coreclr-smoke, which keeps the package → generated composition → host
+# uses --coreclr-smoke, which keeps the package → product build → host
 # lifecycle seam without also paying for source-override and NativeAOT fidelity
-# coverage.  --aot adds the generated NativeAOT composition to that smoke.
+# coverage.  --aot adds the NativeAOT publish of the same product to that smoke.
 coreclr_smoke=false
 aot_requested=false
 while (($#)); do
@@ -377,19 +377,27 @@ staged_product_directory=$(cd "$consumer_dir" && DOTNET_CLI_HOME="$consumer_home
     echo "test-csharp-sdk-package: CoreCLR staging did not emit product.json." >&2
     exit 1
 }
-[[ -f "$staged_product_directory/coreclr/Rusty.Engine.Product.dll" ]] || {
-    echo "test-csharp-sdk-package: CoreCLR staging did not emit the generated composition assembly." >&2
+[[ -f "$staged_product_directory/coreclr/Consumer.dll" ]] || {
+    echo "test-csharp-sdk-package: CoreCLR staging did not emit the product assembly." >&2
     exit 1
 }
-if ! find "$consumer_dir/obj/Rusty.Engine/Composition/coreclr/obj" -type f -name 'ProductExports.g.cs' -print -quit | grep -q .; then
-    echo "test-csharp-sdk-package: first CoreCLR staging did not generate ProductExports for the composition assembly." >&2
+if ! find "$consumer_dir/obj" -type f -name 'ProductExports.g.cs' -print -quit | grep -q .; then
+    echo "test-csharp-sdk-package: the product compilation did not generate ProductExports." >&2
     exit 1
 fi
-[[ -f "$staged_product_directory/coreclr/Rusty.Engine.Product.runtimeconfig.json" ]] || {
-    echo "test-csharp-sdk-package: CoreCLR staging did not emit the generated runtimeconfig." >&2
+if [[ -e "$consumer_dir/obj/Rusty.Engine/Composition" ]]; then
+    echo "test-csharp-sdk-package: staging generated a separate composition project." >&2
+    exit 1
+fi
+if grep -aq 'ProductExports' "$consumer_dir/bin/Debug/net10.0/Library.dll"; then
+    echo "test-csharp-sdk-package: a library that references Rusty.Engine received a product export." >&2
+    exit 1
+fi
+[[ -f "$staged_product_directory/coreclr/Consumer.runtimeconfig.json" ]] || {
+    echo "test-csharp-sdk-package: CoreCLR staging did not emit the product runtimeconfig." >&2
     exit 1
 }
-[[ -f "$staged_product_directory/coreclr/Rusty.Engine.dll" && -f "$staged_product_directory/coreclr/Rusty.Engine.Product.deps.json" ]] || {
+[[ -f "$staged_product_directory/coreclr/Rusty.Engine.dll" && -f "$staged_product_directory/coreclr/Consumer.deps.json" ]] || {
     echo "test-csharp-sdk-package: CoreCLR staging did not retain its managed dependency closure." >&2
     exit 1
 }
@@ -404,7 +412,7 @@ jq -e '.bundles | map(.id) == ["mixed", "rules"] and
     echo "test-csharp-sdk-package: SDK staging did not generate the mixed bundle inventory." >&2
     exit 1
 }
-jq -e '.coreclr.assembly == "coreclr/Rusty.Engine.Product.dll" and (.nativeAot | not)' \
+jq -e '.coreclr.assembly == "coreclr/Consumer.dll" and .coreclr.runtimeconfig == "coreclr/Consumer.runtimeconfig.json" and (.nativeAot | not)' \
     "$staged_product_directory/product.json" >/dev/null || {
     echo "test-csharp-sdk-package: CoreCLR manifest shape is not the V1 Product bundle." >&2
     exit 1
@@ -427,7 +435,7 @@ jq -e '.renderer.lighting.defaultLights == {"world":"disabled","viewmodel":"neut
 if (
     cd "$consumer_dir"
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet msbuild Consumer.csproj -t:GenerateRustyEngineProductComposition \
+        dotnet msbuild Consumer.csproj -t:ValidateRustyEngineProduct \
             -p:RustyEngineProductDefaultWorldLights=Neutral \
             > "$work_dir/invalid-default-world-lights.log" 2>&1
 ); then
@@ -455,8 +463,8 @@ printf '<!doctype html><title>Rusty Engine C# package smoke</title>\n' > "$host_
 if [[ "$coreclr_smoke" == true ]]; then
     cargo run --manifest-path "$repo_root/Cargo.toml" -p csharp-product-runtime --bin rusty-product-host --locked -- \
         --loader coreclr \
-        --library "$staged_product_directory/coreclr/Rusty.Engine.Product.dll" \
-        --runtimeconfig "$staged_product_directory/coreclr/Rusty.Engine.Product.runtimeconfig.json" \
+        --library "$staged_product_directory/coreclr/Consumer.dll" \
+        --runtimeconfig "$staged_product_directory/coreclr/Consumer.runtimeconfig.json" \
         --bundle-dir "$host_bundle_dir" \
         --content-dir "$staged_product_directory/content" \
         --mode realtime \
@@ -478,15 +486,15 @@ if [[ "$run_aot" == true ]]; then
                 > "$work_dir/nativeaot-staging.log" 2>&1
     )
     if grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log"; then
-        echo "test-csharp-sdk-package: generated CoreCLR/NativeAOT composition emitted compiler or analyzer warnings." >&2
+        echo "test-csharp-sdk-package: CoreCLR/NativeAOT product build emitted compiler or analyzer warnings." >&2
         cat "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log" >&2
         exit 1
     fi
-    [[ -f "$staged_product_directory/native/Rusty.Engine.Product.so" ]] || {
+    [[ -f "$staged_product_directory/native/Consumer.so" ]] || {
         echo "test-csharp-sdk-package: explicit linux-x64 NativeAOT verification did not stage its module." >&2
         exit 1
     }
-    jq -e '.nativeAot.module == "native/Rusty.Engine.Product.so" and .coreclr.assembly == "coreclr/Rusty.Engine.Product.dll"' \
+    jq -e '.nativeAot.module == "native/Consumer.so" and .coreclr.assembly == "coreclr/Consumer.dll"' \
         "$staged_product_directory/product.json" >/dev/null || {
         echo "test-csharp-sdk-package: NativeAOT staging did not preserve the same Product bundle." >&2
         exit 1
@@ -494,7 +502,7 @@ if [[ "$run_aot" == true ]]; then
     # Exercise the generated package consumer through the native loader too.
     # A checked legacy composition is not the downstream NativeAOT path.
     cargo run --manifest-path "$repo_root/Cargo.toml" -p csharp-product-runtime --bin rusty-product-host --locked -- \
-        --library "$staged_product_directory/native/Rusty.Engine.Product.so" \
+        --library "$staged_product_directory/native/Consumer.so" \
         --bundle-dir "$host_bundle_dir" \
         --content-dir "$staged_product_directory/content" \
         --mode realtime \
@@ -504,13 +512,13 @@ if [[ "$run_aot" == true ]]; then
         --port 0 \
         --exercise
 elif grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log"; then
-    echo "test-csharp-sdk-package: generated CoreCLR composition emitted compiler or analyzer warnings." >&2
+    echo "test-csharp-sdk-package: CoreCLR product build emitted compiler or analyzer warnings." >&2
     cat "$work_dir/coreclr-staging.log" >&2
     exit 1
 fi
 
-# The generated composition owns its interop warning baseline. It must not
-# become a package-wide NoWarn that hides an ordinary product warning.
+# The SDK's interop warning baseline stays in its own generated source. It must
+# not become a package-wide NoWarn that hides an ordinary product warning.
 if [[ "$coreclr_smoke" == true ]]; then
     echo "csharp SDK CoreCLR package smoke passed"
     exit 0

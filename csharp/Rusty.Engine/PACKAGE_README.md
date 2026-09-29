@@ -1,8 +1,10 @@
 # Rusty.Engine C# SDK
 
 This package is the managed C# surface for Rusty Engine products. It contains
-the generated Engine contracts and values, reusable managed helpers, and the
-product generator used to create the CoreCLR and NativeAOT product boundary.
+the generated Engine contracts and values, the compiled native bridge, reusable
+managed helpers, and the product generator. The project that sets
+`RustyEngineProductEntryType` compiles its own small CoreCLR/NativeAOT bind
+export and debug catalog; no second project is generated.
 
 Reference one immutable `Rusty.Engine` package built from the same Engine
 revision as the runtime pack that hosts the product. The normal development

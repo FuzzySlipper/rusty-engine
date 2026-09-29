@@ -5,11 +5,13 @@
     <!-- Loaded as a CoreCLR component by the runtime-pack proof. -->
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <Nullable>enable</Nullable>
+    <RustyEngineProductEntryType>DebugExecutionContextFixture.FixtureProduct</RustyEngineProductEntryType>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../csharp/Rusty.Engine/Rusty.Engine.csproj" />
     <ProjectReference Include="../../csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
+    <CompilerVisibleProperty Include="RustyEngineProductEntryType" />
   </ItemGroup>
 </Project>

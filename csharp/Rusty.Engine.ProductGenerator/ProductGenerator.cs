@@ -5,42 +5,36 @@ namespace Rusty.Engine.ProductGenerator;
 [Generator]
 public sealed class ProductGenerator : IIncrementalGenerator
 {
-    private const string ProductAttribute = "Rusty.Engine.EngineProductAttribute";
+    // Set by the product project and made visible to the compiler by the SDK
+    // targets. Library projects that reference Rusty.Engine leave it empty.
+    private const string EntryTypeProperty = "build_property.RustyEngineProductEntryType";
+
+    private static readonly DiagnosticDescriptor MissingProductType = new(
+        "RUSTY001",
+        "Product entry type not found",
+        "RustyEngineProductEntryType '{0}' does not name a type in this compilation or its references",
+        "Rusty.Engine",
+        DiagnosticSeverity.Error,
+        true);
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        context.RegisterSourceOutput(context.CompilationProvider, static (output, compilation) =>
+        IncrementalValueProvider<string> entryType = context.AnalyzerConfigOptionsProvider
+            .Select(static (options, _) => options.GlobalOptions.TryGetValue(EntryTypeProperty, out string? value) ? value.Trim() : string.Empty);
+        context.RegisterSourceOutput(context.CompilationProvider.Combine(entryType), static (output, input) =>
         {
-            INamedTypeSymbol[] candidates = compilation.Assembly.GetAttributes()
-                .Where(attribute => attribute.AttributeClass?.ToDisplayString() == ProductAttribute)
-                .Select(ProductType)
-                .Where(product => product is not null)
-                .Cast<INamedTypeSymbol>()
-                .ToArray();
-            // The analyzer is carried transitively by Rusty.Engine. Most of
-            // those compilations are ordinary libraries, not product roots;
-            // do not add a bind export or require an attribute.
-            if (candidates.Length == 0) return;
-            if (candidates.Length != 1)
+            (Compilation compilation, string entryTypeName) = input;
+            if (entryTypeName.Length == 0) return;
+            INamedTypeSymbol? product = compilation.GetTypeByMetadataName(entryTypeName);
+            if (product is null)
             {
-                output.ReportDiagnostic(Diagnostic.Create(
-                    new DiagnosticDescriptor("RUSTY001", "One NativeProduct selection is required", "Select exactly one product with [assembly: EngineProduct(typeof(...))]", "Rusty.Engine", DiagnosticSeverity.Error, true),
-                    Location.None));
+                output.ReportDiagnostic(Diagnostic.Create(MissingProductType, Location.None, entryTypeName));
                 return;
             }
 
-            DebugCommandCatalogGenerator.Generate(output, compilation);
-            output.AddSource("ProductExports.g.cs", Exports(candidates[0]));
+            DebugCommandCatalogGenerator.Generate(output, compilation, product);
+            output.AddSource("ProductExports.g.cs", Exports(product));
         });
-    }
-
-    private static INamedTypeSymbol? ProductType(AttributeData attribute)
-    {
-        if (attribute.ConstructorArguments.Length != 1)
-        {
-            return null;
-        }
-        return attribute.ConstructorArguments[0].Value as INamedTypeSymbol;
     }
 
     private static string Exports(INamedTypeSymbol product)

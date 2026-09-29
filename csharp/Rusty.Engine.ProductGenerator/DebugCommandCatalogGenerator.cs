@@ -12,7 +12,6 @@ internal static class DebugCommandCatalogGenerator
     private const string DebugCommandAttribute = "Rusty.Engine.Debugging.DebugCommandAttribute";
     private const string DebugCommandModule = "Rusty.Engine.Debugging.IDebugCommandModule";
     private const string DebugCommandResult = "Rusty.Engine.Debugging.DebugCommandResult";
-    private const string EngineProductAttribute = "Rusty.Engine.EngineProductAttribute";
 
     private static readonly DiagnosticDescriptor InvalidCommand = new(
         "RUSTYDBG001",
@@ -30,7 +29,7 @@ internal static class DebugCommandCatalogGenerator
         DiagnosticSeverity.Error,
         true);
 
-    internal static void Generate(SourceProductionContext output, Compilation compilation)
+    internal static void Generate(SourceProductionContext output, Compilation compilation, INamedTypeSymbol product)
     {
         INamedTypeSymbol? moduleInterface = compilation.GetTypeByMetadataName(DebugCommandModule);
         if (moduleInterface is null)
@@ -39,7 +38,7 @@ internal static class DebugCommandCatalogGenerator
         }
 
         List<Command> commands = new();
-        foreach (INamedTypeSymbol type in AllTypes(compilation))
+        foreach (INamedTypeSymbol type in AllTypes(compilation, product.ContainingAssembly))
         {
             foreach (IMethodSymbol method in type.GetMembers().OfType<IMethodSymbol>())
             {
@@ -166,10 +165,10 @@ internal static class DebugCommandCatalogGenerator
         => accessibility == Accessibility.Public
             || (localModule && (accessibility == Accessibility.Internal || accessibility == Accessibility.ProtectedOrInternal));
 
-    private static IEnumerable<INamedTypeSymbol> AllTypes(Compilation compilation)
+    private static IEnumerable<INamedTypeSymbol> AllTypes(Compilation compilation, IAssemblySymbol productAssembly)
     {
         HashSet<string> visited = new(StringComparer.Ordinal);
-        foreach (IAssemblySymbol assembly in ProductAssemblies(compilation))
+        foreach (IAssemblySymbol assembly in ProductAssemblies(compilation, productAssembly))
         {
             foreach (INamedTypeSymbol type in AllTypes(assembly.GlobalNamespace))
             {
@@ -181,19 +180,12 @@ internal static class DebugCommandCatalogGenerator
         }
     }
 
-    private static IEnumerable<IAssemblySymbol> ProductAssemblies(Compilation compilation)
+    private static IEnumerable<IAssemblySymbol> ProductAssemblies(Compilation compilation, IAssemblySymbol productAssembly)
     {
         HashSet<string> visited = new(StringComparer.Ordinal);
-        IAssemblySymbol[] productAssemblies = compilation.Assembly.GetAttributes()
-                .Where(attribute => attribute.AttributeClass?.ToDisplayString() == EngineProductAttribute)
-                .Select(attribute => attribute.ConstructorArguments.Length == 1 ? attribute.ConstructorArguments[0].Value as INamedTypeSymbol : null)
-                .Where(type => type is not null)
-                .Select(type => type!.ContainingAssembly)
-                .ToArray();
-        foreach (IAssemblySymbol assembly in new[] { compilation.Assembly }
-            .Concat(productAssemblies)
+        foreach (IAssemblySymbol assembly in new[] { compilation.Assembly, productAssembly }
             .Concat(DirectReferences(compilation.Assembly))
-            .Concat(productAssemblies.SelectMany(DirectReferences)))
+            .Concat(DirectReferences(productAssembly)))
         {
             if (visited.Add(assembly.Identity.GetDisplayName()))
             {

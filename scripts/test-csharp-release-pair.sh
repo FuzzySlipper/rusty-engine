@@ -153,7 +153,7 @@ mkdir -p "$consumer_home" "$consumer_packages"
 )
 staged=$(cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
     dotnet msbuild PairConsumer.csproj -getProperty:RustyEngineStagedProductDirectory | tail -n 1)
-[[ -f "$staged/product.json" && -f "$staged/coreclr/Rusty.Engine.Product.dll" ]] || {
+[[ -f "$staged/product.json" && -f "$staged/coreclr/PairConsumer.dll" ]] || {
     echo "RUSTY_ENGINE_PAIR_TEST_STAGE: package-only consumer did not stage a CoreCLR product" >&2
     exit 1
 }

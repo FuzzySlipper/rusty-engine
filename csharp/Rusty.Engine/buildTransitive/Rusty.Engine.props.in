@@ -8,9 +8,9 @@
     <!-- Source use is intentionally opt-in; no checkout is discovered automatically. -->
     <RustyEngineUseSourceDevelopment Condition="'$(RustyEngineUseSourceDevelopment)' == ''">false</RustyEngineUseSourceDevelopment>
     <!--
-      One ordinary project declares this concrete product type. The SDK writes
-      the NativeAOT composition around it below obj; this is deliberately not
-      an assembly scan or a product framework registration point.
+      One ordinary project declares this concrete product type and becomes the
+      product root. The SDK generator reads it to emit that project's bind
+      export; this is deliberately not an assembly scan or a registration point.
     -->
     <RustyEngineProductEntryType Condition="'$(RustyEngineProductEntryType)' == ''"></RustyEngineProductEntryType>
     <RustyEngineProductId Condition="'$(RustyEngineProductId)' == ''">product.local</RustyEngineProductId>

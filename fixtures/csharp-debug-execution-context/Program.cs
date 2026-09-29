@@ -1,8 +1,6 @@
 using Rusty.Engine;
 using Rusty.Engine.Debugging;
 
-[assembly: EngineProduct(typeof(DebugExecutionContextFixture.FixtureProduct))]
-
 namespace DebugExecutionContextFixture;
 
 // The runtime-pack proof loads this product through the CoreCLR host.

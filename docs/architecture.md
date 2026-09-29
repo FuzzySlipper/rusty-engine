@@ -257,8 +257,8 @@ resource release removes its canonical definition and browser/GPU realization.
 
 The Engine publishes two matched artifacts: an immutable `Rusty.Engine` SDK
 package and a runtime pack containing `rusty`, `rusty-product-host`, and the
-Engine-owned browser shell. The package generates composition below `obj` and
-stages a loose Product directory. `rusty dev` asks the package to stage that
+Engine-owned browser shell. The package makes the product project build its
+own bind export and stages a loose Product directory from that build. `rusty dev` asks the package to stage that
 directory, launches CoreCLR, and watches only the declared Product inputs.
 
 Packaged CoreCLR launches (`rusty dev` and a direct `rusty-product-host

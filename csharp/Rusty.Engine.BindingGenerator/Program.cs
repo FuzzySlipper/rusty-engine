@@ -471,10 +471,6 @@ internal static class Emit
         output.AppendLine("    public InputBinding Binding { get; }").AppendLine("    public InputContext Context { get; }").AppendLine("    public ReadOnlyMemory<ProductInputDescriptor> DirectIntents { get; }").AppendLine("    public ReadOnlyMemory<ProductInputMapping> PhysicalMappings { get; }").AppendLine("    public InputCursorMode CursorMode { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly record struct ProductInputEvent(InputEventKind Kind, InputEdge Edge, InputDevice Device, InputChannel Channel, InputAxis Axis, KeyboardControl Keyboard, PointerButton PointerButton, ControllerButton ControllerButton, ControllerAxis ControllerAxis, InputClearReason ClearReason, InputValueKind ValueKind, InputPhase Phase, InputProvenance Provenance, InputBinding Binding, InputSequence Sequence, InputContext Context, float X, float Y, ReadOnlyMemory<byte> Label, ReadOnlyMemory<byte> MappingId, ReadOnlyMemory<byte> Intent, ReadOnlyMemory<byte> PayloadContract, ReadOnlyMemory<byte> PayloadData);");
         output.AppendLine();
-        output.AppendLine("[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]");
-        output.AppendLine("public sealed class EngineProductAttribute : Attribute").AppendLine("{");
-        output.AppendLine("    public EngineProductAttribute(Type productType) => ProductType = productType ?? throw new ArgumentNullException(nameof(productType));");
-        output.AppendLine("    public Type ProductType { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public interface IEngineProduct : IDisposable").AppendLine("{");
         output.AppendLine("    void Start();");
         output.AppendLine("    // Legacy source compatibility; renderer attachment reads committed Engine state.");
