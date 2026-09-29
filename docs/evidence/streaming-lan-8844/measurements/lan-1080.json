@@ -1,0 +1,23 @@
+{
+ "label": "stream-lan-1080",
+ "origin": "http://192.168.1.10:4394",
+ "viewport": [
+  1920,
+  1080
+ ],
+ "webglRenderer": "ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon 8060S Graphics (RADV STRIX_HALO) (0x00001586)), radv)",
+ "bytesPerSecond": {
+  "sse": 67186,
+  "frames": 12556996,
+  "other": 172
+ },
+ "inputToVisibleChangeMs": {
+  "trials": 40,
+  "measured": 40,
+  "median": 30.9,
+  "p90": 37.6,
+  "min": 21.3,
+  "max": 52.5
+ },
+ "blankSamples": 0
+}

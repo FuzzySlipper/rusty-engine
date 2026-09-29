@@ -11,12 +11,17 @@
 // pixels differ from the frame before the key. The turn is undone with "j"
 // between trials.
 import { createRequire } from 'node:module';
-const require = createRequire(new URL('../../../../render/node_modules/.pnpm/playwright-core@1.61.1/node_modules/playwright-core/package.json', import.meta.url));
+// PLAYWRIGHT_CORE (a playwright-core directory) and CHROMIUM (an executable)
+// let the script run on a viewer machine without the Engine checkout.
+const require = createRequire(process.env.PLAYWRIGHT_CORE
+  ? `${process.env.PLAYWRIGHT_CORE}/package.json`
+  : new URL('../../../../render/node_modules/.pnpm/playwright-core@1.61.1/node_modules/playwright-core/package.json', import.meta.url));
 const { chromium } = require('playwright-core');
 
 const [origin, label, width = '1280', height = '720', trials = '15'] = process.argv.slice(2);
 // The crew-services GPU flags: ANGLE on Vulkan (RADV) for WebGL.
 const browser = await chromium.launch({
+  ...(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {}),
   args: ['--enable-gpu', '--use-angle=vulkan', '--disable-vulkan-surface', '--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan'],
 });
 const page = await browser.newPage({ viewport: { width: Number(width), height: Number(height) } });

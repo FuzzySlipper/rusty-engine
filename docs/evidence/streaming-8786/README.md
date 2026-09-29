@@ -111,7 +111,7 @@ Runtime stage medians (`engine.renderer.status` → `stream`; `measurements/stre
 - **720p is at parity with Three** (within about 4 ms median), and it is the development default the harness uses.
 - **At 1080p the page is the bottleneck.** JPEG decode takes 12.7 ms per frame, and under the machine's load the page occasionally stalls: `scripts/draw-gaps.mjs` drew about 45 of 60 fps, with gaps up to 170 ms. That gives the p90 tail. The runtime side is not saturated.
 - **Measurements vary with other lanes' builds.** Repeated 720p stream runs gave 25 to 42 ms medians; Three gave 27 to 31 ms.
-- **Not measured over a LAN hop.** No second machine was reachable. #8844 records the run. At the measured sizes one hop adds one frame's transfer: 88 KB is about 0.7 ms on 1 GbE.
+- **Not measured over a LAN hop here.** No second machine was reachable. [#8844](../streaming-lan-8844/README.md) measured it later: the same bandwidth at 60 fps, and 720p latency 8 ms above localhost. At the measured sizes one hop adds one frame's transfer: 88 KB is about 0.7 ms on 1 GbE.
 
 ### How the transport got here
 

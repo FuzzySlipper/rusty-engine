@@ -1,0 +1,31 @@
+{
+ "frames": 602,
+ "framesPerSecond": 60.1,
+ "payloadBytesPerSecond": 5336827,
+ "medianFrameBytes": 88825.0,
+ "medianGapMs": 16.66,
+ "p95GapMs": 17.98,
+ "skippedSequences": 0,
+ "first": {
+  "sequence": 23735,
+  "step": 25964,
+  "size": [
+   1280,
+   720
+  ],
+  "format": 1,
+  "held": false,
+  "bytes": 88812
+ },
+ "last": {
+  "sequence": 24336,
+  "step": 26565,
+  "size": [
+   1280,
+   720
+  ],
+  "format": 1,
+  "held": false,
+  "bytes": 88825
+ }
+}
