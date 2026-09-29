@@ -11,6 +11,7 @@
 //! Only this crate depends on kira and cpal.
 
 mod opus;
+mod soundtrack;
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
@@ -259,6 +260,8 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     /// longer reported, but stoppable at shutdown.
     released_one_shots: Vec<Playback>,
     facts: Vec<RealizedAudioFact>,
+    /// The playing video's own sound, outside the Engine buses.
+    soundtrack: Option<StreamingSoundHandle<FromFileError>>,
 }
 
 impl AudioRealizer<DefaultBackend> {
@@ -309,6 +312,7 @@ impl<B: Backend> AudioRealizer<B> {
             one_shots: Vec::new(),
             released_one_shots: Vec::new(),
             facts: Vec::new(),
+            soundtrack: None,
         })
     }
 
@@ -377,6 +381,7 @@ impl<B: Backend> AudioRealizer<B> {
     /// down. Unlike [`Self::reset`], nothing keeps playing.
     pub fn stop_all(&mut self) {
         self.reset();
+        self.stop_soundtrack();
         for playback in &mut self.released_one_shots {
             playback.stop();
         }
@@ -393,6 +398,46 @@ impl<B: Backend> AudioRealizer<B> {
                 bus.resume(IMMEDIATE);
             }
         }
+        if let Some(soundtrack) = &mut self.soundtrack {
+            if suspended {
+                soundtrack.pause(IMMEDIATE);
+            } else {
+                soundtrack.resume(IMMEDIATE);
+            }
+        }
+    }
+
+    /// Play a WebM video clip's own sound from its start, replacing any
+    /// other. A clip without an Opus track plays silently. The browser's
+    /// video element played it outside the Engine buses; so does this.
+    pub fn play_soundtrack(&mut self, clip: &[u8]) -> Result<(), String> {
+        self.stop_soundtrack();
+        let clip = render_video::VideoClip::open(clip).map_err(|error| error.to_string())?;
+        if clip.audio.is_none() {
+            return Ok(());
+        }
+        let decoder =
+            soundtrack::SoundtrackDecoder::new(clip).map_err(|error| error.to_string())?;
+        let handle = self
+            .manager
+            .play(StreamingSoundData::from_decoder(decoder))
+            .map_err(|error| error.to_string())?;
+        self.soundtrack = Some(handle);
+        Ok(())
+    }
+
+    pub fn stop_soundtrack(&mut self) {
+        if let Some(mut soundtrack) = self.soundtrack.take() {
+            soundtrack.stop(IMMEDIATE);
+        }
+    }
+
+    /// Seconds into the playing soundtrack, if one is playing.
+    pub fn soundtrack_position(&self) -> Option<f64> {
+        self.soundtrack
+            .as_ref()
+            .filter(|soundtrack| soundtrack.state() != PlaybackState::Stopped)
+            .map(StreamingSoundHandle::position)
     }
 
     /// Drops decoded data for clips the Engine no longer owns, unless a

@@ -1071,7 +1071,10 @@ impl CsharpProductRuntime {
         load_api: impl FnOnce() -> Result<LoadedProductApi, CsharpProductRuntimeError>,
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
-        let audio_output = audio_output::AudioOutput::from_environment()?;
+        // The desktop window draws video, and so plays its sound too.
+        let audio_output = audio_output::AudioOutput::from_environment(
+            frame_output::render_output_mode()? == Some("window"),
+        )?;
         let frame_output = frame_output::FrameOutput::from_environment(
             config.renderer_options,
             config.window_gpu.as_ref(),

@@ -9,11 +9,13 @@
 //! draws it to its window. Either way each committed call's renderer
 //! publications are applied as they are committed, and the browser shell
 //! shows the product UI without realizing the world with Three. The
-//! publications still reach the browser; its surface ignores the world and
-//! realizes only audio and video.
+//! publications still reach the browser; its surface ignores the world. The
+//! browser's video element played over the page UI, which a streamed frame
+//! lies under, so the stream leaves video to the browser; the window draws
+//! it over the UI itself.
 //!
-//! Animation facts reach the Engine from this renderer, through the same
-//! realization feedback the browser reports.
+//! Animation and video facts reach the Engine from this renderer, through
+//! the same realization feedback the browser reports.
 //! `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of JPEG, to
 //! measure what the encoder saves.
 //!
@@ -29,12 +31,14 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use csharp_engine_services::{AnimationRealizationFact, EngineServiceSet};
+use csharp_engine_abi::NativeVideoFailureCode;
+use csharp_engine_services::{AnimationRealizationFact, EngineServiceSet, VideoRealizationFact};
 use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::RendererViewTarget;
 use render_stream::{
     AnimationFact, DrawnFrame, FrameStreamer, Gpu, RendererCameraPose, RendererOptions,
     RendererViewComposition, ResourceSource, SceneDriver, SceneState, StreamFormat, StreamStats,
+    VideoFact, VideoFailure,
 };
 use runtime_publication::RuntimePublication;
 use serde_json::{json, Value};
@@ -80,6 +84,7 @@ pub(crate) struct FrameOutput {
     /// The stream's render thread and frame route, when frames are streamed.
     stream: Option<(FrameStreamer, Arc<ProductDevFrameStream>)>,
     next_fact_id: u64,
+    next_video_fact_id: u64,
 }
 
 impl FrameOutput {
@@ -110,6 +115,12 @@ impl FrameOutput {
                     }
                 };
                 let gpu = Gpu::headless().map_err(|gpu| error(gpu.to_string()))?;
+                // The browser's video element plays over the page UI; a
+                // streamed frame lies under it.
+                let options = RendererOptions {
+                    video: false,
+                    ..options
+                };
                 let driver = SceneDriver::new(gpu, options);
                 let frames = ProductDevFrameStream::new();
                 let streamer =
@@ -122,6 +133,7 @@ impl FrameOutput {
             driver,
             stream,
             next_fact_id: 1,
+            next_video_fact_id: 1,
         }))
     }
 
@@ -182,6 +194,36 @@ impl FrameOutput {
                 .map(|fact| self.engine_fact(fact.clone()))
                 .collect();
             services.ingest_animation_realization_feedback(false, 0, facts);
+        }
+        let facts = self.driver.take_video_facts();
+        for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
+            let facts: Vec<_> = chunk.iter().map(|fact| self.video_fact(*fact)).collect();
+            // The Engine rejects no fact this renderer produces; one it did
+            // would be the Engine's defect, not the product's.
+            let _ = services.ingest_video_realization_feedback(false, 0, facts);
+        }
+    }
+
+    fn video_fact(&mut self, fact: VideoFact) -> VideoRealizationFact {
+        let fact_id = self.next_video_fact_id;
+        self.next_video_fact_id += 1;
+        match fact {
+            VideoFact::Completed { handle } => VideoRealizationFact::Completed {
+                fact_id,
+                handle: handle.raw(),
+            },
+            VideoFact::Skipped { handle } => VideoRealizationFact::Skipped {
+                fact_id,
+                handle: handle.raw(),
+            },
+            VideoFact::Failed { handle, failure } => VideoRealizationFact::Failed {
+                fact_id,
+                handle: handle.raw(),
+                failure: match failure {
+                    VideoFailure::DecodeFailed => NativeVideoFailureCode::DecodeFailed,
+                    VideoFailure::HostFailure => NativeVideoFailureCode::HostFailure,
+                },
+            },
         }
     }
 

@@ -62,7 +62,11 @@ ops are then removed from the published presentation, so the browser neither
 plays nor reports them. The device follows the runtime: it plays only while the
 product runs, a binding change (Start, Restart, fault) replays the committed
 baseline, and Shutdown stops every voice. Natural completions and device
-diagnostics become the same realization facts the browser reports.
+diagnostics become the same realization facts the browser reports. The
+[desktop shell](desktop-shell.md) turns this on for its runtime, and there
+the device also plays a playing video clip's Opus soundtrack (demuxed by
+`render-video`) from the clip's start, outside the Engine buses, as the
+browser's video element did.
 
 WAV decodes once per clip; Vorbis, MP3 and FLAC stream from their encoded bytes
 per voice (symphonia). Opus streams the same way: symphonia demuxes the Ogg

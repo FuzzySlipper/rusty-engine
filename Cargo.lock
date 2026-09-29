@@ -2971,6 +2971,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "matroska-demuxer"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cbf36668475a45a46bf8710e927e7458b7c387e7c46ddb5457ae0c71cf5e817"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4314,6 +4320,7 @@ dependencies = [
  "opus-decoder",
  "render-model",
  "render-presentation",
+ "render-video",
  "symphonia",
 ]
 
@@ -4374,6 +4381,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-video"
+version = "0.1.0"
+dependencies = [
+ "matroska-demuxer",
+ "rusty_vp9",
+]
+
+[[package]]
 name = "render-wgpu"
 version = "0.1.0"
 dependencies = [
@@ -4390,6 +4405,7 @@ dependencies = [
  "render-model",
  "render-presentation",
  "render-projection",
+ "render-video",
  "serde",
  "serde_json",
  "welding",
@@ -4610,6 +4626,12 @@ dependencies = [
  "sha2 0.10.9",
  "signal-hook",
 ]
+
+[[package]]
+name = "rusty_vp9"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4f7698cee9ea00ee8ee104766c47fced2fb60486a2ce6e854ab453533dbd63b"
 
 [[package]]
 name = "safe_arch"

@@ -725,6 +725,12 @@ impl EngineServiceSet {
         self.audio.snapshot_frame()
     }
 
+    /// The committed video playback (its play op, if a clip is playing),
+    /// for an in-process video realization.
+    pub fn video_snapshot_frame(&self) -> render_presentation::PresentationFrameDiff {
+        self.video.snapshot_frame()
+    }
+
     /// The Engine presentation timeline the committed world has reached.
     pub fn presentation_elapsed_seconds(&self) -> f64 {
         self.presentation_world.elapsed_seconds()

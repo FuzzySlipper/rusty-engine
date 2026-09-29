@@ -1,0 +1,36 @@
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+anim0000.webm: 633 frames, 45.36 s, opus true, decoded in 625 ms
+anim0001.webm: 190 frames, 13.60 s, opus true, decoded in 127 ms
+anim0002.webm: 47 frames, 5.44 s, opus true, decoded in 66 ms
+anim0003.webm: 207 frames, 14.30 s, opus true, decoded in 342 ms
+anim0004.webm: 77 frames, 9.28 s, opus true, decoded in 79 ms
+anim0005.webm: 590 frames, 45.13 s, opus true, decoded in 1052 ms
+anim0006.webm: 204 frames, 17.12 s, opus true, decoded in 421 ms
+anim0007.webm: 138 frames, 16.22 s, opus true, decoded in 236 ms
+anim0008.webm: 240 frames, 20.04 s, opus true, decoded in 449 ms
+anim0009.webm: 200 frames, 19.64 s, opus true, decoded in 243 ms
+anim0010.webm: 197 frames, 14.93 s, opus true, decoded in 321 ms
+anim0011.webm: 35 frames, 5.56 s, opus true, decoded in 6 ms
+anim0012.webm: 130 frames, 15.01 s, opus true, decoded in 187 ms
+anim0013.webm: 151 frames, 12.68 s, opus true, decoded in 151 ms
+anim0014.webm: 218 frames, 16.79 s, opus true, decoded in 236 ms
+anim0015.webm: 240 frames, 21.97 s, opus true, decoded in 501 ms
+azura.webm: 14 frames, 3.00 s, opus false, decoded in 44 ms
+boethiah.webm: 14 frames, 3.00 s, opus false, decoded in 40 ms
+clavicus.webm: 14 frames, 3.00 s, opus false, decoded in 42 ms
+dag2.webm: 1164 frames, 121.56 s, opus true, decoded in 1261 ms
+hermaeus.webm: 14 frames, 3.00 s, opus false, decoded in 38 ms
+hircine.webm: 14 frames, 3.00 s, opus false, decoded in 42 ms
+malacath.webm: 14 frames, 3.00 s, opus false, decoded in 41 ms
+mehrunes.webm: 14 frames, 3.00 s, opus false, decoded in 43 ms
+mephala.webm: 14 frames, 3.00 s, opus false, decoded in 46 ms
+meridia.webm: 14 frames, 3.00 s, opus false, decoded in 44 ms
+molagbal.webm: 14 frames, 3.00 s, opus false, decoded in 42 ms
+namira.webm: 14 frames, 3.00 s, opus false, decoded in 44 ms
+nocturna.webm: 14 frames, 3.00 s, opus false, decoded in 42 ms
+peryite.webm: 14 frames, 1.99 s, opus false, decoded in 45 ms
+sanguine.webm: 14 frames, 3.00 s, opus false, decoded in 47 ms
+sheogrth.webm: 14 frames, 3.00 s, opus false, decoded in 50 ms
+vaernima.webm: 14 frames, 0.99 s, opus false, decoded in 46 ms
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 7.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

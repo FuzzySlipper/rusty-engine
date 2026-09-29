@@ -672,10 +672,11 @@ fn sprite_quad(
 
 impl Renderer {
     /// Apply the renderer ops of one presentation delta: particles, ghost
-    /// plates and animation controllers. `entities` resolves entity-attached
+    /// plates, animation controllers and video. `entities` resolves entity-attached
     /// anchors (the runtime passes `PresentationWorld::entity_world_position`).
     /// Billboard labels are drawn by the primary views; telemetry overlays
-    /// (DOM UI), audio and video are not renderer ops.
+    /// (DOM UI) and audio are not renderer ops. Video playbacks end in facts
+    /// ([`Renderer::take_video_facts`]), not issues.
     pub fn apply_presentation(
         &mut self,
         frame: &PresentationFrameDiff,
@@ -734,11 +735,15 @@ impl Renderer {
                     .apply_ghost_op(op, resources)
                     .err()
                     .map(|detail| ("ghostPlate", detail)),
+                PresentationOp::Video { op, .. } => {
+                    if self.options.video {
+                        self.apply_video_op(op, resources);
+                    }
+                    None
+                }
                 // The telemetry overlay is DOM UI (renderer-host's `<pre>` HUD);
-                // audio and video have their own hosts. None is a renderer op.
-                PresentationOp::TelemetryOverlay { .. }
-                | PresentationOp::Audio { .. }
-                | PresentationOp::Video { .. } => None,
+                // audio has its own realizer. Neither is a renderer op.
+                PresentationOp::TelemetryOverlay { .. } | PresentationOp::Audio { .. } => None,
             };
             if let Some((op, detail)) = issue {
                 issues.push(ApplyIssue { op, detail });

@@ -195,6 +195,7 @@ impl Renderer {
     /// Bring GPU rows up to date with the tables. Returns rows uploaded.
     pub(crate) fn prepare(&mut self) -> u32 {
         self.advance_animations();
+        self.advance_video();
         self.propagate_transforms();
         self.report_pending_bounds();
         if self.tables.lights_dirty {

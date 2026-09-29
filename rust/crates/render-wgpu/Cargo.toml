@@ -10,6 +10,7 @@ workspace = true
 render-model.workspace = true
 render-host-contracts.workspace = true
 render-presentation.workspace = true
+render-video.workspace = true
 # Only this crate may depend on wgpu (scripts/dependency_boundary_check.py).
 wgpu = "30.0.1"
 glam.workspace = true

@@ -60,6 +60,9 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "cef": "render-wgpu",
     "welding": "render-wgpu",
     "winit": "desktop-shell",
+    # Video clips: WebM demux and VP9 decode (#8791).
+    "matroska-demuxer": "render-video",
+    "rusty_vp9": "render-video",
 }
 
 

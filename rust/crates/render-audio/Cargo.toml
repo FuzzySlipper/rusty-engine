@@ -13,3 +13,4 @@ opus-decoder = "0.1"
 symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
 render-model.workspace = true
 render-presentation.workspace = true
+render-video.workspace = true

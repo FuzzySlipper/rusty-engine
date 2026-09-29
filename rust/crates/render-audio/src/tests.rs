@@ -638,3 +638,28 @@ fn stop_all_also_stops_one_shots_released_by_an_earlier_reset() {
     realizer.refresh(&NoEntityPositions);
     assert_eq!(realizer.take_facts(), []);
 }
+
+#[test]
+fn a_video_soundtrack_plays_pauses_with_the_runtime_and_stops() {
+    let clip = include_bytes!("../../render-video/tests/fixtures/testsrc.webm");
+    let mut realizer = realizer();
+    assert_eq!(realizer.soundtrack_position(), None);
+    realizer.play_soundtrack(clip).expect("plays");
+    // The soundtrack streams from a decoder thread; the mock backend renders
+    // faster than real time, so give that thread time to keep up.
+    let position = |realizer: &mut AudioRealizer<MockBackend>, seconds: f64| {
+        for _ in 0..(seconds / 0.05) as usize {
+            run(realizer, 0.05);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        realizer.soundtrack_position().expect("not stopped")
+    };
+    let playing = position(&mut realizer, 0.5);
+    assert!(playing > 0.0, "{playing}");
+    realizer.set_suspended(true);
+    let held = position(&mut realizer, 0.5);
+    assert!((held - playing).abs() < 0.06, "{held} vs {playing}");
+    realizer.set_suspended(false);
+    realizer.stop_soundtrack();
+    assert_eq!(realizer.soundtrack_position(), None);
+}

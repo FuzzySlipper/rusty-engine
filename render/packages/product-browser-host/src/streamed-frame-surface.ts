@@ -36,8 +36,13 @@ const FRAME_FORMAT_RGBA8 = 2;
 const FRAME_FLAG_HELD = 1;
 const RETRY_DELAY_MS = 500;
 /** UI-host domains the browser still realizes; the runtime renders the rest. */
-/** Domains the browser still realizes; the runtime renders every other one. */
-const BROWSER_PRESENTATION_DOMAINS: ReadonlySet<string> = new Set(['audio', 'video', 'telemetryOverlay']);
+/**
+ * Domains the browser still realizes. The browser's video element plays
+ * over the page UI, which a streamed frame lies under, so streaming leaves
+ * video here; the desktop window draws video over the UI itself (#8791).
+ */
+const STREAMED_BROWSER_DOMAINS: ReadonlySet<string> = new Set(['audio', 'video', 'telemetryOverlay']);
+const WINDOW_BROWSER_DOMAINS: ReadonlySet<string> = new Set(['audio', 'telemetryOverlay']);
 
 interface StreamedFrame {
   readonly sequence: number;
@@ -117,6 +122,7 @@ function mountRuntimeRenderedSurface(
   options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
   streamed: boolean,
 ): RendererSurface {
+  const browserDomains = streamed ? STREAMED_BROWSER_DOMAINS : WINDOW_BROWSER_DOMAINS;
   const context = streamed ? canvas.getContext('2d', { alpha: false }) : null;
   if (streamed && context === null) throw new Error('the streaming surface needs a 2D canvas context');
   const pixelRatio = options.pixelRatio ?? 1;
@@ -384,7 +390,7 @@ function mountRuntimeRenderedSurface(
     sampleAnimatedMesh: noAnimation,
     applyFrame: () => ({ applied: true, outcome: 'applied', diagnostics: [] }),
     applyPresentation: async (frame: PresentationFrameDiff): Promise<RendererPresentationFrameReceipt> => {
-      const browserOps = frame.ops.filter((op) => BROWSER_PRESENTATION_DOMAINS.has(op.domain));
+      const browserOps = frame.ops.filter((op) => browserDomains.has(op.domain));
       const runtimeOps = frame.ops.length - browserOps.length;
       if (hosts === null || browserOps.length === 0) {
         return { schemaVersion: 1, applied: runtimeOps, outcome: 'applied', domains: [], diagnostics: [] };

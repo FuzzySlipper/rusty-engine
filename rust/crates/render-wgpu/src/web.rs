@@ -326,7 +326,8 @@ impl WebOverlay {
 
 impl Renderer {
     /// As [`Renderer::render_view_composition_to_surface`], with `overlay`'s
-    /// latest page composited over the frame.
+    /// latest page composited over the frame. A playing video covers both,
+    /// as the browser's video element covered the page.
     pub fn render_view_composition_to_surface_with_overlay(
         &mut self,
         surface: &mut WindowSurface,
@@ -340,6 +341,7 @@ impl Renderer {
         surface.present_layers(&gpu, |view, finished| {
             stats = self.render_composition(view, time_seconds);
             overlay.draw(finished.color, finished.format);
+            self.draw_video(&finished);
         })?;
         stats.parts_uploaded = uploaded;
         Ok(stats)

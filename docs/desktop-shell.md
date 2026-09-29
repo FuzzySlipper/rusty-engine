@@ -23,8 +23,14 @@ TypeScript UI is composited over it. Decision and measurements:
   so the shell provides it: `requestPointerLock` grabs the native cursor and
   raw mouse motion reaches the page as `pointermove` events with
   `movementX`/`movementY`. Escape and focus loss end the lock.
+- **Video.** `render-wgpu` plays video clips (WebM, VP9 profile 0, decoded
+  in pure Rust by `render-video`) over the whole window, above the UI, as
+  the browser's video element covered the page
+  ([evidence #8791](evidence/video-8791/README.md)). The streaming mode
+  leaves video to the browser, whose element sits above the page.
 - **Audio.** The shell's runtime plays audio on the output device
-  (`RUSTY_AUDIO_OUTPUT=device`, see [recorded audio](recorded-audio.md)).
+  (`RUSTY_AUDIO_OUTPUT=device`, see [recorded audio](recorded-audio.md)),
+  video soundtracks included.
 - **Live debug.** Unchanged: `rusty-live-debug --origin http://127.0.0.1:<port>`
   reaches the runtime's HTTP host over loopback. `RUSTY_CEF_SWITCHES`
   passes Chromium switches (comma-separated `name[=value]`); with

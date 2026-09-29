@@ -1,0 +1,13 @@
+[package]
+name = "render-video"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Only this crate may depend on the demuxer and decoder
+# (scripts/dependency_boundary_check.py).
+matroska-demuxer = "=0.8.1"
+rusty_vp9 = "=0.1.1"

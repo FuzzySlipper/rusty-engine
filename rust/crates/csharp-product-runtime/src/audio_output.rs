@@ -10,11 +10,16 @@
 //! The listener follows the camera of the primary view in the committed view
 //! composition, and entity-attached emitters follow the committed graphics
 //! node published for their entity.
+//!
+//! When this process also draws video (the desktop window), a playing clip's
+//! own sound plays here too, from the clip's start, as the browser's video
+//! element played it. The video ops stay in the publications: the runtime's
+//! renderer draws the picture.
 
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
 use render_audio::{AudioEntityPositions, AudioRealizer, RealizedAudioFact};
 use render_host_contracts::{RendererViewComposition, RendererViewTarget};
-use render_presentation::{PresentationFrameDiff, PresentationOp};
+use render_presentation::{PresentationFrameDiff, PresentationOp, VideoProjectionOp};
 use runtime_publication::RuntimePublication;
 
 use crate::{native_audio_diagnostic_code, CsharpProductRuntimeError};
@@ -27,13 +32,17 @@ const MAX_FACTS_PER_REPORT: usize = 128;
 pub(crate) struct AudioOutput {
     realizer: AudioRealizer,
     next_fact_id: u64,
+    /// This process draws video, so it plays the clips' sound as well.
+    soundtracks: bool,
 }
 
 impl AudioOutput {
     /// The device path is opt-in until the desktop shell owns it. An unset
     /// variable keeps browser realization; an unknown value or a device
     /// that will not open is an error rather than silent fallback.
-    pub(crate) fn from_environment() -> Result<Option<Self>, CsharpProductRuntimeError> {
+    pub(crate) fn from_environment(
+        soundtracks: bool,
+    ) -> Result<Option<Self>, CsharpProductRuntimeError> {
         let Some(value) = std::env::var_os(AUDIO_OUTPUT_ENV) else {
             return Ok(None);
         };
@@ -48,6 +57,7 @@ impl AudioOutput {
         Ok(Some(Self {
             realizer,
             next_fact_id: 1,
+            soundtracks,
         }))
     }
 
@@ -61,6 +71,11 @@ impl AudioOutput {
         for output in outputs.iter() {
             if let RuntimePublication::ViewComposition(composition) = output {
                 self.follow_camera(composition);
+            }
+        }
+        for output in outputs.iter() {
+            if let RuntimePublication::Presentation(frame) = output {
+                self.follow_video(services, frame);
             }
         }
         let entities = EngineEntities(services);
@@ -85,6 +100,10 @@ impl AudioOutput {
         let baseline = services.audio_snapshot_frame()?;
         self.follow_camera(&services.view_composition()?);
         self.realizer.reset();
+        // A fresh realization plays an active clip from its start, as the
+        // renderer shows it.
+        self.realizer.stop_soundtrack();
+        self.follow_video(services, &services.video_snapshot_frame());
         self.realizer.apply(
             &baseline.ops,
             &|hash: &str| services.audio_clip_bytes(hash),
@@ -112,6 +131,33 @@ impl AudioOutput {
             services.ingest_audio_realization_feedback(false, 0, facts)?;
         }
         Ok(())
+    }
+
+    /// Starts or ends the playing clip's sound with its video ops.
+    fn follow_video(&mut self, services: &EngineServiceSet, frame: &PresentationFrameDiff) {
+        if !self.soundtracks {
+            return;
+        }
+        for op in &frame.ops {
+            let PresentationOp::Video { op, .. } = op else {
+                continue;
+            };
+            match op {
+                VideoProjectionOp::Play { clip, .. } => {
+                    // A clip the renderer cannot read fails there, as a
+                    // playback; its sound is simply absent here.
+                    match services.borrowed_renderer_resource(&clip.asset) {
+                        Some(resource) => {
+                            let _ = self.realizer.play_soundtrack(resource.bytes());
+                        }
+                        None => self.realizer.stop_soundtrack(),
+                    }
+                }
+                VideoProjectionOp::Stop { .. } | VideoProjectionOp::Skip { .. } => {
+                    self.realizer.stop_soundtrack();
+                }
+            }
+        }
     }
 
     /// Moves the listener to the primary view's camera. A composition with

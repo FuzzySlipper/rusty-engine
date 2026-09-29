@@ -43,6 +43,7 @@ mod shadows;
 mod surface;
 mod tables;
 mod target;
+mod video;
 mod voxel;
 #[cfg(feature = "web-overlay")]
 pub mod web;
@@ -61,6 +62,7 @@ pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, WindowSurface};
 pub use target::OffscreenTarget;
+pub use video::{VideoFact, VideoFailure};
 
 use pipelines::{Layouts, Pipelines};
 use tables::{Builtin, GpuMesh, GpuTexture, Tables};
@@ -99,6 +101,10 @@ pub struct RendererOptions {
     /// them (Three's `lighting.shadows.enabled` host option). Off by
     /// default; C# products do not enable it.
     pub shadows: bool,
+    /// Play video ops. The streaming browser mode leaves them to the
+    /// browser's video element, which covers the page UI; a frame under the
+    /// page cannot.
+    pub video: bool,
 }
 
 impl Default for RendererOptions {
@@ -107,6 +113,7 @@ impl Default for RendererOptions {
             default_world_lights: true,
             default_viewmodel_lights: true,
             shadows: false,
+            video: true,
         }
     }
 }
@@ -151,6 +158,7 @@ pub struct Renderer {
     effects: effects::Effects,
     particles: particles::Particles,
     labels: labels::Labels,
+    video: video::Video,
 }
 
 /// Initial storage sizes; both grow by doubling.
@@ -224,6 +232,7 @@ impl Renderer {
             effects,
             particles: Default::default(),
             labels: Default::default(),
+            video: video::Video::new(device),
         };
         for kind in [
             Builtin::Cube,

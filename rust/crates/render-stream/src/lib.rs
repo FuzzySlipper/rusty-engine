@@ -32,7 +32,8 @@ use product_dev_host::{ProductDevFrame, ProductDevFrameFormat, ProductDevFrameSt
 pub use render_host_contracts::{RendererCameraPose, RendererViewComposition};
 use render_wgpu::OffscreenTarget;
 pub use render_wgpu::{
-    AnimationFact, EntityPositions, Gpu, Renderer, RendererOptions, ResourceSource,
+    AnimationFact, EntityPositions, Gpu, Renderer, RendererOptions, ResourceSource, VideoFact,
+    VideoFailure,
 };
 use runtime_publication::RuntimePublication;
 
@@ -79,6 +80,7 @@ struct Scene {
     /// Engine presentation time the last applied call reached.
     elapsed_seconds: f64,
     animation_facts: Vec<AnimationFact>,
+    video_facts: Vec<VideoFact>,
     skipped_ops: BTreeMap<&'static str, u64>,
     last_skip: Option<String>,
     stats: VecDeque<FrameCost>,
@@ -178,6 +180,7 @@ impl SceneDriver {
                 step: 0,
                 elapsed_seconds: 0.0,
                 animation_facts: Vec::new(),
+                video_facts: Vec::new(),
                 skipped_ops: BTreeMap::new(),
                 last_skip: None,
                 stats: VecDeque::with_capacity(STATS_WINDOW),
@@ -240,6 +243,7 @@ impl SceneDriver {
         scene.elapsed_seconds = state.elapsed_seconds;
         scene.renderer.set_animation_time(state.elapsed_seconds);
         scene.animation_facts.clear();
+        scene.video_facts.clear();
         scene.apply(baseline, resources, entities, state, now);
         scene.dirty = true;
         drop(scene);
@@ -276,9 +280,15 @@ impl SceneDriver {
         std::mem::take(&mut self.scene().animation_facts)
     }
 
+    /// How video playbacks ended since the last call.
+    pub fn take_video_facts(&self) -> Vec<VideoFact> {
+        std::mem::take(&mut self.scene().video_facts)
+    }
+
     /// Draw the committed scene: `draw` renders with the renderer at the
     /// presentation time it is given, to its own target. Facts the frame
-    /// produced are kept for [`Self::take_animation_facts`].
+    /// produced are kept for [`Self::take_animation_facts`] and
+    /// [`Self::take_video_facts`].
     pub fn draw<R>(&self, draw: impl FnOnce(&mut Renderer, f64) -> R) -> R {
         let now = self.now();
         let mut scene = self.scene();
@@ -429,6 +439,8 @@ impl Scene {
     fn collect_facts(&mut self) {
         let animation = self.renderer.take_animation_facts();
         self.animation_facts.extend(animation);
+        let video = self.renderer.take_video_facts();
+        self.video_facts.extend(video);
     }
 
     /// Applies publications and the state they reach under the caller's
@@ -472,6 +484,8 @@ impl Scene {
             (self.step, self.held) = (state.step, state.held);
             applied = true;
         }
+        // Video playbacks that could not start end here, not in a frame.
+        self.collect_facts();
         self.dirty |= applied;
         applied
     }
