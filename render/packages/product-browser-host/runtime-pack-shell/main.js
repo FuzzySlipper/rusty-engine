@@ -1,9 +1,6 @@
 import {
   createProductBrowserLocalHttpAdapter,
-  loadProductBrowserRendererInitialContent,
   mountProductBrowserHost,
-  mountStreamedFrameSurface,
-  mountWindowSurface,
 } from './engine/product-browser-host.js';
 
 const root = document.querySelector('#application');
@@ -28,25 +25,17 @@ if (uiProjection !== undefined
     || typeof uiProjection.expectedContract !== 'string')) {
   throw new Error('Product bootstrap has an invalid UI projection declaration');
 }
-const defaultLights = bootstrap?.renderer?.lighting?.defaultLights;
-if (defaultLights === null
-  || typeof defaultLights !== 'object'
-  || (defaultLights.world !== 'neutral' && defaultLights.world !== 'disabled')
-  || (defaultLights.viewmodel !== 'neutral' && defaultLights.viewmodel !== 'disabled')) {
-  throw new Error('Product bootstrap has an invalid default lighting declaration');
-}
 // `stream`: the runtime renders the world and this page shows its frames.
-const rendererOutput = bootstrap?.renderer?.output;
 // `window`: the runtime presents the world to the desktop shell's window
 // under this page, which must let it show through.
-if (rendererOutput !== undefined && rendererOutput !== 'stream' && rendererOutput !== 'window') {
+const output = bootstrap?.renderer?.output;
+if (output !== 'stream' && output !== 'window') {
   throw new Error('Product bootstrap has an invalid renderer output');
 }
-if (rendererOutput === 'window') {
+if (output === 'window') {
   document.documentElement.style.background = 'transparent';
   document.body.style.background = 'transparent';
 }
-const runtimeSurfaces = { stream: mountStreamedFrameSurface, window: mountWindowSurface };
 const cursorMode = bootstrap?.input?.cursorMode;
 if (cursorMode !== 'pointer-lock' && cursorMode !== 'unlocked') {
   throw new Error('Product bootstrap has an invalid input cursor mode');
@@ -57,7 +46,6 @@ if (typeof productUi.mountProductUi !== 'function') {
 }
 
 const transport = createProductBrowserLocalHttpAdapter();
-const rendererInitialContent = await loadProductBrowserRendererInitialContent(import.meta.url);
 void mountProductBrowserHost({
   root,
   transport,
@@ -69,11 +57,7 @@ void mountProductBrowserHost({
     maximumWheelDelta: 64,
     selectedController: { index: 0 },
   },
-  renderer: {
-    initialContent: rendererInitialContent,
-    lighting: { defaultLights },
-    ...(rendererOutput === undefined ? {} : { mountSurface: runtimeSurfaces[rendererOutput] }),
-  },
+  output,
   ...(uiProjection === undefined ? {} : { uiProjection }),
   mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),
 }).catch((error) => {

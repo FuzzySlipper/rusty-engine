@@ -163,20 +163,13 @@
       }
     },
     {
-      "domain": "telemetryOverlay",
+      "domain": "particle",
       "meta": {
         "sequence": 3
       },
       "op": {
-        "op": "create",
-        "handle": 1,
-        "descriptor": {
-          "title": "Frame telemetry",
-          "corner": "topRight",
-          "refreshIntervalMs": 250,
-          "maxFrameTimeSamples": 60,
-          "visible": true
-        }
+        "op": "destroy",
+        "handle": 1
       }
     },
     {

@@ -1,12 +1,8 @@
-use render_model::JSON_SAFE_U64_MAX;
 pub use runtime_diagnostics::CanonicalU64;
 use runtime_diagnostics::{RuntimeDiagnosticRuntimeBinding, RuntimeUpdateAttribution};
 use runtime_input::{RuntimeInputBinding, RuntimeInputEvent};
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
-use runtime_publication::{
-    RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
-    RuntimePublicationError, RuntimePublicationFrontier,
-};
+use runtime_publication::{RuntimePublication, RuntimePublicationError};
 use runtime_timeline::{
     RuntimeOpaqueData, RuntimeProvenance, RuntimeTimelineBinding, TimelineCompletionEnvelope,
     TimelineCompletionOutcome, TimelineCompletionTicketId,
@@ -14,7 +10,7 @@ use runtime_timeline::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ProductDevHostError, ProductDevRendererResource, ProductDevRuntimeError};
+use crate::{ProductDevHostError, ProductDevRuntimeError};
 
 /// Fixed Engine-owned local-runtime route prefix consumed by product-browser-host.
 pub const PRODUCT_DEV_RUNTIME_BASE_PATH: &str = "/__rusty/product/runtime/";
@@ -128,11 +124,6 @@ pub enum ProductDevOperationKind {
     AdmitDemandStep,
     AdmitExternalStep,
     CompleteTimeline,
-    ReportAudioFeedback,
-    ReportVideoFeedback,
-    ReportAnimationFeedback,
-    ReportGhostPlateFeedback,
-    ReportRendererDiagnostics,
     ExecuteDebug,
 }
 
@@ -171,704 +162,6 @@ fn runtime_fault_fields(
     )
 }
 
-/// Bounded, host-realized audio facts. These are observations from the
-/// Engine browser host rather than audio projector/admission state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ProductDevAudioFeedbackFact {
-    NaturalCompletion {
-        fact_id: CanonicalU64,
-        sequence: u32,
-        #[serde(flatten)]
-        source: ProductDevAudioCompletionSource,
-    },
-    Diagnostic {
-        fact_id: CanonicalU64,
-        code: render_presentation::AudioProjectionDiagnosticCode,
-        sequence: u32,
-        signal_handle: Option<CanonicalU64>,
-        voice_handle: Option<CanonicalU64>,
-    },
-}
-
-/// The two Engine-owned realization identities. This matches the closed
-/// browser-host transport shape without exposing browser objects downstream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "source",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ProductDevAudioCompletionSource {
-    OneShot { signal_handle: CanonicalU64 },
-    RetainedVoice { voice_handle: CanonicalU64 },
-}
-
-#[derive(Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-enum ProductDevAudioFeedbackFactWire {
-    NaturalCompletion {
-        fact_id: CanonicalU64,
-        sequence: u32,
-        source: String,
-        #[serde(default)]
-        signal_handle: Option<CanonicalU64>,
-        #[serde(default)]
-        voice_handle: Option<CanonicalU64>,
-    },
-    Diagnostic {
-        fact_id: CanonicalU64,
-        code: render_presentation::AudioProjectionDiagnosticCode,
-        sequence: u32,
-        #[serde(default)]
-        signal_handle: Option<CanonicalU64>,
-        #[serde(default)]
-        voice_handle: Option<CanonicalU64>,
-    },
-}
-
-fn decode_audio_feedback_facts<'de, D>(
-    deserializer: D,
-) -> Result<Vec<ProductDevAudioFeedbackFact>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Vec::<ProductDevAudioFeedbackFactWire>::deserialize(deserializer)?
-        .into_iter()
-        .map(|fact| match fact {
-            ProductDevAudioFeedbackFactWire::NaturalCompletion {
-                fact_id,
-                sequence,
-                source,
-                signal_handle,
-                voice_handle,
-            } => match source.as_str() {
-                "oneShot" if voice_handle.is_none() => signal_handle
-                    .map(
-                        |signal_handle| ProductDevAudioFeedbackFact::NaturalCompletion {
-                            fact_id,
-                            sequence,
-                            source: ProductDevAudioCompletionSource::OneShot { signal_handle },
-                        },
-                    )
-                    .ok_or_else(|| {
-                        serde::de::Error::custom("oneShot completion requires signalHandle")
-                    }),
-                "retainedVoice" if signal_handle.is_none() => voice_handle
-                    .map(
-                        |voice_handle| ProductDevAudioFeedbackFact::NaturalCompletion {
-                            fact_id,
-                            sequence,
-                            source: ProductDevAudioCompletionSource::RetainedVoice { voice_handle },
-                        },
-                    )
-                    .ok_or_else(|| {
-                        serde::de::Error::custom("retainedVoice completion requires voiceHandle")
-                    }),
-                _ => Err(serde::de::Error::custom(
-                    "audio completion source and handle are incoherent",
-                )),
-            },
-            ProductDevAudioFeedbackFactWire::Diagnostic {
-                fact_id,
-                code,
-                sequence,
-                signal_handle,
-                voice_handle,
-            } => Ok(ProductDevAudioFeedbackFact::Diagnostic {
-                fact_id,
-                code,
-                sequence,
-                signal_handle,
-                voice_handle,
-            }),
-        })
-        .collect()
-}
-
-impl ProductDevAudioFeedbackFact {
-    pub const fn fact_id(&self) -> CanonicalU64 {
-        match self {
-            Self::NaturalCompletion { fact_id, .. } | Self::Diagnostic { fact_id, .. } => *fact_id,
-        }
-    }
-}
-
-/// One fixed host-to-runtime audio realization snapshot. `facts` is bounded
-/// to the same 128-item FIFO retained by the browser Engine host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevAudioFeedback {
-    pub runtime: ProductDevRuntimeBinding,
-    pub replace_owner: bool,
-    pub evicted_fact_count: CanonicalU64,
-    #[serde(deserialize_with = "decode_audio_feedback_facts")]
-    pub facts: Vec<ProductDevAudioFeedbackFact>,
-}
-
-impl ProductDevAudioFeedback {
-    pub const MAX_FACTS: usize = 128;
-
-    pub fn validate(&self) -> Result<(), ProductDevHostError> {
-        if self.facts.len() > Self::MAX_FACTS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_AUDIO_FEEDBACK_BOUNDS",
-                "audio feedback exceeds the 128 fact host bound",
-            ));
-        }
-        if self
-            .facts
-            .windows(2)
-            .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
-        {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_AUDIO_FEEDBACK_ORDER",
-                "audio feedback fact ids must be strictly increasing",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Fixed response for the browser host's audio feedback route.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevAudioFeedbackResult {
-    pub accepted: bool,
-    pub code: String,
-    pub disposition: ProductDevFaultDisposition,
-    pub runtime: ProductDevRuntimeBinding,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accepted_through_fact_id: Option<CanonicalU64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostic: Option<String>,
-}
-
-impl ProductDevAudioFeedbackResult {
-    pub fn accepted(
-        runtime: ProductDevRuntimeBinding,
-        accepted_through_fact_id: Option<CanonicalU64>,
-    ) -> Self {
-        Self {
-            accepted: true,
-            code: ACCEPTED_FAULT_CODE.to_owned(),
-            disposition: ProductDevFaultDisposition::Accepted,
-            runtime,
-            accepted_through_fact_id,
-            diagnostic: None,
-        }
-    }
-
-    pub fn rejected(
-        runtime: ProductDevRuntimeBinding,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
-        Ok(Self {
-            accepted: false,
-            code: "DEV_HOST_AUDIO_FEEDBACK_REJECTED".to_owned(),
-            disposition: ProductDevFaultDisposition::RejectedRecoverable,
-            runtime,
-            accepted_through_fact_id: None,
-            diagnostic: Some(diagnostic.into()),
-        })
-    }
-
-    pub fn rejected_runtime(
-        runtime: ProductDevRuntimeBinding,
-        error: ProductDevRuntimeError,
-    ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
-            accepted: false,
-            code,
-            disposition,
-            runtime,
-            accepted_through_fact_id: None,
-            diagnostic: Some(diagnostic),
-        })
-    }
-}
-
-/// Fixed browser-to-runtime video realization facts. Each fact names the
-/// Engine-issued playback handle, so a late HTMLVideoElement callback cannot
-/// advance a replacement presentation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ProductDevVideoFeedbackFact {
-    Completed {
-        fact_id: CanonicalU64,
-        handle: CanonicalU64,
-    },
-    Skipped {
-        fact_id: CanonicalU64,
-        handle: CanonicalU64,
-    },
-    Failed {
-        fact_id: CanonicalU64,
-        handle: CanonicalU64,
-        code: String,
-    },
-}
-impl ProductDevVideoFeedbackFact {
-    pub const fn fact_id(&self) -> CanonicalU64 {
-        match self {
-            Self::Completed { fact_id, .. }
-            | Self::Skipped { fact_id, .. }
-            | Self::Failed { fact_id, .. } => *fact_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevVideoFeedback {
-    pub runtime: ProductDevRuntimeBinding,
-    pub replace_owner: bool,
-    pub evicted_fact_count: CanonicalU64,
-    pub facts: Vec<ProductDevVideoFeedbackFact>,
-}
-impl ProductDevVideoFeedback {
-    pub const MAX_FACTS: usize = 128;
-    pub fn validate(&self) -> Result<(), ProductDevHostError> {
-        if self.facts.len() > Self::MAX_FACTS
-            || self
-                .facts
-                .windows(2)
-                .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
-        {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_VIDEO_FEEDBACK",
-                "video feedback must contain at most 128 strictly ordered facts",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Copied browser-renderer animation observations. Playback is deliberately an
-/// observation, never a claim that a one-shot completed naturally.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ProductDevAnimationFeedbackFact {
-    MeshInspection {
-        fact_id: CanonicalU64,
-        object_id: CanonicalU64,
-        generation: CanonicalU64,
-        request: u32,
-        bounds_min: [f32; 3],
-        bounds_max: [f32; 3],
-        has_bounds: bool,
-        voxel_normal_meshes: u32,
-    },
-    PlaybackObservation {
-        fact_id: CanonicalU64,
-        object_id: CanonicalU64,
-        generation: CanonicalU64,
-        sequence: u32,
-        status: String,
-        selected_clip: Option<String>,
-        sampled_at_seconds: Option<f64>,
-    },
-    NaturalCompletion {
-        fact_id: CanonicalU64,
-        object_id: CanonicalU64,
-        generation: CanonicalU64,
-        clip: String,
-    },
-    Diagnostic {
-        fact_id: CanonicalU64,
-        object_id: Option<CanonicalU64>,
-        generation: Option<CanonicalU64>,
-        code: String,
-        sequence: u32,
-    },
-    Cue {
-        fact_id: CanonicalU64,
-        object_id: CanonicalU64,
-        generation: CanonicalU64,
-        cue_id: String,
-        clip: String,
-        marker_seconds: f64,
-        sampled_at_seconds: f64,
-        signal_domain: String,
-        signal_id: String,
-    },
-    Stopped {
-        fact_id: CanonicalU64,
-        object_id: CanonicalU64,
-        generation: CanonicalU64,
-        sequence: u32,
-        reason: String,
-    },
-}
-
-impl ProductDevAnimationFeedbackFact {
-    pub const fn fact_id(&self) -> CanonicalU64 {
-        match self {
-            Self::MeshInspection { fact_id, .. }
-            | Self::PlaybackObservation { fact_id, .. }
-            | Self::NaturalCompletion { fact_id, .. }
-            | Self::Diagnostic { fact_id, .. }
-            | Self::Cue { fact_id, .. }
-            | Self::Stopped { fact_id, .. } => *fact_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevAnimationFeedback {
-    pub runtime: ProductDevRuntimeBinding,
-    pub replace_owner: bool,
-    pub evicted_fact_count: CanonicalU64,
-    pub facts: Vec<ProductDevAnimationFeedbackFact>,
-}
-
-impl ProductDevAnimationFeedback {
-    pub const MAX_FACTS: usize = 128;
-    /// Matches `NativeAnimationFeedbackText`; values cross the ABI inline.
-    pub const MAX_INLINE_TEXT_BYTES: usize = 96;
-    pub fn validate(&self) -> Result<(), ProductDevHostError> {
-        if self.facts.len() > Self::MAX_FACTS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_ANIMATION_FEEDBACK_BOUNDS",
-                "animation feedback exceeds the 128 fact host bound",
-            ));
-        }
-        if self
-            .facts
-            .windows(2)
-            .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
-        {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_ANIMATION_FEEDBACK_ORDER",
-                "animation feedback fact ids must be strictly increasing",
-            ));
-        }
-        for fact in &self.facts {
-            match fact {
-                ProductDevAnimationFeedbackFact::PlaybackObservation {
-                    status,
-                    selected_clip,
-                    sampled_at_seconds,
-                    ..
-                } if !matches!(
-                    status.as_str(),
-                    "unavailable" | "not_started" | "playing" | "paused" | "sampled" | "stopped"
-                ) || !animation_feedback_text_fits(status)
-                    || selected_clip
-                        .as_ref()
-                        .is_some_and(|clip| !animation_feedback_text_fits(clip))
-                    || sampled_at_seconds.is_some_and(|time| !time.is_finite() || time < 0.0) =>
-                {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
-                        "animation playback observation is invalid",
-                    ));
-                }
-                ProductDevAnimationFeedbackFact::NaturalCompletion { clip, .. }
-                    if !animation_feedback_text_fits(clip) =>
-                {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
-                        "animation natural completion is invalid",
-                    ));
-                }
-                ProductDevAnimationFeedbackFact::Diagnostic { code, .. }
-                    if !animation_feedback_text_fits(code) =>
-                {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
-                        "animation diagnostic code is empty",
-                    ));
-                }
-                ProductDevAnimationFeedbackFact::Cue {
-                    cue_id,
-                    clip,
-                    marker_seconds,
-                    sampled_at_seconds,
-                    signal_domain,
-                    signal_id,
-                    ..
-                } if !animation_feedback_text_fits(cue_id)
-                    || !animation_feedback_text_fits(clip)
-                    || !animation_feedback_text_fits(signal_id)
-                    || !animation_feedback_text_fits(signal_domain)
-                    || !matches!(signal_domain.as_str(), "audio" | "particle")
-                    || !marker_seconds.is_finite()
-                    || !sampled_at_seconds.is_finite()
-                    || *marker_seconds < 0.0
-                    || *sampled_at_seconds < 0.0 =>
-                {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
-                        "animation cue observation is invalid",
-                    ));
-                }
-                ProductDevAnimationFeedbackFact::Stopped { reason, .. }
-                    if !animation_feedback_text_fits(reason)
-                        || !matches!(reason.as_str(), "destroyed" | "teardown") =>
-                {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
-                        "animation stop observation is invalid",
-                    ));
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-}
-
-fn animation_feedback_text_fits(value: &str) -> bool {
-    !value.is_empty() && value.len() <= ProductDevAnimationFeedback::MAX_INLINE_TEXT_BYTES
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevAnimationFeedbackResult {
-    pub accepted: bool,
-    pub code: String,
-    pub disposition: ProductDevFaultDisposition,
-    pub runtime: ProductDevRuntimeBinding,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accepted_through_fact_id: Option<CanonicalU64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostic: Option<String>,
-}
-
-impl ProductDevAnimationFeedbackResult {
-    pub fn accepted(
-        runtime: ProductDevRuntimeBinding,
-        accepted_through_fact_id: Option<CanonicalU64>,
-    ) -> Self {
-        Self {
-            accepted: true,
-            code: ACCEPTED_FAULT_CODE.to_owned(),
-            disposition: ProductDevFaultDisposition::Accepted,
-            runtime,
-            accepted_through_fact_id,
-            diagnostic: None,
-        }
-    }
-    pub fn rejected(
-        runtime: ProductDevRuntimeBinding,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
-        Ok(Self {
-            accepted: false,
-            code: "DEV_HOST_ANIMATION_FEEDBACK_REJECTED".to_owned(),
-            disposition: ProductDevFaultDisposition::RejectedRecoverable,
-            runtime,
-            accepted_through_fact_id: None,
-            diagnostic: Some(diagnostic.into()),
-        })
-    }
-
-    pub fn rejected_runtime(
-        runtime: ProductDevRuntimeBinding,
-        error: ProductDevRuntimeError,
-    ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
-            accepted: false,
-            code,
-            disposition,
-            runtime,
-            accepted_through_fact_id: None,
-            diagnostic: Some(diagnostic),
-        })
-    }
-}
-
-/// Closed fallback classifications reported by the retained ghost-plate host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ProductDevGhostPlateFallbackReason {
-    None,
-    PreparedSourceUnsupported,
-    RealizationFailed,
-}
-
-/// One latest-state observation keyed by the opaque Engine ghost owner. This
-/// is deliberately a bounded snapshot, not a renderer event stream.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevGhostPlateFeedbackFact {
-    pub presentation: CanonicalU64,
-    pub source_matches: bool,
-    pub current_sector: u32,
-    pub local_angular_offset_degrees: Option<f64>,
-    pub fallback_active: bool,
-    pub fallback_reason: ProductDevGhostPlateFallbackReason,
-    /// Closed GhostPlateLimitationMask bits copied from the renderer host.
-    pub limitation_mask: u32,
-    pub preparation_cpu_milliseconds: Option<f64>,
-    pub capture_cpu_submission_milliseconds: Option<f64>,
-    pub retained_sector_count: u32,
-    pub retained_mesh_count: u32,
-    pub retained_material_count: u32,
-    pub retained_borrowed_texture_count: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevGhostPlateFeedback {
-    pub runtime: ProductDevRuntimeBinding,
-    pub replace_owner: bool,
-    pub facts: Vec<ProductDevGhostPlateFeedbackFact>,
-}
-
-impl ProductDevGhostPlateFeedback {
-    pub const MAX_FACTS: usize = 128;
-
-    pub fn validate(&self) -> Result<(), ProductDevHostError> {
-        if self.facts.len() > Self::MAX_FACTS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_GHOST_PLATE_FEEDBACK_BOUNDS",
-                "ghost plate feedback exceeds the 128 presentation bound",
-            ));
-        }
-        let mut owners = std::collections::BTreeSet::new();
-        for fact in &self.facts {
-            let fallback_active = !matches!(
-                fact.fallback_reason,
-                ProductDevGhostPlateFallbackReason::None
-            );
-            let invalid_angle = fact
-                .local_angular_offset_degrees
-                .is_some_and(|value| !value.is_finite() || !(-360.0..=360.0).contains(&value));
-            let invalid_timing = [
-                fact.preparation_cpu_milliseconds,
-                fact.capture_cpu_submission_milliseconds,
-            ]
-            .into_iter()
-            .flatten()
-            .any(|value| !value.is_finite() || value < 0.0);
-            let unsupported_limitation_mask = !matches!(fact.limitation_mask, 125 | 127);
-            if fact.presentation.get() == 0
-                || !owners.insert(fact.presentation.get())
-                || fact.fallback_active != fallback_active
-                || invalid_angle
-                || invalid_timing
-                || unsupported_limitation_mask
-            {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_GHOST_PLATE_FEEDBACK_FACT",
-                    "ghost plate feedback must contain unique owners, coherent fallback state, and finite observations",
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevGhostPlateFeedbackResult {
-    pub accepted: bool,
-    pub code: String,
-    pub disposition: ProductDevFaultDisposition,
-    pub runtime: ProductDevRuntimeBinding,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostic: Option<String>,
-}
-
-impl ProductDevGhostPlateFeedbackResult {
-    pub fn accepted(runtime: ProductDevRuntimeBinding) -> Self {
-        Self {
-            accepted: true,
-            code: ACCEPTED_FAULT_CODE.to_owned(),
-            disposition: ProductDevFaultDisposition::Accepted,
-            runtime,
-            diagnostic: None,
-        }
-    }
-
-    pub fn rejected(
-        runtime: ProductDevRuntimeBinding,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
-        Ok(Self {
-            accepted: false,
-            code: "DEV_HOST_GHOST_PLATE_FEEDBACK_REJECTED".to_owned(),
-            disposition: ProductDevFaultDisposition::RejectedRecoverable,
-            runtime,
-            diagnostic: Some(diagnostic.into()),
-        })
-    }
-
-    pub fn rejected_runtime(
-        runtime: ProductDevRuntimeBinding,
-        error: ProductDevRuntimeError,
-    ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
-            accepted: false,
-            code,
-            disposition,
-            runtime,
-            diagnostic: Some(diagnostic),
-        })
-    }
-}
-
-/// Latest bounded browser-owned renderer observation. Its payload is a closed
-/// versioned snapshot produced by renderer-host, not a command or telemetry bus.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevRendererDiagnosticsFeedback {
-    pub runtime: ProductDevRuntimeBinding,
-    pub snapshot: Value,
-}
-
-impl ProductDevRendererDiagnosticsFeedback {
-    pub const MAX_SNAPSHOT_BYTES: usize = 256 * 1024;
-
-    pub fn validate(&self) -> Result<(), ProductDevHostError> {
-        let valid_version = self
-            .snapshot
-            .as_object()
-            .and_then(|object| object.get("schemaVersion"))
-            .and_then(Value::as_u64)
-            == Some(1);
-        let encoded = serde_json::to_vec(&self.snapshot).map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_RENDERER_DIAGNOSTICS_ENCODE",
-                "renderer diagnostics snapshot could not be encoded",
-            )
-        })?;
-        if !valid_version || encoded.len() > Self::MAX_SNAPSHOT_BYTES {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_RENDERER_DIAGNOSTICS_BOUNDS",
-                "renderer diagnostics must be a version 1 object within 256 KiB",
-            ));
-        }
-        Ok(())
-    }
-}
-
 /// Fixed browser-host observation batch. This is deliberately a small health
 /// report, not a browser console or generic diagnostic transport.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -878,8 +171,6 @@ pub struct ProductDevBrowserDiagnosticsReport {
     pub runtime_progress: CanonicalU64,
     pub transport_state: ProductDevBrowserConnectionState,
     pub output_state: ProductDevBrowserConnectionState,
-    pub last_renderer_sequence: Option<CanonicalU64>,
-    pub renderer_observation_age_ms: Option<CanonicalU64>,
     pub first_terminal: Option<ProductDevBrowserTerminalDiagnostic>,
     pub recoverable_event: Option<ProductDevBrowserTerminalDiagnostic>,
     pub page_events: Vec<ProductDevBrowserPageDiagnostic>,
@@ -905,7 +196,6 @@ pub struct ProductDevBrowserAttachment {
 pub struct ProductDevBrowserAttachmentBaseline {
     pub runtime: ProductDevRuntimeBinding,
     pub next_input_sequence: CanonicalU64,
-    pub publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -949,7 +239,6 @@ pub enum ProductDevBrowserPageDiagnosticKind {
 
 impl ProductDevBrowserDiagnosticsReport {
     pub const MAX_PAGE_EVENTS: usize = 8;
-    pub const MAX_ATTACHMENT_FRONTIERS: usize = 8;
 
     pub fn validate(&self) -> Result<(), ProductDevHostError> {
         if self.page_events.len() > Self::MAX_PAGE_EVENTS {
@@ -965,9 +254,7 @@ impl ProductDevBrowserDiagnosticsReport {
             validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
             if !matches!(
                 diagnostic.code.as_str(),
-                "CSHARP_LIFECYCLE_CLOCK_REGRESSION"
-                    | "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE"
-                    | "BROWSER_LOCAL_REQUEST_UNAVAILABLE"
+                "CSHARP_LIFECYCLE_CLOCK_REGRESSION" | "BROWSER_LOCAL_REQUEST_UNAVAILABLE"
             ) {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
@@ -982,20 +269,6 @@ impl ProductDevBrowserDiagnosticsReport {
             validate_browser_attachment_id(&attachment.id)?;
             if let Some(replaces) = &attachment.replaces {
                 validate_browser_attachment_id(replaces)?;
-            }
-            if let Some(baseline) = &attachment.baseline {
-                if baseline.publication_frontiers.len() > Self::MAX_ATTACHMENT_FRONTIERS {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
-                        "browser attachment baseline frontier count exceeds its fixed bound",
-                    ));
-                }
-                for frontier in &baseline.publication_frontiers {
-                    ProductDevRendererPublicationFrontier::new(
-                        frontier.stream.clone(),
-                        frontier.revision,
-                    )?;
-                }
             }
         }
         Ok(())
@@ -1169,62 +442,10 @@ pub struct ProductDevUpdateAttributionSnapshot {
     pub slowest_age_ms: CanonicalU64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevRendererDiagnosticsFeedbackResult {
-    pub accepted: bool,
-    pub code: String,
-    pub disposition: ProductDevFaultDisposition,
-    pub runtime: ProductDevRuntimeBinding,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostic: Option<String>,
-}
-
-impl ProductDevRendererDiagnosticsFeedbackResult {
-    pub fn accepted(runtime: ProductDevRuntimeBinding) -> Self {
-        Self {
-            accepted: true,
-            code: ACCEPTED_FAULT_CODE.to_owned(),
-            disposition: ProductDevFaultDisposition::Accepted,
-            runtime,
-            diagnostic: None,
-        }
-    }
-
-    pub fn rejected(
-        runtime: ProductDevRuntimeBinding,
-        diagnostic: impl Into<String>,
-    ) -> Result<Self, ProductDevHostError> {
-        Ok(Self {
-            accepted: false,
-            code: "DEV_HOST_RENDERER_DIAGNOSTICS_REJECTED".to_owned(),
-            disposition: ProductDevFaultDisposition::RejectedRecoverable,
-            runtime,
-            diagnostic: Some(diagnostic.into()),
-        })
-    }
-
-    pub fn rejected_runtime(
-        runtime: ProductDevRuntimeBinding,
-        error: ProductDevRuntimeError,
-    ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
-        Ok(Self {
-            accepted: false,
-            code,
-            disposition,
-            runtime,
-            diagnostic: Some(diagnostic),
-        })
-    }
-}
-
 /// Minimal local readout passed through from the generated runtime owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevRuntimeReadout {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    inspection_time: Option<(String, u32)>,
     artifact: String,
     runtime: ProductDevRuntimeBinding,
     mode: ProductDevRuntimeMode,
@@ -1239,17 +460,12 @@ pub struct ProductDevRuntimeReadout {
 }
 
 impl ProductDevRuntimeReadout {
-    pub fn with_inspection_time(mut self, mode: String, hz: u32) -> Self {
-        self.inspection_time = Some((mode, hz));
-        self
-    }
     pub fn new(
         runtime: ProductDevRuntimeBinding,
         mode: ProductDevRuntimeMode,
         state: ProductDevRuntimeState,
     ) -> Self {
         Self {
-            inspection_time: None,
             artifact: "rusty.product.runtime-readout".to_owned(),
             runtime,
             mode,
@@ -1302,20 +518,11 @@ impl ProductDevRuntimeReadout {
         self.mode
     }
 
-    /// Whether a browser holding `previous` needs this readout. Identity,
-    /// mode, state, fault and inspection time always count. Step counters
-    /// count only while inspection time is not realtime, where the browser
-    /// derives held simulation time from them. Per-tick counters and clock
-    /// samples otherwise stay with live debug (`engine.time`).
+    /// Whether a browser holding `previous` needs this readout: identity,
+    /// mode, state and fault. Per-tick counters and clock samples stay with
+    /// live debug (`engine.time`).
     pub fn changes_browser_view(&self, previous: &Self) -> bool {
-        let held_steps = self
-            .inspection_time
-            .as_ref()
-            .is_some_and(|(mode, _)| mode != "realtime")
-            && self.admitted_simulation_steps != previous.admitted_simulation_steps;
-        held_steps
-            || self.inspection_time != previous.inspection_time
-            || self.runtime != previous.runtime
+        self.runtime != previous.runtime
             || self.mode != previous.mode
             || self.state != previous.state
             || self.fault != previous.fault
@@ -2250,74 +1457,26 @@ impl ProductDevTimelineCompletionResult {
     }
 }
 
-/// One Rust-authoritative output pushed to the local browser projection.
-#[derive(Debug, Clone, PartialEq)]
+/// One Rust-authoritative output pushed to the browser shell. The world is
+/// rendered in the runtime, so the shell receives only its binding, the
+/// product UI projection, readouts and input results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ProductDevRuntimeOutput {
-    renderer_resources: Option<Vec<String>>,
     wire: ProductDevRuntimeOutputWire,
-}
-
-/// One retained renderer stream frontier captured at a complete baseline
-/// boundary. Revisions intentionally remain JSON numbers: renderer frame
-/// publication uses JavaScript-safe numeric revisions rather than the host's
-/// canonical-string control counters.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProductDevRendererPublicationFrontier {
-    pub stream: String,
-    pub revision: u64,
-}
-
-impl ProductDevRendererPublicationFrontier {
-    pub fn new(stream: String, revision: u64) -> Result<Self, ProductDevHostError> {
-        if stream.trim().is_empty() || stream.len() > 256 {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_RENDERER_FRONTIER",
-                "renderer publication frontier stream must contain 1..=256 characters",
-            ));
-        }
-        if revision > JSON_SAFE_U64_MAX {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_RENDERER_FRONTIER",
-                "renderer publication frontier revision is outside the JSON-safe range",
-            ));
-        }
-        Ok(Self { stream, revision })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProductDevRuntimeOutputWire {
-    /// Resource inventory/lease change without a gameplay or scheduling operation.
-    RendererResources,
     Binding {
         runtime: ProductDevRuntimeBinding,
         #[serde(rename = "nextInputSequence")]
         next_input_sequence: CanonicalU64,
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            rename = "publicationFrontiers"
-        )]
-        publication_frontiers: Option<Vec<ProductDevRendererPublicationFrontier>>,
     },
+    /// Ends the outputs that together make one binding's complete baseline.
     CompleteBaseline {
         runtime: ProductDevRuntimeBinding,
-        #[serde(rename = "publicationFrontiers")]
-        publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
-    },
-    Frame {
-        frame: render_model::RenderFrameDiff,
-    },
-    ViewComposition {
-        composition: render_host_contracts::RendererViewComposition,
-    },
-    Presentation {
-        frame: render_presentation::PresentationFrameDiff,
-    },
-    AnimationCueDefinitions {
-        definitions: Vec<ProductDevAnimationCueDefinition>,
     },
     UiProjection {
         envelope: runtime_ui::RuntimeUiProjectionEnvelope,
@@ -2334,75 +1493,9 @@ enum ProductDevRuntimeOutputWire {
     },
 }
 
-/// Closed renderer realization families for a sampled animation marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ProductDevAnimationCueSignalDomain {
-    Audio,
-    Particle,
-}
-
-/// A copied animation cue declaration sent through the fixed renderer output
-/// stream. `at_seconds` is derived from an Engine-admitted millisecond marker,
-/// so it cannot borrow product memory or become non-finite in transit.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevAnimationCueDefinition {
-    pub cue_id: String,
-    pub asset: String,
-    pub clip: String,
-    pub at_seconds: f64,
-    pub signal_domain: ProductDevAnimationCueSignalDomain,
-    pub signal_id: String,
-}
-
-impl ProductDevAnimationCueDefinition {
-    pub const MAX_TEXT_BYTES: usize = 96;
-
-    pub fn new(
-        cue_id: String,
-        asset: String,
-        clip: String,
-        marker_millis: u64,
-        signal_domain: ProductDevAnimationCueSignalDomain,
-        signal_id: String,
-    ) -> Result<Self, ProductDevHostError> {
-        for (field, value) in [
-            ("animation cue id", &cue_id),
-            ("animation cue asset", &asset),
-            ("animation cue clip", &clip),
-            ("animation cue signal id", &signal_id),
-        ] {
-            if value.is_empty() || value.len() > Self::MAX_TEXT_BYTES {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_ANIMATION_CUE",
-                    format!("{field} must be non-empty and no more than 96 UTF-8 bytes"),
-                ));
-            }
-        }
-        let at_seconds = marker_millis as f64 / 1_000.0;
-        debug_assert!(at_seconds.is_finite() && at_seconds >= 0.0);
-        Ok(Self {
-            cue_id,
-            asset,
-            clip,
-            at_seconds,
-            signal_domain,
-            signal_id,
-        })
-    }
-}
-
 impl ProductDevRuntimeOutput {
-    pub fn resource_inventory() -> Self {
-        Self {
-            wire: ProductDevRuntimeOutputWire::RendererResources,
-            renderer_resources: None,
-        }
-    }
-
     /// Decodes one output through the same JSON representation used by the
-    /// browser projection.
+    /// browser shell.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
         serde_json::from_slice(bytes).map_err(|_| {
             ProductDevHostError::new(
@@ -2412,261 +1505,69 @@ impl ProductDevRuntimeOutput {
         })
     }
 
-    /// Converts one logical Engine publication into the existing browser
-    /// output schema. The conversion belongs to this host adapter so the
-    /// neutral runtime-publication crate never acquires JSON wire DTOs or
-    /// delivery policy.
-    pub fn from_publication(publication: RuntimePublication) -> Result<Self, ProductDevHostError> {
-        publication.validate().map_err(publication_error)?;
-        match publication {
+    /// The browser shell's share of one Engine publication. Graphics,
+    /// presentation and animation cue publications stay in the runtime,
+    /// whose renderer applies them.
+    pub fn from_publication(publication: RuntimePublication) -> Option<Self> {
+        let wire = match publication {
             RuntimePublication::Binding {
                 runtime,
                 next_input_sequence,
-                publication_frontiers,
-            } => {
-                let publication_frontiers = publication_frontiers
-                    .map(|frontiers| {
-                        frontiers
-                            .into_iter()
-                            .map(host_publication_frontier)
-                            .collect::<Result<Vec<_>, _>>()
-                    })
-                    .transpose()?;
-                let mut output = Self::binding(
-                    host_runtime_binding(runtime),
-                    CanonicalU64::new(next_input_sequence),
-                );
-                if let Some(publication_frontiers) = publication_frontiers {
-                    if let ProductDevRuntimeOutputWire::Binding {
-                        publication_frontiers: destination,
-                        ..
-                    } = &mut output.wire
-                    {
-                        *destination = Some(publication_frontiers);
-                    }
+                ..
+            } => ProductDevRuntimeOutputWire::Binding {
+                runtime: host_runtime_binding(runtime),
+                next_input_sequence: CanonicalU64::new(next_input_sequence),
+            },
+            RuntimePublication::CompleteBaseline { runtime, .. } => {
+                ProductDevRuntimeOutputWire::CompleteBaseline {
+                    runtime: host_runtime_binding(runtime),
                 }
-                Ok(output)
             }
-            RuntimePublication::CompleteBaseline {
-                runtime,
-                publication_frontiers,
-            } => Ok(Self::complete_baseline_with_frontiers(
-                host_runtime_binding(runtime),
-                publication_frontiers
-                    .into_iter()
-                    .map(host_publication_frontier)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            RuntimePublication::Frame(frame) => Ok(Self {
-                renderer_resources: None,
-                wire: ProductDevRuntimeOutputWire::Frame { frame },
-            }),
-            RuntimePublication::ViewComposition(composition) => Ok(Self {
-                renderer_resources: None,
-                wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
-            }),
-            RuntimePublication::Presentation(frame) => Ok(Self {
-                renderer_resources: None,
-                wire: ProductDevRuntimeOutputWire::Presentation { frame },
-            }),
-            RuntimePublication::AnimationCueDefinitions(definitions) => {
-                let definitions = definitions
-                    .into_iter()
-                    .map(host_animation_cue_definition)
-                    .collect::<Result<Vec<_>, _>>()?;
-                Self::animation_cue_definitions(definitions)
+            RuntimePublication::UiProjection(envelope) => {
+                ProductDevRuntimeOutputWire::UiProjection { envelope }
             }
-            RuntimePublication::UiProjection(envelope) => Ok(Self {
-                renderer_resources: None,
-                wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
-            }),
-        }
-    }
-
-    /// Converts the browser wire DTO back to a typed logical publication.
-    /// Runtime readouts, input receipts, and host progress markers are
-    /// deliberately rejected because they are serving-host observations, not
-    /// Engine publications.
-    pub fn into_publication(self) -> Result<RuntimePublication, ProductDevHostError> {
-        match self.wire {
-            ProductDevRuntimeOutputWire::Binding {
-                runtime,
-                next_input_sequence,
-                publication_frontiers,
-            } => {
-                let publication = RuntimePublication::Binding {
-                    runtime: neutral_runtime_binding(runtime),
-                    next_input_sequence: next_input_sequence.get(),
-                    publication_frontiers: publication_frontiers
-                        .map(|frontiers| {
-                            frontiers
-                                .into_iter()
-                                .map(neutral_publication_frontier)
-                                .collect::<Result<Vec<_>, _>>()
-                        })
-                        .transpose()?,
-                };
-                publication.validate().map_err(publication_error)?;
-                Ok(publication)
-            }
-            ProductDevRuntimeOutputWire::CompleteBaseline {
-                runtime,
-                publication_frontiers,
-            } => {
-                let publication = RuntimePublication::complete_baseline_with_frontiers(
-                    neutral_runtime_binding(runtime),
-                    publication_frontiers
-                        .into_iter()
-                        .map(neutral_publication_frontier)
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-                publication.validate().map_err(publication_error)?;
-                Ok(publication)
-            }
-            ProductDevRuntimeOutputWire::Frame { frame } => Ok(RuntimePublication::Frame(frame)),
-            ProductDevRuntimeOutputWire::ViewComposition { composition } => {
-                Ok(RuntimePublication::ViewComposition(composition))
-            }
-            ProductDevRuntimeOutputWire::Presentation { frame } => {
-                Ok(RuntimePublication::Presentation(frame))
-            }
-            ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions } => {
-                let definitions = definitions
-                    .into_iter()
-                    .map(neutral_animation_cue_definition)
-                    .collect::<Result<Vec<_>, _>>()?;
-                RuntimePublication::animation_cue_definitions(definitions)
-                    .map_err(publication_error)
-            }
-            ProductDevRuntimeOutputWire::UiProjection { envelope } => {
-                Ok(RuntimePublication::UiProjection(envelope))
-            }
-            ProductDevRuntimeOutputWire::RendererResources
-            | ProductDevRuntimeOutputWire::RuntimeReadout { .. }
-            | ProductDevRuntimeOutputWire::RuntimeInputResult { .. } => {
-                Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_LOGICAL_VARIANT",
-                    "host-only runtime observation cannot become an Engine publication",
-                ))
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test_frame_value(value: Value) -> Self {
-        // Transport tests vary byte volume and ordering independently of renderer admission.
-        let frame = render_model::RenderFrameDiff {
-            publication: Some(render_model::RenderFramePublication {
-                stream: value.to_string(),
-                base_revision: 0,
-                revision: 1,
-                operation_count: 0,
-            }),
-            ..Default::default()
+            RuntimePublication::Frame(_)
+            | RuntimePublication::ViewComposition(_)
+            | RuntimePublication::Presentation(_)
+            | RuntimePublication::AnimationCueDefinitions(_) => return None,
         };
-        Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::Frame { frame },
-        }
+        Some(Self { wire })
+    }
+
+    /// A UI projection carrying `value`, for transport tests that vary byte
+    /// volume and ordering.
+    #[cfg(test)]
+    pub(crate) fn test_value(value: Value) -> Self {
+        use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
+        let binding = RuntimeUiRuntimeBinding::new(
+            RuntimeInstanceId::new(1),
+            RuntimeGeneration::new(1),
+            RuntimeControlRevision::new(1),
+        );
+        let envelope = RuntimeUiProjectionEnvelope::new(binding, 1, "test", "test", value)
+            .expect("fixture projection");
+        Self::ui_projection(&envelope)
     }
 
     pub fn binding(runtime: ProductDevRuntimeBinding, next_input_sequence: CanonicalU64) -> Self {
         Self {
-            renderer_resources: None,
             wire: ProductDevRuntimeOutputWire::Binding {
                 runtime,
                 next_input_sequence,
-                publication_frontiers: None,
             },
         }
     }
-    pub fn frame(frame: &render_model::RenderFrameDiff) -> Result<Self, ProductDevHostError> {
-        frame
-            .validate()
-            .map_err(|_| ProductDevHostError::new("DEV_HOST_RENDER_FRAME", "frame is invalid"))?;
-        let frame = frame.clone();
-        Ok(Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::Frame { frame },
-        })
-    }
-    /// Carries one Engine-owned camera/view composition to the existing
-    /// renderer host. Products publish typed facts; browser realization and
-    /// resize observation remain behind this fixed Engine output lane.
-    pub fn view_composition(
-        composition: &render_host_contracts::RendererViewComposition,
-    ) -> Result<Self, ProductDevHostError> {
-        composition.validate().map_err(|_| {
-            ProductDevHostError::new("DEV_HOST_VIEW_COMPOSITION", "view composition is invalid")
-        })?;
-        let composition = composition.clone();
-        Ok(Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
-        })
-    }
-    /// Preserve only newly emitted, non-retained presentation events when a
-    /// lifecycle operation publishes its complete committed snapshot.
-    pub fn transient_presentation(&self) -> Result<Option<Self>, ProductDevHostError> {
-        let ProductDevRuntimeOutputWire::Presentation { frame } = &self.wire else {
-            return Ok(None);
-        };
-        let events = frame.transient_events();
-        if events.is_empty() {
-            Ok(None)
-        } else {
-            Self::presentation(&events).map(Some)
+
+    pub fn ui_projection(envelope: &runtime_ui::RuntimeUiProjectionEnvelope) -> Self {
+        Self {
+            wire: ProductDevRuntimeOutputWire::UiProjection {
+                envelope: envelope.clone(),
+            },
         }
     }
 
-    pub fn presentation(
-        frame: &render_presentation::PresentationFrameDiff,
-    ) -> Result<Self, ProductDevHostError> {
-        frame.validate().map_err(|_| {
-            ProductDevHostError::new("DEV_HOST_PRESENTATION_FRAME", "frame is invalid")
-        })?;
-        let frame = frame.clone();
-        Ok(Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::Presentation { frame },
-        })
-    }
-    /// Replaces all active animation cue definitions in the generic renderer
-    /// host. This is a fixed typed output, not a product event stream.
-    pub fn animation_cue_definitions(
-        definitions: Vec<ProductDevAnimationCueDefinition>,
-    ) -> Result<Self, ProductDevHostError> {
-        // Each definition was checked by `ProductDevAnimationCueDefinition::new`.
-        let mut keys = std::collections::BTreeSet::new();
-        if definitions.iter().any(|definition| {
-            !keys.insert((
-                definition.asset.as_str(),
-                definition.clip.as_str(),
-                definition.cue_id.as_str(),
-            ))
-        }) {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_ANIMATION_CUE",
-                "animation cue definitions must not duplicate an asset, clip, and cue id",
-            ));
-        }
-        Ok(Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions },
-        })
-    }
-    pub fn ui_projection(
-        envelope: &runtime_ui::RuntimeUiProjectionEnvelope,
-    ) -> Result<Self, ProductDevHostError> {
-        let envelope = envelope.clone();
-        Ok(Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
-        })
-    }
     pub fn runtime_readout(readout: ProductDevRuntimeReadout) -> Self {
         Self {
-            renderer_resources: None,
             wire: ProductDevRuntimeOutputWire::RuntimeReadout { readout },
         }
     }
@@ -2676,7 +1577,6 @@ impl ProductDevRuntimeOutput {
     /// admission; this is the later runtime-owned receipt.
     pub fn runtime_input_result(result: ProductDevInputResult) -> Self {
         Self {
-            renderer_resources: None,
             wire: ProductDevRuntimeOutputWire::RuntimeInputResult { result },
         }
     }
@@ -2685,19 +1585,8 @@ impl ProductDevRuntimeOutput {
     /// buffers its preceding binding-tagged facts and exposes them together;
     /// later facts for that binding are incremental.
     pub fn complete_baseline(runtime: ProductDevRuntimeBinding) -> Self {
-        Self::complete_baseline_with_frontiers(runtime, Vec::new())
-    }
-
-    pub fn complete_baseline_with_frontiers(
-        runtime: ProductDevRuntimeBinding,
-        publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
-    ) -> Self {
         Self {
-            renderer_resources: None,
-            wire: ProductDevRuntimeOutputWire::CompleteBaseline {
-                runtime,
-                publication_frontiers,
-            },
+            wire: ProductDevRuntimeOutputWire::CompleteBaseline { runtime },
         }
     }
 
@@ -2710,7 +1599,7 @@ impl ProductDevRuntimeOutput {
 
     pub(crate) const fn complete_baseline_marker(&self) -> Option<ProductDevRuntimeBinding> {
         match &self.wire {
-            ProductDevRuntimeOutputWire::CompleteBaseline { runtime, .. } => Some(*runtime),
+            ProductDevRuntimeOutputWire::CompleteBaseline { runtime } => Some(*runtime),
             _ => None,
         }
     }
@@ -2735,34 +1624,6 @@ impl ProductDevRuntimeOutput {
         }
         Ok(whole_baseline)
     }
-
-    pub(crate) fn attach_complete_baseline_frontiers_to_binding(
-        &self,
-        binding: &mut Self,
-    ) -> Result<(), ProductDevHostError> {
-        let ProductDevRuntimeOutputWire::CompleteBaseline {
-            publication_frontiers,
-            ..
-        } = &self.wire
-        else {
-            return Ok(());
-        };
-        if publication_frontiers.is_empty() {
-            return Ok(());
-        }
-        let ProductDevRuntimeOutputWire::Binding {
-            publication_frontiers: destination,
-            ..
-        } = &mut binding.wire
-        else {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_BASELINE",
-                "a complete renderer frontier must attach to its baseline binding",
-            ));
-        };
-        *destination = Some(publication_frontiers.clone());
-        Ok(())
-    }
 }
 
 fn publication_error(error: RuntimePublicationError) -> ProductDevHostError {
@@ -2777,114 +1638,10 @@ fn host_runtime_binding(binding: RuntimeInputBinding) -> ProductDevRuntimeBindin
     }
 }
 
-fn neutral_runtime_binding(binding: ProductDevRuntimeBinding) -> RuntimeInputBinding {
-    RuntimeInputBinding::new(
-        RuntimeInstanceId::new(binding.instance_id.get()),
-        RuntimeGeneration::new(binding.generation.get()),
-        RuntimeControlRevision::new(binding.control_revision.get()),
-    )
-}
-
-fn host_publication_frontier(
-    frontier: RuntimePublicationFrontier,
-) -> Result<ProductDevRendererPublicationFrontier, ProductDevHostError> {
-    ProductDevRendererPublicationFrontier::new(frontier.stream().to_owned(), frontier.revision())
-}
-
-fn neutral_publication_frontier(
-    frontier: ProductDevRendererPublicationFrontier,
-) -> Result<RuntimePublicationFrontier, ProductDevHostError> {
-    RuntimePublicationFrontier::new(frontier.stream, frontier.revision).map_err(publication_error)
-}
-
-fn host_animation_cue_definition(
-    definition: RuntimeAnimationCueDefinition,
-) -> Result<ProductDevAnimationCueDefinition, ProductDevHostError> {
-    let signal_domain = match definition.signal_domain() {
-        RuntimeAnimationCueSignalDomain::Audio => ProductDevAnimationCueSignalDomain::Audio,
-        RuntimeAnimationCueSignalDomain::Particle => ProductDevAnimationCueSignalDomain::Particle,
-    };
-    ProductDevAnimationCueDefinition::new(
-        definition.cue_id().to_owned(),
-        definition.asset().to_owned(),
-        definition.clip().to_owned(),
-        definition.marker_millis(),
-        signal_domain,
-        definition.signal_id().to_owned(),
-    )
-}
-
-fn neutral_animation_cue_definition(
-    definition: ProductDevAnimationCueDefinition,
-) -> Result<RuntimeAnimationCueDefinition, ProductDevHostError> {
-    let signal_domain = match definition.signal_domain {
-        ProductDevAnimationCueSignalDomain::Audio => RuntimeAnimationCueSignalDomain::Audio,
-        ProductDevAnimationCueSignalDomain::Particle => RuntimeAnimationCueSignalDomain::Particle,
-    };
-    // The existing host DTO is derived from an Engine millisecond marker.
-    // Round back to the integral source unit before entering the neutral model.
-    let marker_millis = definition.at_seconds * 1_000.0;
-    if !marker_millis.is_finite()
-        || marker_millis < 0.0
-        || marker_millis > u64::MAX as f64
-        || marker_millis.fract() != 0.0
-    {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_ANIMATION_CUE",
-            "animation cue marker is not an integral millisecond value",
-        ));
-    }
-    RuntimeAnimationCueDefinition::new(
-        definition.cue_id,
-        definition.asset,
-        definition.clip,
-        marker_millis as u64,
-        signal_domain,
-        definition.signal_id,
-    )
-    .map_err(publication_error)
-}
-
-impl Serialize for ProductDevRuntimeOutput {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Envelope<'a> {
-            #[serde(flatten)]
-            wire: &'a ProductDevRuntimeOutputWire,
-            #[serde(rename = "rendererResources", skip_serializing_if = "Option::is_none")]
-            renderer_resources: &'a Option<Vec<String>>,
-        }
-        Envelope {
-            wire: &self.wire,
-            renderer_resources: &self.renderer_resources,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        let resources = value
-            .as_object_mut()
-            .and_then(|value| value.remove("rendererResources"))
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(serde::de::Error::custom)?;
-        let wire = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-        Ok(Self {
-            wire,
-            renderer_resources: resources,
-        })
-    }
-}
-
 /// One direct runtime receipt. The explicit owned output batch avoids a
 /// separate server-side output mutation/callback path.
 #[derive(Debug, Clone)]
 pub struct ProductDevRuntimeReceipt<T> {
-    resource_baseline: bool,
-    renderer_resources: Option<Vec<String>>,
     receipt: runtime_publication::RuntimeReceipt<T>,
 }
 
@@ -2938,24 +1695,8 @@ impl<T> ProductDevRuntimeReceipt<T> {
             output.validate().map_err(publication_error)?;
         }
         Ok(Self {
-            resource_baseline: outputs
-                .iter()
-                .any(|output| matches!(output, RuntimePublication::Binding { .. })),
-            renderer_resources: None,
             receipt: runtime_session::RuntimeReceipt::new(result, outputs),
         })
-    }
-
-    pub(crate) fn resource_baseline(&self) -> bool {
-        self.resource_baseline
-    }
-
-    /// Attaches the retained renderer resource closure, when it changed.
-    pub fn with_resource_inventory(mut self, inventory: Option<Vec<String>>) -> Self {
-        if inventory.is_some() {
-            self.renderer_resources = inventory;
-        }
-        self
     }
 
     pub fn result(&self) -> &T {
@@ -2967,20 +1708,13 @@ impl<T> ProductDevRuntimeReceipt<T> {
     }
 
     /// Encode only at the serving edge. Runtime receipts retain typed
-    /// Engine facts; byte budgets and JSON conversion belong to this adapter.
+    /// Engine facts; the browser shell's share is converted here.
     pub fn into_wire_parts(self) -> Result<(T, Vec<ProductDevRuntimeOutput>), ProductDevHostError> {
-        let inventory = self.renderer_resources.clone();
         let (result, publications) = self.receipt.into_parts();
-        let mut outputs = publications
+        let outputs = publications
             .into_iter()
-            .map(ProductDevRuntimeOutput::from_publication)
-            .collect::<Result<Vec<_>, _>>()?;
-        if outputs.is_empty() && inventory.is_some() {
-            outputs.push(ProductDevRuntimeOutput::resource_inventory());
-        }
-        if let Some(output) = outputs.first_mut() {
-            output.renderer_resources = inventory;
-        }
+            .filter_map(ProductDevRuntimeOutput::from_publication)
+            .collect::<Vec<_>>();
         ProductDevRuntimeOutput::validate_output_group(&outputs)?;
         Ok((result, outputs))
     }
@@ -2997,19 +1731,6 @@ pub trait ProductDevRuntime: Send + 'static {
     /// has nothing to do.
     fn reload_content(&mut self) -> Result<(), ProductDevRuntimeError> {
         Ok(())
-    }
-    fn renderer_resource_ids(&self) -> Option<Vec<String>> {
-        None
-    }
-    /// Returns a currently retained renderer body for the exact runtime
-    /// generation. Browser delivery uses this read-only path only when a
-    /// preload/baseline resource must be fetched; it does not publish output.
-    fn renderer_resource(
-        &mut self,
-        _identity: &str,
-        _generation: u64,
-    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
-        Ok(None)
     }
 
     /// Takes the one completed update-callback attribution sample, if this
@@ -3133,104 +1854,11 @@ pub trait ProductDevRuntime: Send + 'static {
         &mut self,
         completion: ProductDevTimelineCompletion,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>;
-
-    /// Ingests the fixed Engine browser-host audio realization snapshot. This
-    /// deliberately has no callback: a later ordinary product call exposes
-    /// the copied facts through the generated audio service readout.
-    fn report_audio_feedback(
-        &mut self,
-        _feedback: ProductDevAudioFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
-    {
-        Err(ProductDevRuntimeError::new_not_applied(
-            "DEV_HOST_AUDIO_FEEDBACK_UNSUPPORTED",
-            "audio feedback is not supported by this runtime",
-        ))
-    }
-
-    fn report_video_feedback(
-        &mut self,
-        _feedback: ProductDevVideoFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
-    {
-        Err(ProductDevRuntimeError::new(
-            "DEV_HOST_VIDEO_FEEDBACK_UNSUPPORTED",
-            "video feedback is not supported by this runtime",
-        ))
-    }
-
-    fn report_animation_feedback(
-        &mut self,
-        _feedback: ProductDevAnimationFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
-    {
-        Err(ProductDevRuntimeError::new_not_applied(
-            "DEV_HOST_ANIMATION_FEEDBACK_UNSUPPORTED",
-            "animation feedback is not supported by this runtime",
-        ))
-    }
-
-    /// Ingests the latest retained ghost-plate renderer snapshot. It is
-    /// exposed only by a later normal generated C# service read.
-    fn report_ghost_plate_feedback(
-        &mut self,
-        _feedback: ProductDevGhostPlateFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevGhostPlateFeedbackResult>, ProductDevRuntimeError>
-    {
-        Err(ProductDevRuntimeError::new_not_applied(
-            "DEV_HOST_GHOST_PLATE_FEEDBACK_UNSUPPORTED",
-            "ghost plate feedback is not supported by this runtime",
-        ))
-    }
-
-    fn report_renderer_diagnostics(
-        &mut self,
-        _feedback: ProductDevRendererDiagnosticsFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevRendererDiagnosticsFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        Err(ProductDevRuntimeError::new_not_applied(
-            "DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED",
-            "renderer diagnostics are not supported by this runtime",
-        ))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn video_terminal_feedback_accepts_browser_camel_case_fields() {
-        for kind in ["completed", "skipped", "failed"] {
-            let mut wire = serde_json::json!({"kind": kind, "factId": "7", "handle": "3"});
-            if kind == "failed" {
-                wire["code"] = serde_json::json!("decodeFailed");
-            }
-            let fact: ProductDevVideoFeedbackFact = serde_json::from_value(wire.clone()).unwrap();
-            assert_eq!(fact.fact_id().get(), 7);
-            assert_eq!(serde_json::to_value(fact).unwrap(), wire);
-        }
-    }
-
-    #[test]
-    fn animation_feedback_accepts_browser_camel_case_fields() {
-        let wire = serde_json::json!({
-            "kind": "playbackObservation", "factId": "1", "objectId": "42",
-            "generation": "1", "sequence": 1, "status": "sampled",
-            "selectedClip": "idle", "sampledAtSeconds": 0.5
-        });
-        let fact: ProductDevAnimationFeedbackFact = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(serde_json::to_value(fact).unwrap(), wire);
-        let completion = serde_json::json!({
-            "kind": "naturalCompletion", "factId": "2", "objectId": "42",
-            "generation": "1", "clip": "idle"
-        });
-        let fact: ProductDevAnimationFeedbackFact =
-            serde_json::from_value(completion.clone()).unwrap();
-        assert_eq!(serde_json::to_value(fact).unwrap(), completion);
-    }
 
     #[test]
     fn browser_attachment_report_uses_bounded_typed_baseline_facts() {
@@ -3246,8 +1874,7 @@ mod tests {
                     "replaces":"attachment-1",
                     "baseline":{
                         "runtime":{"instanceId":"7","generation":"3","controlRevision":"12"},
-                        "nextInputSequence":"14",
-                        "publicationFrontiers":[{"stream":"primary","revision":9}]
+                        "nextInputSequence":"14"
                     }
                 }
             }"#,
@@ -3257,10 +1884,7 @@ mod tests {
         report.validate().unwrap();
         let encoded = serde_json::to_value(&report).unwrap();
         assert_eq!(encoded["attachment"]["id"], "attachment-2");
-        assert_eq!(
-            encoded["attachment"]["baseline"]["publicationFrontiers"][0]["revision"],
-            9
-        );
+        assert_eq!(encoded["attachment"]["baseline"]["nextInputSequence"], "14");
 
         let invalid_id: ProductDevBrowserDiagnosticsReport = serde_json::from_str(
             r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"invalid id","replaces":null,"baseline":null}}"#,
@@ -3270,78 +1894,6 @@ mod tests {
             invalid_id.validate().unwrap_err().code(),
             "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"
         );
-
-        let mut too_many_frontiers = report;
-        too_many_frontiers
-            .attachment
-            .as_mut()
-            .unwrap()
-            .baseline
-            .as_mut()
-            .unwrap()
-            .publication_frontiers = (0
-            ..=ProductDevBrowserDiagnosticsReport::MAX_ATTACHMENT_FRONTIERS)
-            .map(|revision| ProductDevRendererPublicationFrontier {
-                stream: "primary".to_owned(),
-                revision: revision as u64,
-            })
-            .collect();
-        assert_eq!(
-            too_many_frontiers.validate().unwrap_err().code(),
-            "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"
-        );
-    }
-
-    fn feedback(fact: ProductDevGhostPlateFeedbackFact) -> ProductDevGhostPlateFeedback {
-        ProductDevGhostPlateFeedback {
-            runtime: ProductDevRuntimeBinding {
-                instance_id: CanonicalU64::new(1),
-                generation: CanonicalU64::new(1),
-                control_revision: CanonicalU64::new(1),
-            },
-            replace_owner: true,
-            facts: vec![fact],
-        }
-    }
-
-    fn fact() -> ProductDevGhostPlateFeedbackFact {
-        ProductDevGhostPlateFeedbackFact {
-            presentation: CanonicalU64::new(9),
-            source_matches: true,
-            current_sector: 2,
-            local_angular_offset_degrees: None,
-            fallback_active: false,
-            fallback_reason: ProductDevGhostPlateFallbackReason::None,
-            limitation_mask: 127,
-            preparation_cpu_milliseconds: Some(1.0),
-            capture_cpu_submission_milliseconds: Some(2.0),
-            retained_sector_count: 4,
-            retained_mesh_count: 1,
-            retained_material_count: 1,
-            retained_borrowed_texture_count: 0,
-        }
-    }
-
-    #[test]
-    fn ghost_plate_feedback_rejects_invalid_timings_without_an_angle() {
-        let mut invalid_preparation = fact();
-        invalid_preparation.preparation_cpu_milliseconds = Some(-0.1);
-        assert!(feedback(invalid_preparation).validate().is_err());
-
-        let mut invalid_capture = fact();
-        invalid_capture.capture_cpu_submission_milliseconds = Some(f64::NAN);
-        assert!(feedback(invalid_capture).validate().is_err());
-    }
-
-    #[test]
-    fn ghost_plate_feedback_requires_fallback_flag_and_reason_to_agree() {
-        let mut inactive_reason = fact();
-        inactive_reason.fallback_reason = ProductDevGhostPlateFallbackReason::RealizationFailed;
-        assert!(feedback(inactive_reason).validate().is_err());
-
-        let mut active_none = fact();
-        active_none.fallback_active = true;
-        assert!(feedback(active_none).validate().is_err());
     }
 
     #[test]
@@ -3397,7 +1949,7 @@ mod tests {
 
     #[test]
     fn runtime_output_wire_round_trips_without_a_wrapper() {
-        let output = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({
+        let output = ProductDevRuntimeOutput::test_value(serde_json::json!({
             "sequence": "7",
             "changed": true,
         }));
@@ -3405,7 +1957,7 @@ mod tests {
 
         assert_eq!(
             serde_json::from_slice::<Value>(&encoded).unwrap()["kind"],
-            "frame"
+            "ui-projection"
         );
         assert_eq!(
             ProductDevRuntimeOutput::decode_json(&encoded).unwrap(),
@@ -3414,10 +1966,9 @@ mod tests {
     }
 
     #[test]
-    fn logical_publications_round_trip_through_the_existing_wire_schema() {
+    fn only_the_shells_publications_reach_the_wire() {
         use render_model::RenderFrameDiff;
         use runtime_input::RuntimeInputBinding;
-        use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
         use runtime_publication::{
             RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
             RuntimePublicationFrontier,
@@ -3430,33 +1981,25 @@ mod tests {
             RuntimeControlRevision::new(5),
         );
         let frontier = RuntimePublicationFrontier::new("voxel", 4).unwrap();
-        let baseline =
-            RuntimePublication::complete_baseline_with_frontiers(binding, vec![frontier]);
-        let baseline_wire = ProductDevRuntimeOutput::from_publication(baseline.clone()).unwrap();
-        assert_eq!(baseline_wire.into_publication().unwrap(), baseline);
+        let baseline = ProductDevRuntimeOutput::from_publication(
+            RuntimePublication::complete_baseline_with_frontiers(binding, vec![frontier]),
+        )
+        .expect("a baseline end reaches the shell");
+        assert_eq!(
+            serde_json::to_value(baseline).unwrap(),
+            serde_json::json!({
+                "kind": "complete-baseline",
+                "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "5" },
+            }),
+        );
 
         let frame = RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Destroy {
             handle: render_model::RenderHandle::new(17),
         }])
         .unwrap();
-        let frame_publication = RuntimePublication::Frame(frame.clone());
-        let frame_wire =
-            ProductDevRuntimeOutput::from_publication(frame_publication.clone()).unwrap();
-        let encoded = serde_json::to_vec(&frame_wire).unwrap();
-        let json: Value = serde_json::from_slice(&encoded).unwrap();
-        assert_eq!(
-            json["frame"],
-            serde_json::from_str::<Value>(&frame.encode_json().unwrap()).unwrap()
+        assert!(
+            ProductDevRuntimeOutput::from_publication(RuntimePublication::Frame(frame)).is_none()
         );
-        assert_eq!(
-            ProductDevRuntimeOutput::decode_json(&encoded)
-                .unwrap()
-                .into_publication()
-                .unwrap(),
-            frame_publication
-        );
-        assert_eq!(frame_wire.into_publication().unwrap(), frame_publication);
-
         let cue = RuntimeAnimationCueDefinition::new(
             "footstep",
             "audio/footstep",
@@ -3466,9 +2009,10 @@ mod tests {
             "left",
         )
         .unwrap();
-        let cue_publication = RuntimePublication::animation_cue_definitions(vec![cue]).unwrap();
-        let cue_wire = ProductDevRuntimeOutput::from_publication(cue_publication.clone()).unwrap();
-        assert_eq!(cue_wire.into_publication().unwrap(), cue_publication);
+        assert!(ProductDevRuntimeOutput::from_publication(
+            RuntimePublication::animation_cue_definitions(vec![cue]).unwrap()
+        )
+        .is_none());
 
         let envelope = RuntimeUiProjectionEnvelope::new(
             RuntimeUiRuntimeBinding::new(
@@ -3483,27 +2027,22 @@ mod tests {
         )
         .unwrap();
         let canonical: Value = serde_json::from_slice(&envelope.encode_json().unwrap()).unwrap();
-        assert_eq!(canonical["runtime"]["instanceId"], "7");
-        assert_eq!(canonical["sequence"], "1");
-        let ui_publication = RuntimePublication::UiProjection(envelope.clone());
-        let ui_wire = ProductDevRuntimeOutput::from_publication(ui_publication.clone()).unwrap();
+        let ui_wire =
+            ProductDevRuntimeOutput::from_publication(RuntimePublication::UiProjection(envelope))
+                .unwrap();
         let encoded = serde_json::to_vec(&ui_wire).unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&encoded).unwrap()["envelope"],
             canonical
         );
         assert_eq!(
-            ProductDevRuntimeOutput::decode_json(&encoded)
-                .unwrap()
-                .into_publication()
-                .unwrap(),
-            ui_publication
+            ProductDevRuntimeOutput::decode_json(&encoded).unwrap(),
+            ui_wire
         );
-        assert_eq!(ui_wire.into_publication().unwrap(), ui_publication);
     }
 
     #[test]
-    fn readouts_change_the_browser_view_only_on_lifecycle_facts_or_held_steps() {
+    fn readouts_change_the_browser_view_only_on_lifecycle_facts() {
         let binding = ProductDevRuntimeBinding {
             instance_id: CanonicalU64::new(7),
             generation: CanonicalU64::new(1),
@@ -3517,7 +2056,6 @@ mod tests {
             )
             .with_counters(steps, steps, 0, 0)
             .with_clock(Some(3), Some(steps * 16_666_667))
-            .with_inspection_time("realtime".to_owned(), 60)
         };
         assert!(!running(2).changes_browser_view(&running(1)));
         let paused = ProductDevRuntimeReadout {
@@ -3533,60 +2071,6 @@ mod tests {
             ..running(2)
         };
         assert!(rebound.changes_browser_view(&running(1)));
-        let held = |steps: u64| running(steps).with_inspection_time("manual".to_owned(), 60);
-        assert!(held(1).changes_browser_view(&running(1)));
-        assert!(held(2).changes_browser_view(&held(1)));
-        assert!(!held(2).changes_browser_view(&held(2)));
-    }
-
-    #[test]
-    fn host_observations_do_not_enter_the_logical_publication_model() {
-        let binding = ProductDevRuntimeBinding {
-            instance_id: CanonicalU64::new(7),
-            generation: CanonicalU64::new(1),
-            control_revision: CanonicalU64::new(1),
-        };
-        let readout = ProductDevRuntimeReadout::new(
-            binding,
-            ProductDevRuntimeMode::Realtime,
-            ProductDevRuntimeState::Running,
-        );
-        let error = ProductDevRuntimeOutput::runtime_readout(readout)
-            .into_publication()
-            .expect_err("host progress is not an Engine publication");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_LOGICAL_VARIANT");
-    }
-
-    #[test]
-    fn complete_baseline_frontiers_are_carried_by_its_binding() {
-        let binding = ProductDevRuntimeBinding {
-            instance_id: CanonicalU64::new(7),
-            generation: CanonicalU64::new(3),
-            control_revision: CanonicalU64::new(5),
-        };
-        let completion = ProductDevRuntimeOutput::complete_baseline_with_frontiers(
-            binding,
-            vec![ProductDevRendererPublicationFrontier::new("voxel:active".to_owned(), 4).unwrap()],
-        );
-        let mut baseline = ProductDevRuntimeOutput::binding(binding, CanonicalU64::new(0));
-
-        completion
-            .attach_complete_baseline_frontiers_to_binding(&mut baseline)
-            .unwrap();
-
-        assert_eq!(
-            serde_json::to_value(baseline).unwrap(),
-            serde_json::json!({
-                "kind": "binding",
-                "runtime": {
-                    "instanceId": "7",
-                    "generation": "3",
-                    "controlRevision": "5",
-                },
-                "nextInputSequence": "0",
-                "publicationFrontiers": [{ "stream": "voxel:active", "revision": 4 }],
-            }),
-        );
     }
 
     #[test]
@@ -3596,7 +2080,7 @@ mod tests {
             generation: CanonicalU64::new(3),
             control_revision: CanonicalU64::new(5),
         };
-        let large = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({
+        let large = ProductDevRuntimeOutput::test_value(serde_json::json!({
             "payload": "x".repeat(16 * 1024 * 1024 + 1),
         }));
         assert_eq!(
@@ -3619,7 +2103,7 @@ mod tests {
                 ProductDevRuntimeOutput::binding(binding, CanonicalU64::new(0)),
                 large,
                 ProductDevRuntimeOutput::complete_baseline(binding),
-                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
             ])
             .expect("a bounded recovery baseline may share publication with following ticks"),
             None,

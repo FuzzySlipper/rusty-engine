@@ -33,9 +33,9 @@ TypeScript UI is composited over it. Decision and measurements:
   ([evidence #8791](evidence/video-8791/README.md)). The streaming mode
   draws video into its frames and shows those frames above the page
   ([architecture](architecture.md#streaming-browser-mode)).
-- **Audio.** The shell's runtime plays audio on the output device
-  (`RUSTY_AUDIO_OUTPUT=device`, see [recorded audio](recorded-audio.md)),
-  video soundtracks included.
+- **Audio.** The runtime plays audio on the output device, video
+  soundtracks included, as it does for streamed frames (see
+  [recorded audio](recorded-audio.md#device-realization)).
 - **Live debug.** Unchanged: `rusty-live-debug --origin http://127.0.0.1:<port>`
   reaches the runtime's HTTP host over loopback. `RUSTY_CEF_SWITCHES`
   passes Chromium switches (comma-separated `name[=value]`); with

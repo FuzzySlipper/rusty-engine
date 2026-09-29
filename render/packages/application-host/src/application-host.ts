@@ -1,31 +1,8 @@
-import type { RenderOutputJob } from "@rusty-engine/render-contracts";
-import type { PresentationFrameDiff, RenderFrameDiff, RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import {
-  RendererAnimationHost,
-  RendererAnimationCueDefinitionError,
-  RendererAudioHost,
-  RendererVideoHost,
-  RendererBillboardHost,
-  RendererParticleHost,
-  RendererGhostPlateHost,
-  RendererPresentationHostSet,
-  createRendererDefaultSurfaceFrame,
-  mountRendererSurface,
-  type RendererSurface,
-  type RendererSurfaceDiagnosticsReadout,
-  type RendererSurfaceOptions,
-  type RendererSurfaceResourceOptions,
-} from '@rusty-engine/renderer-host';
-import {
-  RustyApplicationContentError,
-  prepareRustyApplicationContent,
-  rustyApplicationAudioResourceResolver,
-  RustyApplicationResourceCatalog,
-  rustyApplicationSurfaceResourceOptions,
-  type PreparedRustyApplicationContent,
-  type RustyApplicationContent,
-  type RustyApplicationResource,
-} from './application-content.js';
+  mountRustyApplicationFrameView,
+  type RustyApplicationFrameView,
+  type RustyApplicationRenderOutput,
+} from './frame-view.js';
 import {
   resolvePresentationFrameGeometry,
   validatePresentationAspectBounds,
@@ -37,7 +14,6 @@ import {
   type RustyApplicationInterfaceInputObservation,
   type RustyApplicationManagedInputIngress,
   type RustyApplicationRuntimeInputOptions,
-  type RustyApplicationRuntimeIdentity,
   type RustyApplicationRuntimeIntentValue,
 } from './input-ingress.js';
 import {
@@ -60,365 +36,6 @@ export type RustyApplicationInteractionMode =
 
 /** Engine-selected cursor behavior while gameplay owns input. */
 export type RustyApplicationGameplayCursorMode = 'pointer-lock' | 'unlocked';
-
-/** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
-export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
-/** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
-export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
-export interface RustyApplicationViewCompositionCamera {
-  readonly id: string;
-  readonly pose: {
-    readonly position: readonly [number, number, number];
-    readonly pitchDegrees: number;
-    readonly yawDegrees: number;
-  };
-  readonly basis?: {
-    readonly forward: readonly [number, number, number];
-    readonly right: readonly [number, number, number];
-    readonly up: readonly [number, number, number];
-  };
-  readonly projection:
-    | { readonly kind: 'perspective'; readonly fovYDegrees: number; readonly near: number; readonly far: number }
-    | { readonly kind: 'orthographic'; readonly verticalSize: number; readonly near: number; readonly far: number };
-}
-
-export interface RustyApplicationViewCompositionTarget {
-  readonly id: string;
-  readonly revision: number;
-  readonly width: number;
-  readonly height: number;
-  readonly color: 'rgba8_srgb';
-  readonly depth: 'depth24' | 'none';
-  readonly sampling: 'linear' | 'nearest';
-}
-
-export interface RustyApplicationViewCompositionViewport {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-export interface RustyApplicationViewCompositionView {
-  readonly id: string;
-  readonly cameraId: string;
-  readonly target:
-    | { readonly kind: 'primary' }
-    | { readonly kind: 'offscreen'; readonly targetId: string; readonly targetRevision: number };
-  readonly viewport: RustyApplicationViewCompositionViewport;
-  readonly order: number;
-}
-
-export interface RustyApplicationViewCompositionPresentation {
-  readonly id: string;
-  readonly sourceTargetId: string;
-  readonly sourceTargetRevision: number;
-  readonly destination: {
-    readonly kind: 'primary';
-    readonly viewport: RustyApplicationViewCompositionViewport;
-  };
-  readonly order: number;
-}
-
-/** Typed Engine view composition, realized by the Engine renderer against its current surface. */
-export interface RustyApplicationViewComposition {
-  readonly schemaVersion: 1;
-  readonly cameras: readonly RustyApplicationViewCompositionCamera[];
-  readonly targets: readonly RustyApplicationViewCompositionTarget[];
-  readonly views: readonly RustyApplicationViewCompositionView[];
-  readonly presentations: readonly RustyApplicationViewCompositionPresentation[];
-}
-
-/** A product-provided marker snapshot realized only by the Engine animation host. */
-export interface RustyApplicationAnimationCueDefinition {
-  readonly cueId: string;
-  readonly asset: string;
-  readonly clip: string;
-  readonly atSeconds: number;
-  readonly signal: {
-    readonly domain: 'audio' | 'particle';
-    readonly id: string;
-  };
-}
-
-export interface RustyApplicationCameraPose {
-  readonly position: readonly [number, number, number];
-  readonly pitchDegrees: number;
-  readonly yawDegrees: number;
-}
-
-/** Focused renderer-owned retained ghost facts; no backend object crosses this port. */
-export interface RustyApplicationGhostPlateReadout {
-  readonly activePlates: number;
-  readonly plates: readonly {
-    readonly handle: number;
-    readonly source: number;
-    readonly sourceMatch: boolean;
-    readonly currentSector: number;
-    readonly localAzimuthDegrees: number | null;
-    readonly capture: {
-      readonly resolution: number;
-      readonly azimuthDegrees: number;
-      readonly elevationDegrees: number;
-      readonly near: number;
-      readonly far: number;
-      readonly fieldOfViewDegrees: number;
-      readonly lighting: { readonly mode: 'scene' | 'isolated' };
-    };
-    readonly config: {
-      readonly depthRetention: number;
-      readonly anchorPolicy: 'bounds-center' | 'bounds-normalized';
-      readonly anchorValue: number;
-      readonly plateMapping: 'plate-locked' | 'projective-surface';
-      readonly shellMode: 'whole-mesh' | 'strict-source' | 'repaired-source';
-      readonly shellDepthEpsilon: number;
-      readonly sectorCount: 1 | 4 | 8 | 16;
-      readonly sectorHysteresisDegrees: number;
-    };
-    readonly fallbackActive: boolean;
-    readonly fallbackReason: string | null;
-    /** Closed GhostPlateLimitationMask bits; no renderer limitation strings cross this port. */
-    readonly limitationMask: number;
-    readonly preparationCpuMilliseconds: number | null;
-    readonly captureCpuSubmissionMilliseconds: number | null;
-    readonly retainedResourceCounts: {
-      readonly sectors: number;
-      readonly meshes: number;
-      readonly materials: number;
-      readonly borrowedTextures: number;
-    };
-  }[];
-}
-
-export interface RustyApplicationFrameDiagnostic {
-  readonly code: string;
-  readonly message: string;
-}
-
-export interface RustyApplicationFrameReceipt {
-  readonly applied: boolean;
-  readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
-  readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
-}
-
-export interface RustyApplicationPresentationDiagnostic {
-  readonly code: string;
-  readonly domain: string;
-  readonly message: string;
-}
-
-export interface RustyApplicationPresentationReceipt {
-  readonly applied: number;
-  readonly outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal';
-  readonly diagnostics: readonly RustyApplicationPresentationDiagnostic[];
-}
-
-export interface RustyApplicationAudioResumeReceipt {
-  readonly resumed: boolean;
-  readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
-}
-
-export type RustyApplicationAudioDiagnosticCode =
-  | 'invalidDescriptor'
-  | 'assetMissing'
-  | 'assetKindMismatch'
-  | 'contentHashMismatch'
-  | 'duplicateSignal'
-  | 'duplicateHandle'
-  | 'unknownHandle'
-  | 'unavailableHost'
-  | 'audioContextBlocked'
-  | 'decodeFailed'
-  | 'hostFailure';
-
-export interface RustyApplicationAudioDiagnostic {
-  readonly code: RustyApplicationAudioDiagnosticCode;
-  readonly sequence: number;
-  readonly handle: number | null;
-  /** Present only when a one-shot terminal diagnostic identifies its signal. */
-  readonly signalHandle?: number;
-  readonly message: string;
-}
-
-export type RustyApplicationAudioRealizedFact =
-  | {
-      readonly kind: 'naturalCompletion';
-      readonly factId: number;
-      readonly source: 'oneShot';
-      readonly sequence: number;
-      readonly signalHandle: number;
-    }
-  | {
-      readonly kind: 'naturalCompletion';
-      readonly factId: number;
-      readonly source: 'retainedVoice';
-      readonly sequence: number;
-      readonly handle: number;
-    }
-  | {
-      readonly kind: 'diagnostic';
-      readonly factId: number;
-      readonly diagnostic: RustyApplicationAudioDiagnostic;
-    };
-
-export interface RustyApplicationAudioRealizedFactsReadout {
-  readonly retainedFactCount: number;
-  readonly evictedFactCount: number;
-  readonly facts: readonly RustyApplicationAudioRealizedFact[];
-}
-
-export type RustyApplicationVideoRealizedFact =
-  | { readonly kind: 'completed'; readonly factId: number; readonly handle: number }
-  | { readonly kind: 'skipped'; readonly factId: number; readonly handle: number }
-  | { readonly kind: 'failed'; readonly factId: number; readonly handle: number; readonly code: 'decodeFailed' | 'playbackBlocked' | 'hostFailure' };
-
-export interface RustyApplicationVideoRealizedFactsReadout {
-  readonly retainedFactCount: number;
-  readonly evictedFactCount: number;
-  readonly facts: readonly RustyApplicationVideoRealizedFact[];
-}
-
-export type RustyApplicationAnimationDiagnosticCode =
-  | 'invalidDescriptor'
-  | 'duplicateHandle'
-  | 'unknownHandle'
-  | 'unknownTarget'
-  | 'assetMissing'
-  | 'contentHashMismatch'
-  | 'clipMissing'
-  | 'incompatibleRig'
-  | 'invalidBlendWeight'
-  | 'invalidTransition'
-  | 'staleRevision'
-  | 'unavailableHost'
-  | 'compatibilityFallback'
-  | 'hostFailure';
-
-export interface RustyApplicationAnimationDiagnostic {
-  readonly code: RustyApplicationAnimationDiagnosticCode;
-  readonly sequence: number;
-  readonly handle: number | null;
-  readonly target: number | null;
-  readonly message: string;
-}
-
-export type RustyApplicationAnimationRealizedFact =
-  | (import('@rusty-engine/render-contracts').AnimatedMeshInspectionObservation & { readonly kind: 'meshInspection'; readonly factId: number })
-  | {
-      readonly kind: 'playbackObservation';
-      readonly factId: number;
-      readonly objectId: number;
-      readonly generation: number;
-      readonly sequence: number;
-      readonly status: 'unavailable' | 'not_started' | 'playing' | 'paused' | 'sampled' | 'stopped';
-      readonly selectedClip: string | null;
-      readonly sampledAtSeconds: number | null;
-    }
-  | {
-      readonly kind: 'diagnostic';
-      readonly factId: number;
-      readonly objectId: number | null;
-      readonly generation: number | null;
-      readonly diagnostic: RustyApplicationAnimationDiagnostic;
-    }
-  | {
-      readonly kind: 'cue';
-      readonly factId: number;
-      readonly objectId: number;
-      readonly generation: number;
-      readonly cueId: string;
-      readonly clip: string;
-      readonly markerSeconds: number;
-      readonly sampledAtSeconds: number;
-      readonly signal: RustyApplicationAnimationCueDefinition['signal'];
-    }
-  | {
-      readonly kind: 'stopped';
-      readonly factId: number;
-      readonly objectId: number;
-      readonly generation: number;
-      readonly sequence: number;
-      readonly reason: 'destroyed' | 'teardown';
-    }
-  | {
-      readonly kind: 'naturalCompletion';
-      readonly factId: number;
-      readonly objectId: number;
-      readonly generation: number;
-      readonly clip: string;
-    };
-
-export interface RustyApplicationAnimationRealizedFactsReadout {
-  readonly retainedFactCount: number;
-  readonly evictedFactCount: number;
-  readonly facts: readonly RustyApplicationAnimationRealizedFact[];
-}
-
-export interface RustyApplicationViewCompositionReceipt {
-  readonly applied: boolean;
-  readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
-  readonly diagnostics: readonly {
-    readonly code:
-      | 'invalid_view_composition'
-      | 'stale_target_revision'
-      | 'surface_disposed'
-      | 'target_allocation_failed';
-    readonly message: string;
-  }[];
-  readonly revision: number;
-}
-
-export interface RustyApplicationRendererPort {
-  readonly inspection?: RendererSurface['inspection'];
-  readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
-  readonly applyPresentation: (
-    frame: RustyApplicationPresentationFrame,
-  ) => Promise<RustyApplicationPresentationReceipt>;
-  /** Atomically replace marker definitions consumed by the existing animation host. */
-  readonly replaceAnimationCueDefinitions: (
-    definitions: readonly RustyApplicationAnimationCueDefinition[],
-  ) => RustyApplicationFrameReceipt;
-  /** Read Engine-realized audio facts without exposing the browser audio owner. */
-  readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
-  readonly videoRealizedFacts: () => RustyApplicationVideoRealizedFactsReadout | null;
-  readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
-  readonly ghostPlateReadout: () => RustyApplicationGhostPlateReadout | null;
-  readonly diagnosticsReadout: () => RendererSurfaceDiagnosticsReadout;
-  /** Acknowledge only the submitted Engine-realized audio fact range. */
-  readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
-  readonly acknowledgeVideoRealizedFacts: (throughFactId: number) => boolean;
-  readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
-  /** Invalidate the realized-audio owner when a product runtime binding changes. */
-  readonly resetAudioRealizationOwner: () => boolean;
-  readonly resetVideoRealizationOwner: () => boolean;
-  readonly resetAnimationRealizationOwner: () => boolean;
-  readonly resetCameraMotion: () => void;
-  readonly configureViews: (
-    composition: RustyApplicationViewComposition,
-  ) => RustyApplicationViewCompositionReceipt;
-  /** Replace product content with the Engine-owned empty/default retained frame. */
-  readonly clear: () => Promise<void>;
-  readonly renderOnce: (timeMs?: number) => void;
-  readonly executeRenderOutput: (job: RenderOutputJob) => Promise<Uint8Array>;
-  /** Admit immutable bytes into the live Engine renderer without replacing its surface. */
-  readonly admitResources: (
-    resources: readonly RustyApplicationResource[],
-    frame?: RustyApplicationFrame,
-  ) => Promise<void>;
-  readonly retainResources: (identities: ReadonlySet<string>) => void;
-  /** Atomically replace the immutable resource catalog and complete retained frame. */
-  readonly replaceContent: (
-    content: RustyApplicationContent,
-  ) => Promise<RustyApplicationFrameReceipt>;
-  /** Prepare and atomically publish a complete Rust-projected retained frame. */
-  readonly replaceFrame: (
-    frame: RustyApplicationFrame,
-    publicationFrontiers?: readonly RenderPublicationFrontier[],
-  ) => Promise<RustyApplicationFrameReceipt>;
-  /** Resume the browser audio context from a downstream user-gesture handler. */
-  readonly resumeAudio: () => Promise<RustyApplicationAudioResumeReceipt>;
-  readonly setCameraPose: (pose: RustyApplicationCameraPose) => void;
-}
 
 export interface RustyApplicationUiPort {
   readonly active: () => boolean;
@@ -472,63 +89,21 @@ export type RustyApplicationUiMount = (
   context: RustyApplicationUiContext,
 ) => void | RustyApplicationUiOwner | Promise<void | RustyApplicationUiOwner>;
 
-export interface RustyApplicationRendererOptions {
-  readonly clearColor?: number;
-  /** Optional Engine-owned linear fog applied by the mounted renderer surface. */
-  readonly fog?: RustyApplicationFogOptions;
-  /** Optional retained-light policy for the mounted world and shadow backend. */
-  readonly lighting?: RustyApplicationLightingOptions;
-  readonly initialContent?: RustyApplicationContent;
-  readonly initialFrame?: RustyApplicationFrame;
-  readonly pixelRatio?: number;
-  /** Gameplay-owned entity positions used only to resolve neutral billboard anchors. */
-  readonly resolveIndicatorEntityPosition?: (
-    entity: number,
-  ) => readonly [number, number, number] | null;
-  /** Gameplay-owned entity positions used only to resolve neutral particle anchors. */
-  readonly resolveParticleEntityPosition?: (
-    entity: number,
-  ) => readonly [number, number, number] | null;
-  /** Observe the one Engine-owned renderer cadence without creating another RAF. */
-  readonly onCadence?: (timeMs: number) => void;
-  /**
-   * Mount this surface on the Engine canvas instead of the Three surface. The
-   * streaming browser mode passes one that shows frames the runtime renders.
-   */
-  readonly mountSurface?: (
-    canvas: HTMLCanvasElement,
-    options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
-  ) => RendererSurface | Promise<RendererSurface>;
-}
-
-export interface RustyApplicationLightingOptions {
-  readonly defaultLights?: {
-    readonly world?: 'neutral' | 'disabled';
-    readonly viewmodel?: 'neutral' | 'disabled';
-  };
-  readonly shadows?: {
-    readonly enabled?: boolean;
-  };
-}
-
-export interface RustyApplicationFogOptions {
-  readonly color: number;
-  readonly near: number;
-  readonly far: number;
-}
-
 export interface RustyApplicationHostOptions {
   readonly root: HTMLElement;
   readonly mountUi: RustyApplicationUiMount;
+  /** Where the runtime draws the world: streamed to this page (the default) or to the desktop window under it. */
+  readonly output?: RustyApplicationRenderOutput;
+  /** Observe the one page cadence without creating another animation-frame loop. */
+  readonly onCadence?: (timeMs: number) => void;
   /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
   readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
-  readonly renderer?: RustyApplicationRendererOptions;
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
   readonly initialInteractionMode?: RustyApplicationInteractionMode;
   /** Pointer lock is the existing first-person default; unlocked gameplay keeps the browser cursor. */
   readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
-  /** Optional browser input ingress. Omission leaves renderer controls and DOM capture disabled. */
+  /** Optional browser input ingress. Omission leaves DOM capture disabled. */
   readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
   /** Optional strict Product UI projection channel. */
   readonly uiProjection?: RustyApplicationUiProjectionOptions;
@@ -536,18 +111,14 @@ export interface RustyApplicationHostOptions {
 
 export interface RustyApplicationHostReadout {
   readonly compatibilityVersion: typeof RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
-  readonly contentRevision: number;
   readonly interactionMode: RustyApplicationInteractionMode;
   readonly pointerLocked: boolean;
-  readonly resourceBytes: number;
-  readonly resourceCount: number;
   readonly uiProjection?: RustyApplicationUiProjectionReadout;
   readonly state: 'ready' | 'disposed';
 }
 
 export interface RustyApplicationHost {
   readonly kind: 'rusty_application_host.v1';
-  readonly renderer: RustyApplicationRendererPort;
   readonly ui: RustyApplicationUiPort;
   /** Optional ordered physical-input and direct-UI-claim transport lane. */
   readonly input?: RustyApplicationInputPort;
@@ -558,7 +129,7 @@ export interface RustyApplicationHost {
 }
 
 export class RustyApplicationHostError extends Error {
-  readonly code: 'invalid_presentation_aspect_bounds' | 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
+  readonly code: 'invalid_presentation_aspect_bounds' | 'invalid_root' | 'mount_failed' | 'disposed';
 
   constructor(
     code: RustyApplicationHostError['code'],
@@ -571,33 +142,10 @@ export class RustyApplicationHostError extends Error {
   }
 }
 
-interface RustyApplicationHostEnvironment {
-  readonly mountSurface: (
-    canvas: HTMLCanvasElement,
-    options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
-  ) => RendererSurface | Promise<RendererSurface>;
-}
-
-const BROWSER_ENVIRONMENT: RustyApplicationHostEnvironment = {
-  mountSurface: mountRendererSurface,
-};
-
 const failureFrameResizeCleanups = new WeakMap<HTMLElement, () => void>();
 
 export async function mountRustyApplication(
   options: RustyApplicationHostOptions,
-): Promise<RustyApplicationHost> {
-  const mountSurface = options.renderer?.mountSurface;
-  return mountRustyApplicationWithEnvironment(
-    options,
-    mountSurface === undefined ? BROWSER_ENVIRONMENT : { mountSurface },
-  );
-}
-
-/** Internal injection seam for focused host lifecycle tests. Not exported by the package root. */
-export async function mountRustyApplicationWithEnvironment(
-  options: RustyApplicationHostOptions,
-  environment: RustyApplicationHostEnvironment,
 ): Promise<RustyApplicationHost> {
   const { root } = options;
   let presentationAspectBounds: RustyApplicationPresentationAspectBounds | undefined;
@@ -643,7 +191,8 @@ export async function mountRustyApplicationWithEnvironment(
   root.append(layout.host);
   root.dataset['rustyApplicationState'] = 'mounting';
 
-  let surface: RendererSurface | null = null;
+  const { canvas } = layout;
+  let frames: RustyApplicationFrameView | null = null;
   let input: RustyApplicationManagedInputIngress | null = null;
   let uiOwner: RustyApplicationUiOwner | null = null;
   let removeListeners = (): void => undefined;
@@ -652,22 +201,6 @@ export async function mountRustyApplicationWithEnvironment(
   let disposal: Promise<void> | null = null;
   let interactionMode = options.initialInteractionMode ?? 'interface';
   const gameplayCursorMode = options.gameplayCursorMode ?? 'pointer-lock';
-  let activeCanvas = layout.canvas;
-  let activeContent: PreparedRustyApplicationContent | null = null;
-  let resourceCatalog = new RustyApplicationResourceCatalog();
-  let activeAudio: RendererAudioHost | null = null;
-  let activeVideo: RendererVideoHost | null = null;
-  let activeAnimation: RendererAnimationHost | null = null;
-  let activeBillboard: RendererBillboardHost | null = null;
-  let activeParticle: RendererParticleHost | null = null;
-  let activeBillboardUrls = new Set<string>();
-  let contentRevision = 0;
-  let replacementPending = 0;
-  let replacementQueue: Promise<void> = Promise.resolve();
-  // Once a lower renderer reports an ownership/lifetime terminal outcome, no
-  // later product output may probe the same surface as though its prior state
-  // were still authoritative.
-  let rendererTerminal = false;
   let intents: RustyApplicationUiIntentsPort | null = null;
   const interfaceInputObservers = new Set<(input: RustyApplicationInterfaceInputObservation) => void>();
   const removePresentationResizeListener = installPresentationFrameSizing(
@@ -675,19 +208,11 @@ export async function mountRustyApplicationWithEnvironment(
     layout.host,
     layout.frame,
     presentationAspectBounds,
-    () => {
-      if (!disposed && surface !== null) surface.renderOnce();
-    },
   );
 
-  const requireActive = (): RendererSurface => {
-    if (closing || disposed || surface === null) {
-      throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
-    }
-    return surface;
-  };
+  const pointerLocked = (): boolean => document.pointerLockElement === canvas;
   const releaseInput = (): void => {
-    surface?.releaseInput();
+    if (pointerLocked()) document.exitPointerLock();
   };
   const setInteractionMode = (mode: RustyApplicationInteractionMode): void => {
     if (disposed) {
@@ -703,594 +228,12 @@ export async function mountRustyApplicationWithEnvironment(
   };
   const focusGameplay = (): void => {
     if (interactionMode !== 'gameplay') return;
-    const activeSurface = requireActive();
-    activeSurface.canvas.focus({ preventScroll: true });
-    if (gameplayCursorMode === 'pointer-lock') requestPointerLock(activeSurface.canvas);
-  };
-  const mountSurface = async (
-    canvas: HTMLCanvasElement,
-    content: PreparedRustyApplicationContent,
-    catalog: RustyApplicationResourceCatalog,
-  ): Promise<{
-  readonly audio: RendererAudioHost;
-    readonly video: RendererVideoHost;
-    readonly animation: RendererAnimationHost;
-    readonly billboard: RendererBillboardHost;
-    readonly particle: RendererParticleHost;
-    readonly ghostPlate: RendererGhostPlateHost;
-    readonly billboardUrls: Set<string>;
-    readonly surface: RendererSurface;
-  }> => {
-    const mounted = await environment.mountSurface(canvas, {
-      autoStart: true,
-      controls: { enabled: false },
-      frame: content.frame as unknown as RenderFrameDiff,
-      publicationFrontiers: content.publicationFrontiers,
-      ...(options.renderer?.clearColor === undefined
-        ? {} : { clearColor: options.renderer.clearColor }),
-      ...(options.renderer?.fog === undefined
-        ? {} : { fog: options.renderer.fog }),
-      ...(options.renderer?.lighting === undefined
-        ? {} : {
-            lighting: {
-              schemaVersion: 1 as const,
-              ...(options.renderer.lighting.defaultLights === undefined
-                ? {} : { defaultLights: options.renderer.lighting.defaultLights }),
-              ...(options.renderer.lighting.shadows === undefined
-                ? {} : { shadows: options.renderer.lighting.shadows }),
-            },
-          }),
-      ...(options.renderer?.pixelRatio === undefined
-        ? {} : { pixelRatio: options.renderer.pixelRatio }),
-      animatedMeshSource: catalog.animatedSource,
-      meshResourceSource: catalog.meshSource,
-      textureResourceSource: catalog.textureSource,
-      ...(options.renderer?.onCadence === undefined
-        ? {}
-        : { onAnimationFrame: options.renderer.onCadence }),
-    });
-    const resolveAudio = catalog.audioResolver();
-    const resolveVideo = catalog.videoResolver();
-    const presentationUrls = new Set<string>();
-    let audio: RendererAudioHost | null = null;
-    let video: RendererVideoHost | null = null;
-    let animation: RendererAnimationHost | null = null;
-    let billboard: RendererBillboardHost | null = null;
-    let particle: RendererParticleHost | null = null;
-    let ghostPlate: RendererGhostPlateHost | null = null;
-    let presentationHostsInstalled = false;
-    try {
-      // Bus controls are valid presentation operations even when a product has
-      // no admitted clips. Keep the Engine audio mechanism available and let
-      // its typed resolver reject only an actually missing clip request.
-      audio = new RendererAudioHost({ resolveResource: resolveAudio });
-      video = new RendererVideoHost({ container: layout.host, resolveResource: resolveVideo });
-      // The generic application host owns the renderer animation mechanism as
-      // well as audio. Product Browser therefore observes only fixed typed
-      // renderer facts, never a downstream animation substitute.
-      animation = new RendererAnimationHost(mounted.animationProjection);
-      billboard = new RendererBillboardHost({
-        container: layout.indicators,
-        projectWorld: (position) => ({
-          ...mounted.projectWorldPoint(position),
-          // The ordinary public host exposes CPU projection but no depth-buffer readback.
-          occluded: false,
-        }),
-        resolveEntityPosition: options.renderer?.resolveIndicatorEntityPosition ?? (() => null),
-        resolveResource: async (identity, contentHash) => {
-          const resource = catalog.resource(identity, contentHash);
-          if (resource === undefined) return null;
-          const bytes = resource.bytes;
-          if (resource.kind !== 'texture') return { bytes };
-          const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
-          presentationUrls.add(url);
-          let released = false;
-          return {
-            bytes,
-            url,
-            release: () => {
-              if (released) return;
-              released = true;
-              presentationUrls.delete(url);
-              URL.revokeObjectURL(url);
-            },
-          };
-        },
-      });
-      particle = new RendererParticleHost({
-        resolveEntityPosition: options.renderer?.resolveParticleEntityPosition ?? (() => null),
-        resolveResource: async (sprite) => {
-          const resource = catalog.resource('', sprite.contentHash);
-          if (resource?.kind !== 'texture') return null;
-          const bytes = resource.bytes;
-          const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
-          presentationUrls.add(url);
-          let released = false;
-          return {
-            bytes,
-            url,
-            release: () => {
-              if (released) return;
-              released = true;
-              presentationUrls.delete(url);
-              URL.revokeObjectURL(url);
-            },
-          };
-        },
-        sink: mounted.createParticleSink(),
-      });
-      ghostPlate = new RendererGhostPlateHost({
-        createPresentation: mounted.createGhostPlatePresentation,
-      });
-      mounted.setPresentationHosts(new RendererPresentationHostSet({
-        animation,
-        audio,
-        video,
-        billboard,
-        particle,
-        ghostPlate,
-      }));
-      presentationHostsInstalled = true;
-      return {
-        audio,
-        video,
-        animation,
-        billboard,
-        billboardUrls: presentationUrls,
-        particle,
-        ghostPlate,
-        surface: mounted,
-      };
-    } catch (cause) {
-      // `RendererPresentationHostSet` currently owns ghost-plate disposal
-      // only. Until it has been installed, this outer transaction must release
-      // every independently-created presentation owner itself.
-      if (!presentationHostsInstalled) {
-        try {
-          ghostPlate?.dispose();
-        } catch {
-          // Preserve the primary construction failure.
-        }
-      }
-      try {
-        animation?.cleanup();
-      } catch {
-        // Preserve the primary construction failure.
-      }
-      try {
-        particle?.dispose();
-      } catch {
-        // Preserve the primary construction failure.
-      }
-      try {
-        billboard?.dispose();
-      } catch {
-        // Preserve the primary construction failure.
-      }
-      try {
-        await audio?.dispose();
-      } catch {
-        // Preserve the primary construction failure.
-      }
-      try {
-        mounted.dispose();
-      } catch {
-        // Preserve the primary construction failure.
-      }
-      for (const url of presentationUrls) {
-        try {
-          URL.revokeObjectURL(url);
-        } catch {
-          // Preserve the primary construction failure.
-        }
-      }
-      throw cause;
+    if (closing || disposed) {
+      throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
     }
+    canvas.focus({ preventScroll: true });
+    if (gameplayCursorMode === 'pointer-lock') requestPointerLock(canvas);
   };
-  const enqueueReplacement = (
-    candidate: () => PreparedRustyApplicationContent,
-  ): Promise<RustyApplicationFrameReceipt> => {
-    requireActive();
-    replacementPending += 1;
-    let receipt: RustyApplicationFrameReceipt = Object.freeze({
-      applied: false,
-      outcome: 'rejected_atomic',
-      diagnostics: [],
-    });
-    replacementQueue = replacementQueue.then(async () => {
-      const oldSurface = surface;
-      const oldAudio = activeAudio;
-      const oldAnimation = activeAnimation;
-      const oldBillboard = activeBillboard;
-      const oldParticle = activeParticle;
-      const oldBillboardUrls = activeBillboardUrls;
-      const oldContent = activeContent;
-      if (oldSurface === null || oldContent === null || disposed) {
-        receipt = replacementFailure(
-          new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed'),
-        );
-        return;
-      }
-      const oldCanvas = activeCanvas;
-      const oldCatalog = resourceCatalog;
-      let candidateCanvas: HTMLCanvasElement | null = null;
-      let inputRebindAttempted = false;
-      let candidateSurface: RendererSurface | null = null;
-      let candidateAudio: RendererAudioHost | null = null;
-      let candidateVideo: RendererVideoHost | null = null;
-      let candidateAnimation: RendererAnimationHost | null = null;
-      let candidateBillboard: RendererBillboardHost | null = null;
-      let candidateParticle: RendererParticleHost | null = null;
-      let candidateBillboardUrls = new Set<string>();
-      try {
-        // Canvas allocation and input rebinding are both fallible candidate
-        // steps. Neither is allowed to occur after the old DOM/state owner is
-        // committed away.
-        candidateCanvas = createRendererCanvas(document);
-        const candidateContent = candidate();
-        const priorViewComposition = oldSurface.viewCompositionReadout();
-        const candidateCatalog = new RustyApplicationResourceCatalog();
-        await candidateCatalog.admit(candidateContent.resources, candidateContent.frame);
-        const mounted = await mountSurface(candidateCanvas, candidateContent, candidateCatalog);
-        candidateSurface = mounted.surface;
-        candidateAudio = mounted.audio;
-        candidateVideo = mounted.video;
-        candidateAnimation = mounted.animation;
-        mounted.animation.replaceCueDefinitions(oldAnimation?.cueDefinitions() ?? []);
-        candidateBillboard = mounted.billboard;
-        candidateParticle = mounted.particle;
-        candidateBillboardUrls = mounted.billboardUrls;
-        const viewReceipt = candidateSurface.configureViews({
-          schemaVersion: priorViewComposition.schemaVersion,
-          cameras: priorViewComposition.cameras,
-          targets: priorViewComposition.targets.map(({ lastRefreshedSubmission, status, ...target }) => target),
-          views: priorViewComposition.views,
-          presentations: priorViewComposition.presentations,
-        });
-        if (!viewReceipt.applied) {
-          throw new RustyApplicationHostError(
-            'mount_failed',
-            viewReceipt.diagnostics.map((diagnostic) => diagnostic.message).join('; ')
-              || 'renderer view composition was rejected during surface replacement',
-          );
-        }
-        candidateSurface.setCameraPose(oldSurface.cameraPose());
-        candidateSurface.renderOnce();
-        inputRebindAttempted = true;
-        input?.rebindCanvas(candidateCanvas);
-        oldCanvas.replaceWith(candidateCanvas);
-        surface = candidateSurface;
-        activeAudio = candidateAudio;
-        activeVideo = candidateVideo;
-        activeAnimation = mounted.animation;
-        activeBillboard = candidateBillboard;
-        activeParticle = candidateParticle;
-        activeBillboardUrls = candidateBillboardUrls;
-        activeContent = candidateContent;
-        resourceCatalog = candidateCatalog;
-        contentRevision += 1;
-        activeCanvas = candidateCanvas;
-        rendererTerminal = false;
-        try {
-          oldParticle?.dispose();
-        } catch {
-          // Particle cleanup is best-effort after the replacement transaction commits.
-        }
-        try {
-          oldAnimation?.cleanup();
-        } catch {
-          // Animation cleanup is best-effort after the replacement commits.
-        }
-        try {
-          oldSurface.dispose();
-        } catch {
-          // Surface disposal is best-effort after the replacement transaction commits.
-        }
-        try {
-          await oldAudio?.dispose();
-        } catch {
-          // Audio disposal is best-effort after the replacement commits.
-        }
-        try {
-          disposeBillboardOwner(oldBillboard, oldBillboardUrls);
-        } catch {
-          // Billboard cleanup is best-effort after the replacement commits.
-        }
-        oldCatalog.clear();
-        receipt = Object.freeze({ applied: true, outcome: 'applied', diagnostics: [] });
-      } catch (cause) {
-        if (inputRebindAttempted) {
-          try {
-            input?.rebindCanvas(oldCanvas);
-          } catch {
-            // Preserve the candidate failure and the old renderer owner.
-          }
-        }
-        try {
-          candidateParticle?.dispose();
-        } catch {
-          // Preserve the authoritative prior surface if candidate cleanup is noisy.
-        }
-        try {
-          candidateAnimation?.cleanup();
-        } catch {
-          // Preserve the authoritative prior surface if candidate cleanup is noisy.
-        }
-        try {
-          candidateSurface?.dispose();
-        } catch {
-          // Preserve the authoritative prior surface even if candidate cleanup is noisy.
-        }
-        try {
-          await candidateAudio?.dispose();
-        } catch {
-          // Preserve the authoritative prior surface if candidate cleanup is noisy.
-        }
-        try {
-          disposeBillboardOwner(candidateBillboard, candidateBillboardUrls);
-        } catch {
-          // Preserve the authoritative prior surface if candidate cleanup is noisy.
-        }
-        try {
-          candidateCanvas?.remove();
-        } catch {
-          // Preserve the authoritative prior surface if candidate cleanup is noisy.
-        }
-        receipt = replacementFailure(cause);
-      }
-    });
-    return replacementQueue.then(() => receipt).finally(() => {
-      replacementPending -= 1;
-    });
-  };
-  const replaceContent = (
-    content: RustyApplicationContent,
-  ): Promise<RustyApplicationFrameReceipt> => {
-    requireActive();
-    let prepared: PreparedRustyApplicationContent;
-    try {
-      prepared = prepareRustyApplicationContent(content);
-    } catch (cause) {
-      return Promise.resolve(replacementFailure(cause));
-    }
-    return enqueueReplacement(() => prepared);
-  };
-  const replaceFrame = (
-    frame: RustyApplicationFrame,
-    publicationFrontiers: readonly RenderPublicationFrontier[] = [],
-  ): Promise<RustyApplicationFrameReceipt> => {
-    requireActive();
-    let prepared: PreparedRustyApplicationContent;
-    try {
-      prepared = prepareRustyApplicationContent({ frame, publicationFrontiers });
-    } catch (cause) {
-      return Promise.resolve(replacementFailure(cause));
-    }
-    return enqueueReplacement(() => {
-      const current = activeContent;
-      if (current === null) {
-        throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
-      }
-      const resources = resourceCatalog.snapshot();
-      return Object.freeze({
-        frame: prepared.frame,
-        publicationFrontiers: prepared.publicationFrontiers,
-        resources,
-        resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
-      });
-    });
-  };
-
-  const renderer: RustyApplicationRendererPort = Object.freeze({
-    admitResources: async (
-      resources: readonly RustyApplicationResource[],
-      frame?: RustyApplicationFrame,
-    ) => {
-      requireActive();
-      await resourceCatalog.admit(resources, frame);
-    },
-    retainResources: (identities: ReadonlySet<string>) => {
-      const retainedHashes = new Set<string>();
-      for (const identity of identities) {
-        const resource = resourceCatalog.resource(identity);
-        if (resource !== undefined) retainedHashes.add(resource.contentHash);
-      }
-      activeBillboard?.retainResources(retainedHashes);
-      activeParticle?.retainResources(retainedHashes);
-      requireActive().retainResources(identities);
-      resourceCatalog.retainOnly(identities);
-      if (activeContent !== null) {
-        const resources = resourceCatalog.snapshot();
-        activeContent = Object.freeze({
-          ...activeContent,
-          resources,
-          resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
-        });
-      }
-      const audioHashes = new Set(
-        [...identities]
-          .map((identity) => /^audio(?:-resource)?\/([0-9a-f]{64})$/u.exec(identity)?.[1])
-          .filter((hash): hash is string => hash !== undefined)
-          .map((hash) => `sha256:${hash}`),
-      );
-      activeAudio?.retainResources(audioHashes);
-    },
-    applyFrame: (frame: RustyApplicationFrame) => {
-      if (rendererTerminal) return terminalFrameReceipt('renderer_terminal');
-      if (replacementPending > 0) {
-        return Object.freeze({
-          applied: false,
-          outcome: 'rejected_atomic',
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'content_replacement_in_progress',
-            message:
-              'incremental frames are rejected while complete content replacement is pending',
-          })]),
-        });
-      }
-      const receipt = requireActive().applyFrame(frame as unknown as RenderFrameDiff);
-      const result = Object.freeze({
-        applied: receipt.applied,
-        outcome: receipt.outcome,
-        diagnostics: Object.freeze(receipt.diagnostics.map((diagnostic) => Object.freeze({
-          code: diagnostic.code,
-          message: diagnostic.message,
-        }))),
-      });
-      if (result.outcome === 'terminal') rendererTerminal = true;
-      return result;
-    },
-    applyPresentation: async (frame: RustyApplicationPresentationFrame) => {
-      if (rendererTerminal) return terminalPresentationReceipt('renderer_terminal');
-      if (replacementPending > 0) {
-        return Object.freeze({
-          applied: 0,
-          outcome: 'rejected_atomic',
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'content_replacement_in_progress',
-            domain: 'application',
-            message: 'presentation frames are rejected while complete content replacement is pending',
-          })]),
-        });
-      }
-      try {
-        const receipt = await requireActive().applyPresentation(
-          frame as unknown as PresentationFrameDiff,
-        );
-        const result = Object.freeze({
-          applied: receipt.applied,
-          outcome: receipt.outcome,
-          diagnostics: Object.freeze(receipt.diagnostics.map((diagnostic) => Object.freeze({
-            code: diagnostic.code,
-            domain: diagnostic.domain,
-            message: diagnostic.message,
-          }))),
-        });
-        if (result.outcome === 'terminal') rendererTerminal = true;
-        return result;
-      } catch (cause) {
-        const result = Object.freeze({
-          applied: 0,
-          outcome: 'terminal',
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'presentation_frame_rejected',
-            domain: 'application',
-            message: cause instanceof Error ? cause.message : String(cause),
-          })]),
-        });
-        if (result.outcome === 'terminal') rendererTerminal = true;
-        return result;
-      }
-    },
-    replaceAnimationCueDefinitions: (
-      definitions: readonly RustyApplicationAnimationCueDefinition[],
-    ) => {
-      if (rendererTerminal) return terminalFrameReceipt('renderer_terminal');
-      if (replacementPending > 0) {
-        return Object.freeze({
-          applied: false,
-          outcome: 'rejected_atomic',
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'content_replacement_in_progress',
-            message: 'animation cue definitions are rejected while content replacement is pending',
-          })]),
-        });
-      }
-      try {
-        if (activeAnimation === null) {
-          throw new RustyApplicationHostError('disposed', 'Rusty Application animation host is unavailable');
-        }
-        activeAnimation.replaceCueDefinitions(definitions);
-        return Object.freeze({ applied: true, outcome: 'applied', diagnostics: [] });
-      } catch (cause) {
-        const result = Object.freeze({
-          applied: false,
-          outcome: cause instanceof RendererAnimationCueDefinitionError
-            ? 'rejected_atomic'
-            : 'terminal',
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'animation_cue_definitions_rejected',
-            message: cause instanceof Error ? cause.message : String(cause),
-          })]),
-        });
-        if (result.outcome === 'terminal') rendererTerminal = true;
-        return result;
-      }
-    },
-    clear: async () => {
-      const receipt = await replaceContent({
-        frame: createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
-        resources: [],
-      });
-      if (!receipt.applied) {
-        throw new Error(
-          `Engine default renderer frame was rejected: ${receipt.diagnostics
-            .map((diagnostic) => diagnostic.message)
-            .join('; ')}`,
-        );
-      }
-    },
-    executeRenderOutput: (job: RenderOutputJob) => requireActive().executeRenderOutput(job),
-    inspection: (options: Parameters<RendererSurface["inspection"]>[0]) => requireActive().inspection(options),
-    renderOnce: (timeMs?: number) => {
-      if (timeMs === undefined) requireActive().renderOnce();
-      else requireActive().renderOnce(timeMs);
-    },
-    replaceContent,
-    replaceFrame,
-    resumeAudio: async () => {
-      requireActive();
-      if (activeAudio === null) {
-        return Object.freeze({
-          resumed: false,
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'audio_host_unavailable',
-            message: 'application content has no admitted audio resources',
-          })]),
-        });
-      }
-      const diagnostics = await activeAudio.resume();
-      return Object.freeze({
-        resumed: diagnostics.length === 0,
-        diagnostics: Object.freeze(diagnostics.map((diagnostic) => Object.freeze({
-          code: diagnostic.code,
-          message: diagnostic.message,
-        }))),
-      });
-    },
-    audioRealizedFacts: () => requireActive().audioRealizedFacts(),
-    videoRealizedFacts: () => requireActive().videoRealizedFacts(),
-    animationRealizedFacts: () => requireActive().animationRealizedFacts(),
-    ghostPlateReadout: () => requireActive().ghostPlateReadout() as RustyApplicationGhostPlateReadout | null,
-    diagnosticsReadout: () => requireActive().diagnosticsReadout(),
-    acknowledgeAudioRealizedFacts: (throughFactId: number) =>
-      requireActive().acknowledgeAudioRealizedFacts(throughFactId),
-    acknowledgeVideoRealizedFacts: (throughFactId: number) =>
-      requireActive().acknowledgeVideoRealizedFacts(throughFactId),
-    acknowledgeAnimationRealizedFacts: (throughFactId: number) =>
-      requireActive().acknowledgeAnimationRealizedFacts(throughFactId),
-    resetAnimationRealizationOwner: () => requireActive().resetAnimationRealizationOwner(),
-    resetCameraMotion: () => requireActive().resetCameraMotion(),
-    resetAudioRealizationOwner: () => requireActive().resetAudioRealizationOwner(),
-    resetVideoRealizationOwner: () => requireActive().resetVideoRealizationOwner(),
-    setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
-    configureViews: (composition: RustyApplicationViewComposition) => {
-      if (rendererTerminal) {
-        return Object.freeze({
-          applied: false,
-          outcome: 'terminal' as const,
-          diagnostics: Object.freeze([Object.freeze({
-            code: 'surface_disposed' as const,
-            message: 'renderer is terminal after an earlier backend failure',
-          })]),
-          revision: requireActive().viewCompositionReadout().revision,
-        });
-      }
-      const receipt = requireActive().configureViews(composition);
-      if (receipt.outcome === 'terminal') rendererTerminal = true;
-      return receipt;
-    },
-  });
   const ui: RustyApplicationUiPort = Object.freeze({
     active: () => !closing && !disposed,
     allowsGameplayInput: (event: Event) =>
@@ -1306,37 +249,16 @@ export async function mountRustyApplicationWithEnvironment(
   });
 
   try {
-    if (options.renderer?.initialContent !== undefined
-      && options.renderer.initialFrame !== undefined) {
-      throw new RustyApplicationContentError(
-        'content_invalid',
-        null,
-        'initialContent and initialFrame are mutually exclusive',
-      );
-    }
-    const initialContent = prepareRustyApplicationContent(
-      options.renderer?.initialContent ?? {
-        frame: options.renderer?.initialFrame
-          ?? createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
-        resources: [],
-      },
+    frames = mountRustyApplicationFrameView(
+      canvas,
+      options.output ?? 'stream',
+      (timeMs) => options.onCadence?.(timeMs),
     );
-    await resourceCatalog.admit(initialContent.resources, initialContent.frame);
-    const surfaceMount = await mountSurface(layout.canvas, initialContent, resourceCatalog);
-    surface = surfaceMount.surface;
-    activeAudio = surfaceMount.audio;
-    activeVideo = surfaceMount.video;
-    activeAnimation = surfaceMount.animation;
-    activeBillboard = surfaceMount.billboard;
-    activeParticle = surfaceMount.particle;
-    activeBillboardUrls = surfaceMount.billboardUrls;
-    activeContent = initialContent;
-    contentRevision = 1;
     if (options.runtimeInput !== undefined) {
       input = createRustyApplicationInputIngress(options.runtimeInput, {
         active: () => !closing && !disposed,
         allowsGameplayInput: (event) => ui.allowsGameplayInput(event),
-        canvas: () => requireActive().canvas,
+        canvas: () => canvas,
         document,
         eventTarget: layout.host,
         focusGameplay,
@@ -1359,7 +281,8 @@ export async function mountRustyApplicationWithEnvironment(
     removeListeners = installInputArbitration(
       layout.host,
       layout.ui,
-      () => requireActive(),
+      canvas,
+      releaseInput,
       () => interactionMode,
       focusGameplay,
       input === null,
@@ -1367,7 +290,6 @@ export async function mountRustyApplicationWithEnvironment(
         ui.allowsGameplayInput(event);
         input?.clear('focus-loss');
       },
-      () => { void activeAudio?.resume(); },
     );
     setInteractionMode(interactionMode);
     const uiContext: RustyApplicationUiContext = Object.freeze({
@@ -1395,12 +317,7 @@ export async function mountRustyApplicationWithEnvironment(
       input,
       uiProjection,
       removeListeners,
-      surface,
-      activeAudio,
-      activeAnimation,
-      activeBillboard,
-      activeParticle,
-      activeBillboardUrls,
+      frames,
       layout.host,
       removePresentationResizeListener,
     );
@@ -1423,17 +340,13 @@ export async function mountRustyApplicationWithEnvironment(
 
   return Object.freeze({
     kind: 'rusty_application_host.v1' as const,
-    renderer,
     ui,
     ...(input === null ? {} : { input: input as RustyApplicationInputPort }),
     ...(uiProjection === null ? {} : { uiProjection }),
     readout: () => Object.freeze({
       compatibilityVersion: RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
-      contentRevision,
       interactionMode,
-      pointerLocked: surface?.pointerLocked() ?? false,
-      resourceBytes: activeContent?.resourceBytes ?? 0,
-      resourceCount: activeContent?.resources.length ?? 0,
+      pointerLocked: pointerLocked(),
       ...(uiProjection === null ? {} : { uiProjection: uiProjection.readout() }),
       state: disposed ? 'disposed' as const : 'ready' as const,
     }),
@@ -1441,7 +354,6 @@ export async function mountRustyApplicationWithEnvironment(
       if (disposal !== null) return disposal;
       closing = true;
       disposal = (async () => {
-        await replacementQueue;
         disposed = true;
         interfaceInputObservers.clear();
         const cleanupFailures = await cleanupApplicationOwners(
@@ -1449,25 +361,13 @@ export async function mountRustyApplicationWithEnvironment(
           input,
           uiProjection,
           removeListeners,
-          surface,
-          activeAudio,
-          activeAnimation,
-          activeBillboard,
-          activeParticle,
-          activeBillboardUrls,
+          frames,
           layout.host,
           removePresentationResizeListener,
         );
-        resourceCatalog.clear();
         uiOwner = null;
         input = null;
-        surface = null;
-        activeAudio = null;
-        activeVideo = null;
-        activeAnimation = null;
-        activeBillboard = null;
-        activeParticle = null;
-        activeBillboardUrls = new Set();
+        frames = null;
         delete root.dataset['rustyApplicationState'];
         if (cleanupFailures.length > 0) {
           throw new AggregateError(cleanupFailures, 'Rusty Application Host disposal failed');
@@ -1478,45 +378,6 @@ export async function mountRustyApplicationWithEnvironment(
   });
 }
 
-function replacementFailure(cause: unknown): RustyApplicationFrameReceipt {
-  return Object.freeze({
-    applied: false,
-    outcome: 'rejected_atomic',
-    diagnostics: Object.freeze([Object.freeze({
-      code: replacementDiagnosticCode(cause),
-      message: cause instanceof Error ? cause.message : String(cause),
-    })]),
-  });
-}
-
-function terminalFrameReceipt(code: string): RustyApplicationFrameReceipt {
-  return Object.freeze({
-    applied: false,
-    outcome: 'terminal',
-    diagnostics: Object.freeze([Object.freeze({
-      code,
-      message: 'renderer is terminal after an earlier backend failure',
-    })]),
-  });
-}
-
-function terminalPresentationReceipt(code: string): RustyApplicationPresentationReceipt {
-  return Object.freeze({
-    applied: 0,
-    outcome: 'terminal',
-    diagnostics: Object.freeze([Object.freeze({
-      code,
-      domain: 'application',
-      message: 'renderer is terminal after an earlier backend failure',
-    })]),
-  });
-}
-
-function replacementDiagnosticCode(cause: unknown): string {
-  if (cause instanceof RustyApplicationContentError) return cause.code;
-  return 'retained_frame_replacement_failed';
-}
-
 function createLayout(
   document: Document,
   loadingLabel: string,
@@ -1525,7 +386,6 @@ function createLayout(
   readonly host: HTMLDivElement;
   readonly canvas: HTMLCanvasElement;
   readonly ui: HTMLDivElement;
-  readonly indicators: HTMLDivElement;
   readonly loading: HTMLDivElement;
   readonly frame: HTMLDivElement | null;
 } {
@@ -1535,12 +395,12 @@ function createLayout(
     ? 'isolation:isolate;min-height:100dvh;position:relative;width:100%;'
     : 'height:100%;isolation:isolate;min-height:0;overflow:hidden;position:relative;width:100%;';
 
-  const canvas = createRendererCanvas(document);
-
-  const indicators = document.createElement('div');
-  indicators.dataset['rustyApplicationIndicators'] = 'engine-owned';
-  indicators.style.cssText =
-    'inset:0;overflow:hidden;pointer-events:none;position:absolute;z-index:1;';
+  const canvas = document.createElement('canvas');
+  canvas.dataset['rustyApplicationRenderer'] = 'engine-owned';
+  canvas.setAttribute('aria-label', 'Engine-rendered game world');
+  canvas.tabIndex = 0;
+  canvas.style.cssText =
+    'display:block;height:100%;inset:0;position:absolute;touch-action:none;width:100%;z-index:0;';
 
   const ui = document.createElement('div');
   ui.dataset['rustyApplicationUi'] = 'downstream';
@@ -1562,8 +422,8 @@ function createLayout(
     'align-items:center;background:#071012;color:#d9eee7;display:flex;font:14px system-ui;inset:0;justify-content:center;position:absolute;z-index:2;';
 
   if (presentationAspectBounds === undefined) {
-    host.append(canvas, indicators, ui, loading);
-    return { host, canvas, indicators, ui, loading, frame: null };
+    host.append(canvas, ui, loading);
+    return { host, canvas, ui, loading, frame: null };
   }
 
   const frame = document.createElement('div');
@@ -1573,9 +433,9 @@ function createLayout(
   host.style.display = 'flex';
   host.style.alignItems = 'center';
   host.style.justifyContent = 'center';
-  frame.append(canvas, indicators, ui, loading);
+  frame.append(canvas, ui, loading);
   host.append(frame);
-  return { host, canvas, indicators, ui, loading, frame };
+  return { host, canvas, ui, loading, frame };
 }
 
 function installPresentationFrameSizing(
@@ -1583,7 +443,6 @@ function installPresentationFrameSizing(
   container: HTMLElement,
   frame: HTMLElement | null,
   presentationAspectBounds: RustyApplicationPresentationAspectBounds | undefined,
-  requestRendererResize: () => void,
 ): () => void {
   if (presentationAspectBounds === undefined || frame === null) return () => undefined;
   let active = true;
@@ -1596,7 +455,6 @@ function installPresentationFrameSizing(
     );
     frame.style.width = `${String(geometry.width)}px`;
     frame.style.height = `${String(geometry.height)}px`;
-    requestRendererResize();
   };
   const ResizeObserverConstructor = root.ownerDocument.defaultView?.ResizeObserver;
   if (ResizeObserverConstructor !== undefined) {
@@ -1618,32 +476,21 @@ function installPresentationFrameSizing(
   };
 }
 
-function createRendererCanvas(document: Document): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.dataset['rustyApplicationRenderer'] = 'engine-owned';
-  canvas.setAttribute('aria-label', 'Engine-rendered game world');
-  canvas.tabIndex = 0;
-  canvas.style.cssText =
-    'display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;';
-  return canvas;
-}
-
 function installInputArbitration(
   host: HTMLElement,
   uiRoot: HTMLElement,
-  surface: () => RendererSurface,
+  canvas: HTMLCanvasElement,
+  releaseInput: () => void,
   interactionMode: () => RustyApplicationInteractionMode,
   focusGameplay: () => void,
   coreOwnsPrimaryFocus: boolean,
   clearRuntimeInputForFocus: (event: FocusEvent) => void,
-  resumeAudio: () => void,
 ): () => void {
   const document = host.ownerDocument;
   const onPointerDown = (event: PointerEvent): void => {
-    if (!isArbitratedHostPointerEvent(event, uiRoot, surface().canvas)) return;
-    resumeAudio();
+    if (!isArbitratedHostPointerEvent(event, uiRoot, canvas)) return;
     if (isInteractiveUiEvent(event, uiRoot)) {
-      surface().releaseInput();
+      releaseInput();
       return;
     }
     if (interactionMode() === 'gameplay' && (coreOwnsPrimaryFocus || event.button !== 0)) {
@@ -1652,24 +499,21 @@ function installInputArbitration(
   };
   const onFocusIn = (event: FocusEvent): void => {
     if (!isUiTarget(event.target, uiRoot) || !isTextEntry(event.target)) return;
-    surface().releaseInput();
+    releaseInput();
     clearRuntimeInputForFocus(event);
   };
   const onPointerLockChange = (): void => {
-    host.dataset['pointerLocked'] = String(document.pointerLockElement === surface().canvas);
+    host.dataset['pointerLocked'] = String(document.pointerLockElement === canvas);
   };
-  const onBlur = (): void => surface().releaseInput();
-  const onKeyDown = (): void => resumeAudio();
+  const onBlur = (): void => releaseInput();
 
   host.addEventListener('pointerdown', onPointerDown, true);
-  host.addEventListener('keydown', onKeyDown, true);
   host.addEventListener('focusin', onFocusIn, true);
   document.addEventListener('pointerlockchange', onPointerLockChange);
   document.defaultView?.addEventListener('blur', onBlur);
   onPointerLockChange();
   return () => {
     host.removeEventListener('pointerdown', onPointerDown, true);
-    host.removeEventListener('keydown', onKeyDown, true);
     host.removeEventListener('focusin', onFocusIn, true);
     document.removeEventListener('pointerlockchange', onPointerLockChange);
     document.defaultView?.removeEventListener('blur', onBlur);
@@ -1770,90 +614,26 @@ async function cleanupApplicationOwners(
   input: RustyApplicationManagedInputIngress | null,
   uiProjection: RustyApplicationUiProjectionPort | null,
   removeListeners: () => void,
-  surface: RendererSurface | null,
-  audio: RendererAudioHost | null,
-  animation: RendererAnimationHost | null,
-  billboard: RendererBillboardHost | null,
-  particle: RendererParticleHost | null,
-  billboardUrls: ReadonlySet<string>,
+  frames: RustyApplicationFrameView | null,
   host: HTMLElement,
   removePresentationResizeListener: () => void,
 ): Promise<readonly unknown[]> {
   const failures: unknown[] = [];
-  try {
-    await uiOwner?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    input?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    uiProjection?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    removeListeners();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    particle?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    animation?.cleanup();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    surface?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    await audio?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    disposeBillboardOwner(billboard, billboardUrls);
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    removePresentationResizeListener();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  host.remove();
-  return failures;
-}
-
-function disposeBillboardOwner(
-  billboard: RendererBillboardHost | null,
-  urls: ReadonlySet<string>,
-): void {
-  const failures: unknown[] = [];
-  try {
-    billboard?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  for (const url of urls) {
+  const attempt = async (cleanup: () => void | Promise<void>): Promise<void> => {
     try {
-      URL.revokeObjectURL(url);
+      await cleanup();
     } catch (cause) {
       failures.push(cause);
     }
-  }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, 'renderer billboard cleanup failed');
-  }
+  };
+  await attempt(() => uiOwner?.dispose());
+  await attempt(() => input?.dispose());
+  await attempt(() => uiProjection?.dispose());
+  await attempt(removeListeners);
+  await attempt(() => frames?.dispose());
+  await attempt(removePresentationResizeListener);
+  host.remove();
+  return failures;
 }
 
 function clearPreviousFailure(root: HTMLElement): void {
@@ -1902,6 +682,6 @@ function renderFailure(
   root.append(failureLayout);
   failureFrameResizeCleanups.set(
     failureLayout,
-    installPresentationFrameSizing(root, failureLayout, frame, presentationAspectBounds, () => undefined),
+    installPresentationFrameSizing(root, failureLayout, frame, presentationAspectBounds),
   );
 }

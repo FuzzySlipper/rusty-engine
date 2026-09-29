@@ -57,13 +57,9 @@ cleanup() { rm -rf -- "$STAGE"; }
 trap cleanup EXIT
 
 cd "$REPO_ROOT"
-# The bundle publishers copy generated declarations from package dist outputs.
-# Build those outputs explicitly so a clean checkout does not depend on stale
-# local TypeScript artifacts.
-pnpm --dir render run build:packages
-pnpm --dir render run bundle:application-host-artifact
-pnpm --dir render run bundle:product-browser-host-artifact
-pnpm --dir render run bundle:live-debug-panel-artifact
+# The browser shell and live-debug bundles, from the packages' fresh dist
+# outputs so a clean checkout does not depend on stale local artifacts.
+pnpm --dir render run build
 HOST_FEATURES=()
 if ((DESKTOP)); then
   export CEF_PATH="${CEF_PATH:-$REPO_ROOT/target/cef}"

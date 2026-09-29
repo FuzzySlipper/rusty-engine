@@ -2,27 +2,24 @@
 
 ## CI lanes
 
-CI follows the current C# product, Rust Engine, and browser renderer ownership.
+CI follows the current C# product, Rust Engine, and browser shell ownership.
 Changes route to their owning lanes; superseded runs are cancelled.
 
 | Lane | Default evidence |
 | --- | --- |
 | Rust | Formatting, Cargo dependency boundaries, mechanism tests, Clippy with warnings as errors |
 | C# | Binding generation and a disposable packaged SDK consumer staged and exercised through the Rust CoreCLR host |
-| Render | Browser bundle build, TypeScript package boundaries, compiled unit tests and Chromium behavior |
+| Browser | Browser shell and live-debug bundle build, closed-bundle check, compiled unit tests |
 | Docs | Local links and CI owner routing |
 
 Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
-`scripts/verify-render.sh`, or `scripts/verify-docs.sh` locally. Renderer
-checks require their pnpm dependencies; C# requires .NET, Clang/libclang and
-the pinned binding tools.
+`pnpm --dir render run verify` (the browser shell and live-debug panel), or
+`scripts/verify-docs.sh` locally. The browser shell needs its pnpm
+dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
+The render-wgpu screenshot tests run on llvmpipe (`mesa-vulkan-drivers`) in CI.
 
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
-C# workflow dispatch option, and SDK release verification. The optional native
-webview remains available through `scripts/verify-renderer-webview-host.sh`
-with its platform dependencies and Playwright Chromium; ordinary browser CI
-does not install GTK or
-WebKit or certify that host.
+C# workflow dispatch option, and SDK release verification.
 
 Boundary checks inspect current dependencies and artifacts. Historical symbol
 blacklists, obsolete TypeScript product-authoring restrictions, public TypeScript

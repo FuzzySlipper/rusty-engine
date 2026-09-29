@@ -8,7 +8,7 @@ interface AttachmentStorage {
   setItem(key: string, value: string): void;
 }
 
-/** Delivery correlation only. A confirmed renderer baseline never proves that
+/** Delivery correlation only. A confirmed output baseline never proves that
  * an uncertain product callback ran, or authorizes replaying it. */
 export function createBrowserAttachmentEvidence(options: {
   readonly key: string;

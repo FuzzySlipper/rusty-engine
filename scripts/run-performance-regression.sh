@@ -7,7 +7,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROBE_ROOT="$(mktemp -d -t rusty-engine-performance.XXXXXX)"
 ITERATIONS="${RUSTY_PERF_ITERATIONS:-50}"
-RENDER_PORT="${RUSTY_PERF_RENDER_PORT:-$((4200 + $$ % 1000))}"
 BROWSER_RUNTIME_ROOT="${RUSTY_PERF_RUNTIME_PACK:-$REPO_ROOT/target/runtime-pack/linux-x64}"
 SDK_VERSION="0.1.0-crossover.$$.${RANDOM}"
 CROSSOVER_FIXTURE="$REPO_ROOT/fixtures/csharp-crossover-performance/CsharpCrossoverPerformance.csproj"
@@ -73,9 +72,3 @@ for loader in coreclr nativeaot; do
     --performance-probe "$ITERATIONS"
 done
 
-if [[ "${RUSTY_PERF_SKIP_BROWSER:-0}" != "1" ]]; then
-  PLAYWRIGHT_RENDER_PORT="$RENDER_PORT" pnpm --dir "$REPO_ROOT/render" exec playwright test \
-    browser/renderer-performance.browser.spec.ts \
-    --config playwright.config.ts \
-    --reporter=line
-fi

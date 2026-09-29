@@ -223,9 +223,9 @@ public static class CameraQueries
         RequireFinite(basis.Right, nameof(basis));
         RequireFinite(basis.Up, nameof(basis));
 
-        // This matches the renderer's explicit-basis realization: Three consumes Forward and Up
-        // through lookAt, then derives a perpendicular right axis. The descriptor's Right is
-        // still checked for a valid copied descriptor, but does not override that realization.
+        // This matches the renderer's explicit-basis realization: render-wgpu consumes Forward
+        // and Up, then derives a perpendicular right axis. The descriptor's Right is still
+        // checked for a valid copied descriptor, but does not override that realization.
         Vector3 forward = Normalize(basis.Forward);
         Vector3 right = Normalize(Cross(forward, basis.Up));
         Vector3 up = Normalize(Cross(right, forward));

@@ -22,7 +22,6 @@ const READOUT = {
   scaledRemainder: 0,
   lastObservedTimeNs: '100',
   fault: null,
-  inspectionTime: ['action-driven', 60],
 } as const;
 
 type TestJson =
@@ -176,35 +175,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
           assert.equal(body?.['ticket'], '1');
           return response({ accepted: true, ...ACCEPTED_FAULT, ticket: '1', binding: RUNTIME, readout: READOUT });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}audio-feedback`:
-          assert.deepEqual(body, {
-            runtime: RUNTIME,
-            replaceOwner: true,
-            evictedFactCount: '2',
-            facts: [{
-              kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
-            }],
-          });
-          return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '7' });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}video-feedback`:
-          assert.deepEqual(body, {
-            runtime: RUNTIME,
-            replaceOwner: true,
-            evictedFactCount: '2',
-            facts: [{ kind: 'completed', factId: '9', handle: '3' }],
-          });
-          return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '9' });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
-          assert.deepEqual(body, {
-            runtime: RUNTIME,
-            replaceOwner: true,
-            evictedFactCount: '0',
-            facts: [{
-              kind: 'diagnostic', factId: '8', objectId: null, generation: null,
-              code: 'assetMissing', sequence: 4,
-            }],
-          });
-          return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '8' });
         default:
           return response({ error: 'missing route' }, 404);
       }
@@ -258,29 +228,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     outcome: { kind: 'success' },
     provenance: { correlation: 'request-1' },
   }))?.ticket, '1');
-  assert.deepEqual(await adapter.reportAudioFeedback({
-    runtime: RUNTIME,
-    replaceOwner: true,
-    evictedFactCount: '2',
-    facts: [{
-      kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
-    }],
-  }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '7' });
-  assert.deepEqual(await adapter.reportVideoFeedback?.({
-    runtime: RUNTIME,
-    replaceOwner: true,
-    evictedFactCount: '2',
-    facts: [{ kind: 'completed', factId: '9', handle: '3' }],
-  }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '9' });
-  assert.deepEqual(await adapter.reportAnimationFeedback({
-    runtime: RUNTIME,
-    replaceOwner: true,
-    evictedFactCount: '0',
-    facts: [{
-      kind: 'diagnostic', factId: '8', objectId: null, generation: null,
-      code: 'assetMissing', sequence: 4,
-    }],
-  }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '8' });
   assert.throws(
     () => adapter.completeTimeline?.({
       ticket: '01',
@@ -309,9 +256,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     'POST /__rusty/product/runtime/admit-demand-step',
     'POST /__rusty/product/runtime/admit-external-step',
     'POST /__rusty/product/runtime/timeline-completion',
-    'POST /__rusty/product/runtime/audio-feedback',
-    'POST /__rusty/product/runtime/video-feedback',
-    'POST /__rusty/product/runtime/animation-feedback',
   ]);
   assert.equal(batches.length, 1);
   unsubscribe();
@@ -412,11 +356,6 @@ test('rejected runtime results remain decoded result facts rather than transport
           return response({ ...rejected, operation: 'advance-realtime' }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}input`:
           return response({ ...rejected, count: 0, acceptedCount: 0, droppedCount: 0 }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}audio-feedback`:
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}ghost-plate-feedback`:
-        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}renderer-diagnostics`:
-          return response({ ...rejected, runtime: RUNTIME }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
           return response({ ...rejected, ticket: '1' }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         default:
@@ -428,18 +367,6 @@ test('rejected runtime results remain decoded result facts rather than transport
 
   assert.equal((await adapter.advanceRealtime('1')).disposition, 'rejected-recoverable');
   assert.equal((await adapter.input([])).disposition, 'rejected-recoverable');
-  assert.equal((await adapter.reportAudioFeedback({
-    runtime: RUNTIME, replaceOwner: false, evictedFactCount: '0', facts: [],
-  })).disposition, 'rejected-recoverable');
-  assert.equal((await adapter.reportAnimationFeedback({
-    runtime: RUNTIME, replaceOwner: false, evictedFactCount: '0', facts: [],
-  })).disposition, 'rejected-recoverable');
-  assert.equal((await adapter.reportGhostPlateFeedback({
-    runtime: RUNTIME, replaceOwner: false, facts: [],
-  })).disposition, 'rejected-recoverable');
-  assert.equal((await adapter.reportRendererDiagnostics?.({
-    runtime: RUNTIME, snapshot: { schemaVersion: 1 },
-  } as never))?.disposition, 'rejected-recoverable');
   assert.equal((await adapter.completeTimeline?.({
     ticket: '1', runtime: RUNTIME, correlation: 'request-1', outcome: { kind: 'success' },
     provenance: { correlation: 'request-1' },
@@ -562,7 +489,6 @@ for (const cursor of ['', '5', '50000']) {
     const connection = adapter.connect?.();
     stream.emit({
       kind: 'binding', runtime: RUNTIME, nextInputSequence: '1',
-      publicationFrontiers: [{ stream: 'voxel:active', revision: 1 }],
     }, '');
     stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
     stream.emitBaseline(result('connect'), '');
@@ -582,7 +508,6 @@ for (const cursor of ['', '5', '50000']) {
     const nextRuntime = { ...RUNTIME, instanceId: '8' };
     replacement.emit({
       kind: 'binding', runtime: nextRuntime, nextInputSequence: '1',
-      publicationFrontiers: [{ stream: 'voxel:active', revision: 2 }],
     }, '');
     replacement.emit({ kind: 'runtime-readout', readout: READOUT }, '');
     replacement.emitBaseline({ ...result('connect'), binding: nextRuntime }, '');
@@ -617,13 +542,13 @@ test('one runtime output batch is decoded and delivered through one batch callba
     kind: 'runtime-output-batch',
     outputs: [
       { kind: 'runtime-readout', readout: READOUT },
-      { kind: 'renderer-resources' },
+      { kind: 'binding', runtime: RUNTIME, nextInputSequence: '2' },
     ],
   }, '1');
   assert.equal(received.length, 2);
   assert.deepEqual(received[1]?.map((output) => (output as { kind: string }).kind), [
     'runtime-readout',
-    'renderer-resources',
+    'binding',
   ]);
   unsubscribe?.();
   adapter.dispose();
@@ -684,12 +609,10 @@ test('runtime output UI projections pass empty strings and large deep data throu
   adapter.dispose();
 });
 
-test('sixty hertz receipt stream parses once and preserves four-output order per receipt', () => {
+test('sixty hertz receipt stream parses once and preserves output order per receipt', () => {
   const TICKS = 60;
-  const OUTPUTS_PER_RECEIPT = 4;
+  const OUTPUTS_PER_RECEIPT = 2;
   const expectedKinds = [
-    'frame',
-    'view-composition',
     'ui-projection',
     'runtime-readout',
   ];
@@ -725,17 +648,6 @@ test('sixty hertz receipt stream parses once and preserves four-output order per
       stream.emit({
         kind: 'runtime-output-batch',
         outputs: [
-          { kind: 'frame', frame: { tick } },
-          {
-            kind: 'view-composition',
-            composition: {
-              schemaVersion: 1,
-              cameras: [],
-              targets: [],
-              views: [],
-              presentations: [],
-            },
-          },
           {
             kind: 'ui-projection',
             envelope: {
@@ -770,11 +682,6 @@ test('sixty hertz receipt stream parses once and preserves four-output order per
   assert.deepEqual(
     outputKinds,
     Array.from({ length: TICKS }, () => expectedKinds).flat(),
-  );
-  assert.equal(
-    TICKS * OUTPUTS_PER_RECEIPT,
-    240,
-    'the old one-callback-per-output stream would deliver about 240 typed outputs',
   );
   unsubscribeBatches?.();
   unsubscribeOutputs();
@@ -1197,10 +1104,23 @@ test('one output batch far above the former 256 KiB event bound arrives as one e
   completeConnectionBaseline(stream);
   stream.emit({
     kind: 'runtime-output-batch',
-    outputs: [{ kind: 'frame', frame: { payload: 'x'.repeat(4 * 1024 * 1024) } }],
+    outputs: [{
+      kind: 'ui-projection',
+      envelope: {
+        artifact: 'rusty.product.ui-projection',
+        runtime: RUNTIME,
+        sequence: '1',
+        stream: 'product.ui',
+        contract: 'runtime.large.v1',
+        value: { payload: 'x'.repeat(4 * 1024 * 1024) },
+      },
+    }],
   });
   assert.equal(batches.length, 2);
-  assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 4 * 1024 * 1024);
+  assert.equal(
+    ((batches[1]?.[0] as { envelope: { value: { payload: string } } }).envelope.value.payload).length,
+    4 * 1024 * 1024,
+  );
   adapter.dispose();
 });
 
@@ -1239,8 +1159,6 @@ test('a dropped output stream asks for one fresh baseline without closing the ru
     runtimeProgress: '9',
     transportState: 'open' as const,
     outputState: 'open' as const,
-    lastRendererSequence: '60',
-    rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'output stream lagged' },
     pageEvents: [],
   };
@@ -1427,49 +1345,6 @@ test('local transport preserves analog button values and rejects pressure outsid
   adapter.dispose();
 });
 
-test('renderer diagnostics use their own 256 KiB snapshot budget', async () => {
-  const requestBodies: unknown[] = [];
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async (_input, init) => {
-      requestBodies.push(JSON.parse(String(init?.body)) as unknown);
-      return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME });
-    },
-    eventSource: FakeEventSource,
-  });
-
-  const withinRendererBudget = {
-    schemaVersion: 1,
-    resources: Array.from({ length: 1_024 }, (_unused, index) => ({
-      id: index,
-      diagnostic: 'x'.repeat(64),
-    })),
-  };
-  assert.ok(JSON.stringify(withinRendererBudget).length > 65_536);
-  await adapter.reportRendererDiagnostics?.({
-    runtime: RUNTIME,
-    snapshot: withinRendererBudget,
-  } as never);
-  assert.deepEqual(requestBodies, [{ runtime: RUNTIME, snapshot: withinRendererBudget }]);
-
-  const overRendererBudget = {
-    schemaVersion: 1,
-    resources: Array.from({ length: 1_024 }, (_unused, index) => ({
-      id: index,
-      diagnostic: 'x'.repeat(256),
-    })),
-  };
-  assert.ok(JSON.stringify(overRendererBudget).length > 256 * 1024);
-  assert.throws(
-    () => adapter.reportRendererDiagnostics?.({
-      runtime: RUNTIME,
-      snapshot: overRendererBudget,
-    } as never),
-    /renderer diagnostics snapshot exceeds 262144 bytes/u,
-  );
-  assert.equal(requestBodies.length, 1);
-  adapter.dispose();
-});
-
 test('terminal browser diagnostics remain postable after the output transport closes', async () => {
   const requestBodies: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -1482,7 +1357,6 @@ test('terminal browser diagnostics remain postable after the output transport cl
   adapter.dispose();
   await adapter.reportBrowserDiagnostics?.({
     hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
-    lastRendererSequence: '60', rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
     recoverableEvent: { code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION', message: 'dropped clock observation' },
     pageEvents: [],
@@ -1493,7 +1367,6 @@ test('terminal browser diagnostics remain postable after the output transport cl
   assert.deepEqual(requestBodies, [{
     attachment,
     hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
-    lastRendererSequence: '60', rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
     recoverableEvent: { code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION', message: 'dropped clock observation' },
     pageEvents: [],
@@ -1526,7 +1399,7 @@ test('browser diagnostics accepts the production committed response without reco
   adapter.dispose();
 });
 
-test('attachment health reports only renderer-confirmed baselines and correlates each request', async () => {
+test('attachment health reports only page-confirmed baselines and correlates each request', async () => {
   FakeEventSource.instances.length = 0;
   const reports: Array<{ attachment: { id: string; replaces?: string; baseline?: unknown } }> = [];
   const headers: Array<string | null> = [];
@@ -1546,7 +1419,7 @@ test('attachment health reports only renderer-confirmed baselines and correlates
   adapter.confirmOutputBaseline?.(1);
   await adapter.reportBrowserDiagnostics?.(report);
   assert.deepEqual(reports[1]!.attachment.baseline, {
-    runtime: RUNTIME, nextInputSequence: '1', publicationFrontiers: [],
+    runtime: RUNTIME, nextInputSequence: '1',
   });
   FakeEventSource.instances[0]!.drop();
   completeConnectionBaseline(FakeEventSource.instances[1]!);
@@ -1586,30 +1459,6 @@ for (const certainty of ['not-applied', 'unknown'] as const) {
     adapter.dispose();
   });
 }
-
-test('runtime output batches admit video resources and reject duplicate identities', () => {
-  for (const duplicate of [false, true]) {
-    FakeEventSource.instances.length = 0;
-    const errors: unknown[] = [];
-    const outputs: unknown[] = [];
-    const adapter = createProductBrowserLocalHttpAdapter({
-      fetch: async () => response({}), eventSource: FakeEventSource,
-      onTransportError: (error) => errors.push(error),
-    });
-    adapter.subscribeOutputs((output) => outputs.push(output));
-    const stream = FakeEventSource.instances[0]!;
-    completeConnectionBaseline(stream);
-    outputs.length = 0;
-    const identity = `video-resource/${'a'.repeat(64)}`;
-    stream.emit({ kind: 'runtime-output-batch', outputs: [{
-      kind: 'renderer-resources', rendererResources: duplicate ? [identity, identity] : [identity],
-    }] });
-    assert.equal(errors.length, duplicate ? 1 : 0);
-    assert.equal(outputs.length, duplicate ? 0 : 1);
-    adapter.dispose();
-  }
-});
-
 
 test('held connection baseline satisfies response output fences without another simulation tick', async () => {
   FakeEventSource.instances.length = 0;

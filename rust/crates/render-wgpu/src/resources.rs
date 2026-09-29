@@ -131,9 +131,6 @@ pub(crate) fn mesh_streams(
                 )?,
             })
         }
-        MeshPayloadSource::SharedBuffer { .. } => {
-            Err("shared-buffer mesh payloads are not realized yet".to_owned())
-        }
     }
 }
 

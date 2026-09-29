@@ -1,20 +1,19 @@
 //! Audio realized on this process's output device.
 //!
-//! `RUSTY_AUDIO_OUTPUT=device` opens the default output device when the
-//! runtime loads and closes it when the runtime drops. Committed audio ops
-//! then play here instead of in the browser: they are taken out of the
-//! published presentation so no second realization plays them or reports
-//! feedback for them. Natural completions and device diagnostics reach the
-//! Engine through the same realization facts the browser reports.
+//! The runtime opens the default output device when it loads and closes it
+//! when it drops. Committed audio ops play here: they are taken out of the
+//! call's publications. Natural completions and device diagnostics reach the
+//! Engine as realization facts.
+//!
+//! With `RUSTY_AUDIO_OUTPUT` unset, a machine with no output device (a CI
+//! runner, a headless server) runs silent after one warning: its audio ops
+//! are dropped and report no completions. `RUSTY_AUDIO_OUTPUT=device`
+//! requires the device and fails the load without one.
 //!
 //! The listener follows the camera of the primary view in the committed view
 //! composition, and entity-attached emitters follow the committed graphics
-//! node published for their entity.
-//!
-//! When this process also draws video (the desktop window or the streamed
-//! frames), a playing clip's own sound plays here too, from the clip's start,
-//! as the browser's video element played it. The video ops stay in the
-//! publications: the runtime's renderer draws the picture.
+//! node published for their entity. A playing video clip's own sound plays
+//! here too, from the clip's start, beside the picture this process draws.
 
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
 use render_audio::{AudioEntityPositions, AudioRealizer, RealizedAudioFact};
@@ -32,33 +31,36 @@ const MAX_FACTS_PER_REPORT: usize = 128;
 pub(crate) struct AudioOutput {
     realizer: AudioRealizer,
     next_fact_id: u64,
-    /// This process draws video, so it plays the clips' sound as well.
-    soundtracks: bool,
 }
 
 impl AudioOutput {
-    /// The device path is opt-in until the desktop shell owns it. An unset
-    /// variable keeps browser realization; an unknown value or a device
-    /// that will not open is an error rather than silent fallback.
-    pub(crate) fn from_environment(
-        soundtracks: bool,
-    ) -> Result<Option<Self>, CsharpProductRuntimeError> {
-        let Some(value) = std::env::var_os(AUDIO_OUTPUT_ENV) else {
-            return Ok(None);
+    /// Opens the default output device. `None` when none opens and the
+    /// device was not required; an unknown `RUSTY_AUDIO_OUTPUT` is an error.
+    pub(crate) fn from_environment() -> Result<Option<Self>, CsharpProductRuntimeError> {
+        let required = match std::env::var_os(AUDIO_OUTPUT_ENV) {
+            None => false,
+            Some(value) if value == AUDIO_OUTPUT_DEVICE => true,
+            Some(_) => {
+                return Err(CsharpProductRuntimeError::new(
+                    "CSHARP_AUDIO_OUTPUT",
+                    format!("{AUDIO_OUTPUT_ENV} must be `{AUDIO_OUTPUT_DEVICE}` when set"),
+                ))
+            }
         };
-        if value != AUDIO_OUTPUT_DEVICE {
-            return Err(CsharpProductRuntimeError::new(
+        match AudioRealizer::open_default_device() {
+            Ok(realizer) => Ok(Some(Self {
+                realizer,
+                next_fact_id: 1,
+            })),
+            Err(message) if required => Err(CsharpProductRuntimeError::new(
                 "CSHARP_AUDIO_OUTPUT",
-                format!("{AUDIO_OUTPUT_ENV} must be `{AUDIO_OUTPUT_DEVICE}` when set"),
-            ));
+                message,
+            )),
+            Err(message) => {
+                eprintln!("rusty: {message}; the product runs silent");
+                Ok(None)
+            }
         }
-        let realizer = AudioRealizer::open_default_device()
-            .map_err(|message| CsharpProductRuntimeError::new("CSHARP_AUDIO_OUTPUT", message))?;
-        Ok(Some(Self {
-            realizer,
-            next_fact_id: 1,
-            soundtracks,
-        }))
     }
 
     /// Plays a committed call's audio ops and removes them from its
@@ -135,9 +137,6 @@ impl AudioOutput {
 
     /// Starts or ends the playing clip's sound with its video ops.
     fn follow_video(&mut self, services: &EngineServiceSet, frame: &PresentationFrameDiff) {
-        if !self.soundtracks {
-            return;
-        }
         for op in &frame.ops {
             let PresentationOp::Video { op, .. } = op else {
                 continue;
@@ -297,8 +296,7 @@ fn recount(frame: &mut PresentationFrameDiff) {
 #[cfg(test)]
 mod tests {
     use render_presentation::{
-        AudioBus, AudioBusControl, AudioProjectionOp, PresentationOpMeta, TelemetryOverlayHandle,
-        TelemetryOverlayProjectionOp,
+        AudioBus, AudioBusControl, AudioProjectionOp, PresentationOpMeta, VideoPlaybackHandle,
     };
 
     use super::*;
@@ -377,10 +375,10 @@ mod tests {
                 control: AudioBusControl::SetMuted { muted: true },
             },
         };
-        let other = PresentationOp::TelemetryOverlay {
+        let other = PresentationOp::Video {
             meta: PresentationOpMeta::new(2),
-            op: TelemetryOverlayProjectionOp::Destroy {
-                handle: TelemetryOverlayHandle::new(1),
+            op: VideoProjectionOp::Stop {
+                handle: VideoPlaybackHandle::new(1),
             },
         };
         let mut frame = PresentationFrameDiff::new();

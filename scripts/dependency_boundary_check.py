@@ -29,15 +29,16 @@ ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS = frozenset(
         "voxel-object-runtime",
     }
 )
-RENDER_HOST_BACKEND_PACKAGES = frozenset({"renderer-host", "renderer-three"})
+# The renderer and its hosts consume the retained model, never the reverse.
+RENDER_BACKEND_PACKAGES = frozenset({"render-wgpu", "render-stream", "desktop-shell"})
 RENDER_MODEL_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
-    | RENDER_HOST_BACKEND_PACKAGES
+    | RENDER_BACKEND_PACKAGES
     | {"render-presentation", "render-projection"}
 )
 RENDER_PRESENTATION_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
-    | RENDER_HOST_BACKEND_PACKAGES
+    | RENDER_BACKEND_PACKAGES
     | {"render-projection"}
 )
 # External crates that exactly one workspace crate may depend on, so a

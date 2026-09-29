@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform,
-    TransformError, JSON_SAFE_U64_MAX,
+    validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform, TransformError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,18 +119,6 @@ pub enum MeshPayloadSource {
         colors: Option<Vec<f32>>,
         indices: Vec<u32>,
     },
-    /// Shared bytes are resolved through the renderer resource provider. This
-    /// handle is scoped to that provider and is not a general runtime bridge.
-    SharedBuffer {
-        buffer: u64,
-        positions_byte_offset: u32,
-        normals_byte_offset: u32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        uvs_byte_offset: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        colors_byte_offset: Option<u32>,
-        indices_byte_offset: u32,
-    },
     /// Durable, content-addressed bytes resolved by an explicit renderer host.
     /// The identity names bytes, not a filesystem path or network location.
     Resource {
@@ -223,18 +210,6 @@ impl MeshPayloadDescriptor {
                         vertex_count: self.layout.vertex_count,
                     });
                 }
-            }
-            MeshPayloadSource::SharedBuffer {
-                buffer,
-                uvs_byte_offset,
-                colors_byte_offset,
-                ..
-            } => {
-                if *buffer > JSON_SAFE_U64_MAX {
-                    return Err(MeshDescriptorError::UnsafeSharedBufferId { buffer: *buffer });
-                }
-                validate_optional_uv_offset(&self.layout, *uvs_byte_offset)?;
-                validate_optional_color_offset(&self.layout, *colors_byte_offset)?;
             }
             MeshPayloadSource::Resource {
                 resource,
@@ -548,9 +523,6 @@ pub enum MeshDescriptorError {
     },
     ColorOutOfRange,
     VoxelTileCoordinateOutOfRange,
-    UnsafeSharedBufferId {
-        buffer: u64,
-    },
     InvalidResourceIdentity,
     InvalidResourceByteLength {
         byte_length: u32,
@@ -1867,23 +1839,6 @@ mod tests {
                 actual_start: 1,
             })
         );
-    }
-
-    #[test]
-    fn shared_buffer_ids_must_survive_the_javascript_border_exactly() {
-        let mut payload = triangle();
-        payload.source = MeshPayloadSource::SharedBuffer {
-            buffer: JSON_SAFE_U64_MAX + 1,
-            positions_byte_offset: 0,
-            normals_byte_offset: 36,
-            uvs_byte_offset: None,
-            colors_byte_offset: None,
-            indices_byte_offset: 72,
-        };
-        assert!(matches!(
-            payload.validate(),
-            Err(MeshDescriptorError::UnsafeSharedBufferId { .. })
-        ));
     }
 
     #[test]

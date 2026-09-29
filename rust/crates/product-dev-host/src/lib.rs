@@ -24,11 +24,7 @@ mod model;
 mod scheduler;
 mod session;
 
-pub use bundle::{
-    product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry,
-    ProductDevRendererResource, ProductDevRendererResourceKind, PRODUCT_DEV_INDEX_PATH,
-    PRODUCT_DEV_RENDERER_PRELOAD_PATH,
-};
+pub use bundle::{ProductDevBundle, ProductDevBundleEntry, PRODUCT_DEV_INDEX_PATH};
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use frames::{
     ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream, FRAME_REQUEST_WAIT,
@@ -42,28 +38,20 @@ pub use log::{
     ProductDevLogEvent, ProductDevLogSeverity, ProductDevLogSnapshot, ProductDevLogWriterState,
 };
 pub use model::{
-    runtime_fault_disposition, CanonicalU64, ProductDevAnimationCueDefinition,
-    ProductDevAnimationCueSignalDomain, ProductDevAnimationFeedback,
-    ProductDevAnimationFeedbackFact, ProductDevAnimationFeedbackResult,
-    ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
-    ProductDevAudioFeedbackResult, ProductDevBrowserAttachment,
+    runtime_fault_disposition, CanonicalU64, ProductDevBrowserAttachment,
     ProductDevBrowserAttachmentBaseline, ProductDevBrowserConnectionState,
     ProductDevBrowserDiagnosticsReport, ProductDevBrowserDiagnosticsResult,
     ProductDevBrowserHostState, ProductDevBrowserPageDiagnostic,
     ProductDevBrowserPageDiagnosticKind, ProductDevBrowserTerminalDiagnostic,
     ProductDevControlOperation, ProductDevDebugCatalog, ProductDevDebugCommandDescriptor,
     ProductDevDebugCommandParameterDescriptor, ProductDevDebugResult, ProductDevFaultDisposition,
-    ProductDevGhostPlateFallbackReason, ProductDevGhostPlateFeedback,
-    ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
-    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
-    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererPublicationFrontier,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
+    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
+    ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevRuntimeState, ProductDevTelemetrySnapshot,
     ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
-    ProductDevUpdateAttributionSnapshot, ProductDevVideoFeedback, ProductDevVideoFeedbackFact,
-    PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
+    ProductDevUpdateAttributionSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use runtime_publication::{
     RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,

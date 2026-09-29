@@ -1200,16 +1200,6 @@ fn dispatch_request<R: ProductDevRuntime>(
     request: HttpRequest,
 ) -> HttpResponse {
     if request.method == "GET" {
-        if let Some((identity, generation)) = renderer_resource_query(&request.path) {
-            if !request.body.is_empty() {
-                return HttpResponse::error(
-                    400,
-                    "DEV_HOST_GET_BODY",
-                    "GET requests cannot carry a body",
-                );
-            }
-            return invoke_renderer_resource(state, &identity, generation);
-        }
         if request.path == "/__rusty/product/runtime/debug/catalog" {
             if !state.live_debug_enabled {
                 return HttpResponse::error(
@@ -1294,17 +1284,6 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/admit-demand-step" => invoke_demand(state, &request.body),
         "/__rusty/product/runtime/admit-external-step" => invoke_external(state, &request.body),
         "/__rusty/product/runtime/timeline-completion" => invoke_timeline(state, &request.body),
-        "/__rusty/product/runtime/audio-feedback" => invoke_audio_feedback(state, &request.body),
-        "/__rusty/product/runtime/video-feedback" => invoke_video_feedback(state, &request.body),
-        "/__rusty/product/runtime/animation-feedback" => {
-            invoke_animation_feedback(state, &request.body)
-        }
-        "/__rusty/product/runtime/ghost-plate-feedback" => {
-            invoke_ghost_plate_feedback(state, &request.body)
-        }
-        "/__rusty/product/runtime/renderer-diagnostics" => {
-            invoke_renderer_diagnostics(state, &request.body)
-        }
         "/__rusty/product/runtime/diagnostics/read" => {
             invoke_diagnostics_read(state, &request.body)
         }
@@ -1315,129 +1294,14 @@ fn dispatch_request<R: ProductDevRuntime>(
     }
 }
 
-fn invoke_renderer_resource<R: ProductDevRuntime>(
-    state: &HostState<R>,
-    identity: &str,
-    generation: u64,
-) -> HttpResponse {
-    let resource = match state.runtime.renderer_resource(identity, generation) {
-        Ok(resource) => resource,
-        Err(error) => return HttpResponse::error(503, error.code(), error.diagnostic()),
-    };
-    let Some(resource) = resource else {
-        return HttpResponse::error(
-            404,
-            "DEV_HOST_RENDERER_RESOURCE_NOT_FOUND",
-            "renderer resource is not retained for the requested runtime generation",
-        );
-    };
-    if resource.identity() != identity {
-        return HttpResponse::error(
-            500,
-            "DEV_HOST_RENDERER_RESOURCE_IDENTITY",
-            "renderer resource lookup returned a mismatched identity",
-        );
-    }
-    let response =
-        HttpResponse::bytes(200, resource.media_type(), resource.shared_bytes()).with_observation();
-    if content_addressed_identity(identity) {
-        response.immutable()
-    } else {
-        response
-    }
-}
-
-/// Engine renderer identities end in the SHA-256 of their bytes, so a
-/// response for one can never change.
-fn content_addressed_identity(identity: &str) -> bool {
-    identity.rsplit_once('/').is_some_and(|(_, hash)| {
-        hash.len() == 64
-            && hash
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
-}
-
-/// Serve an exact bundle path. `?content=<hash>` names a renderer preload
-/// body by its content hash: a match is immutable, a mismatch is a stale
-/// descriptor and is refused so old URLs never cache new bytes.
+/// Serve an exact bundle path.
 fn bundle_response(bundle: &ProductDevBundle, request_path: &str) -> Option<HttpResponse> {
-    let (path, query) = match request_path.split_once('?') {
-        Some((path, query)) => (path, Some(query)),
-        None => (request_path, None),
-    };
-    let entry = bundle.get(path)?;
-    let response = HttpResponse::bytes(200, entry.content_type(), entry.shared_bytes());
-    let Some(query) = query else {
-        return Some(response);
-    };
-    let requested = query.strip_prefix("content=").and_then(percent_decode)?;
-    (entry.content_hash() == Some(requested.as_str())).then(|| response.immutable())
-}
-
-fn renderer_resource_query(path: &str) -> Option<(String, u64)> {
-    let (route, query) = path.split_once('?')?;
-    if route != "/__rusty/product/runtime/resource" {
-        return None;
-    }
-    let mut identity = None;
-    let mut generation = None;
-    for pair in query.split('&') {
-        let (key, value) = pair.split_once('=')?;
-        match key {
-            "identity" if identity.is_none() => identity = percent_decode(value),
-            "generation" if generation.is_none() => {
-                generation = value
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|generation| *generation != 0)
-            }
-            _ => return None,
-        }
-    }
-    identity
-        .filter(|identity| valid_renderer_identity(identity))
-        .zip(generation)
-}
-
-fn valid_renderer_identity(identity: &str) -> bool {
-    !identity.is_empty()
-        && identity.len() <= 512
-        && identity.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b':' | b'.' | b'-' | b'_')
-        })
-}
-
-fn percent_decode(value: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(value.len());
-    let source = value.as_bytes();
-    let mut index = 0;
-    while index < source.len() {
-        match source[index] {
-            b'%' => {
-                let high = *source.get(index + 1)?;
-                let low = *source.get(index + 2)?;
-                bytes.push(hex_value(high)? << 4 | hex_value(low)?);
-                index += 3;
-            }
-            b'+' => return None,
-            byte if byte.is_ascii() => {
-                bytes.push(byte);
-                index += 1;
-            }
-            _ => return None,
-        }
-    }
-    String::from_utf8(bytes).ok()
-}
-
-fn hex_value(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
+    let entry = bundle.get(request_path)?;
+    Some(HttpResponse::bytes(
+        200,
+        entry.content_type(),
+        entry.shared_bytes(),
+    ))
 }
 
 fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpResponse {
@@ -1448,7 +1312,7 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
             || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
             |runtime| {
                 let result = runtime.describe_debug();
-                let receipt = match state.runtime.finish_call(runtime, result) {
+                let receipt = match result {
                     Ok(receipt) => receipt,
                     Err(error) => {
                         return Ok(HttpResponse::error(500, error.code(), error.diagnostic()));
@@ -1493,7 +1357,6 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                     // Input accepted before this command reaches the runtime
                     // first; `engine.time.advance` steps held time with it.
                     let errors = crate::scheduler::deliver_queued_input(
-                        &state.runtime,
                         runtime,
                         state.input_mailbox.drain(),
                         &mut |receipt| publish_scheduled_input_receipt(state, receipt),
@@ -1511,7 +1374,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                     }
                 }
                 let result = runtime.execute_debug(command);
-                let receipt = match state.runtime.finish_call(runtime, result) {
+                let receipt = match result {
                     Ok(receipt) => receipt,
                     Err(error) => {
                         return Ok(debug_text_error(
@@ -1769,99 +1632,6 @@ fn invoke_timeline<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
     )
 }
 
-fn invoke_audio_feedback<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: crate::ProductDevAudioFeedback = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    if let Err(error) = request.validate() {
-        return HttpResponse::error(400, error.code(), error.detail());
-    }
-    let binding = request.runtime;
-    call_runtime(
-        state,
-        ProductDevOperationKind::ReportAudioFeedback,
-        |runtime| runtime.report_audio_feedback(request),
-        |error| crate::ProductDevAudioFeedbackResult::rejected_runtime(binding, error),
-    )
-}
-
-fn invoke_video_feedback<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: crate::ProductDevVideoFeedback = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    if let Err(error) = request.validate() {
-        return HttpResponse::error(400, error.code(), error.detail());
-    }
-    let binding = request.runtime;
-    call_runtime(
-        state,
-        ProductDevOperationKind::ReportVideoFeedback,
-        |runtime| runtime.report_video_feedback(request),
-        |error| crate::ProductDevAudioFeedbackResult::rejected_runtime(binding, error),
-    )
-}
-
-fn invoke_animation_feedback<R: ProductDevRuntime>(
-    state: &HostState<R>,
-    body: &[u8],
-) -> HttpResponse {
-    let request: crate::ProductDevAnimationFeedback = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    if let Err(error) = request.validate() {
-        return HttpResponse::error(400, error.code(), error.detail());
-    }
-    let binding = request.runtime;
-    call_runtime(
-        state,
-        ProductDevOperationKind::ReportAnimationFeedback,
-        |runtime| runtime.report_animation_feedback(request),
-        |error| crate::ProductDevAnimationFeedbackResult::rejected_runtime(binding, error),
-    )
-}
-
-fn invoke_ghost_plate_feedback<R: ProductDevRuntime>(
-    state: &HostState<R>,
-    body: &[u8],
-) -> HttpResponse {
-    let request: crate::ProductDevGhostPlateFeedback = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    if let Err(error) = request.validate() {
-        return HttpResponse::error(400, error.code(), error.detail());
-    }
-    let binding = request.runtime;
-    call_runtime(
-        state,
-        ProductDevOperationKind::ReportGhostPlateFeedback,
-        |runtime| runtime.report_ghost_plate_feedback(request),
-        |error| crate::ProductDevGhostPlateFeedbackResult::rejected_runtime(binding, error),
-    )
-}
-
-fn invoke_renderer_diagnostics<R: ProductDevRuntime>(
-    state: &HostState<R>,
-    body: &[u8],
-) -> HttpResponse {
-    let request: crate::ProductDevRendererDiagnosticsFeedback = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    let binding = request.runtime;
-    call_runtime(
-        state,
-        ProductDevOperationKind::ReportRendererDiagnostics,
-        |runtime| runtime.report_renderer_diagnostics(request),
-        |error| {
-            crate::ProductDevRendererDiagnosticsFeedbackResult::rejected_runtime(binding, error)
-        },
-    )
-}
-
 fn invoke_diagnostics_read<R: ProductDevRuntime>(
     state: &HostState<R>,
     body: &[u8],
@@ -1970,14 +1740,8 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
             .as_ref()
             .and_then(|attachment| attachment.baseline.as_ref())
             .expect("established baseline requires a baseline");
-        let revisions = baseline
-            .publication_frontiers
-            .iter()
-            .map(|frontier| frontier.revision.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
         format!(
-            "runtime={}/{}/{};next-input={};revisions={revisions}",
+            "runtime={}/{}/{};next-input={}",
             baseline.runtime.instance_id.get(),
             baseline.runtime.generation.get(),
             baseline.runtime.control_revision.get(),
@@ -2167,7 +1931,7 @@ where
         || begin_telemetry(state, operation),
         |runtime| {
         let call_result = call(runtime);
-        let receipt = match state.runtime.finish_call(runtime, call_result) {
+        let receipt = match call_result {
             Ok(receipt) => receipt,
             Err(error) => {
                 let message = if error.diagnostic().is_empty() {
@@ -2348,7 +2112,7 @@ fn handle_sse<R: ProductDevRuntime>(
             || begin_telemetry(&state, ProductDevOperationKind::Connect),
             |runtime| {
                 let result = runtime.connect();
-                let receipt = state.runtime.finish_call(runtime, result)?;
+                let receipt = result?;
                 let (result, mut outputs) = match receipt.into_wire_parts() {
                     Ok(parts) => parts,
                     Err(error) => {
@@ -2644,7 +2408,7 @@ fn encode_output_batches(
             continue;
         }
         if let Some(binding) = output.complete_baseline_marker() {
-            let Some((pending, mut members)) = baseline.take() else {
+            let Some((pending, members)) = baseline.take() else {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BASELINE",
                     "a baseline completion arrived without its binding",
@@ -2656,7 +2420,6 @@ fn encode_output_batches(
                     "a baseline completion does not match its binding",
                 ));
             }
-            output.attach_complete_baseline_frontiers_to_binding(&mut members[0])?;
             batches.push(encode_output_batch(&members)?);
             active_binding = Some(binding);
             continue;
@@ -2786,24 +2549,6 @@ mod tests {
         let unclassified =
             HttpResponse::bytes(200, "application/json", Vec::new()).with_resync_required();
         assert!(unclassified.delivery_certainty.is_none());
-    }
-
-    #[test]
-    fn renderer_resource_route_decodes_identity_and_runtime_generation() {
-        assert_eq!(
-            renderer_resource_query(
-                "/__rusty/product/runtime/resource?identity=font%2Fsha256%3Aabc&generation=7"
-            ),
-            Some(("font/sha256:abc".to_owned(), 7))
-        );
-        assert!(renderer_resource_query(
-            "/__rusty/product/runtime/resource?identity=font%2Fsha256%3Aabc&generation=0"
-        )
-        .is_none());
-        assert!(renderer_resource_query(
-            "/__rusty/product/runtime/resource?identity=font&generation=7&generation=8"
-        )
-        .is_none());
     }
 
     #[test]
@@ -2976,7 +2721,7 @@ mod tests {
             &bus,
             vec![
                 ProductDevRuntimeOutput::binding(paused, CanonicalU64::new(5)),
-                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
                 ProductDevRuntimeOutput::complete_baseline(paused),
             ],
         )
@@ -2988,7 +2733,7 @@ mod tests {
         assert_eq!(value["kind"], "runtime-output-batch");
         assert_eq!(value["outputs"][0]["kind"], "binding");
         assert_eq!(value["outputs"][0]["runtime"]["controlRevision"], "3");
-        assert_eq!(value["outputs"][1]["kind"], "frame");
+        assert_eq!(value["outputs"][1]["kind"], "ui-projection");
         assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
     }
 
@@ -3003,7 +2748,7 @@ mod tests {
                     crate::ProductDevRuntimeMode::Realtime,
                     crate::ProductDevRuntimeState::Running,
                 )),
-                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
             ],
         )
         .expect("receipt batch publishes");
@@ -3013,7 +2758,7 @@ mod tests {
         let value = batch_json(&events[0]);
         assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
         assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
-        assert_eq!(value["outputs"][1]["kind"], "frame");
+        assert_eq!(value["outputs"][1]["kind"], "ui-projection");
     }
 
     #[test]
@@ -3032,18 +2777,10 @@ mod tests {
                 .iter()
                 .map(|output| output["kind"].as_str().unwrap().to_owned())
                 .collect();
+            assert_eq!(kinds, ["ui-projection", "ui-projection", "runtime-readout"]);
             assert_eq!(
-                kinds,
-                [
-                    "frame",
-                    "view-composition",
-                    "ui-projection",
-                    "runtime-readout"
-                ]
-            );
-            assert_eq!(
-                value["outputs"][0]["frame"]["publication"]["stream"],
-                format!("{{\"tick\":{tick}}}")
+                value["outputs"][0]["envelope"]["value"]["tick"],
+                serde_json::json!(tick)
             );
         }
     }
@@ -3053,7 +2790,7 @@ mod tests {
         let (bus, early) = subscribed_bus();
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_frame_value(
+            vec![ProductDevRuntimeOutput::test_value(
                 serde_json::json!({"n": 1}),
             )],
         )
@@ -3062,7 +2799,7 @@ mod tests {
         bus.lock().unwrap().subscribers.push(Arc::downgrade(&late));
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_frame_value(
+            vec![ProductDevRuntimeOutput::test_value(
                 serde_json::json!({"n": 2}),
             )],
         )
@@ -3097,17 +2834,17 @@ mod tests {
         let payload = "x".repeat(4 * 1024 * 1024);
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_frame_value(
+            vec![ProductDevRuntimeOutput::test_value(
                 serde_json::json!({ "payload": payload }),
             )],
         )
         .unwrap();
         let events = queue.take().unwrap();
         assert_eq!(events.len(), 1);
-        let stream = batch_json(&events[0])["outputs"][0]["frame"]["publication"]["stream"]
+        let carried = batch_json(&events[0])["outputs"][0]["envelope"]["value"]["payload"]
             .as_str()
             .map(str::len);
-        assert!(stream > Some(payload.len()));
+        assert_eq!(carried, Some(payload.len()));
     }
 
     #[test]
@@ -3120,9 +2857,9 @@ mod tests {
         let error = push_outputs(
             &bus,
             vec![
-                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
                 ProductDevRuntimeOutput::binding(replacement, CanonicalU64::new(0)),
-                ProductDevRuntimeOutput::test_frame_value(serde_json::json!({})),
+                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
             ],
         )
         .expect_err("a baseline must complete within its publication");
@@ -3131,9 +2868,7 @@ mod tests {
         assert_eq!(bus.lock().unwrap().active_binding, None);
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({}),
-            )],
+            vec![ProductDevRuntimeOutput::test_value(serde_json::json!({}))],
         )
         .expect("incrementals after a fence are dropped, not rejected");
         assert!(queue.take().unwrap().is_empty());
@@ -3481,13 +3216,6 @@ mod tests {
 
     fn representative_realtime_receipt(tick: u64) -> Vec<ProductDevRuntimeOutput> {
         let runtime = binding();
-        let composition = render_host_contracts::RendererViewComposition {
-            schema_version: render_host_contracts::RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
-            cameras: Vec::new(),
-            targets: Vec::new(),
-            views: Vec::new(),
-            presentations: Vec::new(),
-        };
         let ui_runtime = runtime_ui::RuntimeUiRuntimeBinding::new(
             runtime_lifecycle::RuntimeInstanceId::new(runtime.instance_id.get()),
             runtime_lifecycle::RuntimeGeneration::new(runtime.generation.get()),
@@ -3502,11 +3230,8 @@ mod tests {
         )
         .expect("representative UI projection");
         vec![
-            ProductDevRuntimeOutput::test_frame_value(serde_json::json!({"tick": tick})),
-            ProductDevRuntimeOutput::view_composition(&composition)
-                .expect("representative view composition"),
-            ProductDevRuntimeOutput::ui_projection(&ui_projection)
-                .expect("representative UI projection output"),
+            ProductDevRuntimeOutput::test_value(serde_json::json!({"tick": tick})),
+            ProductDevRuntimeOutput::ui_projection(&ui_projection),
             ProductDevRuntimeOutput::runtime_readout(
                 crate::ProductDevRuntimeReadout::new(
                     runtime,
@@ -3738,9 +3463,6 @@ struct HttpResponse {
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
     delivery_certainty: Option<ResponseDeliveryCertainty>,
-    /// Only a body named by its content hash may be cached; every other
-    /// response, including mutable dev files, stays `no-store`.
-    immutable: bool,
 }
 
 /// Preserve the runtime's mutation certainty even on a typed rejection.
@@ -3795,13 +3517,7 @@ impl HttpResponse {
             output_through: None,
             commit_disposition: None,
             delivery_certainty: None,
-            immutable: false,
         }
-    }
-
-    fn immutable(mut self) -> Self {
-        self.immutable = true;
-        self
     }
 
     /// Only a failure rejected before mutation is known not to have applied.
@@ -3895,11 +3611,7 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
             stream.write_all(b"X-Rusty-Resync-Outputs: fresh\r\n")?;
         }
     }
-    stream.write_all(if response.immutable {
-        b"Cache-Control: private, max-age=31536000, immutable\r\n".as_slice()
-    } else {
-        b"Cache-Control: no-store\r\n".as_slice()
-    })?;
+    stream.write_all(b"Cache-Control: no-store\r\n")?;
     stream.write_all(b"X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n")?;
     stream.write_all(&response.body)?;
     stream.flush()

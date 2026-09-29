@@ -38,7 +38,6 @@ use std::sync::Arc;
 use csharp_product_runtime::{Gpu, Renderer, SceneDriver};
 use desktop_shell::{DesktopScene, DesktopShell, DesktopShellConfig, WebRuntimeConfig};
 
-const AUDIO_OUTPUT_ENV: &str = "RUSTY_AUDIO_OUTPUT";
 /// Extra Chromium switches for the UI page, comma-separated `name[=value]`;
 /// for example `remote-debugging-port=9333` lets a CDP client (the playtest
 /// harness, a debugger) attach to the page.
@@ -57,13 +56,9 @@ impl Desktop {
     /// Call on the main thread, before any other thread starts.
     pub(crate) fn open_if_selected() -> Result<Option<Self>, String> {
         if csharp_product_runtime::render_output_mode().map_err(|error| error.to_string())?
-            != Some("window")
+            != csharp_product_runtime::RenderOutput::Window
         {
             return Ok(None);
-        }
-        // A desktop application plays its own sound.
-        if std::env::var_os(AUDIO_OUTPUT_ENV).is_none() {
-            std::env::set_var(AUDIO_OUTPUT_ENV, "device");
         }
         Ok(Some(Self {
             shell: DesktopShell::open()?,

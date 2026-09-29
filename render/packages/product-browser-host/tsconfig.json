@@ -6,9 +6,12 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
-    { "path": "../application-host" },
-    { "path": "../renderer-host" }
+    {
+      "path": "../application-host"
+    }
   ]
 }

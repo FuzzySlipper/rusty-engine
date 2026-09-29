@@ -115,10 +115,9 @@ Known overlaps:
 
 ## Shared generated files
 
-- **`render/artifacts/*`** and `rust/crates/renderer-webview-host/artifacts/`
-  are ignored build output since #8752. Do not commit them. `pnpm run build`
-  in `render/` rebuilds them, and `scripts/build-runtime-pack.sh` builds them
-  itself.
+- **`render/artifacts/*`** are ignored build output since #8752. Do not
+  commit them. `pnpm run build` in `render/` rebuilds them, and
+  `scripts/build-runtime-pack.sh` builds them itself.
 - **`rust/crates/csharp-engine-abi/src/generated_abi_identity.rs`.** On
   conflict, regenerate it with `scripts/generate-csharp-native-bindings.sh`
   (building the SDK also regenerates it).
@@ -129,10 +128,8 @@ Known overlaps:
 
 ## Known baseline
 
-- **Tests.** `cargo test --workspace --exclude renderer-webview-host` passes on
-  main (1,145 tests at `a3b43343`).
-  - The GTK/WebKit dev packages are now installed, so `renderer-webview-host`
-    builds too; its check script needs `pnpm --dir render run build:webview-artifact` first.
+- **Tests.** `cargo test --workspace` passes on main. The webview host crate
+  and the Three.js lane were deleted by #8792.
 - **Clippy.** It still reports the #8757 lints in `product-dev-host/src/model.rs`,
   `render-presentation/src/frame.rs` and `csharp-engine-services`
   (`spatial.rs`, `voxel.rs`) until the tooling lane lands #8757. They are not

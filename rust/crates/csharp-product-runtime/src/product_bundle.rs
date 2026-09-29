@@ -11,7 +11,7 @@ use std::{
 };
 
 use csharp_engine_abi::NativeInputCursorMode;
-use product_dev_host::{ProductDevBundleEntry, ProductDevRendererResource};
+use product_dev_host::ProductDevBundleEntry;
 use runtime_input::{CompiledInputMappings, DirectInputIntentDescriptor, RuntimeInputMapping};
 use runtime_lifecycle::{
     validate_runtime_identity, RealtimeLifecycleConfig, RuntimeLifecycleConfig,
@@ -174,10 +174,7 @@ impl ProductBundle {
         self.renderer_lighting.enabled()
     }
 
-    pub(super) fn browser_entries(
-        &self,
-        resources: &[ProductDevRendererResource],
-    ) -> Result<Vec<ProductDevBundleEntry>, String> {
+    pub(super) fn browser_entries(&self) -> Result<Vec<ProductDevBundleEntry>, String> {
         let mut entries = Vec::new();
         collect_ui(&self.ui_root, &self.ui_root, &mut entries)?;
         let bootstrap = ProductBootstrap {
@@ -199,15 +196,10 @@ impl ProductBundle {
             ui_projection: self.ui_projection.as_ref(),
             renderer: ProductBootstrapRenderer {
                 // The shell shows the runtime's frames, or lets the desktop
-                // window show through, instead of realizing the world itself.
+                // window show through.
                 output: csharp_product_runtime::render_output_mode()
-                    .map_err(|error| error.to_string())?,
-                lighting: ProductBootstrapLighting {
-                    default_lights: ProductBootstrapDefaultLights {
-                        world: self.renderer_lighting.world.as_str(),
-                        viewmodel: self.renderer_lighting.viewmodel.as_str(),
-                    },
-                },
+                    .map_err(|error| error.to_string())?
+                    .as_str(),
             },
         };
         entries.push(
@@ -217,10 +209,6 @@ impl ProductBundle {
                 serde_json::to_vec(&bootstrap).expect("fixed Product browser bootstrap encodes"),
             )
             .map_err(|error| error.to_string())?,
-        );
-        entries.extend(
-            product_dev_host::product_dev_renderer_preload_entries(resources)
-                .map_err(|error| error.to_string())?,
         );
         Ok(entries)
     }
@@ -546,13 +534,6 @@ impl ProductDefaultLights {
             _ => Err(field_error(field, "must be neutral or disabled")),
         }
     }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Neutral => "neutral",
-            Self::Disabled => "disabled",
-        }
-    }
 }
 #[derive(Debug)]
 struct ProductRendererLighting {
@@ -701,19 +682,7 @@ struct ProductBootstrapInput {
 }
 #[derive(Serialize)]
 struct ProductBootstrapRenderer {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<&'static str>,
-    lighting: ProductBootstrapLighting,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProductBootstrapLighting {
-    default_lights: ProductBootstrapDefaultLights,
-}
-#[derive(Serialize)]
-struct ProductBootstrapDefaultLights {
-    world: &'static str,
-    viewmodel: &'static str,
+    output: &'static str,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -805,7 +774,7 @@ mod tests {
                 .0,
             root.join("coreclr/product.dll").canonicalize().unwrap()
         );
-        let entries = product.browser_entries(&[]).expect("Product UI stages");
+        let entries = product.browser_entries().expect("Product UI stages");
         assert!(entries
             .iter()
             .any(|entry| entry.path() == "product-ui/main.js"));
@@ -827,9 +796,10 @@ mod tests {
             "fixture.terrain.v1"
         );
         assert_eq!(
-            bootstrap["renderer"]["lighting"]["defaultLights"],
-            serde_json::json!({ "world": "neutral", "viewmodel": "neutral" })
+            bootstrap["renderer"],
+            serde_json::json!({ "output": "stream" })
         );
+        assert_eq!(product.default_lights(), (true, true));
         assert_eq!(bootstrap["input"]["cursorMode"], "pointer-lock");
         assert!(!entries
             .iter()
@@ -858,7 +828,7 @@ mod tests {
 
         let bootstrap = ProductBundle::read(&root)
             .expect("unlocked cursor mode admits")
-            .browser_entries(&[])
+            .browser_entries()
             .expect("browser bootstrap stages")
             .into_iter()
             .find(|entry| entry.path() == PRODUCT_BOOTSTRAP_PATH)
@@ -884,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_default_light_modes_before_the_browser_bootstrap_is_staged() {
+    fn rejects_invalid_default_light_modes_at_admission() {
         let root = fixture_root("invalid-default-lighting");
         write_manifest(&root, "native/product.so");
         let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
@@ -900,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn stages_world_and_viewmodel_default_lights_independently() {
+    fn reads_world_and_viewmodel_default_lights_independently() {
         let root = fixture_root("independent-default-lighting");
         write_manifest(&root, "native/product.so");
         let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
@@ -911,17 +881,7 @@ mod tests {
         fs::write(&manifest_path, manifest).unwrap();
 
         let product = ProductBundle::read(&root).expect("independent light modes admit");
-        let bootstrap = product
-            .browser_entries(&[])
-            .expect("browser bootstrap stages")
-            .into_iter()
-            .find(|entry| entry.path() == PRODUCT_BOOTSTRAP_PATH)
-            .expect("browser bootstrap exists");
-        let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.bytes()).unwrap();
-        assert_eq!(
-            bootstrap["renderer"]["lighting"]["defaultLights"],
-            serde_json::json!({ "world": "disabled", "viewmodel": "neutral" })
-        );
+        assert_eq!(product.default_lights(), (false, true));
         fs::remove_dir_all(root).unwrap();
     }
 }

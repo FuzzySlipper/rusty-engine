@@ -55,12 +55,12 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
 | Dynamics bodies and ropes | Rust | `svc-collision::DynamicsSolver` keeps one live Rapier world per Dynamics world (bodies, static colliders, rope joints) and changes it in place. The Dynamics bridge maps generated handles onto it, owns chains, and binds Spatial collision scenes. See [rope physics](rope-physics.md). |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
-| wgpu realization | Rust | [`render-wgpu`](../rust/crates/render-wgpu) applies `PresentationWorld` deltas to typed GPU tables and renders offscreen (with readback) or to a window surface. It is the only crate that may depend on wgpu. Its node table is a derived GPU-side twin, not a second retained world. It holds only what encoding a view and picking need, it is crate-private, and no other crate reads it. It propagates world matrices itself because joint attachments follow poses only it evaluates; other consumers take positions from `PresentationWorld::entity_world_position` (#8848). The runtime drives it in the streaming browser mode (below); the desktop shell (#8790) wires it in next, and Three stays the default browser realizer until #8792. |
-| Animated mesh glTF | Rust | The retained model keeps admitted GLB bytes (`animated-mesh-resource/…`, `clip-pack-resource/…`), which the Three lane also loads until #8792. [`asset-import`](../rust/crates/asset-import), run by the services at open, owns admission and every Engine-visible fact: clip ids, names and declared durations; the rig signature (joint identity is a skin joint's unique node name) and clip-pack compatibility; material slots; bounds. [`render-wgpu`](../rust/crates/render-wgpu) `glb.rs` reads the admitted bytes only to realize them: streams, skins, keyframes, materials, textures. Playback timing and completion come from its decoded keyframes, and nothing else reads the declared durations. It adds no admission rule, and it binds clips and clip-pack channels by the identities `asset-import` defined (#8847). |
+| wgpu realization | Rust | [`render-wgpu`](../rust/crates/render-wgpu) applies `PresentationWorld` deltas to typed GPU tables and renders offscreen (with readback) or to a window surface. It is the only crate that may depend on wgpu. Its node table is a derived GPU-side twin, not a second retained world. It holds only what encoding a view and picking need, it is crate-private, and no other crate reads it. It propagates world matrices itself because joint attachments follow poses only it evaluates; other consumers take positions from `PresentationWorld::entity_world_position` (#8848). The runtime drives it for the streamed frames and the desktop window (below); it is the only renderer (#8792). |
+| Animated mesh glTF | Rust | The retained model keeps admitted GLB bytes (`animated-mesh-resource/…`, `clip-pack-resource/…`). [`asset-import`](../rust/crates/asset-import), run by the services at open, owns admission and every Engine-visible fact: clip ids, names and declared durations; the rig signature (joint identity is a skin joint's unique node name) and clip-pack compatibility; material slots; bounds. [`render-wgpu`](../rust/crates/render-wgpu) `glb.rs` reads the admitted bytes only to realize them: streams, skins, keyframes, materials, textures. Playback timing and completion come from its decoded keyframes, and nothing else reads the declared durations. It adds no admission rule, and it binds clips and clip-pack channels by the identities `asset-import` defined (#8847). |
 | Math vocabulary | Rust | Engine value types are plain arrays and the small f32 [`core-math`](../rust/crates/core-math) types. World-space spatial work is f64 and uses nalgebra through parry and rapier inside `svc-collision` and `svc-implicit`. glam is private to `render-wgpu`, which needs f32 column-major matrices for GPU rows, and `scripts/dependency_boundary_check.py` refuses it anywhere else. Conversions between Engine arrays and glam go only through `render-wgpu/src/convert.rs` (#8846). |
-| Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) owns the runtime's `render-wgpu` renderer in the streaming browser mode: it applies each committed call's publications, draws offscreen on its own thread, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-dev-host` serves them at `/__rusty/product/runtime/frames`. |
+| Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) owns the runtime's `render-wgpu` renderer: it applies each committed call's publications, draws offscreen on its own thread, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-dev-host` serves them at `/__rusty/product/runtime/frames`. |
 | Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
-| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. Runtime operations return these before the host converts them to browser DTOs and applies delivery byte limits. Input acknowledgements and the runtime readout remain host observations. |
+| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. The runtime's renderer and audio output apply them in process; the host sends the browser shell only its binding, baseline markers and UI projections. Input acknowledgements and the runtime readout remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
 | Safe C# contracts and native bridge | Generated and handwritten C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles the generated contracts, values, internal interop and service implementations from ignored `obj/Generated` output, plus the handwritten [`ProductBridge`](../csharp/Rusty.Engine/NativeProduct/ProductBridge.cs) that implements the product ABI table and lifetime. |
@@ -146,81 +146,19 @@ loaders. They are not downstream product architecture or launch templates.
 
 ## Reconstructible presentation
 
-This section describes the current implementation. Its candidates, transport
-ordering, revision checks, and recovery paths are starting points for campaign
+This section describes the current implementation. Its transport ordering,
+revision checks, and recovery paths are starting points for campaign
 experiments, not requirements to reproduce in a simpler design.
 
-C# selects presentation facts through named services. Rust commits the resulting
-graphics intent into `PresentationWorld`; TypeScript realizes that intent in
-browser/GPU objects. Fresh browser attachment reads committed Rust snapshots
-without calling the product's `Attach` callback. Graphics snapshots preserve
-active handles and resource dependencies, with a `presentation-world`
-continuation revision. The runtime session guard covers snapshot capture and
-the output cursor handover, so subsequent deltas follow that snapshot. The
-presentation revision and transport cursor remain separate facts.
-The runtime moves owned typed publications through operation settlement into
-ProductDev wire DTOs. Publication and host adapters do not clone and readmit
-already admitted graphics, presentation, UI, or view payloads. The serving
-adapter adds input receipt observations and publishes the runtime readout
-only when it changes. Mailbox draining and publication callbacks belong to that host
-scheduler; neutral session scopes retain the single runtime lock.
-
-The renderer realizes admitted changes once, without constructing disposable
-resources or sampling phantom animated instances as a frame preflight. Backend
-realization failure currently makes that surface terminal; recovery rebuilds
-from committed intent. Campaign #8723 includes exploring in-place recovery and
-resource reuse. Retained texture descriptors are immutable shared values.
-Shadows initialize on new world objects without a scene-wide frame sweep or an
-Engine shadow-light quota; products choose their lighting workload.
-Generated C# bridges convert borrowed spans directly to
-native arrays while retaining the required pin and release lifetimes.
-
-Auxiliary publication frontier checks read only the stream revision; they do
-not fork retained graphics maps. Commit rechecks after asynchronous realization.
-SSE subscribers share one immutable encoding of each output batch. Product artifact
-resolution checks paths/metadata without reading bodies that it would discard;
-actual loaders and UI staging consume those bodies when needed.
-
-Catalog admission canonicalizes owned data once before encoding it.
-
-Each operation's outputs become ordered output batches, each sent as one SSE
-event of any size; there is no default byte or count cap and no fragmenting. A
-binding opens a baseline that must complete within the same operation.
-
-There is no output history and no resume. Every SSE connection starts from a
-fresh complete baseline: a reload, a dropped connection, and a replaced runtime
-all reconnect the same way. Each subscriber gets its own live queue from the
-moment its baseline is captured. A subscriber that falls
-`MAX_SUBSCRIBER_QUEUE_EVENTS` (256) events behind, or stops reading for the
-750 ms write timeout, is closed, and the browser reconnects for a fresh
-baseline. One-shot transients published while a browser is disconnected are
-not replayed. SSE ids remain only as an output sequence, so a caller can wait
-until an operation's outputs have been observed.
-
-Renderer resources are served from the runtime's current retained set only;
-content-addressed responses are immutable and cached by the browser. A body the
-runtime releases before the browser fetches it, whether in the same callback
-or a later one, answers 404. The browser treats that 404 (or a 503 while no
-runtime serves) as a stale projection, not a failure: it discards the queued
-output and requests a fresh baseline, which references only retained bodies.
-Browser callers may choose an explicit per-batch byte budget. Immutable host bundles and C# content
-have no default file/count/aggregate byte quotas. Resource-format and browser
-loader restrictions remain separate.
-
-The TS `render-projection` model has no Three or DOM dependency and remains an
-explicit tool/snapshot consumer. Mounted surfaces realize admitted operations
-directly in Three and retain only publication frontiers alongside the backend;
-there is no neutral scene mirror or whole-frame rollback staging. A partial
-realization failure currently stops and disposes the surface.
-`product-browser-host` uses its existing attachment epochs and fresh committed
-baseline recovery, without replaying the product callback. On-demand inspection
-reads actual backend nodes.
-
-Resource inventories reconcile on inventory or resource-owner changes, not on
-transform-only frames. Local static-instance edits update affected membership
-and batch groups; camera culling and picking retain their existing behavior.
-Packed mesh decoding retains byte-range, encoding, and copy-out lifetime checks,
-without rescanning Engine-admitted indices, UVs, colors, or light semantics.
+C# selects presentation facts through named services. Rust commits the
+resulting graphics intent into `PresentationWorld`, and `render-wgpu` realizes
+it in the runtime process. Graphics snapshots preserve active handles and
+resource dependencies, with a `presentation-world` continuation revision. The
+runtime moves owned typed publications through operation settlement to its
+renderer without cloning or readmitting already admitted payloads; the
+renderer reads resource bodies from the committed services while it holds
+them. A call whose renderer work was lost, or a world replacement, rebuilds
+the renderer from the committed snapshot without calling the product.
 
 A product call owns each service's state for its duration and hands it back
 when it finishes, so a call's first write never copies the graphics or
@@ -232,89 +170,92 @@ independent snapshots.
 `PresentationWorld` also commits the retained audio/effect baseline and stamps
 auxiliary presentation deltas with the same revision as graphics. Named Rust
 mechanisms admit their state; the ABI adapter supplies their copied snapshots.
-The shared TS continuation advances when configured hosts apply their operations.
-Explicitly absent optional hosts do not strand unrelated graphics. A configured
-host's partial or rejected published delta currently triggers a fresh baseline;
-its diagnostics remain visible.
 
 Playback cursors advance from admitted Engine update facts. Audio baselines
 resume loops and preserve paused or completed voices; direct sounds and emitter
-creation bursts are not replayed. Audio is realized either by the browser or,
-with `RUSTY_AUDIO_OUTPUT=device`, by `render-audio` on the runtime's output
-device ([recorded audio](recorded-audio.md#device-realization)). Continuous emitters restart their cosmetic
-simulation from their retained descriptor. Animation baselines carry playback
-cursors and per-clip controller phases, suppressing historical cues and
-completion callbacks. Controller phase anchors initialize fresh realization;
-attached mixers and cue cursors advance together on browser display time without
-seeking on ordinary weight updates. A ghost plate retains its capture-time graphics subtree,
-resource definitions, lights, and sampled animation pose. The backend rebuilds
-its capture bank from that immutable input, including after a reconnect; only
-explicit recapture replaces the source pose.
+creation bursts are not replayed. `render-audio` plays audio on the runtime's
+output device ([recorded audio](recorded-audio.md#device-realization)). A
+machine with no output device runs silent after one warning, with no
+completions reported; `RUSTY_AUDIO_OUTPUT=device` requires the device instead.
+Continuous emitters restart their cosmetic simulation from their retained
+descriptor. Animation baselines carry playback cursors and per-clip controller
+phases, suppressing historical cues and completion callbacks. A ghost plate
+retains its capture-time graphics subtree, resource definitions, lights, and
+sampled animation pose; the renderer rebuilds its capture bank from that
+immutable input, and only explicit recapture replaces the source pose.
 
-### Streaming browser mode
+### Runtime outputs to the browser shell
 
-The world is realized either by the browser's Three surface or, with
-`RUSTY_RENDER_OUTPUT=stream`, by `render-wgpu` in the runtime process
-(`csharp-product-runtime/src/frame_output.rs`, `render-stream`). In that mode:
+The browser shell realizes no world. Each operation's outputs for the page
+(its binding, the product UI projections, the runtime readout and scheduled
+input results) become ordered output batches, each sent as one SSE event of
+any size; there is no default byte or count cap and no fragmenting. A binding
+opens a baseline that must complete within the same operation.
+
+There is no output history and no resume. Every SSE connection starts from a
+fresh complete baseline: a reload, a dropped connection, and a replaced runtime
+all reconnect the same way. Each subscriber gets its own live queue from the
+moment its baseline is captured. A subscriber that falls
+`MAX_SUBSCRIBER_QUEUE_EVENTS` (256) events behind, or stops reading for the
+750 ms write timeout, is closed, and the browser reconnects for a fresh
+baseline; the page ignores incremental outputs until that baseline arrives.
+SSE ids remain only as an output sequence, so a caller can wait until an
+operation's outputs have been observed. Immutable host bundles and C# content
+have no default file/count/aggregate byte quotas.
+
+### Runtime-rendered output
+
+`RUSTY_RENDER_OUTPUT` selects where the runtime's renderer draws: `stream`
+(the default) streams frames to the browser shell, and `window` presents to
+the [desktop shell](desktop-shell.md)'s native window
+(`csharp-product-runtime/src/frame_output.rs`, `render-stream`).
 
 - **Runtime.** Each finished product call's frame, presentation and view
   composition publications are applied to the renderer as they are committed,
   under one lock with the simulation step and held state the call left, so a
-  frame never shows a call's changes under the previous step.
-  A call whose renderer work was lost, or a world replacement, rebuilds the
-  renderer from the committed snapshot. Animation and video facts from drawn
-  frames reach the Engine through the ordinary realization feedback, and the
-  renderer's ghost plates are reported as the complete ghost plate snapshot
-  after each product call. The
-  renderer draws when a change is applied: every step while the simulation
-  runs, once per change while it is paused or inspection time is held. It
-  takes the product manifest's default light rigs.
+  frame never shows a call's changes under the previous step. Animation,
+  video and ghost plate facts from drawn frames reach the Engine through the
+  ordinary realization feedback. The renderer draws when a change is applied:
+  every step while the simulation runs, once per change while it is paused or
+  inspection time is held. It takes the product manifest's default light rigs.
+  Once a second it refreshes the renderer statistics C# reads with
+  `Diagnostics.ReadRenderer`; `engine.renderer.status` shows the same.
 - **Transport.** A viewer pulls frames one at a time:
   `GET /__rusty/product/runtime/frames?after=N&width=W&height=H&cssWidth=C`
-  answers with
-  the latest frame newer than `N`, or `204` after a second. Each frame is a
-  40-byte `RSF1` header (sequence, simulation step, size, format, held and
-  video flags) and a JPEG (quality 80) payload; `product-dev-host/src/frames.rs` is the
-  format's source. The renderer draws at the most recent viewer's size, and
-  at its pixel ratio (`W / C`): labels, pixel-sized sprites and particle
-  points are CSS pixels (`Renderer::set_pixel_ratio`). The desktop window
-  uses its scale factor.
+  answers with the latest frame newer than `N`, or `204` after a second. Each
+  frame is a 40-byte `RSF1` header (sequence, simulation step, size, format,
+  held and video flags) and a JPEG (quality 80) payload;
+  `product-dev-host/src/frames.rs` is the format's source. The renderer draws
+  at the most recent viewer's size, and at its pixel ratio (`W / C`): labels,
+  pixel-sized sprites and particle points are CSS pixels
+  (`Renderer::set_pixel_ratio`). The desktop window uses its scale factor.
   `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames, for measurement only.
-- **Browser.** `product-bootstrap.json` carries `renderer.output: "stream"`,
-  and the runtime-pack shell mounts `mountStreamedFrameSurface`
-  (`product-browser-host`) on the Engine canvas instead of Three. It paints
-  the frames under the unchanged product UI, keeps the canvas as the focus,
-  pointer-lock and input target, and marks it with
-  `data-rusty-frame-sequence`, `-step`, `-held` and `-video`. Graphics
-  publications still reach the page and are acknowledged there.
-- **Video.** The runtime renderer plays video clips into the frames, as the
-  desktop window does, and reports their realization facts; the browser's
-  video host receives no ops. A frame a clip covers carries the video flag,
-  and the page shows it above the product UI (z-index 1000, the video
-  element's layer) until a frame without it arrives. The clip's sound plays
-  with the runtime's device audio (`RUSTY_AUDIO_OUTPUT=device`); with
-  browser-realized audio the clip is silent. Audio and the telemetry overlay
-  stay browser presentation hosts.
+- **Browser.** `product-bootstrap.json` carries `renderer.output`. The
+  runtime-pack shell (`product-browser-host` over `application-host`) owns the
+  Engine canvas: with `stream` it paints the frames under the unchanged
+  product UI and marks the canvas with `data-rusty-frame-sequence`, `-step`,
+  `-held` and `-video`; with `window` it leaves the page transparent over the
+  native window. The canvas stays the focus, pointer-lock and input target.
+- **Video.** The runtime renderer plays video clips into the frames and the
+  window. A streamed frame a clip covers carries the video flag, and the page
+  shows it above the product UI (z-index 1000) until a frame without it
+  arrives. The clip's sound plays with the runtime's device audio.
 - **Inspection.** The runtime renderer answers playtest inspection through
-  Engine debug commands the catalog lists only in this mode:
-  `engine.renderer.camera` (read; set an observer pose that replaces every
-  primary view's camera; `none` restores), `engine.renderer.drawing`
-  (`continuous` or `on-demand`, which draws only on request) and
-  `engine.renderer.frame` (draw one frame now). A change draws a frame and
-  the answer names its sequence and step; the page's `__rustyPlaytest` hook
-  waits until the canvas shows that frame. `engine.renderer.presentation`
-  describes the last drawn frame in the browser observation's shape, with
-  `frameSequence`, `simulationStep`, `held` and `observer` added and
-  `captureCorrelation: "frame-sequence"`. Its `views.cameras` are the poses
-  the frame drew from (motion sampled, or the observer's where it replaced a
+  Engine debug commands: `engine.renderer.camera` (read; set an observer pose
+  that replaces every primary view's camera; `none` restores),
+  `engine.renderer.drawing` (`continuous` or `on-demand`, which draws only on
+  request) and `engine.renderer.frame` (draw one frame now). A change draws a
+  frame and the answer names its sequence and step; the page's
+  `__rustyPlaytest` hook waits until the canvas shows that frame.
+  `engine.renderer.presentation` describes the last drawn frame, with
+  `frameSequence`, `simulationStep`, `held` and `observer`, and
+  `captureCorrelation: "frame-sequence"`. Its `views.cameras` are the poses the
+  frame drew from (motion sampled, or the observer's where it replaced a
   primary view's camera, marked `observer`, with `offscreenPose` for that
   camera's offscreen views); `views.sourceCameras` are the product's
-  descriptors. The observer and drawing mode belong
-  to the runtime, so every attached page sees them. Held simulation time is
-  the runtime's own. Nothing asks for a renderer pick.
-- **Not yet in this mode:** ghost plate realization feedback (#8842).
-  `RenderOutput` jobs run in the runtime in every mode (#8826), and billboard
-  labels are drawn by the streamed renderer (#8827).
+  descriptors. The observer and drawing mode belong to the runtime, so every
+  attached page sees them. Held simulation time is the runtime's own. Nothing
+  asks for a renderer pick.
 
 Measured costs and the encoding decision: `docs/evidence/streaming-8786/`.
 
@@ -328,7 +269,7 @@ appearance or mesh definition changed. A complete snapshot is an adapter over
 the same path. Typed runtime mesh
 admission copies C# triangle streams into retained Engine resources. Mesh
 appearances reuse the existing material and static-mesh projection; explicit
-resource release removes its canonical definition and browser/GPU realization.
+resource release removes its canonical definition and GPU realization.
 
 ## Packaging and development
 

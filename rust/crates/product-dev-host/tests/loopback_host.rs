@@ -9,18 +9,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use product_dev_host::product_dev_renderer_preload_entries;
 use product_dev_host::{
-    CanonicalU64, ProductDevAudioFeedback, ProductDevAudioFeedbackResult, ProductDevBundle,
-    ProductDevBundleEntry, ProductDevDebugCatalog, ProductDevDebugResult, ProductDevHost,
-    ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRendererResource, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeMode, ProductDevRuntimeReadout,
-    ProductDevRuntimeReceipt, ProductDevRuntimeState, ProductDevTimelineCompletion,
-    ProductDevTimelineCompletionResult,
+    CanonicalU64, ProductDevBundle, ProductDevBundleEntry, ProductDevDebugCatalog,
+    ProductDevDebugResult, ProductDevHost, ProductDevHostConfig, ProductDevInputBatch,
+    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
-use render_model::RenderFrameDiff;
 use runtime_input::RuntimeInputBinding;
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use runtime_publication::RuntimePublication;
@@ -29,9 +25,6 @@ use runtime_publication::RuntimePublication;
 struct FixtureRuntime {
     recovery_calls: Arc<AtomicUsize>,
     fail_lifecycle: bool,
-    renderer_resource: Option<ProductDevRendererResource>,
-    renderer_resource_inventory: Vec<String>,
-    debug_resource_transition: Option<ProductDevRendererResource>,
 }
 
 struct ReconnectRuntime {
@@ -112,7 +105,20 @@ impl ReconnectRuntime {
         let outputs = if baseline {
             FixtureRuntime::baseline_publications()
         } else {
-            vec![RuntimePublication::Frame(RenderFrameDiff::new())]
+            vec![RuntimePublication::UiProjection(
+                runtime_ui::RuntimeUiProjectionEnvelope::new(
+                    runtime_ui::RuntimeUiRuntimeBinding::new(
+                        RuntimeInstanceId::new(7),
+                        RuntimeGeneration::new(1),
+                        RuntimeControlRevision::new(2),
+                    ),
+                    1,
+                    "hud",
+                    "fixture",
+                    serde_json::json!({ "tick": true }),
+                )
+                .unwrap(),
+            )]
         };
         ProductDevRuntimeReceipt::new(
             ProductDevOperationResult::accepted(
@@ -231,23 +237,6 @@ impl ProductDevRuntime for ReconnectRuntime {
 }
 
 impl ProductDevRuntime for FixtureRuntime {
-    fn renderer_resource_ids(&self) -> Option<Vec<String>> {
-        (!self.renderer_resource_inventory.is_empty())
-            .then(|| self.renderer_resource_inventory.clone())
-    }
-
-    fn renderer_resource(
-        &mut self,
-        identity: &str,
-        generation: u64,
-    ) -> Result<Option<ProductDevRendererResource>, product_dev_host::ProductDevRuntimeError> {
-        Ok((generation == Self::binding().generation.get())
-            .then_some(self.renderer_resource.as_ref())
-            .flatten()
-            .filter(|resource| resource.identity() == identity)
-            .cloned())
-    }
-
     fn lifecycle(
         &mut self,
         operation: ProductDevLifecycleOperation,
@@ -295,11 +284,6 @@ impl ProductDevRuntime for FixtureRuntime {
         ProductDevRuntimeReceipt<ProductDevDebugCatalog>,
         product_dev_host::ProductDevRuntimeError,
     > {
-        if let Some(resource) = self.debug_resource_transition.take() {
-            let identity = resource.identity().to_owned();
-            self.renderer_resource_inventory = vec![identity];
-            drop(resource);
-        }
         let catalog = ProductDevDebugCatalog::decode_json(
             br#"{"available":true,"commands":[{"name":"fixture.echo","description":"Echoes a fixture value.","parameters":[{"name":"value","type":"string"}]}]}"#,
         )
@@ -378,27 +362,6 @@ impl ProductDevRuntime for FixtureRuntime {
                 Self::readout(),
             )
             .unwrap(),
-            Vec::new(),
-        )
-        .unwrap())
-    }
-
-    fn report_audio_feedback(
-        &mut self,
-        feedback: ProductDevAudioFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>,
-        product_dev_host::ProductDevRuntimeError,
-    > {
-        if feedback.runtime != Self::binding() {
-            return Err(product_dev_host::ProductDevRuntimeError::new(
-                "FIXTURE_AUDIO_BINDING",
-                "audio feedback does not name the current binding",
-            ));
-        }
-        let accepted_through = feedback.facts.last().map(|fact| fact.fact_id());
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevAudioFeedbackResult::accepted(Self::binding(), accepted_through),
             Vec::new(),
         )
         .unwrap())
@@ -633,171 +596,6 @@ fn start() -> product_dev_host::RunningProductDevHost {
         ProductDevHostConfig::new(0, bundle),
     )
     .unwrap()
-}
-
-#[test]
-fn renderer_resource_route_serves_raw_bytes_and_fences_runtime_generation() {
-    let resource = ProductDevRendererResource::admit_font(
-        "content/fonts/runtime.woff2",
-        b"wOF2runtime-body".to_vec(),
-    )
-    .unwrap();
-    let identity = resource.identity().to_owned();
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
-        "index.html",
-        "text/html; charset=utf-8",
-        b"<!doctype html>".to_vec(),
-    )
-    .unwrap()])
-    .unwrap();
-    let host = ProductDevHost::start(
-        FixtureRuntime {
-            renderer_resource: Some(resource),
-            ..Default::default()
-        },
-        ProductDevHostConfig::new(0, bundle),
-    )
-    .unwrap();
-    let origin = host.origin();
-    let encoded_identity = identity.replace('/', "%2F").replace(':', "%3A");
-    let response = request(
-        &origin,
-        &format!(
-            "GET /__rusty/product/runtime/resource?identity={encoded_identity}&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-        ),
-    );
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(response.contains("Content-Type: font/woff2\r\n"));
-    assert!(response.contains("Cache-Control: private, max-age=31536000, immutable\r\n"));
-    assert!(response.ends_with("wOF2runtime-body"));
-    let stale = request(
-        &origin,
-        &format!(
-            "GET /__rusty/product/runtime/resource?identity={encoded_identity}&generation=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-        ),
-    );
-    assert!(stale.starts_with("HTTP/1.1 404 Not Found\r\n"));
-    let missing = request(
-        &origin,
-        "GET /__rusty/product/runtime/resource?identity=font%2Fmissing&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-    );
-    assert!(missing.starts_with("HTTP/1.1 404 Not Found\r\n"));
-}
-
-#[test]
-fn preload_bodies_are_immutable_only_under_their_content_hash() {
-    let serve = |body: &[u8]| {
-        let resource =
-            ProductDevRendererResource::admit_font("content/fonts/title.woff2", body.to_vec())
-                .unwrap();
-        let hash = resource.content_hash().replace(':', "%3A");
-        let mut entries = product_dev_renderer_preload_entries(&[resource]).unwrap();
-        entries.push(
-            ProductDevBundleEntry::new(
-                "index.html",
-                "text/html; charset=utf-8",
-                b"<!doctype html>".to_vec(),
-            )
-            .unwrap(),
-        );
-        let host = ProductDevHost::start(
-            FixtureRuntime::default(),
-            ProductDevHostConfig::new(0, ProductDevBundle::new(entries).unwrap()),
-        )
-        .unwrap();
-        (host, hash)
-    };
-    let get = |origin: &str, path: &str| {
-        request(
-            origin,
-            &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
-        )
-    };
-    let (first, first_hash) = serve(b"wOF2first-body");
-    let origin = first.origin();
-    let content = get(
-        &origin,
-        &format!("/content/fonts/title.woff2?content={first_hash}"),
-    );
-    assert!(content.starts_with("HTTP/1.1 200 OK\r\n"), "{content}");
-    assert!(content.contains("Cache-Control: private, max-age=31536000, immutable\r\n"));
-    assert!(content.ends_with("wOF2first-body"));
-    // The mutable dev path and its descriptor stay uncached.
-    let mutable = get(&origin, "/content/fonts/title.woff2");
-    assert!(mutable.contains("Cache-Control: no-store\r\n"));
-    assert!(mutable.ends_with("wOF2first-body"));
-    let descriptor = get(&origin, "/renderer-preload.json");
-    assert!(descriptor.contains("Cache-Control: no-store\r\n"));
-    assert!(descriptor.contains(&first_hash.replace("%3A", ":")));
-    first.shutdown().unwrap();
-
-    // Replacing the bytes yields a new content URL; the old one is refused
-    // rather than caching the new body under a stale hash.
-    let (second, second_hash) = serve(b"wOF2second-body");
-    assert_ne!(first_hash, second_hash);
-    let origin = second.origin();
-    let stale = get(
-        &origin,
-        &format!("/content/fonts/title.woff2?content={first_hash}"),
-    );
-    assert!(stale.starts_with("HTTP/1.1 404 Not Found\r\n"), "{stale}");
-    let replaced = get(
-        &origin,
-        &format!("/content/fonts/title.woff2?content={second_hash}"),
-    );
-    assert!(replaced.contains("Cache-Control: private, max-age=31536000, immutable\r\n"));
-    assert!(replaced.ends_with("wOF2second-body"));
-    second.shutdown().unwrap();
-}
-
-#[test]
-fn timed_debug_call_and_fresh_baseline_publish_the_resource_inventory() {
-    let resource = ProductDevRendererResource::admit_font(
-        "content/fonts/timed-transition.woff2",
-        b"wOF2timed-transition".to_vec(),
-    )
-    .unwrap();
-    let identity = resource.identity().to_owned();
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
-        "index.html",
-        "text/html; charset=utf-8",
-        b"<!doctype html>".to_vec(),
-    )
-    .unwrap()])
-    .unwrap();
-    let host = ProductDevHost::start(
-        FixtureRuntime {
-            debug_resource_transition: Some(resource),
-            ..Default::default()
-        },
-        ProductDevHostConfig::new(0, bundle).with_live_debug(true),
-    )
-    .unwrap();
-    let origin = host.origin();
-
-    // Establish an active binding so the timed catalog receipt takes the same
-    // incremental publication path as a running host.
-    let mut initial = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
-    let initial_baseline = read_until(&mut initial, "\"operation\":\"start\"");
-    assert!(initial_baseline.contains("event: rusty-output-baseline"));
-    drop(initial);
-
-    let catalog = request(
-        &origin,
-        "GET /__rusty/product/runtime/debug/catalog HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-    );
-    assert!(catalog.starts_with("HTTP/1.1 200 OK\r\n"), "{catalog}");
-    assert!(catalog.contains("X-Rusty-Output-Through:"), "{catalog}");
-
-    let mut fresh = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
-    let fresh_baseline = read_until(&mut fresh, "\"operation\":\"start\"");
-    assert!(fresh_baseline.contains("event: rusty-output-baseline"));
-    assert!(
-        fresh_baseline.contains(&format!("\"rendererResources\":[\"{identity}\"]")),
-        "{fresh_baseline}"
-    );
-    drop(fresh);
-    host.shutdown().unwrap();
 }
 
 fn start_debug() -> product_dev_host::RunningProductDevHost {
@@ -1090,7 +888,7 @@ fn closed_response_socket_records_the_exact_settled_attachment_before_fresh_base
     );
     drop(fresh);
 
-    let replacement_report = r#"{"hostState":"ready","runtimeProgress":"1","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment-replacement","replaces":"attachment-original","baseline":{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"nextInputSequence":"0","publicationFrontiers":[]}}}"#;
+    let replacement_report = r#"{"hostState":"ready","runtimeProgress":"1","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment-replacement","replaces":"attachment-original","baseline":{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"nextInputSequence":"0"}}}"#;
     let replacement = request(
         &origin,
         &format!(
@@ -1223,7 +1021,7 @@ fn over_limit_malformed_batch_resynchronizes_once_without_becoming_terminal() {
 fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
     let host = start_debug();
     let origin = host.origin();
-    let report_body = r#"{"hostState":"failed","runtimeProgress":"9","transportState":"closed","outputState":"closed","lastRendererSequence":"60","rendererObservationAgeMs":"100","firstTerminal":{"code":"BROWSER_HOST_TRANSPORT_FAILED","message":"transport closed"},"recoverableEvent":{"code":"CSHARP_LIFECYCLE_CLOCK_REGRESSION","message":"dropped clock observation"},"pageEvents":[]}"#;
+    let report_body = r#"{"hostState":"failed","runtimeProgress":"9","transportState":"closed","outputState":"closed","firstTerminal":{"code":"BROWSER_HOST_TRANSPORT_FAILED","message":"transport closed"},"recoverableEvent":{"code":"CSHARP_LIFECYCLE_CLOCK_REGRESSION","message":"dropped clock observation"},"pageEvents":[]}"#;
     let reported = request(
         &origin,
         &format!(
@@ -1272,7 +1070,7 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
 fn browser_diagnostics_establishes_a_typed_attachment_baseline() {
     let host = start_debug();
     let origin = host.origin();
-    let report_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment-2","replaces":"attachment-1","baseline":{"runtime":{"instanceId":"7","generation":"3","controlRevision":"12"},"nextInputSequence":"14","publicationFrontiers":[{"stream":"primary","revision":9}]}}}"#;
+    let report_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment-2","replaces":"attachment-1","baseline":{"runtime":{"instanceId":"7","generation":"3","controlRevision":"12"},"nextInputSequence":"14"}}}"#;
     let reported = request(
         &origin,
         &format!(
@@ -1302,10 +1100,7 @@ fn browser_diagnostics_establishes_a_typed_attachment_baseline() {
         read.contains("\"baseline-established\",\"value\":\"true\""),
         "{read}"
     );
-    assert!(
-        read.contains("runtime=7/3/12;next-input=14;revisions=9"),
-        "{read}"
-    );
+    assert!(read.contains("runtime=7/3/12;next-input=14"), "{read}");
 
     let invalid_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment has a space","replaces":null,"baseline":null}}"#;
     let invalid = request(
@@ -1323,34 +1118,6 @@ fn browser_diagnostics_establishes_a_typed_attachment_baseline() {
         invalid.contains("DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"),
         "{invalid}"
     );
-    host.shutdown().unwrap();
-}
-
-#[test]
-fn browser_diagnostics_accepts_auxiliary_renderer_failure_as_recoverable() {
-    let host = start_debug();
-    let origin = host.origin();
-    let report_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","recoverableEvent":{"code":"BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE","message":"renderer diagnostics reporting was temporarily unavailable: failed to fetch"},"pageEvents":[]}"#;
-    let reported = request(
-        &origin,
-        &format!(
-            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{report_body}",
-            report_body.len(),
-        ),
-    );
-    assert!(reported.starts_with("HTTP/1.1 200 OK\r\n"), "{reported}");
-    let read = request(
-        &origin,
-        "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
-    );
-    assert!(read.starts_with("HTTP/1.1 200 OK\r\n"), "{read}");
-    assert!(
-        read.contains("\"BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE\""),
-        "{read}"
-    );
-    assert!(read.contains("\"warningCount\":\"1\""), "{read}");
-    assert!(read.contains("\"errorCount\":\"0\""), "{read}");
-    assert!(read.contains("\"rejected-recoverable\""), "{read}");
     host.shutdown().unwrap();
 }
 
@@ -1393,38 +1160,6 @@ fn rejects_nonclosed_routes_headers_bodies_and_canonical_integers() {
     assert!(bad_realtime.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     let oversized = request(&origin, "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 999999999\r\n\r\n");
     assert!(oversized.starts_with("HTTP/1.1 413 Payload Too Large\r\n"));
-    host.shutdown().unwrap();
-}
-
-#[test]
-fn accepts_only_bounded_exact_binding_audio_feedback_on_its_fixed_route() {
-    let host = start();
-    let origin = host.origin();
-    let accepted_body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"replaceOwner":true,"evictedFactCount":"0","facts":[{"kind":"naturalCompletion","factId":"9","sequence":3,"source":"oneShot","signalHandle":"4"}]}"#;
-    let decoded = serde_json::from_str::<ProductDevAudioFeedback>(accepted_body).unwrap();
-    assert_eq!(serde_json::to_string(&decoded).unwrap(), accepted_body);
-    let accepted = request(
-        &origin,
-        &format!(
-            "POST /__rusty/product/runtime/audio-feedback HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{accepted_body}",
-            accepted_body.len()
-        ),
-    );
-    assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"), "{accepted}");
-    assert!(accepted.contains("\"accepted\":true"));
-    assert!(accepted.contains("\"acceptedThroughFactId\":\"9\""));
-
-    let stale_body = accepted_body.replace("\"generation\":\"1\"", "\"generation\":\"2\"");
-    let stale = request(
-        &origin,
-        &format!(
-            "POST /__rusty/product/runtime/audio-feedback HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{stale_body}",
-            stale_body.len()
-        ),
-    );
-    assert!(stale.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(stale.contains("\"accepted\":false"));
-    assert!(stale.contains("\"runtime\":{\"instanceId\":\"7\""));
     host.shutdown().unwrap();
 }
 
@@ -1488,7 +1223,7 @@ fn sse_delivers_realtime_publications_at_publication_cadence() {
         while let Some(end) = pending.find("\n\n") {
             let record = pending[..end].to_owned();
             pending.drain(..end + 2);
-            if record.contains("\"kind\":\"frame\"") {
+            if record.contains("\"kind\":\"ui-projection\"") {
                 arrivals.push(Instant::now());
             }
         }
@@ -1836,16 +1571,16 @@ fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
         ProductDevHostConfig::new(0, bundle()),
     )
     .unwrap();
-    let body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"snapshot":{"schemaVersion":1}}"#;
+    let body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"}}"#;
     let rejected = request(&host.origin(), &format!(
-        "POST /__rusty/product/runtime/renderer-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body,
+        "POST /__rusty/product/runtime/control/release HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body,
     ));
     assert!(rejected.starts_with("HTTP/1.1 200 OK"), "{rejected}");
     assert!(
         rejected.contains("X-Rusty-Commit-Disposition: not-applied\r\n"),
         "{rejected}"
     );
-    assert!(rejected.contains("DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED"));
+    assert!(rejected.contains("DEV_HOST_CONTROL_UNSUPPORTED"));
     assert!(rejected.contains("\"disposition\":\"rejected-recoverable\""));
     assert!(!rejected.contains("\"recovery\""));
     assert!(!rejected.contains("X-Rusty-Output-Through:"));

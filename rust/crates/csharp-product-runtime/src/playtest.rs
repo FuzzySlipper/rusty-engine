@@ -9,15 +9,6 @@ pub(super) enum TimeMode {
     ActionDriven,
 }
 
-impl TimeMode {
-    pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::Realtime => "realtime",
-            Self::Manual => "manual",
-            Self::ActionDriven => "action-driven",
-        }
-    }
-}
 impl CsharpProductRuntime {
     pub(super) fn execute_time_debug(
         &mut self,

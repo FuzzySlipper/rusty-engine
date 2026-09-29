@@ -129,14 +129,14 @@ class DependencyBoundaryTests(unittest.TestCase):
             [
                 "content-store",
                 "entity-state",
-                "renderer-host",
+                "render-wgpu",
                 "render-model",
                 "render-presentation",
                 "render-projection",
             ],
             [
                 ("entity-state", "render-projection", None, "projection"),
-                ("render-model", "renderer-host", None, "browser_host"),
+                ("render-model", "render-wgpu", None, "backend"),
                 ("render-presentation", "render-projection", None, "projection"),
             ],
         )

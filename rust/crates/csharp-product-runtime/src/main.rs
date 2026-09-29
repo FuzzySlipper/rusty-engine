@@ -16,8 +16,7 @@ use csharp_product_runtime::{
 };
 use product_dev_host::{
     ProductDevAssetReload, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
-    ProductDevHostConfig, ProductDevLog, ProductDevRendererResource, ProductDevRuntime,
-    RunningProductDevHost,
+    ProductDevHostConfig, ProductDevLog, ProductDevRuntime, RunningProductDevHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -113,6 +112,13 @@ fn main() -> Result<(), String> {
     let (library, runtimeconfig) = args.selected_artifacts()?;
     #[allow(unused_mut)]
     let mut runtime_config = args.runtime_config().with_diagnostics(diagnostics.clone());
+    // Exercise and probe runs assert Engine behaviour and exit; they draw
+    // nothing, so they need no GPU.
+    if !args.exercise && args.performance_probe.is_none() {
+        runtime_config = runtime_config.with_render_output(
+            csharp_product_runtime::render_output_mode().map_err(|error| error.to_string())?,
+        );
+    }
     #[cfg(feature = "desktop")]
     if let Some(desktop) = &desktop {
         runtime_config = runtime_config.with_window_gpu(desktop.gpu());
@@ -130,11 +136,8 @@ fn main() -> Result<(), String> {
     }
     .map_err(|error| error.to_string())?;
     let bundle = match &args.product {
-        Some(product) => load_bundle(&runtime_browser_root()?, product, &[])?,
-        None => load_legacy_bundle(
-            args.bundle_dir.as_deref().expect("legacy bundle path"),
-            &runtime.render_resources(),
-        )?,
+        Some(product) => load_bundle(&runtime_browser_root()?, product)?,
+        None => load_legacy_bundle(args.bundle_dir.as_deref().expect("legacy bundle path"))?,
     };
     if args.exercise {
         runtime
@@ -376,7 +379,7 @@ fn print_runtime_identity(machine_readable: bool) {
 fn asset_reloader(reload: ProductDevAssetReload, product: ProductBundle) -> Box<dyn Fn() + Send> {
     Box::new(move || {
         let result = runtime_browser_root()
-            .and_then(|root| load_bundle(&root, &product, &[]))
+            .and_then(|root| load_bundle(&root, &product))
             .and_then(|bundle| {
                 reload
                     .reload(bundle)
@@ -1338,27 +1341,16 @@ fn runtime_browser_root() -> Result<PathBuf, String> {
     Ok(browser)
 }
 
-fn load_bundle(
-    root: &Path,
-    product: &ProductBundle,
-    render_resources: &[ProductDevRendererResource],
-) -> Result<ProductDevBundle, String> {
+fn load_bundle(root: &Path, product: &ProductBundle) -> Result<ProductDevBundle, String> {
     let mut entries = Vec::new();
     collect_bundle(root, root, &mut entries)?;
-    entries.extend(product.browser_entries(render_resources)?);
+    entries.extend(product.browser_entries()?);
     ProductDevBundle::new(entries).map_err(|error| error.to_string())
 }
 
-fn load_legacy_bundle(
-    root: &Path,
-    render_resources: &[ProductDevRendererResource],
-) -> Result<ProductDevBundle, String> {
+fn load_legacy_bundle(root: &Path) -> Result<ProductDevBundle, String> {
     let mut entries = Vec::new();
     collect_bundle(root, root, &mut entries)?;
-    entries.extend(
-        product_dev_host::product_dev_renderer_preload_entries(render_resources)
-            .map_err(|error| error.to_string())?,
-    );
     ProductDevBundle::new(entries).map_err(|error| error.to_string())
 }
 

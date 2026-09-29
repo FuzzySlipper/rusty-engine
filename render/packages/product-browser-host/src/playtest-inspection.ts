@@ -1,4 +1,3 @@
-import type { RustyApplicationRendererPort } from '@rusty-engine/application-host';
 type Camera = { position: readonly [number, number, number]; yawDegrees: number; pitchDegrees: number };
 export interface PlaytestInspectionRequest {
   op: 'discover' | 'observe' | 'action' | 'look' | 'time' | 'advance' | 'drawing' | 'frame' | 'camera' | 'targets' | 'route' | 'flush' | 'focus' | 'interaction' | 'grid' | 'probe' | 'jump-plan' | 'clearance';
@@ -16,17 +15,17 @@ interface Presenter {
   /** Draw and describe the drawn frame. */
   frame(): Promise<unknown>;
 }
-/** The streamed frame the Engine canvas shows (streaming browser mode). */
+/** The streamed frame the Engine canvas shows. */
 const shownFrameSequence = (): number =>
   Number(document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]')?.dataset['rustyFrameSequence'] ?? 0);
 const FRAME_SHOWN_WAIT_MS = 2000;
 /**
  * Engine-owned browser inspection adapter; gameplay remains in the product.
- * With `runtimeRenderer` the world is rendered in the runtime (the streaming
- * browser mode): inspection goes to its `engine.renderer.*` commands, and each
- * answer waits until the canvas shows the frame the command drew.
+ * The world is rendered in the runtime: inspection goes to its
+ * `engine.renderer.*` commands, and each answer waits until the canvas shows
+ * the frame the command drew.
  */
-export function installPlaytestInspection(renderer: RustyApplicationRendererPort, flushInput: () => Promise<void>, settle: (through?: string) => Promise<void>, runtimeRenderer = false): () => void {
+export function installPlaytestInspection(flushInput: () => Promise<void>, settle: (through?: string) => Promise<void>): () => void {
   const target = globalThis as typeof globalThis & { __rustyPlaytest?: (request: PlaytestInspectionRequest) => Promise<unknown> };
   async function debug(command: string): Promise<unknown> {
     const response = await fetch('/__rusty/product/runtime/debug/execute', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: command });
@@ -35,15 +34,6 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
     await settle(through ?? undefined);
     return JSON.parse(text);
   }
-  const inspect = renderer.inspection;
-  const threePresenter: Presenter = {
-    inspect: async (request) => {
-      if (!inspect) throw new Error('Engine inspection is unavailable');
-      return inspect(request);
-    },
-    draw: async () => { renderer.renderOnce(); },
-    frame: async () => { renderer.renderOnce(); return renderer.diagnosticsReadout(); },
-  };
   const shown = async (answer: InspectionState & { frame?: { sequence: number } | null }): Promise<InspectionState> => {
     const sequence = answer.frame?.sequence ?? 0;
     const deadline = performance.now() + FRAME_SHOWN_WAIT_MS;
@@ -52,7 +42,7 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
     }
     return answer;
   };
-  const runtimePresenter: Presenter = {
+  const presenter: Presenter = {
     inspect: async (request) => {
       if (request.drawing !== undefined) await debug(`engine.renderer.drawing ${request.drawing}`);
       if (request.camera === null) return shown(await debug('engine.renderer.camera none') as InspectionState);
@@ -64,9 +54,8 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
       return debug('engine.renderer.camera') as Promise<InspectionState>;
     },
     draw: async () => { await shown(await debug('engine.renderer.frame') as InspectionState); },
-    frame: async () => { await runtimePresenter.draw(); return debug('engine.renderer.presentation'); },
+    frame: async () => { await presenter.draw(); return debug('engine.renderer.presentation'); },
   };
-  const presenter = runtimeRenderer ? runtimePresenter : threePresenter;
   const invoke = async (request: PlaytestInspectionRequest): Promise<unknown> => {
     const id = request.id ?? '';
     if (id && !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('invalid target/action id');

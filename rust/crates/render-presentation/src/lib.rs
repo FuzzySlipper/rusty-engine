@@ -14,7 +14,6 @@ mod billboard;
 mod frame;
 mod ghost_plate;
 mod particle;
-mod telemetry;
 mod video;
 mod world;
 
@@ -25,6 +24,5 @@ pub use billboard::*;
 pub use frame::*;
 pub use ghost_plate::*;
 pub use particle::*;
-pub use telemetry::*;
 pub use video::*;
 pub use world::*;

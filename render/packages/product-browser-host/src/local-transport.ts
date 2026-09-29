@@ -1,14 +1,10 @@
 import { browserAttachmentEvidence } from './attachment-evidence.js';
-import { isRendererResourceIdentity } from './dynamic-renderer-resources.js';
 import { snapshotRustyApplicationJson, snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
 import type {
-  RustyApplicationFrame,
-  RustyApplicationAnimationCueDefinition,
   RustyApplicationControllerAxis,
   RustyApplicationControllerButton,
   RustyApplicationInputClearReason,
   RustyApplicationKeyboardControl,
-  RustyApplicationPresentationFrame,
   RustyApplicationPointerButton,
   RustyApplicationRuntimeIdentity,
   RustyApplicationRuntimeInputFact,
@@ -16,28 +12,11 @@ import type {
   RustyApplicationRuntimeIntentValue,
   RustyApplicationUiProjectionEnvelope,
 } from '@rusty-engine/application-host';
-import {
-  decodeRenderPublicationFrontiers,
-  type RendererViewComposition,
-} from '@rusty-engine/render-contracts';
 import type {
   ProductBrowserLifecycleOperation,
-  ProductBrowserAudioFeedback,
-  ProductBrowserAudioFeedbackFact,
-  ProductBrowserAudioFeedbackResult,
-  ProductBrowserVideoFeedback,
-  ProductBrowserVideoFeedbackFact,
-  ProductBrowserAnimationFeedback,
-  ProductBrowserAnimationFeedbackFact,
-  ProductBrowserAnimationFeedbackResult,
-  ProductBrowserGhostPlateFeedback,
-  ProductBrowserGhostPlateFeedbackFact,
-  ProductBrowserGhostPlateFeedbackResult,
   ProductBrowserDiagnosticsReport,
   ProductBrowserDiagnosticsResult,
   ProductBrowserHostFaultDisposition,
-  ProductBrowserRendererDiagnosticsFeedback,
-  ProductBrowserRendererDiagnosticsFeedbackResult,
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeOperationKind,
@@ -81,11 +60,6 @@ const ROUTES = Object.freeze({
   admitDemandStep: 'admit-demand-step',
   admitExternalStep: 'admit-external-step',
   completeTimeline: 'timeline-completion',
-  audioFeedback: 'audio-feedback',
-  videoFeedback: 'video-feedback',
-  animationFeedback: 'animation-feedback',
-  ghostPlateFeedback: 'ghost-plate-feedback',
-  rendererDiagnostics: 'renderer-diagnostics',
   browserDiagnostics: 'browser-diagnostics',
   outputs: 'outputs',
   freshOutputs: 'outputs/fresh',
@@ -95,18 +69,10 @@ const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
 const EVENT_SOURCE_CLOSED = 2;
 const FRESH_RETRY_INITIAL_DELAY_MS = 250;
 const FRESH_RETRY_MAX_DELAY_MS = 2_000;
-// Mirrors ProductDevRendererDiagnosticsFeedback::MAX_SNAPSHOT_BYTES. Renderer
-// observations are not direct UI product payloads and have their own closed,
-// versioned transport budget.
-const MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES = 256 * 1024;
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = MAXIMUM_RUNTIME_RESPONSE_BYTES;
 const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
 const UINT64_MAX_DECIMAL = '18446744073709551615';
 const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
-const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
-const MAXIMUM_VIDEO_FEEDBACK_FACTS = 128;
-const MAXIMUM_ANIMATION_FEEDBACK_FACTS = 128;
-const MAXIMUM_ANIMATION_CUE_TEXT_BYTES = 96;
 const KEYBOARD_CONTROLS = new Set<string>([
   ...Array.from({ length: 26 }, (_, index) => `key-${String.fromCharCode(97 + index)}`),
   ...Array.from({ length: 10 }, (_, index) => `digit-${String(index)}`),
@@ -121,11 +87,6 @@ const INPUT_EDGES = new Set<string>(['pressed', 'released']);
 const INPUT_CLEAR_REASONS = new Set<string>([
   'focus-loss', 'ingress-overflow', 'interaction-mode-loss', 'pointer-lock-loss',
   'restart', 'control-revision-change', 'dispose',
-]);
-const AUDIO_DIAGNOSTIC_CODES = new Set<string>([
-  'invalidDescriptor', 'assetMissing', 'assetKindMismatch', 'contentHashMismatch',
-  'duplicateSignal', 'duplicateHandle', 'unknownHandle', 'unavailableHost',
-  'audioContextBlocked', 'decodeFailed', 'hostFailure', 'invalidControl',
 ]);
 const HOST_FAULT_DISPOSITIONS = new Set<string>([
   'accepted', 'rejected-recoverable', 'degraded', 'resync-required', 'terminal',
@@ -180,8 +141,6 @@ interface ProductBrowserWireRecord {
   readonly runtimeProgress?: unknown;
   readonly transportState?: unknown;
   readonly outputState?: unknown;
-  readonly lastRendererSequence?: unknown;
-  readonly rendererObservationAgeMs?: unknown;
   readonly firstTerminal?: unknown;
   readonly pageEvents?: unknown;
   readonly reported?: unknown;
@@ -775,58 +734,6 @@ export function createProductBrowserLocalHttpAdapter(
   ): Promise<ProductBrowserRuntimeInputResult> =>
     post(ROUTES.input, { batch: snapshotInputBatch(batch) }, decodeInputResult);
 
-  const reportAudioFeedback = (
-    feedback: ProductBrowserAudioFeedback,
-  ): Promise<ProductBrowserAudioFeedbackResult> => {
-    const snapshot = snapshotAudioFeedback(feedback);
-    return post(
-      ROUTES.audioFeedback,
-      snapshot,
-      (value) => decodeAudioFeedbackResult(value, snapshot.runtime, snapshot.facts),
-    );
-  };
-
-  const reportVideoFeedback = (feedback: ProductBrowserVideoFeedback): Promise<ProductBrowserAudioFeedbackResult> => {
-    const snapshot = snapshotVideoFeedback(feedback);
-    return post(ROUTES.videoFeedback, snapshot, (value) => decodeAudioFeedbackResult(
-      value, snapshot.runtime, snapshot.facts as unknown as readonly ProductBrowserAudioFeedbackFact[],
-    ));
-  };
-
-  const reportAnimationFeedback = (
-    feedback: ProductBrowserAnimationFeedback,
-  ): Promise<ProductBrowserAnimationFeedbackResult> => {
-    const snapshot = snapshotAnimationFeedback(feedback);
-    return post(
-      ROUTES.animationFeedback,
-      snapshot,
-      (value) => decodeAnimationFeedbackResult(value, snapshot.runtime, snapshot.facts),
-    );
-  };
-
-
-  const reportGhostPlateFeedback = (
-    feedback: ProductBrowserGhostPlateFeedback,
-  ): Promise<ProductBrowserGhostPlateFeedbackResult> => {
-    const snapshot = snapshotGhostPlateFeedback(feedback);
-    return post(
-      ROUTES.ghostPlateFeedback,
-      snapshot,
-      (value) => decodeGhostPlateFeedbackResult(value, snapshot.runtime),
-    );
-  };
-
-  const reportRendererDiagnostics = (
-    feedback: ProductBrowserRendererDiagnosticsFeedback,
-  ): Promise<ProductBrowserRendererDiagnosticsFeedbackResult> => {
-    const snapshot = snapshotRendererDiagnosticsFeedback(feedback);
-    return post(
-      ROUTES.rendererDiagnostics,
-      snapshot,
-      (value) => decodeRendererDiagnosticsResult(value, snapshot.runtime),
-    );
-  };
-
   const reportBrowserDiagnostics = (
     report: ProductBrowserDiagnosticsReport,
   ): Promise<ProductBrowserDiagnosticsResult> => {
@@ -878,7 +785,6 @@ export function createProductBrowserLocalHttpAdapter(
       if (binding?.kind === 'binding') attachment.stage(metadata.epoch, {
         runtime: binding.runtime,
         nextInputSequence: binding.nextInputSequence,
-        publicationFrontiers: binding.publicationFrontiers ?? [],
       });
     }
     for (const output of batch) {
@@ -1283,11 +1189,6 @@ export function createProductBrowserLocalHttpAdapter(
     lifecycle,
     replaceControl,
     input,
-    reportAudioFeedback,
-    reportVideoFeedback,
-    reportAnimationFeedback,
-    reportGhostPlateFeedback,
-    reportRendererDiagnostics,
     reportBrowserDiagnostics,
     advanceRealtime,
     admitDemandStep,
@@ -1575,171 +1476,13 @@ function snapshotInputEnvelope(value: unknown): RustyApplicationRuntimeInputEnve
   throw new TypeError('runtime input envelope must contain fact or intent');
 }
 
-function snapshotAudioFeedback(value: ProductBrowserAudioFeedback): ProductBrowserAudioFeedback {
-  const record = requireRecord(value, 'audio feedback');
-  requireKnownFields(record, ['runtime', 'replaceOwner', 'evictedFactCount', 'facts'], 'audio feedback');
-  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('audio feedback replaceOwner must be boolean');
-  const facts = requirePlainArray(record.facts, 'audio feedback facts');
-  if (facts.length > MAXIMUM_AUDIO_FEEDBACK_FACTS) {
-    throw new ProductBrowserLocalTransportError(
-      'invalid_options',
-      `audio feedback facts must contain 0..${String(MAXIMUM_AUDIO_FEEDBACK_FACTS)} entries`,
-    );
-  }
-  const snapshotFacts: ProductBrowserAudioFeedbackFact[] = [];
-  for (let index = 0; index < facts.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(facts, String(index));
-    if (descriptor === undefined || !('value' in descriptor)) {
-      throw new ProductBrowserLocalTransportError(
-        'invalid_options',
-        `audio feedback fact ${String(index)} cannot be a getter or hole`,
-      );
-    }
-    snapshotFacts.push(snapshotAudioFeedbackFact(descriptor.value));
-  }
-  return Object.freeze({
-    runtime: decodeRuntimeIdentity(record.runtime),
-    replaceOwner: record.replaceOwner,
-    evictedFactCount: requireU64Text(record.evictedFactCount, 'audio feedback evictedFactCount'),
-    facts: Object.freeze(snapshotFacts),
-  });
-}
-
-function snapshotAudioFeedbackFact(value: unknown): ProductBrowserAudioFeedbackFact {
-  const record = requireRecord(value, 'audio feedback fact');
-  const common = {
-    factId: requireU64Text(record['factId'], 'audio feedback factId'),
-    sequence: requireU32(record.sequence, 'audio feedback sequence'),
-  };
-  if (record.kind === 'naturalCompletion') {
-    if (record.source === 'oneShot') {
-      requireKnownFields(record, ['kind', 'source', 'factId', 'sequence', 'signalHandle'], 'one-shot audio completion');
-      return Object.freeze({
-        kind: 'naturalCompletion', source: 'oneShot', ...common,
-        signalHandle: requireU64Text(record.signalHandle, 'audio feedback signalHandle'),
-      });
-    }
-    if (record.source === 'retainedVoice') {
-      requireKnownFields(record, ['kind', 'source', 'factId', 'sequence', 'voiceHandle'], 'retained audio completion');
-      return Object.freeze({
-        kind: 'naturalCompletion', source: 'retainedVoice', ...common,
-        voiceHandle: requireU64Text(record.voiceHandle, 'audio feedback voiceHandle'),
-      });
-    }
-    throw new TypeError('audio feedback natural completion source is invalid');
-  }
-  if (record.kind === 'diagnostic') {
-    requireKnownFields(record, ['kind', 'factId', 'code', 'sequence', 'voiceHandle', 'signalHandle'], 'audio feedback diagnostic');
-    return Object.freeze({
-      kind: 'diagnostic', ...common,
-      code: requireCatalogValue<string>(record.code, 'audio feedback diagnostic code', AUDIO_DIAGNOSTIC_CODES),
-      voiceHandle: record.voiceHandle === null
-        ? null
-        : requireU64Text(record.voiceHandle, 'audio feedback diagnostic voiceHandle'),
-      signalHandle: record.signalHandle === null
-        ? null
-        : requireU64Text(record.signalHandle, 'audio feedback diagnostic signalHandle'),
-    });
-  }
-  throw new TypeError('audio feedback fact kind is not admitted');
-}
-
-function snapshotVideoFeedback(value: ProductBrowserVideoFeedback): ProductBrowserVideoFeedback {
-  const record = requireRecord(value, 'video feedback');
-  requireKnownFields(record, ['runtime', 'replaceOwner', 'evictedFactCount', 'facts'], 'video feedback');
-  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('video feedback replaceOwner must be boolean');
-  const facts = requirePlainArray(record.facts, 'video feedback facts');
-  if (facts.length > MAXIMUM_VIDEO_FEEDBACK_FACTS) {
-    throw new ProductBrowserLocalTransportError('invalid_options', `video feedback facts must contain 0..${String(MAXIMUM_VIDEO_FEEDBACK_FACTS)} entries`);
-  }
-  return Object.freeze({
-    runtime: decodeRuntimeIdentity(record.runtime),
-    replaceOwner: record.replaceOwner,
-    evictedFactCount: requireU64Text(record.evictedFactCount, 'video feedback evictedFactCount'),
-    facts: Object.freeze(facts.map(snapshotVideoFeedbackFact)),
-  });
-}
-
-function snapshotVideoFeedbackFact(value: unknown): ProductBrowserVideoFeedbackFact {
-  const record = requireRecord(value, 'video feedback fact');
-  const common = {
-    factId: requireU64Text(record['factId'], 'video feedback factId'),
-    handle: requireU64Text(record['handle'], 'video feedback handle'),
-  };
-  if (record.kind === 'completed' || record.kind === 'skipped') {
-    requireKnownFields(record, ['kind', 'factId', 'handle'], 'video terminal feedback');
-    return Object.freeze({ kind: record.kind, ...common });
-  }
-  if (record.kind === 'failed') {
-    requireKnownFields(record, ['kind', 'factId', 'handle', 'code'], 'video failure feedback');
-    return Object.freeze({
-      kind: 'failed',
-      ...common,
-      code: requireCatalogValue<'decodeFailed' | 'playbackBlocked' | 'hostFailure'>(
-        record.code,
-        'video feedback failure code',
-        new Set(['decodeFailed', 'playbackBlocked', 'hostFailure']),
-      ),
-    });
-  }
-  throw new TypeError('video feedback fact kind is not admitted');
-}
-
-function snapshotAnimationFeedback(value: ProductBrowserAnimationFeedback): ProductBrowserAnimationFeedback {
-  const record = requireRecord(value, 'animation feedback');
-  requireKnownFields(record, ['runtime', 'replaceOwner', 'evictedFactCount', 'facts'], 'animation feedback');
-  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('animation feedback replaceOwner must be boolean');
-  const facts = requirePlainArray(record.facts, 'animation feedback facts');
-  if (facts.length > MAXIMUM_ANIMATION_FEEDBACK_FACTS) throw new ProductBrowserLocalTransportError('invalid_options', 'animation feedback exceeds 128 facts');
-  return Object.freeze({
-    runtime: decodeRuntimeIdentity(record.runtime), replaceOwner: record.replaceOwner,
-    evictedFactCount: requireU64Text(record.evictedFactCount, 'animation feedback evictedFactCount'),
-    facts: Object.freeze(facts.map((fact) => snapshotAnimationFeedbackFact(fact))),
-  });
-}
-
-function snapshotGhostPlateFeedback(value: ProductBrowserGhostPlateFeedback): ProductBrowserGhostPlateFeedback {
-  const record = requireRecord(value, 'ghost plate feedback');
-  requireKnownFields(record, ['runtime', 'replaceOwner', 'facts'], 'ghost plate feedback');
-  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('ghost plate feedback replaceOwner must be boolean');
-  const facts = requirePlainArray(record.facts, 'ghost plate feedback facts');
-  if (facts.length > 128) throw new ProductBrowserLocalTransportError('invalid_options', 'ghost plate feedback exceeds 128 facts');
-  return Object.freeze({
-    runtime: decodeRuntimeIdentity(record.runtime),
-    replaceOwner: record.replaceOwner,
-    facts: Object.freeze(facts.map(snapshotGhostPlateFeedbackFact)),
-  });
-}
-
-function snapshotRendererDiagnosticsFeedback(
-  value: ProductBrowserRendererDiagnosticsFeedback,
-): ProductBrowserRendererDiagnosticsFeedback {
-  const record = requireRecord(value, 'renderer diagnostics feedback');
-  requireKnownFields(record, ['runtime', 'snapshot'], 'renderer diagnostics feedback');
-  const snapshot = snapshotJsonValue(record['snapshot']);
-  const snapshotRecord = requireRecord(snapshot, 'renderer diagnostics snapshot');
-  if (snapshotRecord['schemaVersion'] !== 1) {
-    throw new TypeError('renderer diagnostics snapshot schemaVersion must equal 1');
-  }
-  const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
-  if (bytes > MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES) {
-    throw new TypeError(
-      `renderer diagnostics snapshot exceeds ${String(MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES)} bytes`,
-    );
-  }
-  return Object.freeze({
-    runtime: decodeRuntimeIdentity(record.runtime),
-    snapshot,
-  }) as unknown as ProductBrowserRendererDiagnosticsFeedback;
-}
-
 function snapshotBrowserDiagnosticsReport(
   value: ProductBrowserDiagnosticsReport,
 ): ProductBrowserDiagnosticsReport {
   const record = requireRecord(value, 'browser diagnostics report');
   requireKnownFields(record, [
     'hostState', 'runtimeProgress', 'transportState', 'outputState',
-    'lastRendererSequence', 'rendererObservationAgeMs', 'firstTerminal', 'recoverableEvent', 'pageEvents',
+    'firstTerminal', 'recoverableEvent', 'pageEvents',
   ], 'browser diagnostics report');
   const pageEvents = requirePlainArray(record.pageEvents, 'browser diagnostics page events');
   if (pageEvents.length > 8) throw new TypeError('browser diagnostics exceeds 8 page events');
@@ -1750,7 +1493,6 @@ function snapshotBrowserDiagnosticsReport(
     ? undefined
     : snapshotBrowserDiagnostic(record['recoverableEvent'], 'browser recoverable diagnostic');
   if (recoverable !== undefined && recoverable.code !== 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
-    && recoverable.code !== 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE'
     && recoverable.code !== 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
     throw new TypeError('browser recoverable diagnostic code is not supported');
   }
@@ -1759,8 +1501,6 @@ function snapshotBrowserDiagnosticsReport(
     runtimeProgress: requireU64Text(record.runtimeProgress, 'browser runtime progress'),
     transportState: requireCatalogValue(record.transportState, 'browser transport state', new Set(['open', 'closed'])),
     outputState: requireCatalogValue(record.outputState, 'browser output state', new Set(['open', 'closed'])),
-    ...(record.lastRendererSequence === undefined ? {} : { lastRendererSequence: requireU64Text(record.lastRendererSequence, 'browser renderer sequence') }),
-    ...(record.rendererObservationAgeMs === undefined ? {} : { rendererObservationAgeMs: requireU64Text(record.rendererObservationAgeMs, 'browser renderer observation age') }),
     ...(terminal === undefined ? {} : { firstTerminal: terminal }),
     ...(recoverable === undefined ? {} : { recoverableEvent: recoverable }),
     pageEvents: Object.freeze(pageEvents.map((event) => {
@@ -1790,103 +1530,6 @@ function requireBrowserDiagnosticCode(value: unknown, name: string): string {
     throw new TypeError(`${name} is invalid`);
   }
   return value;
-}
-
-function snapshotGhostPlateFeedbackFact(value: unknown): ProductBrowserGhostPlateFeedbackFact {
-  const record = requireRecord(value, 'ghost plate feedback fact');
-  requireKnownFields(record, [
-    'presentation', 'sourceMatches', 'currentSector', 'localAngularOffsetDegrees',
-    'fallbackActive', 'fallbackReason', 'limitationMask', 'preparationCpuMilliseconds',
-    'captureCpuSubmissionMilliseconds', 'retainedSectorCount', 'retainedMeshCount',
-    'retainedMaterialCount', 'retainedBorrowedTextureCount',
-  ], 'ghost plate feedback fact');
-  const optionalFinite = (candidate: unknown, field: string, minimum: number): number | null =>
-    candidate === null ? null : requireFiniteNumber(candidate, field, minimum, Number.MAX_VALUE);
-  const fallbackReason = requireCatalogValue<'none' | 'preparedSourceUnsupported' | 'realizationFailed'>(
-    record['fallbackReason'],
-    'ghost plate fallback reason',
-    new Set(['none', 'preparedSourceUnsupported', 'realizationFailed']),
-  );
-  if (typeof record['sourceMatches'] !== 'boolean' || typeof record['fallbackActive'] !== 'boolean') {
-    throw new TypeError('ghost plate boolean observations are invalid');
-  }
-  return Object.freeze({
-    presentation: requireU64Text(record['presentation'], 'ghost plate presentation'),
-    sourceMatches: record['sourceMatches'],
-    currentSector: requireU32(record['currentSector'], 'ghost plate current sector'),
-    localAngularOffsetDegrees: optionalFinite(record['localAngularOffsetDegrees'], 'ghost plate local angular offset', -360),
-    fallbackActive: record['fallbackActive'],
-    fallbackReason,
-    limitationMask: requireU32(record['limitationMask'], 'ghost plate limitation mask'),
-    preparationCpuMilliseconds: optionalFinite(record['preparationCpuMilliseconds'], 'ghost plate preparation cpu milliseconds', 0),
-    captureCpuSubmissionMilliseconds: optionalFinite(record['captureCpuSubmissionMilliseconds'], 'ghost plate capture cpu milliseconds', 0),
-    retainedSectorCount: requireU32(record['retainedSectorCount'], 'ghost plate retained sectors'),
-    retainedMeshCount: requireU32(record['retainedMeshCount'], 'ghost plate retained meshes'),
-    retainedMaterialCount: requireU32(record['retainedMaterialCount'], 'ghost plate retained materials'),
-    retainedBorrowedTextureCount: requireU32(record['retainedBorrowedTextureCount'], 'ghost plate retained borrowed textures'),
-  });
-}
-
-function snapshotAnimationFeedbackFact(value: unknown): ProductBrowserAnimationFeedbackFact {
-  const record = requireRecord(value, 'animation feedback fact');
-  const factId = requireU64Text(record['factId'], 'animation feedback factId');
-  if (record.kind === 'meshInspection') {
-    if (typeof record['hasBounds'] !== 'boolean') throw new TypeError('inspection hasBounds must be boolean');
-    const vector = (value: unknown): readonly [number, number, number] => {
-      if (!Array.isArray(value) || value.length !== 3) throw new Error('inspection bounds require three coordinates');
-      return [0,1,2].map(i => requireFiniteNumber(value[i], 'inspection coordinate', -Number.MAX_VALUE, Number.MAX_VALUE)) as [number, number, number];
-    };
-    return Object.freeze({ kind: 'meshInspection', factId,
-      objectId: requireU64Text(record['objectId'], 'inspection objectId'),
-      generation: requireU64Text(record['generation'], 'inspection generation'),
-      request: requireU32(record['request'], 'inspection request'),
-      boundsMin: vector(record['boundsMin']), boundsMax: vector(record['boundsMax']),
-      hasBounds: record['hasBounds'],
-      voxelNormalMeshes: requireU32(record['voxelNormalMeshes'], 'inspection voxel meshes'),
-    });
-  }
-  if (record.kind === 'playbackObservation') {
-    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'sequence', 'status', 'selectedClip', 'sampledAtSeconds'], 'animation playback observation');
-    return Object.freeze({ kind: 'playbackObservation', factId,
-      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
-      generation: requireU64Text(record['generation'], 'animation feedback generation'),
-      sequence: requireU32(record['sequence'], 'animation feedback sequence'), status: requireBoundedString(record['status'], 'animation playback status'),
-      selectedClip: record['selectedClip'] === null ? null : requireBoundedString(record['selectedClip'], 'animation selected clip'),
-      sampledAtSeconds: record['sampledAtSeconds'] === null ? null : requireFiniteNumber(record['sampledAtSeconds'], 'animation sample seconds', 0, Number.MAX_VALUE),
-    });
-  }
-  if (record.kind === 'naturalCompletion') {
-    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'clip'], 'animation natural completion');
-    return Object.freeze({ kind: 'naturalCompletion', factId,
-      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
-      generation: requireU64Text(record['generation'], 'animation feedback generation'),
-      clip: requireBoundedString(record['clip'], 'animation completion clip'),
-    });
-  }
-  if (record.kind === 'cue') {
-    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'cueId', 'clip', 'markerSeconds', 'sampledAtSeconds', 'signalDomain', 'signalId'], 'animation cue');
-    const signalDomain = requireCatalogValue<'audio' | 'particle'>(record['signalDomain'], 'animation cue signal domain', new Set(['audio', 'particle']));
-    return Object.freeze({ kind: 'cue', factId,
-      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
-      generation: requireU64Text(record['generation'], 'animation feedback generation'),
-      cueId: requireBoundedString(record['cueId'], 'animation cue id'), clip: requireBoundedString(record['clip'], 'animation cue clip'),
-      markerSeconds: requireFiniteNumber(record['markerSeconds'], 'animation cue marker', 0, Number.MAX_VALUE), sampledAtSeconds: requireFiniteNumber(record['sampledAtSeconds'], 'animation cue sample', 0, Number.MAX_VALUE), signalDomain, signalId: requireBoundedString(record['signalId'], 'animation cue signal id') });
-  }
-  if (record.kind === 'stopped') {
-    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'sequence', 'reason'], 'animation stopped observation');
-    return Object.freeze({ kind: 'stopped', factId,
-      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
-      generation: requireU64Text(record['generation'], 'animation feedback generation'),
-      sequence: requireU32(record['sequence'], 'animation feedback sequence'), reason: requireCatalogValue<'destroyed' | 'teardown'>(record['reason'], 'animation stop reason', new Set(['destroyed', 'teardown'])) });
-  }
-  if (record.kind === 'diagnostic') {
-    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'code', 'sequence'], 'animation diagnostic');
-    return Object.freeze({ kind: 'diagnostic', factId,
-      objectId: record['objectId'] === null ? null : requireU64Text(record['objectId'], 'animation feedback objectId'),
-      generation: record['generation'] === null ? null : requireU64Text(record['generation'], 'animation feedback generation'),
-      code: requireBoundedString(record['code'], 'animation diagnostic code'), sequence: requireU32(record['sequence'], 'animation diagnostic sequence') });
-  }
-  throw new TypeError('animation feedback fact kind is not admitted');
 }
 
 function snapshotInputFact(value: unknown): RustyApplicationRuntimeInputFact {
@@ -2188,102 +1831,6 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   };
 }
 
-function decodeAudioFeedbackResult(
-  value: unknown,
-  expectedRuntime: RustyApplicationRuntimeIdentity,
-  submittedFacts: readonly ProductBrowserAudioFeedbackFact[],
-): ProductBrowserAudioFeedbackResult {
-  const record = requireRecord(value, 'audio feedback result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'audio feedback result');
-  if (record.accepted !== true && record.accepted !== false) {
-    throw new TypeError('audio feedback accepted must be boolean');
-  }
-  const runtime = decodeRuntimeIdentity(record.runtime);
-  const fault = decodeFault(record, 'audio feedback result');
-  if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
-    throw new TypeError('audio feedback result runtime does not match request runtime');
-  }
-  const expectedThroughFactId = submittedFacts.length === 0
-    ? undefined
-    : submittedFacts[submittedFacts.length - 1]!.factId;
-  if (record.accepted === false) {
-    if (record.acceptedThroughFactId !== undefined) {
-      throw new TypeError('rejected audio feedback cannot include acceptedThroughFactId');
-    }
-    return Object.freeze({
-      accepted: false,
-      ...fault,
-      runtime,
-      ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
-    });
-  }
-  if (record.diagnostic !== undefined) throw new TypeError('accepted audio feedback cannot include diagnostic');
-  if (expectedThroughFactId === undefined) {
-    if (record.acceptedThroughFactId !== undefined) {
-      throw new TypeError('empty audio feedback cannot include acceptedThroughFactId');
-    }
-    return Object.freeze({ accepted: true, ...fault, runtime });
-  }
-  const acceptedThroughFactId = requireU64Text(
-    record.acceptedThroughFactId,
-    'audio feedback acceptedThroughFactId',
-  );
-  if (acceptedThroughFactId !== expectedThroughFactId) {
-    throw new TypeError('audio feedback acknowledgement boundary does not match submitted facts');
-  }
-  return Object.freeze({ accepted: true, ...fault, runtime, acceptedThroughFactId });
-}
-
-function decodeGhostPlateFeedbackResult(
-  value: unknown,
-  expectedRuntime: RustyApplicationRuntimeIdentity,
-): ProductBrowserGhostPlateFeedbackResult {
-  const record = requireRecord(value, 'ghost plate feedback result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'diagnostic'], 'ghost plate feedback result');
-  if (record.accepted !== true && record.accepted !== false) throw new TypeError('ghost plate feedback accepted must be boolean');
-  const runtime = decodeRuntimeIdentity(record.runtime);
-  const fault = decodeFault(record, 'ghost plate feedback result');
-  if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('ghost plate feedback result runtime does not match request runtime');
-  if (record.accepted) {
-    if (record.diagnostic !== undefined) throw new TypeError('accepted ghost plate feedback cannot include diagnostic');
-    return Object.freeze({ accepted: true, ...fault, runtime });
-  }
-  return Object.freeze({
-    accepted: false,
-    ...fault,
-    runtime,
-    ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
-  });
-}
-
-function decodeRendererDiagnosticsResult(
-  value: unknown,
-  expectedRuntime: RustyApplicationRuntimeIdentity,
-): ProductBrowserRendererDiagnosticsFeedbackResult {
-  const record = requireRecord(value, 'renderer diagnostics result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'diagnostic'], 'renderer diagnostics result');
-  if (record.accepted !== true && record.accepted !== false) {
-    throw new TypeError('renderer diagnostics accepted must be boolean');
-  }
-  const runtime = decodeRuntimeIdentity(record.runtime);
-  const fault = decodeFault(record, 'renderer diagnostics result');
-  if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
-    throw new TypeError('renderer diagnostics result runtime does not match request runtime');
-  }
-  const diagnostic = record.diagnostic === undefined
-    ? undefined
-    : requireDiagnostic(record.diagnostic);
-  if (record.accepted && diagnostic !== undefined) {
-    throw new TypeError('accepted renderer diagnostics cannot include diagnostic');
-  }
-  return Object.freeze({
-    accepted: record.accepted,
-    ...fault,
-    runtime,
-    ...(diagnostic === undefined ? {} : { diagnostic }),
-  });
-}
-
 function decodeBrowserDiagnosticsResult(value: unknown): ProductBrowserDiagnosticsResult {
   const record = requireRecord(value, 'browser diagnostics result');
   requireKnownFields(record, ['accepted', 'reported'], 'browser diagnostics result');
@@ -2291,37 +1838,6 @@ function decodeBrowserDiagnosticsResult(value: unknown): ProductBrowserDiagnosti
     throw new TypeError('browser diagnostics result is invalid');
   }
   return Object.freeze({ accepted: true, reported: record.reported as number });
-}
-
-function decodeAnimationFeedbackResult(
-  value: unknown,
-  expectedRuntime: RustyApplicationRuntimeIdentity,
-  submittedFacts: readonly ProductBrowserAnimationFeedbackFact[],
-): ProductBrowserAnimationFeedbackResult {
-  const record = requireRecord(value, 'animation feedback result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'animation feedback result');
-  if (record.accepted !== true && record.accepted !== false) throw new TypeError('animation feedback accepted must be boolean');
-  const runtime = decodeRuntimeIdentity(record.runtime);
-  const fault = decodeFault(record, 'animation feedback result');
-  if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('animation feedback result runtime does not match request runtime');
-  const expectedThroughFactId = submittedFacts.length === 0 ? undefined : submittedFacts[submittedFacts.length - 1]!.factId;
-  if (!record.accepted) {
-    if (record.acceptedThroughFactId !== undefined) throw new TypeError('rejected animation feedback cannot include acceptedThroughFactId');
-    return Object.freeze({
-      accepted: false,
-      ...fault,
-      runtime,
-      ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
-    });
-  }
-  if (record.diagnostic !== undefined) throw new TypeError('accepted animation feedback cannot include diagnostic');
-  if (expectedThroughFactId === undefined) {
-    if (record.acceptedThroughFactId !== undefined) throw new TypeError('empty animation feedback cannot include acceptedThroughFactId');
-    return Object.freeze({ accepted: true, ...fault, runtime });
-  }
-  const acceptedThroughFactId = requireU64Text(record.acceptedThroughFactId, 'animation feedback acceptedThroughFactId');
-  if (acceptedThroughFactId !== expectedThroughFactId) throw new TypeError('animation feedback acknowledgement boundary does not match submitted facts');
-  return Object.freeze({ accepted: true, ...fault, runtime, acceptedThroughFactId });
 }
 
 function decodeTimelineCompletionResult(
@@ -2361,63 +1877,24 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
   const record = requireRecord(value, 'runtime output');
   switch (record.kind) {
     case 'binding':
-      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence', 'publicationFrontiers', 'rendererResources'], 'binding output');
+      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence'], 'binding output');
       return {
         kind: 'binding',
         runtime: decodeRuntimeIdentity(record.runtime),
         nextInputSequence: requireU64Text(record['nextInputSequence'], 'binding nextInputSequence'),
-        ...(record['publicationFrontiers'] === undefined
-          ? {}
-          : { publicationFrontiers: decodeRenderPublicationFrontiers(record['publicationFrontiers']) }),
-        ...optionalRendererResources(record),
       };
-    case 'frame':
-      requireKnownFields(record, ['kind', 'frame', 'rendererResources'], 'frame output');
-      return { kind: 'frame', frame: decodeFrame(record.frame, 'frame'), ...optionalRendererResources(record) };
-    case 'view-composition':
-      requireKnownFields(record, ['kind', 'composition', 'rendererResources'], 'view composition output');
-      return { kind: 'view-composition', composition: decodeViewComposition(record.composition), ...optionalRendererResources(record) };
-    case 'animation-cue-definitions':
-      requireKnownFields(record, ['kind', 'definitions', 'rendererResources'], 'animation cue definitions output');
-      return { kind: 'animation-cue-definitions', definitions: decodeAnimationCueDefinitions(record['definitions']), ...optionalRendererResources(record) };
-    case 'presentation':
-      requireKnownFields(record, ['kind', 'frame', 'rendererResources'], 'presentation output');
-      return { kind: 'presentation', frame: decodeFrame(record.frame, 'presentation'), ...optionalRendererResources(record) };
     case 'ui-projection':
-      requireKnownFields(record, ['kind', 'envelope', 'rendererResources'], 'UI projection output');
-      return { kind: 'ui-projection', envelope: decodeUiProjection(record.envelope), ...optionalRendererResources(record) };
+      requireKnownFields(record, ['kind', 'envelope'], 'UI projection output');
+      return { kind: 'ui-projection', envelope: decodeUiProjection(record.envelope) };
     case 'runtime-readout':
-      requireKnownFields(record, ['kind', 'readout', 'rendererResources'], 'runtime readout output');
-      return { kind: 'runtime-readout', readout: decodeRuntimeReadout(record.readout), ...optionalRendererResources(record) };
-    case 'renderer-resources':
-      requireKnownFields(record, ['kind', 'rendererResources'], 'renderer resources output');
-      return { kind: 'renderer-resources', ...optionalRendererResources(record) };
+      requireKnownFields(record, ['kind', 'readout'], 'runtime readout output');
+      return { kind: 'runtime-readout', readout: decodeRuntimeReadout(record.readout) };
     case 'runtime-input-result':
-      requireKnownFields(record, ['kind', 'result', 'rendererResources'], 'runtime input result output');
-      return {
-        kind: 'runtime-input-result',
-        result: decodeInputResult(record['result']),
-        ...optionalRendererResources(record),
-      };
+      requireKnownFields(record, ['kind', 'result'], 'runtime input result output');
+      return { kind: 'runtime-input-result', result: decodeInputResult(record['result']) };
     default:
       throw new TypeError('runtime output kind is not admitted');
   }
-}
-
-function optionalRendererResources(record: Record<string, unknown>): {
-  readonly rendererResources?: readonly string[];
-} {
-  if (record['rendererResources'] === undefined) return {};
-  const values = requirePlainArray(record['rendererResources'], 'renderer resource identities');
-  const identities = values.map((value) => requireBoundedString(value, 'renderer resource identity'));
-  const seen = new Set<string>();
-  for (const identity of identities) {
-    if (!isRendererResourceIdentity(identity) || seen.has(identity)) {
-      throw new TypeError('renderer resource identity is invalid or duplicated');
-    }
-    seen.add(identity);
-  }
-  return { rendererResources: Object.freeze(identities) };
 }
 
 function decodeRuntimeOutputBatch(value: unknown): readonly ProductBrowserRuntimeOutput[] {
@@ -2431,72 +1908,7 @@ function decodeRuntimeOutputBatch(value: unknown): readonly ProductBrowserRuntim
   return Object.freeze(outputs.map(decodeRuntimeOutput));
 }
 
-function decodeAnimationCueDefinitions(
-  value: unknown,
-): readonly RustyApplicationAnimationCueDefinition[] {
-  const values = requirePlainArray(value, 'animation cue definitions');
-  const keys = new Set<string>();
-  return Object.freeze(values.map((value) => {
-    const record = requireRecord(value, 'animation cue definition');
-    requireKnownFields(
-      record,
-      ['cueId', 'asset', 'clip', 'atSeconds', 'signalDomain', 'signalId'],
-      'animation cue definition',
-    );
-    const cueId = requireBoundedString(
-      record['cueId'],
-      'animation cue id',
-      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
-    );
-    const asset = requireBoundedString(
-      record['asset'],
-      'animation cue asset',
-      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
-    );
-    const clip = requireBoundedString(
-      record['clip'],
-      'animation cue clip',
-      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
-    );
-    const signalId = requireBoundedString(
-      record['signalId'],
-      'animation cue signal id',
-      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
-    );
-    const signalDomain = requireCatalogValue<'audio' | 'particle'>(
-      record['signalDomain'],
-      'animation cue signal domain',
-      new Set(['audio', 'particle']),
-    );
-    const atSeconds = requireFiniteNumber(
-      record['atSeconds'],
-      'animation cue marker',
-      0,
-      Number.MAX_VALUE,
-    );
-    const key = JSON.stringify([asset, clip, cueId]);
-    if (keys.has(key)) throw new TypeError(`duplicate animation cue definition ${key}`);
-    keys.add(key);
-    return Object.freeze({
-      cueId,
-      asset,
-      clip,
-      atSeconds,
-      signal: Object.freeze({ domain: signalDomain, id: signalId }),
-    });
-  }));
-}
-
 // The renderer validates a composition when it configures it.
-function decodeViewComposition(value: unknown): RendererViewComposition {
-  return requireRecord(value, 'view composition') as unknown as RendererViewComposition;
-}
-
-function decodeFrame(value: unknown, name: string): RustyApplicationFrame | RustyApplicationPresentationFrame {
-  const record = requireRecord(value, name);
-  return record as RustyApplicationFrame;
-}
-
 // The application host validates the envelope when it ingests it.
 function decodeUiProjection(value: unknown): RustyApplicationUiProjectionEnvelope {
   return requireRecord(value, 'UI projection') as unknown as RustyApplicationUiProjectionEnvelope;
@@ -2535,7 +1947,6 @@ function decodeRuntimeReadout(value: unknown): ProductBrowserRuntimeReadout {
     'scaledRemainder',
     'lastObservedTimeNs',
     'fault',
-    'inspectionTime',
   ], 'runtime readout');
   if (record.artifact !== 'rusty.product.runtime-readout') throw new TypeError('runtime readout artifact is invalid');
   const mode = record.mode;
@@ -2554,12 +1965,7 @@ function decodeRuntimeReadout(value: unknown): ProductBrowserRuntimeReadout {
       || (record.scaledRemainder as number) > 4_294_967_295)) {
     throw new TypeError('runtime readout scaledRemainder must be a u32 or null');
   }
-  const inspectionTime = record['inspectionTime'];
-  if (inspectionTime !== undefined && (!Array.isArray(inspectionTime) || inspectionTime.length !== 2
-    || !['realtime', 'manual', 'action-driven'].includes(inspectionTime[0])
-    || !Number.isInteger(inspectionTime[1]) || inspectionTime[1] <= 0)) throw new TypeError('invalid inspection time');
   return {
-    ...(inspectionTime === undefined ? {} : { inspectionTime: inspectionTime as [string, number] }),
     artifact: 'rusty.product.runtime-readout',
     runtime: decodeRuntimeIdentity(record.runtime),
     mode,

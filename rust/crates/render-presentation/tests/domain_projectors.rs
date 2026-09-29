@@ -119,16 +119,6 @@ fn particle_descriptor() -> ParticleEmitterDescriptor {
     }
 }
 
-fn telemetry_descriptor() -> TelemetryOverlayDescriptor {
-    TelemetryOverlayDescriptor {
-        title: "Runtime".into(),
-        corner: TelemetryOverlayCorner::TopRight,
-        refresh_interval_ms: 250,
-        max_frame_time_samples: 60,
-        visible: true,
-    }
-}
-
 #[test]
 fn audio_batch_is_atomic_and_reset_clears_retained_and_impulse_state() {
     let assets = assets();
@@ -258,39 +248,6 @@ fn audio_diagnostics_coalesce_repeated_failures_without_consuming_ring_capacity(
     assert_eq!(readout.retained_diagnostic_count, 1);
     assert_eq!(readout.evicted_diagnostic_count, 0);
     assert_eq!(readout.diagnostics[0].sequence, 3);
-}
-
-#[test]
-fn optional_projector_diagnostics_are_bounded_and_coalesce_repeated_failures() {
-    let mut projector = TelemetryOverlayProjector::default();
-    for sequence in 0..200 {
-        let result = projector.project(
-            PresentationOpMeta::new(sequence),
-            TelemetryOverlayProjectionOp::Destroy {
-                handle: TelemetryOverlayHandle::new(sequence as u64),
-            },
-        );
-        assert!(matches!(
-            result,
-            Err(TelemetryOverlayDiagnostic {
-                code: TelemetryOverlayDiagnosticCode::UnknownHandle,
-                ..
-            })
-        ));
-    }
-    assert_eq!(projector.readout().diagnostics.len(), 128);
-
-    projector
-        .project(
-            PresentationOpMeta::new(999),
-            TelemetryOverlayProjectionOp::Destroy {
-                handle: TelemetryOverlayHandle::new(199),
-            },
-        )
-        .expect_err("the retained unknown handle remains rejected");
-    let readout = projector.readout();
-    assert_eq!(readout.diagnostics.len(), 128);
-    assert_eq!(readout.diagnostics.last().unwrap().sequence, 999);
 }
 
 #[test]
@@ -770,58 +727,6 @@ fn cube_particles_validate_local_collision_without_an_asset_reference() {
 }
 
 #[test]
-fn telemetry_batch_and_reopen_have_no_hidden_state() {
-    let handle = TelemetryOverlayHandle::new(9);
-    let mut projector = TelemetryOverlayProjector::default();
-    let error = projector
-        .project_batch(vec![
-            (
-                PresentationOpMeta::new(0),
-                TelemetryOverlayProjectionOp::Create {
-                    handle,
-                    descriptor: telemetry_descriptor(),
-                },
-            ),
-            (
-                PresentationOpMeta::new(1),
-                TelemetryOverlayProjectionOp::Update {
-                    handle,
-                    patch: TelemetryOverlayPatch {
-                        refresh_interval_ms: Some(1),
-                        ..TelemetryOverlayPatch::default()
-                    },
-                },
-            ),
-        ])
-        .unwrap_err();
-    assert_eq!(
-        error.code,
-        TelemetryOverlayDiagnosticCode::InvalidDescriptor
-    );
-    assert_eq!(projector.readout().active_overlays, 0);
-
-    projector
-        .project(
-            PresentationOpMeta::new(0),
-            TelemetryOverlayProjectionOp::Create {
-                handle,
-                descriptor: telemetry_descriptor(),
-            },
-        )
-        .unwrap();
-    projector.reset();
-    projector
-        .project(
-            PresentationOpMeta::new(0),
-            TelemetryOverlayProjectionOp::Create {
-                handle,
-                descriptor: telemetry_descriptor(),
-            },
-        )
-        .expect("same handle may be reopened after reset");
-}
-
-#[test]
 fn every_retained_domain_rejects_unknown_handles() {
     let assets = assets();
     assert_eq!(
@@ -862,18 +767,6 @@ fn every_retained_domain_rejects_unknown_handles() {
             .unwrap_err()
             .code,
         ParticleProjectionDiagnosticCode::UnknownHandle
-    );
-    assert_eq!(
-        TelemetryOverlayProjector::default()
-            .project(
-                PresentationOpMeta::new(0),
-                TelemetryOverlayProjectionOp::Destroy {
-                    handle: TelemetryOverlayHandle::new(99),
-                },
-            )
-            .unwrap_err()
-            .code,
-        TelemetryOverlayDiagnosticCode::UnknownHandle
     );
 }
 

@@ -703,20 +703,6 @@ impl EngineServiceSet {
         self.audio.seal_resource_selection();
     }
 
-    pub fn renderer_resource_ids(&self) -> Vec<String> {
-        self.appearance
-            .state
-            .render_resources
-            .iter()
-            .chain(self.appearance.state.recently_released_resources())
-            .chain(self.audio.render_resources())
-            .chain(self.video.render_resources())
-            .map(|resource| resource.identity().to_owned())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    }
-
     /// Committed retained-audio baseline (voices at their Engine cursors and
     /// bus state) for an in-process audio realization.
     pub fn audio_snapshot_frame(
@@ -758,14 +744,7 @@ impl EngineServiceSet {
             .map(CsharpRenderResource::shared_bytes)
     }
 
-    pub fn renderer_resource(
-        &self,
-        identity: &str,
-    ) -> Option<crate::appearance::CsharpRenderResource> {
-        self.borrowed_renderer_resource(identity).cloned()
-    }
-
-    /// As [`Self::renderer_resource`], without cloning, for an in-process
+    /// A retained renderer resource by identity, borrowed for an in-process
     /// renderer that reads the bytes while it holds the services.
     pub fn borrowed_renderer_resource(
         &self,
@@ -779,17 +758,6 @@ impl EngineServiceSet {
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
             .find(|resource| resource.identity() == identity)
-    }
-
-    pub fn render_resources(&self) -> Vec<CsharpRenderResource> {
-        self.appearance
-            .state
-            .render_resources
-            .iter()
-            .cloned()
-            .chain(self.audio.render_resources().cloned())
-            .chain(self.video.render_resources().cloned())
-            .collect()
     }
 
     /// Latest projection of every UI stream, bound to `binding`. A browser

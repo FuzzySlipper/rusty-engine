@@ -116,3 +116,164 @@ evidence, docs and generated files are left out.
 - **Rust count.** It sometimes runs higher than the baseline. Those
   capabilities are larger than the baseline's one-field additions, and each
   also carries its host plumbing (stream header, desktop shell).
+
+## Deletion
+
+With the gate recorded, the Three.js lane is gone. `render-wgpu` is the only
+renderer.
+
+### What was removed
+
+- **TypeScript.** Removed:
+  - the packages `renderer-three`, `renderer-host`, `render-projection` and
+    `render-contracts`;
+  - the graphics realization paths of `application-host` and
+    `product-browser-host`: renderer port, content catalog, renderer preload,
+    dynamic resources, surface replacement, projection recovery, and the
+    audio, video, animation, ghost plate and renderer diagnostics feedback
+    reporters;
+  - the browser specs and pages, the webview, product-playtest and voxel
+    vignette pages, the behavior and donor inventories, the Playwright and
+    Vite configs they used, and the dead product bundle template.
+- **Rust.** Removed:
+  - `renderer-webview-host`;
+  - `MeshPayloadSource::SharedBuffer` (its validation, its error variant and
+    render-wgpu's "not realized" arm);
+  - the dev host's browser feedback routes (`audio-feedback`,
+    `video-feedback`, `animation-feedback`, `ghost-plate-feedback`,
+    `renderer-diagnostics`), with their wire types and `ProductDevRuntime`
+    methods;
+  - the renderer resource route and renderer preload bundle entries;
+  - publication frontiers and renderer resource inventories on the wire;
+  - the readout's inspection time;
+  - the telemetry overlay op (`PresentationOp::TelemetryOverlay` and its
+    projector). No C# service or runtime path ever emitted it, and its only
+    realizer was the deleted DOM host.
+- **CI and scripts.** Removed `.github/workflows/render.yml`,
+  `verify-render.sh`, `verify-renderer-webview-host.sh`,
+  `build-render-behavior-inventory.sh`, both voxel vignette staging scripts,
+  `measure-world-indicators.sh`, `measure-voxel-chunk-updates.sh`, and the
+  browser lane of `run-performance-regression.sh`.
+  - `.github/workflows/browser.yml` builds and tests what remains.
+  - `check-ci-routing.py` and its negative probes route `render/**` to it.
+- **Fixtures.** Removed the render fixtures only the Three lane read.
+
+### What remains in TypeScript
+
+| Package | Role |
+|---|---|
+| `application-host` | Engine canvas and the frame view (streamed frames, or transparent over the desktop window), input capture and arbitration, product UI mount, UI projection |
+| `product-browser-host` | Runtime transport, lifecycle and uncertain-input recovery, health reports, playtest inspection hook, runtime-pack shell page |
+| `live-debug-client`, `live-debug-panel` | Developer console over the product's debug catalog |
+
+That is 11,405 lines, 7,866 of them outside tests. `render/` held about 77k
+with specs when the campaign started. Across this change, TypeScript and
+JavaScript under `render/` lost 68,702 lines and gained 1,044; Rust lost 6,292
+and gained 445.
+
+### Decisions this settles
+
+- **Stream is the default output.** `RUSTY_RENDER_OUTPUT` is `stream`
+  (default) or `window`.
+  - The host binary always builds a renderer.
+  - `--exercise` and `--performance-probe` runs build none: they assert
+    Engine behaviour and exit, so CI's C# lane needs no GPU.
+  - Runtimes constructed without an output (tests) have none either.
+- **Device audio is the default.** The runtime plays audio on the output
+  device.
+  - With `RUSTY_AUDIO_OUTPUT` unset, a machine with no device runs silent after
+    one warning: its audio ops are dropped and report no completions. No
+    product consumes audio completions today.
+  - `RUSTY_AUDIO_OUTPUT=device` still fails the load without a device.
+  - The desktop shell no longer sets the variable.
+- **The telemetry overlay has no DOM home.** Nothing produced it, so the op is
+  deleted rather than rehosted.
+- **The page receives only its binding, baseline markers, UI projections,
+  readouts and input results.** The browser shell's surviving recovery is an
+  output-gap rule: after a gap, incremental outputs are ignored until the next
+  fresh baseline arrives.
+- **Renderer diagnostics come from the Rust renderer.** `engine.renderer`
+  (`status`, `read`, `detail`) reports its statistics:
+  - the adapter;
+  - frames per second;
+  - median render, readback and encode times;
+  - bytes per frame and per second;
+  - skipped ops.
+
+  The live-debug metrics widget shows them. `Diagnostics.ReadRenderer` keeps
+  its ABI and is refreshed from the same statistics once a second.
+- **Pointer lock is released for menus again.** The streamed surface's
+  `releaseInput` was a no-op, so an interface or modal mode, an interactive UI
+  press or window blur left the pointer locked. The Three surface exited
+  pointer lock in those cases, and the new application host does too.
+
+### Measures
+
+| | Before (`9857de734`) | After |
+|---|---|---|
+| Runtime pack | 412.4 MB | 385.0 MB |
+| `bin/` | 220.1 MB (`rusty-product-host` 185.4 MB, `rusty-live-debug` 27.8 MB) | 206.6 MB (177.6 MB, 22.1 MB) |
+| `symbols/` | 190.7 MB | 178.1 MB |
+| `share/browser/` | 1.44 MB | 0.15 MB |
+| Browser shell bundle | 1,409,315 bytes (three.js included) | 114,244 bytes |
+| SSE bytes, 5 s from a fresh attach to Doom E1M1 in stream mode | 25.8 MB (the whole graphics baseline, then frames and view compositions) | 2.5 KB (binding, UI projection, readout) |
+
+Both packs were built with `scripts/build-runtime-pack.sh` on this machine.
+
+### The new pack in use
+
+![Doom, stream by default, on the new pack](after-doom-stream.jpg)
+
+![Dagger, stream by default, on the new pack](after-dagger-stream.jpg)
+
+![Doom in the desktop window with the new shell](after-doom-window.jpg)
+
+- **Doom and Dagger, no `RUSTY_RENDER_OUTPUT`.** Both streamed.
+  - `parity-capture.mjs` ran unchanged: held time, the canvas click, the held
+    turn and Dagger's UI intents.
+  - The frames match the gate's stream captures above.
+  - The product HUDs (UI projection) render.
+- **Device audio.** While Doom ran, `pactl list sink-inputs` showed a
+  `PipeWire ALSA [rusty-product-host]` playback stream, with the variable
+  unset.
+- **Harness.** A second crew-services pass on the new pack reported:
+  - 17 operations and 40 native commands;
+  - action-driven time;
+  - `act forward 1000ms` moved 5.98 units;
+  - `act attack` accepted and spent a bullet;
+  - `frame` available.
+- **Desktop window.** A `--desktop` pack from this tree opened Doom's window
+  with the UI overlay. A virtual click and a 700 ms W hold (KWin fake input)
+  moved the player 3.9 units.
+
+### Checks
+
+- `cargo test --workspace` passes, as do `cargo clippy --workspace
+  --all-targets -D warnings` and `cargo fmt --check`.
+- Desktop-feature clippy (`csharp-product-runtime/desktop`,
+  `desktop-shell/web-overlay`) passes.
+- `pnpm --dir render run verify` builds both bundles, confirms they are
+  closed, and passes 101 tests: 32 application-host, 60 product-browser-host,
+  4 live-debug-panel, 5 live-debug-client.
+- These pass: `dependency_boundary_check.py` (render-model and
+  render-presentation may not depend on `render-wgpu`, `render-stream` or
+  `desktop-shell`), `test_architecture_checks.py`, `check-ci-routing.py`,
+  `test-ci-routing-checker.sh`, and `check-doc-links.sh`.
+- `pnpm install --offline` pruned `three`, `@types/three`, `fflate` and
+  `@noble/hashes` from the lockfile. `@playwright/test` stays at 1.61.1 for
+  `capture-playtest-warning-delta.mjs`.
+
+### Docs
+
+Updated:
+- `docs/architecture.md`: the presentation sections now describe the wgpu
+  path, runtime outputs to the browser shell, and runtime-rendered output;
+- `docs/csharp-capabilities.md` (TypeScript boundary);
+- `docs/recorded-audio.md` (device realization only);
+- `docs/presentation-capture.md` (the runtime renderer's observation);
+- `docs/performance.md`, `docs/verification.md`, `docs/desktop-shell.md`,
+  `render/README.md`, and the fixture READMEs.
+
+The Den ADR `host-platform-and-browser-validation-boundary` now states wgpu
+as the renderer and the browser as a display and UI host. The "removing the
+Three renderer" non-goal is gone.

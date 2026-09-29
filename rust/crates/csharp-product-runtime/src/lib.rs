@@ -18,9 +18,8 @@ use std::{
 };
 
 use csharp_engine_services::{
-    AnimationRealizationFact, AudioRealizationFact, CsharpAppearanceCallOutput,
-    CsharpAppearanceCatalog, CsharpEngineCallOutput, CsharpEngineServicesError,
-    CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet, VideoRealizationFact,
+    CsharpAppearanceCallOutput, CsharpAppearanceCatalog, CsharpEngineCallOutput,
+    CsharpEngineServicesError, EngineServiceSet,
 };
 use libloading::Library;
 use netcorehost::{
@@ -29,20 +28,14 @@ use netcorehost::{
     pdcstring::PdCString,
 };
 use product_dev_host::{
-    runtime_fault_disposition, CanonicalU64, ProductDevAnimationFeedback,
-    ProductDevAnimationFeedbackResult, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
-    ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
-    ProductDevDebugResult, ProductDevFaultDisposition, ProductDevGhostPlateFallbackReason,
-    ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackFact,
-    ProductDevGhostPlateFeedbackResult, ProductDevInputBatch, ProductDevInputResult,
+    runtime_fault_disposition, CanonicalU64, ProductDevControlOperation, ProductDevDebugResult,
+    ProductDevFaultDisposition, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
-    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
-    ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeReadout,
-    ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
-    ProductDevVideoFeedback, ProductDevVideoFeedbackFact,
+    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevUpdateAttribution,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -152,74 +145,6 @@ fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
     }
 }
 
-fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) -> serde_json::Value {
-    let Some(snapshot) =
-        snapshot.and_then(|snapshot| serde_json::from_str::<serde_json::Value>(snapshot).ok())
-    else {
-        return serde_json::json!({
-            "schemaVersion": 1,
-            "available": false,
-            "widget": { "visible": widget_visible },
-            "diagnostic": "No browser renderer snapshot has been admitted yet.",
-        });
-    };
-    let object = snapshot.as_object();
-    let value = |path: &[&str]| -> serde_json::Value {
-        let mut current =
-            object.and_then(|object| object.get(path.first().copied().unwrap_or_default()));
-        for key in path.iter().skip(1) {
-            current = current
-                .and_then(serde_json::Value::as_object)
-                .and_then(|object| object.get(*key));
-        }
-        current.cloned().unwrap_or(serde_json::Value::Null)
-    };
-    let interval_ms = value(&["submission", "frameIntervalMs"]);
-    let submission_rate_hz = renderer_interval_rate(&value(&[
-        "pacing",
-        "hostAdmission",
-        "recentSubmissionIntervalsMs",
-    ]));
-    serde_json::json!({
-        "schemaVersion": 1,
-        "available": true,
-        "widget": { "visible": widget_visible },
-        "renderer": {
-            "name": value(&["renderer"]),
-            "vendor": value(&["vendor"]),
-            "class": value(&["pacing", "rendererClass"]),
-        },
-        "canvas": value(&["canvas"]),
-        "frame": {
-            "renderSequence": value(&["submission", "renderSequence"]),
-            "intervalMs": interval_ms,
-            "intervalStatus": value(&["submission", "frameIntervalStatus"]),
-            "submissionRateHz": submission_rate_hz,
-            "syncSubmissionMs": value(&["submission", "backendSubmissionDurationMs"]),
-            "syncSubmissionStatus": value(&["submission", "backendSubmissionDurationStatus"]),
-        },
-        "pacing": {
-            "mode": value(&["pacing", "mode"]),
-            "state": value(&["pacing", "state"]),
-            "effectiveDurationMs": value(&["pacing", "effectiveDurationMs"]),
-            "timerDurationMs": value(&["pacing", "timerDurationMs"]),
-            "completionAgeMs": value(&["pacing", "completionAgeMs"]),
-            "completionFenceMode": value(&["pacing", "completionFenceMode"]),
-            "pendingSubmissionCount": value(&["pacing", "pendingSubmissionCount"]),
-            "pendingMeasurementCount": value(&["pacing", "pendingMeasurementCount"]),
-        },
-        "statistics": value(&["submission", "statistics"]),
-        "resources": {
-            "definedTextureCount": value(&["resources", "definedTextureCount"]),
-            "skyBackground": value(&["resources", "skyBackground"]),
-            "spriteAtlasCount": value(&["resources", "spriteAtlasCount"]),
-            "spriteFallbackCount": value(&["resources", "spriteFallbackCount"]),
-            "materialFallbackCount": value(&["resources", "materialFallbackCount"]),
-            "voxelSpecializedMaterialCount": value(&["resources", "voxelSpecializedMaterialCount"]),
-        },
-    })
-}
-
 fn pretty_json(value: &serde_json::Value) -> Result<String, ProductDevRuntimeError> {
     serde_json::to_string_pretty(value).map_err(|error| {
         ProductDevRuntimeError::new(
@@ -227,276 +152,6 @@ fn pretty_json(value: &serde_json::Value) -> Result<String, ProductDevRuntimeErr
             format!("renderer inspection answer could not be encoded: {error}"),
         )
     })
-}
-
-const RENDERER_DETAIL_RECENT_ATTEMPTS: usize = 16;
-
-fn renderer_diagnostics_detail(
-    snapshot: Option<&str>,
-    widget_visible: bool,
-    snapshot_age_ms: Option<u64>,
-) -> serde_json::Value {
-    let mut summary = renderer_diagnostics_summary(snapshot, widget_visible);
-    if summary["available"] != serde_json::Value::Bool(true) {
-        return summary;
-    }
-    let Some(snapshot) =
-        snapshot.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-    else {
-        return summary;
-    };
-    let value = |path: &[&str]| -> serde_json::Value {
-        let mut current = Some(&snapshot);
-        for key in path {
-            current = current
-                .and_then(serde_json::Value::as_object)
-                .and_then(|object| object.get(*key));
-        }
-        current.cloned().unwrap_or(serde_json::Value::Null)
-    };
-
-    let attempts = value(&["pacing", "hostAdmission", "recentAttempts"]);
-    let attempts = attempts.as_array().cloned().unwrap_or_default();
-    let derived = attempts
-        .iter()
-        .filter_map(renderer_admission_attempt_detail)
-        .collect::<Vec<_>>();
-    let recent_start = derived
-        .len()
-        .saturating_sub(RENDERER_DETAIL_RECENT_ATTEMPTS);
-    let recent_attempts = derived[recent_start..].to_vec();
-    let mut window_outcomes = serde_json::Map::new();
-    let callback_rate_hz = renderer_interval_rate(&value(&[
-        "pacing",
-        "hostAdmission",
-        "recentCallbackIntervalsMs",
-    ]));
-    let callback_rate = callback_rate_hz.as_f64();
-    for outcome in ["admitted", "backendBlocked", "noDemand"] {
-        let count = derived
-            .iter()
-            .filter(|attempt| attempt["outcome"] == outcome)
-            .count();
-        window_outcomes.insert(outcome.to_owned(), serde_json::json!(count));
-    }
-    let outcome_rate = |outcome: &str| -> serde_json::Value {
-        let Some(callback_rate) = callback_rate else {
-            return serde_json::Value::Null;
-        };
-        if derived.is_empty() {
-            return serde_json::Value::Null;
-        }
-        let count = derived
-            .iter()
-            .filter(|attempt| attempt["outcome"] == outcome)
-            .count();
-        serde_json::json!(callback_rate * count as f64 / derived.len() as f64)
-    };
-    let mut phase_aggregates = serde_json::Map::new();
-    for phase in [
-        "callbackTotalMs",
-        "successorQueueMs",
-        "demandDecisionMs",
-        "backendReadinessMs",
-        "controlsMs",
-        "cameraMs",
-        "presentationMs",
-        "backendSubmissionMs",
-        "unaccountedTailMs",
-    ] {
-        let samples = derived
-            .iter()
-            .filter_map(|attempt| attempt["phasesMs"][phase].as_f64())
-            .collect::<Vec<_>>();
-        phase_aggregates.insert(phase.to_owned(), renderer_duration_aggregate(&samples));
-    }
-    let callback_intervals = value(&["pacing", "hostAdmission", "recentCallbackIntervalsMs"]);
-    let submission_intervals = value(&["pacing", "hostAdmission", "recentSubmissionIntervalsMs"]);
-    let product_received_intervals = value(&["productFrames", "recentReceivedIntervalsMs"]);
-    let product_applied_intervals = value(&["productFrames", "recentAppliedIntervalsMs"]);
-    let product_apply_latency = value(&["productFrames", "recentApplyLatencyMs"]);
-    let product_observed_at = value(&["productFrames", "observedAtMs"]);
-    let product_age = |field: &str| -> serde_json::Value {
-        product_observed_at
-            .as_f64()
-            .zip(value(&["productFrames", field]).as_f64())
-            .and_then(|(observed, event)| renderer_duration_value(observed, event))
-            .map_or(serde_json::Value::Null, serde_json::Value::from)
-    };
-
-    let realized_textures = value(&["resources", "realizedTextures"]);
-    let realized_textures = realized_textures.as_array().cloned().unwrap_or_default();
-    let realized_texture_encoded_bytes = realized_textures
-        .iter()
-        .filter_map(|texture| texture["encodedBytes"].as_u64())
-        .fold(0_u64, u64::saturating_add);
-    let realized_texture_decoded_bytes = realized_textures
-        .iter()
-        .filter_map(|texture| texture["decodedBytes"].as_u64())
-        .fold(0_u64, u64::saturating_add);
-    let retained_texture_rows = realized_textures
-        .iter()
-        .take(32)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    summary["detail"] = serde_json::json!({
-        "snapshotAgeMs": snapshot_age_ms,
-        "admission": {
-            "totals": {
-                "attempts": value(&["pacing", "hostAdmission", "attemptCount"]),
-                "admitted": value(&["pacing", "hostAdmission", "admittedCount"]),
-                "backendBlocked": value(&["pacing", "hostAdmission", "backendBlockedCount"]),
-                "noDemand": value(&["pacing", "hostAdmission", "noDemandCount"]),
-                "demandReasons": value(&["pacing", "hostAdmission", "demandCounts"]),
-            },
-            "window": {
-                "attempts": derived.len(),
-                "outcomes": window_outcomes,
-                "callbackRateHz": callback_rate_hz,
-                "submissionRateHz": renderer_interval_rate(&submission_intervals),
-                "demandPositiveRateHz": match (outcome_rate("admitted").as_f64(), outcome_rate("backendBlocked").as_f64()) {
-                    (Some(admitted), Some(blocked)) => serde_json::json!(admitted + blocked),
-                    _ => serde_json::Value::Null,
-                },
-                "outcomeRatesHz": {
-                    "admitted": outcome_rate("admitted"),
-                    "backendBlocked": outcome_rate("backendBlocked"),
-                    "noDemand": outcome_rate("noDemand"),
-                },
-                "callbackIntervalsMs": renderer_json_duration_aggregate(&callback_intervals),
-                "submissionIntervalsMs": renderer_json_duration_aggregate(&submission_intervals),
-                "phaseAggregatesMs": phase_aggregates,
-            },
-            "recentAttemptLimit": RENDERER_DETAIL_RECENT_ATTEMPTS,
-            "recentAttempts": recent_attempts,
-        },
-        "productFrames": {
-            "receivedCount": value(&["productFrames", "receivedCount"]),
-            "appliedCount": value(&["productFrames", "appliedCount"]),
-            "receivedRateHz": renderer_interval_rate(&product_received_intervals),
-            "appliedRateHz": renderer_interval_rate(&product_applied_intervals),
-            "receivedAgeMs": product_age("lastReceivedAtMs"),
-            "appliedAgeMs": product_age("lastAppliedAtMs"),
-            "receivedIntervalsMs": renderer_json_duration_aggregate(&product_received_intervals),
-            "appliedIntervalsMs": renderer_json_duration_aggregate(&product_applied_intervals),
-            "applyLatencyMs": renderer_json_duration_aggregate(&product_apply_latency),
-        },
-        "pacing": {
-            "completionAllowanceMs": value(&["pacing", "completionAllowanceMs"]),
-            "targetDutyFraction": value(&["pacing", "targetDutyFraction"]),
-            "admittedAtMs": value(&["pacing", "admittedAtMs"]),
-            "admissionObservedAtMs": value(&["pacing", "admissionObservedAtMs"]),
-            "observedAtMs": value(&["pacing", "observedAtMs"]),
-            "automaticSubmissionCapacity": value(&["pacing", "automaticSubmissionCapacity"]),
-            "automaticSubmissionLimit": value(&["pacing", "automaticSubmissionLimit"]),
-            "maximumPendingSubmissions": value(&["pacing", "maximumPendingSubmissions"]),
-            "maximumPendingMeasurements": value(&["pacing", "maximumPendingMeasurements"]),
-        },
-        "cadence": value(&["cadence"]),
-        "realizedTextures": {
-            "count": realized_textures.len(),
-            "encodedBytes": realized_texture_encoded_bytes,
-            "decodedBytes": realized_texture_decoded_bytes,
-            "retainedRowLimit": 32,
-            "omittedRows": realized_textures.len().saturating_sub(retained_texture_rows.len()),
-            "rows": retained_texture_rows,
-        },
-    });
-    summary
-}
-
-fn renderer_admission_attempt_detail(attempt: &serde_json::Value) -> Option<serde_json::Value> {
-    let callback = attempt.get("callback")?;
-    let timestamp = |key: &str| callback.get(key).and_then(serde_json::Value::as_f64);
-    let started = timestamp("callbackStartedAtMs")?;
-    let queued = timestamp("successorQueuedAtMs")?;
-    let demand = timestamp("demandObservedAtMs")?;
-    let readiness = timestamp("backendReadinessObservedAtMs");
-    let controls = timestamp("controlsUpdatedAtMs");
-    let camera = timestamp("cameraUpdatedAtMs");
-    let presentation = timestamp("presentationAdvancedAtMs");
-    let backend = timestamp("backendSubmittedAtMs");
-    let ended = timestamp("callbackEndedAtMs")?;
-    let tail_start = backend
-        .or(presentation)
-        .or(camera)
-        .or(controls)
-        .or(readiness)
-        .unwrap_or(demand);
-    Some(serde_json::json!({
-        "sequence": attempt.get("sequence").cloned().unwrap_or(serde_json::Value::Null),
-        "sourceTimeMs": attempt.get("sourceTimeMs").cloned().unwrap_or(serde_json::Value::Null),
-        "outcome": attempt.get("outcome").cloned().unwrap_or(serde_json::Value::Null),
-        "demand": attempt.get("demand").cloned().unwrap_or(serde_json::Value::Null),
-        "backend": attempt.get("backend").cloned().unwrap_or(serde_json::Value::Null),
-        "phasesMs": {
-            "callbackTotalMs": renderer_duration(ended, started),
-            "successorQueueMs": renderer_duration(queued, started),
-            "demandDecisionMs": renderer_duration(demand, queued),
-            "backendReadinessMs": readiness.and_then(|end| renderer_duration_value(end, demand)),
-            "controlsMs": controls.zip(readiness).and_then(|(end, start)| renderer_duration_value(end, start)),
-            "cameraMs": camera.zip(controls).and_then(|(end, start)| renderer_duration_value(end, start)),
-            "presentationMs": presentation.zip(camera).and_then(|(end, start)| renderer_duration_value(end, start)),
-            "backendSubmissionMs": backend.zip(presentation).and_then(|(end, start)| renderer_duration_value(end, start)),
-            "unaccountedTailMs": renderer_duration(ended, tail_start),
-        },
-    }))
-}
-
-fn renderer_duration(end: f64, start: f64) -> serde_json::Value {
-    renderer_duration_value(end, start).map_or(serde_json::Value::Null, serde_json::Value::from)
-}
-
-fn renderer_duration_value(end: f64, start: f64) -> Option<f64> {
-    let duration = end - start;
-    (duration.is_finite() && duration >= 0.0).then_some(duration)
-}
-
-fn renderer_duration_aggregate(samples: &[f64]) -> serde_json::Value {
-    if samples.is_empty() {
-        return serde_json::json!({ "count": 0, "median": null, "p95": null });
-    }
-    let mut sorted = samples.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    serde_json::json!({
-        "count": sorted.len(),
-        "median": renderer_percentile(&sorted, 0.5),
-        "p95": renderer_percentile(&sorted, 0.95),
-    })
-}
-
-fn renderer_json_duration_aggregate(value: &serde_json::Value) -> serde_json::Value {
-    let samples = value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_f64)
-        .filter(|sample| sample.is_finite() && *sample >= 0.0)
-        .collect::<Vec<_>>();
-    renderer_duration_aggregate(&samples)
-}
-
-fn renderer_interval_rate(value: &serde_json::Value) -> serde_json::Value {
-    let samples = value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_f64)
-        .filter(|sample| sample.is_finite() && *sample > 0.0)
-        .collect::<Vec<_>>();
-    if samples.is_empty() {
-        return serde_json::Value::Null;
-    }
-    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
-    serde_json::json!(1_000.0 / mean)
-}
-
-fn renderer_percentile(sorted: &[f64], percentile: f64) -> f64 {
-    let index = ((sorted.len() as f64 * percentile).ceil() as usize)
-        .saturating_sub(1)
-        .min(sorted.len() - 1);
-    sorted[index]
 }
 
 #[derive(Clone, Debug)]
@@ -523,6 +178,8 @@ pub struct CsharpProductRuntimeConfig {
     persistence_root: Option<PathBuf>,
     diagnostics: ProductDevLog,
     renderer_options: render_stream::RendererOptions,
+    /// Where the runtime's renderer draws; `None` builds no renderer.
+    render_output: Option<RenderOutput>,
     /// The desktop shell's device, for `RUSTY_RENDER_OUTPUT=window`.
     window_gpu: Option<render_stream::Gpu>,
 }
@@ -542,8 +199,16 @@ impl CsharpProductRuntimeConfig {
             persistence_root: None,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
             renderer_options: render_stream::RendererOptions::default(),
+            render_output: None,
             window_gpu: None,
         }
+    }
+
+    /// Renders the world in this process, to `output`, and plays its audio
+    /// on the output device. The product host always selects one.
+    pub fn with_render_output(mut self, output: RenderOutput) -> Self {
+        self.render_output = Some(output);
+        self
     }
 
     /// The desktop shell's device: with `RUSTY_RENDER_OUTPUT=window` the
@@ -954,9 +619,11 @@ mod audio_output;
 mod frame_output;
 mod render_output;
 
-/// Where `RUSTY_RENDER_OUTPUT` has this process draw the world instead of
-/// the browser: `stream` or `window`.
-pub fn render_output_mode() -> Result<Option<&'static str>, CsharpProductRuntimeError> {
+pub use frame_output::RenderOutput;
+
+/// Where `RUSTY_RENDER_OUTPUT` has this process draw the world: `stream`
+/// (the default) or `window`.
+pub fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
     frame_output::render_output_mode()
 }
 
@@ -991,14 +658,13 @@ pub struct CsharpProductRuntime {
     content_root: PathBuf,
     initial_output: Option<Vec<RuntimePublication>>,
     renderer_metrics_visible: bool,
-    renderer_diagnostics_received_at: Option<Instant>,
-    renderer_diagnostics_runtime: Option<ProductDevRuntimeBinding>,
     shutdown_called: bool,
     diagnostics: ProductDevLog,
     pending_update_attribution: Option<ProductDevUpdateAttribution>,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
-    /// Present when this process renders the world and streams its frames.
+    /// The renderer, when the configuration selected an output: absent only
+    /// in runtimes built without one (tests).
     frame_output: Option<frame_output::FrameOutput>,
     /// Runs the product's RenderOutput jobs.
     render_outputs: render_output::OutputExecutor,
@@ -1012,12 +678,6 @@ unsafe impl Send for CsharpProductRuntime {}
 /// Callback state remains Engine-owned for the complete loaded-product lifetime.
 /// A C# call only borrows its value arena; Rust copies it into envelopes and commits
 impl CsharpProductRuntime {
-    /// Current renderer resources for explicit legacy preload consumers.
-    pub fn render_resources(&self) -> Vec<ProductDevRendererResource> {
-        admit_renderer_resources(&self.services.render_resources())
-            .expect("committed Engine resources were validated during admission")
-    }
-
     /// Loads one NativeAOT C# library and creates its authoritative product state.
     pub fn load(
         library_path: impl AsRef<Path>,
@@ -1071,14 +731,21 @@ impl CsharpProductRuntime {
         load_api: impl FnOnce() -> Result<LoadedProductApi, CsharpProductRuntimeError>,
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
-        // A runtime-rendered output draws video, and so plays its sound too.
-        let audio_output = audio_output::AudioOutput::from_environment(
-            frame_output::render_output_mode()?.is_some(),
-        )?;
-        let frame_output = frame_output::FrameOutput::from_environment(
-            config.renderer_options,
-            config.window_gpu.as_ref(),
-        )?;
+        let frame_output = config
+            .render_output
+            .map(|output| {
+                frame_output::FrameOutput::start(
+                    output,
+                    config.renderer_options,
+                    config.window_gpu.as_ref(),
+                )
+            })
+            .transpose()?;
+        // The process that draws the world plays its sound.
+        let audio_output = match frame_output {
+            Some(_) => audio_output::AudioOutput::from_environment()?,
+            None => None,
+        };
         let render_outputs = render_output::OutputExecutor::start(config.renderer_options)
             .map_err(|error| {
                 CsharpProductRuntimeError::new(
@@ -1186,7 +853,6 @@ impl CsharpProductRuntime {
             // Convert once and retain the owned create output for the first Start.
             let initial_output = call_outputs(&render_outputs, call.take_output())?;
             services.seal_resource_selection();
-            admit_renderer_resources(&services.render_resources())?;
             Ok((initial_output, call.take_input_mapping_replacement()))
         });
         let (initial_output, initial_input_mapping_replacement) = match created {
@@ -1238,8 +904,6 @@ impl CsharpProductRuntime {
             content_root,
             initial_output,
             renderer_metrics_visible: false,
-            renderer_diagnostics_received_at: None,
-            renderer_diagnostics_runtime: None,
             shutdown_called: false,
             diagnostics: config.diagnostics,
             pending_update_attribution: None,
@@ -2412,13 +2076,7 @@ impl CsharpProductRuntime {
     }
 
     fn readout(&self) -> ProductDevRuntimeReadout {
-        let readout = dev_readout(self.lifecycle.readout());
-        // Inspection time counts fixed steps, so only a realtime product has it.
-        match self.lifecycle.configuration() {
-            RuntimeLifecycleConfig::Realtime(config) => readout
-                .with_inspection_time(self.playtest_time.name().to_owned(), config.fixed_step_hz()),
-            _ => readout,
-        }
+        dev_readout(self.lifecycle.readout())
     }
 
     fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
@@ -2771,50 +2429,32 @@ impl CsharpProductRuntime {
             | RendererDebugCommand::Detail
             | RendererDebugCommand::Status => {}
         }
-        let snapshot = self.services.renderer_diagnostics_json();
-        let summary = if let (RendererDebugCommand::Presentation, Some(frames)) =
-            (action, &self.frame_output)
-        {
-            frames.presentation(serde_json::to_value(self.binding()).unwrap_or_default())
-        } else if action == RendererDebugCommand::Presentation {
-            let observation = snapshot
-                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-                .and_then(|value| value.get("presentation").cloned())
-                .filter(|_| self.renderer_diagnostics_runtime == Some(self.binding()));
-            serde_json::json!({
+        let summary = match (&self.frame_output, action) {
+            (Some(frames), RendererDebugCommand::Presentation) => {
+                frames.presentation(serde_json::to_value(self.binding()).unwrap_or_default())
+            }
+            (Some(frames), _) => serde_json::json!({
                 "schemaVersion": 1,
-                "runtime": self.binding(),
-                "observationRuntime": self.renderer_diagnostics_runtime,
-                "available": observation.is_some(),
-                "observationAgeMs": self.renderer_diagnostics_received_at.map(|time| time.elapsed().as_millis()),
-                "presentation": observation,
-                "captureCorrelation": "unavailable",
-                "worldReadiness": "unavailable",
-            })
-        } else if action == RendererDebugCommand::Detail {
-            renderer_diagnostics_detail(
-                snapshot,
-                self.renderer_metrics_visible,
-                self.renderer_diagnostics_received_at.map(|received| {
-                    received.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
-                }),
-            )
-        } else {
-            renderer_diagnostics_summary(snapshot, self.renderer_metrics_visible)
+                "available": true,
+                "widget": { "visible": self.renderer_metrics_visible },
+                "renderer": frames.stats_json(),
+            }),
+            (None, _) => serde_json::json!({
+                "schemaVersion": 1,
+                "available": false,
+                "widget": { "visible": self.renderer_metrics_visible },
+                "diagnostic": "This runtime has no renderer.",
+            }),
         };
-        let mut summary = summary;
-        if let (Some(frames), Some(object)) = (&self.frame_output, summary.as_object_mut()) {
-            object.insert("stream".to_owned(), frames.stats_json());
-        }
         let message = serde_json::to_string_pretty(&summary).map_err(|error| {
             ProductDevRuntimeError::new(
                 "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
                 format!("renderer diagnostics summary could not be encoded: {error}"),
             )
         })?;
-        // A read with no browser snapshot remains a failed observation for
-        // callers. Visibility operations are successful even before the first
-        // frame so a mounted widget can accurately show its unavailable state.
+        // A read with no renderer is a failed observation for callers.
+        // Visibility operations succeed either way, so a mounted widget can
+        // show its unavailable state.
         let succeeded = match action {
             RendererDebugCommand::Read | RendererDebugCommand::Detail => {
                 summary["available"].as_bool().unwrap_or(false)
@@ -2830,10 +2470,6 @@ impl CsharpProductRuntime {
 }
 
 impl ProductDevRuntime for CsharpProductRuntime {
-    fn renderer_resource_ids(&self) -> Option<Vec<String>> {
-        Some(self.services.renderer_resource_ids())
-    }
-
     /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
     /// edited, added and deleted bundle files. Open bundles and content
     /// references keep the bytes they were opened with. The eager loose
@@ -2844,21 +2480,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .map_err(|error| ProductDevRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
         self.services.bind_content_bundles(bundles);
         Ok(())
-    }
-
-    fn renderer_resource(
-        &mut self,
-        identity: &str,
-        generation: u64,
-    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
-        if self.binding().generation.get() != generation {
-            return Ok(None);
-        }
-        let resource = self.services.renderer_resource(identity);
-        resource
-            .map(|resource| admit_renderer_resource(&resource))
-            .transpose()
-            .map_err(|error| ProductDevRuntimeError::new(error.code(), error.to_string()))
     }
 
     fn take_update_attribution(&mut self) -> Option<ProductDevUpdateAttribution> {
@@ -3387,388 +3008,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
         .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
-
-    fn report_audio_feedback(
-        &mut self,
-        feedback: ProductDevAudioFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
-    {
-        // Fence before clearing/replacing the realization owner. A stale host
-        // generation must be observationally rejected without touching the
-        // committed Engine audio store.
-        self.require_current_control_binding(Some(feedback.runtime))?;
-        feedback.validate().map_err(host_runtime_error)?;
-        let accepted_through_fact_id = feedback.facts.last().map(|fact| fact.fact_id());
-        let facts = feedback
-            .facts
-            .into_iter()
-            .map(audio_realization_fact)
-            .collect::<Result<Vec<_>, _>>()?;
-        self.services
-            .ingest_audio_realization_feedback(
-                feedback.replace_owner,
-                feedback.evicted_fact_count.get(),
-                facts,
-            )
-            .map_err(|error| self.runtime_error(error.into()))?;
-        let result =
-            ProductDevAudioFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
-        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
-    }
-
-    fn report_video_feedback(
-        &mut self,
-        feedback: ProductDevVideoFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
-    {
-        self.require_current_control_binding(Some(feedback.runtime))?;
-        feedback.validate().map_err(host_runtime_error)?;
-        let accepted_through_fact_id = feedback.facts.last().map(|fact| fact.fact_id());
-        let facts = feedback
-            .facts
-            .into_iter()
-            .map(video_realization_fact)
-            .collect::<Result<Vec<_>, _>>()?;
-        self.services
-            .ingest_video_realization_feedback(
-                feedback.replace_owner,
-                feedback.evicted_fact_count.get(),
-                facts,
-            )
-            .map_err(|error| self.runtime_error(error.into()))?;
-        ProductDevRuntimeReceipt::new(
-            ProductDevAudioFeedbackResult::accepted(self.binding(), accepted_through_fact_id),
-            Vec::new(),
-        )
-        .map_err(host_runtime_error)
-    }
-
-    fn report_animation_feedback(
-        &mut self,
-        feedback: ProductDevAnimationFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
-    {
-        self.require_current_control_binding(Some(feedback.runtime))?;
-        feedback.validate().map_err(host_runtime_error)?;
-        let accepted_through_fact_id = feedback.facts.last().map(|fact| fact.fact_id());
-        let facts = feedback
-            .facts
-            .into_iter()
-            .map(animation_realization_fact)
-            .collect::<Result<Vec<_>, _>>()?;
-        self.services.ingest_animation_realization_feedback(
-            feedback.replace_owner,
-            feedback.evicted_fact_count.get(),
-            facts,
-        );
-        let result =
-            ProductDevAnimationFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
-        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
-    }
-
-    fn report_ghost_plate_feedback(
-        &mut self,
-        feedback: ProductDevGhostPlateFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevGhostPlateFeedbackResult>, ProductDevRuntimeError>
-    {
-        self.require_current_control_binding(Some(feedback.runtime))?;
-        feedback.validate().map_err(host_runtime_error)?;
-        let facts = feedback
-            .facts
-            .into_iter()
-            .map(ghost_plate_realization_fact)
-            .collect::<Result<Vec<_>, _>>()?;
-        self.services
-            .ingest_ghost_plate_realization_feedback(feedback.replace_owner, facts);
-        ProductDevRuntimeReceipt::new(
-            ProductDevGhostPlateFeedbackResult::accepted(self.binding()),
-            Vec::new(),
-        )
-        .map_err(host_runtime_error)
-    }
-
-    fn report_renderer_diagnostics(
-        &mut self,
-        feedback: ProductDevRendererDiagnosticsFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevRendererDiagnosticsFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        self.require_current_control_binding(Some(feedback.runtime))?;
-        feedback.validate().map_err(host_runtime_error)?;
-        self.services
-            .ingest_renderer_diagnostics(&feedback.snapshot)
-            .map_err(|error| self.runtime_error(error.into()))?;
-        self.renderer_diagnostics_received_at = Some(Instant::now());
-        self.renderer_diagnostics_runtime = Some(feedback.runtime);
-        let result = ProductDevRendererDiagnosticsFeedbackResult::accepted(self.binding());
-        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
-    }
-}
-
-fn ghost_plate_realization_fact(
-    fact: ProductDevGhostPlateFeedbackFact,
-) -> Result<csharp_engine_services::GhostPlateRealizationFact, ProductDevRuntimeError> {
-    let scalar =
-        |value: Option<f64>, field: &'static str| -> Result<Option<f64>, ProductDevRuntimeError> {
-            if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
-                Err(ProductDevRuntimeError::new(
-                    "CSHARP_GHOST_PLATE_FEEDBACK",
-                    format!("ghost plate {field} is invalid"),
-                ))
-            } else {
-                Ok(value)
-            }
-        };
-    let angle = fact
-        .local_angular_offset_degrees
-        .map(|value| {
-            if !value.is_finite() || !(-360.0..=360.0).contains(&value) {
-                return Err(ProductDevRuntimeError::new(
-                    "CSHARP_GHOST_PLATE_FEEDBACK",
-                    "ghost plate local angular offset is invalid",
-                ));
-            }
-            Ok(value)
-        })
-        .transpose()?
-        .map(|value| {
-            if value > f64::from(f32::MAX) {
-                Err(ProductDevRuntimeError::new(
-                    "CSHARP_GHOST_PLATE_FEEDBACK",
-                    "ghost plate local angular offset exceeded f32 range",
-                ))
-            } else {
-                Ok(value as f32)
-            }
-        })
-        .transpose()?;
-    Ok(csharp_engine_services::GhostPlateRealizationFact {
-        handle: fact.presentation.get(),
-        source_matches: fact.source_matches,
-        current_sector: fact.current_sector,
-        local_angular_offset_degrees: angle,
-        fallback_active: fact.fallback_active,
-        fallback_reason: match fact.fallback_reason {
-            ProductDevGhostPlateFallbackReason::None => NativeGhostPlateFallbackReason::None,
-            ProductDevGhostPlateFallbackReason::PreparedSourceUnsupported => {
-                NativeGhostPlateFallbackReason::PreparedSourceUnsupported
-            }
-            ProductDevGhostPlateFallbackReason::RealizationFailed => {
-                NativeGhostPlateFallbackReason::RealizationFailed
-            }
-        },
-        limitation_mask: match fact.limitation_mask {
-            127 => NativeGhostPlateLimitationMask::SingleCaptureViewProfile,
-            125 => NativeGhostPlateLimitationMask::DirectionalCaptureBankProfile,
-            _ => {
-                return Err(ProductDevRuntimeError::new(
-                    "CSHARP_GHOST_PLATE_FEEDBACK",
-                    "ghost plate limitation mask is not a supported retained profile",
-                ));
-            }
-        },
-        preparation_cpu_milliseconds: scalar(
-            fact.preparation_cpu_milliseconds,
-            "preparation cpu milliseconds",
-        )?,
-        capture_cpu_submission_milliseconds: scalar(
-            fact.capture_cpu_submission_milliseconds,
-            "capture cpu submission milliseconds",
-        )?,
-        retained_sector_count: fact.retained_sector_count,
-        retained_mesh_count: fact.retained_mesh_count,
-        retained_material_count: fact.retained_material_count,
-        retained_borrowed_texture_count: fact.retained_borrowed_texture_count,
-    })
-}
-
-fn animation_realization_fact(
-    fact: product_dev_host::ProductDevAnimationFeedbackFact,
-) -> Result<AnimationRealizationFact, ProductDevRuntimeError> {
-    use product_dev_host::ProductDevAnimationFeedbackFact as Fact;
-    let millis = |seconds: f64| -> Result<u64, ProductDevRuntimeError> {
-        if !seconds.is_finite() || seconds < 0.0 || seconds * 1000.0 > u64::MAX as f64 {
-            Err(ProductDevRuntimeError::new(
-                "CSHARP_ANIMATION_FEEDBACK",
-                "animation feedback time is invalid",
-            ))
-        } else {
-            Ok((seconds * 1000.0).round() as u64)
-        }
-    };
-    Ok(match fact {
-        Fact::PlaybackObservation {
-            fact_id,
-            object_id,
-            generation,
-            sequence,
-            status,
-            selected_clip,
-            sampled_at_seconds,
-        } => AnimationRealizationFact::Playback {
-            fact_id: fact_id.get(),
-            object_id: object_id.get(),
-            generation: generation.get(),
-            sequence,
-            status,
-            clip: selected_clip,
-            sampled_millis: sampled_at_seconds.map(millis).transpose()?,
-        },
-        Fact::MeshInspection {
-            fact_id,
-            object_id,
-            generation,
-            request,
-            bounds_min,
-            bounds_max,
-            has_bounds,
-            voxel_normal_meshes,
-        } => AnimationRealizationFact::MeshInspection {
-            fact_id: fact_id.get(),
-            object_id: object_id.get(),
-            generation: generation.get(),
-            request,
-            bounds_min,
-            bounds_max,
-            has_bounds,
-            voxel_normal_meshes,
-        },
-        Fact::NaturalCompletion {
-            fact_id,
-            object_id,
-            generation,
-            clip,
-        } => AnimationRealizationFact::NaturalCompletion {
-            fact_id: fact_id.get(),
-            object_id: object_id.get(),
-            generation: generation.get(),
-            clip,
-        },
-        Fact::Diagnostic {
-            fact_id,
-            object_id,
-            generation,
-            code,
-            sequence,
-        } => AnimationRealizationFact::Diagnostic {
-            fact_id: fact_id.get(),
-            object_id: object_id.map(CanonicalU64::get),
-            generation: generation.map(CanonicalU64::get),
-            code,
-            sequence,
-        },
-        Fact::Cue {
-            fact_id,
-            object_id,
-            generation,
-            cue_id,
-            clip,
-            marker_seconds,
-            sampled_at_seconds,
-            signal_domain,
-            signal_id,
-        } => AnimationRealizationFact::Cue {
-            fact_id: fact_id.get(),
-            object_id: object_id.get(),
-            generation: generation.get(),
-            cue_id,
-            clip,
-            marker_millis: millis(marker_seconds)?,
-            sampled_millis: millis(sampled_at_seconds)?,
-            signal_domain,
-            signal_id,
-        },
-        Fact::Stopped {
-            fact_id,
-            object_id,
-            generation,
-            sequence,
-            reason,
-        } => AnimationRealizationFact::Stopped {
-            fact_id: fact_id.get(),
-            object_id: object_id.get(),
-            generation: generation.get(),
-            sequence,
-            reason,
-        },
-    })
-}
-
-fn audio_realization_fact(
-    fact: ProductDevAudioFeedbackFact,
-) -> Result<AudioRealizationFact, ProductDevRuntimeError> {
-    Ok(match fact {
-        ProductDevAudioFeedbackFact::NaturalCompletion {
-            fact_id,
-            sequence,
-            source,
-        } => match source {
-            ProductDevAudioCompletionSource::OneShot { signal_handle } => {
-                AudioRealizationFact::NaturalCompletionOneShot {
-                    fact_id: fact_id.get(),
-                    sequence,
-                    signal_handle: signal_handle.get(),
-                }
-            }
-            ProductDevAudioCompletionSource::RetainedVoice { voice_handle } => {
-                AudioRealizationFact::NaturalCompletionRetainedVoice {
-                    fact_id: fact_id.get(),
-                    sequence,
-                    voice_handle: voice_handle.get(),
-                }
-            }
-        },
-        ProductDevAudioFeedbackFact::Diagnostic {
-            fact_id,
-            code,
-            sequence,
-            signal_handle,
-            voice_handle,
-        } => AudioRealizationFact::Diagnostic {
-            fact_id: fact_id.get(),
-            code: native_audio_diagnostic_code(code),
-            sequence,
-            signal_handle: signal_handle.map(CanonicalU64::get),
-            voice_handle: voice_handle.map(CanonicalU64::get),
-        },
-    })
-}
-
-fn video_realization_fact(
-    fact: ProductDevVideoFeedbackFact,
-) -> Result<VideoRealizationFact, ProductDevRuntimeError> {
-    Ok(match fact {
-        ProductDevVideoFeedbackFact::Completed { fact_id, handle } => {
-            VideoRealizationFact::Completed {
-                fact_id: fact_id.get(),
-                handle: handle.get(),
-            }
-        }
-        ProductDevVideoFeedbackFact::Skipped { fact_id, handle } => VideoRealizationFact::Skipped {
-            fact_id: fact_id.get(),
-            handle: handle.get(),
-        },
-        ProductDevVideoFeedbackFact::Failed {
-            fact_id,
-            handle,
-            code,
-        } => VideoRealizationFact::Failed {
-            fact_id: fact_id.get(),
-            handle: handle.get(),
-            failure: match code.as_str() {
-                "decodeFailed" => NativeVideoFailureCode::DecodeFailed,
-                "playbackBlocked" => NativeVideoFailureCode::PlaybackBlocked,
-                "hostFailure" => NativeVideoFailureCode::HostFailure,
-                _ => {
-                    return Err(ProductDevRuntimeError::new(
-                        "CSHARP_VIDEO_FEEDBACK",
-                        "video feedback failure code is invalid",
-                    ))
-                }
-            },
-        },
-    })
 }
 
 fn native_audio_diagnostic_code(
@@ -5325,42 +4564,6 @@ fn clear_reason(value: runtime_input::InputClearReason) -> NativeInputClearReaso
     }
 }
 
-fn admit_renderer_resources(
-    resources: &[CsharpRenderResource],
-) -> Result<Vec<ProductDevRendererResource>, CsharpProductRuntimeError> {
-    // Sampler variants are distinct retained texture assets but share one
-    // immutable pixel payload and one browser preload entry.
-    let mut identities = BTreeSet::new();
-    resources
-        .iter()
-        .filter(|resource| identities.insert(resource.identity()))
-        .map(admit_renderer_resource)
-        .collect()
-}
-
-fn admit_renderer_resource(
-    resource: &CsharpRenderResource,
-) -> Result<ProductDevRendererResource, CsharpProductRuntimeError> {
-    use product_dev_host::ProductDevRendererResourceKind as HostKind;
-    let kind = match resource.kind() {
-        CsharpRenderResourceKind::Texture => HostKind::Texture,
-        CsharpRenderResourceKind::Mesh => HostKind::Mesh,
-        CsharpRenderResourceKind::Font => HostKind::Font,
-        CsharpRenderResourceKind::Audio => HostKind::Audio,
-        CsharpRenderResourceKind::Video => HostKind::Video,
-        CsharpRenderResourceKind::AnimatedMesh => HostKind::AnimatedMesh,
-        CsharpRenderResourceKind::AnimationClipPack => HostKind::AnimationClipPack,
-    };
-    ProductDevRendererResource::from_retained(
-        kind,
-        resource.identity().to_owned(),
-        resource.content_hash().to_owned(),
-        resource.path().to_owned(),
-        resource.shared_bytes(),
-    )
-    .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))
-}
-
 /// A call's frame with no operations and no publication revision changes
 /// nothing a renderer holds. Baselines are built separately and keep theirs.
 fn is_empty_frame(output: &RuntimePublication) -> bool {
@@ -5542,18 +4745,32 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
 }
 
 #[cfg(test)]
-mod publication_budget_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A publication's kind with its graphics or presentation frame, as JSON
+    /// to inspect.
     fn publication_value(output: &RuntimePublication) -> serde_json::Value {
-        serde_json::to_value(
-            product_dev_host::ProductDevRuntimeOutput::from_publication(output.clone())
-                .expect("publication adapts"),
-        )
-        .expect("wire output encodes")
+        let kind = publication_kind(output);
+        match output {
+            RuntimePublication::Frame(frame) => serde_json::json!({ "kind": kind, "frame": frame }),
+            RuntimePublication::Presentation(frame) => {
+                serde_json::json!({ "kind": kind, "frame": frame })
+            }
+            _ => serde_json::json!({ "kind": kind }),
+        }
+    }
+
+    fn publication_kind(output: &RuntimePublication) -> &'static str {
+        match output {
+            RuntimePublication::Binding { .. } => "binding",
+            RuntimePublication::CompleteBaseline { .. } => "complete-baseline",
+            RuntimePublication::Frame(_) => "frame",
+            RuntimePublication::ViewComposition(_) => "view-composition",
+            RuntimePublication::Presentation(_) => "presentation",
+            RuntimePublication::AnimationCueDefinitions(_) => "animation-cue-definitions",
+            RuntimePublication::UiProjection(_) => "ui-projection",
+        }
     }
 
     use std::sync::{
@@ -5601,7 +4818,7 @@ mod tests {
     static REMAPPING_CALLBACK_OUTCOME: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
-    fn renderer_debug_summary_is_compact_and_owns_only_exact_engine_commands() {
+    fn renderer_debug_owns_only_exact_engine_commands() {
         assert_eq!(
             renderer_debug_command("engine.renderer"),
             Some(RendererDebugCommand::Read)
@@ -5615,113 +4832,6 @@ mod tests {
             Some(RendererDebugCommand::Detail)
         );
         assert_eq!(renderer_debug_command("engine.renderer.product"), None);
-
-        let admission_attempt = serde_json::json!({
-            "sequence": 2, "sourceTimeMs": 120.0, "outcome": "admitted",
-            "demand": { "schemaVersion": 1, "requested": false, "viewportChanged": false, "controls": true, "presentation": false, "retainedAnimation": false, "shouldSubmit": true },
-            "backend": { "mode": "timerQuery", "state": "ready", "rendererClass": "accelerated", "timerDurationMs": 2.0, "effectiveDurationMs": 4.0, "admittedAtMs": 120.0, "admissionObservedAtMs": 120.1, "observedAtMs": 120.1, "automaticSubmissionLimit": 8, "pendingMeasurementCount": 0, "completionFenceMode": "active", "maximumPendingSubmissions": 8, "pendingSubmissionCount": 0 },
-            "callback": { "schemaVersion": 1, "callbackStartedAtMs": 100.0, "successorQueuedAtMs": 100.1, "demandObservedAtMs": 100.2, "backendReadinessObservedAtMs": 100.3, "controlsUpdatedAtMs": 100.4, "cameraUpdatedAtMs": 100.5, "presentationAdvancedAtMs": 100.7, "backendSubmittedAtMs": 103.7, "callbackEndedAtMs": 103.8 }
-        });
-        let realized_textures = (0..1000)
-            .map(|id| serde_json::json!({ "id": format!("texture-{id:04}-{}", "x".repeat(128)), "resource": null, "encodedBytes": 2, "decodedBytes": 4 }))
-            .collect::<Vec<_>>();
-        let snapshot = serde_json::json!({
-            "schemaVersion": 1,
-            "renderer": "Fixture GPU",
-            "vendor": "Fixture Vendor",
-            "canvas": { "cssWidth": 800, "cssHeight": 600, "backingWidth": 1600, "backingHeight": 1200, "effectivePixelRatio": 2.0 },
-            "submission": {
-                "renderSequence": 42,
-                "frameIntervalMs": 20.0,
-                "frameIntervalStatus": "available",
-                "backendSubmissionDurationMs": 3.0,
-                "backendSubmissionDurationStatus": "available",
-                "statistics": {
-                    "drawCallCount": { "scope": "perSubmission", "status": "available", "value": 12 },
-                    "renderHandleCount": { "scope": "liveResident", "status": "available", "value": 8 },
-                    "geometryResourceCount": { "scope": "liveResident", "status": "available", "value": 3 },
-                    "materialResourceCount": { "scope": "liveResident", "status": "available", "value": 4 },
-                    "textureResourceCount": { "scope": "liveResident", "status": "available", "value": 5 },
-                    "animatedInstanceCount": { "scope": "liveResident", "status": "available", "value": 0 },
-                    "triangleCount": { "scope": "perSubmission", "status": "available", "value": 90 }
-                }
-            },
-            "pacing": {
-                "rendererClass": "accelerated", "mode": "timerQuery", "state": "ready",
-                "timerDurationMs": 2.0, "effectiveDurationMs": 4.0, "completionAgeMs": 1.0,
-                "completionAllowanceMs": 17.0, "targetDutyFraction": 0.5,
-                "admittedAtMs": 120.0, "admissionObservedAtMs": 121.0, "observedAtMs": 121.0,
-                "automaticSubmissionCapacity": 8, "automaticSubmissionLimit": 8,
-                "completionFenceMode": "active", "maximumPendingSubmissions": 8,
-                "maximumPendingMeasurements": 8, "pendingSubmissionCount": 0, "pendingMeasurementCount": 0,
-                "hostAdmission": {
-                    "attemptCount": 2, "admittedCount": 1, "backendBlockedCount": 1, "noDemandCount": 0,
-                    "demandCounts": { "requested": 0, "viewportChanged": 0, "controls": 1, "presentation": 0, "retainedAnimation": 0 },
-                    "recentCallbackIntervalsMs": [8.0, 8.0],
-                    "recentSubmissionIntervalsMs": [20.0, 20.0],
-                    "recentAttempts": [admission_attempt]
-                }
-            },
-            "resources": {
-                "definedTextureCount": 1000,
-                "skyBackground": {
-                    "textureId": "texture/sky",
-                    "contentHash": "sha256:sky",
-                    "resource": "texture-resource/sky"
-                },
-                "realizedTextures": realized_textures,
-                "spriteAtlasCount": 1,
-                "spriteFallbackCount": 0,
-                "materialFallbackCount": 0,
-                "voxelSpecializedMaterialCount": 2
-            },
-            "cadence": { "state": "ready", "retainedFailureCount": 0, "evictedFailureCount": 0, "failures": [] }
-        });
-        let encoded = serde_json::to_string(&snapshot).expect("fixture snapshot encodes");
-        let summary = renderer_diagnostics_summary(Some(&encoded), true);
-        let summary_encoded = serde_json::to_vec(&summary).expect("summary encodes");
-        assert!(
-            summary_encoded.len() < 8 * 1024,
-            "summary must not retain per-texture rows"
-        );
-        assert_eq!(summary["widget"]["visible"], true);
-        assert_eq!(summary["frame"]["submissionRateHz"], 50.0);
-        assert_eq!(
-            summary["resources"]["skyBackground"]["textureId"],
-            "texture/sky"
-        );
-        assert_eq!(
-            summary["resources"]["skyBackground"]["resource"],
-            "texture-resource/sky"
-        );
-        assert!(summary["resources"].get("realizedTextures").is_none());
-
-        let detail = renderer_diagnostics_detail(Some(&encoded), true, Some(9));
-        let detail_encoded = serde_json::to_vec(&detail).expect("detail encodes");
-        assert!(!detail_encoded.is_empty());
-        assert_eq!(detail["detail"]["snapshotAgeMs"], 9);
-        assert_eq!(
-            detail["detail"]["admission"]["window"]["outcomes"]["admitted"],
-            1
-        );
-        assert_eq!(
-            detail["detail"]["admission"]["window"]["phaseAggregatesMs"]["backendSubmissionMs"]
-                ["median"],
-            3.0
-        );
-        assert_eq!(detail["detail"]["realizedTextures"]["count"], 1000);
-        assert_eq!(detail["detail"]["realizedTextures"]["encodedBytes"], 2000);
-        assert_eq!(
-            detail["detail"]["realizedTextures"]["rows"]
-                .as_array()
-                .unwrap()
-                .len(),
-            32
-        );
-
-        let unavailable = renderer_diagnostics_summary(None, false);
-        assert_eq!(unavailable["available"], false);
-        assert_eq!(unavailable["widget"]["visible"], false);
     }
 
     #[test]
@@ -5732,16 +4842,18 @@ mod tests {
         let (mut runtime, root) = drop_fixture_runtime("renderer-debug-commands");
         let (unavailable, _) = runtime
             .execute_debug("engine.renderer.presentation")
-            .expect("presentation query without a browser completes")
+            .expect("presentation query without a renderer completes")
             .into_parts();
         assert!(unavailable.succeeded());
         let unavailable: serde_json::Value = serde_json::from_str(unavailable.message()).unwrap();
         assert_eq!(unavailable["available"], false);
-        assert_eq!(unavailable["presentation"], serde_json::Value::Null);
-        assert_eq!(unavailable["captureCorrelation"], "unavailable");
-        assert_eq!(
-            unavailable["runtime"],
-            serde_json::to_value(runtime.binding()).unwrap()
+        let (read, _) = runtime
+            .execute_debug("engine.renderer")
+            .expect("read without a renderer completes")
+            .into_parts();
+        assert!(
+            !read.succeeded(),
+            "a read with no renderer is a failed observation"
         );
 
         let (shown, _) = runtime
@@ -5792,41 +4904,6 @@ mod tests {
             .expect("catalog commands")
             .iter()
             .any(|command| command["name"] == "engine.renderer.detail"));
-        runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
-            .expect("start fixture");
-        runtime.report_renderer_diagnostics(ProductDevRendererDiagnosticsFeedback {
-            runtime: runtime.binding(),
-            snapshot: serde_json::json!({"schemaVersion":1,"presentation":{"state":"pending","submitted":null}}),
-        }).expect("current browser feedback is admitted");
-        let (pending, _) = runtime
-            .execute_debug("engine.renderer.presentation")
-            .expect("pending presentation query completes")
-            .into_parts();
-        let pending: serde_json::Value = serde_json::from_str(pending.message()).unwrap();
-        assert_eq!(pending["available"], true);
-        assert_eq!(pending["presentation"]["state"], "pending");
-        assert_eq!(pending["captureCorrelation"], "unavailable");
-        assert!(pending["observationAgeMs"].is_number());
-        let observed_binding = runtime.binding();
-        runtime
-            .control(
-                product_dev_host::ProductDevControlOperation::Replace,
-                observed_binding,
-            )
-            .expect("replace control");
-        let (replaced, _) = runtime
-            .execute_debug("engine.renderer.presentation")
-            .expect("query after control replacement")
-            .into_parts();
-        let replaced: serde_json::Value = serde_json::from_str(replaced.message()).unwrap();
-        assert_eq!(replaced["available"], false);
-        assert_eq!(replaced["presentation"], serde_json::Value::Null);
-        assert_eq!(
-            replaced["observationRuntime"],
-            serde_json::to_value(observed_binding).unwrap()
-        );
-        assert_ne!(replaced["runtime"], replaced["observationRuntime"]);
         drop(runtime);
         fs::remove_dir_all(root).expect("remove renderer debug fixture content");
     }
@@ -6595,7 +5672,7 @@ mod tests {
         assert!(service_outputs(staged.take_output())
             .expect("initial output")
             .iter()
-            .any(|output| publication_value(output)["kind"] == "frame"));
+            .any(|output| publication_kind(output) == "frame"));
         (session, presentation)
     }
 
@@ -6858,19 +5935,14 @@ mod tests {
         assert!(
             outputs
                 .iter()
-                .any(|output| publication_value(output)["kind"] == "complete-baseline"),
+                .any(|output| publication_kind(output) == "complete-baseline"),
             "renderers get a fresh baseline after the fault"
         );
         // The browser clears UI when the binding changes, so the fault
         // binding carries the retained HUD projection with it.
         let kinds: Vec<_> = outputs
             .iter()
-            .map(|output| {
-                publication_value(output)["kind"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_owned()
-            })
+            .map(|output| publication_kind(output).to_owned())
             .collect();
         let binding = kinds.iter().rposition(|kind| kind == "binding").unwrap();
         assert!(
@@ -7806,7 +6878,7 @@ mod tests {
     }
 
     #[test]
-    fn service_frame_storage_moves_through_publication_and_host_roundtrip() {
+    fn service_frame_storage_moves_into_its_publication() {
         let frame =
             render_model::RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Create {
                 handle: render_model::RenderHandle::new(1),
@@ -7820,9 +6892,7 @@ mod tests {
             ..Default::default()
         };
         let publication = service_outputs(output).unwrap().pop().unwrap();
-        let wire =
-            product_dev_host::ProductDevRuntimeOutput::from_publication(publication).unwrap();
-        let RuntimePublication::Frame(frame) = wire.into_publication().unwrap() else {
+        let RuntimePublication::Frame(frame) = publication else {
             panic!("frame publication");
         };
         assert_eq!(
@@ -7833,7 +6903,7 @@ mod tests {
     }
 
     #[test]
-    fn animation_cue_definition_output_maps_to_the_typed_product_dev_snapshot() {
+    fn animation_cue_definition_output_maps_to_its_publication() {
         let output = csharp_engine_services::CsharpEngineCallOutput {
             render_output: Vec::new(),
             appearance: vec![CsharpAppearanceCallOutput::AnimationCueDefinitions(vec![
@@ -7853,19 +6923,29 @@ mod tests {
         };
         let values = service_outputs(output).expect("cue output maps");
         assert_eq!(values.len(), 1);
+        let RuntimePublication::AnimationCueDefinitions(definitions) = &values[0] else {
+            panic!("animation cue definitions");
+        };
+        let [definition] = definitions.as_slice() else {
+            panic!("one definition");
+        };
         assert_eq!(
-            publication_value(&values[0]),
-            serde_json::json!({
-                "kind": "animation-cue-definitions",
-                "definitions": [{
-                    "cueId": "footfall",
-                    "asset": "animated-mesh-resource/test",
-                    "clip": "run",
-                    "atSeconds": 0.125,
-                    "signalDomain": "particle",
-                    "signalId": "footfall.spark",
-                }],
-            })
+            (
+                definition.cue_id(),
+                definition.asset(),
+                definition.clip(),
+                definition.marker_millis(),
+                definition.signal_domain(),
+                definition.signal_id(),
+            ),
+            (
+                "footfall",
+                "animated-mesh-resource/test",
+                "run",
+                125,
+                RuntimeAnimationCueSignalDomain::Particle,
+                "footfall.spark",
+            )
         );
     }
 
@@ -7895,13 +6975,7 @@ mod tests {
         let encoded = service_outputs(output)
             .expect("ordered service output")
             .into_iter()
-            .map(|output| {
-                publication_value(&output)
-                    .get("kind")
-                    .and_then(serde_json::Value::as_str)
-                    .expect("runtime output kind")
-                    .to_owned()
-            })
+            .map(|output| publication_kind(&output).to_owned())
             .collect::<Vec<_>>();
         assert_eq!(encoded, ["presentation", "frame"]);
     }
@@ -8092,28 +7166,6 @@ mod tests {
             *result = NativeProductUpdateResult::None;
         }
         ABI_OK
-    }
-
-    #[test]
-    fn only_a_realtime_readout_carries_inspection_time() {
-        let _guard = DROP_FIXTURE_GATE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let (demand, demand_root) = drop_fixture_runtime("demand-inspection-time");
-        let readout = serde_json::to_value(demand.readout()).unwrap();
-        assert_eq!(readout["mode"], "demand");
-        assert!(readout.get("inspectionTime").is_none(), "{readout}");
-        drop(demand);
-        fs::remove_dir_all(demand_root).unwrap();
-
-        let (realtime, realtime_root) = realtime_drop_fixture_runtime("realtime-inspection-time");
-        let readout = serde_json::to_value(realtime.readout()).unwrap();
-        assert_eq!(
-            readout["inspectionTime"],
-            serde_json::json!(["realtime", 30])
-        );
-        drop(realtime);
-        fs::remove_dir_all(realtime_root).unwrap();
     }
 
     #[test]
@@ -8309,7 +7361,7 @@ mod tests {
         assert_ne!(runtime.binding().control_revision, binding.control_revision);
         let (_, outputs) = receipt.into_parts();
         assert_eq!(
-            publication_value(outputs.last().unwrap())["kind"],
+            publication_kind(outputs.last().unwrap()),
             "complete-baseline"
         );
         runtime.admit_demand_step().expect("owner remains usable");

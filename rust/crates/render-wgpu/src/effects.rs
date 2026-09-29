@@ -741,9 +741,8 @@ impl Renderer {
                     self.apply_video_op(op, resources);
                     None
                 }
-                // The telemetry overlay is DOM UI (renderer-host's `<pre>` HUD);
-                // audio has its own realizer. Neither is a renderer op.
-                PresentationOp::TelemetryOverlay { .. } | PresentationOp::Audio { .. } => None,
+                // Audio has its own realizer; it is not a renderer op.
+                PresentationOp::Audio { .. } => None,
             };
             if let Some((op, detail)) = issue {
                 issues.push(ApplyIssue { op, detail });

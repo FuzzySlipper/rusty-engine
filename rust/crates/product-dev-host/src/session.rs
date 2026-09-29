@@ -2,8 +2,8 @@ use runtime_session::RuntimeSession;
 
 use crate::{
     CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
-    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRendererResource,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
+    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
@@ -14,14 +14,12 @@ use crate::{
 /// result and output batch.
 pub struct ProductDevOperationOwner<R> {
     session: RuntimeSession<R>,
-    resource_inventory: std::sync::Mutex<Option<Vec<String>>>,
 }
 
 impl<R> ProductDevOperationOwner<R> {
     pub fn new(runtime: R) -> Self {
         Self {
             session: RuntimeSession::new(runtime),
-            resource_inventory: std::sync::Mutex::new(None),
         }
     }
 
@@ -33,18 +31,6 @@ impl<R> ProductDevOperationOwner<R> {
 }
 
 impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
-    /// Reads an exact renderer body under the same runtime serialization fence
-    /// as every lifecycle and product operation.
-    pub fn renderer_resource(
-        &self,
-        identity: &str,
-        generation: u64,
-    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
-        self.session
-            .with_locked(|runtime| runtime.renderer_resource(identity, generation))
-            .map_err(|_| runtime_poisoned())?
-    }
-
     /// Reloads staged content under the same serialization guard as every
     /// product operation, so no callback observes a half-swapped inventory.
     pub fn reload_content(&self) -> Result<(), ProductDevRuntimeError> {
@@ -203,56 +189,6 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.describe_debug())
     }
 
-    pub fn report_audio_feedback(
-        &self,
-        feedback: crate::ProductDevAudioFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<crate::ProductDevAudioFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        self.with_runtime(|runtime| runtime.report_audio_feedback(feedback))
-    }
-
-    pub fn report_video_feedback(
-        &self,
-        feedback: crate::ProductDevVideoFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<crate::ProductDevAudioFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        self.with_runtime(|runtime| runtime.report_video_feedback(feedback))
-    }
-
-    pub fn report_animation_feedback(
-        &self,
-        feedback: crate::ProductDevAnimationFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<crate::ProductDevAnimationFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        self.with_runtime(|runtime| runtime.report_animation_feedback(feedback))
-    }
-
-    pub fn report_ghost_plate_feedback(
-        &self,
-        feedback: crate::ProductDevGhostPlateFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<crate::ProductDevGhostPlateFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        self.with_runtime(|runtime| runtime.report_ghost_plate_feedback(feedback))
-    }
-
-    pub fn report_renderer_diagnostics(
-        &self,
-        feedback: crate::ProductDevRendererDiagnosticsFeedback,
-    ) -> Result<
-        ProductDevRuntimeReceipt<crate::ProductDevRendererDiagnosticsFeedbackResult>,
-        ProductDevRuntimeError,
-    > {
-        self.with_runtime(|runtime| runtime.report_renderer_diagnostics(feedback))
-    }
-
     /// Strictly admits an input wire array, then forwards the validated batch
     /// through the same direct owner path as [`Self::input`].
     pub fn input_json(
@@ -327,25 +263,6 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.complete_timeline(completion)
     }
 
-    /// Capture resources before releasing a caller-held runtime lock. Timed
-    /// host calls and the scheduler use this same completion path as direct calls.
-    pub(crate) fn finish_call<T>(
-        &self,
-        runtime: &mut R,
-        result: Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
-    ) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
-        let inventory = runtime.renderer_resource_ids();
-        result.map(|receipt| {
-            let mut previous = self
-                .resource_inventory
-                .lock()
-                .expect("inventory is only accessed under runtime serialization");
-            let changed = receipt.resource_baseline() || *previous != inventory;
-            *previous = inventory.clone();
-            receipt.with_resource_inventory(if changed { inventory } else { None })
-        })
-    }
-
     pub(crate) fn with_runtime<T, F>(
         &self,
         call: F,
@@ -354,10 +271,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         F: FnOnce(&mut R) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     {
         self.session
-            .with_locked(|runtime| {
-                let result = call(runtime);
-                self.finish_call(runtime, result)
-            })
+            .with_locked(call)
             .map_err(|_| runtime_poisoned())
             .and_then(|result| result)
     }
@@ -396,10 +310,7 @@ mod tests {
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
     use runtime_publication::RuntimePublication;
 
-    #[derive(Default)]
-    struct FixtureRuntime {
-        inventory: Option<Vec<String>>,
-    }
+    struct FixtureRuntime;
 
     impl FixtureRuntime {
         fn operation(
@@ -441,10 +352,6 @@ mod tests {
     }
 
     impl ProductDevRuntime for FixtureRuntime {
-        fn renderer_resource_ids(&self) -> Option<Vec<String>> {
-            self.inventory.clone()
-        }
-
         fn lifecycle(
             &mut self,
             operation: ProductDevLifecycleOperation,
@@ -522,37 +429,8 @@ mod tests {
     }
 
     #[test]
-    fn final_release_publishes_the_empty_retained_closure() {
-        let identity =
-            ProductDevRendererResource::admit_font("content/font.woff2", b"wOF2fixture".to_vec())
-                .unwrap()
-                .identity()
-                .to_owned();
-        let owner = ProductDevOperationOwner::new(FixtureRuntime {
-            inventory: Some(vec![identity]),
-        });
-        // Establish the previous mounted inventory without a binding baseline.
-        owner
-            .with_runtime(|_| Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap()))
-            .unwrap();
-        let receipt = owner
-            .with_runtime(|runtime| {
-                runtime.inventory = Some(vec![]);
-                Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap())
-            })
-            .unwrap();
-        let (_, outputs) = receipt.into_wire_parts().unwrap();
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(
-            serde_json::to_value(&outputs[0]).unwrap()["rendererResources"],
-            serde_json::json!([])
-        );
-        assert_eq!(*owner.resource_inventory.lock().unwrap(), Some(vec![]));
-    }
-
-    #[test]
     fn rejected_lifecycle_and_control_preserve_queued_input_fence() {
-        let owner = ProductDevOperationOwner::new(FixtureRuntime::default());
+        let owner = ProductDevOperationOwner::new(FixtureRuntime);
         let cleared = std::cell::Cell::new(false);
         let result = owner
             .lifecycle_with_input_fence(
@@ -573,7 +451,7 @@ mod tests {
 
     #[test]
     fn direct_and_json_operations_return_owner_receipts() {
-        let session = ProductDevOperationOwner::new(FixtureRuntime::default());
+        let session = ProductDevOperationOwner::new(FixtureRuntime);
         assert_eq!(
             session
                 .lifecycle(ProductDevLifecycleOperation::Start)
@@ -623,7 +501,7 @@ mod tests {
 
     #[test]
     fn json_admission_rejects_malformed_and_trailing_payloads() {
-        let session = ProductDevOperationOwner::new(FixtureRuntime::default());
+        let session = ProductDevOperationOwner::new(FixtureRuntime);
         let input = session.input_json(br#"[] trailing"#).unwrap_err();
         assert_eq!(input.code(), "DEV_HOST_INPUT_DECODE");
         let time = session.advance_realtime_json(br#"01"#).unwrap_err();

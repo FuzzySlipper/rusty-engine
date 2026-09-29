@@ -65,7 +65,7 @@ def main() -> None:
         for name in (
             "verify",
             "csharp",
-            "render",
+            "browser",
             "docs",
         )
     }
@@ -81,7 +81,6 @@ def main() -> None:
             "Cargo.toml",
             "Cargo.lock",
             "rust/**",
-            "!rust/crates/renderer-webview-host/**",
             "scripts/verify.sh",
         },
         {"csharp/**", "fixtures/csharp-*/**", "render/**", "migration/**"},
@@ -109,13 +108,10 @@ def main() -> None:
     )
 
     require_paths(
-        "render",
-        workflows["render"],
-        {
-            "render/**",
-            "rust/crates/render-host-contracts/**",
-        },
-        set(),
+        "browser",
+        workflows["browser"],
+        {"render/**"},
+        {"rust/**", "csharp/**"},
     )
 
     routing_cases = {
@@ -126,12 +122,11 @@ def main() -> None:
         "rust/crates/csharp-product-runtime/src/lib.rs": {"csharp", "verify"},
         "scripts/generate-csharp-native-bindings.sh": {"csharp"},
         "scripts/test-csharp-binding-generator-results-fixture.sh": {"csharp"},
-        "render/browser/application-host.browser.spec.ts": {"render"},
-        "render/packages/renderer-three/src/backend.ts": {"render"},
-        "rust/crates/renderer-webview-host/src/lib.rs": set(),
+        "render/packages/product-browser-host/src/index.ts": {"browser"},
+        "render/packages/live-debug-panel/src/browser-mount.ts": {"browser"},
         "rust/crates/entity-state/src/lib.rs": {"verify"},
         "docs/csharp-sdk.md": {"docs"},
-        ".github/workflows/render.yml": {"docs", "render"},
+        ".github/workflows/browser.yml": {"docs", "browser"},
     }
     for path, expected in routing_cases.items():
         actual = {

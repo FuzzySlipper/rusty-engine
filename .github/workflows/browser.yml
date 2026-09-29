@@ -1,0 +1,50 @@
+name: browser
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'render/**'
+      - 'scripts/performance-results*.mjs'
+      - '.github/workflows/browser.yml'
+  pull_request:
+    paths:
+      - 'render/**'
+      - 'scripts/performance-results*.mjs'
+      - '.github/workflows/browser.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-browser-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: render/pnpm-lock.yaml
+
+      - name: Install browser shell dependencies
+        run: pnpm --dir render install --frozen-lockfile --ignore-scripts
+
+      - name: Build and test the browser shell and live-debug panel
+        run: pnpm --dir render run verify
+
+      - name: Test the performance result tooling
+        run: node --test scripts/performance-results.test.mjs

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout,
-    MeshGroupDescriptor, MeshIndexWidth, MeshProvenance,
+    MeshGroupDescriptor, MeshIndexWidth, MeshProvenance, MeshResourceEncoding,
 };
 
 fn attributed_mesh() -> MeshPayloadDescriptor {
@@ -222,9 +222,12 @@ fn rejects_invalid_cells_and_non_inline_sources() {
     assert!(partition_mesh_spatially(&mesh, [f32::NAN, 0.0, 0.0], [1.0; 3]).is_err());
     assert!(partition_mesh_spatially(&mesh, [0.0; 3], [1.0, 0.0, 1.0]).is_err());
 
-    let mut shared = mesh;
-    shared.source = MeshPayloadSource::SharedBuffer {
-        buffer: 1,
+    let mut resource = mesh;
+    resource.source = MeshPayloadSource::Resource {
+        resource: "mesh/sha256:fixture".to_owned(),
+        content_hash: "sha256:fixture".to_owned(),
+        byte_length: 480,
+        encoding: MeshResourceEncoding::PackedStreamsLeV3,
         positions_byte_offset: 0,
         normals_byte_offset: 108,
         uvs_byte_offset: Some(216),
@@ -232,7 +235,7 @@ fn rejects_invalid_cells_and_non_inline_sources() {
         indices_byte_offset: 432,
     };
     assert_eq!(
-        partition_mesh_spatially(&shared, [0.0; 3], [1.0; 3]),
+        partition_mesh_spatially(&resource, [0.0; 3], [1.0; 3]),
         Err("spatial mesh partition requires an inline mesh")
     );
 }

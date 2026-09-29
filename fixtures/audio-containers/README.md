@@ -5,11 +5,10 @@ regressions. No third-party recording or music is included. They were encoded
 once with libsndfile (PCM16 WAV, Vorbis Ogg, Opus Ogg, MP3, FLAC). The Engine
 has no dependency on that encoder, Python, ffmpeg, or a Rust decoder.
 
-Rust admission tests consume these exact bodies. The browser test
-`render/browser/audio-containers.browser.spec.ts` exercises actual decoding,
-one-shot completion, retained looping, nonzero analyser samples and cleanup for
-all five containers through `RendererAudioHost`. This proves sink behavior,
-not physical speakers or product music policy.
+Rust admission tests consume these exact bodies, and `render-audio`'s tests
+play them through its realizer on kira's mock backend: a one-shot completes for
+every container, and looping and retained voices resume and complete. This
+proves sink behavior, not physical speakers or product music policy.
 
 `tone-gain6.opus` is `tone.opus` with its OpusHead output gain set to +6 dB
 (Q7.8 value 1536) and the first Ogg page CRC recomputed; nothing else changes.

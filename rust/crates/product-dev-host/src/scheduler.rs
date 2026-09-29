@@ -46,9 +46,8 @@ where
             begin,
             |runtime| {
                 let input_errors =
-                    deliver_queued_input(owner, runtime, drain(), &mut publish_input, &mut publish);
+                    deliver_queued_input(runtime, drain(), &mut publish_input, &mut publish);
                 let result = runtime.advance_realtime(observed_time_ns);
-                let result = owner.finish_call(runtime, result);
                 let attribution = runtime.take_update_attribution();
                 match result {
                     Ok(receipt) => {
@@ -68,7 +67,6 @@ where
 /// first, and so does a debug command: held playtest time advances only through
 /// debug commands, so input accepted before one must reach the steps it runs.
 pub(crate) fn deliver_queued_input<R, I, P>(
-    owner: &ProductDevOperationOwner<R>,
     runtime: &mut R,
     (batches, overflowed): (Vec<ProductDevInputBatch>, bool),
     publish_input: &mut I,
@@ -82,14 +80,14 @@ where
     let mut input_errors = Vec::new();
     if overflowed {
         let result = runtime.recover_input_overflow();
-        match owner.finish_call(runtime, result) {
+        match result {
             Ok(receipt) => publish(receipt),
             Err(error) => input_errors.push(error),
         }
     }
     for batch in batches {
         let result = runtime.input(batch);
-        match owner.finish_call(runtime, result) {
+        match result {
             Ok(receipt) => publish_input(receipt),
             Err(error) => input_errors.push(error),
         }
@@ -107,20 +105,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevRendererResource,
-        ProductDevRuntimeBinding, ProductDevRuntimeMode, ProductDevRuntimeReadout,
-        ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+        ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevRuntimeBinding,
+        ProductDevRuntimeMode, ProductDevRuntimeReadout, ProductDevRuntimeState,
+        ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
     };
-    use render_model::RenderFrameDiff;
     use runtime_input::RuntimeInputBinding;
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
     use runtime_publication::RuntimePublication;
 
-    #[derive(Default)]
-    struct FixtureRuntime {
-        renderer_resources: Vec<String>,
-        scheduled_asset_transition: Option<ProductDevRendererResource>,
-    }
+    struct FixtureRuntime;
 
     impl FixtureRuntime {
         fn binding() -> ProductDevRuntimeBinding {
@@ -162,10 +155,6 @@ mod tests {
     }
 
     impl ProductDevRuntime for FixtureRuntime {
-        fn renderer_resource_ids(&self) -> Option<Vec<String>> {
-            (!self.renderer_resources.is_empty()).then(|| self.renderer_resources.clone())
-        }
-
         fn lifecycle(
             &mut self,
             operation: ProductDevLifecycleOperation,
@@ -205,20 +194,6 @@ mod tests {
             _observed_time_ns: CanonicalU64,
         ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>
         {
-            if let Some(resource) = self.scheduled_asset_transition.take() {
-                self.renderer_resources.push(resource.identity().to_owned());
-                return Ok(ProductDevRuntimeReceipt::new(
-                    ProductDevOperationResult::accepted(
-                        ProductDevOperationKind::AdvanceRealtime,
-                        Self::binding(),
-                        CanonicalU64::new(0),
-                        Self::readout(),
-                    )
-                    .unwrap(),
-                    vec![RuntimePublication::Frame(RenderFrameDiff::new())],
-                )
-                .unwrap());
-            }
             Ok(Self::operation(ProductDevOperationKind::AdvanceRealtime))
         }
 
@@ -258,7 +233,7 @@ mod tests {
 
     #[test]
     fn scheduled_publication_stays_inside_owner_serialization() {
-        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime::default()));
+        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
         let (published, published_ready) = mpsc::channel();
         let (release, release_publication) = mpsc::channel();
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -313,44 +288,6 @@ mod tests {
             *order.lock().expect("final order lock"),
             vec!["input", "advance"],
             "runtime input receipts must publish before the scheduled advance receipt"
-        );
-    }
-
-    #[test]
-    fn scheduled_asset_transition_publishes_its_resource_inventory() {
-        let resource = ProductDevRendererResource::admit_font(
-            "content/fonts/scheduled.woff2",
-            b"wOF2scheduled-font".to_vec(),
-        )
-        .unwrap();
-        let identity = resource.identity().to_owned();
-        let owner = ProductDevOperationOwner::new(FixtureRuntime {
-            scheduled_asset_transition: Some(resource),
-            ..Default::default()
-        });
-        let mut published = None;
-
-        advance_realtime_with_input_and_publish(
-            &owner,
-            || (Vec::new(), false),
-            CanonicalU64::new(1),
-            |_| panic!("the fixture has no scheduled input receipt"),
-            |receipt| published = Some(receipt),
-            || {},
-            || {},
-        )
-        .unwrap();
-
-        let (_, outputs) = published
-            .expect("scheduled update receipt")
-            .into_wire_parts()
-            .expect("scheduled receipt encodes for publication");
-        assert_eq!(outputs.len(), 1);
-
-        let public_wire = serde_json::to_value(&outputs[0]).expect("public output wire");
-        assert_eq!(
-            public_wire["rendererResources"],
-            serde_json::json!([identity])
         );
     }
 }

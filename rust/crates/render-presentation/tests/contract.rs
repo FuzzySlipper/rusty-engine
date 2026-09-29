@@ -91,16 +91,6 @@ fn particle() -> ParticleEmitterDescriptor {
     }
 }
 
-fn telemetry() -> TelemetryOverlayDescriptor {
-    TelemetryOverlayDescriptor {
-        title: "Frame telemetry".into(),
-        corner: TelemetryOverlayCorner::TopRight,
-        refresh_interval_ms: 250,
-        max_frame_time_samples: 60,
-        visible: true,
-    }
-}
-
 fn animation_state(revision: u64) -> AnimationControllerProjectionState {
     AnimationControllerProjectionState {
         entity: 42,
@@ -146,11 +136,10 @@ fn fixture_frame() -> PresentationFrameDiff {
                 descriptor: particle(),
             },
         },
-        PresentationOp::TelemetryOverlay {
+        PresentationOp::Particle {
             meta: PresentationOpMeta::new(3),
-            op: TelemetryOverlayProjectionOp::Create {
-                handle: TelemetryOverlayHandle::new(1),
-                descriptor: telemetry(),
+            op: ParticleProjectionOp::Destroy {
+                handle: ParticleEmitterHandle::new(1),
             },
         },
         PresentationOp::Animation {
@@ -264,27 +253,22 @@ fn every_presentation_operation_survives_the_json_border() {
                 handle: ParticleEmitterHandle::new(3),
             },
         },
-        PresentationOp::TelemetryOverlay {
+        PresentationOp::Particle {
             meta: PresentationOpMeta::new(11),
-            op: TelemetryOverlayProjectionOp::Create {
-                handle: TelemetryOverlayHandle::new(4),
-                descriptor: telemetry(),
+            op: ParticleProjectionOp::Destroy {
+                handle: ParticleEmitterHandle::new(4),
             },
         },
-        PresentationOp::TelemetryOverlay {
+        PresentationOp::Particle {
             meta: PresentationOpMeta::new(12),
-            op: TelemetryOverlayProjectionOp::Update {
-                handle: TelemetryOverlayHandle::new(4),
-                patch: TelemetryOverlayPatch {
-                    visible: Some(false),
-                    ..TelemetryOverlayPatch::default()
-                },
+            op: ParticleProjectionOp::Destroy {
+                handle: ParticleEmitterHandle::new(5),
             },
         },
-        PresentationOp::TelemetryOverlay {
+        PresentationOp::Particle {
             meta: PresentationOpMeta::new(13),
-            op: TelemetryOverlayProjectionOp::Destroy {
-                handle: TelemetryOverlayHandle::new(4),
+            op: ParticleProjectionOp::Destroy {
+                handle: ParticleEmitterHandle::new(6),
             },
         },
         PresentationOp::Animation {
@@ -345,7 +329,6 @@ fn every_presentation_operation_survives_the_json_border() {
         "audio",
         "billboard",
         "particle",
-        "telemetryOverlay",
         "animation",
     ] {
         assert!(

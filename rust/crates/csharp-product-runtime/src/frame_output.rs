@@ -1,23 +1,20 @@
 //! The world rendered in this process: streamed to the browser shell, or
 //! presented to the desktop shell's window.
 //!
-//! `RUSTY_RENDER_OUTPUT` selects it. With `stream`, a `render-wgpu` renderer
-//! starts on a headless device when the runtime loads, and the host serves
-//! the frames it draws at `/__rusty/product/runtime/frames`. With `window`,
-//! the renderer is built on the desktop shell's device
+//! `RUSTY_RENDER_OUTPUT` selects it; `stream` is the default. With `stream`, a
+//! `render-wgpu` renderer starts on a headless device when the runtime loads,
+//! and the host serves the frames it draws at
+//! `/__rusty/product/runtime/frames`. With `window`, the renderer is built on
+//! the desktop shell's device
 //! ([`crate::CsharpProductRuntimeConfig::with_window_gpu`]) and the shell
 //! draws it to its window. Either way each committed call's renderer
-//! publications are applied as they are committed, and the browser shell
-//! shows the product UI without realizing the world with Three. The
-//! publications still reach the browser; its surface ignores the world. The
-//! browser's video element played over the page UI, which a streamed frame
-//! lies under, so the stream leaves video to the browser; the window draws
-//! it over the UI itself.
+//! publications are applied as they are committed. The browser shell never
+//! receives them: it shows the frames, or lets the window show through, under
+//! the product UI. Video plays in these frames, above the UI.
 //!
-//! Animation and video facts reach the Engine from this renderer, through
-//! the same realization feedback the browser reports.
-//! `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of JPEG, to
-//! measure what the encoder saves.
+//! Animation, video and ghost plate facts reach the Engine from this
+//! renderer. `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of
+//! JPEG, to measure what the encoder saves.
 //!
 //! Playtest inspection reaches the streamed renderer through Engine debug
 //! commands (the window takes only the observer camera):
@@ -29,7 +26,7 @@
 
 use std::borrow::Cow;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use csharp_engine_abi::{
     NativeGhostPlateFallbackReason, NativeGhostPlateLimitationMask, NativeVideoFailureCode,
@@ -57,6 +54,8 @@ const STREAM_FORMAT_ENV: &str = "RUSTY_RENDER_STREAM_FORMAT";
 const MAX_FACTS_PER_REPORT: usize = 128;
 /// How long an inspection command waits for the frame it asked for.
 const INSPECTION_FRAME_WAIT: Duration = Duration::from_secs(2);
+/// How often the renderer statistics C# reads are refreshed.
+const STATISTICS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Whether `command` is one of the runtime renderer's inspection commands.
 pub(crate) fn is_inspection_command(command: &str) -> bool {
@@ -66,14 +65,32 @@ pub(crate) fn is_inspection_command(command: &str) -> bool {
     )
 }
 
-/// Where this process's renderer draws: `stream` or `window`. An unset
-/// variable keeps browser realization (`None`); an unknown value is an error
+/// Where this process's renderer draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderOutput {
+    /// Frames streamed to the browser shell (the default).
+    Stream,
+    /// The desktop shell's window.
+    Window,
+}
+
+impl RenderOutput {
+    /// The browser bootstrap's name for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stream => RENDER_OUTPUT_STREAM,
+            Self::Window => RENDER_OUTPUT_WINDOW,
+        }
+    }
+}
+
+/// `RUSTY_RENDER_OUTPUT`: `stream` when unset. An unknown value is an error
 /// rather than a silent fallback.
-pub(crate) fn render_output_mode() -> Result<Option<&'static str>, CsharpProductRuntimeError> {
+pub(crate) fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
     match std::env::var_os(RENDER_OUTPUT_ENV) {
-        None => Ok(None),
-        Some(value) if value == RENDER_OUTPUT_STREAM => Ok(Some(RENDER_OUTPUT_STREAM)),
-        Some(value) if value == RENDER_OUTPUT_WINDOW => Ok(Some(RENDER_OUTPUT_WINDOW)),
+        None => Ok(RenderOutput::Stream),
+        Some(value) if value == RENDER_OUTPUT_STREAM => Ok(RenderOutput::Stream),
+        Some(value) if value == RENDER_OUTPUT_WINDOW => Ok(RenderOutput::Window),
         Some(_) => Err(CsharpProductRuntimeError::new(
             "CSHARP_RENDER_OUTPUT",
             format!(
@@ -89,18 +106,21 @@ pub(crate) struct FrameOutput {
     stream: Option<(FrameStreamer, Arc<ProductDevFrameStream>)>,
     next_fact_id: u64,
     next_video_fact_id: u64,
+    /// When the renderer statistics C# reads (`Diagnostics.ReadRenderer`)
+    /// were last refreshed.
+    statistics_reported: Option<Instant>,
 }
 
 impl FrameOutput {
-    pub(crate) fn from_environment(
+    pub(crate) fn start(
+        output: RenderOutput,
         options: RendererOptions,
         window_gpu: Option<&Gpu>,
-    ) -> Result<Option<Self>, CsharpProductRuntimeError> {
+    ) -> Result<Self, CsharpProductRuntimeError> {
         let error =
             |message: String| CsharpProductRuntimeError::new("CSHARP_RENDER_OUTPUT", message);
-        let (driver, stream) = match render_output_mode()? {
-            None => return Ok(None),
-            Some(RENDER_OUTPUT_WINDOW) => {
+        let (driver, stream) = match output {
+            RenderOutput::Window => {
                 let gpu = window_gpu.ok_or_else(|| {
                     error(format!(
                         "{RENDER_OUTPUT_ENV}={RENDER_OUTPUT_WINDOW} needs the desktop shell (a runtime built with the `desktop` feature)"
@@ -108,7 +128,7 @@ impl FrameOutput {
                 })?;
                 (SceneDriver::new(gpu.clone(), options), None)
             }
-            Some(_) => {
+            RenderOutput::Stream => {
                 let format = match std::env::var(STREAM_FORMAT_ENV).as_deref() {
                     Err(_) | Ok("jpeg") => StreamFormat::Jpeg,
                     Ok("rgba") => StreamFormat::Rgba8,
@@ -127,12 +147,13 @@ impl FrameOutput {
                 (driver, Some((streamer, frames)))
             }
         };
-        Ok(Some(Self {
+        Ok(Self {
             driver,
             stream,
             next_fact_id: 1,
             next_video_fact_id: 1,
-        }))
+            statistics_reported: None,
+        })
     }
 
     /// The renderer the desktop shell draws.
@@ -204,6 +225,14 @@ impl FrameOutput {
         let plates = self.driver.ghost_plate_readouts();
         services
             .ingest_ghost_plate_realization_feedback(false, plates.iter().map(ghost_plate_fact));
+        if self
+            .statistics_reported
+            .is_none_or(|reported| reported.elapsed() >= STATISTICS_INTERVAL)
+        {
+            self.statistics_reported = Some(Instant::now());
+            // The statistics are plain JSON values, so they always encode.
+            let _ = services.ingest_renderer_diagnostics(&self.stats_json());
+        }
     }
 
     fn video_fact(&mut self, fact: VideoFact) -> VideoRealizationFact {

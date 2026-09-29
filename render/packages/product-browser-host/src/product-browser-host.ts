@@ -1,15 +1,10 @@
 import { installPlaytestInspection } from './playtest-inspection.js';
-import { mountStreamedFrameSurface, mountWindowSurface } from './streamed-frame-surface.js';
 import {
   mountRustyApplication,
-  type RustyApplicationFrame,
   type RustyApplicationGameplayCursorMode,
-  type RustyApplicationAnimationCueDefinition,
-  type RustyApplicationContent,
   type RustyApplicationHost,
   type RustyApplicationHostReadout,
-  type RustyApplicationPresentationFrame,
-  type RustyApplicationRendererOptions,
+  type RustyApplicationRenderOutput,
   type RustyApplicationRuntimeIdentity,
   type RustyApplicationRuntimeInputEnvelope,
   type RustyApplicationRuntimeInputOptions,
@@ -17,15 +12,8 @@ import {
   type RustyApplicationUiProjectionEnvelope,
   type RustyApplicationUiProjectionOptions,
   type RustyApplicationPresentationAspectBounds,
-  type RustyApplicationViewComposition,
 } from '@rusty-engine/application-host';
-import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
-import {
-  ProductBrowserDynamicRendererResources,
-  ProductBrowserRendererResourceUnavailableError,
-  type ProductBrowserDynamicRendererResourceFetcher,
-} from './dynamic-renderer-resources.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
@@ -35,11 +23,9 @@ export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
 /**
  * Selects the owner that admits fixed-step realtime work.
  *
- * Browser products use the Engine renderer cadence by default. A packaged
- * product with an in-process Rust service can select `rust-host`; the
- * WebView still drains typed input on each animation frame and receives
- * retained outputs through the runtime subscription, but it never asks the
- * runtime to advance from its presentation clock.
+ * `rust-host` is the product host's scheduler: the page still drains typed
+ * input on each animation frame, but it never asks the runtime to advance
+ * from its own clock. `browser` advances realtime from the page cadence.
  */
 export type ProductBrowserRealtimeAdvanceOwner = 'browser' | 'rust-host';
 
@@ -108,145 +94,6 @@ export interface ProductBrowserRuntimeInputResult {
   readonly diagnostic?: string;
 }
 
-/** Closed browser-to-runtime audio realization feedback; no browser objects cross this boundary. */
-export type ProductBrowserAudioFeedbackFact =
-  | {
-      readonly kind: 'naturalCompletion';
-      readonly source: 'oneShot';
-      readonly factId: string;
-      readonly sequence: number;
-      readonly signalHandle: string;
-    }
-  | {
-      readonly kind: 'naturalCompletion';
-      readonly source: 'retainedVoice';
-      readonly factId: string;
-      readonly sequence: number;
-      readonly voiceHandle: string;
-    }
-  | {
-      readonly kind: 'diagnostic';
-      readonly factId: string;
-      readonly code: string;
-      readonly sequence: number;
-      readonly voiceHandle: string | null;
-      readonly signalHandle: string | null;
-    };
-
-export interface ProductBrowserAudioFeedback {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly replaceOwner: boolean;
-  readonly evictedFactCount: string;
-  readonly facts: readonly ProductBrowserAudioFeedbackFact[];
-}
-
-export interface ProductBrowserAudioFeedbackResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  /** The exact runtime binding which accepted or rejected this fixed report. */
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  /** The accepted submitted boundary; absent when the fixed report had no facts. */
-  readonly acceptedThroughFactId?: string;
-  readonly diagnostic?: string;
-}
-
-export type ProductBrowserVideoFeedbackFact =
-  | { readonly kind: 'completed'; readonly factId: string; readonly handle: string }
-  | { readonly kind: 'skipped'; readonly factId: string; readonly handle: string }
-  | { readonly kind: 'failed'; readonly factId: string; readonly handle: string; readonly code: 'decodeFailed' | 'playbackBlocked' | 'hostFailure' };
-export interface ProductBrowserVideoFeedback {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly replaceOwner: boolean;
-  readonly evictedFactCount: string;
-  readonly facts: readonly ProductBrowserVideoFeedbackFact[];
-}
-
-/** Closed renderer-observation feedback; this is not an animation command route. */
-export type ProductBrowserAnimationFeedbackFact =
-  | { readonly kind: 'meshInspection'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly request: number; readonly boundsMin: readonly [number, number, number]; readonly boundsMax: readonly [number, number, number]; readonly hasBounds: boolean; readonly voxelNormalMeshes: number }
-  | { readonly kind: 'playbackObservation'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly status: string; readonly selectedClip: string | null; readonly sampledAtSeconds: number | null }
-  | { readonly kind: 'naturalCompletion'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly clip: string }
-  | { readonly kind: 'diagnostic'; readonly factId: string; readonly objectId: string | null; readonly generation: string | null; readonly code: string; readonly sequence: number }
-  | { readonly kind: 'cue'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly cueId: string; readonly clip: string; readonly markerSeconds: number; readonly sampledAtSeconds: number; readonly signalDomain: 'audio' | 'particle'; readonly signalId: string }
-  | { readonly kind: 'stopped'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly reason: 'destroyed' | 'teardown' };
-
-export interface ProductBrowserAnimationFeedback {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly replaceOwner: boolean;
-  readonly evictedFactCount: string;
-  readonly facts: readonly ProductBrowserAnimationFeedbackFact[];
-}
-
-export interface ProductBrowserAnimationFeedbackResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly acceptedThroughFactId?: string;
-  readonly diagnostic?: string;
-}
-
-/** Latest retained ghost-plate realization snapshot. Owner identities are opaque Engine values. */
-export interface ProductBrowserGhostPlateFeedbackFact {
-  readonly presentation: string;
-  readonly sourceMatches: boolean;
-  readonly currentSector: number;
-  readonly localAngularOffsetDegrees: number | null;
-  readonly fallbackActive: boolean;
-  readonly fallbackReason: 'none' | 'preparedSourceUnsupported' | 'realizationFailed';
-  /** Closed GhostPlateLimitationMask bits copied from the renderer host. */
-  readonly limitationMask: number;
-  readonly preparationCpuMilliseconds: number | null;
-  readonly captureCpuSubmissionMilliseconds: number | null;
-  readonly retainedSectorCount: number;
-  readonly retainedMeshCount: number;
-  readonly retainedMaterialCount: number;
-  readonly retainedBorrowedTextureCount: number;
-}
-
-export interface ProductBrowserGhostPlateFeedback {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly replaceOwner: boolean;
-  readonly facts: readonly ProductBrowserGhostPlateFeedbackFact[];
-}
-
-export interface ProductBrowserGhostPlateFeedbackResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly diagnostic?: string;
-}
-
-export interface ProductBrowserRendererDiagnosticsFeedback {
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']> & {
-    readonly productFrames?: ProductBrowserProductFrameObservationSample;
-  };
-}
-
-export interface ProductBrowserProductFrameObservationSample {
-  readonly schemaVersion: 1;
-  readonly observedAtMs: number;
-  readonly receivedCount: number;
-  readonly appliedCount: number;
-  readonly firstReceivedAtMs: number | null;
-  readonly lastReceivedAtMs: number | null;
-  readonly lastAppliedAtMs: number | null;
-  readonly recentReceivedIntervalsMs: readonly number[];
-  readonly recentAppliedIntervalsMs: readonly number[];
-  readonly recentApplyLatencyMs: readonly number[];
-}
-
-export interface ProductBrowserRendererDiagnosticsFeedbackResult {
-  readonly accepted: boolean;
-  readonly code: string;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-  readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly diagnostic?: string;
-}
-
 export interface ProductBrowserTimelineCompletion {
   /** Canonical decimal u64 ticket issued by runtime-timeline. */
   readonly ticket: string;
@@ -275,7 +122,6 @@ export interface ProductBrowserTimelineCompletionResult {
 /** A bounded semantic-neutral readout emitted by the Rust runtime owner. */
 export interface ProductBrowserRuntimeReadout {
   readonly artifact: 'rusty.product.runtime-readout';
-  readonly inspectionTime?: readonly [string, number];
   readonly runtime: RustyApplicationRuntimeIdentity;
   readonly mode: ProductBrowserRuntimeMode;
   readonly state: 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
@@ -292,79 +138,19 @@ export interface ProductBrowserRuntimeBindingOutput {
   readonly kind: 'binding';
   readonly runtime: RustyApplicationRuntimeIdentity;
   readonly nextInputSequence: string;
-  /**
-   * Active renderer stream frontiers captured when this binding's complete
-   * retained baseline was committed. They seed the replacement projection
-   * before any new-epoch trailing frame is allowed through.
-   */
-  readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
-  /** Immutable renderer identities required by this output group, without bytes. */
-  readonly rendererResources?: readonly string[];
 }
 
+/**
+ * What the runtime publishes to the page. The world is rendered in the
+ * runtime, so the page receives only its binding, the product UI projection,
+ * readouts and input results.
+ */
 export type ProductBrowserRuntimeOutput =
   | ProductBrowserRuntimeBindingOutput
   /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
-  | {
-      readonly kind: 'runtime-input-result';
-      readonly result: ProductBrowserRuntimeInputResult;
-      readonly rendererResources?: readonly string[];
-    }
-  | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame; readonly rendererResources?: readonly string[] }
-  | { readonly kind: 'view-composition'; readonly composition: RustyApplicationViewComposition; readonly rendererResources?: readonly string[] }
-  | {
-      readonly kind: 'animation-cue-definitions';
-      readonly definitions: readonly RustyApplicationAnimationCueDefinition[];
-      readonly rendererResources?: readonly string[];
-    }
-  | {
-      readonly kind: 'presentation';
-      readonly frame: RustyApplicationPresentationFrame;
-      readonly rendererResources?: readonly string[];
-    }
-  | {
-      readonly kind: 'ui-projection';
-      readonly envelope: RustyApplicationUiProjectionEnvelope;
-      readonly rendererResources?: readonly string[];
-    }
-  | { readonly kind: 'runtime-readout'; readonly readout: ProductBrowserRuntimeReadout; readonly rendererResources?: readonly string[] }
-  | { readonly kind: 'renderer-resources'; readonly rendererResources?: readonly string[] };
-
-/**
- * Buffers semantic runtime outputs while the renderer is mounting. Runtime
- * readouts are snapshots, so only the newest one is useful. Retained
- * presentation outputs preserve their original ordering.
- *
- * @internal
- */
-export function bufferProductBrowserPreMountOutput(
-  pendingOutputs: ProductBrowserRuntimeOutput[],
-  output: ProductBrowserRuntimeOutput,
-  maximumPendingOutputs: number,
-): boolean {
-  if (output.kind === 'runtime-readout'
-    || output.kind === 'view-composition'
-    || output.kind === 'animation-cue-definitions') {
-    const previousSnapshot = pendingOutputs.findIndex((pending) => pending.kind === output.kind);
-    if (previousSnapshot >= 0) {
-      pendingOutputs[previousSnapshot] = output;
-      return true;
-    }
-  }
-  if (output.kind === 'ui-projection') {
-    const previousProjection = pendingOutputs.findIndex((pending) =>
-      pending.kind === 'ui-projection'
-      && pending.envelope.stream === output.envelope.stream
-      && pending.envelope.contract === output.envelope.contract);
-    if (previousProjection >= 0) {
-      pendingOutputs[previousProjection] = output;
-      return true;
-    }
-  }
-  if (pendingOutputs.length >= maximumPendingOutputs) return false;
-  pendingOutputs.push(output);
-  return true;
-}
+  | { readonly kind: 'runtime-input-result'; readonly result: ProductBrowserRuntimeInputResult }
+  | { readonly kind: 'ui-projection'; readonly envelope: RustyApplicationUiProjectionEnvelope }
+  | { readonly kind: 'runtime-readout'; readonly readout: ProductBrowserRuntimeReadout };
 
 export type ProductBrowserRuntimeOutputListener = (
   output: ProductBrowserRuntimeOutput,
@@ -376,10 +162,10 @@ export type ProductBrowserRuntimeOutputBatchListener = (
 ) => void;
 
 /**
- * Browser-local projection framing for one ordered output delivery. The epoch
- * is deliberately local to the attached EventSource; it is not a second
- * runtime identity or an ABI field. A recovery marker has no outputs and
- * keeps the host gated until the following complete baseline arrives.
+ * Browser-local framing for one ordered output delivery. The epoch is local
+ * to the attached EventSource; it is not a second runtime identity. A
+ * recovery marker has no outputs: the page ignores later incremental outputs
+ * until the following complete baseline replaces what it lost.
  */
 export interface ProductBrowserRuntimeOutputBatchMetadata {
   readonly epoch: number;
@@ -398,7 +184,6 @@ export interface ProductBrowserRuntimeTerminalFailure {
 export interface ProductBrowserAttachmentBaseline {
   readonly runtime: RustyApplicationRuntimeIdentity;
   readonly nextInputSequence: string;
-  readonly publicationFrontiers: readonly RenderPublicationFrontier[];
 }
 
 export interface ProductBrowserAttachmentEvidence {
@@ -414,15 +199,10 @@ export interface ProductBrowserDiagnosticsReport {
   readonly runtimeProgress: string;
   readonly transportState: 'open' | 'closed';
   readonly outputState: 'open' | 'closed';
-  readonly lastRendererSequence?: string;
-  readonly rendererObservationAgeMs?: string;
   readonly firstTerminal?: { readonly code: string; readonly message: string };
   /** One bounded, typed operation observation that was deliberately dropped. */
   readonly recoverableEvent?: {
-    readonly code:
-      | 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
-      | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE'
-      | 'BROWSER_LOCAL_REQUEST_UNAVAILABLE';
+    readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' | 'BROWSER_LOCAL_REQUEST_UNAVAILABLE';
     readonly message: string;
   };
   readonly pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[];
@@ -438,10 +218,8 @@ export type ProductBrowserRuntimeTerminalFailureListener = (
 ) => void;
 
 /**
- * A source-linked local runtime adapter. The implementation may be a Rust
- * worker, an in-process native bridge, or a deterministic test adapter, but
- * the operation surface is fixed and named. It has no generic `call` or
- * arbitrary message method.
+ * The page's local runtime transport. Its operation surface is fixed and
+ * named; it has no generic `call` or arbitrary message method.
  */
 export interface ProductBrowserRuntimeAdapter {
   /**
@@ -459,21 +237,6 @@ export interface ProductBrowserRuntimeAdapter {
   readonly input: (
     batch: readonly RustyApplicationRuntimeInputEnvelope[],
   ) => Promise<ProductBrowserRuntimeInputResult>;
-  readonly reportAudioFeedback: (
-    feedback: ProductBrowserAudioFeedback,
-  ) => Promise<ProductBrowserAudioFeedbackResult>;
-  readonly reportVideoFeedback?: (
-    feedback: ProductBrowserVideoFeedback,
-  ) => Promise<ProductBrowserAudioFeedbackResult>;
-  readonly reportAnimationFeedback: (
-    feedback: ProductBrowserAnimationFeedback,
-  ) => Promise<ProductBrowserAnimationFeedbackResult>;
-  readonly reportGhostPlateFeedback: (
-    feedback: ProductBrowserGhostPlateFeedback,
-  ) => Promise<ProductBrowserGhostPlateFeedbackResult>;
-  readonly reportRendererDiagnostics?: (
-    feedback: ProductBrowserRendererDiagnosticsFeedback,
-  ) => Promise<ProductBrowserRendererDiagnosticsFeedbackResult>;
   readonly reportBrowserDiagnostics?: (
     report: ProductBrowserDiagnosticsReport,
   ) => Promise<ProductBrowserDiagnosticsResult>;
@@ -497,141 +260,26 @@ export interface ProductBrowserRuntimeAdapter {
   readonly subscribeOutputBatches?: (
     listener: ProductBrowserRuntimeOutputBatchListener,
   ) => () => void;
-  /** Resolves once an asynchronous output subscription can receive runtime publications. */
+  /** Resolves once the page has received every output through `through`. */
   readonly waitUntilOutputSequence?: (through: string) => Promise<void>;
+  /** Resolves once an asynchronous output subscription can receive runtime publications. */
   readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
-  /** Reattach through the local transport's existing single-flight fresh-baseline path. */
-  readonly recoverOutputProjection?: () => Promise<void>;
-  /** Confirms physical installation, after the renderer's baseline tail settles. */
+  /** Confirms that the page has applied the baseline of `epoch`. */
   readonly confirmOutputBaseline?: (epoch: number) => void;
   readonly dispose: () => Promise<void> | void;
 }
 
-/** The transport kept by the generated bridge and consumed by the host. */
-export interface ProductBrowserRuntimeTransport {
-  readonly connect?: NonNullable<ProductBrowserRuntimeAdapter['connect']>;
-  readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
-  readonly replaceControl?: NonNullable<ProductBrowserRuntimeAdapter['replaceControl']>;
-  readonly input: ProductBrowserRuntimeAdapter['input'];
-  readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
-  readonly reportVideoFeedback?: NonNullable<ProductBrowserRuntimeAdapter['reportVideoFeedback']>;
-  readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
-  readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
-  readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
-  readonly reportBrowserDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportBrowserDiagnostics']>;
-  readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
-  readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
-  readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
-  readonly completeTimeline?: NonNullable<ProductBrowserRuntimeAdapter['completeTimeline']>;
-  readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
-  readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
-  readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
-  readonly waitUntilOutputSequence?: ProductBrowserRuntimeAdapter['waitUntilOutputSequence'];
-  readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
-  readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
-  readonly confirmOutputBaseline?: NonNullable<ProductBrowserRuntimeAdapter['confirmOutputBaseline']>;
-  readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
-}
-
-export function createProductBrowserRuntimeTransport(
-  adapter: ProductBrowserRuntimeAdapter,
-): ProductBrowserRuntimeTransport {
-  if (adapter === null || typeof adapter !== 'object') {
-    throw new TypeError('Product Browser Host runtime adapter must be an object');
-  }
-  requireFunction(adapter.lifecycle, 'lifecycle');
-  if (adapter.connect !== undefined) {
-    requireFunction(adapter.connect, 'connect');
-  }
-  if (adapter.replaceControl !== undefined) {
-    requireFunction(adapter.replaceControl, 'replaceControl');
-  }
-  requireFunction(adapter.input, 'input');
-  requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
-  if (adapter.reportVideoFeedback !== undefined) requireFunction(adapter.reportVideoFeedback, 'reportVideoFeedback');
-  requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
-  requireFunction(adapter.reportGhostPlateFeedback, 'reportGhostPlateFeedback');
-  if (adapter.reportRendererDiagnostics !== undefined) {
-    requireFunction(adapter.reportRendererDiagnostics, 'reportRendererDiagnostics');
-  }
-  if (adapter.reportBrowserDiagnostics !== undefined) {
-    requireFunction(adapter.reportBrowserDiagnostics, 'reportBrowserDiagnostics');
-  }
-  requireFunction(adapter.advanceRealtime, 'advanceRealtime');
-  if (adapter.admitDemandStep !== undefined) {
-    requireFunction(adapter.admitDemandStep, 'admitDemandStep');
-  }
-  if (adapter.admitExternalStep !== undefined) {
-    requireFunction(adapter.admitExternalStep, 'admitExternalStep');
-  }
-  if (adapter.completeTimeline !== undefined) {
-    requireFunction(adapter.completeTimeline, 'completeTimeline');
-  }
-  if (adapter.subscribeTerminalFailures !== undefined) {
-    requireFunction(adapter.subscribeTerminalFailures, 'subscribeTerminalFailures');
-  }
-  requireFunction(adapter.subscribeOutputs, 'subscribeOutputs');
-  if (adapter.subscribeOutputBatches !== undefined) {
-    requireFunction(adapter.subscribeOutputBatches, 'subscribeOutputBatches');
-  }
-  if (adapter.waitUntilOutputSubscriptionReady !== undefined) {
-    requireFunction(adapter.waitUntilOutputSubscriptionReady, 'waitUntilOutputSubscriptionReady');
-  }
-  if (adapter.recoverOutputProjection !== undefined) {
-    requireFunction(adapter.recoverOutputProjection, 'recoverOutputProjection');
-  }
-  requireFunction(adapter.dispose, 'dispose');
-  return Object.freeze({
-    ...(adapter.connect === undefined ? {} : { connect: adapter.connect }),
-    lifecycle: adapter.lifecycle,
-    ...(adapter.replaceControl === undefined ? {} : { replaceControl: adapter.replaceControl }),
-    input: adapter.input,
-    reportAudioFeedback: adapter.reportAudioFeedback,
-    ...(adapter.reportVideoFeedback === undefined ? {} : { reportVideoFeedback: adapter.reportVideoFeedback }),
-    reportAnimationFeedback: adapter.reportAnimationFeedback,
-    reportGhostPlateFeedback: adapter.reportGhostPlateFeedback,
-    ...(adapter.reportRendererDiagnostics === undefined
-      ? {}
-      : { reportRendererDiagnostics: adapter.reportRendererDiagnostics }),
-    ...(adapter.reportBrowserDiagnostics === undefined
-      ? {}
-      : { reportBrowserDiagnostics: adapter.reportBrowserDiagnostics }),
-    advanceRealtime: adapter.advanceRealtime,
-    ...(adapter.admitDemandStep === undefined ? {} : { admitDemandStep: adapter.admitDemandStep }),
-    ...(adapter.admitExternalStep === undefined ? {} : { admitExternalStep: adapter.admitExternalStep }),
-    ...(adapter.completeTimeline === undefined ? {} : { completeTimeline: adapter.completeTimeline }),
-    ...(adapter.subscribeTerminalFailures === undefined
-      ? {}
-      : { subscribeTerminalFailures: adapter.subscribeTerminalFailures }),
-    subscribeOutputs: adapter.subscribeOutputs,
-    ...(adapter.subscribeOutputBatches === undefined
-      ? {}
-      : { subscribeOutputBatches: adapter.subscribeOutputBatches }),
-    ...(adapter.waitUntilOutputSequence === undefined ? {} : { waitUntilOutputSequence: adapter.waitUntilOutputSequence }),
-    ...(adapter.waitUntilOutputSubscriptionReady === undefined
-      ? {}
-      : { waitUntilOutputSubscriptionReady: adapter.waitUntilOutputSubscriptionReady }),
-    ...(adapter.recoverOutputProjection === undefined
-      ? {}
-      : { recoverOutputProjection: adapter.recoverOutputProjection }),
-    ...(adapter.confirmOutputBaseline === undefined
-      ? {}
-      : { confirmOutputBaseline: adapter.confirmOutputBaseline }),
-    dispose: adapter.dispose,
-  });
-}
-
 export interface ProductBrowserHostOptions {
   readonly root: HTMLElement;
-  readonly transport: ProductBrowserRuntimeTransport;
+  readonly transport: ProductBrowserRuntimeAdapter;
   readonly lifecycleMode: ProductBrowserRuntimeMode;
   /**
-   * Owner of realtime simulation admission. Defaults to `browser`; use
-   * `rust-host` only when a packaged in-process Rust host advances the runtime
-   * and publishes outputs through `transport.subscribeOutputs`. Only realtime
-   * products read it; demand and external products ignore it.
+   * Owner of realtime simulation admission. Defaults to `browser`. Only
+   * realtime products read it; demand and external products ignore it.
    */
   readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
+  /** Where the runtime draws the world: streamed to this page (the default) or to the desktop window. */
+  readonly output?: RustyApplicationRenderOutput;
   readonly mountUi: RustyApplicationUiMount;
   readonly runtimeInput?: Omit<RustyApplicationRuntimeInputOptions, 'binding' | 'onAvailable'> & {
     readonly binding?: RustyApplicationRuntimeIdentity;
@@ -639,7 +287,6 @@ export interface ProductBrowserHostOptions {
   readonly uiProjection?: Omit<ProductBrowserUiProjectionOptions, 'binding'> & {
     readonly binding?: RustyApplicationRuntimeIdentity;
   };
-  readonly renderer?: Omit<RustyApplicationRendererOptions, 'onCadence'>;
   readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
   readonly initialInteractionMode?: 'gameplay' | 'interface' | 'modal';
   /** Engine-selected gameplay cursor behavior; defaults to pointer lock for FPS products. */
@@ -649,136 +296,6 @@ export interface ProductBrowserHostOptions {
   readonly failureLabel?: string;
   /** Start the Rust runtime after the Engine host has mounted. Defaults true. */
   readonly autoStart?: boolean;
-  readonly dynamicRendererResourceFetcher?: ProductBrowserDynamicRendererResourceFetcher;
-}
-
-const PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS = 10_000;
-const PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS = 750;
-/**
- * A complete baseline can fail while its replacement canvas is being mounted
- * (for example while the browser is recovering a lost GPU context). Keep the
- * recovery bounded and increasingly patient so a persistent realization
- * failure cannot turn into a tight reconnect loop.
- */
-const PRODUCT_BROWSER_PROJECTION_RECOVERY_RETRY_DELAYS_MS = [50, 250, 1_000] as const;
-
-/** @internal Reports whether admitted animation bytes still need their first semantic frame. */
-export function productBrowserInitialRendererFrameRequired(
-  renderer: ProductBrowserHostOptions['renderer'],
-): boolean {
-  const content = renderer?.initialContent;
-  if (content === undefined || !Array.isArray(content.resources)) return false;
-  const hasAnimationPreload = content.resources.some((resource) =>
-    /^(animated-mesh|clip-pack)-resource\//u.test(resource.identity));
-  if (!hasAnimationPreload || !Array.isArray(content.frame['ops'])) return false;
-  return !content.frame['ops'].some((operation) => typeof operation === 'object'
-    && operation !== null
-    && (operation as { readonly op?: unknown }).op === 'defineAnimatedMesh');
-}
-
-/** @internal Binds admitted preload bytes to one retained frame without mutating caller state. */
-export function bindProductBrowserInitialRendererFrame(
-  renderer: NonNullable<ProductBrowserHostOptions['renderer']>,
-  frame: RustyApplicationFrame,
-  publicationFrontiers?: readonly RenderPublicationFrontier[],
-): NonNullable<ProductBrowserHostOptions['renderer']> {
-  if (renderer.initialContent === undefined) {
-    throw new ProductBrowserHostError(
-      'invalid_options',
-      'initial renderer frame binding requires admitted initial content',
-    );
-  }
-  return Object.freeze({
-    ...renderer,
-    initialContent: Object.freeze({
-      ...renderer.initialContent,
-      frame,
-      ...(publicationFrontiers === undefined ? {} : { publicationFrontiers }),
-    }),
-  });
-}
-
-/** @internal Folds one completed transport baseline into the mount frame. */
-export function prepareProductBrowserInitialRendererBaseline(
-  outputs: readonly ProductBrowserRuntimeOutput[],
-  requiredFrame: RustyApplicationFrame,
-  options: {
-    /** `true` only for a transport batch marked as one complete baseline. */
-    readonly complete: boolean;
-    readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
-  } = { complete: false },
-): {
-  readonly frame: RustyApplicationFrame;
-  readonly remainingOutputs: readonly ProductBrowserRuntimeOutput[];
-  readonly publicationFrontiers: readonly RenderPublicationFrontier[];
-} {
-  const firstPublishedFrameIndex = outputs.findIndex((output) => output.kind === 'frame'
-    && output.frame['publication'] !== undefined);
-  const seedLimit = options.complete
-    ? outputs.length
-    : firstPublishedFrameIndex < 0 ? outputs.length : firstPublishedFrameIndex;
-  const seedIndexes = new Set<number>();
-  const seedFrames: RustyApplicationFrame[] = [];
-  for (let index = 0; index < seedLimit; index += 1) {
-    const output = outputs[index];
-    if (output?.kind !== 'frame') continue;
-    seedIndexes.add(index);
-    seedFrames.push(output.frame);
-  }
-  if (!seedFrames.some((frame) => frame === requiredFrame)) {
-    throw new ProductBrowserHostError(
-      'startup_failed',
-      'initial retained renderer frame was not preserved by the completed transport baseline',
-    );
-  }
-  const seedOps = seedFrames.flatMap((frame) => [...(frame['ops'] as readonly unknown[])]);
-  const seededDefinitions = new Set(seedOps.flatMap((operation) => {
-    const signature = retainedDefinitionSignature(operation);
-    return signature === null ? [] : [signature];
-  }));
-  const frame = Object.freeze({
-    schemaVersion: 1,
-    ops: Object.freeze(seedOps),
-  }) as RustyApplicationFrame;
-  const remainingOutputs = outputs.flatMap((output, index): ProductBrowserRuntimeOutput[] => {
-    if (seedIndexes.has(index)) return [];
-    if (output.kind !== 'frame') return [output];
-    const originalOps = output.frame['ops'] as readonly unknown[];
-    const ops = originalOps.filter((operation) => {
-      const signature = retainedDefinitionSignature(operation);
-      return signature === null || !seededDefinitions.has(signature);
-    });
-    if (ops.length === originalOps.length) return [output];
-    const publication = output.frame['publication'];
-    return [{
-      ...output,
-      frame: Object.freeze({
-        ...output.frame,
-        ops: Object.freeze(ops),
-        ...(typeof publication === 'object' && publication !== null
-          ? {
-              publication: Object.freeze({
-                ...publication,
-                operationCount: ops.length,
-              }),
-            }
-          : {}),
-      }),
-    }];
-  });
-  return Object.freeze({
-    frame,
-    remainingOutputs: Object.freeze(remainingOutputs),
-    publicationFrontiers: Object.freeze([...(options.publicationFrontiers ?? [])]),
-  });
-}
-
-function retainedDefinitionSignature(operation: unknown): string | null {
-  if (typeof operation !== 'object' || operation === null) return null;
-  const kind = (operation as { readonly op?: unknown }).op;
-  return typeof kind === 'string' && kind.startsWith('define')
-    ? JSON.stringify(operation)
-    : null;
 }
 
 export interface ProductBrowserUiProjectionOptions {
@@ -800,7 +317,7 @@ export interface ProductBrowserHostReadout {
 export interface ProductBrowserHost {
   readonly kind: 'rusty.product.browser-host';
   readonly application: RustyApplicationHost;
-  readonly transport: ProductBrowserRuntimeTransport;
+  readonly transport: ProductBrowserRuntimeAdapter;
   readonly readout: () => ProductBrowserHostReadout;
   readonly completeTimeline: (
     completion: ProductBrowserTimelineCompletion,
@@ -845,73 +362,8 @@ interface ProductBrowserOperationQueue {
   readonly settle: () => Promise<void>;
 }
 
-interface ProductBrowserAudioFeedbackReporter {
-  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
-  readonly flush: () => Promise<void>;
-}
-
-export interface ProductBrowserVideoFeedbackReporter { readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void; readonly flush: () => Promise<void>; }
-
-export function createProductBrowserVideoFeedbackReporter(options: {
-  readonly renderer: Pick<RustyApplicationHost['renderer'], 'videoRealizedFacts' | 'acknowledgeVideoRealizedFacts' | 'resetVideoRealizationOwner'>;
-  readonly report: NonNullable<ProductBrowserRuntimeTransport['reportVideoFeedback']>;
-}): ProductBrowserVideoFeedbackReporter {
-  let binding: RustyApplicationRuntimeIdentity | null = null;
-  let replaceOwner = false;
-  let lastReportedEvictionCount = 0;
-  const bindRuntime = (next: RustyApplicationRuntimeIdentity): void => {
-    if (binding === null || !sameRuntimeIncarnation(binding, next)) { options.renderer.resetVideoRealizationOwner(); replaceOwner = true; }
-    binding = next;
-  };
-  const flush = async (): Promise<void> => {
-    if (binding === null) return;
-    const readout = options.renderer.videoRealizedFacts();
-    const realizedFacts = readout?.facts ?? [];
-    const facts = realizedFacts.map((fact) => Object.freeze({ ...fact, factId: canonicalSafeU64(fact.factId, 'video feedback factId'), handle: canonicalSafeU64(fact.handle, 'video feedback handle') }));
-    const evictedFactCount = readout?.evictedFactCount ?? 0;
-    if (!replaceOwner && facts.length === 0 && evictedFactCount === lastReportedEvictionCount) return;
-    const result = await options.report(Object.freeze({
-      runtime: binding,
-      replaceOwner,
-      evictedFactCount: canonicalSafeU64(evictedFactCount, 'video feedback evictedFactCount'),
-      facts,
-    }));
-    if (!result.accepted || !sameRuntimeBinding(result.runtime, binding)) throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'video feedback was rejected by the runtime');
-    const through = facts.at(-1)?.factId;
-    if (through !== undefined) options.renderer.acknowledgeVideoRealizedFacts(Number(through));
-    lastReportedEvictionCount = evictedFactCount;
-    replaceOwner = false;
-  };
-  return Object.freeze({ bindRuntime, flush });
-}
-
-interface ProductBrowserAnimationFeedbackReporter {
-  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
-  readonly flush: () => Promise<void>;
-}
-
-interface ProductBrowserGhostPlateFeedbackReporter {
-  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
-  readonly flush: () => Promise<void>;
-}
-
-interface ProductBrowserRendererDiagnosticsReporter {
-  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
-  readonly flush: () => Promise<void>;
-}
-
-interface ProductBrowserRendererDiagnosticsCadenceSampler {
-  readonly sample: (timeMs: number) => void;
-  readonly settle: () => Promise<void>;
-  readonly dispose: () => void;
-}
-
-function isRecoverableReportRejection(result: {
-  readonly accepted: boolean;
-  readonly disposition: ProductBrowserHostFaultDisposition;
-}): boolean {
-  return !result.accepted && result.disposition === 'rejected-recoverable';
-}
+const MAXIMUM_PENDING_OUTPUTS = 64;
+const MAXIMUM_HEALTH_DIAGNOSTIC_BYTES = 512;
 
 /** This is the sole browser cadence observation that can be safely dropped. */
 export function isDroppedClockRegression(result: ProductBrowserRuntimeOperationResult): boolean {
@@ -921,305 +373,33 @@ export function isDroppedClockRegression(result: ProductBrowserRuntimeOperationR
     && result.operation === 'advance-realtime';
 }
 
-/** @internal Closed policy for atomic frame, view, and cue outputs. */
-export function productBrowserAtomicReceiptMayContinue(
-  outcome: 'applied' | 'rejected_atomic' | 'terminal',
+/**
+ * Buffers runtime outputs that arrive before the application has mounted.
+ * Readouts are snapshots and UI projections replace their stream's previous
+ * value, so only the newest of each is kept.
+ *
+ * @internal
+ */
+export function bufferProductBrowserPreMountOutput(
+  pendingOutputs: ProductBrowserRuntimeOutput[],
+  output: ProductBrowserRuntimeOutput,
+  maximumPendingOutputs: number,
 ): boolean {
-  return outcome !== 'terminal';
+  const previous = pendingOutputs.findIndex((pending) =>
+    (output.kind === 'runtime-readout' && pending.kind === 'runtime-readout')
+    || (output.kind === 'ui-projection'
+      && pending.kind === 'ui-projection'
+      && pending.envelope.stream === output.envelope.stream
+      && pending.envelope.contract === output.envelope.contract));
+  if (previous >= 0) {
+    pendingOutputs[previous] = output;
+    return true;
+  }
+  if (pendingOutputs.length >= maximumPendingOutputs) return false;
+  pendingOutputs.push(output);
+  return true;
 }
 
-/** @internal Presentation can be partial because later domains already ran. */
-export function productBrowserPresentationReceiptMayContinue(
-  outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal',
-): boolean {
-  return outcome !== 'terminal';
-}
-
-/** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
-export function createProductBrowserAudioFeedbackReporter(options: {
-  readonly renderer: Pick<RustyApplicationHost['renderer'],
-    'audioRealizedFacts' | 'acknowledgeAudioRealizedFacts' | 'resetAudioRealizationOwner'>;
-  readonly report: ProductBrowserRuntimeTransport['reportAudioFeedback'];
-  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
-}): ProductBrowserAudioFeedbackReporter {
-  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
-  // A fresh browser owner must replace any feedback retained by a prior page,
-  // even when it rejoins with an identical runtime identity.
-  let replaceOwnerPending = currentBinding !== null;
-  let lastReportedEvictionCount = 0;
-
-  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeIncarnation(currentBinding, runtime)) {
-      options.renderer.resetAudioRealizationOwner();
-      replaceOwnerPending = true;
-    }
-    currentBinding = runtime;
-  };
-
-  const flush = async (): Promise<void> => {
-    const binding = currentBinding;
-    if (binding === null) return;
-    const factsReadout = options.renderer.audioRealizedFacts();
-    const realizedFacts = factsReadout?.facts ?? [];
-    const facts = realizedFacts.map(snapshotAudioFeedbackFact);
-    const evictedFactCount = factsReadout?.evictedFactCount ?? 0;
-    if (!replaceOwnerPending
-      && facts.length === 0
-      && evictedFactCount === lastReportedEvictionCount) {
-      return;
-    }
-    const submittedThroughFactId = realizedFacts.length === 0
-      ? undefined
-      : realizedFacts[realizedFacts.length - 1]!.factId;
-    const result = await options.report(Object.freeze({
-      runtime: binding,
-      replaceOwner: replaceOwnerPending,
-      evictedFactCount: canonicalSafeU64(evictedFactCount, 'audio feedback evictedFactCount'),
-      facts: Object.freeze(facts),
-    }));
-    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
-      throw new ProductBrowserHostError(
-        'transport_failed',
-        'audio feedback result did not match the current Product runtime binding',
-      );
-    }
-    if (isRecoverableReportRejection(result)) return;
-    if (!result.accepted) {
-      throw new ProductBrowserHostError(
-        'transport_failed',
-        result.diagnostic ?? 'audio feedback was rejected by the runtime',
-      );
-    }
-    if (result.diagnostic !== undefined) {
-      throw new ProductBrowserHostError('transport_failed', 'accepted audio feedback cannot include a diagnostic');
-    }
-    const expectedThroughFactId = submittedThroughFactId === undefined
-      ? undefined
-      : canonicalSafeU64(submittedThroughFactId, 'audio feedback factId');
-    if (result.acceptedThroughFactId !== expectedThroughFactId) {
-      throw new ProductBrowserHostError(
-        'transport_failed',
-        'audio feedback acknowledgement boundary did not match the submitted facts',
-      );
-    }
-    if (submittedThroughFactId !== undefined) {
-      options.renderer.acknowledgeAudioRealizedFacts(submittedThroughFactId);
-    }
-    replaceOwnerPending = false;
-    lastReportedEvictionCount = evictedFactCount;
-  };
-
-  return Object.freeze({ bindRuntime, flush });
-}
-
-/** @internal Fixed animation observation coordinator, intentionally parallel to audio. */
-export function createProductBrowserAnimationFeedbackReporter(options: {
-  readonly renderer: Pick<RustyApplicationHost['renderer'],
-    'animationRealizedFacts' | 'acknowledgeAnimationRealizedFacts' | 'resetAnimationRealizationOwner'>;
-  readonly report: ProductBrowserRuntimeTransport['reportAnimationFeedback'];
-  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
-}): ProductBrowserAnimationFeedbackReporter {
-  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
-  let replaceOwnerPending = currentBinding !== null;
-  let lastReportedEvictionCount = 0;
-  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeIncarnation(currentBinding, runtime)) {
-      options.renderer.resetAnimationRealizationOwner();
-      replaceOwnerPending = true;
-    }
-    currentBinding = runtime;
-  };
-  const flush = async (): Promise<void> => {
-    const binding = currentBinding;
-    if (binding === null) return;
-    const readout = options.renderer.animationRealizedFacts();
-    const realizedFacts = readout?.facts ?? [];
-    const facts = realizedFacts.map(snapshotAnimationFeedbackFact);
-    const evictedFactCount = readout?.evictedFactCount ?? 0;
-    if (!replaceOwnerPending && facts.length === 0 && evictedFactCount === lastReportedEvictionCount) return;
-    const submittedThrough = realizedFacts.at(-1)?.factId;
-    const result = await options.report(Object.freeze({
-      runtime: binding,
-      replaceOwner: replaceOwnerPending,
-      evictedFactCount: canonicalSafeU64(evictedFactCount, 'animation feedback evictedFactCount'),
-      facts: Object.freeze(facts),
-    }));
-    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
-      throw new ProductBrowserHostError('transport_failed', 'animation feedback result did not match the current Product runtime binding');
-    }
-    if (isRecoverableReportRejection(result)) return;
-    if (!result.accepted) throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'animation feedback was rejected by the runtime');
-    if (result.diagnostic !== undefined) throw new ProductBrowserHostError('transport_failed', 'accepted animation feedback cannot include a diagnostic');
-    const expectedThrough = submittedThrough === undefined ? undefined : canonicalSafeU64(submittedThrough, 'animation feedback factId');
-    if (result.acceptedThroughFactId !== expectedThrough) {
-      throw new ProductBrowserHostError('transport_failed', 'animation feedback acknowledgement boundary did not match submitted facts');
-    }
-    if (submittedThrough !== undefined) options.renderer.acknowledgeAnimationRealizedFacts(submittedThrough);
-    replaceOwnerPending = false;
-    lastReportedEvictionCount = evictedFactCount;
-  };
-  return Object.freeze({ bindRuntime, flush });
-}
-
-/** @internal Latest-state ghost realization reporter; it has no renderer command path. */
-export function createProductBrowserGhostPlateFeedbackReporter(options: {
-  readonly renderer: Pick<RustyApplicationHost['renderer'], 'ghostPlateReadout'>;
-  readonly report: ProductBrowserRuntimeTransport['reportGhostPlateFeedback'];
-  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
-}): ProductBrowserGhostPlateFeedbackReporter {
-  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
-  let replaceOwnerPending = currentBinding !== null;
-  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeIncarnation(currentBinding, runtime)) replaceOwnerPending = true;
-    currentBinding = runtime;
-  };
-  const flush = async (): Promise<void> => {
-    const binding = currentBinding;
-    if (binding === null) return;
-    const readout = options.renderer.ghostPlateReadout();
-    // A surface that does not realize ghost plates (the runtime renders them
-    // and reports their facts) has nothing to report; an empty snapshot would
-    // clear the runtime's.
-    if (readout === null) return;
-    const plates = readout.plates;
-    const facts: ProductBrowserGhostPlateFeedbackFact[] = plates.map((plate) => Object.freeze({
-      presentation: canonicalSafeU64(Number(plate.handle), 'ghost plate presentation'),
-      sourceMatches: plate.sourceMatch,
-      currentSector: plate.currentSector,
-      localAngularOffsetDegrees: plate.localAzimuthDegrees,
-      fallbackActive: plate.fallbackActive,
-      fallbackReason: plate.fallbackReason === 'prepared-source-unsupported'
-        ? 'preparedSourceUnsupported'
-        : plate.fallbackReason === null ? 'none' : 'realizationFailed',
-      limitationMask: plate.limitationMask,
-      preparationCpuMilliseconds: plate.preparationCpuMilliseconds,
-      captureCpuSubmissionMilliseconds: plate.captureCpuSubmissionMilliseconds,
-      retainedSectorCount: plate.retainedResourceCounts.sectors,
-      retainedMeshCount: plate.retainedResourceCounts.meshes,
-      retainedMaterialCount: plate.retainedResourceCounts.materials,
-      retainedBorrowedTextureCount: plate.retainedResourceCounts.borrowedTextures,
-    }));
-    const result = await options.report(Object.freeze({
-      runtime: binding,
-      replaceOwner: replaceOwnerPending,
-      facts: Object.freeze(facts),
-    }));
-    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
-      throw new ProductBrowserHostError('transport_failed', 'ghost plate feedback result did not match the current Product runtime binding');
-    }
-    if (isRecoverableReportRejection(result)) return;
-    if (!result.accepted || result.diagnostic !== undefined) {
-      throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'ghost plate feedback was rejected by the runtime');
-    }
-    replaceOwnerPending = false;
-  };
-  return Object.freeze({ bindRuntime, flush });
-}
-
-/** @internal Publishes one latest immutable renderer snapshot without scheduling renderer work. */
-export function createProductBrowserRendererDiagnosticsReporter(options: {
-  readonly renderer: Pick<RustyApplicationHost['renderer'], 'diagnosticsReadout'>;
-  readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
-  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
-  readonly onObservation?: (renderSequence: number) => void;
-  readonly productFrames?: () => ProductBrowserProductFrameObservationSample;
-}): ProductBrowserRendererDiagnosticsReporter {
-  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
-  let lastRenderSequence: number | null = null;
-  let lastPresentationState: string | null = null;
-  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
-    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
-      lastRenderSequence = null;
-      lastPresentationState = null;
-    }
-    currentBinding = runtime;
-  };
-  const flush = async (): Promise<void> => {
-    const binding = currentBinding;
-    if (binding === null) return;
-    const rendererSnapshot = options.renderer.diagnosticsReadout();
-    const presentation = rendererSnapshot.presentation;
-    const presentationState = presentation === undefined ? null
-      : `${presentation.surfaceId}:${presentation.state}:${presentation.pendingRealizations}:${presentation.realizedViewRevision}`;
-    if (rendererSnapshot.submission.renderSequence === lastRenderSequence
-      && presentationState === lastPresentationState) return;
-    const snapshot = options.productFrames === undefined
-      ? rendererSnapshot
-      : Object.freeze({ ...rendererSnapshot, productFrames: options.productFrames() });
-    const result = await options.report(Object.freeze({ runtime: binding, snapshot }));
-    if (!sameRuntimeBinding(result.runtime, binding)) {
-      throw new ProductBrowserHostError('transport_failed', 'renderer diagnostics result did not match the current Product runtime binding');
-    }
-    // A replacement binding may arrive while an auxiliary observation is in
-    // flight. Its stale result cannot update renderer diagnostics because Rust
-    // fences the request at the binding, so discard it rather than reporting a
-    // recoverable renderer failure for an expected cancellation.
-    if (!sameRuntimeBinding(currentBinding, binding)) return;
-    if (isRecoverableReportRejection(result)) return;
-    if (!result.accepted || result.diagnostic !== undefined) {
-      throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'renderer diagnostics were rejected by the runtime');
-    }
-    lastRenderSequence = snapshot.submission.renderSequence;
-    lastPresentationState = presentationState;
-    options.onObservation?.(snapshot.submission.renderSequence);
-  };
-  return Object.freeze({ bindRuntime, flush });
-}
-
-const PRODUCT_BROWSER_FRAME_OBSERVATION_HISTORY_LIMIT = 256;
-
-/** @internal Passive receipt/apply timing attached to existing renderer snapshots. */
-export function createProductBrowserProductFrameObservation(
-  now: () => number = () => globalThis.performance?.now() ?? Date.now(),
-): {
-  readonly received: () => number;
-  readonly applied: (receivedAtMs: number) => void;
-  readonly sample: () => ProductBrowserProductFrameObservationSample;
-} {
-  let receivedCount = 0;
-  let appliedCount = 0;
-  let firstReceivedAtMs: number | null = null;
-  let lastReceivedAtMs: number | null = null;
-  let lastAppliedAtMs: number | null = null;
-  const receivedIntervals: number[] = [];
-  const appliedIntervals: number[] = [];
-  const applyLatency: number[] = [];
-  const retain = (values: number[], value: number): void => {
-    if (!Number.isFinite(value) || value < 0) return;
-    values.push(value);
-    if (values.length > PRODUCT_BROWSER_FRAME_OBSERVATION_HISTORY_LIMIT) values.shift();
-  };
-  const received = (): number => {
-    const observedAtMs = now();
-    receivedCount += 1;
-    if (firstReceivedAtMs === null) firstReceivedAtMs = observedAtMs;
-    if (lastReceivedAtMs !== null) retain(receivedIntervals, observedAtMs - lastReceivedAtMs);
-    lastReceivedAtMs = observedAtMs;
-    return observedAtMs;
-  };
-  const applied = (receivedAtMs: number): void => {
-    const observedAtMs = now();
-    appliedCount += 1;
-    if (lastAppliedAtMs !== null) retain(appliedIntervals, observedAtMs - lastAppliedAtMs);
-    retain(applyLatency, observedAtMs - receivedAtMs);
-    lastAppliedAtMs = observedAtMs;
-  };
-  const sample = (): ProductBrowserProductFrameObservationSample => Object.freeze({
-    schemaVersion: 1,
-    observedAtMs: now(),
-    receivedCount,
-    appliedCount,
-    firstReceivedAtMs,
-    lastReceivedAtMs,
-    lastAppliedAtMs,
-    recentReceivedIntervalsMs: Object.freeze([...receivedIntervals]),
-    recentAppliedIntervalsMs: Object.freeze([...appliedIntervals]),
-    recentApplyLatencyMs: Object.freeze([...applyLatency]),
-  });
-  return Object.freeze({ received, applied, sample });
-}
-
-/** @internal Applies stable browser health attributes without redundant writes. */
 export function syncProductBrowserHealthDatasets(
   roots: readonly Pick<HTMLElement, 'dataset'>[],
   values: {
@@ -1249,96 +429,6 @@ export function syncProductBrowserHealthDatasets(
   }
 }
 
-/** @internal Coalesces diagnostics work from the existing renderer cadence without owning a loop. */
-export function createProductBrowserRendererDiagnosticsCadenceSampler(options: {
-  readonly enqueueOperation: ProductBrowserOperationQueue['enqueue'];
-  readonly flush: () => Promise<void>;
-  readonly onFailure: (cause: unknown) => void;
-}): ProductBrowserRendererDiagnosticsCadenceSampler {
-  let lastSampledAtMs: number | null = null;
-  let maximumObservedTimeMs = 0;
-  let pendingCadenceTimeMs: number | null = null;
-  let inFlight: Promise<void> | null = null;
-  let disposed = false;
-
-  const start = (timeMs: number): void => {
-    lastSampledAtMs = timeMs;
-    inFlight = options.enqueueOperation(async () => {
-      if (disposed) return;
-      await options.flush();
-    }).then(
-      () => finish(),
-      (cause: unknown) => {
-        options.onFailure(cause);
-        finish();
-      },
-    );
-  };
-
-  const finish = (): void => {
-    inFlight = null;
-    const pendingTimeMs = pendingCadenceTimeMs;
-    pendingCadenceTimeMs = null;
-    if (disposed || pendingTimeMs === null || lastSampledAtMs === null) return;
-    if (pendingTimeMs - lastSampledAtMs >= PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS) {
-      start(pendingTimeMs);
-    }
-  };
-
-  const sample = (timeMs: number): void => {
-    if (disposed) return;
-    const orderedTimeMs = Number.isFinite(timeMs) && timeMs >= 0 ? timeMs : 0;
-    const monotonicTimeMs = Math.max(maximumObservedTimeMs, orderedTimeMs);
-    maximumObservedTimeMs = monotonicTimeMs;
-    if (lastSampledAtMs !== null
-      && monotonicTimeMs - lastSampledAtMs < PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS) {
-      return;
-    }
-    if (inFlight !== null) {
-      pendingCadenceTimeMs = monotonicTimeMs;
-      return;
-    }
-    start(monotonicTimeMs);
-  };
-
-  return Object.freeze({
-    sample,
-    settle: async (): Promise<void> => {
-      while (inFlight !== null) await inFlight;
-    },
-    dispose: (): void => {
-      disposed = true;
-      pendingCadenceTimeMs = null;
-    },
-  });
-}
-
-/** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
-export async function flushProductBrowserAudioFeedbackBeforeUpdate<T>(
-  flush: () => Promise<void>,
-  update: () => Promise<T>,
-): Promise<T> {
-  await flush();
-  return update();
-}
-
-/** @internal Flushes both fixed renderer feedback families before C# update work. */
-export async function flushProductBrowserRendererFeedbackBeforeUpdate<T>(
-  flush: () => Promise<void>, update: () => Promise<T>,
-): Promise<T> {
-  await flush();
-  return update();
-}
-
-/**
- * Mounts the one Engine-owned application composition root. The browser host
- * has no renderer implementation, product state, evaluator, or own cadence;
- * it drains the public input port from the application-host's existing
- * renderer cadence callback. Browser-owned realtime products also advance
- * from that callback; `realtimeAdvanceOwner: 'rust-host'` leaves advancement
- * to the packaged Rust host while subscribed outputs continue to drive the
- * retained presentation.
- */
 export async function mountProductBrowserHost(
   options: ProductBrowserHostOptions,
 ): Promise<ProductBrowserHost> {
@@ -1352,11 +442,6 @@ export async function mountProductBrowserHostWithApplication(
 ): Promise<ProductBrowserHost> {
   validateOptions(options);
   const realtimeAdvanceOwner = options.realtimeAdvanceOwner ?? 'browser';
-  // The streaming browser mode and the desktop window: the runtime renders
-  // the world, so its renderer owns held time, drawing and the observer
-  // camera.
-  const runtimeRenderer = options.renderer?.mountSurface === mountStreamedFrameSurface
-    || options.renderer?.mountSurface === mountWindowSurface;
   const transport = options.transport;
   const queue = createOperationQueue();
   let state: ProductBrowserHostReadout['state'] = 'starting';
@@ -1372,112 +457,24 @@ export async function mountProductBrowserHostWithApplication(
   let recoveryFailure: ProductBrowserHostError | null = null;
   let recoveryDiagnosticReported = false;
   let currentInputBinding: RustyApplicationRuntimeIdentity | null = options.runtimeInput?.binding ?? null;
-  const dynamicRendererResources = new ProductBrowserDynamicRendererResources(
-    options.dynamicRendererResourceFetcher,
-  );
   let inputRecovery: {
     readonly uncertainBinding: RustyApplicationRuntimeIdentity;
     inFlight: boolean;
   } | null = null;
-  // A retained-output replacement is distinct from input certainty: the
-  // runtime keeps running, but browser projection must not admit a second
-  // incremental frame until its fresh baseline has replaced the old one.
-  let projectionRecovery: { readonly fromEpoch: number } | null = null;
-  let projectionRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  let projectionRecoveryRetryAttempt = 0;
-  let pendingProjectionBaseline: {
-    readonly epoch: number;
-    readonly outputs: readonly ProductBrowserRuntimeOutput[];
-  } | null = null;
-  let selectedProjectionBaselineEpoch: number | null = null;
-  let pendingProjectionIncrementals: {
-    readonly epoch: number;
-    readonly outputs: readonly ProductBrowserRuntimeOutput[];
-  } | null = null;
-  let acceptedProjectionEpoch = 0;
+  // After an output gap the transport attaches afresh; the page ignores
+  // incremental outputs until that attachment's complete baseline arrives.
+  let awaitingBaseline = false;
+  let acceptedEpoch = 0;
   let browserDiagnosticsReportInFlight = false;
   let pendingHealthTransition = false;
   let transportClosed = false;
   let runtimeProgress = 0;
-  let lastRendererSequence: string | null = null;
-  let lastRendererObservationAtMs: number | null = null;
   let lastDiagnosticsStatusKey: string | null = null;
   let baselineConfirmationRevision = 0;
   let terminalDiagnosticsReported = false;
   let recoverableClockDiagnosticPending = false;
   let recoverableClockDiagnosticReported = false;
-  let rendererDiagnosticsFailure: string | null = null;
-  let rendererDiagnosticsFailureReported = false;
-  let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
-  let videoFeedbackReporter: ProductBrowserVideoFeedbackReporter | null = null;
-  let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
-  let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
-  let rendererDiagnosticsReporter: ProductBrowserRendererDiagnosticsReporter | null = null;
-  let rendererObservationCadenceSampler: ProductBrowserRendererDiagnosticsCadenceSampler | null = null;
-  const productFrameObservation = createProductBrowserProductFrameObservation();
-  // Renderer calls can be asynchronous (notably presentation realization),
-  // while the retained runtime output port is synchronous. Keep their typed
-  // realization order private to this host so a later frame cannot overtake a
-  // teardown presentation from the same product callback.
-  let rendererOutputTail: Promise<void> = Promise.resolve();
-  let rendererProjectionEpoch = 0;
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
-  // Scoped to the renderer and binding that accepted a frozen job. Replayed
-  // pending snapshots do not run the same job repeatedly during normal updates.
-
-  // A transport-marked connection baseline is a complete retained graph. Keep
-  // its envelope while animated resources wait for their initial definitions;
-  // an arbitrary binding is never treated as a replacement on its own.
-  let pendingInitialRendererBaseline: {
-    readonly epoch: number;
-    readonly outputs: readonly ProductBrowserRuntimeOutput[];
-    readonly publicationFrontiers: readonly RenderPublicationFrontier[];
-  } | null = null;
-  const maximumPendingOutputs = 64;
-  const requiresInitialRendererFrame = productBrowserInitialRendererFrameRequired(options.renderer);
-  let initialRendererFrameGate: Promise<
-    | { readonly accepted: true; readonly frame: RustyApplicationFrame }
-    | { readonly accepted: false; readonly error: ProductBrowserHostError }
-  > | null = null;
-  let settleInitialRendererFrame: ((result:
-    | { readonly accepted: true; readonly frame: RustyApplicationFrame }
-    | { readonly accepted: false; readonly error: ProductBrowserHostError }
-  ) => void) | null = null;
-  let initialRendererFrameTimeout: ReturnType<typeof setTimeout> | null = null;
-  let rendererContextLost = false;
-
-  if (requiresInitialRendererFrame) {
-    if (options.autoStart === false) {
-      throw new ProductBrowserHostError(
-        'invalid_options',
-        'animation preloads without initial definitions require automatic runtime start',
-      );
-    }
-    initialRendererFrameGate = new Promise((resolve) => {
-      settleInitialRendererFrame = resolve;
-    });
-    initialRendererFrameTimeout = setTimeout(() => {
-      const settle = settleInitialRendererFrame;
-      settleInitialRendererFrame = null;
-      initialRendererFrameTimeout = null;
-      settle?.({
-        accepted: false,
-        error: new ProductBrowserHostError(
-          'startup_failed',
-          'runtime did not publish an initial retained frame for admitted animation resources',
-        ),
-      });
-    }, PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS);
-  }
-
-  const settleInitialRendererFrameFailure = (error: ProductBrowserHostError): void => {
-    if (settleInitialRendererFrame === null) return;
-    if (initialRendererFrameTimeout !== null) clearTimeout(initialRendererFrameTimeout);
-    initialRendererFrameTimeout = null;
-    const settle = settleInitialRendererFrame;
-    settleInitialRendererFrame = null;
-    settle({ accepted: false, error });
-  };
 
   // These are deliberately small, product-neutral observation markers. They
   // let an outer host prove that a mounted runtime is still making accepted
@@ -1503,22 +500,18 @@ export async function mountProductBrowserHostWithApplication(
       });
     const includeTerminal = terminal !== undefined && !terminalDiagnosticsReported;
     const hostState = state === 'starting' ? 'loading' : state;
-    const statusKey = `${hostState}/${transportClosed ? 'closed' : 'open'}/${transportClosed ? 'closed' : 'open'}/${baselineConfirmationRevision}`;
+    const connection = transportClosed ? 'closed' : 'open';
+    const statusKey = `${hostState}/${connection}/${baselineConfirmationRevision}`;
     const recoverableEvent = recoverableClockDiagnosticPending && !recoverableClockDiagnosticReported
       ? Object.freeze({
           code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' as const,
           message: 'dropped a regressing browser realtime observation; awaiting a later monotonic observation',
         })
-      : rendererDiagnosticsFailure !== null && !rendererDiagnosticsFailureReported
+      : recoveryFailure !== null && !recoveryDiagnosticReported
         ? Object.freeze({
-            code: 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE' as const,
-            message: rendererDiagnosticsFailure,
+            code: 'BROWSER_LOCAL_REQUEST_UNAVAILABLE' as const,
+            message: boundedDiagnostic(recoveryFailure.message),
           })
-        : recoveryFailure !== null && !recoveryDiagnosticReported
-          ? Object.freeze({
-              code: 'BROWSER_LOCAL_REQUEST_UNAVAILABLE' as const,
-              message: boundedDiagnostic(recoveryFailure.message),
-            })
         : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
       && (includeTerminal || recoverableEvent !== undefined || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
@@ -1530,48 +523,37 @@ export async function mountProductBrowserHostWithApplication(
       pendingHealthTransition = true;
       return;
     }
-    {
-      const age = lastRendererObservationAtMs === null
-        ? undefined
-        : String(Math.max(0, Date.now() - lastRendererObservationAtMs));
-      const report = Object.freeze({
-        hostState,
-        runtimeProgress: String(runtimeProgress),
-        transportState: transportClosed ? 'closed' : 'open',
-        outputState: transportClosed ? 'closed' : 'open',
-        ...(lastRendererSequence === null ? {} : { lastRendererSequence }),
-        ...(age === undefined ? {} : { rendererObservationAgeMs: age }),
-        ...(includeTerminal ? { firstTerminal: terminal } : {}),
-        ...(recoverableEvent === undefined ? {} : { recoverableEvent }),
-        pageEvents: Object.freeze([...pageEvents]),
-      });
-      browserDiagnosticsReportInFlight = true;
-      void transport.reportBrowserDiagnostics(report).then(
-        () => {
-          browserDiagnosticsReportInFlight = false;
-          lastDiagnosticsStatusKey = statusKey;
-          if (includeTerminal) terminalDiagnosticsReported = true;
-          if (recoverableEvent?.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
-            recoverableClockDiagnosticPending = false;
-            recoverableClockDiagnosticReported = true;
-          } else if (recoverableEvent?.code === 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE') {
-            rendererDiagnosticsFailureReported = true;
-          }
-          if (recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
-            recoveryDiagnosticReported = true;
-          }
-          const flushPendingHealthTransition = pendingHealthTransition;
-          pendingHealthTransition = false;
-          if (flushPendingHealthTransition) publishHealth();
-        },
-        () => {
-          browserDiagnosticsReportInFlight = false;
-          const flushPendingHealthTransition = pendingHealthTransition;
-          pendingHealthTransition = false;
-          if (flushPendingHealthTransition) publishHealth();
-        },
-      );
-    }
+    const report = Object.freeze({
+      hostState,
+      runtimeProgress: String(runtimeProgress),
+      transportState: connection,
+      outputState: connection,
+      ...(includeTerminal ? { firstTerminal: terminal } : {}),
+      ...(recoverableEvent === undefined ? {} : { recoverableEvent }),
+      pageEvents: Object.freeze([...pageEvents]),
+    }) as ProductBrowserDiagnosticsReport;
+    browserDiagnosticsReportInFlight = true;
+    const followUp = (): void => {
+      browserDiagnosticsReportInFlight = false;
+      const flushPendingHealthTransition = pendingHealthTransition;
+      pendingHealthTransition = false;
+      if (flushPendingHealthTransition) publishHealth();
+    };
+    void transport.reportBrowserDiagnostics!(report).then(
+      () => {
+        lastDiagnosticsStatusKey = statusKey;
+        if (includeTerminal) terminalDiagnosticsReported = true;
+        if (recoverableEvent?.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
+          recoverableClockDiagnosticPending = false;
+          recoverableClockDiagnosticReported = true;
+        }
+        if (recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
+          recoveryDiagnosticReported = true;
+        }
+        followUp();
+      },
+      followUp,
+    );
   };
 
   const requireApplication = (): RustyApplicationHost => {
@@ -1597,11 +579,6 @@ export async function mountProductBrowserHostWithApplication(
     if (inputRecovery !== null) {
       throw recoveryGateError('Product Browser Host is reconciling an uncertain input mutation');
     }
-    if (projectionRecovery !== null) {
-      throw recoveryGateError(
-        'Product Browser Host is replacing an invalidated retained output projection',
-      );
-    }
     if (state === 'ready' || state === 'degraded') return;
     throw new ProductBrowserHostError(
       state === 'disposed' ? 'disposed' : 'transport_failed',
@@ -1625,7 +602,7 @@ export async function mountProductBrowserHostWithApplication(
       failure = error;
       if (state !== 'disposed') state = 'failed';
       // The DOM remains current now; the typed terminal report waits until
-      // closeTransport has recorded the durable closed/closed state.
+      // closeTransport has recorded the durable closed state.
       publishHealth(false);
     }
     return failure;
@@ -1633,29 +610,17 @@ export async function mountProductBrowserHostWithApplication(
 
   let cadence: ProductBrowserCadence | null = null;
   let removePageDiagnosticListeners: (() => void) | null = null;
-  let removeRendererContextListeners: (() => void) | null = null;
-  const removeContextListeners = (): void => {
-    const remove = removeRendererContextListeners;
-    removeRendererContextListeners = null;
-    remove?.();
-  };
   const closeTransport = (): void => {
     if (transportClosed) return;
     transportClosed = true;
     started = false;
-    if (projectionRecoveryRetryTimer !== null) {
-      clearTimeout(projectionRecoveryRetryTimer);
-      projectionRecoveryRetryTimer = null;
-    }
     cadence?.dispose();
-    rendererObservationCadenceSampler?.dispose();
     unsubscribeTerminalFailures?.();
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();
     unsubscribeOutputs = null;
     removePageDiagnosticListeners?.();
     removePageDiagnosticListeners = null;
-    removeContextListeners();
     // This exact report route remains callable after disposal. Send after the
     // state transition so stopped-host diagnostics never claim open streams.
     publishHealth();
@@ -1668,7 +633,6 @@ export async function mountProductBrowserHostWithApplication(
     code: ProductBrowserHostError['code'],
   ): ProductBrowserHostError => {
     const error = reportFailure(cause, code);
-    settleInitialRendererFrameFailure(error);
     closeTransport();
     return error;
   };
@@ -1713,7 +677,7 @@ export async function mountProductBrowserHostWithApplication(
   };
 
   const restoreReadyAfterHealthyTransport = (): void => {
-    if (state !== 'degraded' || inputRecovery !== null || projectionRecovery !== null) return;
+    if (state !== 'degraded' || inputRecovery !== null || awaitingBaseline) return;
     state = 'ready';
     publishHealth();
   };
@@ -1733,12 +697,6 @@ export async function mountProductBrowserHostWithApplication(
     const pending = inputRecovery;
     if (pending === null || !hasFreshRecoveryBinding(runtime, pending.uncertainBinding)) return false;
     const host = requireApplication();
-    host.renderer.resetCameraMotion();
-    audioFeedbackReporter?.bindRuntime(runtime);
-    videoFeedbackReporter?.bindRuntime(runtime);
-    animationFeedbackReporter?.bindRuntime(runtime);
-    ghostPlateFeedbackReporter?.bindRuntime(runtime);
-    rendererDiagnosticsReporter?.bindRuntime(runtime);
     currentInputBinding = runtime;
     host.input?.rebaselineRuntime({
       runtime,
@@ -1831,101 +789,22 @@ export async function mountProductBrowserHostWithApplication(
     };
   }
 
-  const flushRendererFeedback = async (): Promise<void> => {
-    requireReady();
-    await audioFeedbackReporter?.flush();
-    await videoFeedbackReporter?.flush();
-    await animationFeedbackReporter?.flush();
-    await ghostPlateFeedbackReporter?.flush();
-  };
-
-  const scheduleRendererFeedbackFlush = (): void => {
-    if (state !== 'ready') return;
-    void queue.enqueue(flushRendererFeedback).catch((cause: unknown) => {
-      if (isRecoveryGateError(cause)) return;
-      recoverOrClose(cause, 'transport_failed');
-    });
-  };
-
-  const enqueueRendererOutput = (
-    apply: () => void | Promise<void>,
-    projectionEpoch = rendererProjectionEpoch,
-  ): Promise<void> => {
-    const nextTail = rendererOutputTail.then(async () => {
-      // Disposal unsubscribes the source before awaiting this tail, so work
-      // already accepted by the host must still drain. A terminal renderer
-      // failure is the only state that invalidates the remaining queue.
-      if (state === 'failed' || projectionEpoch !== rendererProjectionEpoch) return;
-      try {
-        await apply();
-      } catch (cause) {
-        if (cause instanceof ProductBrowserRendererResourceUnavailableError) {
-          // The runtime released a body after publishing output that used
-          // it. A fresh baseline references only what it still retains.
-          requestPublishedProjectionRecovery(acceptedProjectionEpoch, cause.message);
-          return;
-        }
-        failAndClose(cause, 'output_failed');
-      }
-    });
-    rendererOutputTail = nextTail;
-    return nextTail;
-  };
-
-  const admitOutputResources = async (
-    host: RustyApplicationHost,
-    output: ProductBrowserRuntimeOutput,
-  ): Promise<void> => {
-    if (output.rendererResources === undefined) {
-      if (output.kind === 'frame') await host.renderer.admitResources([], output.frame);
-      return;
-    }
-    const runtime = output.kind === 'binding' ? output.runtime : currentInputBinding;
-    if (runtime === null) {
-      throw new ProductBrowserHostError('output_failed', 'renderer resource closure arrived before a runtime binding');
-    }
-    const resources = await dynamicRendererResources.ensure(output.rendererResources, runtime.generation);
-    await host.renderer.admitResources(resources, output.kind === 'frame' ? output.frame : undefined);
-    dynamicRendererResources.retainOnly(new Set(output.rendererResources), runtime.generation);
-  };
-
-  const applyOutput = (
-    output: ProductBrowserRuntimeOutput,
-    outputEpoch = acceptedProjectionEpoch,
-    requireAppliedPresentation = false,
-  ): void => {
+  const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
     if (application === null) {
-      if (!bufferProductBrowserPreMountOutput(pendingOutputs, output, maximumPendingOutputs)) {
+      if (!bufferProductBrowserPreMountOutput(pendingOutputs, output, MAXIMUM_PENDING_OUTPUTS)) {
         failAndClose(
           new ProductBrowserHostError(
             'output_failed',
-            `runtime output buffer exceeded ${String(maximumPendingOutputs)} entries before host mount`,
+            `runtime output buffer exceeded ${String(MAXIMUM_PENDING_OUTPUTS)} entries before host mount`,
           ),
           'output_failed',
         );
-        return;
-      }
-      if (output.kind === 'frame' && settleInitialRendererFrame !== null) {
-        if (initialRendererFrameTimeout !== null) clearTimeout(initialRendererFrameTimeout);
-        initialRendererFrameTimeout = null;
-        const settle = settleInitialRendererFrame;
-        settleInitialRendererFrame = null;
-        settle({ accepted: true, frame: output.frame });
       }
       return;
     }
     if (state === 'failed' || state === 'disposed') return;
     try {
       const host = requireApplication();
-      if (output.rendererResources !== undefined
-        && output.kind !== 'binding'
-        && output.kind !== 'frame'
-        && output.kind !== 'presentation') {
-        enqueueRendererOutput(async () => {
-          await admitOutputResources(host, output);
-          host.renderer.retainResources(new Set(output.rendererResources));
-        });
-      }
       switch (output.kind) {
         case 'binding':
           if (inputRecovery !== null) {
@@ -1937,14 +816,6 @@ export async function mountProductBrowserHostWithApplication(
             }
             return;
           }
-          if (currentInputBinding !== null && !sameRuntimeBinding(currentInputBinding, output.runtime)) {
-            host.renderer.resetCameraMotion();
-          }
-          audioFeedbackReporter?.bindRuntime(output.runtime);
-          videoFeedbackReporter?.bindRuntime(output.runtime);
-          animationFeedbackReporter?.bindRuntime(output.runtime);
-          ghostPlateFeedbackReporter?.bindRuntime(output.runtime);
-          rendererDiagnosticsReporter?.bindRuntime(output.runtime);
           currentInputBinding = output.runtime;
           host.input?.bindRuntime({
             runtime: output.runtime,
@@ -1952,97 +823,9 @@ export async function mountProductBrowserHostWithApplication(
             nextSequence: output.nextInputSequence,
           });
           host.uiProjection?.bindRuntime(output.runtime);
-          enqueueRendererOutput(() => admitOutputResources(host, output));
-          return;
-        case 'renderer-resources':
           return;
         case 'runtime-input-result':
           applyInputResult(output.result);
-          return;
-        case 'frame': {
-          const receivedAtMs = productFrameObservation.received();
-          enqueueRendererOutput(() => {
-            return admitOutputResources(host, output).then(() => {
-            const receipt = host.renderer.applyFrame(output.frame);
-            if (receipt.outcome !== 'applied') {
-              const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
-                || 'renderer rejected a published frame';
-              requestPublishedProjectionRecovery(outputEpoch, diagnostic);
-              return;
-            }
-            if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
-              throw new ProductBrowserHostError(
-                'output_failed',
-                'renderer frame reported a terminal outcome',
-              );
-            }
-            if (receipt.outcome === 'applied') productFrameObservation.applied(receivedAtMs);
-            if (output.rendererResources !== undefined) host.renderer.retainResources(new Set(output.rendererResources));
-            });
-          });
-          return;
-        }
-        case 'view-composition': {
-          enqueueRendererOutput(() => {
-            const receipt = host.renderer.configureViews(output.composition);
-            if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
-              throw new ProductBrowserHostError(
-                'output_failed',
-                'renderer view composition reported a terminal outcome',
-              );
-            }
-          });
-          return;
-        }
-        case 'animation-cue-definitions': {
-          enqueueRendererOutput(() => {
-            const receipt = host.renderer.replaceAnimationCueDefinitions(output.definitions);
-            if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
-              throw new ProductBrowserHostError(
-                'output_failed',
-                'renderer animation cue definitions reported a terminal outcome',
-              );
-            }
-          });
-          return;
-        }
-        case 'presentation':
-          enqueueRendererOutput(async () => {
-            await admitOutputResources(host, output);
-            const receipt = await host.renderer.applyPresentation(output.frame);
-            // Refused operations (budget, missing asset, absent host) leave
-            // the retained realization coherent and stay visible as renderer
-            // diagnostics. A published projection needs a fresh baseline only
-            // when the renderer did not take the frame: a degraded domain
-            // (`terminal`) or an application-level rejection of the whole frame.
-            const frameNotTaken = receipt.outcome === 'terminal'
-              || receipt.diagnostics.some((entry) => entry.domain === 'application');
-            if (frameNotTaken
-              && (requireAppliedPresentation || output.frame['publication'] !== undefined)) {
-              const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
-                || 'renderer did not take the published presentation';
-              requestPublishedProjectionRecovery(outputEpoch, diagnostic);
-              return;
-            }
-            if (!productBrowserPresentationReceiptMayContinue(receipt.outcome)) {
-              // Preserve the existing terminal presentation posture, but give
-              // the fixed audio-feedback lane one serialized attempt first so
-              // a just-realized audio diagnostic reaches its C# readout.
-              try {
-                await queue.enqueue(flushRendererFeedback);
-              } catch (cause) {
-                if (isRecoveryGateError(cause)) return;
-                recoverOrClose(cause, 'transport_failed');
-                return;
-              }
-              throw new ProductBrowserHostError(
-                'output_failed',
-                'renderer presentation reported a terminal outcome',
-              );
-            }
-            if (output.rendererResources !== undefined) host.renderer.retainResources(new Set(output.rendererResources));
-            scheduleRendererFeedbackFlush();
-          });
           return;
         case 'ui-projection':
           if (host.uiProjection === undefined) {
@@ -2055,10 +838,6 @@ export async function mountProductBrowserHostWithApplication(
           return;
         case 'runtime-readout':
           runtimeReadout = output.readout;
-          if (output.readout.inspectionTime !== undefined && !runtimeRenderer) {
-            const [mode, hz] = output.readout.inspectionTime;
-            host.renderer.inspection?.({ simulationMs: mode === 'realtime' ? null : Number(output.readout.admittedSimulationSteps) * 1000 / hz });
-          }
           return;
         default:
           assertNever(output);
@@ -2068,414 +847,26 @@ export async function mountProductBrowserHostWithApplication(
     }
   };
 
-  const beginProjectionRecovery = (epoch: number): void => {
-    if (projectionRecovery !== null && epoch <= projectionRecovery.fromEpoch) return;
-    const newRecoveryEpisode = projectionRecovery === null;
-    if (projectionRecoveryRetryTimer !== null) {
-      clearTimeout(projectionRecoveryRetryTimer);
-      projectionRecoveryRetryTimer = null;
-    }
-    // A newer baseline in the same unresolved recovery episode must retain the
-    // backoff budget. Reset only after the prior episode has settled or when a
-    // genuinely new invalidation starts with no pending recovery.
-    if (newRecoveryEpisode) projectionRecoveryRetryAttempt = 0;
-    projectionRecovery = { fromEpoch: epoch };
-    if (pendingProjectionBaseline !== null && pendingProjectionBaseline.epoch <= epoch) {
-      pendingProjectionBaseline = null;
-    }
-    selectedProjectionBaselineEpoch = null;
-    pendingProjectionIncrementals = null;
-    // Work already queued from the discarded retained projection is never
-    // allowed to reach the renderer after its fresh replacement arrives.
-    rendererProjectionEpoch += 1;
-    if (state === 'ready') state = 'degraded';
-    publishHealth();
-  };
-
-  const requestPublishedProjectionRecovery = (
-    epoch: number,
-    diagnostic: string,
-  ): void => {
-    if (recoveryFailure === null) {
-      recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
-    }
-    if (projectionRecovery !== null && epoch <= projectionRecovery.fromEpoch) return;
-    beginProjectionRecovery(epoch);
-    if (transport.recoverOutputProjection === undefined) {
-      failAndClose(new ProductBrowserHostError(
-        'transport_failed',
-        'runtime transport did not provide the required fresh output recovery',
-      ), 'transport_failed');
-      return;
-    }
-    void transport.recoverOutputProjection().catch((cause: unknown) => {
-      recoverOrClose(cause, 'transport_failed');
-    });
-  };
-
-  /**
-   * Retry only the fresh projection request after a candidate baseline failed
-   * before commit. The old renderer remains the authority until a later
-   * complete baseline applies, so no product operation or callback is replayed.
-   */
-  const scheduleProjectionRecoveryRetry = (
-    epoch: number,
-    diagnostic: string,
-  ): void => {
-    if (state === 'failed' || state === 'disposed' || transportClosed) return;
-    if (recoveryFailure === null) {
-      recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
-    }
-    if (projectionRecovery === null || projectionRecovery.fromEpoch < epoch) {
-      beginProjectionRecovery(epoch);
-    }
-    if (projectionRecovery === null || projectionRecovery.fromEpoch !== epoch) return;
-    if (projectionRecoveryRetryTimer !== null) return;
-    const retryIndex = projectionRecoveryRetryAttempt;
-    const delay = PRODUCT_BROWSER_PROJECTION_RECOVERY_RETRY_DELAYS_MS[retryIndex];
-    if (delay === undefined) {
-      // Keep the host gated with the first concrete failure visible. A later
-      // independent invalidation can start a new bounded recovery episode.
-      publishHealth();
-      return;
-    }
-    projectionRecoveryRetryAttempt += 1;
-    projectionRecoveryRetryTimer = setTimeout(() => {
-      projectionRecoveryRetryTimer = null;
-      if (state === 'failed' || state === 'disposed' || transportClosed
-        || projectionRecovery?.fromEpoch !== epoch) return;
-      if (transport.recoverOutputProjection === undefined) {
-        failAndClose(new ProductBrowserHostError(
-          'transport_failed',
-          'runtime transport did not provide the required fresh output recovery',
-        ), 'transport_failed');
-        return;
-      }
-      void transport.recoverOutputProjection().catch((cause: unknown) => {
-        recoverOrClose(cause, 'transport_failed');
-      });
-    }, delay);
-  };
-
-  /**
-   * WebGL context events are the surface's typed browser-lifetime boundary.
-   * Capture them at the Product root so application-host can replace the lost
-   * canvas through its existing complete-frame path without touching runtime
-   * state or replaying a product operation.
-   */
-  const installRendererContextListeners = (): void => {
-    const root = options.root as unknown as {
-      readonly addEventListener?: (
-        type: string,
-        listener: (event: Event) => void,
-        options?: boolean,
-      ) => void;
-      readonly removeEventListener?: (
-        type: string,
-        listener: (event: Event) => void,
-        options?: boolean,
-      ) => void;
-      readonly querySelector?: (selectors: string) => EventTarget | null;
-    };
-    if (typeof root.addEventListener !== 'function'
-      || typeof root.removeEventListener !== 'function') return;
-    const isActiveRendererCanvasEvent = (event: Event): boolean => {
-      const target = event.target;
-      if (target === null) return false;
-      const activeCanvas = root.querySelector?.('[data-rusty-application-renderer="engine-owned"]') ?? null;
-      if (activeCanvas !== null) return target === activeCanvas;
-      const dataset = (target as { readonly dataset?: Record<string, string | undefined> }).dataset;
-      return dataset?.['rustyApplicationRenderer'] === 'engine-owned';
-    };
-    const recover = (event: Event, eventKind: 'lost' | 'restored'): void => {
-      if (state === 'failed' || state === 'disposed') return;
-      // The Product root can also contain downstream UI canvases. Only the
-      // active Engine canvas may invalidate the retained renderer projection.
-      if (!isActiveRendererCanvasEvent(event)) return;
-      if (eventKind === 'lost') rendererContextLost = true;
-      if (eventKind === 'restored'
-        && projectionRecovery !== null
-        && projectionRecoveryRetryTimer === null
-        && projectionRecoveryRetryAttempt >= PRODUCT_BROWSER_PROJECTION_RECOVERY_RETRY_DELAYS_MS.length) {
-        // Candidate mount failures exhausted this loss episode. Restoration is
-        // a new browser availability fact, so re-arm one bounded recovery
-        // episode while invalidating any stale completion from the old epoch.
-        projectionRecovery = null;
-        pendingProjectionBaseline = null;
-        selectedProjectionBaselineEpoch = null;
-        pendingProjectionIncrementals = null;
-        rendererProjectionEpoch += 1;
-        projectionRecoveryRetryAttempt = 0;
-      }
-      if (!rendererContextLost || application === null) return;
-      requestPublishedProjectionRecovery(
-        acceptedProjectionEpoch,
-        eventKind === 'lost'
-          ? 'WebGL context was lost; rebuilding the retained renderer projection'
-        : 'WebGL context was restored after loss; rebuilding the retained renderer projection',
-      );
-    };
-    const onContextLost = (event: Event): void => recover(event, 'lost');
-    const onContextRestored = (event: Event): void => recover(event, 'restored');
-    root.addEventListener('webglcontextlost', onContextLost, true);
-    root.addEventListener('webglcontextrestored', onContextRestored, true);
-    removeRendererContextListeners = () => {
-      root.removeEventListener?.('webglcontextlost', onContextLost, true);
-      root.removeEventListener?.('webglcontextrestored', onContextRestored, true);
-    };
-  };
-
-  const applyProjectionBaseline = (
-    outputs: readonly ProductBrowserRuntimeOutput[],
-    epoch: number,
-  ): void => {
-    const pending = projectionRecovery;
-    if (application === null) return;
-    if (pending !== null && epoch <= pending.fromEpoch) return;
-    if (pending === null && epoch <= acceptedProjectionEpoch) return;
-    if (selectedProjectionBaselineEpoch !== null) {
-      if (epoch <= selectedProjectionBaselineEpoch) return;
-      // A newer retained replacement supersedes one that was selected but has
-      // not become visible yet. Its queued renderer work cannot release this
-      // gate, and only the new epoch's trailing output remains relevant.
-      if (projectionRecoveryRetryTimer !== null) {
-        clearTimeout(projectionRecoveryRetryTimer);
-        projectionRecoveryRetryTimer = null;
-      }
-      rendererProjectionEpoch += 1;
-      pendingProjectionIncrementals = null;
-    }
-    selectedProjectionBaselineEpoch = epoch;
-    const host = requireApplication();
-    const frontierBindings = outputs.filter((output): output is ProductBrowserRuntimeBindingOutput => (
-      output.kind === 'binding' && output.publicationFrontiers !== undefined
-    ));
-    if (frontierBindings.length > 1) {
-      throw new ProductBrowserHostError(
-        'output_failed',
-        'recovered retained projection contained multiple publication frontier bindings',
-      );
-    }
-    const publicationFrontiers = frontierBindings[0]?.publicationFrontiers ?? [];
-    const frameOps = outputs.flatMap((output) => output.kind === 'frame'
-      ? [...(output.frame['ops'] as readonly unknown[])]
-      : []);
-    const retainedFrame = Object.freeze({
-      schemaVersion: 1,
-      ops: Object.freeze(frameOps),
-    }) as RustyApplicationFrame;
-    const retainedOutputs = outputs.filter((output) => output.kind !== 'frame'
-      && output.kind !== 'runtime-input-result');
-
-    const replacementEpoch = rendererProjectionEpoch;
-    // Rust attaches complete-baseline frontiers to its binding in one ordered
-    // group. Its Frame outputs are ordered renderer diffs, not individually
-    // replaceable scenes; preserving every operation in that order is the
-    // existing complete-frame representation accepted by replaceFrame.
-    rendererOutputTail = rendererOutputTail.then(async () => {
-      if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
-        || (pending === null && (projectionRecovery !== null || epoch <= acceptedProjectionEpoch))
-        || rendererProjectionEpoch !== replacementEpoch
-        || state === 'failed'
-        || state === 'disposed') return;
-      try {
-        const resourceBinding = outputs.find((output) => output.kind === 'binding');
-        const inventory = outputs.find((output) => output.rendererResources !== undefined)?.rendererResources;
-        if (inventory !== undefined) {
-          const runtime = resourceBinding?.runtime ?? currentInputBinding;
-          if (runtime === null) throw new ProductBrowserHostError('output_failed', 'baseline resources arrived without a runtime binding');
-          const resources = await dynamicRendererResources.ensure(inventory, runtime.generation);
-          await host.renderer.admitResources(resources, retainedFrame);
-          dynamicRendererResources.retainOnly(new Set(inventory), runtime.generation);
-        } else {
-          await host.renderer.admitResources([], retainedFrame);
-        }
-        const receipt = await host.renderer.replaceFrame(retainedFrame, publicationFrontiers);
-        // A normal incremental frame may continue after rejected_atomic, but
-        // a recovery baseline is not installed until the replacement applied.
-        if (receipt.outcome !== 'applied') {
-          const diagnostic = boundedDiagnostic(
-            receipt.diagnostics.map((entry) => `${entry.code}: ${entry.message}`).join('; ')
-              || 'renderer did not apply the recovered retained projection',
-          );
-          if (recoveryFailure === null) {
-            recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
-          }
-          scheduleProjectionRecoveryRetry(epoch, diagnostic);
-          publishHealth();
-          return;
-        }
-
-        if (inventory !== undefined) host.renderer.retainResources(new Set(inventory));
-
-        // Replacement is now visible. Recreate only the fixed realization
-        // reporters and then switch the other retained facets in original
-        // baseline order. The Rust snapshot omits expired one-shots, while
-        // retained presentation state must be realized with the replacement.
-        host.renderer.resetAudioRealizationOwner();
-        host.renderer.resetAnimationRealizationOwner();
-        host.renderer.resetCameraMotion();
-        audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
-          renderer: host.renderer,
-          report: transport.reportAudioFeedback,
-        });
-        videoFeedbackReporter = transport.reportVideoFeedback === undefined ? null : createProductBrowserVideoFeedbackReporter({ renderer: host.renderer, report: transport.reportVideoFeedback });
-        animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
-          renderer: host.renderer,
-          report: transport.reportAnimationFeedback,
-        });
-        ghostPlateFeedbackReporter = createProductBrowserGhostPlateFeedbackReporter({
-          renderer: host.renderer,
-          report: transport.reportGhostPlateFeedback,
-        });
-        for (const output of retainedOutputs) {
-          if (output.kind === 'view-composition') {
-            const viewReceipt = host.renderer.configureViews(output.composition);
-            if (viewReceipt.outcome !== 'applied') {
-              throw new ProductBrowserHostError('output_failed', 'renderer did not apply recovered view composition');
-            }
-          } else if (output.kind === 'animation-cue-definitions') {
-            const cueReceipt = host.renderer.replaceAnimationCueDefinitions(output.definitions);
-            if (cueReceipt.outcome !== 'applied') {
-              throw new ProductBrowserHostError('output_failed', 'renderer did not apply recovered animation cues');
-            }
-          } else {
-            applyOutput(output, epoch, true);
-          }
-        }
-        if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
-          || (pending === null && (projectionRecovery !== null || epoch <= acceptedProjectionEpoch))
-          || rendererProjectionEpoch !== replacementEpoch
-          || failure !== null
-          || transportClosed) return;
-        const trailingOutputs = pendingProjectionIncrementals?.epoch === epoch
-          ? pendingProjectionIncrementals.outputs
-          : [];
-        pendingProjectionIncrementals = null;
-        // The retained replacement is physically installed before any normal
-        // output accepted behind its CompleteBaseline. This preserves the
-        // current epoch rather than dropping it during the asynchronous swap.
-        for (const output of trailingOutputs) applyOutput(output, epoch, true);
-        // Retained presentation can settle asynchronously behind the graphics
-        // replacement. Only this tail-drained continuation may release the
-        // recovery gate and acknowledge the new baseline.
-        enqueueRendererOutput(() => {
-          if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
-            || (pending === null && (projectionRecovery !== null || epoch <= acceptedProjectionEpoch))
-            || rendererProjectionEpoch !== replacementEpoch
-            || failure !== null
-            || transportClosed) return;
-          acceptedProjectionEpoch = epoch;
-          if (pending !== null) projectionRecovery = null;
-          selectedProjectionBaselineEpoch = null;
-          if (projectionRecoveryRetryTimer !== null) {
-            clearTimeout(projectionRecoveryRetryTimer);
-            projectionRecoveryRetryTimer = null;
-          }
-          projectionRecoveryRetryAttempt = 0;
-          rendererContextLost = false;
-          transport.confirmOutputBaseline?.(epoch);
-          // A prior in-flight report must not acknowledge this new baseline.
-          baselineConfirmationRevision += 1;
-          publishHealth();
-          restoreReadyAfterHealthyTransport();
-          cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
-          scheduleRendererFeedbackFlush();
-        }, replacementEpoch);
-      } catch (cause) {
-        const diagnostic = cause instanceof Error ? cause.message : String(cause);
-        if (recoveryFailure === null) {
-          recoveryFailure = cause instanceof ProductBrowserHostError
-            ? cause
-            : new ProductBrowserHostError('output_failed', diagnostic);
-        }
-        scheduleProjectionRecoveryRetry(epoch, diagnostic);
-        publishHealth();
-      }
-    });
-  };
-
   const applyOutputBatch = (
     outputs: readonly ProductBrowserRuntimeOutput[],
     metadata?: ProductBrowserRuntimeOutputBatchMetadata,
   ): void => {
     if (metadata?.recovery === 'fresh-baseline-required') {
-      beginProjectionRecovery(metadata.epoch);
+      awaitingBaseline = true;
+      if (state === 'ready') state = 'degraded';
+      publishHealth();
       return;
     }
-    if (application === null && requiresInitialRendererFrame && metadata?.baseline === true) {
-      const frontierBindings = outputs.filter((output): output is ProductBrowserRuntimeBindingOutput => (
-        output.kind === 'binding' && output.publicationFrontiers !== undefined
-      ));
-      if (frontierBindings.length > 1) {
-        failAndClose(new ProductBrowserHostError(
-          'output_failed',
-          'initial retained projection contained multiple publication frontier bindings',
-        ), 'output_failed');
-        return;
-      }
-      if (pendingInitialRendererBaseline === null || metadata.epoch > pendingInitialRendererBaseline.epoch) {
-        pendingInitialRendererBaseline = Object.freeze({
-          epoch: metadata.epoch,
-          outputs: Object.freeze([...outputs]),
-          publicationFrontiers: Object.freeze([...(frontierBindings[0]?.publicationFrontiers ?? [])]),
-        });
-      }
-    }
-    if (metadata !== undefined && metadata.epoch < acceptedProjectionEpoch) return;
-    if (projectionRecovery !== null) {
-      if (metadata?.baseline === true && metadata.epoch > projectionRecovery.fromEpoch) {
-        if (application === null) {
-          if (pendingProjectionBaseline === null || metadata.epoch > pendingProjectionBaseline.epoch) {
-            pendingProjectionBaseline = Object.freeze({
-              epoch: metadata.epoch,
-              outputs: Object.freeze([...outputs]),
-            });
-            // A newer retained baseline makes any trailing output staged for
-            // the older pre-mount projection irrelevant.
-            pendingProjectionIncrementals = null;
-          }
-        } else {
-          applyProjectionBaseline(outputs, metadata.epoch);
-        }
-      } else if (metadata !== undefined && (
-        selectedProjectionBaselineEpoch === metadata.epoch
-        || (application === null && pendingProjectionBaseline?.epoch === metadata.epoch)
-      )) {
-        const trailing = pendingProjectionIncrementals;
-        pendingProjectionIncrementals = Object.freeze({
-          epoch: metadata.epoch,
-          outputs: Object.freeze([
-            ...(trailing?.epoch === metadata.epoch ? trailing.outputs : []),
-            ...outputs,
-          ]),
-        });
-      }
-      return;
-    }
-    // A normal fresh attachment also replaces asynchronously. Do not let a
-    // same-epoch delta advance the observed frontier while that replacement is
-    // still queued; it belongs immediately after the complete baseline.
-    if (metadata !== undefined
-      && metadata.baseline !== true
-      && selectedProjectionBaselineEpoch === metadata.epoch) {
-      const trailing = pendingProjectionIncrementals;
-      pendingProjectionIncrementals = Object.freeze({
-        epoch: metadata.epoch,
-        outputs: Object.freeze([
-          ...(trailing?.epoch === metadata.epoch ? trailing.outputs : []),
-          ...outputs,
-        ]),
-      });
-      return;
-    }
+    if (metadata !== undefined && metadata.epoch < acceptedEpoch) return;
+    if (awaitingBaseline && metadata !== undefined && metadata.baseline !== true) return;
+    if (metadata !== undefined) acceptedEpoch = metadata.epoch;
+    for (const output of outputs) applyOutput(output);
     if (metadata?.baseline === true && application !== null) {
-      applyProjectionBaseline(outputs, metadata.epoch);
-      return;
-    }
-    if (metadata !== undefined) acceptedProjectionEpoch = Math.max(acceptedProjectionEpoch, metadata.epoch);
-    for (const output of outputs) {
-      applyOutput(output, metadata?.epoch ?? acceptedProjectionEpoch);
+      awaitingBaseline = false;
+      transport.confirmOutputBaseline?.(metadata.epoch);
+      // A prior in-flight report must not acknowledge this new baseline.
+      baselineConfirmationRevision += 1;
+      publishHealth();
     }
     if (state !== 'failed' && state !== 'disposed' && outputs.length > 0) {
       restoreReadyAfterHealthyTransport();
@@ -2483,11 +874,28 @@ export async function mountProductBrowserHostWithApplication(
   };
 
   const applyTerminalFailure = (terminalFailure: ProductBrowserRuntimeTerminalFailure): void => {
-    const failure = normalizeTerminalFailure(terminalFailure);
+    const normalized = normalizeTerminalFailure(terminalFailure);
     failAndClose(
-      new ProductBrowserHostError('transport_failed', failure.diagnostic),
+      new ProductBrowserHostError('transport_failed', normalized.diagnostic),
       'transport_failed',
     );
+  };
+
+  const operationOutputs = (result: {
+    readonly binding?: RustyApplicationRuntimeIdentity;
+    readonly nextInputSequence?: string;
+    readonly readout?: ProductBrowserRuntimeReadout;
+  }): ProductBrowserRuntimeOutput[] => {
+    const outputs: ProductBrowserRuntimeOutput[] = [];
+    if (result.binding !== undefined && result.nextInputSequence !== undefined) {
+      outputs.push({
+        kind: 'binding',
+        runtime: result.binding,
+        nextInputSequence: result.nextInputSequence,
+      });
+    }
+    if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
+    return outputs;
   };
 
   const applyOperationResult = (
@@ -2500,16 +908,7 @@ export async function mountProductBrowserHostWithApplication(
       publishHealth();
       return false;
     }
-    const outputs: ProductBrowserRuntimeOutput[] = [];
-    if (result.binding !== undefined && result.nextInputSequence !== undefined) {
-      outputs.push({
-        kind: 'binding',
-        runtime: result.binding,
-        nextInputSequence: result.nextInputSequence,
-      });
-    }
-    if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
-    applyOutputBatch(outputs);
+    applyOutputBatch(operationOutputs(result));
     if (!result.accepted) {
       // A typed recoverable or resync receipt is a completed operation. The
       // runtime may already have consumed lifecycle work, so never replay it
@@ -2530,10 +929,8 @@ export async function mountProductBrowserHostWithApplication(
   function applyInputResult(result: ProductBrowserRuntimeInputResult): void {
     if (inputRecovery !== null) {
       // An asynchronous mailbox result for the ambiguous batch is stale by
-      // construction. Do not let it synchronize an old cursor or revive a
-      // drained batch while the control fence is unresolved. Only the
-      // acknowledged control-replace response is allowed to establish the
-      // replacement cursor and trigger a physical-state baseline.
+      // construction. Only the acknowledged control-replace response may
+      // establish the replacement cursor.
       return;
     }
     if (result.binding !== undefined && currentInputBinding !== null
@@ -2543,16 +940,7 @@ export async function mountProductBrowserHostWithApplication(
       // cannot rewind the browser input cursor after a later control fence.
       return;
     }
-    const outputs: ProductBrowserRuntimeOutput[] = [];
-    if (result.binding !== undefined && result.nextInputSequence !== undefined) {
-      outputs.push({
-        kind: 'binding',
-        runtime: result.binding,
-        nextInputSequence: result.nextInputSequence,
-      });
-    }
-    if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
-    applyOutputBatch(outputs);
+    applyOutputBatch(operationOutputs(result));
     if (!result.accepted) {
       if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') {
         restoreReadyAfterHealthyTransport();
@@ -2575,11 +963,17 @@ export async function mountProductBrowserHostWithApplication(
     }
   };
 
+  const drainAndSendInput = async (): Promise<void> => {
+    const host = requireApplication();
+    host.input?.sampleController();
+    const batch = host.input?.drain() ?? [];
+    if (batch.length > 0) await sendInput(batch);
+  };
+
   cadence = createProductBrowserCadence({
     lifecycleMode: options.lifecycleMode,
     realtimeAdvanceOwner,
     isReady: () => inputRecovery === null
-      && projectionRecovery === null
       && started
       && (state === 'ready' || state === 'degraded'),
     enqueueOperation: queue.enqueue,
@@ -2592,10 +986,11 @@ export async function mountProductBrowserHostWithApplication(
     sendInput,
     advanceRealtime: async (observedTimeNs) => {
       requireReady();
-      const accepted = applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
-        flushRendererFeedback,
-        () => transport.advanceRealtime(observedTimeNs),
-      ), 'transport_failed', true);
+      const accepted = applyOperationResult(
+        await transport.advanceRealtime(observedTimeNs),
+        'transport_failed',
+        true,
+      );
       if (accepted) {
         recoverableClockDiagnosticPending = false;
         recoverableClockDiagnosticReported = false;
@@ -2613,21 +1008,13 @@ export async function mountProductBrowserHostWithApplication(
           'this native product did not provide a demand-step transport lane',
         );
       }
-      applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
-        flushRendererFeedback,
-        () => transport.admitDemandStep!(),
-      ));
+      applyOperationResult(await transport.admitDemandStep());
     },
     onFailure: (cause) => {
       if (isRecoveryGateError(cause)) return;
       recoverOrClose(cause, 'transport_failed');
     },
   });
-
-  const observeRendererCadence = (timeMs: number): void => {
-    cadence?.enqueue(timeMs);
-    if (started && state === 'ready') rendererObservationCadenceSampler?.sample(timeMs);
-  };
 
   let runtimeInput: RustyApplicationRuntimeInputOptions | undefined;
   if (options.runtimeInput !== undefined) {
@@ -2656,73 +1043,11 @@ export async function mountProductBrowserHostWithApplication(
     unsubscribeTerminalFailures = transport.subscribeTerminalFailures?.(applyTerminalFailure) ?? null;
     unsubscribeOutputs = transport.subscribeOutputBatches?.(applyOutputBatch)
       ?? transport.subscribeOutputs((output) => applyOutputBatch([output]));
-    installRendererContextListeners();
-    let renderer = options.renderer;
-    let runtimeStartedBeforeMount = false;
-    if (requiresInitialRendererFrame) {
-      await transport.waitUntilOutputSubscriptionReady?.();
-      if (failure !== null) throw failure;
-      const result = await queue.enqueue(() => transport.connect?.()
-        ?? transport.lifecycle({ kind: 'start' }));
-      applyOperationResult(result, 'startup_failed');
-      if (failure !== null) throw failure;
-      const initialFrameGate = initialRendererFrameGate;
-      if (initialFrameGate === null) {
-        throw new ProductBrowserHostError('startup_failed', 'initial renderer frame gate was unavailable');
-      }
-      const initialFrameResult = await initialFrameGate;
-      if (initialFrameResult.accepted === false) throw initialFrameResult.error;
-      // Assignment happens in the subscribed output callback, which TypeScript
-      // cannot model through local flow analysis.
-      const completeBaseline = pendingInitialRendererBaseline as {
-        readonly epoch: number;
-        readonly outputs: readonly ProductBrowserRuntimeOutput[];
-        readonly publicationFrontiers: readonly RenderPublicationFrontier[];
-      } | null;
-      const baseline = prepareProductBrowserInitialRendererBaseline(
-        completeBaseline?.outputs ?? pendingOutputs,
-        initialFrameResult.frame,
-        completeBaseline === null
-          ? undefined
-          : {
-              complete: true,
-              publicationFrontiers: completeBaseline.publicationFrontiers,
-            },
-      );
-      if (completeBaseline === null) {
-        pendingOutputs.splice(0, pendingOutputs.length, ...baseline.remainingOutputs);
-      } else {
-        // Pre-mount buffering coalesces snapshots and drops liveness pulses,
-        // so the original envelope length is not a prefix length here. Remove
-        // only graphics frames consumed into the initial content. Keep the
-        // buffer's non-frame state (including coalescing) and every later delta.
-        const baselineFrames = new Set<ProductBrowserRuntimeOutput>(
-          completeBaseline.outputs.filter((output) => output.kind === 'frame'),
-        );
-        const remainingOutputs = pendingOutputs.filter((output) => !baselineFrames.has(output));
-        pendingOutputs.splice(
-          0,
-          pendingOutputs.length,
-          ...remainingOutputs,
-        );
-      }
-      renderer = bindProductBrowserInitialRendererFrame(
-        options.renderer as NonNullable<ProductBrowserHostOptions['renderer']>,
-        baseline.frame,
-        baseline.publicationFrontiers,
-      );
-      runtimeStartedBeforeMount = true;
-    }
-    let stagedRendererContent: RustyApplicationContent | undefined;
-    let rendererForMount = renderer;
-    if (renderer?.initialContent !== undefined) {
-      const { initialContent, ...remainingRendererOptions } = renderer;
-      stagedRendererContent = initialContent;
-      rendererForMount = remainingRendererOptions;
-    }
     application = await mountApplication({
       root: options.root,
       mountUi: options.mountUi,
+      ...(options.output === undefined ? {} : { output: options.output }),
+      onCadence: (timeMs) => cadence?.enqueue(timeMs),
       ...(options.presentationAspectBounds === undefined
         ? {}
         : { presentationAspectBounds: options.presentationAspectBounds }),
@@ -2736,112 +1061,14 @@ export async function mountProductBrowserHostWithApplication(
       ...(options.failureLabel === undefined ? {} : { failureLabel: options.failureLabel }),
       ...(runtimeInput === undefined ? {} : { runtimeInput }),
       ...(projection === undefined ? {} : { uiProjection: projection }),
-      ...(rendererForMount === undefined
-        ? {
-            renderer: {
-              onCadence: observeRendererCadence,
-            },
-          }
-        : {
-            renderer: {
-              ...rendererForMount,
-              onCadence: observeRendererCadence,
-            },
-          }),
     });
-    if (rendererContextLost) {
-      requestPublishedProjectionRecovery(
-        acceptedProjectionEpoch,
-        'WebGL context was lost while mounting; rebuilding the retained renderer projection',
-      );
-    }
-    audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
-      renderer: application.renderer,
-      report: transport.reportAudioFeedback,
-      ...(options.runtimeInput?.binding === undefined
-        ? {}
-        : { initialRuntime: options.runtimeInput.binding }),
-    });
-    videoFeedbackReporter = transport.reportVideoFeedback === undefined ? null : createProductBrowserVideoFeedbackReporter({ renderer: application.renderer, report: transport.reportVideoFeedback });
-    animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
-      renderer: application.renderer,
-      report: transport.reportAnimationFeedback,
-      ...(options.runtimeInput?.binding === undefined
-        ? {}
-        : { initialRuntime: options.runtimeInput.binding }),
-    });
-    ghostPlateFeedbackReporter = createProductBrowserGhostPlateFeedbackReporter({
-      renderer: application.renderer,
-      report: transport.reportGhostPlateFeedback,
-      ...(options.runtimeInput?.binding === undefined
-        ? {}
-        : { initialRuntime: options.runtimeInput.binding }),
-    });
-    if (transport.reportRendererDiagnostics !== undefined) {
-      rendererDiagnosticsReporter = createProductBrowserRendererDiagnosticsReporter({
-        renderer: application.renderer,
-        report: transport.reportRendererDiagnostics,
-        productFrames: productFrameObservation.sample,
-        onObservation: (renderSequence) => {
-          lastRendererSequence = String(renderSequence);
-          lastRendererObservationAtMs = Date.now();
-        },
-        ...(options.runtimeInput?.binding === undefined
-          ? {}
-          : { initialRuntime: options.runtimeInput.binding }),
-      });
-    }
-    // Rust-driven updates need no browser advance or presentation mutation.
-    // Sample delayed audio/animation facts and realized ghost direction on the
-    // existing cadence even while retained presentation is quiet.
-    rendererObservationCadenceSampler = createProductBrowserRendererDiagnosticsCadenceSampler({
-      enqueueOperation: queue.enqueue,
-      flush: async () => {
-        await audioFeedbackReporter?.flush();
-        await videoFeedbackReporter?.flush();
-        await animationFeedbackReporter?.flush();
-        await ghostPlateFeedbackReporter?.flush();
-        await rendererDiagnosticsReporter?.flush();
-      },
-      onFailure: (cause) => {
-        // Derived observations can retry without stopping product work.
-        if (rendererDiagnosticsFailureReported || rendererDiagnosticsFailure !== null) return;
-        rendererDiagnosticsFailure = boundedDiagnostic(
-          `renderer observation reporting was temporarily unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
-        publishHealth();
-      },
-    });
-    if (stagedRendererContent !== undefined) {
-      const content = stagedRendererContent;
-      const mountedApplication = application;
-      enqueueRendererOutput(async () => {
-        const receipt = await mountedApplication.renderer.replaceContent(content);
-        if (!receipt.applied) {
-          throw new ProductBrowserHostError(
-            'output_failed',
-            `initial renderer content was rejected: ${receipt.diagnostics
-              .map((diagnostic) => diagnostic.message)
-              .join('; ')}`,
-          );
-        }
-      });
-    }
-    const stagedProjectionBaseline = pendingProjectionBaseline as {
-      readonly epoch: number;
-      readonly outputs: readonly ProductBrowserRuntimeOutput[];
-    } | null;
-    pendingProjectionBaseline = null;
-    if (stagedProjectionBaseline !== null) {
-      applyProjectionBaseline(stagedProjectionBaseline.outputs, stagedProjectionBaseline.epoch);
-    }
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     applyOutputBatch(bufferedOutputs);
-    await rendererOutputTail;
     if (failure !== null) throw failure;
-    transport.confirmOutputBaseline?.(acceptedProjectionEpoch);
+    awaitingBaseline = false;
+    transport.confirmOutputBaseline?.(acceptedEpoch);
     baselineConfirmationRevision += 1;
-    if (options.autoStart !== false && !runtimeStartedBeforeMount) {
+    if (options.autoStart !== false) {
       await transport.waitUntilOutputSubscriptionReady?.();
       if (failure !== null) throw failure;
       const result = await queue.enqueue(() => transport.connect?.()
@@ -2850,20 +1077,20 @@ export async function mountProductBrowserHostWithApplication(
       if (failure !== null) throw failure;
     }
     started = true;
-    state = projectionRecovery === null ? 'ready' : 'degraded';
+    state = 'ready';
     publishHealth();
-    if (state === 'ready') scheduleRendererFeedbackFlush();
   } catch (cause) {
     // Output delivery can fail and close the shared transport while the
     // lifecycle response is still in flight. Preserve that first concrete
     // failure instead of replacing it with the resulting aborted fetch.
     const error = failure ?? reportFailure(cause, 'startup_failed');
-    settleInitialRendererFrameFailure(error);
+    cadence.dispose();
     unsubscribeTerminalFailures?.();
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();
     unsubscribeOutputs = null;
-    removeContextListeners();
+    removePageDiagnosticListeners?.();
+    removePageDiagnosticListeners = null;
     try {
       await transport.dispose();
     } catch {
@@ -2879,17 +1106,16 @@ export async function mountProductBrowserHostWithApplication(
   }
 
   const host = application;
-  if (host === null) {
-    throw new ProductBrowserHostError('startup_failed', 'application host did not mount');
-  }
 
-  const removePlaytestInspection = installPlaytestInspection(host.renderer,
-    () => queue.enqueue(async () => { const batch = host.input?.drain() ?? []; if (batch.length > 0) await sendInput(batch); }),
+  const removePlaytestInspection = installPlaytestInspection(
+    () => queue.enqueue(async () => {
+      const batch = host.input?.drain() ?? [];
+      if (batch.length > 0) await sendInput(batch);
+    }),
     async (through) => {
       if (through !== undefined) await transport.waitUntilOutputSequence?.(through);
-      await rendererOutputTail;
     },
-    runtimeRenderer);
+  );
 
   const readout = (): ProductBrowserHostReadout => Object.freeze({
     artifact: PRODUCT_BROWSER_HOST_ARTIFACT,
@@ -2936,62 +1162,29 @@ export async function mountProductBrowserHostWithApplication(
     });
   };
 
-  const admitDemandStep = (): Promise<ProductBrowserRuntimeOperationResult> => {
+  const admitStep = (
+    mode: 'demand' | 'external',
+    admit: (() => Promise<ProductBrowserRuntimeOperationResult>) | undefined,
+  ): Promise<ProductBrowserRuntimeOperationResult> => {
     try { requireReady(); } catch (cause) { return Promise.reject(cause); }
-    if (options.lifecycleMode !== 'demand') {
+    if (options.lifecycleMode !== mode) {
       return Promise.reject(new ProductBrowserHostError(
         'invalid_options',
-        'admitDemandStep is only available for demand lifecycle products',
+        mode === 'demand'
+          ? 'admitDemandStep is only available for demand lifecycle products'
+          : 'admitExternalStep is only available for external lifecycle products',
       ));
     }
-    if (transport.admitDemandStep === undefined) {
+    if (admit === undefined) {
       return Promise.reject(new ProductBrowserHostError(
         'transport_failed',
-        'this native product did not provide a demand-step transport lane',
+        `this native product did not provide a ${mode === 'demand' ? 'demand' : 'external'}-step transport lane`,
       ));
     }
     return queue.enqueue(async () => {
       requireReady();
-      const host = requireApplication();
-      host.input?.sampleController();
-      const batch = host.input?.drain() ?? [];
-      if (batch.length > 0) await sendInput(batch);
-      const result = await flushProductBrowserRendererFeedbackBeforeUpdate(
-        flushRendererFeedback,
-        () => transport.admitDemandStep!(),
-      );
-      applyOperationResult(result);
-      return result;
-    }).catch((cause: unknown) => {
-      if (isRecoveryGateError(cause)) throw cause;
-      throw recoverOrClose(cause, 'transport_failed');
-    });
-  };
-
-  const admitExternalStep = (step: string): Promise<ProductBrowserRuntimeOperationResult> => {
-    try { requireReady(); } catch (cause) { return Promise.reject(cause); }
-    if (options.lifecycleMode !== 'external') {
-      return Promise.reject(new ProductBrowserHostError(
-        'invalid_options',
-        'admitExternalStep is only available for external lifecycle products',
-      ));
-    }
-    if (transport.admitExternalStep === undefined) {
-      return Promise.reject(new ProductBrowserHostError(
-        'transport_failed',
-        'this native product did not provide an external-step transport lane',
-      ));
-    }
-    return queue.enqueue(async () => {
-      requireReady();
-      const host = requireApplication();
-      host.input?.sampleController();
-      const batch = host.input?.drain() ?? [];
-      if (batch.length > 0) await sendInput(batch);
-      const result = await flushProductBrowserRendererFeedbackBeforeUpdate(
-        flushRendererFeedback,
-        () => transport.admitExternalStep!(step),
-      );
+      await drainAndSendInput();
+      const result = await admit();
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
@@ -3010,16 +1203,13 @@ export async function mountProductBrowserHostWithApplication(
       publishHealth();
       cadence?.dispose();
       removePlaytestInspection();
-      rendererObservationCadenceSampler?.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();
       unsubscribeOutputs = null;
-      removeContextListeners();
       removePageDiagnosticListeners?.();
       removePageDiagnosticListeners = null;
       await queue.settle();
-      await rendererOutputTail;
       const failures: unknown[] = [];
       try {
         await transport.dispose();
@@ -3044,117 +1234,13 @@ export async function mountProductBrowserHostWithApplication(
     transport,
     readout,
     completeTimeline,
-    admitDemandStep,
-    admitExternalStep,
+    admitDemandStep: () => admitStep('demand', transport.admitDemandStep),
+    admitExternalStep: (step: string) => admitStep(
+      'external',
+      transport.admitExternalStep === undefined ? undefined : () => transport.admitExternalStep!(step),
+    ),
     dispose,
   });
-}
-
-const MAXIMUM_HEALTH_DIAGNOSTIC_BYTES = 512;
-
-function snapshotAudioFeedbackFact(
-  value: NonNullable<ReturnType<RustyApplicationHost['renderer']['audioRealizedFacts']>>['facts'][number],
-): ProductBrowserAudioFeedbackFact {
-  if (value.kind === 'naturalCompletion' && value.source === 'oneShot') {
-    return Object.freeze({
-      kind: 'naturalCompletion',
-      source: 'oneShot',
-      factId: canonicalSafeU64(value.factId, 'audio feedback factId'),
-      sequence: requireAudioFeedbackSequence(value.sequence),
-      signalHandle: canonicalSafeU64(value.signalHandle, 'audio feedback signalHandle'),
-    });
-  }
-  if (value.kind === 'naturalCompletion' && value.source === 'retainedVoice') {
-    return Object.freeze({
-      kind: 'naturalCompletion',
-      source: 'retainedVoice',
-      factId: canonicalSafeU64(value.factId, 'audio feedback factId'),
-      sequence: requireAudioFeedbackSequence(value.sequence),
-      voiceHandle: canonicalSafeU64(value.handle, 'audio feedback voiceHandle'),
-    });
-  }
-  return Object.freeze({
-    kind: 'diagnostic',
-    factId: canonicalSafeU64(value.factId, 'audio feedback factId'),
-    code: value.diagnostic.code,
-    sequence: requireAudioFeedbackSequence(value.diagnostic.sequence),
-    voiceHandle: value.diagnostic.handle === null
-      ? null
-      : canonicalSafeU64(value.diagnostic.handle, 'audio feedback diagnostic voiceHandle'),
-    signalHandle: value.diagnostic.signalHandle === undefined
-      ? null
-      : canonicalSafeU64(value.diagnostic.signalHandle, 'audio feedback diagnostic signalHandle'),
-  });
-}
-
-function snapshotAnimationFeedbackFact(
-  value: NonNullable<ReturnType<RustyApplicationHost['renderer']['animationRealizedFacts']>>['facts'][number],
-): ProductBrowserAnimationFeedbackFact {
-  if (value.kind === 'meshInspection') return Object.freeze({
-    ...value, factId: canonicalSafeU64(value.factId, 'inspection factId'),
-    objectId: canonicalSafeU64(value.objectId, 'inspection objectId'),
-    generation: canonicalSafeU64(value.generation, 'inspection generation'),
-  });
-  if (value.kind === 'playbackObservation') return Object.freeze({
-    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
-    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
-    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
-    sequence: requireAudioFeedbackSequence(value.sequence), status: value.status,
-    selectedClip: value.selectedClip, sampledAtSeconds: value.sampledAtSeconds,
-  });
-  if (value.kind === 'naturalCompletion') return Object.freeze({
-    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
-    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
-    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
-    clip: value.clip,
-  });
-  if (value.kind === 'diagnostic') return Object.freeze({
-    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
-    objectId: value.objectId === null ? null : canonicalSafeU64(value.objectId, 'animation feedback objectId'),
-    generation: value.generation === null ? null : canonicalSafeU64(value.generation, 'animation feedback generation'),
-    code: value.diagnostic.code, sequence: requireAudioFeedbackSequence(value.diagnostic.sequence),
-  });
-  if (value.kind === 'cue') return Object.freeze({
-    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
-    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
-    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
-    cueId: value.cueId, clip: value.clip, markerSeconds: value.markerSeconds,
-    sampledAtSeconds: value.sampledAtSeconds, signalDomain: value.signal.domain,
-    signalId: value.signal.id,
-  });
-  return Object.freeze({
-    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
-    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
-    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
-    sequence: requireAudioFeedbackSequence(value.sequence), reason: value.reason,
-  });
-}
-
-function requireAudioFeedbackSequence(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value > 4_294_967_295) {
-    throw new ProductBrowserHostError('transport_failed', 'renderer audio feedback sequence is outside u32 range');
-  }
-  return value;
-}
-
-function canonicalSafeU64(value: number, name: string): string {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new ProductBrowserHostError('transport_failed', `${name} is outside the safe u64 bridge range`);
-  }
-  return String(value);
-}
-
-/**
- * Realization owners (audio voices, video elements, animation and ghost-plate
- * facts) live as long as the runtime incarnation. A control-revision fence
- * (pause, resume, remap, control replace) rebinds reporting to the new
- * binding but must not reset them; a new instance or generation does.
- */
-function sameRuntimeIncarnation(
-  left: RustyApplicationRuntimeIdentity,
-  right: RustyApplicationRuntimeIdentity,
-): boolean {
-  return left.instanceId === right.instanceId && left.generation === right.generation;
 }
 
 function sameRuntimeBinding(
@@ -3216,16 +1302,15 @@ function validateOptions(options: ProductBrowserHostOptions): void {
     && options.realtimeAdvanceOwner !== 'rust-host') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host realtime advance owner is invalid');
   }
+  if (options.output !== undefined && options.output !== 'stream' && options.output !== 'window') {
+    throw new ProductBrowserHostError('invalid_options', 'Product Browser Host output must be stream or window');
+  }
   if (typeof options.mountUi !== 'function') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host mountUi must be a function');
   }
   if (options.uiProjection !== undefined && typeof options.uiProjection.expectedContract !== 'string') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host UI projection requires expectedContract');
   }
-}
-
-function requireFunction(value: unknown, name: string): void {
-  if (typeof value !== 'function') throw new TypeError(`Product Browser Host adapter ${name} must be a function`);
 }
 
 function assertNever(value: never): never {
@@ -3242,201 +1327,4 @@ function createOperationQueue(): ProductBrowserOperationQueue {
     },
     settle: () => tail,
   };
-}
-
-/** Fixed relative location of the complete Engine runtime closure. */
-export const PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE = 'engine/product-browser-host.js' as const;
-
-export type ProductBrowserBundleAssetName =
-  | 'index.html'
-  | 'main.js'
-  | 'bridge.js'
-  | typeof PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE;
-
-export interface ProductBrowserBundleAsset {
-  readonly name: ProductBrowserBundleAssetName;
-  readonly content: string;
-}
-
-export interface ProductBrowserBundleDescriptor {
-  readonly artifact: 'rusty.product.bundle';
-  readonly files: readonly {
-    readonly name: ProductBrowserBundleAssetName;
-    readonly content: string;
-    readonly utf8Bytes: number;
-  }[];
-}
-
-export interface ProductBrowserBundleTemplateOptions {
-  /**
-   * Exact built Engine-owned browser-host closure. The closure is copied into
-   * the generated bundle instead of being resolved through a package manager
-   * or a runtime import map. It must be ordinary JavaScript with no bare
-   * package imports.
-   */
-  readonly engineHostModule: string;
-  /** Product-relative compiled UI module, e.g. `./ui/main.js`. */
-  readonly uiModule: string;
-  /**
-   * Product-relative generated Rust runtime route descriptor, e.g.
-   * `./runtime-adapter.js`. It exports `PRODUCT_RUNTIME_HTTP_BASE_PATH`.
-   */
-  readonly runtimeAdapterModule: string;
-  readonly lifecycleMode: ProductBrowserRuntimeMode;
-  /** Defaults to `rust-host` for realtime bundles and `browser` otherwise. */
-  readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
-  /** Engine-selected gameplay cursor behavior; defaults to pointer lock. */
-  readonly gameplayCursorMode?: RustyApplicationGameplayCursorMode;
-  readonly uiProjection?: {
-    readonly expectedStream: string;
-    readonly expectedContract: string;
-  } | null;
-}
-
-/**
- * Deterministic fixed host assets copied by product build scripts into an
- * ignored generated bundle. Only source-linked module paths are
- * substituted; the HTML, main, bridge, and host topology remain Engine-owned.
- */
-export function productBrowserBundleAssets(
-  options: ProductBrowserBundleTemplateOptions,
-): readonly ProductBrowserBundleAsset[] {
-  validateBundleEngineModule(options.engineHostModule);
-  validateBundleModulePath(options.uiModule, 'uiModule');
-  validateBundleModulePath(options.runtimeAdapterModule, 'runtimeAdapterModule');
-  if (options.lifecycleMode !== 'realtime'
-    && options.lifecycleMode !== 'demand'
-    && options.lifecycleMode !== 'external') {
-    throw new RangeError('lifecycleMode must be realtime, demand, or external');
-  }
-  if (options.realtimeAdvanceOwner !== undefined
-    && options.realtimeAdvanceOwner !== 'browser'
-    && options.realtimeAdvanceOwner !== 'rust-host') {
-    throw new RangeError('realtimeAdvanceOwner must be browser or rust-host');
-  }
-  if (options.gameplayCursorMode !== undefined
-    && options.gameplayCursorMode !== 'pointer-lock'
-    && options.gameplayCursorMode !== 'unlocked') {
-    throw new RangeError('gameplayCursorMode must be pointer-lock or unlocked');
-  }
-  if (options.uiProjection !== undefined && options.uiProjection !== null) {
-    validateBundleIdentity(options.uiProjection.expectedStream, 'expectedStream');
-    validateBundleIdentity(options.uiProjection.expectedContract, 'expectedContract');
-  }
-  return Object.freeze([
-    Object.freeze({
-      name: 'index.html' as const,
-      content: '<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n    <title>Rusty Product</title>\n  </head>\n  <body>\n    <div id="application"></div>\n    <script type="module" src="./main.js"></script>\n  </body>\n</html>\n',
-    }),
-    Object.freeze({
-      name: 'main.js' as const,
-      content: [
-        `import { loadProductBrowserRendererInitialContent, mountProductBrowserHost } from './${PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE}';`,
-        "import { createProductBridge } from './bridge.js';",
-        `import { mountProductUi } from '${options.uiModule}';`,
-        '',
-        "const root = document.querySelector('#application');",
-        "if (root === null) throw new Error('generated Product Browser Host root is missing');",
-        'const bridge = createProductBridge();',
-        'const rendererInitialContent = await loadProductBrowserRendererInitialContent(import.meta.url);',
-        'const host = await mountProductBrowserHost({',
-        '  root,',
-        '  transport: bridge.transport,',
-        '  lifecycleMode: bridge.lifecycleMode,',
-        '  realtimeAdvanceOwner: bridge.realtimeAdvanceOwner,',
-        "  initialInteractionMode: 'gameplay',",
-        `  gameplayCursorMode: ${JSON.stringify(options.gameplayCursorMode ?? 'pointer-lock')},`,
-        '  mountUi: mountProductUi,',
-        '  uiProjection: bridge.uiProjection,',
-        '  runtimeInput: bridge.runtimeInput,',
-        '  renderer: { initialContent: rendererInitialContent },',
-        '});',
-        'void host;',
-        '',
-      ].join('\n'),
-    }),
-    Object.freeze({
-      name: 'bridge.js' as const,
-      content: [
-        `import { createProductBrowserLocalHttpAdapter, createProductBrowserRuntimeTransport } from './${PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE}';`,
-        `import { PRODUCT_RUNTIME_HTTP_BASE_PATH } from '${options.runtimeAdapterModule}';`,
-        '',
-        'export function createProductBridge() {',
-        '  const adapter = createProductBrowserLocalHttpAdapter({',
-        '    basePath: PRODUCT_RUNTIME_HTTP_BASE_PATH,',
-        '  });',
-        '  return {',
-        '    transport: createProductBrowserRuntimeTransport(adapter),',
-        `    lifecycleMode: ${JSON.stringify(options.lifecycleMode)},`,
-        `    realtimeAdvanceOwner: ${JSON.stringify(options.realtimeAdvanceOwner
-          ?? (options.lifecycleMode === 'realtime' ? 'rust-host' : 'browser'))},`,
-        `    gameplayCursorMode: ${JSON.stringify(options.gameplayCursorMode ?? 'pointer-lock')},`,
-        ...(options.uiProjection === undefined || options.uiProjection === null
-          ? ['    uiProjection: undefined,']
-          : [`    uiProjection: ${JSON.stringify(options.uiProjection)},`]),
-        '    runtimeInput: { maximumWheelDelta: 64, selectedController: { index: 0 } },',
-        '  };',
-        '}',
-        '',
-      ].join('\n'),
-    }),
-    Object.freeze({
-      name: PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE,
-      content: options.engineHostModule,
-    }),
-  ]);
-}
-
-/**
- * Returns the exact ordered byte descriptor used by the generator. The
- * descriptor intentionally contains no version counter: consumers can hash
- * each UTF-8 file and compare actual template changes when contracts evolve.
- */
-export function productBrowserBundleDescriptor(
-  options: ProductBrowserBundleTemplateOptions,
-): ProductBrowserBundleDescriptor {
-  const assets = productBrowserBundleAssets(options);
-  const encoder = new TextEncoder();
-  return Object.freeze({
-    artifact: 'rusty.product.bundle' as const,
-    files: Object.freeze(assets.map((asset) => Object.freeze({
-      name: asset.name,
-      content: asset.content,
-      utf8Bytes: encoder.encode(asset.content).byteLength,
-    }))),
-  });
-}
-
-function validateBundleModulePath(value: string, field: string): void {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
-    throw new RangeError(`${field} must be a non-empty relative module path`);
-  }
-  if (value.startsWith('/') || value.includes('\\') || value.includes(':') || value.includes('..')) {
-    throw new RangeError(`${field} must not escape the generated Product Bundle`);
-  }
-  if (!value.startsWith('./')) {
-    throw new RangeError(`${field} must start with ./`);
-  }
-}
-
-function validateBundleEngineModule(value: string): void {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 16 * 1024 * 1024) {
-    throw new RangeError('engineHostModule must be a bounded compiled JavaScript closure');
-  }
-  if (value.includes('\u0000')) {
-    throw new RangeError('engineHostModule must not contain NUL bytes');
-  }
-  for (const line of value.split('\n')) {
-    if (/^\s*(?:import|export)\b/u.test(line)
-      && /['"]@rusty-engine\//u.test(line)) {
-      throw new RangeError('engineHostModule must not contain bare Engine package imports');
-    }
-  }
-}
-
-function validateBundleIdentity(value: string, field: string): void {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 128
-    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)) {
-    throw new RangeError(`${field} must be a bounded product identity`);
-  }
 }

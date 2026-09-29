@@ -48,7 +48,7 @@ to force a rerun.
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |
-| `Video` | Own one content-backed full-viewport WebM presentation and terminal browser realization facts. |
+| `Video` | Own one content-backed full-viewport WebM presentation and terminal realization facts. |
 | `CameraView` | Retain cameras, offscreen targets, and ordered primary/offscreen view compositions; select one active camera as a convenience. |
 | `Random` | Provide Engine-owned deterministic streams, keyed draws, and explicit-state compatibility draws. `DrawLcg15` advances a caller-held wrapping 32-bit LCG state, exposes its 15-bit sample, and reduces it with modulo arithmetic; it is intentionally compatibility behavior, so it has modulo bias and is not a general uniform random API. |
 | `Persistence` | Read and write bounded Engine persistence blobs and stores. |
@@ -211,9 +211,11 @@ at a time.
 ## TypeScript boundary
 
 Downstream TypeScript owns DOM UI and accessibility, never gameplay state or
-non-UI rendering. Engine TypeScript owns browser realization, including Three.js,
-GPU resources, audio, interpolation, and canvas/backend lifecycle. Canonical
-presentation intent remains in Rust; gameplay decisions remain in C#.
+non-UI rendering. Engine TypeScript is the browser shell: it shows the frames
+the runtime renders, carries input, and mounts the product UI. Rendering
+(`render-wgpu`), audio (`render-audio`) and video are Rust mechanisms in the
+runtime process; canonical presentation intent remains in Rust, and gameplay
+decisions remain in C#.
 
 ## Retired lanes
 

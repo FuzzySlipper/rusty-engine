@@ -14,7 +14,7 @@ use crate::{
     BillboardMeter, BillboardPatch, BillboardProjectionOp, BillboardStyle, BillboardTextureRef,
     GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlatePlacement,
     GhostPlateProjectionOp, ParticleAnchor, ParticleCollisionVolume, ParticleEmitterDescriptor,
-    ParticleEmitterPatch, ParticleProjectionOp, TelemetryOverlayProjectionOp, VideoProjectionOp,
+    ParticleEmitterPatch, ParticleProjectionOp, VideoProjectionOp,
 };
 
 pub const PRESENTATION_FRAME_SCHEMA_VERSION: u32 = 1;
@@ -46,10 +46,6 @@ pub enum PresentationOp {
         meta: PresentationOpMeta,
         op: ParticleProjectionOp,
     },
-    TelemetryOverlay {
-        meta: PresentationOpMeta,
-        op: TelemetryOverlayProjectionOp,
-    },
     Animation {
         meta: PresentationOpMeta,
         op: AnimationProjectionOp,
@@ -70,7 +66,6 @@ impl PresentationOp {
             Self::Audio { meta, .. }
             | Self::Billboard { meta, .. }
             | Self::Particle { meta, .. }
-            | Self::TelemetryOverlay { meta, .. }
             | Self::Animation { meta, .. }
             | Self::GhostPlate { meta, .. }
             | Self::Video { meta, .. } => *meta,
@@ -302,14 +297,6 @@ fn validate_json_safe_integers(
                 json_safe(handle.raw(), sequence, "particle.handle")
             }
         },
-        PresentationOp::TelemetryOverlay { op, .. } => {
-            let handle = match op {
-                TelemetryOverlayProjectionOp::Create { handle, .. }
-                | TelemetryOverlayProjectionOp::Update { handle, .. }
-                | TelemetryOverlayProjectionOp::Destroy { handle } => handle,
-            };
-            json_safe(handle.raw(), sequence, "telemetryOverlay.handle")
-        }
         PresentationOp::Animation { op, .. } => match op {
             AnimationProjectionOp::Create { handle, descriptor } => {
                 json_safe(handle.raw(), sequence, "animation.handle")?;

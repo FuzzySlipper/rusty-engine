@@ -23,24 +23,9 @@ importers:
       '@rusty-engine/product-browser-host':
         specifier: workspace:*
         version: link:packages/product-browser-host
-      '@rusty-engine/render-contracts':
-        specifier: workspace:*
-        version: link:packages/render-contracts
-      '@rusty-engine/renderer-host':
-        specifier: workspace:*
-        version: link:packages/renderer-host
-      '@rusty-engine/renderer-three':
-        specifier: workspace:*
-        version: link:packages/renderer-three
       '@types/node':
         specifier: ^25.0.0
         version: 25.9.5
-      '@types/three':
-        specifier: ^0.184.1
-        version: 0.184.1
-      three:
-        specifier: ^0.184.0
-        version: 0.184.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -50,12 +35,6 @@ importers:
 
   packages/application-host:
     devDependencies:
-      '@rusty-engine/render-contracts':
-        specifier: workspace:*
-        version: link:../render-contracts
-      '@rusty-engine/renderer-host':
-        specifier: workspace:*
-        version: link:../renderer-host
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -83,75 +62,11 @@ importers:
       '@rusty-engine/application-host':
         specifier: workspace:*
         version: link:../application-host
-      '@rusty-engine/render-contracts':
-        specifier: workspace:*
-        version: link:../render-contracts
-      '@rusty-engine/renderer-host':
-        specifier: workspace:*
-        version: link:../renderer-host
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/render-contracts:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/render-projection:
-    devDependencies:
-      '@rusty-engine/render-contracts':
-        specifier: workspace:*
-        version: link:../render-contracts
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/renderer-host:
-    devDependencies:
-      '@rusty-engine/render-contracts':
-        specifier: workspace:*
-        version: link:../render-contracts
-      '@rusty-engine/render-projection':
-        specifier: workspace:*
-        version: link:../render-projection
-      '@rusty-engine/renderer-three':
-        specifier: workspace:*
-        version: link:../renderer-three
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/renderer-three:
-    dependencies:
-      '@noble/hashes':
-        specifier: ^2.0.1
-        version: 2.2.0
-      '@types/three':
-        specifier: ^0.184.1
-        version: 0.184.1
-      fflate:
-        specifier: ^0.8.2
-        version: 0.8.3
-      three:
-        specifier: ^0.184.0
-        version: 0.184.0
-    devDependencies:
-      '@rusty-engine/render-contracts':
-        specifier: workspace:*
-        version: link:../render-contracts
-      '@rusty-engine/render-projection':
-        specifier: workspace:*
-        version: link:../render-projection
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
 
 packages:
-
-  '@dimforge/rapier3d-compat@0.12.0':
-    resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -167,10 +82,6 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
-
-  '@noble/hashes@2.2.0':
-    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
-    engines: {node: '>= 20.19.0'}
 
   '@oxc-project/types@0.139.0':
     resolution: {integrity: sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw==}
@@ -278,9 +189,6 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
-  '@tweenjs/tween.js@23.1.3':
-    resolution: {integrity: sha512-vJmvvwFxYuGnF2axRtPYocag6Clbb5YS7kLL+SO/TeVFzHqDIWrNKYtcsPMibjDx9O+bu+psAy9NKfWklassUA==}
-
   '@tybys/wasm-util@0.10.3':
     resolution: {integrity: sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==}
 
@@ -289,15 +197,6 @@ packages:
 
   '@types/node@25.9.5':
     resolution: {integrity: sha512-OScDchr2fwuUmWdf4kZ9h7PcJiYDVInhJizG/biAq3cAvqwYktuy/TYGGdZNMtNTFUP7rnb0NU4TUdm82kt4Rg==}
-
-  '@types/stats.js@0.17.4':
-    resolution: {integrity: sha512-jIBvWWShCvlBqBNIZt0KAshWpvSjhkwkEu4ZUcASoAvhmrgAUI2t1dXrjSL4xXVLB4FznPrIsX3nKXFl/Dt4vA==}
-
-  '@types/three@0.184.1':
-    resolution: {integrity: sha512-6q4VdiqVsrTRqmk62/BnlcAvIrnDM0zf2ZDVKI5kZiniWrSaOHaQzmbp+BNzoggc/8tgW412pL//wZIxu2PPTA==}
-
-  '@types/webxr@0.5.24':
-    resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
 
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
@@ -311,9 +210,6 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
-
-  fflate@0.8.3:
-    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   fsevents@2.3.2:
     resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
@@ -399,9 +295,6 @@ packages:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
 
-  meshoptimizer@1.1.1:
-    resolution: {integrity: sha512-oRFNWJRDA/WTrVj7NWvqa5HqE1t9MYDj2VaWirQCzCCrAd2GHrqR/sQezCxiWATPNlKTcRaPRHPJwIRoPBAp5g==}
-
   nanoid@3.3.16:
     resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -436,9 +329,6 @@ packages:
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
-
-  three@0.184.0:
-    resolution: {integrity: sha512-wtTRjG92pM5eUg/KuUnHsqSAlPM296brTOcLgMRqEeylYTh/CdtvKUvCyyCQTzFuStieWxvZb8mVTMvdPyUpxg==}
 
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
@@ -503,8 +393,6 @@ packages:
 
 snapshots:
 
-  '@dimforge/rapier3d-compat@0.12.0': {}
-
   '@emnapi/core@1.11.1':
     dependencies:
       '@emnapi/wasi-threads': 1.2.2
@@ -527,8 +415,6 @@ snapshots:
       '@emnapi/runtime': 1.11.1
       '@tybys/wasm-util': 0.10.3
     optional: true
-
-  '@noble/hashes@2.2.0': {}
 
   '@oxc-project/types@0.139.0': {}
 
@@ -587,8 +473,6 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@tweenjs/tween.js@23.1.3': {}
-
   '@tybys/wasm-util@0.10.3':
     dependencies:
       tslib: 2.8.1
@@ -602,26 +486,11 @@ snapshots:
     dependencies:
       undici-types: 7.24.6
 
-  '@types/stats.js@0.17.4': {}
-
-  '@types/three@0.184.1':
-    dependencies:
-      '@dimforge/rapier3d-compat': 0.12.0
-      '@tweenjs/tween.js': 23.1.3
-      '@types/stats.js': 0.17.4
-      '@types/webxr': 0.5.24
-      fflate: 0.8.3
-      meshoptimizer: 1.1.1
-
-  '@types/webxr@0.5.24': {}
-
   detect-libc@2.1.2: {}
 
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
-
-  fflate@0.8.3: {}
 
   fsevents@2.3.2:
     optional: true
@@ -678,8 +547,6 @@ snapshots:
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
 
-  meshoptimizer@1.1.1: {}
-
   nanoid@3.3.16: {}
 
   picocolors@1.1.1: {}
@@ -722,8 +589,6 @@ snapshots:
       '@rolldown/binding-win32-x64-msvc': 1.1.5
 
   source-map-js@1.2.1: {}
-
-  three@0.184.0: {}
 
   tinyglobby@0.2.17:
     dependencies:

@@ -451,11 +451,6 @@ enum DiagnosticsOperationWire {
     AdmitDemandStep,
     AdmitExternalStep,
     CompleteTimeline,
-    ReportAudioFeedback,
-    ReportVideoFeedback,
-    ReportAnimationFeedback,
-    ReportGhostPlateFeedback,
-    ReportRendererDiagnostics,
     ExecuteDebug,
 }
 enum Arguments {

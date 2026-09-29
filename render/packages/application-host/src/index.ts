@@ -3,44 +3,12 @@ export {
   RustyApplicationHostError,
   mountRustyApplication,
 } from './application-host.js';
-export {
-  RustyApplicationContentError,
-} from './application-content.js';
 export type {
-  RustyApplicationAudioResumeReceipt,
-  RustyApplicationAudioDiagnostic,
-  RustyApplicationAudioDiagnosticCode,
-  RustyApplicationAudioRealizedFact,
-  RustyApplicationAudioRealizedFactsReadout,
-  RustyApplicationAnimationDiagnostic,
-  RustyApplicationAnimationDiagnosticCode,
-  RustyApplicationAnimationCueDefinition,
-  RustyApplicationAnimationRealizedFact,
-  RustyApplicationAnimationRealizedFactsReadout,
-  RustyApplicationCameraPose,
-  RustyApplicationFrame,
-  RustyApplicationFrameDiagnostic,
-  RustyApplicationFrameReceipt,
-  RustyApplicationFogOptions,
-  RustyApplicationGhostPlateReadout,
+  RustyApplicationGameplayCursorMode,
   RustyApplicationHost,
   RustyApplicationHostOptions,
   RustyApplicationHostReadout,
-  RustyApplicationGameplayCursorMode,
   RustyApplicationInteractionMode,
-  RustyApplicationLightingOptions,
-  RustyApplicationPresentationDiagnostic,
-  RustyApplicationPresentationFrame,
-  RustyApplicationPresentationReceipt,
-  RustyApplicationViewComposition,
-  RustyApplicationViewCompositionCamera,
-  RustyApplicationViewCompositionPresentation,
-  RustyApplicationViewCompositionReceipt,
-  RustyApplicationViewCompositionTarget,
-  RustyApplicationViewCompositionView,
-  RustyApplicationViewCompositionViewport,
-  RustyApplicationRendererOptions,
-  RustyApplicationRendererPort,
   RustyApplicationUiContext,
   RustyApplicationUiIntentsPort,
   RustyApplicationUiInputPort,
@@ -48,6 +16,14 @@ export type {
   RustyApplicationUiOwner,
   RustyApplicationUiPort,
 } from './application-host.js';
+export {
+  RUSTY_APPLICATION_FRAME_STREAM_PATH,
+  parseRustyApplicationStreamedFrame,
+} from './frame-view.js';
+export type {
+  RustyApplicationRenderOutput,
+  RustyApplicationStreamedFrame,
+} from './frame-view.js';
 export {
   RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
   RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM,
@@ -97,9 +73,3 @@ export type {
 export type {
   RustyApplicationPresentationAspectBounds,
 } from './presentation-frame.js';
-export type {
-  RustyApplicationContent,
-  RustyApplicationContentDiagnosticCode,
-  RustyApplicationResource,
-  RustyApplicationResourceKind,
-} from './application-content.js';

@@ -18,10 +18,10 @@ expect_rejection() {
   fi
 }
 
-cp -a "$PROBE_ROOT" "$PROBE_ROOT.missing-host"
-sed -i "/rust\/crates\/render-host-contracts/d" "$PROBE_ROOT.missing-host/.github/workflows/render.yml"
-PROBE_ROOT="$PROBE_ROOT.missing-host" expect_rejection "missing render contract owner"
-rm -rf "$PROBE_ROOT.missing-host"
+cp -a "$PROBE_ROOT" "$PROBE_ROOT.missing-browser"
+sed -i "/'render\/\*\*'/d" "$PROBE_ROOT.missing-browser/.github/workflows/browser.yml"
+PROBE_ROOT="$PROBE_ROOT.missing-browser" expect_rejection "missing browser shell owner"
+rm -rf "$PROBE_ROOT.missing-browser"
 
 cp -a "$PROBE_ROOT" "$PROBE_ROOT.no-cancel"
 sed -i '/^concurrency:/,/^permissions:/d' "$PROBE_ROOT.no-cancel/.github/workflows/docs.yml"

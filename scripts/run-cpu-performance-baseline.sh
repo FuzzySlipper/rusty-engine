@@ -11,7 +11,7 @@ cd "$REPO_ROOT"
 # Build/crossover probes retain their existing workload. Repeat complete runs
 # so the artifact exposes between-run noise, not just within-run percentiles.
 for run in 1 2 3; do
-  RUSTY_PERF_SKIP_BROWSER=1 "$REPO_ROOT/scripts/run-performance-regression.sh" \
+  "$REPO_ROOT/scripts/run-performance-regression.sh" \
     > "$OUTPUT_DIRECTORY/layers-$run.log" 2>&1
 done
 cargo run --release --locked -p svc-mesh --example dual_contouring_performance \

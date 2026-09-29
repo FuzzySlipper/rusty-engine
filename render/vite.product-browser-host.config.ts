@@ -4,19 +4,10 @@ import { defineConfig } from 'vite';
 const renderRoot = new URL('./', import.meta.url);
 
 /**
- * Build the Engine-owned browser-host closure as one ordinary ES module.
- * application-host is already a bundled public artifact; aliasing that exact
- * artifact keeps the result free of bare package imports at runtime.
+ * Build the Engine-owned browser shell closure, application host included,
+ * as one ordinary ES module the runtime pack serves beside its shell page.
  */
 export default defineConfig({
-  resolve: {
-    alias: [
-      {
-        find: '@rusty-engine/application-host',
-        replacement: fileURLToPath(new URL('artifacts/application-host/index.js', renderRoot)),
-      },
-    ],
-  },
   build: {
     emptyOutDir: true,
     lib: {

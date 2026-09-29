@@ -5,7 +5,7 @@ DOM over `@rusty-engine/live-debug-client`. It forwards raw command lines and
 shows engine diagnostics and product/runtime telemetry. It does not read
 gameplay state, render game elements or define commands.
 
-`pnpm --dir render run bundle:live-debug-panel-artifact` writes one
+`pnpm --dir render run build` writes one
 import-closed ES module to `render/artifacts/live-debug-panel` (ignored build
 output). The runtime pack installs it at `share/browser/engine/live-debug-panel`,
 and its browser shell maps it to the `@rusty-engine/live-debug` import:

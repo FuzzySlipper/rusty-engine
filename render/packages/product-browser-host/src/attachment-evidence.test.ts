@@ -5,7 +5,6 @@ import { createBrowserAttachmentEvidence } from './attachment-evidence.js';
 const baseline = {
   runtime: { instanceId: '1', generation: '2', controlRevision: '3' },
   nextInputSequence: '7',
-  publicationFrontiers: [{ stream: 'presentation-world', revision: 9 }],
 };
 
 function fixture(reload: boolean) {
@@ -17,7 +16,7 @@ function fixture(reload: boolean) {
   return { evidence, values };
 }
 
-void test('reload correlation requires renderer confirmation of the same staged epoch', () => {
+void test('reload correlation requires page confirmation of the same staged epoch', () => {
   const { evidence, values } = fixture(true);
   evidence.begin(1);
   evidence.stage(1, baseline);

@@ -22,16 +22,12 @@ export interface RendererMetricsWidgetMount {
   dispose(): void;
 }
 
+/** The runtime renderer's statistics (`engine.renderer.status`). */
 interface RendererMetricsSummary {
   readonly available: boolean;
   readonly widget?: { readonly visible?: boolean };
   readonly diagnostic?: string;
-  readonly renderer?: { readonly name?: unknown; readonly vendor?: unknown; readonly class?: unknown };
-  readonly canvas?: Record<string, unknown>;
-  readonly frame?: Record<string, unknown>;
-  readonly pacing?: Record<string, unknown>;
-  readonly statistics?: Record<string, unknown>;
-  readonly resources?: Record<string, unknown>;
+  readonly renderer?: Record<string, unknown>;
 }
 
 /**
@@ -128,24 +124,23 @@ function renderSummary(root: HTMLElement, summary: RendererMetricsSummary): void
   root.hidden = !visible;
   root.dataset['visible'] = String(visible);
   if (!summary.available) {
-    root.textContent = `Renderer metrics\nSnapshot unavailable: ${text(summary.diagnostic)}`;
+    root.textContent = `Renderer metrics\nUnavailable: ${text(summary.diagnostic)}`;
     return;
   }
-  const frame = summary.frame ?? {};
-  const pacing = summary.pacing ?? {};
-  const canvas = summary.canvas ?? {};
-  const resources = summary.resources ?? {};
-  const statistics = summary.statistics ?? {};
-  root.textContent = [
+  const renderer = summary.renderer ?? {};
+  const median = (renderer['medianMs'] ?? {}) as Record<string, unknown>;
+  const lines = [
     'Renderer metrics',
-    `Submission rate: ${fixed(frame['submissionRateHz'])} Hz | last interval: ${milliseconds(frame['intervalMs'])} | sync submit: ${milliseconds(frame['syncSubmissionMs'])}`,
-    `GPU timer: ${milliseconds(pacing['timerDurationMs'])} | effective pacing: ${milliseconds(pacing['effectiveDurationMs'])} | ${text(pacing['state'])}/${text(pacing['mode'])}`,
-    `Renderer: ${text(summary.renderer?.class)} | ${text(summary.renderer?.name)} | ${text(summary.renderer?.vendor)}`,
-    `Canvas: ${text(canvas['backingWidth'])}×${text(canvas['backingHeight'])} px | CSS ${text(canvas['cssWidth'])}×${text(canvas['cssHeight'])} | DPR ${fixed(canvas['effectivePixelRatio'])}`,
-    `Draws: ${statistic(statistics['drawCallCount'])} | triangles: ${statistic(statistics['triangleCount'])} | live handles: ${statistic(statistics['renderHandleCount'])}`,
-    `Live resources: geometry ${statistic(statistics['geometryResourceCount'])}, material ${statistic(statistics['materialResourceCount'])}, texture ${statistic(statistics['textureResourceCount'])}`,
-    `Defined textures: ${text(resources['definedTextureCount'])} | fallbacks: sprite ${text(resources['spriteFallbackCount'])}, material ${text(resources['materialFallbackCount'])}`,
-  ].join('\n');
+    `Adapter: ${text(renderer['adapter'])}${renderer['output'] === undefined ? '' : ` | ${text(renderer['output'])}`}`,
+  ];
+  if (renderer['framesPerSecond'] !== undefined) {
+    lines.push(
+      `Frames: ${fixed(renderer['framesPerSecond'])} per second | render ${milliseconds(median['render'])} | readback ${milliseconds(median['readback'])} | encode ${milliseconds(median['encode'])}`,
+      `Stream: ${kilobytes(renderer['medianBytesPerFrame'])} per frame | ${kilobytes(renderer['bytesPerSecond'])} per second`,
+    );
+  }
+  lines.push(`Skipped ops: ${text(renderer['skippedOps'])}${renderer['lastSkip'] ? ` | last: ${text(renderer['lastSkip'])}` : ''}`);
+  root.textContent = lines.join('\n');
 }
 
 function renderError(root: HTMLElement, error: unknown): void {
@@ -154,9 +149,8 @@ function renderError(root: HTMLElement, error: unknown): void {
   root.textContent = `Renderer metrics\nUnavailable: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-function statistic(value: unknown): string {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return 'unavailable';
-  return text((value as Record<string, unknown>)['value']);
+function kilobytes(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${(value / 1024).toFixed(1)} KiB` : 'unavailable';
 }
 
 function fixed(value: unknown): string {

@@ -4,7 +4,6 @@ resolver = "2"
 members = [
     "rust/crates/rusty-cli",
     "rust/crates/render-host-contracts",
-    "rust/crates/renderer-webview-host",
     "rust/crates/product-dev-host",
     "rust/crates/runtime-diagnostics",
     "rust/crates/runtime-session",
@@ -66,7 +65,6 @@ runtime-input = { path = "rust/crates/runtime-input" }
 runtime-timeline = { path = "rust/crates/runtime-timeline" }
 runtime-ui = { path = "rust/crates/runtime-ui" }
 render-host-contracts = { path = "rust/crates/render-host-contracts" }
-renderer-webview-host = { path = "rust/crates/renderer-webview-host" }
 asset-import = { path = "rust/crates/asset-import" }
 voxel-convert = { path = "rust/crates/voxel-convert" }
 authored-scene = { path = "rust/crates/authored-scene" }
