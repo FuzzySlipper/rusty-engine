@@ -15,10 +15,3 @@ export interface RenderOutputJob {
         readonly pose: { readonly handle: RenderHandle; readonly clip: string; readonly normalizedTime: number } | null }
     | { readonly kind: 'glb'; readonly includeAnimations: boolean };
 }
-export interface RenderOutputChunk {
-  readonly id: number;
-  readonly offset: number;
-  readonly bytes: readonly number[];
-  readonly complete: boolean;
-  readonly error: string | null;
-}

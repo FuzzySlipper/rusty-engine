@@ -1,6 +1,5 @@
 import { installPlaytestInspection } from './playtest-inspection.js';
 import { mountStreamedFrameSurface } from './streamed-frame-surface.js';
-import type { RenderOutputJob, RenderOutputChunk } from "@rusty-engine/render-contracts";
 import {
   mountRustyApplication,
   type RustyApplicationFrame,
@@ -305,7 +304,6 @@ export interface ProductBrowserRuntimeBindingOutput {
 
 export type ProductBrowserRuntimeOutput =
   | ProductBrowserRuntimeBindingOutput
-  | { readonly kind: 'render-output'; readonly jobs: readonly RenderOutputJob[]; readonly rendererResources?: readonly string[] }
   /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
   | {
       readonly kind: 'runtime-input-result';
@@ -470,7 +468,6 @@ export interface ProductBrowserRuntimeAdapter {
   readonly reportAnimationFeedback: (
     feedback: ProductBrowserAnimationFeedback,
   ) => Promise<ProductBrowserAnimationFeedbackResult>;
-  readonly reportRenderOutputFeedback?: (feedback: { readonly runtime: RustyApplicationRuntimeIdentity; readonly chunk: RenderOutputChunk }) => Promise<void>;
   readonly reportGhostPlateFeedback: (
     feedback: ProductBrowserGhostPlateFeedback,
   ) => Promise<ProductBrowserGhostPlateFeedbackResult>;
@@ -519,7 +516,6 @@ export interface ProductBrowserRuntimeTransport {
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
   readonly reportVideoFeedback?: NonNullable<ProductBrowserRuntimeAdapter['reportVideoFeedback']>;
   readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
-  readonly reportRenderOutputFeedback?: NonNullable<ProductBrowserRuntimeAdapter['reportRenderOutputFeedback']>;
   readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
   readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
   readonly reportBrowserDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportBrowserDiagnostics']>;
@@ -593,7 +589,6 @@ export function createProductBrowserRuntimeTransport(
     reportAudioFeedback: adapter.reportAudioFeedback,
     ...(adapter.reportVideoFeedback === undefined ? {} : { reportVideoFeedback: adapter.reportVideoFeedback }),
     reportAnimationFeedback: adapter.reportAnimationFeedback,
-    ...(adapter.reportRenderOutputFeedback === undefined ? {} : { reportRenderOutputFeedback: adapter.reportRenderOutputFeedback }),
     reportGhostPlateFeedback: adapter.reportGhostPlateFeedback,
     ...(adapter.reportRendererDiagnostics === undefined
       ? {}
@@ -1422,7 +1417,6 @@ export async function mountProductBrowserHostWithApplication(
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   // Scoped to the renderer and binding that accepted a frozen job. Replayed
   // pending snapshots do not run the same job repeatedly during normal updates.
-  const renderOutputJobs = new Set<string>();
 
   // A transport-marked connection baseline is a complete retained graph. Keep
   // its envelope while animated resources wait for their initial definitions;
@@ -1874,13 +1868,12 @@ export async function mountProductBrowserHostWithApplication(
   const admitOutputResources = async (
     host: RustyApplicationHost,
     output: ProductBrowserRuntimeOutput,
-    requestedRuntime?: RustyApplicationRuntimeIdentity,
   ): Promise<void> => {
     if (output.rendererResources === undefined) {
       if (output.kind === 'frame') await host.renderer.admitResources([], output.frame);
       return;
     }
-    const runtime = requestedRuntime ?? (output.kind === 'binding' ? output.runtime : currentInputBinding);
+    const runtime = output.kind === 'binding' ? output.runtime : currentInputBinding;
     if (runtime === null) {
       throw new ProductBrowserHostError('output_failed', 'renderer resource closure arrived before a runtime binding');
     }
@@ -1979,42 +1972,6 @@ export async function mountProductBrowserHostWithApplication(
             if (receipt.outcome === 'applied') productFrameObservation.applied(receivedAtMs);
             if (output.rendererResources !== undefined) host.renderer.retainResources(new Set(output.rendererResources));
             });
-          });
-          return;
-        }
-        case 'render-output': {
-          const runtime = currentInputBinding;
-          if (runtime === null) throw new ProductBrowserHostError('output_failed', 'output job arrived before runtime binding');
-          const bindingKey = JSON.stringify(runtime);
-          const activeKeys = new Set(output.jobs.map((job) => `${bindingKey}:${job.id}`));
-          for (const key of renderOutputJobs) if (!activeKeys.has(key)) renderOutputJobs.delete(key);
-          enqueueRendererOutput(async () => {
-            await admitOutputResources(host, output, runtime);
-            for (const job of output.jobs) {
-              const key = `${bindingKey}:${job.id}`;
-              if (renderOutputJobs.has(key)) continue;
-              renderOutputJobs.add(key);
-              const report = transport.reportRenderOutputFeedback;
-              if (report === undefined) throw new ProductBrowserHostError('output_failed', 'runtime does not accept render output');
-              let bytes: Uint8Array;
-              try {
-                await host.renderer.admitResources([], job.frame as unknown as RustyApplicationFrame);
-                bytes = await host.renderer.executeRenderOutput(job);
-              } catch (cause) {
-                if (currentInputBinding === null || !sameRuntimeBinding(runtime, currentInputBinding)) continue;
-                await report({ runtime, chunk: { id: job.id, offset: 0, bytes: [], complete: true, error: (cause instanceof Error ? cause.message : String(cause)).slice(0, 256) } });
-                continue;
-              }
-              // Keep JSON and worker messages below the existing host request
-              // cap. Completion is reported only after the last byte is owned.
-              const chunkSize = 32 * 1024;
-              for (let offset = 0; offset < bytes.length || (offset === 0 && bytes.length === 0); offset += chunkSize) {
-                if (currentInputBinding === null || !sameRuntimeBinding(runtime, currentInputBinding)) break;
-                const end = Math.min(offset + chunkSize, bytes.length);
-                await report({ runtime, chunk: { id: job.id, offset, bytes: Array.from(bytes.subarray(offset, end)), complete: end === bytes.length, error: null } });
-                if (end === bytes.length) break;
-              }
-            }
           });
           return;
         }
@@ -2300,7 +2257,6 @@ export async function mountProductBrowserHostWithApplication(
       schemaVersion: 1,
       ops: Object.freeze(frameOps),
     }) as RustyApplicationFrame;
-    renderOutputJobs.clear();
     const retainedOutputs = outputs.filter((output) => output.kind !== 'frame'
       && output.kind !== 'runtime-input-result');
 

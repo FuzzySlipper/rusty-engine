@@ -34,31 +34,33 @@ Image dimensions are independent of the window. The result is a top-to-bottom
 `UseCameraBackground` instead selects the current `CameraView` sky/color.
 Existing retained lights, material assignments, camera framing and projection
 remain Engine inputs. Exposure, no tone mapping/ACES, and multisample count are
-explicit capture choices. Unsupported target dimensions or sample counts fail
-with a diagnostic. A zero `PoseObjectId` keeps the frozen pose; a nonzero object
+explicit capture choices; a sample count above 1 supersamples. Dimensions
+beyond the device's texture limit fail with a diagnostic. A zero `PoseObjectId` keeps the frozen pose; a nonzero object
 selects an exact normalized clip time in `[0,1]`, including the final pose,
 without advancing the live animation or wall clock.
 
 Completion means resources loaded, pose evaluated, render/readback finished,
 and PNG/GLB bytes copied to the Engine owner. Poll `Read`; use `ReadDiagnostic`
 for a failed job. `Cancel` or `Dispose` prevents later completion from reviving
-a job. Dispose results after use; the renderer reuses its batch render target.
+a job. Dispose results after use.
 Requests settle after a callback, so never block that callback waiting for one.
 
 GLB exports current retained geometry, hierarchy, transforms, standard material
 and texture assignments, normals and UVs, rather than returning the original
-imported file. `IncludeAnimations` preserves supported skin/clip data. Unsupported
-shader-based materials or animation features fail explicitly. Generated meshes
+imported file. The selected object keeps its ancestor path, so its placement
+survives. Primitives export as unlit materials, retained materials as
+metallic-roughness with metalness 0, and textures embed their PNG bytes.
+`IncludeAnimations` keeps each skinned mesh's skin and every resolved clip, clip
+packs included; without it only the rig at rest is written. Hidden objects are
+exported. Sprites, voxel objects and voxel-surface materials, and ambient
+lights have no glTF counterpart and fail the job, naming the object. Generated meshes
 remain exportable after the implicit field has been disposed, as long as the
 mesh appearance is retained when the request settles. Reopen output through the
 `Animation.OpenAnimatedMesh` / `CreateAnimatedMeshAppearance` content path
 (which also admits static GLBs with no embedded clips).
 
-For unattended batches, launch the packaged `rusty dev --headless` or
-`rusty-product-host --headless`. Chromium must be installed; `RUSTY_CHROMIUM_PATH`
-selects its executable. This uses the Engine browser backend in a managed
-headless process, including software WebGL support; it is not a GPU-free
-renderer or a product-owned DOM screenshot path.
-The host creates and removes a disposable browser profile. Its basic password
-store avoids desktop keyring prompts that can stall the first page request in
-an unattended Linux session; it does not use your interactive browser profile.
+The runtime runs output jobs itself, on a worker thread beside the product. Images
+render through the Engine's wgpu renderer, on the machine's GPU or a software
+Vulkan adapter such as Mesa's lavapipe. GLB export needs no GPU. No browser is
+involved, so an unattended batch is an ordinary `rusty dev` or
+`rusty-product-host` launch with no page attached.

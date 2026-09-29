@@ -51,8 +51,8 @@ The desktop lane (#8790) presents to a window and does not read frames, so the h
 **Not realized in this mode yet:**
 - observer camera, on-demand drawing, pick and the presentation observation (#8841);
 - ghost plate feedback (#8842);
-- `RenderOutput` image jobs (#8826);
-- billboard labels (#8827).
+- `RenderOutput` image jobs (#8826), since realized: the runtime runs them in every mode;
+- billboard labels (#8827), since realized: the streamed renderer draws them.
 
 ## Encoding decision: JPEG q80, pure Rust
 

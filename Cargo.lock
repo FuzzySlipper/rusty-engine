@@ -909,6 +909,7 @@ dependencies = [
  "render-model",
  "render-presentation",
  "render-stream",
+ "render-wgpu",
  "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",

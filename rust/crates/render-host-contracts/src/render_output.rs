@@ -39,16 +39,3 @@ pub struct RenderOutputPose {
     pub clip: String,
     pub normalized_time: f64,
 }
-
-/// Named bounded transfer of an output. Offsets allow retries without repeated
-/// allocation or corrupting a previously accepted prefix. A final empty chunk
-/// is legal; an error ends the job without exposing partial bytes as output.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenderOutputChunk {
-    pub id: u64,
-    pub offset: usize,
-    pub bytes: Vec<u8>,
-    pub complete: bool,
-    pub error: Option<String>,
-}

@@ -1,5 +1,7 @@
-//! Engine-owned offline output lifetime. Product calls stage requests; the
-//! renderer transfers completed bytes between calls, never through a callback.
+//! Engine-owned offline output lifetime. Product calls stage requests; each
+//! call's settled jobs go to the runtime's executor once, as
+//! [`RenderOutputWork`], and their results arrive between calls, never
+//! through a callback.
 use crate::{
     appearance::CsharpRenderResource,
     camera_view::RuntimeCameraViewCall,
@@ -7,11 +9,13 @@ use crate::{
     CsharpEngineServicesError,
 };
 use csharp_engine_abi::*;
-use render_host_contracts::{
-    RenderOutputChunk, RenderOutputJob, RenderOutputOperation, RenderOutputPose,
-};
+use render_host_contracts::{RenderOutputJob, RenderOutputOperation, RenderOutputPose};
 use render_model::RenderHandle;
-use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ffi::c_void,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 #[derive(Clone)]
 enum Request {
@@ -36,10 +40,46 @@ enum Request {
 struct Entry {
     state: NativeRenderOutputState,
     request: Option<Request>,
-    job: Option<Arc<RenderOutputJob>>,
-    resources: Vec<CsharpRenderResource>,
     bytes: Arc<Vec<u8>>,
     diagnostic: Arc<Vec<u8>>,
+}
+
+type Results = Arc<Mutex<Vec<(u64, Result<Vec<u8>, String>)>>>;
+
+/// A settled output job, the resources its frozen frame reads, and where its
+/// result goes. The resources stay alive with the work even if the product
+/// releases them first.
+pub struct RenderOutputWork {
+    pub job: RenderOutputJob,
+    pub resources: Vec<CsharpRenderResource>,
+    results: Option<Results>,
+}
+
+impl RenderOutputWork {
+    /// Deliver the job's PNG or GLB bytes, or the diagnostic that failed it.
+    /// The product reads it from its next callback on.
+    pub fn complete(mut self, result: Result<Vec<u8>, String>) {
+        self.deliver(result);
+    }
+
+    fn deliver(&mut self, result: Result<Vec<u8>, String>) {
+        if let Some(results) = self.results.take() {
+            results
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((self.job.id, result));
+        }
+    }
+}
+
+/// Work dropped unfinished (its executor stopped) fails rather than staying
+/// pending forever.
+impl Drop for RenderOutputWork {
+    fn drop(&mut self) {
+        self.deliver(Err(
+            "the render output executor stopped before the job finished".to_owned(),
+        ));
+    }
 }
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeRenderOutputCall {
@@ -50,7 +90,8 @@ pub(crate) struct RuntimeRenderOutputBridge {
     state: RuntimeRenderOutputCall,
     staged: Option<RuntimeRenderOutputCall>,
     next: u64,
-    published: Vec<u64>,
+    /// Results delivered since the last call began.
+    results: Results,
     borrowed: crate::operation_diagnostics::BorrowedResult,
 }
 fn error(message: impl Into<String>) -> CsharpEngineServicesError {
@@ -62,11 +103,16 @@ impl RuntimeRenderOutputBridge {
             state: Default::default(),
             staged: None,
             next: 1,
-            published: vec![],
+            results: Default::default(),
             borrowed: Default::default(),
         }
     }
     pub(crate) fn begin_call(&mut self) {
+        let results =
+            std::mem::take(&mut *self.results.lock().unwrap_or_else(PoisonError::into_inner));
+        for (id, result) in results {
+            self.complete(id, result);
+        }
         // The call owns the state until it finishes; nothing is copied.
         self.staged = Some(std::mem::take(&mut self.state));
     }
@@ -84,7 +130,6 @@ impl RuntimeRenderOutputBridge {
         self.commit(call);
     }
     pub(crate) fn commit(&mut self, call: RuntimeRenderOutputCall) {
-        self.published = Self::job_ids(&call);
         self.state = call;
     }
     fn staged(&mut self) -> Result<&mut RuntimeRenderOutputCall, CsharpEngineServicesError> {
@@ -105,8 +150,6 @@ impl RuntimeRenderOutputBridge {
             Entry {
                 state: NativeRenderOutputState::Pending,
                 request: Some(request),
-                job: None,
-                resources: vec![],
                 bytes: Arc::new(vec![]),
                 diagnostic: Arc::new(vec![]),
             },
@@ -222,10 +265,7 @@ impl RuntimeRenderOutputBridge {
             .ok_or_else(|| error("unknown output"))?;
         if e.state == NativeRenderOutputState::Pending {
             e.state = NativeRenderOutputState::Cancelled;
-            e.job = None;
             e.request = None;
-            e.resources.clear();
-            e.bytes = Arc::new(vec![]);
         }
         Ok(())
     }
@@ -236,12 +276,16 @@ impl RuntimeRenderOutputBridge {
             .ok_or_else(|| error("unknown output"))?;
         Ok(())
     }
+    /// Freeze each new request's scene into a job, for the executor. A
+    /// request that cannot settle fails with its diagnostic.
     pub(crate) fn settle(
+        &self,
         call: &mut RuntimeRenderOutputCall,
         world: &render_presentation::PresentationWorld,
         cameras: &RuntimeCameraViewCall,
         appearance: &crate::appearance::RuntimeAppearanceState,
-    ) -> Result<(), CsharpEngineServicesError> {
+    ) -> Vec<RenderOutputWork> {
+        let mut work = Vec::new();
         for (&id, e) in &mut call.entries {
             let Some(request) = e.request.take() else {
                 continue;
@@ -304,86 +348,37 @@ impl RuntimeRenderOutputBridge {
                 })
             })();
             match settled {
-                Ok(job) => e.job = Some(Arc::new(job)),
+                Ok(job) => work.push(RenderOutputWork {
+                    job,
+                    resources: appearance.render_resources.iter().cloned().collect(),
+                    results: Some(Arc::clone(&self.results)),
+                }),
                 Err(cause) => {
                     e.state = NativeRenderOutputState::Failed;
                     e.diagnostic = Arc::new(cause.to_string().into_bytes());
-                    continue;
                 }
             }
-            // Arc-backed immutable resources remain available even if the product
-            // releases its source before the renderer fetches the frozen frame.
-            e.resources = appearance.render_resources.iter().cloned().collect();
         }
-        Ok(())
+        work
     }
-    pub(crate) fn jobs(call: &RuntimeRenderOutputCall) -> Vec<RenderOutputJob> {
-        call.entries
-            .values()
-            .filter_map(|e| e.job.as_deref().cloned())
-            .collect()
-    }
-    fn job_ids(call: &RuntimeRenderOutputCall) -> Vec<u64> {
-        call.entries
-            .iter()
-            .filter_map(|(&id, e)| e.job.as_ref().map(|_| id))
-            .collect()
-    }
-    pub(crate) fn changed_jobs(
-        &self,
-        call: &RuntimeRenderOutputCall,
-    ) -> Option<Vec<RenderOutputJob>> {
-        (Self::job_ids(call) != self.published).then(|| Self::jobs(call))
-    }
-    pub(crate) fn snapshot(&self) -> Vec<RenderOutputJob> {
-        Self::jobs(&self.state)
-    }
-    pub(crate) fn resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
-        self.state.entries.values().flat_map(|e| e.resources.iter())
-    }
-    pub(crate) fn ingest(
-        &mut self,
-        chunk: RenderOutputChunk,
-    ) -> Result<(), CsharpEngineServicesError> {
-        let Some(e) = self.state.entries.get_mut(&chunk.id) else {
-            return Ok(());
+    /// A result for a pending job; a cancelled or destroyed job stays so.
+    fn complete(&mut self, id: u64, result: Result<Vec<u8>, String>) {
+        let Some(e) = self.state.entries.get_mut(&id) else {
+            return;
         };
         if e.state != NativeRenderOutputState::Pending {
-            return Ok(());
+            return;
         }
-        if let Some(message) = chunk.error {
-            e.state = NativeRenderOutputState::Failed;
-            e.diagnostic = Arc::new(message.into_bytes());
-            e.bytes = Arc::new(vec![]);
-        } else {
-            // A reattached renderer can restart serialization of the same
-            // frozen job. Offset zero starts a fresh transfer; terminal jobs
-            // above remain immutable even if completion is retried.
-            if chunk.offset == 0 {
-                e.bytes = Arc::new(Vec::new());
-            }
-            if chunk.offset < e.bytes.len() {
-                if e.bytes
-                    .get(chunk.offset..chunk.offset.saturating_add(chunk.bytes.len()))
-                    == Some(chunk.bytes.as_slice())
-                {
-                    return Ok(());
-                }
-                return Err(error("output chunk retry disagrees with accepted bytes"));
-            }
-            if chunk.offset != e.bytes.len() {
-                return Err(error("output chunk is not contiguous"));
-            }
-            Arc::make_mut(&mut e.bytes).extend_from_slice(&chunk.bytes);
-            if chunk.complete {
+        match result {
+            Ok(bytes) => {
                 e.state = NativeRenderOutputState::Completed;
+                e.bytes = Arc::new(bytes);
+            }
+            Err(message) => {
+                e.state = NativeRenderOutputState::Failed;
+                e.diagnostic = Arc::new(message.into_bytes());
             }
         }
-        if e.state != NativeRenderOutputState::Pending {
-            e.job = None;
-            e.resources.clear();
-        }
-        Ok(())
     }
 }
 
@@ -499,81 +494,78 @@ pub(crate) fn api(b: &mut RuntimeRenderOutputBridge) -> NativeRenderOutputApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn work(bridge: &RuntimeRenderOutputBridge, id: u64) -> RenderOutputWork {
+        RenderOutputWork {
+            job: RenderOutputJob {
+                id,
+                source: RenderHandle::new(1),
+                frame: render_model::RenderFrameDiff {
+                    schema_version: render_model::RENDER_FRAME_SCHEMA_VERSION,
+                    publication: None,
+                    ops: Vec::new(),
+                },
+                operation: RenderOutputOperation::Glb {
+                    include_animations: false,
+                },
+            },
+            resources: Vec::new(),
+            results: Some(Arc::clone(&bridge.results)),
+        }
+    }
+
     #[test]
-    fn chunks_complete_once_and_cancelled_jobs_cannot_be_resurrected() {
+    fn results_arrive_at_the_next_call_and_cancelled_jobs_stay_cancelled() {
         let mut bridge = RuntimeRenderOutputBridge::new();
         bridge.begin_call();
-        let handle = bridge
-            .request(Request::Glb {
-                source: 1,
-                include_animations: true,
-            })
-            .unwrap();
+        let request = |bridge: &mut RuntimeRenderOutputBridge| {
+            bridge
+                .request(Request::Glb {
+                    source: 1,
+                    include_animations: true,
+                })
+                .unwrap()
+        };
+        let (done, failed, cancelled, dropped) = (
+            request(&mut bridge),
+            request(&mut bridge),
+            request(&mut bridge),
+            request(&mut bridge),
+        );
+        bridge.cancel(cancelled).unwrap();
         let call = bridge.take_call().unwrap();
         bridge.commit(call);
-        let chunk = RenderOutputChunk {
-            id: handle.value,
-            offset: 0,
-            bytes: vec![1, 2],
-            complete: false,
-            error: None,
-        };
-        bridge.ingest(chunk.clone()).unwrap();
-        bridge.ingest(chunk).unwrap();
-        assert!(bridge
-            .ingest(RenderOutputChunk {
-                id: handle.value,
-                offset: 3,
-                bytes: vec![3],
-                complete: true,
-                error: None
-            })
-            .is_err());
-        bridge
-            .ingest(RenderOutputChunk {
-                id: handle.value,
-                offset: 2,
-                bytes: vec![3],
-                complete: true,
-                error: None,
-            })
-            .unwrap();
+
+        work(&bridge, done.value).complete(Ok(vec![1, 2, 3]));
+        work(&bridge, failed.value).complete(Err("no source".to_owned()));
+        work(&bridge, cancelled.value).complete(Ok(vec![9]));
+        drop(work(&bridge, dropped.value));
+
         bridge.begin_call();
         assert_eq!(
-            bridge.read(handle).unwrap().state,
+            bridge.read(done).unwrap().state,
             NativeRenderOutputState::Completed
         );
-        let result = bridge.bytes(handle, false).unwrap();
+        let result = bridge.bytes(done, false).unwrap();
         assert_eq!(
             unsafe { std::slice::from_raw_parts(result.bytes, result.len) },
             [1, 2, 3]
         );
-        let cancelled = bridge
-            .request(Request::Glb {
-                source: 1,
-                include_animations: false,
-            })
-            .unwrap();
-        bridge.cancel(cancelled).unwrap();
-        let call = bridge.take_call().unwrap();
-        bridge.commit(call);
-        bridge
-            .ingest(RenderOutputChunk {
-                id: cancelled.value,
-                offset: 0,
-                bytes: vec![9],
-                complete: true,
-                error: None,
-            })
-            .unwrap();
-        bridge.begin_call();
+        assert_eq!(
+            bridge.read(failed).unwrap().state,
+            NativeRenderOutputState::Failed
+        );
         assert_eq!(
             bridge.read(cancelled).unwrap().state,
             NativeRenderOutputState::Cancelled
         );
         assert!(bridge.bytes(cancelled, false).is_err());
-        bridge.destroy(handle).unwrap();
-        assert!(bridge.read(handle).is_err(), "a destroy is final");
+        assert_eq!(
+            bridge.read(dropped).unwrap().state,
+            NativeRenderOutputState::Failed
+        );
+        bridge.destroy(done).unwrap();
+        assert!(bridge.read(done).is_err(), "a destroy is final");
         bridge.end_call();
     }
 }

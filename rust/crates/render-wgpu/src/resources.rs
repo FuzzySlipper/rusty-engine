@@ -158,14 +158,16 @@ fn u32_stream(bytes: &[u8], offset: u32, count: usize) -> Result<Vec<u32>, Strin
         .collect())
 }
 
-/// Encode tightly packed RGBA8 rows (as [`crate::OffscreenTarget::read_rgba`]
-/// returns them) as a PNG, for screenshots.
+/// Encode tightly packed sRGB RGBA8 rows (as
+/// [`crate::OffscreenTarget::read_rgba`] returns them) as a PNG marked sRGB,
+/// as output captures and screenshots are.
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
         writer
             .write_image_data(rgba)

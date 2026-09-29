@@ -85,7 +85,7 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep libasound2-dev
+          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1
           libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
           test -n "$libclang_path"
           echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"

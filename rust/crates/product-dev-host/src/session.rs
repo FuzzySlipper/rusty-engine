@@ -243,13 +243,6 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.report_ghost_plate_feedback(feedback))
     }
 
-    pub fn report_render_output_feedback(
-        &self,
-        feedback: crate::ProductDevRenderOutputFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<bool>, ProductDevRuntimeError> {
-        self.with_runtime(|runtime| runtime.report_render_output_feedback(feedback))
-    }
-
     pub fn report_renderer_diagnostics(
         &self,
         feedback: crate::ProductDevRendererDiagnosticsFeedback,

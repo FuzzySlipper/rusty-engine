@@ -152,12 +152,80 @@ pub(crate) struct AnimatedInstance {
 }
 
 /// Resource identity of an admitted GLB (`sha256:<hex>` names `<kind>/<hex>`).
-fn resource_identity(kind: &str, content_hash: Option<&str>) -> Option<String> {
+pub(crate) fn resource_identity(kind: &str, content_hash: Option<&str>) -> Option<String> {
     let hash = content_hash?;
     Some(format!(
         "{kind}/{}",
         hash.strip_prefix("sha256:").unwrap_or(hash)
     ))
+}
+
+/// Decode an animated asset's GLB and resolve its clips by descriptor id:
+/// its own clips by name, then clip packs, whose channels bind to the rig by
+/// node name. Rendering and GLB export read the asset through this.
+pub(crate) fn decode_animated_asset(
+    asset: &AnimatedMeshAsset,
+    resources: &dyn ResourceSource,
+) -> Result<(GlbModel, HashMap<String, GlbClip>), String> {
+    let identity = resource_identity("animated-mesh-resource", asset.content_hash.as_deref())
+        .ok_or_else(|| format!("{} has no content hash", asset.asset))?;
+    let bytes = resources
+        .bytes(&identity)
+        .ok_or_else(|| format!("resource {identity} is not available"))?;
+    let model = glb::decode(&bytes)?;
+    let mut clips = HashMap::new();
+    let names = |model: &GlbModel| -> HashMap<String, usize> {
+        model
+            .clips
+            .iter()
+            .enumerate()
+            .filter_map(|(index, clip)| clip.name.clone().map(|name| (name, index)))
+            .collect()
+    };
+    let mut own = decode_clips(&model);
+    let own_names = names(&model);
+    for descriptor in &asset.clips {
+        let name = descriptor.name.as_deref().unwrap_or(&descriptor.id);
+        if let Some(clip) = own_names.get(name).and_then(|index| own[*index].take()) {
+            clips.insert(descriptor.id.clone(), clip);
+        }
+    }
+    // Clip packs share the rig; their channels bind by node name.
+    let by_name = channel_targets(&model);
+    for pack in &asset.clip_packs {
+        let identity = resource_identity("clip-pack-resource", Some(pack.content_hash.as_str()))
+            .ok_or_else(|| format!("clip pack {} has no content hash", pack.asset))?;
+        let bytes = resources
+            .bytes(&identity)
+            .ok_or_else(|| format!("resource {identity} is not available"))?;
+        let pack_model = glb::decode(&bytes)?;
+        let pack_names = names(&pack_model);
+        let mut pack_clips = decode_clips(&pack_model);
+        for descriptor in &pack.clips {
+            let name = descriptor.name.as_deref().unwrap_or(&descriptor.id);
+            let Some(mut clip) = pack_names
+                .get(name)
+                .and_then(|index| pack_clips[*index].take())
+            else {
+                continue;
+            };
+            clip.channels.retain_mut(|channel| {
+                let target = pack_model.nodes[channel.node]
+                    .name
+                    .as_deref()
+                    .and_then(|name| by_name.get(name));
+                match target {
+                    Some(node) => {
+                        channel.node = *node;
+                        true
+                    }
+                    None => false,
+                }
+            });
+            clips.insert(descriptor.id.clone(), clip);
+        }
+    }
+    Ok((model, clips))
 }
 
 impl Renderer {
@@ -219,65 +287,7 @@ impl Renderer {
         asset: &AnimatedMeshAsset,
         resources: &dyn ResourceSource,
     ) -> Result<(), String> {
-        let identity = resource_identity("animated-mesh-resource", asset.content_hash.as_deref())
-            .ok_or_else(|| format!("{} has no content hash", asset.asset))?;
-        let bytes = resources
-            .bytes(&identity)
-            .ok_or_else(|| format!("resource {identity} is not available"))?;
-        let model = glb::decode(&bytes)?;
-        let mut clips = HashMap::new();
-        let names = |model: &GlbModel| -> HashMap<String, usize> {
-            model
-                .clips
-                .iter()
-                .enumerate()
-                .filter_map(|(index, clip)| clip.name.clone().map(|name| (name, index)))
-                .collect()
-        };
-        let mut own = decode_clips(&model);
-        let own_names = names(&model);
-        for descriptor in &asset.clips {
-            let name = descriptor.name.as_deref().unwrap_or(&descriptor.id);
-            if let Some(clip) = own_names.get(name).and_then(|index| own[*index].take()) {
-                clips.insert(descriptor.id.clone(), clip);
-            }
-        }
-        // Clip packs share the rig; their channels bind by node name.
-        let by_name = channel_targets(&model);
-        for pack in &asset.clip_packs {
-            let identity =
-                resource_identity("clip-pack-resource", Some(pack.content_hash.as_str()))
-                    .ok_or_else(|| format!("clip pack {} has no content hash", pack.asset))?;
-            let bytes = resources
-                .bytes(&identity)
-                .ok_or_else(|| format!("resource {identity} is not available"))?;
-            let pack_model = glb::decode(&bytes)?;
-            let pack_names = names(&pack_model);
-            let mut pack_clips = decode_clips(&pack_model);
-            for descriptor in &pack.clips {
-                let name = descriptor.name.as_deref().unwrap_or(&descriptor.id);
-                let Some(mut clip) = pack_names
-                    .get(name)
-                    .and_then(|index| pack_clips[*index].take())
-                else {
-                    continue;
-                };
-                clip.channels.retain_mut(|channel| {
-                    let target = pack_model.nodes[channel.node]
-                        .name
-                        .as_deref()
-                        .and_then(|name| by_name.get(name));
-                    match target {
-                        Some(node) => {
-                            channel.node = *node;
-                            true
-                        }
-                        None => false,
-                    }
-                });
-                clips.insert(descriptor.id.clone(), clip);
-            }
-        }
+        let (model, clips) = decode_animated_asset(asset, resources)?;
 
         // Decoding is done and nothing below fails: retire the previous
         // definition now, before its asset-derived texture and material ids

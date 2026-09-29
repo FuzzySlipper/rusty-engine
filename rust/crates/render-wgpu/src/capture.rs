@@ -159,7 +159,7 @@ impl Renderer {
             pose,
         } = &job.operation
         else {
-            return Err("capture: GLB export stays with the browser output executor".to_owned());
+            return Err("capture: a GLB job goes to `export_glb`".to_owned());
         };
         let factor = (f64::from((*samples).max(1))).sqrt().ceil() as u32;
         let limit = self.gpu.device.limits().max_texture_dimension_2d;

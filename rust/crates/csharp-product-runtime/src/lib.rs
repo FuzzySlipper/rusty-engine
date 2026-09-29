@@ -942,6 +942,7 @@ fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProd
 
 mod audio_output;
 mod frame_output;
+mod render_output;
 
 /// Whether `RUSTY_RENDER_OUTPUT=stream` selects frames rendered and
 /// streamed by this process over browser realization.
@@ -987,6 +988,8 @@ pub struct CsharpProductRuntime {
     audio_output: Option<audio_output::AudioOutput>,
     /// Present when this process renders the world and streams its frames.
     frame_output: Option<frame_output::FrameOutput>,
+    /// Runs the product's RenderOutput jobs.
+    render_outputs: render_output::OutputExecutor,
 }
 
 // The development host serializes every call with one mutex. The native handle
@@ -1058,6 +1061,13 @@ impl CsharpProductRuntime {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let audio_output = audio_output::AudioOutput::from_environment()?;
         let frame_output = frame_output::FrameOutput::from_environment(config.renderer_options)?;
+        let render_outputs = render_output::OutputExecutor::start(config.renderer_options)
+            .map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_RENDER_OUTPUT",
+                    format!("could not start the render output worker: {error}"),
+                )
+            })?;
         let mut input_mappings = CompiledInputMappings::standard(
             config.direct_intents.clone(),
             config.physical_mappings.clone(),
@@ -1156,7 +1166,7 @@ impl CsharpProductRuntime {
             }
             let mut call = services.finish_call()?;
             // Convert once and retain the owned create output for the first Start.
-            let initial_output = service_outputs(call.take_output())?;
+            let initial_output = call_outputs(&render_outputs, call.take_output())?;
             services.seal_resource_selection();
             admit_renderer_resources(&services.render_resources())?;
             Ok((initial_output, call.take_input_mapping_replacement()))
@@ -1217,6 +1227,7 @@ impl CsharpProductRuntime {
             pending_update_attribution: None,
             audio_output,
             frame_output,
+            render_outputs,
         })
     }
 
@@ -2079,7 +2090,7 @@ impl CsharpProductRuntime {
         match self.services.finish_call() {
             Ok(mut call) => {
                 finished.input_mapping_replacement = call.take_input_mapping_replacement();
-                match service_outputs(call.take_output()) {
+                match call_outputs(&self.render_outputs, call.take_output()) {
                     Ok(mut outputs) => {
                         if let Some(audio) = &mut self.audio_output {
                             audio.realize(&self.services, &mut outputs);
@@ -2672,7 +2683,9 @@ impl CsharpProductRuntime {
 
     /// The host serves these frames when this process renders the world.
     pub fn frame_stream(&self) -> Option<Arc<product_dev_host::ProductDevFrameStream>> {
-        self.frame_output.as_ref().map(frame_output::FrameOutput::frames)
+        self.frame_output
+            .as_ref()
+            .map(frame_output::FrameOutput::frames)
     }
 
     /// Rebind input for a same-incarnation control fence. The browser keeps
@@ -3426,17 +3439,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let result =
             ProductDevAnimationFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
-    }
-
-    fn report_render_output_feedback(
-        &mut self,
-        feedback: product_dev_host::ProductDevRenderOutputFeedback,
-    ) -> Result<ProductDevRuntimeReceipt<bool>, ProductDevRuntimeError> {
-        self.require_current_control_binding(Some(feedback.runtime))?;
-        self.services
-            .ingest_render_output(feedback.chunk)
-            .map_err(|error| self.runtime_error(error.into()))?;
-        ProductDevRuntimeReceipt::new(true, Vec::new()).map_err(host_runtime_error)
     }
 
     fn report_ghost_plate_feedback(
@@ -5386,10 +5388,17 @@ fn service_outputs(
     for frame in output.presentation {
         outputs.push(RuntimePublication::Presentation(frame));
     }
-    if let Some(jobs) = output.render_output {
-        outputs.push(RuntimePublication::RenderOutput(jobs));
-    }
     Ok(outputs)
+}
+
+/// A finished call's publications, after its settled output jobs go to the
+/// executor.
+fn call_outputs(
+    executor: &render_output::OutputExecutor,
+    mut output: csharp_engine_services::CsharpEngineCallOutput,
+) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
+    executor.submit(std::mem::take(&mut output.render_output));
+    service_outputs(output)
 }
 
 fn product_dev_animation_cue_definition(
@@ -7801,7 +7810,7 @@ mod tests {
     #[test]
     fn animation_cue_definition_output_maps_to_the_typed_product_dev_snapshot() {
         let output = csharp_engine_services::CsharpEngineCallOutput {
-            render_output: None,
+            render_output: Vec::new(),
             appearance: vec![CsharpAppearanceCallOutput::AnimationCueDefinitions(vec![
                 csharp_engine_services::AnimationCueDefinition {
                     cue_id: "footfall".to_owned(),
@@ -7846,7 +7855,7 @@ mod tests {
     #[test]
     fn service_outputs_preserve_appearance_frame_and_presentation_order() {
         let output = CsharpEngineCallOutput {
-            render_output: None,
+            render_output: Vec::new(),
             appearance: vec![
                 CsharpAppearanceCallOutput::Presentation(
                     render_presentation::PresentationFrameDiff::new(),
@@ -8074,7 +8083,10 @@ mod tests {
 
         let (realtime, realtime_root) = realtime_drop_fixture_runtime("realtime-inspection-time");
         let readout = serde_json::to_value(realtime.readout()).unwrap();
-        assert_eq!(readout["inspectionTime"], serde_json::json!(["realtime", 30]));
+        assert_eq!(
+            readout["inspectionTime"],
+            serde_json::json!(["realtime", 30])
+        );
         drop(realtime);
         fs::remove_dir_all(realtime_root).unwrap();
     }

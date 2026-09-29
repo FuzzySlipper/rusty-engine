@@ -295,8 +295,9 @@ The world is realized either by the browser's Three surface or, with
   `captureCorrelation: "frame-sequence"`. The observer and drawing mode belong
   to the runtime, so every attached page sees them. Held simulation time is
   the runtime's own. Nothing asks for a renderer pick.
-- **Not yet in this mode:** ghost plate realization feedback (#8842),
-  `RenderOutput` image jobs (#8826) and billboard labels (#8827).
+- **Not yet in this mode:** ghost plate realization feedback (#8842).
+  `RenderOutput` jobs run in the runtime in every mode (#8826), and billboard
+  labels are drawn by the streamed renderer (#8827).
 
 Measured costs and the encoding decision: `docs/evidence/streaming-8786/`.
 

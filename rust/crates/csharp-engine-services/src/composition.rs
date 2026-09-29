@@ -312,7 +312,8 @@ struct ServiceCalls {
 /// Engine observations from one product call.
 #[derive(Default)]
 pub struct CsharpEngineCallOutput {
-    pub render_output: Option<Vec<render_host_contracts::RenderOutputJob>>,
+    /// The call's newly settled output jobs, for the runtime's executor.
+    pub render_output: Vec<crate::render_output::RenderOutputWork>,
     pub appearance: Vec<CsharpAppearanceCallOutput>,
     pub frames: Vec<render_model::RenderFrameDiff>,
     pub view_composition: Option<render_host_contracts::RendererViewComposition>,
@@ -688,21 +689,13 @@ impl EngineServiceSet {
                 .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
-        crate::render_output::RuntimeRenderOutputBridge::settle(
+        output.render_output = self.render_output.settle(
             &mut calls.render_output,
             &calls.presentation_world,
             &calls.camera_view,
             &calls.appearance.state,
-        )?;
-        output.render_output = self.render_output.changed_jobs(&calls.render_output);
+        );
         Ok(output)
-    }
-
-    pub fn ingest_render_output(
-        &mut self,
-        chunk: render_host_contracts::RenderOutputChunk,
-    ) -> Result<(), CsharpEngineServicesError> {
-        self.render_output.ingest(chunk)
     }
 
     pub fn seal_resource_selection(&mut self) {
@@ -718,7 +711,6 @@ impl EngineServiceSet {
             .chain(self.appearance.state.recently_released_resources())
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
-            .chain(self.render_output.resources())
             .map(|resource| resource.identity().to_owned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -780,7 +772,6 @@ impl EngineServiceSet {
             .chain(self.appearance.state.recently_released_resources())
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
-            .chain(self.render_output.resources())
             .find(|resource| resource.identity() == identity)
     }
 
@@ -792,7 +783,6 @@ impl EngineServiceSet {
             .cloned()
             .chain(self.audio.render_resources().cloned())
             .chain(self.video.render_resources().cloned())
-            .chain(self.render_output.resources().cloned())
             .collect()
     }
 
@@ -827,7 +817,7 @@ impl EngineServiceSet {
             presentation.push(video);
         }
         Ok(CsharpEngineCallOutput {
-            render_output: Some(self.render_output.snapshot()),
+            render_output: Vec::new(),
             appearance: vec![
                 CsharpAppearanceCallOutput::Frame(snapshot.frame),
                 CsharpAppearanceCallOutput::AnimationCueDefinitions(
@@ -864,7 +854,7 @@ impl EngineServiceSet {
         frames.append(&mut call.voxel_content.frames);
         frames.append(&mut call.voxel_scene_presentation.frames);
         CsharpEngineCallOutput {
-            render_output: None,
+            render_output: Vec::new(),
             appearance,
             frames,
             view_composition: call.camera_view.composition.take(),

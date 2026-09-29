@@ -193,7 +193,7 @@ mkfifo "$control_fifo"
 exec 9<>"$control_fifo"
 control_open=1
 env -u CARGO -u CARGO_HOME -u RUSTUP_HOME RUSTY_OUTPUT_TEST_DIR="$output_dir" RUSTY_OUTPUT_REOPEN="$reopen" \
-    "$runtime/bin/rusty-product-host" --headless --supervised --runtime-instance-id "$$" --product "$staged" --loader "$loader" --persistence-root "$work/persistence-$loader" < "$control_fifo" 9>&- > "$host_log" 2>&1 &
+    "$runtime/bin/rusty-product-host" --supervised --runtime-instance-id "$$" --product "$staged" --loader "$loader" --persistence-root "$work/persistence-$loader" < "$control_fifo" 9>&- > "$host_log" 2>&1 &
 host_pid=$!
 origin=""
 for _ in $(seq 1 40); do

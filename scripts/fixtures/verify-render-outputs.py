@@ -6,6 +6,37 @@ import sys
 import zlib
 from pathlib import Path
 root = Path(sys.argv[1])
+
+
+def unfilter(pixels, width, height):
+    """Reverse PNG row filters (RGBA8). Rows keep a leading 0 filter byte, so
+    channels stay at indices 1..=4 of each pixel as the checks below read them."""
+    stride, rows, previous = width * 4, [], bytearray(width * 4)
+    for i in range(height):
+        start = i * (stride + 1)
+        kind, line = pixels[start], bytearray(pixels[start + 1:start + 1 + stride])
+        for x in range(stride):
+            left = line[x - 4] if x >= 4 else 0
+            up = previous[x]
+            corner = previous[x - 4] if x >= 4 else 0
+            if kind == 1:
+                line[x] = (line[x] + left) & 255
+            elif kind == 2:
+                line[x] = (line[x] + up) & 255
+            elif kind == 3:
+                line[x] = (line[x] + (left + up) // 2) & 255
+            elif kind == 4:
+                p = left + up - corner
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - corner)
+                predictor = left if pa <= pb and pa <= pc else up if pb <= pc else corner
+                line[x] = (line[x] + predictor) & 255
+            else:
+                assert kind == 0, f'unknown PNG filter {kind}'
+        rows.append(bytes([0]) + bytes(line))
+        previous = line
+    return rows
+
+
 decoded = {}
 for path in root.glob('*.png'):
     data = path.read_bytes()
@@ -21,8 +52,7 @@ for path in root.glob('*.png'):
         if kind == b'IDAT': compressed.extend(payload)
         offset += count + 12
     pixels = zlib.decompress(compressed)
-    rows = [pixels[i * (width * 4 + 1):(i + 1) * (width * 4 + 1)] for i in range(height)]
-    assert all(row[0] == 0 for row in rows), 'fixture PNG encoder changed filter'
+    rows = unfilter(pixels, width, height)
     alpha = [a for row in rows for a in row[4::4]]
     if path.name not in ('background.png', 'camera-background.png'):
         assert any(a == 0 for a in alpha) and any(a > 0 for a in alpha), f'{path}: expected transparent background and rendered geometry'

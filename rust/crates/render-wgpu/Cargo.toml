@@ -21,6 +21,8 @@ pollster.workspace = true
 # Billboard labels (#8827): glyph rasterizing and WOFF2 font decoding.
 fontdue = "0.9.4"
 wuff = "0.2.9"
+# GLB export writes its glTF JSON document.
+serde_json.workspace = true
 
 [dev-dependencies]
 # Voxel scene fixtures: real chunk payloads from the scene projector.
@@ -29,7 +31,6 @@ engine-spatial.workspace = true
 # Animated fixtures: GLBs admitted exactly as the runtime admits them.
 asset-import.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 # Window for the surface presentation example only; the desktop shell owns
 # the real window.
 winit = "0.30"

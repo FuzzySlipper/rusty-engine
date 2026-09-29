@@ -36,6 +36,7 @@ pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
     CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,
 };
+pub use render_output::RenderOutputWork;
 pub use video::VideoRealizationFact;
 
 pub use content::ProductContentBundles;

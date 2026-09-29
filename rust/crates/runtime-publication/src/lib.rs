@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use render_host_contracts::{RenderOutputJob, RendererViewComposition};
+use render_host_contracts::RendererViewComposition;
 use render_model::{RenderFrameDiff, JSON_SAFE_U64_MAX};
 use render_presentation::PresentationFrameDiff;
 use runtime_input::RuntimeInputBinding;
@@ -156,9 +156,6 @@ pub enum RuntimePublication {
     Frame(RenderFrameDiff),
     ViewComposition(RendererViewComposition),
     Presentation(PresentationFrameDiff),
-    /// Complete replacement snapshot of pending renderer output jobs. An
-    /// empty snapshot cancels every previously published pending job.
-    RenderOutput(Vec<RenderOutputJob>),
     AnimationCueDefinitions(Vec<RuntimeAnimationCueDefinition>),
     UiProjection(RuntimeUiProjectionEnvelope),
 }
@@ -225,7 +222,6 @@ impl RuntimePublication {
             Self::Frame(_)
             | Self::Presentation(_)
             | Self::ViewComposition(_)
-            | Self::RenderOutput(_)
             | Self::UiProjection(_) => Ok(()),
         }
     }

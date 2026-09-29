@@ -1328,7 +1328,7 @@ fn emission(color: [f32; 3], intensity: f32) -> [f32; 3] {
 
 /// Three's deterministic fallback hue for an unbound slot (golden angle,
 /// HSL saturation 0.7, lightness 0.5), in linear RGB.
-fn slot_color(slot: u16) -> [f32; 4] {
+pub(crate) fn slot_color(slot: u16) -> [f32; 4] {
     let hue = (f32::from(slot) * 0.618_034) % 1.0;
     let (s, l) = (0.7_f32, 0.5_f32);
     let q = if l < 0.5 {
