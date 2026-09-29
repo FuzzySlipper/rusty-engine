@@ -21,8 +21,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
+const STAGE_ASSETS_TARGET: &str = "StageRustyEngineProductAssets";
 const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
+const UI_SOURCE_ROOT_PROPERTY: &str = "RustyEngineProductUiSourceRoot";
+const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
+const CONTENT_ROOT_PROPERTY: &str = "RustyEngineProductContentRoot";
+const CONTENT_BUNDLE_ITEM: &str = "RustyEngineContentBundle";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
@@ -75,6 +80,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
     let mut staged = initial.directory;
     verify_staged_product(&staged)?;
     let mut watches = initial.watches;
+    let mut asset_roots = initial.asset_roots;
     let mut snapshot = FileSnapshot::capture(&watches)?;
     let mut child = Some(SupervisedHost::start(
         &runtime.host,
@@ -179,17 +185,41 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 continue;
             }
         };
+        let changed = snapshot.changed_paths(&next);
         if !record_observed_snapshot(&mut snapshot, next) {
             continue;
         }
 
+        let assets_only = changed
+            .iter()
+            .all(|path| asset_roots.iter().any(|root| path.starts_with(root)));
         diagnostic(
             "change-detected",
-            serde_json::json!({ "watchPaths": watches }),
+            serde_json::json!({ "watchPaths": watches, "changed": changed, "assetsOnly": assets_only }),
         );
+        // UI and bundle content edits restage only those files and reload
+        // them into the running product: no C# build, no replacement.
+        if assets_only {
+            if let Some(active_child) = child.as_mut() {
+                let reloaded = stage_assets(&options).and_then(|()| active_child.reload_assets());
+                match reloaded {
+                    // The runtime reports its own reload result.
+                    Ok(()) => diagnostic(
+                        "assets-restaged",
+                        serde_json::json!({ "productDirectory": staged, "changed": changed }),
+                    ),
+                    Err(error) => diagnostic(
+                        "restage-failed",
+                        serde_json::json!({ "phase": "stage-assets", "error": error }),
+                    ),
+                }
+                continue;
+            }
+        }
         let StagedProduct {
             directory: next_staged,
             watches: refreshed_watches,
+            asset_roots: refreshed_asset_roots,
         } = match stage_product(&options) {
             Ok(staged) => staged,
             Err(error) => {
@@ -230,6 +260,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
         };
         snapshot = refreshed_snapshot;
         watches = refreshed_watches;
+        asset_roots = refreshed_asset_roots;
         let mut replacement_failed = false;
         let started_after_restage = if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
@@ -596,6 +627,10 @@ fn runtime_beside_current_executable() -> Result<PathBuf, String> {
 struct StagedProduct {
     directory: PathBuf,
     watches: Vec<PathBuf>,
+    /// Edits wholly under these roots take the asset-only path: the UI source
+    /// and output roots, and each content bundle root. Loose content is part
+    /// of the product's create-time snapshot, so it is not an asset root.
+    asset_roots: Vec<PathBuf>,
 }
 
 /// Restore, build, stage and read the staged directory and watch declaration
@@ -630,8 +665,16 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
         format!("-t:{STAGE_TARGET}"),
     ];
     arguments.extend(stage_properties(options)?);
-    arguments.push(format!("-getProperty:{STAGED_PRODUCT_PROPERTY}"));
-    arguments.push(format!("-getProperty:{WATCH_PATHS_PROPERTY}"));
+    for property in [
+        STAGED_PRODUCT_PROPERTY,
+        WATCH_PATHS_PROPERTY,
+        UI_SOURCE_ROOT_PROPERTY,
+        UI_ROOT_PROPERTY,
+        CONTENT_ROOT_PROPERTY,
+    ] {
+        arguments.push(format!("-getProperty:{property}"));
+    }
+    arguments.push(format!("-getItem:{CONTENT_BUNDLE_ITEM}"));
     arguments.push(format!("-getResultOutputFile:{result_argument}"));
     let _ = fs::remove_file(&result_file);
     run_dotnet(&arguments)?;
@@ -651,7 +694,53 @@ fn stage_product(options: &DevOptions) -> Result<StagedProduct, String> {
     Ok(StagedProduct {
         directory: absolute(Path::new(property(STAGED_PRODUCT_PROPERTY)?.trim()))?,
         watches: parse_watch_paths(property(WATCH_PATHS_PROPERTY)?)?,
+        asset_roots: asset_roots(&project, &result)?,
     })
+}
+
+fn asset_roots(project: &Path, result: &Value) -> Result<Vec<PathBuf>, String> {
+    let project_directory = project.parent().unwrap_or(project);
+    let path = |name: &str| -> Option<PathBuf> {
+        result["Properties"][name]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| project_directory.join(value))
+    };
+    let mut roots: Vec<PathBuf> = [UI_SOURCE_ROOT_PROPERTY, UI_ROOT_PROPERTY]
+        .into_iter()
+        .filter_map(path)
+        .collect();
+    if let Some(content_root) = path(CONTENT_ROOT_PROPERTY) {
+        let bundles = result["Items"][CONTENT_BUNDLE_ITEM].as_array();
+        for bundle in bundles.into_iter().flatten() {
+            let root = bundle["Root"]
+                .as_str()
+                .filter(|root| !root.is_empty())
+                .or_else(|| bundle["Identity"].as_str())
+                .ok_or("RUSTY_DEV_MSBUILD: content bundle item has no identity")?;
+            roots.push(content_root.join(root));
+        }
+    }
+    Ok(roots)
+}
+
+/// Restage only UI and content through the SDK asset target. The project was
+/// restored by the full staging that preceded it.
+fn stage_assets(options: &DevOptions) -> Result<(), String> {
+    let project = absolute(&options.project)?;
+    let mut arguments = vec![
+        "msbuild".to_owned(),
+        project
+            .to_str()
+            .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?
+            .to_owned(),
+        "-nologo".to_owned(),
+        "-verbosity:minimal".to_owned(),
+        format!("-t:{STAGE_ASSETS_TARGET}"),
+    ];
+    arguments.extend(stage_properties(options)?);
+    run_dotnet(&arguments)
 }
 
 fn parse_watch_paths(value: &str) -> Result<Vec<PathBuf>, String> {
@@ -829,54 +918,57 @@ impl SupervisedHost {
     /// The browser listener, diagnostics, and persistent Engine roots remain
     /// fixed process configuration for the duration of `rusty dev`.
     fn replace_runtime(&mut self, product: &Path) -> Result<(), String> {
-        let command = encode_runtime_replacement_command(product)?;
+        let product_directory = product
+            .to_str()
+            .ok_or("RUSTY_DEV_STAGE: staged product path must be UTF-8")?
+            .to_owned();
+        self.send(&SupervisedHostCommand::ReplaceRuntime { product_directory })
+    }
+
+    /// Asks the running product to re-read its restaged UI and content.
+    fn reload_assets(&mut self) -> Result<(), String> {
+        self.send(&SupervisedHostCommand::ReloadAssets)
+    }
+
+    fn send(&mut self, command: &SupervisedHostCommand) -> Result<(), String> {
+        let frame = encode_supervisor_command(command)?;
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or("RUSTY_DEV_CHILD_REPLACE: supervised child stdin was unavailable")?;
+            .ok_or("RUSTY_DEV_CHILD_COMMAND: supervised child stdin was unavailable")?;
         stdin
-            .write_all(&command)
+            .write_all(&frame)
             .and_then(|_| stdin.flush())
-            .map_err(|error| {
-                format!(
-                    "RUSTY_DEV_CHILD_REPLACE: could not send replacement configuration: {error}"
-                )
-            })?;
-        Ok(())
+            .map_err(|error| format!("RUSTY_DEV_CHILD_COMMAND: could not send command: {error}"))
     }
 }
 
-/// The only command the long-lived `rusty dev` shell accepts after startup.
-/// It intentionally carries no generic method name, options bag, or
-/// compatibility negotiation: successful staging can replace exactly one C#
-/// runtime incarnation with the next staged Product directory.
+/// The commands the long-lived `rusty dev` shell accepts after startup. They
+/// carry no generic method name, options bag, or compatibility negotiation:
+/// successful staging either replaces exactly one C# runtime incarnation with
+/// the next staged Product directory, or reloads restaged UI and content into
+/// the running one.
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum SupervisedHostCommand {
     #[serde(rename_all = "camelCase")]
-    ReplaceRuntime { product_directory: String },
+    ReplaceRuntime {
+        product_directory: String,
+    },
+    ReloadAssets,
 }
 
-fn encode_runtime_replacement_command(product: &Path) -> Result<Vec<u8>, String> {
-    let product_directory = product
-        .to_str()
-        .ok_or("RUSTY_DEV_STAGE: staged product path must be UTF-8")?
-        .to_owned();
-    let payload = serde_json::to_vec(&SupervisedHostCommand::ReplaceRuntime { product_directory })
-        .map_err(|error| {
-            format!(
-                "RUSTY_DEV_CHILD_REPLACE: replacement configuration could not be encoded: {error}"
-            )
-        })?;
+fn encode_supervisor_command(command: &SupervisedHostCommand) -> Result<Vec<u8>, String> {
+    let payload = serde_json::to_vec(command).map_err(|error| {
+        format!("RUSTY_DEV_CHILD_COMMAND: command could not be encoded: {error}")
+    })?;
     if payload.len() > MAX_SUPERVISOR_COMMAND_BYTES {
         return Err(
-            "RUSTY_DEV_CHILD_REPLACE: replacement configuration exceeds its bounded command length"
-                .to_owned(),
+            "RUSTY_DEV_CHILD_COMMAND: command exceeds its bounded command length".to_owned(),
         );
     }
-    let length = u32::try_from(payload.len()).map_err(|_| {
-        "RUSTY_DEV_CHILD_REPLACE: replacement configuration length cannot be represented".to_owned()
-    })?;
+    let length = u32::try_from(payload.len())
+        .map_err(|_| "RUSTY_DEV_CHILD_COMMAND: command length cannot be represented".to_owned())?;
     let mut frame = Vec::with_capacity(4 + payload.len());
     frame.extend_from_slice(&length.to_le_bytes());
     frame.extend_from_slice(&payload);
@@ -951,6 +1043,21 @@ impl FileSnapshot {
             capture_path(path, &mut files)?;
         }
         Ok(Self(files))
+    }
+
+    /// Files added, removed or changed between this snapshot and `next`.
+    fn changed_paths(&self, next: &Self) -> Vec<PathBuf> {
+        let removed_or_changed = self
+            .0
+            .iter()
+            .filter(|(path, stamp)| next.0.get(*path) != Some(stamp))
+            .map(|(path, _)| path.clone());
+        let added = next
+            .0
+            .keys()
+            .filter(|path| !self.0.contains_key(*path))
+            .cloned();
+        removed_or_changed.chain(added).collect()
     }
 }
 
@@ -1285,9 +1392,9 @@ mod tests {
 
     #[test]
     fn restage_encodes_the_one_bounded_runtime_replacement_command() {
-        let frame = encode_runtime_replacement_command(Path::new(
-            "/workspace/Product/obj/RustyEngineProduct",
-        ))
+        let frame = encode_supervisor_command(&SupervisedHostCommand::ReplaceRuntime {
+            product_directory: "/workspace/Product/obj/RustyEngineProduct".to_owned(),
+        })
         .expect("replacement frame");
 
         let length = u32::from_le_bytes(frame[..4].try_into().expect("frame prefix")) as usize;
@@ -1299,6 +1406,66 @@ mod tests {
                 "kind": "replace-runtime",
                 "productDirectory": "/workspace/Product/obj/RustyEngineProduct",
             })
+        );
+    }
+
+    #[test]
+    fn asset_reload_encodes_a_bare_command() {
+        let frame =
+            encode_supervisor_command(&SupervisedHostCommand::ReloadAssets).expect("reload frame");
+        let payload: Value = serde_json::from_slice(&frame[4..]).expect("reload payload");
+        assert_eq!(payload, serde_json::json!({ "kind": "reload-assets" }));
+    }
+
+    #[test]
+    fn snapshot_diff_reports_added_removed_and_changed_files() {
+        let stamp = |bytes| FileStamp {
+            modified: None,
+            bytes,
+        };
+        let before = FileSnapshot(BTreeMap::from([
+            (PathBuf::from("/p/kept"), stamp(1)),
+            (PathBuf::from("/p/edited"), stamp(1)),
+            (PathBuf::from("/p/deleted"), stamp(1)),
+        ]));
+        let after = FileSnapshot(BTreeMap::from([
+            (PathBuf::from("/p/kept"), stamp(1)),
+            (PathBuf::from("/p/edited"), stamp(2)),
+            (PathBuf::from("/p/added"), stamp(1)),
+        ]));
+        let mut changed = before.changed_paths(&after);
+        changed.sort();
+        assert_eq!(
+            changed,
+            ["/p/added", "/p/deleted", "/p/edited"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn asset_roots_are_ui_roots_and_content_bundle_roots_only() {
+        let result = serde_json::json!({
+            "Properties": {
+                "RustyEngineProductUiSourceRoot": "/product/ui",
+                "RustyEngineProductUiRoot": "/product/ui/generated",
+                "RustyEngineProductContentRoot": "/product/content",
+            },
+            "Items": {
+                "RustyEngineContentBundle": [
+                    { "Identity": "procgen", "Root": "" },
+                    { "Identity": "music", "Root": "media/music" },
+                ],
+            },
+        });
+        let roots = asset_roots(Path::new("/product/src/Game.csproj"), &result).unwrap();
+        assert_eq!(
+            roots,
+            [
+                "/product/ui",
+                "/product/ui/generated",
+                "/product/content/procgen",
+                "/product/content/media/music",
+            ]
+            .map(PathBuf::from)
         );
     }
 

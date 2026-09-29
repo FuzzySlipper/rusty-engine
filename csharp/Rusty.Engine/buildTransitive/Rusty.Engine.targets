@@ -26,6 +26,16 @@
                       Condition="'$(_RustyEngineGenerateProductComposition)' == 'true'" />
   </ItemGroup>
 
+  <!-- Defaults that derive from the product's own paths are set here, after
+       the product project body. Edits under the UI source root, the UI root
+       or a content bundle root reach a running `rusty dev` product without a
+       C# build or runtime replacement. Without a build command the UI root is
+       its own source. -->
+  <PropertyGroup>
+    <RustyEngineProductUiSourceRoot Condition="'$(RustyEngineProductUiSourceRoot)' == ''">$(RustyEngineProductUiRoot)</RustyEngineProductUiSourceRoot>
+    <RustyEngineWatchPaths Condition="'$(RustyEngineWatchPaths)' == ''">$(MSBuildProjectDirectory);$([System.IO.Path]::GetFullPath('$(RustyEngineProductUiSourceRoot)', '$(MSBuildProjectDirectory)'));$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)', '$(MSBuildProjectDirectory)'))</RustyEngineWatchPaths>
+  </PropertyGroup>
+
   <PropertyGroup>
     <_RustyEngineCompositionRoot>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../Composition'))</_RustyEngineCompositionRoot>
     <_RustyEngineCoreClrCompositionProject>$(_RustyEngineCompositionRoot)/coreclr/Rusty.Engine.Product.csproj</_RustyEngineCoreClrCompositionProject>
@@ -33,6 +43,7 @@
     <_RustyEngineCoreClrOutputDirectory>$(_RustyEngineCompositionRoot)/coreclr/output</_RustyEngineCoreClrOutputDirectory>
     <_RustyEngineNativeAotOutputDirectory>$(_RustyEngineCompositionRoot)/nativeaot/output</_RustyEngineNativeAotOutputDirectory>
     <_RustyEngineStagingDirectory>$(RustyEngineStagedProductDirectory).next</_RustyEngineStagingDirectory>
+    <_RustyEngineProductUiBuildStamp>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../ui-build.stamp'))</_RustyEngineProductUiBuildStamp>
     <_RustyEngineProductAssembly>Rusty.Engine.Product.dll</_RustyEngineProductAssembly>
     <_RustyEngineProductRuntimeConfig>Rusty.Engine.Product.runtimeconfig.json</_RustyEngineProductRuntimeConfig>
     <_RustyEngineProductNativeModule>Rusty.Engine.Product.so</_RustyEngineProductNativeModule>
@@ -47,16 +58,20 @@
     <RustyEngineProductDefaultViewmodelLights Condition="'$(RustyEngineProductDefaultViewmodelLights)' == ''">neutral</RustyEngineProductDefaultViewmodelLights>
   </PropertyGroup>
 
+  <!-- Every file under the UI source root except the build's own output is a
+       UI build input. Products add config and dependency files outside it
+       (package manifest, lockfile) to the same item. -->
+  <ItemGroup Condition="'$(RustyEngineProductUiBuildCommand)' != ''">
+    <RustyEngineProductUiInput Include="$(RustyEngineProductUiSourceRoot)/**/*"
+                               Exclude="$(RustyEngineProductUiRoot)/**/*;$(RustyEngineProductUiSourceRoot)/**/node_modules/**/*" />
+  </ItemGroup>
+
   <!-- The generated project names one explicit ordinary-product type. It does
        not scan assemblies or introduce a product framework registration API. -->
   <Target Name="GenerateRustyEngineProductComposition"
           BeforeTargets="StageRustyEngineCoreClrProduct;VerifyRustyEngineAot">
     <Error Condition="'$(RustyEngineProductEntryType)' == ''"
            Text="RustyEngineProductEntryType is required. Set it to the fully-qualified IEngineProduct implementation in the ordinary product project." />
-    <Error Condition="!Exists('$(RustyEngineProductUiRoot)')"
-           Text="RustyEngineProductUiRoot does not exist: $(RustyEngineProductUiRoot)" />
-    <Error Condition="!Exists('$(RustyEngineProductContentRoot)')"
-           Text="RustyEngineProductContentRoot does not exist: $(RustyEngineProductContentRoot)" />
     <Error Condition="'$(RustyEngineProductLifecycleMode)' == 'realtime' and ('$(RustyEngineProductFixedStepHz)' == '' or '$(RustyEngineProductFixedStepMaxCatchUpSteps)' == '')"
            Text="Realtime RustyEngineProductLifecycleMode requires RustyEngineProductFixedStepHz and RustyEngineProductFixedStepMaxCatchUpSteps." />
     <Error Condition="('$(RustyEngineProductUiProjectionStream)' == '' and '$(RustyEngineProductUiProjectionContract)' != '') or ('$(RustyEngineProductUiProjectionStream)' != '' and '$(RustyEngineProductUiProjectionContract)' == '')"
@@ -90,26 +105,29 @@
     <Exec Command="dotnet build &quot;$(_RustyEngineCoreClrCompositionProject)&quot; --configuration &quot;$(Configuration)&quot; --nologo" />
   </Target>
 
-  <!-- CoreCLR is the normal, explicit staging operation used by development. -->
-  <Target Name="StageRustyEngineCoreClrProduct"
-          DependsOnTargets="BuildRustyEngineCoreClrProduct">
-    <PropertyGroup>
-      <_RustyEngineManifestIntents>@(RustyEngineProductInputIntent-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;value&quot;:&quot;%(Value)&quot;}', ',')</_RustyEngineManifestIntents>
-      <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
-    </PropertyGroup>
-    <!-- Synchronize into the staged directory. product.json is removed first
-         and written last, so a host admits a complete bundle or none. The
-         supervisor replaces the running worker only after this target. -->
-    <Delete Files="$(RustyEngineStagedProductDirectory)/product.json" />
-    <!-- The running worker maps these assemblies until it is replaced: give
-         them fresh files instead of rewriting mapped ones in place. -->
-    <RemoveDir Directories="$(RustyEngineStagedProductDirectory)/coreclr" />
-    <MakeDir Directories="$(RustyEngineStagedProductDirectory)/coreclr;$(RustyEngineStagedProductDirectory)/ui/$(RustyEngineProductUiAssets);$(RustyEngineStagedProductDirectory)/content" />
-    <ItemGroup>
-      <_RustyEngineCoreClrOutputFiles Include="$(_RustyEngineCoreClrOutputDirectory)/*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_RustyEngineCoreClrOutputFiles)"
-          DestinationFolder="$(RustyEngineStagedProductDirectory)/coreclr" />
+  <!-- A product with a compiled DOM companion names its command and inputs.
+       Ordinary MSBuild incrementality skips the command when no input is
+       newer than the last successful build and the entry output exists, so
+       C#-only and unchanged builds do not recompile the UI. -->
+  <Target Name="BuildRustyEngineProductUi"
+          Condition="'$(RustyEngineProductUiBuildCommand)' != ''"
+          Inputs="@(RustyEngineProductUiInput);$(MSBuildProjectFullPath)"
+          Outputs="$(_RustyEngineProductUiBuildStamp);$(RustyEngineProductUiRoot)/$(RustyEngineProductUiEntry)">
+    <MakeDir Directories="$(RustyEngineProductUiRoot)" />
+    <Exec Command="$(RustyEngineProductUiBuildCommand)" />
+    <Touch Files="$(_RustyEngineProductUiBuildStamp)" AlwaysCreate="true" />
+  </Target>
+
+  <!-- UI and content only. `rusty dev` runs this alone for UI or bundle
+       content edits and asks the running runtime to reload them, so no C#
+       build and no runtime replacement happen. -->
+  <Target Name="StageRustyEngineProductAssets"
+          DependsOnTargets="BuildRustyEngineProductUi">
+    <Error Condition="!Exists('$(RustyEngineProductUiRoot)')"
+           Text="RustyEngineProductUiRoot does not exist: $(RustyEngineProductUiRoot)" />
+    <Error Condition="!Exists('$(RustyEngineProductContentRoot)')"
+           Text="RustyEngineProductContentRoot does not exist: $(RustyEngineProductContentRoot)" />
+    <MakeDir Directories="$(RustyEngineStagedProductDirectory)/ui/$(RustyEngineProductUiAssets);$(RustyEngineStagedProductDirectory)/content" />
     <ItemGroup>
       <_RustyEngineUiFiles Include="$(RustyEngineProductUiRoot)/**/*" />
       <_RustyEngineContentFiles Include="$(RustyEngineProductContentRoot)/**/*" />
@@ -131,6 +149,31 @@
         ContentRoot="$(RustyEngineProductContentRoot)"
         StagedContentRoot="$(RustyEngineStagedProductDirectory)/content"
         Bundles="@(RustyEngineContentBundle)" />
+  </Target>
+
+  <!-- product.json is removed first and written last, so a host admits a
+       complete bundle or none. The running runtime maps the old assemblies
+       until it is replaced: give them fresh files instead of rewriting mapped
+       ones in place. -->
+  <Target Name="_RustyEngineStageCoreClrAssemblies"
+          DependsOnTargets="BuildRustyEngineCoreClrProduct">
+    <Delete Files="$(RustyEngineStagedProductDirectory)/product.json" />
+    <RemoveDir Directories="$(RustyEngineStagedProductDirectory)/coreclr" />
+    <MakeDir Directories="$(RustyEngineStagedProductDirectory)/coreclr" />
+    <ItemGroup>
+      <_RustyEngineCoreClrOutputFiles Include="$(_RustyEngineCoreClrOutputDirectory)/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RustyEngineCoreClrOutputFiles)"
+          DestinationFolder="$(RustyEngineStagedProductDirectory)/coreclr" />
+  </Target>
+
+  <!-- CoreCLR is the normal, explicit staging operation used by development. -->
+  <Target Name="StageRustyEngineCoreClrProduct"
+          DependsOnTargets="_RustyEngineStageCoreClrAssemblies;StageRustyEngineProductAssets">
+    <PropertyGroup>
+      <_RustyEngineManifestIntents>@(RustyEngineProductInputIntent-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;value&quot;:&quot;%(Value)&quot;}', ',')</_RustyEngineManifestIntents>
+      <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
+    </PropertyGroup>
     <WriteLinesToFile File="$(RustyEngineStagedProductDirectory)/product.json" Overwrite="true"
                       Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;},&quot;coreclr&quot;:{&quot;assembly&quot;:&quot;coreclr/$(_RustyEngineProductAssembly)&quot;,&quot;runtimeconfig&quot;:&quot;coreclr/$(_RustyEngineProductRuntimeConfig)&quot;},&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;lighting&quot;:{&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
     <Message Importance="High" Text="Rusty Engine CoreCLR Product staged at $(RustyEngineStagedProductDirectory)" />

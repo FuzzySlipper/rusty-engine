@@ -3123,6 +3123,12 @@ impl<T> ProductDevRuntimeReceipt<T> {
 /// input, schedule, timeline, mutation, and projection authority. They return
 /// exact output receipts, so this trait has no subscription/callback method.
 pub trait ProductDevRuntime: Send + 'static {
+    /// Re-reads the runtime's staged content after a development content edit
+    /// without restarting the product. A runtime without reloadable content
+    /// has nothing to do.
+    fn reload_content(&mut self) -> Result<(), ProductDevRuntimeError> {
+        Ok(())
+    }
     fn renderer_resource_ids(&self) -> Option<Vec<String>> {
         None
     }

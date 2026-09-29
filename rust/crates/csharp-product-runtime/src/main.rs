@@ -15,8 +15,9 @@ use csharp_product_runtime::{
     CsharpProductRuntimeConfig,
 };
 use product_dev_host::{
-    ProductDevBundle, ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig, ProductDevLog,
-    ProductDevRendererResource, ProductDevRuntime, RunningProductDevHost,
+    ProductDevAssetReload, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
+    ProductDevHostConfig, ProductDevLog, ProductDevRendererResource, ProductDevRuntime,
+    RunningProductDevHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -81,7 +82,7 @@ fn set_fault_signal_action(action: libc::sighandler_t) {
 fn main() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     set_fault_signal_action(libc::SIG_DFL);
-    let args = match Invocation::parse()? {
+    let mut args = match Invocation::parse()? {
         Invocation::Identity { machine_readable } => {
             print_runtime_identity(machine_readable);
             return Ok(());
@@ -225,10 +226,16 @@ fn main() -> Result<(), String> {
             host.origin()
         ));
         print_line("Press Ctrl+C to stop.");
+        // Only a runtime serving under the supervisor receives asset reloads.
+        let reload_assets = args
+            .serve_listener_fd
+            .and(args.product.take())
+            .map(|product| asset_reloader(host.asset_reload(), product));
         wait_for_process_termination(
             args.supervised || args.serve_listener_fd.is_some(),
             &host,
             termination,
+            reload_assets,
         );
     }
     Ok(())
@@ -319,6 +326,24 @@ fn print_runtime_identity(machine_readable: bool) {
     }
 }
 
+/// Re-reads the staged UI into a fresh browser bundle and reloads the
+/// runtime's content, keeping the old bundle and inventory on failure.
+fn asset_reloader(reload: ProductDevAssetReload, product: ProductBundle) -> Box<dyn Fn() + Send> {
+    Box::new(move || {
+        let result = runtime_browser_root()
+            .and_then(|root| load_bundle(&root, &product, &[]))
+            .and_then(|bundle| {
+                reload
+                    .reload(bundle)
+                    .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))
+            });
+        match result {
+            Ok(()) => print_line("RUSTY_HOST assets-reloaded"),
+            Err(error) => eprintln!("RUSTY_HOST DEV_HOST_ASSET_RELOAD: {error}"),
+        }
+    })
+}
+
 /// The standard host is owned by its foreground process supervisor. In
 /// particular, service launchers commonly provide a closed stdin, so EOF must
 /// not be interpreted as a request to shut the host down. The `rusty dev`
@@ -330,17 +355,24 @@ fn wait_for_process_termination(
     supervised: bool,
     host: &RunningProductDevHost,
     termination: Arc<AtomicBool>,
+    reload_assets: Option<Box<dyn Fn() + Send>>,
 ) {
     if supervised {
         // Keep stdin as the supervisor's clean-stop mechanism, but read it on
         // a helper so a terminal runtime recovery can wake this foreground
-        // owner without waiting for the supervisor to close the pipe.
+        // owner without waiting for the supervisor to close the pipe. The
+        // supervisor also forwards asset reloads here, one line each.
         let supervisor_stdin_closed = Arc::new(AtomicBool::new(false));
         let reader_closed = Arc::clone(&supervisor_stdin_closed);
         std::thread::spawn(move || {
-            let mut input = std::io::stdin();
-            let mut byte = [0_u8; 1];
-            while input.read(&mut byte).is_ok_and(|count| count != 0) {}
+            for line in std::io::stdin().lock().lines() {
+                let Ok(line) = line else { break };
+                if line == supervisor::RELOAD_ASSETS_COMMAND {
+                    if let Some(reload) = &reload_assets {
+                        reload();
+                    }
+                }
+            }
             reader_closed.store(true, Ordering::Release);
         });
         while !termination.load(Ordering::Relaxed)

@@ -274,6 +274,12 @@ supervised or headless NativeAOT launch runs its native module:
   runs in its own process group and serves that listener directly. Closing
   its stdin is the clean stop: the product is disposed before exit.
 
+`rusty dev` sends the supervisor one of two commands on its stdin. After a
+full restage it sends `replace-runtime`. After a UI-only or content-bundle-only
+restage it sends `reload-assets`, which the supervisor forwards to the running
+runtime's stdin; the runtime re-reads its staged UI and bundle inventory in
+place, with no product restart and no reconnect.
+
 Replacement stops the old runtime first, so persistence is never shared
 between two incarnations, then starts the next one. While no runtime is
 serving, the supervisor answers requests with 503: JSON for runtime routes,

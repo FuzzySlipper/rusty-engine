@@ -194,8 +194,14 @@ impl ProductDevHost {
                 return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
             }
         };
+        let content_owner = Arc::clone(&state.runtime);
+        let asset_reload = ProductDevAssetReload {
+            bundle,
+            content: Arc::new(move || content_owner.reload_content()),
+        };
         Ok(RunningProductDevHost {
             address,
+            asset_reload,
             shutdown,
             scheduler_wake,
             output_wake,
@@ -211,6 +217,7 @@ impl ProductDevHost {
 /// connection handler so tests and generated launchers do not leak threads.
 pub struct RunningProductDevHost {
     address: SocketAddr,
+    asset_reload: ProductDevAssetReload,
     shutdown: Arc<AtomicBool>,
     scheduler_wake: Arc<SchedulerWake>,
     output_wake: Arc<OutputWake>,
@@ -227,6 +234,11 @@ impl RunningProductDevHost {
 
     pub fn origin(&self) -> String {
         format!("http://{}", self.address)
+    }
+
+    /// A handle that reloads UI and content into this running host.
+    pub fn asset_reload(&self) -> ProductDevAssetReload {
+        self.asset_reload.clone()
     }
 
     /// Whether the host has stopped serving.
@@ -270,6 +282,25 @@ impl RunningProductDevHost {
         }
         self.diagnostics.flush();
         Ok(())
+    }
+}
+
+/// Swaps the served browser bundle and reloads the runtime's content without
+/// restarting the product. UI is a mutable development route (`no-store`), so
+/// the next page load gets the new files; content keeps its content-addressed
+/// identities, so changed bytes get new URLs and old references keep theirs.
+#[derive(Clone)]
+pub struct ProductDevAssetReload {
+    bundle: Arc<RwLock<ProductDevBundle>>,
+    content: Arc<dyn Fn() -> Result<(), ProductDevRuntimeError> + Send + Sync>,
+}
+
+impl ProductDevAssetReload {
+    pub fn reload(&self, bundle: ProductDevBundle) -> Result<(), ProductDevRuntimeError> {
+        *self.bundle.write().map_err(|_| {
+            ProductDevRuntimeError::new("DEV_HOST_BUNDLE", "bundle lock poisoned")
+        })? = bundle;
+        (self.content)()
     }
 }
 

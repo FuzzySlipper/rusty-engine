@@ -32,7 +32,9 @@ pub use error::{
     ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,
     ProductDevNextAction, ProductDevRuntimeError, ProductDevRuntimeRecovery,
 };
-pub use host::{ProductDevHost, ProductDevHostConfig, RunningProductDevHost};
+pub use host::{
+    ProductDevAssetReload, ProductDevHost, ProductDevHostConfig, RunningProductDevHost,
+};
 pub use log::{
     ProductDevLog, ProductDevLogBatch, ProductDevLogConfig, ProductDevLogDisposition,
     ProductDevLogEvent, ProductDevLogSeverity, ProductDevLogSnapshot, ProductDevLogWriterState,

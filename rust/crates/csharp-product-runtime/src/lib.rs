@@ -1007,6 +1007,8 @@ pub struct CsharpProductRuntime {
     /// publish it.
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
+    /// Root whose bundle inventory `reload_content` re-admits.
+    content_root: PathBuf,
     initial_output: Option<Vec<RuntimePublication>>,
     renderer_metrics_visible: bool,
     renderer_diagnostics_received_at: Option<Instant>,
@@ -1131,6 +1133,7 @@ impl CsharpProductRuntime {
         };
         let api = load_api()?;
         let CsharpProductContent {
+            root: content_root,
             files: content,
             appearance_catalog,
             bundles,
@@ -1216,6 +1219,7 @@ impl CsharpProductRuntime {
             pending_inputs: Vec::new(),
             pending_recovery_outputs: Vec::new(),
             services,
+            content_root,
             initial_output,
             renderer_metrics_visible: false,
             renderer_diagnostics_received_at: None,
@@ -2691,6 +2695,18 @@ impl CsharpProductRuntime {
 impl ProductDevRuntime for CsharpProductRuntime {
     fn renderer_resource_ids(&self) -> Option<Vec<String>> {
         Some(self.services.renderer_resource_ids())
+    }
+
+    /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
+    /// edited, added and deleted bundle files. Open bundles and content
+    /// references keep the bytes they were opened with. The eager loose
+    /// snapshot the product received at create is not reloaded; `rusty dev`
+    /// replaces the runtime for loose content edits.
+    fn reload_content(&mut self) -> Result<(), ProductDevRuntimeError> {
+        let bundles = csharp_engine_services::ProductContentBundles::admit(&self.content_root)
+            .map_err(|error| ProductDevRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
+        self.services.bind_content_bundles(bundles);
+        Ok(())
     }
 
     fn renderer_resource(
@@ -4454,6 +4470,7 @@ struct ContentCandidate {
 /// browser bundle are constructed. Renderer bytes stay inert until C# selects a
 /// supported resource through the generated appearance API during `Create`.
 pub struct CsharpProductContent {
+    root: PathBuf,
     files: Vec<ContentFile>,
     appearance_catalog: CsharpAppearanceCatalog,
     bundles: csharp_engine_services::ProductContentBundles,
@@ -4499,6 +4516,7 @@ impl CsharpProductContent {
         let appearance_catalog =
             csharp_engine_services::parse_runtime_appearance_catalog(appearance_catalog)?;
         Ok(Self {
+            root: root.to_path_buf(),
             files,
             appearance_catalog,
             bundles,

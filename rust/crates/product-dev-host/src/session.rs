@@ -45,6 +45,14 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
             .map_err(|_| runtime_poisoned())?
     }
 
+    /// Reloads staged content under the same serialization guard as every
+    /// product operation, so no callback observes a half-swapped inventory.
+    pub fn reload_content(&self) -> Result<(), ProductDevRuntimeError> {
+        self.session
+            .with_locked(|runtime| runtime.reload_content())
+            .map_err(|_| runtime_poisoned())?
+    }
+
     /// Drains call-local attribution while the outer publisher holds its
     /// operation/publication order (used by the disposable worker adapter).
     pub fn take_update_attribution(

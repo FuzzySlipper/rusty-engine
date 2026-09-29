@@ -36,9 +36,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// [`SERVE_COMMAND`] on stdin before it accepts from the shared listener.
 pub(crate) const RUNTIME_READY_LINE: &str = "RUSTY_RUNTIME ready";
 pub(crate) const SERVE_COMMAND: &str = "serve";
+/// Forwarded to a serving runtime after `rusty dev` restaged only UI or
+/// bundle content: the runtime re-reads them without restarting the product.
+pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
 
-/// `rusty dev` writes one command family over stdin after staging a new
-/// Product directory; EOF is a clean stop. Browser input cannot reach it.
+/// `rusty dev` writes one command over stdin after each restage: a new
+/// Product directory replaces the runtime, restaged UI or bundle content is
+/// reloaded into it. EOF is a clean stop. Browser input cannot reach it.
 #[derive(Debug, serde::Deserialize)]
 #[serde(
     tag = "kind",
@@ -48,6 +52,7 @@ pub(crate) const SERVE_COMMAND: &str = "serve";
 )]
 enum SupervisorCommand {
     ReplaceRuntime { product_directory: PathBuf },
+    ReloadAssets,
 }
 
 pub(crate) fn run(args: Arguments) -> Result<(), String> {
@@ -153,6 +158,13 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
                 runtime = start_or_pause(&mut launch, &unavailable, &diagnostics);
                 if runtime.is_none() {
                     automatic_restart_used = true;
+                }
+            }
+            // A paused or restarting runtime loads the staged assets when it
+            // starts, so there is nothing to forward.
+            Ok(Ok(SupervisorCommand::ReloadAssets)) => {
+                if let Some(Err(error)) = runtime.as_mut().map(RuntimeProcess::reload_assets) {
+                    publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_ASSET_RELOAD", &error);
                 }
             }
             Ok(Err(error)) if error == SUPERVISOR_EOF => break "supervisor-stdin-closed",
@@ -309,7 +321,8 @@ fn path_argument(path: &Path) -> Result<String, String> {
 }
 
 /// One runtime incarnation. Its stdin is the control pipe: one `serve`
-/// line, then EOF as the clean-stop request.
+/// line, any number of `reload-assets` lines, then EOF as the clean-stop
+/// request.
 struct RuntimeProcess {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -386,6 +399,16 @@ impl RuntimeProcess {
         writeln!(stdin, "{SERVE_COMMAND}")
             .and_then(|_| stdin.flush())
             .map_err(|error| format!("DEV_HOST_RUNTIME_SERVE: {error}"))
+    }
+
+    fn reload_assets(&mut self) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or("DEV_HOST_ASSET_RELOAD: runtime stdin is closed")?;
+        writeln!(stdin, "{RELOAD_ASSETS_COMMAND}")
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("DEV_HOST_ASSET_RELOAD: {error}"))
     }
 
     fn exited(&mut self) -> Option<ExitStatus> {
@@ -588,13 +611,25 @@ mod tests {
 
     #[test]
     fn supervisor_frames_decode_replacement_and_report_eof() {
-        let body = br#"{"kind":"replace-runtime","productDirectory":"/tmp/product"}"#;
-        let mut frame = (body.len() as u32).to_le_bytes().to_vec();
-        frame.extend_from_slice(body);
+        let mut frame = Vec::new();
+        for body in [
+            br#"{"kind":"replace-runtime","productDirectory":"/tmp/product"}"#.as_slice(),
+            br#"{"kind":"reload-assets"}"#.as_slice(),
+        ] {
+            frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            frame.extend_from_slice(body);
+        }
         let mut input = frame.as_slice();
-        let SupervisorCommand::ReplaceRuntime { product_directory } =
-            read_supervisor_frame(&mut input).unwrap();
+        let Ok(SupervisorCommand::ReplaceRuntime { product_directory }) =
+            read_supervisor_frame(&mut input)
+        else {
+            panic!("expected a replacement");
+        };
         assert_eq!(product_directory, PathBuf::from("/tmp/product"));
+        assert!(matches!(
+            read_supervisor_frame(&mut input),
+            Ok(SupervisorCommand::ReloadAssets)
+        ));
         assert_eq!(
             read_supervisor_frame(&mut input).unwrap_err(),
             SUPERVISOR_EOF

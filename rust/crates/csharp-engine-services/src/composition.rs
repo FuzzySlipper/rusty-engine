@@ -345,7 +345,9 @@ pub enum CsharpAppearanceCallOutput {
 pub struct CsharpAppearanceCatalog(RuntimeAppearanceCatalog);
 
 impl EngineServiceSet {
-    /// Bind metadata-only build bundles before product creation.
+    /// Bind metadata-only build bundles before product creation, or rebind a
+    /// re-admitted inventory after a development content edit. Only later
+    /// opens see the new inventory.
     pub fn bind_content_bundles(&mut self, bundles: crate::ProductContentBundles) {
         self.content.bind_bundles(bundles);
     }

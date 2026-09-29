@@ -189,8 +189,9 @@ definition's filename in code. Do not depend on an index occupying element zero.
 The existing `Files`, UTF-8 `Path` and `Bytes` members remain available. Content
 is an eagerly admitted memory snapshot copied across the generated boundary;
 these helpers add no filesystem reads, streaming, parsing framework or writable
-store. Treat retained path/payload memory as read-only. `rusty dev` restaging
-supplies a new snapshot on product replacement. Tauri and sealed-container host
+store. Treat retained path/payload memory as read-only. A loose content edit
+under `rusty dev` replaces the runtime to supply a new snapshot; bundle content
+(below) reloads without one. Tauri and sealed-container host
 flavors remain packaging investigations; these logical names do not promise an
 implemented standalone browser/WASM or Tauri runtime.
 
@@ -339,9 +340,45 @@ runtime pack:
 ```
 
 It builds the ordinary project and stages a loose Product directory in one
-MSBuild invocation, launches the packaged host through CoreCLR, and restarts it
-when declared C#, UI, or content inputs change. Staging copies only changed UI
-and content, removes deleted files, and writes `product.json` last. `--bind-host`, `--port`, and
+MSBuild invocation, then launches the packaged host through CoreCLR. Staging
+copies only changed UI and content, removes deleted files, and writes
+`product.json` last. When declared inputs change, `rusty dev` routes the edit:
+
+- **UI or content-bundle edits only.** These are files under
+  `RustyEngineProductUiSourceRoot`, `RustyEngineProductUiRoot`, or a
+  `RustyEngineContentBundle` root. `rusty dev` runs only
+  `StageRustyEngineProductAssets` (no C# build) and the running runtime
+  reloads them. The product keeps running.
+  - UI is served `no-store`, so the next page load gets the new files.
+  - The next `OpenBundle` sees edited, added and deleted bundle files under
+    their new content identities. Bundles and references opened earlier keep
+    their bytes.
+  - If the stage or the reload fails, the old UI and bundle inventory stay in
+    place until the next edit.
+- **Anything else** (C#, the project file, loose content) restages the whole
+  Product and replaces the runtime. Loose content is the create-time snapshot
+  described above.
+
+A product whose UI is compiled declares the compiler command once. The SDK
+runs it only when a file under the UI source root, the project file, or an
+added `RustyEngineProductUiInput` is newer than the last successful build, or
+the UI entry output is missing. An unchanged or C#-only build therefore skips
+the UI compiler:
+
+```xml
+<PropertyGroup>
+  <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/../ui/generated</RustyEngineProductUiRoot>
+  <RustyEngineProductUiSourceRoot>$(MSBuildProjectDirectory)/../ui</RustyEngineProductUiSourceRoot>
+  <RustyEngineProductUiBuildCommand>pnpm --dir "$(MSBuildProjectDirectory)/../.." exec tsc --project "$(MSBuildProjectDirectory)/../ui/tsconfig.json"</RustyEngineProductUiBuildCommand>
+</PropertyGroup>
+<ItemGroup>
+  <!-- Dependencies outside the UI source root. -->
+  <RustyEngineProductUiInput Include="$(MSBuildProjectDirectory)/../../package.json;$(MSBuildProjectDirectory)/../../pnpm-lock.yaml" />
+</ItemGroup>
+```
+
+Do not hook a UI compiler onto the SDK's staging or composition targets
+yourself; that reruns it on every C# edit. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
 session. Use `--debugger` for managed breakpoint sessions; see
 [CoreCLR diagnostics](coreclr-diagnostics.md) for runtime process discovery,

@@ -17,6 +17,10 @@
     <RustyEngineProductTitle Condition="'$(RustyEngineProductTitle)' == ''">Rusty Engine Product</RustyEngineProductTitle>
     <RustyEngineProductUiRoot Condition="'$(RustyEngineProductUiRoot)' == ''">$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
     <RustyEngineProductContentRoot Condition="'$(RustyEngineProductContentRoot)' == ''">$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <!-- A product whose UI is compiled names the command and the directory of
+         its UI sources (RustyEngineProductUiSourceRoot, defaulted in the
+         targets once the product's UI root is known). -->
+    <RustyEngineProductUiBuildCommand Condition="'$(RustyEngineProductUiBuildCommand)' == ''"></RustyEngineProductUiBuildCommand>
     <RustyEngineProductBindHost Condition="'$(RustyEngineProductBindHost)' == ''">127.0.0.1</RustyEngineProductBindHost>
     <RustyEngineProductPort Condition="'$(RustyEngineProductPort)' == ''">0</RustyEngineProductPort>
     <RustyEngineProductLiveDebug Condition="'$(RustyEngineProductLiveDebug)' == ''">false</RustyEngineProductLiveDebug>
@@ -35,7 +39,6 @@
     <!-- This is intentionally absolute so a launcher can query it without
          guessing an intermediate-path convention or adjacent checkout. -->
     <RustyEngineStagedProductDirectory Condition="'$(RustyEngineStagedProductDirectory)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)Rusty.Engine/Product', '$(MSBuildProjectDirectory)'))</RustyEngineStagedProductDirectory>
-    <RustyEngineWatchPaths Condition="'$(RustyEngineWatchPaths)' == ''">$(MSBuildProjectDirectory);$([System.IO.Path]::GetFullPath('$(RustyEngineProductUiRoot)', '$(MSBuildProjectDirectory)'));$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)', '$(MSBuildProjectDirectory)'))</RustyEngineWatchPaths>
   </PropertyGroup>
   <Target Name="ValidateRustyEngineSourceDevelopmentPackageAssets" BeforeTargets="PrepareForBuild"
           Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">
