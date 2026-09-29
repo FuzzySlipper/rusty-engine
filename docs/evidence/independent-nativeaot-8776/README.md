@@ -27,7 +27,8 @@ is shared:
 - **Removed.** `Product.next`, `PromoteRustyEngineAotStagedProduct`,
   `_RustyEngineStagingDirectory`, and the unreferenced `StageRustyEngineProductBundle`.
 - **Separate restore path.** The NativeAOT publish now restores into its own
-  `MSBuildProjectExtensionsPath` (`obj/Rusty.Engine/NativeAotRestore/`).
+  `MSBuildProjectExtensionsPath` (`obj/Rusty.Engine/NativeAotRestore/`, in
+  each project of the graph; see the review fix below).
   Without that, the outer restore (no RID) and the publish's restore (RID plus
   ILCompiler) rewrote the same `obj/project.assets.json` and `nuget.g.*` files.
   Every unchanged NativeAOT run then recompiled and relinked the product.
@@ -101,3 +102,36 @@ a performance lane, not this task's question.
 
 The NativeAOT operation still starts one nested `dotnet publish` process
 because of the RID-specific restore.
+
+## Review fix: one restore directory per project
+
+**Finding.** The publish passed one absolute `MSBuildProjectExtensionsPath`
+as a global property. Global properties reach every `ProjectReference`, so
+every project in the graph restored into the same `project.assets.json`, and
+the last one written decided what all of them read. A net10.0 product that
+references a net8.0 library failed with `NETSDK1005` (no `net8.0` target in
+the assets file), and no module was produced.
+
+**Fix.** The publish now passes
+`CustomBeforeDirectoryBuildProps=<SDK buildTransitive>/Rusty.Engine.NativeAotRestore.props`
+instead. Microsoft.Common.props imports that file before it settles
+`MSBuildProjectExtensionsPath`. The global property still reaches every
+project, but each project evaluates the file in its own directory, so each
+gets `$(MSBuildProjectDirectory)/obj/Rusty.Engine/NativeAotRestore/`. That is
+the same path the product project already used with the default `obj/`
+layout, so the unchanged-run measurement above still applies. The file is
+not named after the package, so NuGet never imports it into ordinary builds.
+
+**Evidence.**
+- The reviewer's graph (net10.0 `App` → net8.0 `Lib`), published with the
+  target's exact switches:
+  - with the old global path: `NETSDK1005`, no module (reviewer's
+    `shared.log`);
+  - with the new props: `Generating native code`, `App.so` produced, and
+    separate `App/obj/Rusty.Engine/NativeAotRestore/project.assets.json` and
+    `Lib/obj/Rusty.Engine/NativeAotRestore/project.assets.json`.
+- `scripts/test-csharp-sdk-package.sh --aot` and `--coreclr-smoke` pass with
+  the packaged SDK.
+
+**Migration.** None. A product that sets `CustomBeforeDirectoryBuildProps`
+itself would have it replaced during the NativeAOT publish only.

@@ -45,7 +45,6 @@
 
   <PropertyGroup>
     <_RustyEngineNativeAotOutputDirectory>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../NativeAot'))</_RustyEngineNativeAotOutputDirectory>
-    <_RustyEngineNativeAotRestoreDirectory>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../NativeAotRestore'))/</_RustyEngineNativeAotRestoreDirectory>
     <_RustyEngineProductUiBuildStamp>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../ui-build.stamp'))</_RustyEngineProductUiBuildStamp>
     <_RustyEngineProductNativeModule>$(TargetName).so</_RustyEngineProductNativeModule>
     <_RustyEngineManifestFixedStep Condition="'$(RustyEngineProductLifecycleMode)' == 'realtime'">,&quot;fixedStep&quot;:{&quot;hz&quot;:$(RustyEngineProductFixedStepHz),&quot;maxCatchUpSteps&quot;:$(RustyEngineProductFixedStepMaxCatchUpSteps)}</_RustyEngineManifestFixedStep>
@@ -175,13 +174,15 @@
   <!-- NativeAOT publishes this product project as a shared library; nothing
        is built or staged for CoreCLR. The RID keeps the publish's intermediate
        and output directories apart from the CoreCLR build. Its RID-specific
-       restore writes to its own extensions path: sharing obj/project.assets.json
-       with the CoreCLR restore made each restore invalidate the other's build. -->
+       restore writes to its own extensions path in every project of the graph
+       (Rusty.Engine.NativeAotRestore.props): sharing obj/project.assets.json
+       with the CoreCLR restore made each restore invalidate the other's build,
+       and one path for the whole graph mixed projects' restore assets. -->
   <Target Name="_RustyEngineStageNativeAotModule"
           DependsOnTargets="ValidateRustyEngineProduct">
     <Error Condition="'$(RustyEngineNativeAotRuntimeIdentifier)' != 'linux-x64'"
            Text="VerifyRustyEngineAot currently proves the supported linux-x64 NativeAOT module; set RustyEngineNativeAotRuntimeIdentifier=linux-x64." />
-    <Exec Command="dotnet publish &quot;$(MSBuildProjectFullPath)&quot; --configuration &quot;$(Configuration)&quot; --runtime &quot;$(RustyEngineNativeAotRuntimeIdentifier)&quot; --output &quot;$(_RustyEngineNativeAotOutputDirectory)&quot; -p:PublishAot=true -p:NativeLib=Shared -p:InvariantGlobalization=true -p:StripSymbols=true &quot;-p:MSBuildProjectExtensionsPath=$(_RustyEngineNativeAotRestoreDirectory)&quot; &quot;-p:RustyEngineUseSourceDevelopment=$(RustyEngineUseSourceDevelopment)&quot; &quot;-p:RustyEngineSourceDevelopmentPath=$(RustyEngineSourceDevelopmentPath)&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildProjectFullPath)&quot; --configuration &quot;$(Configuration)&quot; --runtime &quot;$(RustyEngineNativeAotRuntimeIdentifier)&quot; --output &quot;$(_RustyEngineNativeAotOutputDirectory)&quot; -p:PublishAot=true -p:NativeLib=Shared -p:InvariantGlobalization=true -p:StripSymbols=true &quot;-p:CustomBeforeDirectoryBuildProps=$(MSBuildThisFileDirectory)Rusty.Engine.NativeAotRestore.props&quot; &quot;-p:RustyEngineUseSourceDevelopment=$(RustyEngineUseSourceDevelopment)&quot; &quot;-p:RustyEngineSourceDevelopmentPath=$(RustyEngineSourceDevelopmentPath)&quot;" />
     <Error Condition="!Exists('$(_RustyEngineNativeAotOutputDirectory)/$(_RustyEngineProductNativeModule)')"
            Text="NativeAOT publish did not produce $(_RustyEngineProductNativeModule)." />
     <Delete Files="$(RustyEngineStagedProductDirectory)/product.json" />

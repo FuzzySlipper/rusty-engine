@@ -1,0 +1,9 @@
+<!-- Imported through CustomBeforeDirectoryBuildProps by the nested NativeAOT
+     publish only. The global property reaches every project in the graph, and
+     each one evaluates this file in its own directory, so every project gets
+     its own RID-specific restore beside, not over, its ordinary obj/ restore. -->
+<Project>
+  <PropertyGroup>
+    <MSBuildProjectExtensionsPath>$(MSBuildProjectDirectory)/obj/Rusty.Engine/NativeAotRestore/</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>
