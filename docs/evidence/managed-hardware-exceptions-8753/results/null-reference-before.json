@@ -1,0 +1,82 @@
+{
+  "label": "before",
+  "launch": "--supervised",
+  "faultAt": 240,
+  "faultKind": "null-reference",
+  "faultedObservedInBrowser": false,
+  "secondsFromReadyToFault": null,
+  "readoutStates": [],
+  "runtimeInstances": [],
+  "baselines": 0,
+  "pageHostStateAfterFault": null,
+  "pageHostStateAfterResume": null,
+  "exceptionLogged": null,
+  "diagnosticCodes": [],
+  "exceptionMessage": null,
+  "resumeStatus": 503,
+  "resumeAccepted": false,
+  "resumeCode": null,
+  "simulationStepBeforeResume": {
+    "accepted": false,
+    "error": {
+      "code": "DEV_HOST_RUNTIME_UNAVAILABLE",
+      "diagnostic": "the runtime exhausted its one automatic restart; waiting for source restage"
+    }
+  },
+  "simulationStepAfterResume": {
+    "accepted": false,
+    "error": {
+      "code": "DEV_HOST_RUNTIME_UNAVAILABLE",
+      "diagnostic": "the runtime exhausted its one automatic restart; waiting for source restage"
+    }
+  },
+  "serverErrors": [
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    },
+    {
+      "url": "/",
+      "status": 503
+    }
+  ],
+  "supervisorRestarts": 3,
+  "pageErrors": [],
+  "logTail": [
+    "RUSTY_HOST DEV_HOST_RUNTIME_EXIT: runtime exited unexpectedly (signal: 11 (SIGSEGV) (core dumped))",
+    "RUSTY_HOST DEV_HOST_RUNTIME_EXIT: runtime exited unexpectedly (signal: 11 (SIGSEGV) (core dumped))",
+    "RUSTY_HOST DEV_HOST_RUNTIME_PAUSED: the runtime exhausted its one automatic restart; waiting for source restage"
+  ]
+}

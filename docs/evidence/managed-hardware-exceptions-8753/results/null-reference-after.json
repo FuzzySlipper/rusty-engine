@@ -1,0 +1,45 @@
+{
+  "label": "after",
+  "launch": "--supervised",
+  "faultAt": 240,
+  "faultKind": "null-reference",
+  "faultedObservedInBrowser": true,
+  "secondsFromReadyToFault": 3.355,
+  "readoutStates": [
+    "running@165250/1",
+    "faulted@165250/1",
+    "running@165250/1"
+  ],
+  "runtimeInstances": [
+    "165250"
+  ],
+  "baselines": 1,
+  "pageHostStateAfterFault": "ready",
+  "pageHostStateAfterResume": "ready",
+  "exceptionLogged": {
+    "code": "CSHARP_PRODUCT_CALL",
+    "hasStackTrace": true,
+    "firstLine": "CSharpProduct.Callback returned status 99: System.NullReferenceException: Object reference not set to an instance of an object."
+  },
+  "diagnosticCodes": [
+    "BROWSER_HOST_STATUS",
+    "CSHARP_PRODUCT_CALL"
+  ],
+  "exceptionMessage": [
+    "CSharpProduct.Callback returned status 99: System.NullReferenceException: Object reference not set to an instance of an object.",
+    "   at HardwareFault.Product.Update(ProductUpdate update) in <scratch>/fault-product/Product.cs:line 35",
+    "   at Rusty.Engine.NativeProduct.ProductExports.Update(Void* handle, NativeProductUpdateArgs* args, NativeProductUpdateResult* result) in <scratch>/fault-product/obj/Rusty.Engine/Composition/coreclr/obj/Debug/generated/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.ProductGenerator/ProductExports.g.cs:line 221",
+    "Simulation is paused with the product loaded; resume or restart to continue."
+  ],
+  "resumeStatus": 200,
+  "resumeAccepted": true,
+  "resumeCode": "DEV_HOST_ACCEPTED",
+  "simulationStepBeforeResume": "240",
+  "simulationStepAfterResume": "420",
+  "serverErrors": [],
+  "supervisorRestarts": 0,
+  "pageErrors": [],
+  "logTail": [
+    "FAULT null-reference at update 240 after 480 caught"
+  ]
+}

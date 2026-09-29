@@ -47,7 +47,40 @@ keyboard controls: key-a..key-z, digit-0..digit-9, space, enter, escape, shift-l
   shift-right, control-left, control-right, alt-left, alt-right,
   arrow-up, arrow-down, arrow-left, arrow-right";
 
+/// CoreCLR and NativeAOT turn a managed null dereference (SIGSEGV) into a
+/// `NullReferenceException` in a handler that runs on the thread's alternate
+/// signal stack. They allocate that stack only when a thread has none. Rust
+/// std gives every thread an 8 KiB alternate stack for its stack-overflow
+/// message; the managed handler overflows it into std's guard page and the
+/// process dies instead of throwing (#8753).
+///
+/// std installs its handler and those stacks only when SIGSEGV and SIGBUS
+/// have their default action as it initializes, before `main`. They are
+/// ignored for that window, and `main` restores the default first, so each
+/// managed runtime allocates its own stacks. A Rust stack overflow in this
+/// process ends as a plain SIGSEGV without std's message.
+#[cfg(target_os = "linux")]
+#[used]
+#[link_section = ".init_array"]
+static DEFER_FAULT_SIGNALS_TO_MANAGED_RUNTIME: extern "C" fn() = ignore_fault_signals;
+
+#[cfg(target_os = "linux")]
+extern "C" fn ignore_fault_signals() {
+    set_fault_signal_action(libc::SIG_IGN);
+}
+
+#[cfg(target_os = "linux")]
+fn set_fault_signal_action(action: libc::sighandler_t) {
+    for signal in [libc::SIGSEGV, libc::SIGBUS] {
+        // SAFETY: this only replaces the process-wide action; no handler of
+        // ours runs. The kernel still kills on an ignored hardware fault.
+        unsafe { libc::signal(signal, action) };
+    }
+}
+
 fn main() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    set_fault_signal_action(libc::SIG_DFL);
     let args = match Invocation::parse()? {
         Invocation::Identity { machine_readable } => {
             print_runtime_identity(machine_readable);

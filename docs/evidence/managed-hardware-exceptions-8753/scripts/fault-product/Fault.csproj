@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <Nullable>enable</Nullable>
+    <RustyEngineProductEntryType>HardwareFault.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>fixture.hardware-fault</RustyEngineProductId>
+    <RustyEngineProductTitle>Hardware fault</RustyEngineProductTitle>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductUiAssets>assets</RustyEngineProductUiAssets>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineProductPort>40853</RustyEngineProductPort>
+    <RustyEngineProductLiveDebug>true</RustyEngineProductLiveDebug>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="0.1.0-sdktest7698" />
+  </ItemGroup>
+</Project>
