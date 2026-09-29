@@ -2,56 +2,87 @@
 
 An ordinary downstream product consumes one exact release pair: a Linux-x64
 archive containing a local `Rusty.Engine` NuGet feed, its matching runtime
-pack, and a checksummed pairing manifest. This is a file contract, not a
-GitHub-specific setup: obtain the archive and its adjacent `.sha256` file from
-the distribution channel available to your environment (see
-[Find a published pair](#find-a-published-pair)).
+pack, and a pairing manifest. Every pair has a version derived from one Engine
+commit, for example `0.1.0-dev.abc123def456`. The archive name, package
+version, SDK-generated ABI metadata, and runtime manifest all name that same
+revision. Do not combine artifacts from different pairs or add compatibility
+negotiation.
 
-Every pair has a version derived from one Engine commit, for example
-`0.1.0-dev.abc123def456`. The archive name, package version, SDK-generated ABI
-metadata, and runtime manifest all name that same revision. The host identity
-matches the runtime ABI. Do not combine artifacts from different pairs or add
-compatibility negotiation.
+## Use a pair from a product
 
-## Verify and install a pair
-
-Keep the archive and checksum together, then verify before extracting. Run the
-checksum command from their containing directory:
+The `rusty` command owns installing, updating, inspecting and running a
+product's pair; `rusty --help` and each command's `--help` are the reference.
+Get it once, then refresh it the same way:
 
 ```bash
-sha256sum -c rusty-engine-csharp-pair-0.1.0-dev.abc123def456-linux-x64.tar.gz.sha256
-tar -xzf rusty-engine-csharp-pair-0.1.0-dev.abc123def456-linux-x64.tar.gz
+curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh | bash
+```
+
+The bootstrap downloads the newest pair, checks its SHA-256, puts that pair's
+`rusty` in `~/.local/bin` (`RUSTY_BIN_DIR`), and installs the pair into the
+shared cache.
+
+A product pins exactly one pair with one element in its `Directory.Build.props`,
+which its projects also use for the package reference:
+
+```xml
+<RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
+```
+
+```xml
+<PackageReference Include="Rusty.Engine" Version="$(RustyEnginePackageVersion)" />
+```
+
+From the product repository:
+
+```bash
+rusty status
+rusty install
+rusty dev --project src/Game/Game.csproj --port 8787
+rusty update --check
+rusty update
+```
+
+- `rusty install` downloads the pinned pair once into
+  `~/.cache/rusty-engine/pairs/<version>` (`RUSTY_ENGINE_CACHE` moves the
+  cache), checking the archive's SHA-256 and the manifest's package identity.
+  Every product shares the cache, and an installed pair needs no network.
+  `--archive <pair.tar.gz>` installs an archive obtained another way; keep its
+  `.sha256` beside it.
+- `rusty dev` and `rusty build` restore the SDK package from the cached pair's
+  `sdk-feed`, so a product needs no feed of its own. After one restore through
+  `rusty`, plain `dotnet build` also finds the package. `rusty dev` runs the
+  pinned pair's own `runtime-pack/bin/rusty`, whose supervisor matches its
+  host, and sets `DOTNET_ROOT` from `dotnet` on `PATH` when it is unset.
+- `rusty update` is the only thing that moves the pin. It installs the target
+  pair (the newest, or `--to <version>`), rewrites the pin, and lists the
+  release notes between the old pin and the new one. Commit the changed
+  `Directory.Build.props`.
+- `rusty status` shows the pin and its file, whether the pair is installed, the
+  runtime pack and feed paths, the cached pairs, and missing or mismatched
+  prerequisites (the .NET 10 SDK; `curl` and `tar` for installing). It exits 1
+  when the product cannot run yet.
+
+Normal downstream consumption needs neither an Engine checkout, Cargo, binding
+generation, copied host/browser files, nor a source-development override.
+Engine contributors select a runtime explicitly with `rusty dev --runtime
+<runtime-pack>` or `--engine-source <checkout>`.
+
+## Verify a pair by hand
+
+The CI consumer check exercises every published archive before publication,
+and `rusty dev` compares the host's `--identity` with the runtime manifest at
+each launch. To check an extracted pair's full payload yourself, run its
+bundled verifier:
+
+```bash
 ./rusty-engine-csharp-pair-0.1.0-dev.abc123def456-linux-x64/verify-pair.sh \
   --directory ./rusty-engine-csharp-pair-0.1.0-dev.abc123def456-linux-x64
 ```
 
-The extracted root contains the two consumption inputs plus pair metadata and
-its verifier:
-
-```text
-sdk-feed/Rusty.Engine.0.1.0-dev.abc123def456.nupkg
-runtime-pack/bin/rusty
-runtime-pack/bin/rusty-product-host
-runtime-pack/runtime-manifest.json
-pair-manifest.json
-verify-pair.sh
-```
-
-Point a product-local `NuGet.Config` at `sdk-feed`, reference the exact
-package version, and run the extracted runtime pack:
-
-```bash
-/path/to/runtime-pack/bin/rusty dev \
-  --project /path/to/Product.Game.csproj \
-  --runtime /path/to/runtime-pack
-```
-
-Normal downstream consumption needs neither an Engine checkout, Cargo, binding
-generation, copied host/browser files, nor a source-development override. The
-bundled release pair verifier independently checks all pair payload hashes, SDK
-nuspec/props identity, runtime manifest, and the runtime host's `--identity`
-output. A `RUSTY_ENGINE_PAIR_*` error means replace
-the entire pair with one unmodified matching release artifact.
+It checks all pair payload hashes, SDK nuspec/props identity, runtime manifest,
+and the runtime host's `--identity` output. A `RUSTY_ENGINE_PAIR_*` error means
+replace the entire pair with one unmodified matching release artifact.
 
 ## Find a published pair
 
@@ -66,7 +97,8 @@ https://github.com/FuzzySlipper/rusty-engine/releases/download/csharp-sdk-v<vers
 ```
 
 Latest only makes an update available. A product keeps its explicit pin until
-someone changes it.
+someone runs `rusty update`. `RUSTY_ENGINE_RELEASES` points the CLI and the
+bootstrap at another copy of this releases layout.
 
 ## What changed in a pair
 
@@ -80,8 +112,9 @@ Each release also carries release information, linked from
   It is absent when the surface did not change or there is no previous pair.
 - `api-surface.txt`: this pair's full public surface.
 
-The notes cover one step. To update across several pairs, follow
-`releaseInfo.previous` back to your pinned version and read each release. The
+The notes cover one step. `rusty update` follows `releaseInfo.previous` back to
+the pinned version and lists each release's notes; pairs published before
+release information existed end the chain with a source comparison link. The
 API diff shows signatures only. The authored notes carry behaviour, lifecycle
 and default changes.
 

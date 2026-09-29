@@ -167,10 +167,10 @@ if find "$consumer" -type f \( -name 'NativeProduct.cs' -o -name 'NativeProduct.
 fi
 
 host_log="$work/runtime-host.log"
-if "$runtime/bin/rusty" dev --help > "$work/rusty-dev-help.log" 2>&1; then
-    echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted rusty dev help unexpectedly started a session" >&2
+"$runtime/bin/rusty" dev --help > "$work/rusty-dev-help.log" 2>&1 || {
+    echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted rusty dev --help failed" >&2
     exit 1
-fi
+}
 grep -F 'usage: rusty dev --project' "$work/rusty-dev-help.log" >/dev/null || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not expose rusty dev" >&2
     exit 1

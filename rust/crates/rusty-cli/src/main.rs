@@ -1,14 +1,18 @@
-//! The intentionally thin Product iteration entry point.
+//! The `rusty` command: the downstream product workflow for Rusty Engine.
 //!
-//! This binary does not contain Product configuration. The SDK evaluates and
-//! stages that truth, while a runtime pack supplies the exact host it starts.
+//! It installs and updates the product's pinned SDK/runtime pair, reports what
+//! is selected and missing, and builds and runs the product. It holds no
+//! Product configuration: the SDK evaluates and stages that truth, and the
+//! pinned runtime pack supplies the exact host that `rusty dev` starts.
+
+mod pair;
 
 use std::{
     collections::BTreeMap,
     env, fs,
     io::Write,
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
+    process::{Child, ChildStdin, Command, ExitCode, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -20,7 +24,10 @@ use std::{
 use serde::Deserialize;
 use serde_json::Value;
 
+use pair::{InstalledPair, Pin};
+
 const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
+const AOT_TARGET: &str = "VerifyRustyEngineAot";
 const STAGE_ASSETS_TARGET: &str = "StageRustyEngineProductAssets";
 const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
@@ -28,6 +35,13 @@ const UI_SOURCE_ROOT_PROPERTY: &str = "RustyEngineProductUiSourceRoot";
 const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
 const CONTENT_ROOT_PROPERTY: &str = "RustyEngineProductContentRoot";
 const CONTENT_BUNDLE_ITEM: &str = "RustyEngineContentBundle";
+/// MSBuild reads environment variables as properties, so restores started by
+/// `rusty` (and by the pair's own `rusty dev`) find the pinned SDK package in
+/// the shared cache without a product-local feed.
+const RESTORE_SOURCES_VARIABLE: &str = "RestoreAdditionalProjectSources";
+const REQUIRED_DOTNET_MAJOR: u32 = 10;
+const BOOTSTRAP_URL: &str =
+    "https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
@@ -47,10 +61,27 @@ const IGNORED_WATCH_DIRECTORY_NAMES: &[&str] = &[
     "target",
 ];
 
-fn main() -> Result<(), String> {
-    let arguments = Arguments::parse(env::args().skip(1))?;
-    match arguments.command {
-        CommandName::Dev(options) => dev(options),
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<ExitCode, String> {
+    match Arguments::parse(env::args().skip(1))?.command {
+        CommandName::Help(text) => {
+            println!("{text}");
+            Ok(ExitCode::SUCCESS)
+        }
+        CommandName::Dev(options) => dev(options).map(|()| ExitCode::SUCCESS),
+        CommandName::Build(options) => build(&options),
+        CommandName::Install(options) => install(&options),
+        CommandName::Update(options) => update(&options),
+        CommandName::Status(options) => status(&options),
     }
 }
 
@@ -69,7 +100,31 @@ fn install_termination_signal_hook() -> Result<Arc<AtomicBool>, String> {
     Ok(Arc::new(AtomicBool::new(false)))
 }
 
-fn dev(options: DevOptions) -> Result<(), String> {
+fn dev(mut options: DevOptions) -> Result<(), String> {
+    use_dotnet_root_for_host();
+    if options.engine_source.is_none() {
+        let pinned = if options.runtime.is_none() {
+            pinned_pair(&options.project)?
+        } else {
+            pinned_pair_if_installed(&options.project)?
+        };
+        if let Some((pin, pair)) = pinned {
+            use_sdk_feed(&pair);
+            if options.runtime.is_none() {
+                let runtime = pair.runtime_pack();
+                diagnostic(
+                    "pin-resolved",
+                    serde_json::json!({
+                        "pin": pin.version,
+                        "pinFile": pin.file,
+                        "runtimePack": runtime,
+                    }),
+                );
+                delegate_to_pair_cli(&runtime, &options)?;
+                options.runtime = Some(runtime);
+            }
+        }
+    }
     let termination = install_termination_signal_hook()?;
     let runtime = RuntimePack::resolve(&options)?;
     runtime.verify()?;
@@ -407,7 +462,12 @@ struct Arguments {
 
 #[derive(Debug)]
 enum CommandName {
+    Help(String),
     Dev(DevOptions),
+    Build(BuildOptions),
+    Install(InstallOptions),
+    Update(UpdateOptions),
+    Status(StatusOptions),
 }
 
 #[derive(Debug)]
@@ -422,93 +482,365 @@ struct DevOptions {
     headless: bool,
 }
 
+#[derive(Debug)]
+struct BuildOptions {
+    project: PathBuf,
+    engine_source: Option<PathBuf>,
+    aot: bool,
+}
+
+#[derive(Debug)]
+struct InstallOptions {
+    project: Option<PathBuf>,
+    archive: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct UpdateOptions {
+    project: Option<PathBuf>,
+    to: Option<String>,
+    check: bool,
+}
+
+#[derive(Debug)]
+struct StatusOptions {
+    project: Option<PathBuf>,
+}
+
 impl Arguments {
     fn parse(values: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut values = values.into_iter();
-        let command = values.next().ok_or_else(usage)?;
-        if command != "dev" {
-            return Err(usage());
-        }
-        let mut project = None;
-        let mut runtime = None;
-        let mut engine_source = None;
-        let mut bind_host = None;
-        let mut port = None;
-        let mut live_debug = false;
-        let mut debugger = false;
-        let mut headless = false;
-        while let Some(value) = values.next() {
-            match value.as_str() {
-                "--project" => {
-                    project = Some(PathBuf::from(required_value(&mut values, "--project")?))
-                }
-                "--runtime" => {
-                    runtime = Some(PathBuf::from(required_value(&mut values, "--runtime")?))
-                }
-                "--engine-source" => {
-                    engine_source = Some(PathBuf::from(required_value(
-                        &mut values,
-                        "--engine-source",
-                    )?))
-                }
-                "--bind-host" => {
-                    let value = required_value(&mut values, "--bind-host")?;
-                    value
-                        .parse::<std::net::Ipv4Addr>()
-                        .map_err(|_| "RUSTY_DEV_ARGUMENT: --bind-host must be an IPv4 address")?;
-                    bind_host = Some(value);
-                }
-                "--port" => {
-                    port = Some(
-                        required_value(&mut values, "--port")?
-                            .parse()
-                            .map_err(|_| "RUSTY_DEV_ARGUMENT: --port must be a u16")?,
-                    )
-                }
-                "--live-debug" => live_debug = true,
-                "--debugger" => debugger = true,
-                "--headless" => headless = true,
-                "--help" => return Err(usage()),
-                _ => {
-                    return Err(format!(
-                        "RUSTY_DEV_ARGUMENT: unknown argument `{value}`\n{}",
-                        usage()
-                    ))
-                }
+        let command = match values.next() {
+            None => return Ok(Self::help(usage())),
+            Some(command) => command,
+        };
+        let rest: Vec<String> = values.collect();
+        let help = |text: fn() -> String| {
+            rest.iter()
+                .any(|value| value == "--help" || value == "-h")
+                .then(|| Self::help(text()))
+        };
+        let command = match command.as_str() {
+            "help" | "--help" | "-h" => return Ok(Self::help(usage())),
+            "dev" => match help(dev_usage) {
+                Some(help) => return Ok(help),
+                None => CommandName::Dev(parse_dev(rest)?),
+            },
+            "build" => match help(build_usage) {
+                Some(help) => return Ok(help),
+                None => CommandName::Build(parse_build(rest)?),
+            },
+            "install" => match help(install_usage) {
+                Some(help) => return Ok(help),
+                None => CommandName::Install(parse_install(rest)?),
+            },
+            "update" => match help(update_usage) {
+                Some(help) => return Ok(help),
+                None => CommandName::Update(parse_update(rest)?),
+            },
+            "status" => match help(status_usage) {
+                Some(help) => return Ok(help),
+                None => CommandName::Status(parse_status(rest)?),
+            },
+            other => {
+                return Err(format!(
+                    "RUSTY_ARGUMENT: unknown command `{other}`\n\n{}",
+                    usage()
+                ))
             }
-        }
-        if runtime.is_some() && engine_source.is_some() {
-            return Err(
-                "RUSTY_DEV_ARGUMENT: --runtime and --engine-source are mutually exclusive"
-                    .to_owned(),
-            );
-        }
-        let project = project.ok_or_else(|| {
-            "RUSTY_DEV_ARGUMENT: --project <ordinary-product.csproj> is required".to_owned()
-        })?;
-        Ok(Self {
-            command: CommandName::Dev(DevOptions {
-                project,
-                runtime,
-                engine_source,
-                bind_host,
-                port,
-                live_debug,
-                debugger,
-                headless,
-            }),
-        })
+        };
+        Ok(Self { command })
     }
+
+    const fn help(text: String) -> Self {
+        Self {
+            command: CommandName::Help(text),
+        }
+    }
+}
+
+fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
+    let mut values = values.into_iter();
+    let mut project = None;
+    let mut runtime = None;
+    let mut engine_source = None;
+    let mut bind_host = None;
+    let mut port = None;
+    let mut live_debug = false;
+    let mut debugger = false;
+    let mut headless = false;
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
+            "--runtime" => runtime = Some(PathBuf::from(required_value(&mut values, "--runtime")?)),
+            "--engine-source" => {
+                engine_source = Some(PathBuf::from(required_value(
+                    &mut values,
+                    "--engine-source",
+                )?))
+            }
+            "--bind-host" => {
+                let value = required_value(&mut values, "--bind-host")?;
+                value
+                    .parse::<std::net::Ipv4Addr>()
+                    .map_err(|_| "RUSTY_DEV_ARGUMENT: --bind-host must be an IPv4 address")?;
+                bind_host = Some(value);
+            }
+            "--port" => {
+                port = Some(
+                    required_value(&mut values, "--port")?
+                        .parse()
+                        .map_err(|_| "RUSTY_DEV_ARGUMENT: --port must be a u16")?,
+                )
+            }
+            "--live-debug" => live_debug = true,
+            "--debugger" => debugger = true,
+            "--headless" => headless = true,
+            _ => return Err(unknown_argument("dev", &value, dev_usage)),
+        }
+    }
+    if runtime.is_some() && engine_source.is_some() {
+        return Err(
+            "RUSTY_DEV_ARGUMENT: --runtime and --engine-source are mutually exclusive".to_owned(),
+        );
+    }
+    let project = project.ok_or_else(|| {
+        "RUSTY_DEV_ARGUMENT: --project <ordinary-product.csproj> is required".to_owned()
+    })?;
+    Ok(DevOptions {
+        project,
+        runtime,
+        engine_source,
+        bind_host,
+        port,
+        live_debug,
+        debugger,
+        headless,
+    })
+}
+
+fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
+    let mut values = values.into_iter();
+    let mut project = None;
+    let mut engine_source = None;
+    let mut aot = false;
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
+            "--engine-source" => {
+                engine_source = Some(PathBuf::from(required_value(
+                    &mut values,
+                    "--engine-source",
+                )?))
+            }
+            "--aot" => aot = true,
+            _ => return Err(unknown_argument("build", &value, build_usage)),
+        }
+    }
+    Ok(BuildOptions {
+        project: project.ok_or("RUSTY_ARGUMENT: rusty build needs --project <product.csproj>")?,
+        engine_source,
+        aot,
+    })
+}
+
+fn parse_install(values: Vec<String>) -> Result<InstallOptions, String> {
+    let mut values = values.into_iter();
+    let mut options = InstallOptions {
+        project: None,
+        archive: None,
+    };
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--project" => {
+                options.project = Some(PathBuf::from(required_value(&mut values, "--project")?))
+            }
+            "--archive" => {
+                options.archive = Some(PathBuf::from(required_value(&mut values, "--archive")?))
+            }
+            _ => return Err(unknown_argument("install", &value, install_usage)),
+        }
+    }
+    Ok(options)
+}
+
+fn parse_update(values: Vec<String>) -> Result<UpdateOptions, String> {
+    let mut values = values.into_iter();
+    let mut options = UpdateOptions {
+        project: None,
+        to: None,
+        check: false,
+    };
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--project" => {
+                options.project = Some(PathBuf::from(required_value(&mut values, "--project")?))
+            }
+            "--to" => {
+                let version = required_value(&mut values, "--to")?;
+                pair::validate_version(&version)?;
+                options.to = Some(version);
+            }
+            "--check" => options.check = true,
+            _ => return Err(unknown_argument("update", &value, update_usage)),
+        }
+    }
+    Ok(options)
+}
+
+fn parse_status(values: Vec<String>) -> Result<StatusOptions, String> {
+    let mut values = values.into_iter();
+    let mut options = StatusOptions { project: None };
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--project" => {
+                options.project = Some(PathBuf::from(required_value(&mut values, "--project")?))
+            }
+            _ => return Err(unknown_argument("status", &value, status_usage)),
+        }
+    }
+    Ok(options)
 }
 
 fn required_value(values: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     values
         .next()
-        .ok_or_else(|| format!("RUSTY_DEV_ARGUMENT: {flag} requires a value"))
+        .ok_or_else(|| format!("RUSTY_ARGUMENT: {flag} requires a value"))
+}
+
+fn unknown_argument(command: &str, value: &str, usage: fn() -> String) -> String {
+    format!(
+        "RUSTY_ARGUMENT: rusty {command} does not accept `{value}`\n\n{}",
+        usage()
+    )
 }
 
 fn usage() -> String {
-    "usage: rusty dev --project <ordinary-product.csproj> [--runtime <runtime-pack>] [--engine-source <rusty-engine-source>] [--bind-host <IPv4>] [--port <u16>] [--live-debug] [--debugger] [--headless]\n\nCoreCLR is the only normal loader. --debugger disables the runtime startup deadline for managed breakpoints; source changes still replace the runtime. --headless starts the installed Chromium browser against the host; set RUSTY_CHROMIUM_PATH to select its executable. The SDK stages Product truth; this command never invokes Cargo or auto-discovers an adjacent Engine checkout. Use an explicit override only for Engine contributor runtime packs.".to_owned()
+    format!(
+        "rusty: build, run and update a Rusty Engine product
+
+usage: rusty <command> [options]
+
+commands:
+  status    show the pinned Engine pair, whether it is installed, paths, and missing prerequisites
+  install   install the pinned SDK/runtime pair into the shared cache (once; later use works offline)
+  update    move the pin to a newer published pair, install it, and list what changed
+  build     restore, build and stage the product; --aot also publishes NativeAOT
+  dev       build and run the product on its pinned runtime, rebuilding on source changes
+
+Run `rusty <command> --help` for a command's options.
+
+Everyday use, from the product repository:
+  rusty status
+  rusty install
+  rusty dev --project src/Game/Game.csproj --port 8787
+  rusty update --check
+  rusty update
+  rusty build --project src/Game/Game.csproj --aot
+
+The pin is the one <{pin}> element in the product's {pin_file}.
+Nothing moves it except `rusty update`. Installed pairs live in {cache}
+(set {cache_variable} to move it).
+
+Get or refresh this command:
+  curl -fsSL {bootstrap} | bash",
+        pin = pair::PIN_ELEMENT,
+        pin_file = pair::PIN_FILE,
+        cache = pair::cache_root().map_or_else(|error| error, |root| root.display().to_string()),
+        cache_variable = pair::CACHE_VARIABLE,
+        bootstrap = BOOTSTRAP_URL,
+    )
+}
+
+fn dev_usage() -> String {
+    "usage: rusty dev --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger] [--headless]
+                 [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
+
+Builds and stages the product through its SDK, starts it on CoreCLR, and restages when declared
+C#, UI or content inputs change. UI and content-bundle edits reload into the running product; other
+edits replace the runtime.
+
+The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
+`rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host.
+
+  --port, --bind-host  where the browser host listens
+  --live-debug         enable the live-debug command surface
+  --debugger           no runtime startup deadline, for managed breakpoints
+  --headless           start the installed Chromium against the host (RUSTY_CHROMIUM_PATH selects it)
+  --runtime            Engine contributors: use this runtime pack instead of the pin
+  --engine-source      Engine contributors: build the SDK and runtime from this checkout
+
+This command never invokes Cargo and never searches for an adjacent Engine checkout.
+
+Examples:
+  rusty dev --project src/Game/Game.csproj --port 8787
+  rusty dev --project src/Game/Game.csproj --live-debug --headless"
+        .to_owned()
+}
+
+fn build_usage() -> String {
+    "usage: rusty build --project <product.csproj> [--aot] [--engine-source <rusty-engine-source>]
+
+Restores against the pinned SDK in the shared cache, builds, and stages the CoreCLR product bundle
+(the SDK target StageRustyEngineCoreClrProduct). --aot runs VerifyRustyEngineAot, which also
+publishes the NativeAOT product. Compiler output and dotnet's exit code are passed through.
+
+After one restore through rusty, plain `dotnet build` also resolves the SDK package.
+
+Examples:
+  rusty build --project src/Game/Game.csproj
+  rusty build --project src/Game/Game.csproj --aot"
+        .to_owned()
+}
+
+fn install_usage() -> String {
+    format!(
+        "usage: rusty install [--project <path>] [--archive <pair.tar.gz>]
+
+Installs the Engine SDK/runtime pair pinned by the product (the <{pin}> element in the nearest
+{pin_file} at or above --project, default the current directory). It downloads the pair once,
+checks its SHA-256 and identity, and keeps it in the shared cache for every product. Installing
+never changes the pin. An already installed pair needs no network.
+
+--archive installs a pair archive you already have; its .sha256 file must sit beside it.
+
+Examples:
+  rusty install
+  rusty install --project ~/dev/my-game
+  rusty install --archive ~/Downloads/rusty-engine-csharp-pair-0.1.0-dev.abc123def456-linux-x64.tar.gz",
+        pin = pair::PIN_ELEMENT,
+        pin_file = pair::PIN_FILE,
+    )
+}
+
+fn update_usage() -> String {
+    "usage: rusty update [--project <path>] [--to <version>] [--check]
+
+Moves the product's pin to the newest published Engine pair (or --to an exact version): installs
+it, rewrites the pin, and lists the release notes for every pair between the old pin and the new
+one. Commit the changed Directory.Build.props with any product changes the notes call for.
+
+  --check  report the newest pair and its notes without installing or changing anything
+  --to     choose an exact published version, for example 0.1.0-dev.abc123def456
+
+Examples:
+  rusty update --check
+  rusty update
+  rusty update --to 0.1.0-dev.abc123def456"
+        .to_owned()
+}
+
+fn status_usage() -> String {
+    "usage: rusty status [--project <path>]
+
+Shows the product's pinned pair and where its pin lives, whether that pair is installed, the
+runtime pack and SDK feed paths, the pairs in the shared cache, and missing or mismatched
+prerequisites. Exits 1 when the product cannot run yet. Works offline.
+
+Examples:
+  rusty status
+  rusty status --project src/Game/Game.csproj"
+        .to_owned()
 }
 
 #[derive(Debug)]
@@ -534,7 +866,7 @@ impl RuntimePack {
         } else if let Some(source) = &options.engine_source {
             absolute(source)?.join("target/runtime-pack/linux-x64")
         } else {
-            runtime_beside_current_executable()?
+            runtime_beside_current_executable(&options.project)?
         };
         let manifest_path = root.join("runtime-manifest.json");
         let manifest = fs::read(&manifest_path)
@@ -601,18 +933,399 @@ impl RuntimePack {
     }
 }
 
-fn runtime_beside_current_executable() -> Result<PathBuf, String> {
-    let executable = env::current_exe().map_err(|error| {
-        format!("RUSTY_DEV_RUNTIME_LOCATE: cannot resolve rusty executable: {error}")
-    })?;
-    let bin = executable.parent().ok_or_else(|| {
-        "RUSTY_DEV_RUNTIME_LOCATE: rusty executable has no parent directory".to_owned()
-    })?;
-    let root = bin.parent().ok_or_else(|| "RUSTY_DEV_RUNTIME_LOCATE: rusty executable must reside in a runtime-pack bin directory; use --runtime or --engine-source for contributor work".to_owned())?;
-    if root.join("runtime-manifest.json").is_file() {
-        Ok(root.to_owned())
+/// An unpinned product run by a runtime pack's own `rusty` uses that pack.
+fn runtime_beside_current_executable(project: &Path) -> Result<PathBuf, String> {
+    let root = env::current_exe()
+        .ok()
+        .and_then(|executable| Some(executable.parent()?.parent()?.to_owned()))
+        .filter(|root| root.join("runtime-manifest.json").is_file());
+    root.ok_or_else(|| {
+        format!(
+            "{}\nFor Engine contributor work pass --runtime <runtime-pack> or --engine-source <rusty-engine-source>; rusty never searches for an adjacent checkout.",
+            require_pin(&product_start(Some(project)).unwrap_or_default())
+                .err()
+                .unwrap_or_default()
+        )
+    })
+}
+
+/// The directory whose ancestors hold a product's pin: the project's own
+/// directory, or the given directory, or the current directory.
+fn product_start(project: Option<&Path>) -> Result<PathBuf, String> {
+    let path = match project {
+        Some(path) => absolute(path)?,
+        None => env::current_dir()
+            .map_err(|error| format!("RUSTY_PATH: no current directory: {error}"))?,
+    };
+    if path.is_dir() {
+        return Ok(path);
+    }
+    if path.is_file() {
+        return Ok(path.parent().map_or_else(|| path.clone(), Path::to_owned));
+    }
+    Err(format!("RUSTY_PATH: `{}` does not exist", path.display()))
+}
+
+fn require_pin(start: &Path) -> Result<Pin, String> {
+    Pin::find(start)?.ok_or_else(|| {
+        format!(
+            "RUSTY_PIN_MISSING: no <{}> in a {} at or above `{}`. Run from the product repository or pass --project; a product pins its Engine pair with that one element, for example <{}>0.1.0-dev.abc123def456</{}>.",
+            pair::PIN_ELEMENT,
+            pair::PIN_FILE,
+            start.display(),
+            pair::PIN_ELEMENT,
+            pair::PIN_ELEMENT,
+        )
+    })
+}
+
+fn not_installed(pin: &Pin) -> String {
+    format!(
+        "RUSTY_PAIR_NOT_INSTALLED: Engine pair {} (pinned in `{}`) is not installed; run `rusty install` in the product repository.",
+        pin.version,
+        pin.file.display()
+    )
+}
+
+/// The product's pinned pair, which must be installed when a pin exists.
+fn pinned_pair(project: &Path) -> Result<Option<(Pin, InstalledPair)>, String> {
+    let Some(pin) = Pin::find(&product_start(Some(project))?)? else {
+        return Ok(None);
+    };
+    let pair = pair::installed(&pin.version)?.ok_or_else(|| not_installed(&pin))?;
+    Ok(Some((pin, pair)))
+}
+
+/// The pinned pair when the product has a pin and it is installed; products
+/// that bring their own runtime or package source have neither.
+fn pinned_pair_if_installed(project: &Path) -> Result<Option<(Pin, InstalledPair)>, String> {
+    let Some(pin) = Pin::find(&product_start(Some(project))?)? else {
+        return Ok(None);
+    };
+    Ok(pair::installed(&pin.version)?.map(|pair| (pin, pair)))
+}
+
+fn use_sdk_feed(pair: &InstalledPair) {
+    let feed = pair.sdk_feed().display().to_string();
+    let sources = match env::var(RESTORE_SOURCES_VARIABLE) {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing};{feed}"),
+        _ => feed,
+    };
+    env::set_var(RESTORE_SOURCES_VARIABLE, sources);
+}
+
+/// The CoreCLR host locates the runtime through DOTNET_ROOT. A per-user SDK
+/// install (for example `~/.dotnet`) is not found without it, so derive it
+/// from the `dotnet` the build already uses.
+fn use_dotnet_root_for_host() {
+    if env::var_os("DOTNET_ROOT").is_some() {
+        return;
+    }
+    if let Some(root) = dotnet_root_from_path() {
+        env::set_var("DOTNET_ROOT", root);
+    }
+}
+
+fn dotnet_root_from_path() -> Option<PathBuf> {
+    let dotnet = find_on_path("dotnet")?;
+    fs::canonicalize(dotnet).ok()?.parent().map(Path::to_owned)
+}
+
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    env::split_paths(&env::var_os("PATH")?)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Runs the pinned pair's own `rusty dev`, whose supervisor protocol and
+/// staging expectations match that pair's host. Returns when this process is
+/// already that command.
+#[cfg(unix)]
+fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+
+    let pair_cli = runtime.join("bin/rusty");
+    let current = env::current_exe().and_then(fs::canonicalize).ok();
+    if current.is_some() && current == fs::canonicalize(&pair_cli).ok() {
+        return Ok(());
+    }
+    let mut command = Command::new(&pair_cli);
+    command
+        .arg("dev")
+        .arg("--project")
+        .arg(&options.project)
+        .arg("--runtime")
+        .arg(runtime);
+    if let Some(bind_host) = &options.bind_host {
+        command.args(["--bind-host", bind_host]);
+    }
+    if let Some(port) = options.port {
+        command.args(["--port", &port.to_string()]);
+    }
+    for (enabled, flag) in [
+        (options.live_debug, "--live-debug"),
+        (options.debugger, "--debugger"),
+        (options.headless, "--headless"),
+    ] {
+        if enabled {
+            command.arg(flag);
+        }
+    }
+    let error = command.exec();
+    Err(format!(
+        "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
+        pair_cli.display()
+    ))
+}
+
+#[cfg(not(unix))]
+fn delegate_to_pair_cli(_runtime: &Path, _options: &DevOptions) -> Result<(), String> {
+    Ok(())
+}
+
+fn build(options: &BuildOptions) -> Result<ExitCode, String> {
+    let project = absolute(&options.project)?;
+    if !project.is_file() {
+        return Err(format!(
+            "RUSTY_BUILD_PROJECT: product project `{}` does not exist",
+            project.display()
+        ));
+    }
+    if options.engine_source.is_none() {
+        if let Some(pin) = Pin::find(&product_start(Some(&project))?)? {
+            let pair = pair::installed(&pin.version)?.ok_or_else(|| not_installed(&pin))?;
+            use_sdk_feed(&pair);
+        }
+    }
+    let mut arguments = vec![
+        "msbuild".to_owned(),
+        project
+            .to_str()
+            .ok_or("RUSTY_BUILD_PROJECT: project path must be UTF-8")?
+            .to_owned(),
+        "-restore".to_owned(),
+        "-nologo".to_owned(),
+        "-verbosity:minimal".to_owned(),
+        format!(
+            "-t:{}",
+            if options.aot {
+                AOT_TARGET
+            } else {
+                STAGE_TARGET
+            }
+        ),
+    ];
+    arguments.extend(source_properties(options.engine_source.as_deref())?);
+    let status = Command::new("dotnet")
+        .args(&arguments)
+        .status()
+        .map_err(|error| format!("RUSTY_PREREQUISITE: could not start dotnet: {error}; install the .NET {REQUIRED_DOTNET_MAJOR} SDK"))?;
+    if status.success() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    eprintln!(
+        "RUSTY_BUILD: dotnet {} failed with {status}",
+        arguments.join(" ")
+    );
+    Ok(exit_code(status))
+}
+
+fn exit_code(status: ExitStatus) -> ExitCode {
+    status
+        .code()
+        .and_then(|code| u8::try_from(code).ok())
+        .filter(|code| *code != 0)
+        .map_or(ExitCode::FAILURE, ExitCode::from)
+}
+
+fn install(options: &InstallOptions) -> Result<ExitCode, String> {
+    if let Some(archive) = &options.archive {
+        let pair = pair::install_archive(&absolute(archive)?)?;
+        println!(
+            "Installed Engine pair {} at {}",
+            pair.version,
+            pair.root.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    let pin = require_pin(&product_start(options.project.as_deref())?)?;
+    let (pair, downloaded) = pair::install_version(&pin.version)?;
+    if downloaded {
+        println!(
+            "Installed Engine pair {} at {}",
+            pair.version,
+            pair.root.display()
+        );
     } else {
-        Err("RUSTY_DEV_RUNTIME_LOCATE: no runtime-manifest.json beside rusty; use --runtime <runtime-pack> or --engine-source <rusty-engine-source>. Normal operation never searches for an adjacent checkout.".to_owned())
+        println!(
+            "Engine pair {} is already installed at {}",
+            pair.version,
+            pair.root.display()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn update(options: &UpdateOptions) -> Result<ExitCode, String> {
+    let pin = require_pin(&product_start(options.project.as_deref())?)?;
+    let (target_version, target) = match &options.to {
+        Some(version) => (version.clone(), pair::release(version)?),
+        None => {
+            let latest = pair::latest_release()?;
+            let version = latest["version"]
+                .as_str()
+                .ok_or("RUSTY_RELEASE_METADATA: the latest pair-release.json names no version")?
+                .to_owned();
+            pair::validate_version(&version)?;
+            (version, Some(latest))
+        }
+    };
+    println!("pinned   {} ({})", pin.version, pin.file.display());
+    println!("target   {target_version}");
+    if target_version == pin.version {
+        println!("The product is already pinned to {target_version}.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let notes = match &target {
+        Some(release) => pair::release_notes_chain(release, &pin.version)?,
+        None => vec![format!(
+            "  {target_version}: published without release information"
+        )],
+    };
+    if options.check {
+        println!("An update is available. What changed:");
+        notes.iter().for_each(|line| println!("{line}"));
+        let to = options
+            .to
+            .as_ref()
+            .map_or_else(String::new, |version| format!(" --to {version}"));
+        println!("Apply it with: rusty update{to}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let (pair, _) = pair::install_version(&target_version)?;
+    pin.write(&target_version)?;
+    println!(
+        "Pinned {} -> {target_version} in {}; installed at {}",
+        pin.version,
+        pin.file.display(),
+        pair.root.display()
+    );
+    println!("What changed (read each before building):");
+    notes.iter().for_each(|line| println!("{line}"));
+    println!(
+        "Next: rebuild and run the product (rusty build / rusty dev), then commit {}.",
+        pin.file.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn status(options: &StatusOptions) -> Result<ExitCode, String> {
+    let start = product_start(options.project.as_deref())?;
+    let mut problems = Vec::new();
+    let mut needs_download = false;
+    match Pin::find(&start)? {
+        Some(pin) => {
+            println!("pin            {} ({})", pin.version, pin.file.display());
+            match pair::installed(&pin.version)? {
+                Some(pair) => {
+                    println!("installed      yes");
+                    println!("runtime pack   {}", pair.runtime_pack().display());
+                    println!("sdk feed       {}", pair.sdk_feed().display());
+                }
+                None => {
+                    println!("installed      no");
+                    needs_download = true;
+                    problems.push(format!(
+                        "pair {} is not installed: run `rusty install`",
+                        pin.version
+                    ));
+                }
+            }
+        }
+        None => {
+            println!("pin            none at or above {}", start.display());
+            problems.push(format!(
+                "no pin: add <{}> to the product's {}",
+                pair::PIN_ELEMENT,
+                pair::PIN_FILE
+            ));
+        }
+    }
+    let cache = pair::cache_root()?;
+    let versions = pair::installed_versions()?;
+    println!(
+        "cache          {} ({} pairs)",
+        cache.display(),
+        versions.len()
+    );
+    for version in &versions {
+        println!("               {version}");
+    }
+    if let Ok(executable) = env::current_exe() {
+        println!("this rusty     {}", executable.display());
+    }
+
+    match find_on_path("dotnet") {
+        None => {
+            println!("dotnet         missing");
+            problems.push(format!(
+                "install the .NET {REQUIRED_DOTNET_MAJOR} SDK and put dotnet on PATH"
+            ));
+        }
+        Some(path) => {
+            let version = Command::new(&path)
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+            let major = version
+                .as_deref()
+                .and_then(|version| version.split('.').next())
+                .and_then(|major| major.parse::<u32>().ok());
+            println!(
+                "dotnet         {} ({})",
+                version.as_deref().unwrap_or("unknown version"),
+                path.display()
+            );
+            if major.is_none_or(|major| major < REQUIRED_DOTNET_MAJOR) {
+                problems.push(format!(
+                    "dotnet SDK {} is older than the required {REQUIRED_DOTNET_MAJOR}",
+                    version.as_deref().unwrap_or("of unknown version")
+                ));
+            }
+        }
+    }
+    match env::var_os("DOTNET_ROOT") {
+        Some(root) => println!("DOTNET_ROOT    {}", PathBuf::from(root).display()),
+        None => match dotnet_root_from_path() {
+            Some(root) => println!("DOTNET_ROOT    unset; rusty dev uses {}", root.display()),
+            None => println!("DOTNET_ROOT    unset"),
+        },
+    }
+    for tool in ["curl", "tar"] {
+        let found = find_on_path(tool);
+        println!(
+            "{tool:<15}{}",
+            found.as_ref().map_or_else(
+                || "missing (install and update need it)".to_owned(),
+                |path| path.display().to_string()
+            )
+        );
+        if found.is_none() && needs_download {
+            problems.push(format!("install {tool}, which `rusty install` needs"));
+        }
+    }
+
+    if problems.is_empty() {
+        println!("ready          yes");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        println!("ready          no");
+        for problem in &problems {
+            println!("  - {problem}");
+        }
+        Ok(ExitCode::FAILURE)
     }
 }
 
@@ -755,18 +1468,22 @@ fn parse_watch_paths(value: &str) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+fn source_properties(engine_source: Option<&Path>) -> Result<Vec<String>, String> {
+    let Some(engine_source) = engine_source else {
+        return Ok(Vec::new());
+    };
+    let engine_source = absolute(engine_source)?;
+    let engine_source = engine_source
+        .to_str()
+        .ok_or("RUSTY_DEV_ENGINE_SOURCE: Engine source path must be UTF-8")?;
+    Ok(vec![
+        "-p:RustyEngineUseSourceDevelopment=true".to_owned(),
+        format!("-p:RustyEngineSourceDevelopmentPath={engine_source}"),
+    ])
+}
+
 fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {
-    let mut properties = Vec::new();
-    if let Some(engine_source) = &options.engine_source {
-        let engine_source = absolute(engine_source)?;
-        let engine_source = engine_source
-            .to_str()
-            .ok_or("RUSTY_DEV_ENGINE_SOURCE: Engine source path must be UTF-8")?;
-        properties.push("-p:RustyEngineUseSourceDevelopment=true".to_owned());
-        properties.push(format!(
-            "-p:RustyEngineSourceDevelopmentPath={engine_source}"
-        ));
-    }
+    let mut properties = source_properties(options.engine_source.as_deref())?;
     if let Some(bind_host) = &options.bind_host {
         properties.push(format!("-p:RustyEngineProductBindHost={bind_host}"));
     }
@@ -1188,7 +1905,9 @@ mod tests {
             ["dev", "--project", "Product.csproj", "--debugger"].map(str::to_owned),
         )
         .expect("debugger options");
-        let CommandName::Dev(options) = arguments.command;
+        let CommandName::Dev(options) = arguments.command else {
+            panic!("dev command");
+        };
         assert!(options.debugger);
         assert!(!stage_properties(&options)
             .expect("staging properties")
@@ -1211,7 +1930,9 @@ mod tests {
             ["dev", "--project", "Product.csproj", "--headless"].map(str::to_owned),
         )
         .expect("headless options");
-        let CommandName::Dev(options) = arguments.command;
+        let CommandName::Dev(options) = arguments.command else {
+            panic!("dev command");
+        };
         assert!(options.headless);
         let host = supervised_host_arguments(
             Path::new("/product"),
@@ -1239,7 +1960,9 @@ mod tests {
             "--live-debug".to_owned(),
         ])
         .expect("dev options parse");
-        let CommandName::Dev(options) = arguments.command;
+        let CommandName::Dev(options) = arguments.command else {
+            panic!("dev command");
+        };
         assert_eq!(options.project, PathBuf::from("Product.csproj"));
         assert_eq!(options.runtime, Some(PathBuf::from("/runtime-pack")));
         assert_eq!(options.bind_host.as_deref(), Some("127.0.0.1"));
