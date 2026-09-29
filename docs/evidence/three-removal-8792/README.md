@@ -246,6 +246,33 @@ Both packs were built with `scripts/build-runtime-pack.sh` on this machine.
   with the UI overlay. A virtual click and a 700 ms W hold (KWin fake input)
   moved the player 3.9 units.
 
+### The published pair
+
+CI published pair `0.1.0-dev.829d277f6468` from `829d277f6`, and all four
+workflows passed. Doom (`55f746f`) and Dagger (`7ae8db0`) moved to it with
+`rusty update`. Nothing in either product changed beyond the pin.
+
+- **Browser (default output).** `rusty dev` ran each product from the
+  installed pair. Nothing set `RUSTY_RENDER_OUTPUT`, so both streamed.
+  `parity-capture.mjs` ran unchanged and recorded no page errors.
+- **Desktop window.** With `RUSTY_RENDER_OUTPUT=window`, `rusty dev`
+  downloaded the pair's desktop pack into `<pair>/desktop-pack` and opened
+  each product's window on the headless KWin compositor. Both HUDs render in
+  the overlay. Dagger entered `playing` through its own UI intents.
+  `engine.renderer` answered with `output: window`.
+
+![Doom from the published pair, streamed](published-doom-stream.jpg)
+
+![Dagger from the published pair, streamed](published-dagger-stream.jpg)
+
+![Doom from the published pair, desktop window](published-doom-window.jpg)
+
+![Dagger from the published pair, desktop window](published-dagger-window.jpg)
+
+Both products show the same view on the pair as on the locally built pack
+above. The overlapping labels in Dagger's top left belong to its own UI and
+already appear in the earlier capture.
+
 ### Checks
 
 - `cargo test --workspace` passes, as do `cargo clippy --workspace
