@@ -333,3 +333,114 @@ fn picking_hits_the_posed_character_and_filters_to_the_weapon() {
     );
     assert!(bounds.diagnostics.is_empty());
 }
+
+#[test]
+fn a_controller_drives_its_target_on_the_engine_timeline_and_blends_a_transition() {
+    use render_presentation::{
+        AnimationControllerClipPhase, AnimationControllerProjectionState,
+        AnimationProjectionDescriptor, AnimationProjectionHandle, AnimationProjectionOp,
+        AnimationTransitionState, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+        ResolvedAnimationMotion,
+    };
+    const NO_ENTITIES: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
+    let motion = |clip: &str| ResolvedAnimationMotion {
+        clip_a: clip.to_owned(),
+        clip_b: None,
+        blend_weight_milli: 0,
+        speed_milli: 1000,
+    };
+    let state = |tick: u64, transition: Option<AnimationTransitionState>| {
+        AnimationControllerProjectionState {
+            entity: BODY,
+            graph_id: "graph/character".to_owned(),
+            graph_version: 1,
+            state_id: "run".to_owned(),
+            revision: tick,
+            controller_tick: tick,
+            phase_seconds: 0.0,
+            clip_phases: vec![
+                AnimationControllerClipPhase {
+                    clip: "run".to_owned(),
+                    time_seconds: 0.1,
+                },
+                AnimationControllerClipPhase {
+                    clip: "idle".to_owned(),
+                    time_seconds: 0.0,
+                },
+            ],
+            motion: motion("run"),
+            transition,
+            transition_fact: None,
+        }
+    };
+    let frame = |op| PresentationFrameDiff {
+        ops: vec![PresentationOp::Animation {
+            meta: PresentationOpMeta::new(0),
+            op,
+        }],
+        ..PresentationFrameDiff::default()
+    };
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let view = character_view();
+    let (_, sampled) = harness.render(&view);
+    let handle = AnimationProjectionHandle::new(1);
+    let issues = harness.renderer.apply_presentation(
+        &frame(AnimationProjectionOp::Create {
+            handle,
+            descriptor: AnimationProjectionDescriptor {
+                target: RenderHandle::new(BODY),
+                asset: "graph/character".to_owned(),
+                content_hash: "sha256:controller-fixture".to_owned(),
+                tick_duration_millis: 16,
+                controller: state(1, None),
+            },
+        }),
+        &harness.resources,
+        NO_ENTITIES,
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    let (_, run) = harness.render(&view);
+    assert_ne!(run, sampled, "the controller replaced the sampled pose");
+    let (still, again) = harness.render(&view);
+    assert_eq!(
+        (still.parts_uploaded, &again),
+        (0, &run),
+        "no Engine time, no motion"
+    );
+    harness.renderer.set_animation_time(0.25);
+    let (_, later) = harness.render(&view);
+    assert_ne!(later, run, "the clip advanced with Engine time");
+
+    // Halfway through a transition to idle, both clips contribute.
+    harness.renderer.apply_presentation(
+        &frame(AnimationProjectionOp::Update {
+            handle,
+            controller: state(
+                2,
+                Some(AnimationTransitionState {
+                    transition_id: "to-idle".to_owned(),
+                    from_state_id: "run".to_owned(),
+                    to_state_id: "idle".to_owned(),
+                    elapsed_ticks: 5,
+                    duration_ticks: 10,
+                    target_motion: motion("idle"),
+                }),
+            ),
+        }),
+        &harness.resources,
+        NO_ENTITIES,
+    );
+    let (blended, mid) = harness.render(&view);
+    assert!(blended.parts_uploaded > 0);
+    assert_ne!(mid, later);
+
+    // Destroying the controller leaves the instance's own playback.
+    harness.renderer.apply_presentation(
+        &frame(AnimationProjectionOp::Destroy { handle }),
+        &harness.resources,
+        NO_ENTITIES,
+    );
+    let (_, released) = harness.render(&view);
+    assert_eq!(released, sampled, "back to the sampled direct playback");
+}

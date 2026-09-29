@@ -28,6 +28,7 @@ mod compose;
 mod composition;
 mod effects;
 mod frame;
+mod ghost;
 mod glb;
 mod gpu;
 mod particles;
@@ -48,6 +49,7 @@ pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use frame::FrameStats;
+pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, Gpu, GpuError};
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
@@ -131,6 +133,8 @@ pub struct Renderer {
     animation_facts: Vec<animated::AnimationFact>,
     /// Realization generation per source entity, as the runtime reads it.
     animation_generations: HashMap<u64, u64>,
+    ghosts: HashMap<render_presentation::GhostPlateHandle, ghost::GhostPlate>,
+    ghost_pipelines: ghost::GhostPipelines,
     /// Counts applied deltas; offscreen composition targets re-render when
     /// it moves past the value they were drawn at.
     scene_generation: u64,
@@ -202,6 +206,8 @@ impl Renderer {
             animation_time: 0.0,
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),
+            ghosts: HashMap::new(),
+            ghost_pipelines: ghost::GhostPipelines::new(device),
             scene_generation: 0,
             compose: compose::Compose::new(device),
             composition: Default::default(),

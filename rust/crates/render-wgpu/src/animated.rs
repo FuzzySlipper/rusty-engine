@@ -14,6 +14,12 @@
 //! primitives are skinned on the CPU into the instance's own vertex buffer.
 //! A held, sampled or stopped pose costs nothing per frame.
 //!
+//! **Controllers** (`PresentationOp::Animation`) publish the Engine's
+//! controller state with per-clip phases each update; a controlled instance
+//! samples `frozen_pose` of that state, each clip advanced by its speed over
+//! the Engine time since the update. A controller replaces direct playback on
+//! its target until destroyed.
+//!
 //! **Blending** follows Three's mixer: each property takes its first
 //! contributing clip, later clips mix in by `w / (Σw + w)` (slerp for
 //! rotations), and a total weight below 1 mixes toward the rest pose.
@@ -27,6 +33,8 @@ use render_model::{
     AnimationLoopMode, MaterialAlphaModeDescriptor, MaterialUvStrategy, RenderHandle,
     RenderMaterialDescriptor,
 };
+
+use render_presentation::{AnimationControllerProjectionState, AnimationProjectionOp};
 
 use crate::apply::MaterialParams;
 use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Path, Trs};
@@ -54,6 +62,41 @@ pub enum AnimationFact {
         request: u32,
         bounds: Option<([f32; 3], [f32; 3])>,
     },
+}
+
+/// An animation controller projected onto an animated instance.
+pub(crate) struct ControllerRow {
+    target: RenderHandle,
+    state: AnimationControllerProjectionState,
+    /// The Engine time this state was received at.
+    received_at: f64,
+}
+
+impl ControllerRow {
+    /// The weighted clip times at `now`: the published phases advanced by
+    /// each clip's speed since the update.
+    fn pose(&self, now: f64) -> Vec<AnimatedMeshClipPose> {
+        let elapsed = (now - self.received_at).max(0.0);
+        let mut state = self.state.clone();
+        let speed = |clip: &str| {
+            std::iter::once(&self.state.motion)
+                .chain(
+                    self.state
+                        .transition
+                        .iter()
+                        .map(|transition| &transition.target_motion),
+                )
+                .find(|motion| motion.clip_a == clip || motion.clip_b.as_deref() == Some(clip))
+                .map_or(1.0, |motion| f64::from(motion.speed_milli) / 1000.0)
+        };
+        for phase in &mut state.clip_phases {
+            phase.time_seconds += elapsed * speed(&phase.clip);
+        }
+        match state.frozen_pose(self.state.phase_seconds + elapsed) {
+            AnimatedMeshPlaybackCommand::SamplePose { clips } => clips,
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// One admitted animated-mesh asset.
@@ -124,6 +167,46 @@ impl Renderer {
         if seconds.is_finite() && seconds >= 0.0 {
             self.animation_time = seconds;
         }
+    }
+
+    /// Apply one animation controller op (`PresentationOp::Animation`).
+    pub(crate) fn apply_animation_op(&mut self, op: &AnimationProjectionOp) -> Result<(), String> {
+        let now = self.animation_time;
+        let target = match op {
+            AnimationProjectionOp::Create { handle, descriptor } => {
+                self.tables.controllers.insert(
+                    handle.raw(),
+                    ControllerRow {
+                        target: descriptor.target,
+                        state: descriptor.controller.clone(),
+                        received_at: now,
+                    },
+                );
+                descriptor.target
+            }
+            AnimationProjectionOp::Update { handle, controller } => {
+                let row = self
+                    .tables
+                    .controllers
+                    .get_mut(&handle.raw())
+                    .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
+                row.state = controller.clone();
+                row.received_at = now;
+                row.target
+            }
+            AnimationProjectionOp::Destroy { handle } => {
+                let row = self
+                    .tables
+                    .controllers
+                    .remove(&handle.raw())
+                    .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
+                row.target
+            }
+        };
+        if let Some(instance) = self.tables.animated.get_mut(&target) {
+            instance.pose_dirty = true;
+        }
+        Ok(())
     }
 
     /// Facts gathered since the last call, oldest first.
@@ -536,9 +619,15 @@ impl Renderer {
             .tables
             .animated
             .iter()
-            .filter(|(_, instance)| {
+            .filter(|(handle, instance)| {
+                let controlled = self
+                    .tables
+                    .controllers
+                    .values()
+                    .any(|controller| controller.target == **handle);
                 instance.pose_dirty
-                    || (instance.varies() && instance.posed_at != self.animation_time)
+                    || ((controlled || instance.varies())
+                        && instance.posed_at != self.animation_time)
             })
             .map(|(handle, _)| *handle)
             .collect();
@@ -575,7 +664,27 @@ impl Renderer {
                 actions.push((clip, time, weight * (1.0 - progress)));
             }
         }
-        let (current, finished) = actions_of(asset, &instance.playback, now);
+        let controller = self
+            .tables
+            .controllers
+            .values()
+            .find(|controller| controller.target == handle);
+        let (current, finished) = match controller {
+            // A controller replaces direct playback on its target.
+            Some(controller) => (
+                actions_of(
+                    asset,
+                    &Playback {
+                        timeline: AnimatedMeshPlaybackTimeline::Unset,
+                        pose: Some(controller.pose(now)),
+                    },
+                    now,
+                )
+                .0,
+                false,
+            ),
+            None => actions_of(asset, &instance.playback, now),
+        };
         let fade_in = match (&instance.fade, fade_progress) {
             (Some(fade), Some(progress)) if fade.cross => progress,
             _ => 1.0,

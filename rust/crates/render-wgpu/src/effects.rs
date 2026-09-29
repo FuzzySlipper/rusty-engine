@@ -626,11 +626,11 @@ fn sprite_quad(
 }
 
 impl Renderer {
-    /// Apply the particle ops of one presentation delta. `entities` resolves
-    /// entity-attached anchors (the runtime passes
-    /// `PresentationWorld::entity_world_position`). Billboard labels (#8827),
-    /// ghost plates and animation controllers (#8788) and telemetry overlays
-    /// come back as issues; audio and video are not renderer ops.
+    /// Apply the renderer ops of one presentation delta: particles, ghost
+    /// plates and animation controllers. `entities` resolves entity-attached
+    /// anchors (the runtime passes `PresentationWorld::entity_world_position`).
+    /// Billboard labels (#8827) come back as issues; telemetry overlays (DOM
+    /// UI), audio and video are not renderer ops.
     pub fn apply_presentation(
         &mut self,
         frame: &PresentationFrameDiff,
@@ -670,15 +670,19 @@ impl Renderer {
                     "billboard",
                     "billboard labels are realized by #8827".to_owned(),
                 )),
-                PresentationOp::GhostPlate { .. } | PresentationOp::Animation { .. } => Some((
-                    "ghostPlateOrAnimation",
-                    "realized with animated meshes and ghost plates (#8788)".to_owned(),
-                )),
-                PresentationOp::TelemetryOverlay { .. } => Some((
-                    "telemetryOverlay",
-                    "realized by the telemetry family".to_owned(),
-                )),
-                PresentationOp::Audio { .. } | PresentationOp::Video { .. } => None,
+                PresentationOp::Animation { op, .. } => self
+                    .apply_animation_op(op)
+                    .err()
+                    .map(|detail| ("animation", detail)),
+                PresentationOp::GhostPlate { op, .. } => self
+                    .apply_ghost_op(op, resources)
+                    .err()
+                    .map(|detail| ("ghostPlate", detail)),
+                // The telemetry overlay is DOM UI (renderer-host's `<pre>` HUD);
+                // audio and video have their own hosts. None is a renderer op.
+                PresentationOp::TelemetryOverlay { .. }
+                | PresentationOp::Audio { .. }
+                | PresentationOp::Video { .. } => None,
             };
             if let Some((op, detail)) = issue {
                 issues.push(ApplyIssue { op, detail });

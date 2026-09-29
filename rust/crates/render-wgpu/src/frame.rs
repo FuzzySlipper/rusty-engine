@@ -688,6 +688,15 @@ impl Renderer {
         } else {
             wgpu::LoadOp::Load
         };
+        if world_layer {
+            // Ghost plates snap per view; a view is known by its viewport.
+            let area = view.viewport;
+            let key = (u64::from(area.x) << 48)
+                ^ (u64::from(area.y) << 32)
+                ^ (u64::from(area.width) << 16)
+                ^ u64::from(area.height);
+            self.select_ghost_sectors(eye, key, format);
+        }
         let mut encoder = self
             .gpu
             .device
@@ -761,6 +770,10 @@ impl Renderer {
             let mut part_draws = self.draw_batches(&mut pass, &batches[..blend_start], |pass| {
                 pipelines.get(pass)
             });
+            if world_layer {
+                part_draws += self.draw_ghost_plates(&mut pass, format);
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            }
             self.effects
                 .draw_sprites(&mut pass, format, &effects, false);
             part_draws += self.draw_batches(&mut pass, &batches[blend_start..], |pass| {

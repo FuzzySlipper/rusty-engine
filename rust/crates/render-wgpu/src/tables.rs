@@ -36,7 +36,7 @@ use render_model::{
     Transform, VoxelObjectInstanceDescriptor,
 };
 
-use crate::animated::{AnimatedAssetRow, AnimatedInstance};
+use crate::animated::{AnimatedAssetRow, AnimatedInstance, ControllerRow};
 use crate::voxel::VoxelObjectRow;
 
 pub(crate) fn transform_matrix(transform: &Transform) -> Mat4 {
@@ -392,6 +392,8 @@ pub(crate) struct Tables {
     pub voxel_objects: HashMap<String, VoxelObjectRow>,
     pub animated_assets: HashMap<String, AnimatedAssetRow>,
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
+    /// Animation controllers by projection handle.
+    pub controllers: HashMap<u64, ControllerRow>,
     /// Retained node metadata (label, tags, source entity), for picking.
     pub metadata: HashMap<RenderHandle, RenderMetadata>,
     pub environment: Environment,
@@ -416,6 +418,7 @@ impl Tables {
             voxel_objects: HashMap::new(),
             animated_assets: HashMap::new(),
             animated: HashMap::new(),
+            controllers: HashMap::new(),
             metadata: HashMap::new(),
             environment: Environment::Default,
             dirty_nodes: HashSet::new(),

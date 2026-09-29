@@ -51,7 +51,6 @@ pub(crate) struct CaptureRequest {
 pub(crate) struct Capture {
     pub color: wgpu::Texture,
     /// Depth32Float, cleared to 1 where nothing drew.
-    #[allow(dead_code, reason = "read by ghost plate captures (#8788)")]
     pub depth: wgpu::Texture,
 }
 

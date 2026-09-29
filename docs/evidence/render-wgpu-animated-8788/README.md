@@ -1,6 +1,8 @@
-# Animated meshes, joint attachments, inspection and picking in render-wgpu (#8788, part 1)
+# Ghost plates, animated meshes, inspection and picking in render-wgpu (#8788)
 
-This first landing of #8788 realizes, in `render-wgpu`:
+#8788 landed in two commits.
+
+**Part 1 (`a00ee1204`)** realized, in `render-wgpu`:
 - animated-mesh GLBs;
 - skinning;
 - playback on the Engine timeline;
@@ -9,9 +11,13 @@ This first landing of #8788 realizes, in `render-wgpu`:
 - output pose captures;
 - picking.
 
-It replaces `animated-mesh.ts`, `mesh-inspection.ts`'s bounds, and the Three
-raycast pick. Ghost plates, animation controllers (the `animation`
-presentation domain) and the telemetry overlay decision follow in part 2.
+**Part 2** added:
+- ghost plates;
+- animation controllers (the `animation` presentation domain);
+- the telemetry overlay decision.
+
+Together they replace `animated-mesh.ts`, `mesh-inspection.ts`,
+`ghost-plate*.ts`, `ghost-plate-host.ts` and the Three raycast pick.
 
 ## Doom bone attachment beside Three
 
@@ -147,7 +153,121 @@ collision), so the host exposes this where the webview host's `pick` went.
 shared lighting function. It was `pad` before; Engine materials stay at
 metalness 0.
 
-## Not carried over
+## Ghost plates (`ghost.rs`, `ghost.wgsl`)
+
+![Ghost plate fixture: two sectors](ghost-plate.jpg)
+
+The fixture, `tests/ghost.rs`:
+- **Source.** A hidden, lit, asymmetric source 20 units away: a tall red box
+  and a short blue box. CraftSurvive publishes its source invisible the same
+  way.
+- **Plate.** 8 sectors at 128², 3° hysteresis, isolated studio lighting,
+  presented 2×2 at a plate 4 units in front of the viewer.
+- **Sector snapping.** Orbiting the plate across the 22.5° boundary selects
+  sectors `0, 1, 1, 0` at 24°, 27°, 24° and 19°. At 95° it selects sector 2.
+  The front and side images are the fixture references.
+- **Updates.** A placement or relief update (width 3, retention 0.5) keeps
+  the captures. The readout's capture time is unchanged. A sector-count
+  update recaptures (4 sectors). Destroy removes the plate.
+- **Selection unit test.** Sector selection reproduces `ghost-plate.test.ts`'s
+  vectors.
+
+**How it works.**
+- **Frozen source.** A plate keeps an isolated renderer over its
+  `captured_scene`: the Engine's immutable capture-time subtree, lights and
+  animation pose, filled by `PresentationWorld::apply_presentation`. The
+  source is forced visible, as Three forced its clone.
+- **Isolated lighting** replaces the captured lights with the descriptor's
+  ambient plus camera-relative key and fill rig, per sector. Scene lighting
+  keeps the captured lights and the neutral rig.
+- **Capture.** Each sector goes through #8785's `Renderer::capture` into
+  sRGB colour and `Depth32Float`. The camera orbits the source bounds at
+  `max(1.7·|size|, 1)`, from the capture azimuth plus `s·360/n` and the
+  capture elevation, with the capture fov, near and far.
+- **Drawing.** Each view draws the frozen parts with the warp from
+  `ghost-plate.ts`: vertices are pulled toward the anchor depth along their
+  capture ray by `depth_retention`, then carried through the plate
+  placement. They are textured from the selected sector's capture:
+  - plate-locked: screen-linear uv;
+  - projective: per-fragment divide.
+- **Discards.** Fragments are discarded outside the capture's coverage.
+  `strict-source` and `repaired-source` also discard where the capture's
+  depth disagrees with the fragment's original depth; the tolerance is Three's
+  epsilon plus its 8-bit half-step.
+- **Output.** Unlit and opaque, depth tested and written, double-sided.
+- **Sector choice.** The sector is Three's `selectGhostPlateSector` on the
+  camera's azimuth in the plate's frame. The per-view hysteresis memory is
+  keyed by viewport.
+- **Cost.** Captures run on create, recapture, and a sector-count update.
+  Placement and relief changes only rewrite the sector uniforms, where
+  Three rebuilt the whole bank.
+- **Readout.** `Renderer::ghost_plate_readouts()` gives the host each plate's
+  sector, local azimuth and capture time. This is the realization feedback
+  the Three host reported; the limitation mask stays the directional-bank
+  profile, 125.
+
+**Not carried over:**
+- **The 256 MiB capture budget.** Resolution and sector count are validated
+  by the Engine (≤ 4096², ≤ 16 sectors). The budget was a browser WebGL
+  limit.
+- **The view-space normal pass.** It was captured but never sampled.
+- **Fog on the plate.** The wgpu world has no fog. C# products had none
+  either.
+- **A viewmodel-layer source.** It is captured with the world pass only.
+
+## Animation controllers
+
+Controllers publish the Engine controller state, with per-clip phases, on
+each update:
+- A controlled instance samples `AnimationControllerProjectionState::frozen_pose`,
+  the same function captures use. Each clip is advanced by its speed over
+  the Engine time since the update.
+- A controller replaces its target's direct playback until destroyed.
+- Transitions blend the current and target motions by
+  `elapsed_ticks / duration_ticks`.
+- The Three host's display-time weight interpolation between updates is not
+  ported: updates arrive on Engine ticks, the only time the renderer
+  advances on.
+- Cue facts and controller playback observations are not realized. No
+  product reads them, and cue markers were defined only in the TypeScript
+  host.
+
+The fixture (`tests/animated.rs`) drives the character with a `run`
+controller. It checks that:
+- the pose holds without Engine time;
+- the pose advances with it;
+- a half-way transition to `idle` blends;
+- destroying the controller returns to the direct sampled pose.
+
+No shipped product uses animation controllers today.
+
+## Telemetry overlay: not a renderer op
+
+The telemetry overlay was never drawn by Three. It is a DOM `<pre>` HUD in
+`renderer-host/src/telemetry-host.ts`, and nothing in C# services or the
+runtime emits its ops. Only a proof page and a JSON fixture do.
+
+TypeScript owns DOM UI, so `render-wgpu` treats `PresentationOp::TelemetryOverlay`
+like audio and video: not a renderer op. The HUD's surface counters come from
+the renderer's diagnostics: draw calls from `FrameStats`, resource and handle
+counts and animated instances from `TableCounts`. The host fills them where
+it installs the DOM host.
+
+## Inspection routes
+
+No live-debug or spatial inspection route queried the Three renderer.
+Spatial inspection uses Engine collision. The renderer's inspection surface
+is:
+- `Renderer::pick`;
+- `take_animation_facts` (posed bounds);
+- `ghost_plate_readouts`;
+- `table_counts`.
+
+It is exercised by the fixtures above. A live-debug command answered by wgpu
+needs the runtime to render through wgpu, which is #8786 and #8790; those
+tasks have the wiring notes.
+
+## Not carried over (animated meshes)
 
 - **Morph targets and morph weight channels.** Three loaded them. No admitted
   product asset uses them.
@@ -166,7 +286,7 @@ metalness 0.
 ## Reproduce
 
 ```bash
-cargo test -p render-wgpu --test animated
+cargo test -p render-wgpu --test animated --test ghost
 # in rusty-doom/tools/attachment-example
 DOTNET_ROOT=/home/agent/.dotnet rusty dev --project ./AttachmentExample.csproj --port 4399 \
   --runtime ~/.cache/rusty-engine/pairs/0.1.0-dev.feec788503fe/runtime-pack
