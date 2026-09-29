@@ -19,7 +19,7 @@ while IFS=: read -r document line match; do
     printf '%s:%s: missing local Markdown target %s\n' "$document" "$line" "$target" >&2
     failed=1
   fi
-done < <(rg -n --no-heading -o '\]\([^)]+\)' README.md AGENTS.md docs)
+done < <(grep -rnoE '\]\([^)]+\)' README.md AGENTS.md docs)
 
 if (( failed != 0 )); then
   exit 1
