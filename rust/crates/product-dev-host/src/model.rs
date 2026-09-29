@@ -1561,8 +1561,7 @@ impl ProductDevRuntimeOutput {
             }
             RuntimePublication::Frame(_)
             | RuntimePublication::ViewComposition(_)
-            | RuntimePublication::Presentation(_)
-            | RuntimePublication::AnimationCueDefinitions(_) => return None,
+            | RuntimePublication::Presentation(_) => return None,
         };
         Some(Self { wire })
     }
@@ -2002,10 +2001,7 @@ mod tests {
     fn only_the_shells_publications_reach_the_wire() {
         use render_model::RenderFrameDiff;
         use runtime_input::RuntimeInputBinding;
-        use runtime_publication::{
-            RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
-            RuntimePublicationFrontier,
-        };
+        use runtime_publication::{RuntimePublication, RuntimePublicationFrontier};
         use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
 
         let binding = RuntimeInputBinding::new(
@@ -2033,20 +2029,6 @@ mod tests {
         assert!(
             ProductDevRuntimeOutput::from_publication(RuntimePublication::Frame(frame)).is_none()
         );
-        let cue = RuntimeAnimationCueDefinition::new(
-            "footstep",
-            "audio/footstep",
-            "walk",
-            125,
-            RuntimeAnimationCueSignalDomain::Audio,
-            "left",
-        )
-        .unwrap();
-        assert!(ProductDevRuntimeOutput::from_publication(
-            RuntimePublication::animation_cue_definitions(vec![cue]).unwrap()
-        )
-        .is_none());
-
         let envelope = RuntimeUiProjectionEnvelope::new(
             RuntimeUiRuntimeBinding::new(
                 RuntimeInstanceId::new(7),

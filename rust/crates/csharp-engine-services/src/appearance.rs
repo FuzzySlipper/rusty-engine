@@ -40,7 +40,6 @@ use std::{
 // Admission policy for immutable bundle-backed resource files. Generated mesh
 // definitions remain typed and do not use this file-resource byte ceiling.
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
-const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
 const MAX_SPRITE_PLAYBACK_TRANSITIONS_PER_ADVANCE: usize = 16_384;
 
 /// Latest bounded browser realization snapshot for one opaque ghost owner.
@@ -60,19 +59,6 @@ pub struct GhostPlateRealizationFact {
     pub retained_mesh_count: u32,
     pub retained_material_count: u32,
     pub retained_borrowed_texture_count: u32,
-}
-
-/// Copied, bounded product animation facts for the existing browser animation
-/// host. The Engine retains this snapshot; no C# string remains borrowed after
-/// its defining callback returns.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AnimationCueDefinition {
-    pub cue_id: String,
-    pub asset: String,
-    pub clip: String,
-    pub marker_millis: u64,
-    pub signal_domain: NativeAnimationCueSignalDomain,
-    pub signal_id: String,
 }
 
 #[derive(Clone)]
@@ -108,17 +94,6 @@ pub enum AnimationRealizationFact {
         generation: Option<u64>,
         code: String,
         sequence: u32,
-    },
-    Cue {
-        fact_id: u64,
-        object_id: u64,
-        generation: u64,
-        cue_id: String,
-        clip: String,
-        marker_millis: u64,
-        sampled_millis: u64,
-        signal_domain: String,
-        signal_id: String,
     },
     Stopped {
         fact_id: u64,
@@ -1650,7 +1625,6 @@ pub(crate) struct RuntimeAppearanceData {
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
     animation_transitions: BTreeMap<u64, AnimationTransitionRef>,
     animation_controllers: BTreeMap<u64, AnimationController>,
-    animation_cue_definitions: Vec<AnimationCueDefinition>,
     next_animation_instance: u64,
     next_animation_graph: u64,
     next_animation_transition: u64,
@@ -1737,7 +1711,6 @@ pub(crate) struct RuntimeAppearanceCall {
 pub(crate) enum RuntimeAppearanceCallOutput {
     Frame(render_model::RenderFrameDiff),
     Presentation(PresentationFrameDiff),
-    AnimationCueDefinitions(Vec<AnimationCueDefinition>),
 }
 
 const MAX_PRESENTATION_DIAGNOSTICS: usize = 128;
@@ -1943,7 +1916,6 @@ impl RuntimeAppearanceBridge {
             animation_graphs: BTreeMap::new(),
             animation_transitions: BTreeMap::new(),
             animation_controllers: BTreeMap::new(),
-            animation_cue_definitions: Vec::new(),
             next_animation_instance: 1,
             next_animation_graph: 1,
             next_animation_transition: 1,
@@ -2160,7 +2132,7 @@ impl RuntimeAppearanceBridge {
     /// here, preserving its stable renderer identities.
     ///
     /// The result contains only retained creates. Direct particle emissions
-    /// and animation realization/cue events are historical signals and are
+    /// and animation realization events are historical signals and are
     /// deliberately excluded.
     pub(crate) fn snapshot_presentation(
         &self,
@@ -2228,12 +2200,6 @@ impl RuntimeAppearanceBridge {
                     format!("retained presentation baseline is invalid: {error:?}"),
                 )
             })
-    }
-
-    /// Copies the current retained cue definitions for a baseline. Cue
-    /// delivery itself remains event-like and is not replayed by this read.
-    pub(crate) fn snapshot_animation_cue_definitions(&self) -> Vec<AnimationCueDefinition> {
-        self.state.animation_cue_definitions.clone()
     }
 
     pub(crate) fn presentation_create_billboard(
@@ -6446,55 +6412,6 @@ impl RuntimeAppearanceBridge {
         ))
     }
 
-    fn replace_animation_cue_definitions(
-        &mut self,
-        request: &NativeAnimationCueDefinitionReplaceRequest,
-    ) -> Result<(), CsharpEngineServicesError> {
-        let definitions = unsafe {
-            borrowed_slice(
-                request.definitions,
-                request.definitions_len,
-                "animation cue definitions",
-            )?
-        };
-        let mut keys = BTreeSet::new();
-        let copied = definitions
-            .iter()
-            .map(|definition| {
-                let cue_id = bounded_animation_cue_text(definition.cue_id, "animation cue id")?;
-                let asset = bounded_animation_cue_text(definition.asset, "animation cue asset")?;
-                let clip = bounded_animation_cue_text(definition.clip, "animation cue clip")?;
-                let signal_id =
-                    bounded_animation_cue_text(definition.signal_id, "animation cue signal id")?;
-                let signal_domain = match definition.signal_domain {
-                    NativeAnimationCueSignalDomain::Audio
-                    | NativeAnimationCueSignalDomain::Particle => definition.signal_domain,
-                };
-                let key = (asset.clone(), clip.clone(), cue_id.clone());
-                if !keys.insert(key) {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_ANIMATION_CUE_DEFINITIONS",
-                        "animation cue definitions must not duplicate an asset, clip, and cue id",
-                    ));
-                }
-                Ok(AnimationCueDefinition {
-                    cue_id,
-                    asset,
-                    clip,
-                    marker_millis: definition.marker_millis,
-                    signal_domain,
-                    signal_id,
-                })
-            })
-            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
-        let staged = self.staged_mut()?;
-        staged.state.animation_cue_definitions = copied.clone();
-        staged
-            .outputs
-            .push(RuntimeAppearanceCallOutput::AnimationCueDefinitions(copied));
-        Ok(())
-    }
-
     fn destroy_animation_instance(
         &mut self,
         handle: NativeAnimationInstanceHandle,
@@ -9558,20 +9475,6 @@ pub(crate) unsafe extern "C" fn set_animation_playback(
         })
     })
 }
-pub(crate) unsafe extern "C" fn replace_animation_cue_definitions(
-    context: *mut c_void,
-    request: *const NativeAnimationCueDefinitionReplaceRequest,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    appearance_operation(context, operation_error, || {
-        if request.is_null() {
-            return 0;
-        }
-        animation_void(context, |bridge| {
-            bridge.replace_animation_cue_definitions(unsafe { &*request })
-        })
-    })
-}
 pub(crate) unsafe extern "C" fn create_animation_graph(
     context: *mut c_void,
     request: *const NativeAnimationGraphCreateRequest,
@@ -9783,7 +9686,6 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         destroy_instance: destroy_animation_instance,
         replace_instance: replace_animation_instance,
         set_playback: set_animation_playback,
-        replace_cue_definitions: replace_animation_cue_definitions,
         create_graph: create_animation_graph,
         destroy_graph: destroy_animation_graph,
         define_parameter: define_animation_parameter,
@@ -9900,31 +9802,6 @@ fn animation_realization_receipt(
             out.sequence = *sequence;
             out.diagnostic_code = animation_feedback_text(code);
         }
-        AnimationRealizationFact::Cue {
-            fact_id,
-            object_id,
-            generation,
-            cue_id,
-            clip,
-            marker_millis,
-            sampled_millis,
-            signal_domain,
-            signal_id,
-        } => {
-            out.kind = NativeAnimationRealizationFactKind::Cue;
-            out.fact_id = *fact_id;
-            out.object_id = *object_id;
-            out.generation = *generation;
-            out.has_object_id = true;
-            out.has_generation = true;
-            out.cue_id = animation_feedback_text(cue_id);
-            out.clip = animation_feedback_text(clip);
-            out.marker_millis = *marker_millis;
-            out.sampled_millis = *sampled_millis;
-            out.has_sampled_millis = true;
-            out.signal_domain = animation_feedback_text(signal_domain);
-            out.signal_id = animation_feedback_text(signal_id);
-        }
         AnimationRealizationFact::Stopped {
             fact_id,
             object_id,
@@ -9950,20 +9827,6 @@ fn borrowed_request_utf8(
     field: &'static str,
 ) -> Result<String, CsharpEngineServicesError> {
     unsafe { borrowed_utf8(value.bytes, value.len, field) }.map(str::to_owned)
-}
-
-fn bounded_animation_cue_text(
-    value: NativeUtf8Slice,
-    field: &'static str,
-) -> Result<String, CsharpEngineServicesError> {
-    let value = borrowed_request_utf8(value, field)?;
-    if value.is_empty() || value.len() > MAX_ANIMATION_CUE_TEXT_BYTES {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_ANIMATION_CUE_TEXT",
-            format!("{field} must be non-empty and no more than 96 UTF-8 bytes"),
-        ));
-    }
-    Ok(value)
 }
 
 fn native_vec2(value: NativeVec2) -> [f32; 2] {
@@ -11797,60 +11660,6 @@ pub(super) mod tests {
         assert!(bridge.ghost_plate_realization.contains_key(&9));
         bridge.ingest_ghost_plate_realization(false, []);
         assert!(bridge.ghost_plate_realization.is_empty());
-    }
-
-    #[test]
-    fn animation_cue_definitions_are_bounded_copied_and_replace_as_one_snapshot() {
-        let mut bridge =
-            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-        let cue_id = b"footfall";
-        let asset = b"animated-mesh-resource/test";
-        let clip = b"run";
-        let signal_id = b"footfall.spark";
-        let slice = |value: &[u8]| NativeUtf8Slice {
-            bytes: value.as_ptr(),
-            len: value.len(),
-        };
-        let definitions = [NativeAnimationCueDefinition {
-            cue_id: slice(cue_id),
-            asset: slice(asset),
-            clip: slice(clip),
-            marker_millis: 125,
-            signal_domain: NativeAnimationCueSignalDomain::Particle,
-            signal_id: slice(signal_id),
-        }];
-
-        bridge.begin_call();
-        bridge
-            .replace_animation_cue_definitions(&NativeAnimationCueDefinitionReplaceRequest {
-                definitions: definitions.as_ptr(),
-                definitions_len: definitions.len(),
-            })
-            .expect("replace cue definitions");
-        let staged = bridge.take_staged_call();
-        assert_eq!(staged.state.animation_cue_definitions.len(), 1);
-        assert_eq!(staged.state.animation_cue_definitions[0].cue_id, "footfall");
-        assert!(matches!(
-            staged.outputs.as_slice(),
-            [RuntimeAppearanceCallOutput::AnimationCueDefinitions(values)]
-                if values[0].marker_millis == 125
-                    && values[0].signal_domain == NativeAnimationCueSignalDomain::Particle
-        ));
-        bridge.commit(staged);
-
-        bridge.begin_call();
-        bridge
-            .replace_animation_cue_definitions(&NativeAnimationCueDefinitionReplaceRequest {
-                definitions: std::ptr::null(),
-                definitions_len: 0,
-            })
-            .expect("clear cue definitions");
-        let staged = bridge.take_staged_call();
-        assert!(staged.state.animation_cue_definitions.is_empty());
-        assert!(matches!(
-            staged.outputs.as_slice(),
-            [RuntimeAppearanceCallOutput::AnimationCueDefinitions(values)] if values.is_empty()
-        ));
     }
 
     #[test]

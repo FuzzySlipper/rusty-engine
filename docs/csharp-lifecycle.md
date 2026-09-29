@@ -37,8 +37,7 @@ snapshots, and `IEngineProduct` has no attach callback. Publish current
 presentation during ordinary product lifecycle and updates. Graphics/voxel handles and publication frontiers survive the
 baseline. Playback cursors and controller clip phases resume from Engine-owned
 update facts, and ghost plates reconstruct from their capture-time source.
-Historical sounds, particle bursts, animation cues, and completion callbacks
-are not replayed. Continuous emitters restart their cosmetic simulation.
+Historical sounds, particle bursts, and completion callbacks are not replayed. Continuous emitters restart their cosmetic simulation.
 
 ### Particle bursts
 

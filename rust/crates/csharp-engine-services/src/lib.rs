@@ -28,8 +28,8 @@ mod voxel_scene_presentation;
 mod world_origin;
 
 pub use appearance::{
-    AnimationCueDefinition, AnimationRealizationFact, CsharpRenderResource,
-    CsharpRenderResourceKind, GhostPlateRealizationFact,
+    AnimationRealizationFact, CsharpRenderResource, CsharpRenderResourceKind,
+    GhostPlateRealizationFact,
 };
 pub use audio::AudioRealizationFact;
 pub use composition::{

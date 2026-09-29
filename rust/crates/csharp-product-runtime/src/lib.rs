@@ -51,8 +51,7 @@ use runtime_lifecycle::{
     RuntimeMode, RuntimeState,
 };
 use runtime_publication::{
-    RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
-    RuntimePublicationError, RuntimePublicationFrontier,
+    RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier,
 };
 use runtime_ui::RuntimeUiRuntimeBinding;
 
@@ -4591,16 +4590,6 @@ fn service_outputs(
             CsharpAppearanceCallOutput::Presentation(frame) => {
                 outputs.push(RuntimePublication::Presentation(frame));
             }
-            CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions) => {
-                let definitions = definitions
-                    .into_iter()
-                    .map(product_dev_animation_cue_definition)
-                    .collect::<Result<Vec<_>, _>>()?;
-                outputs.push(
-                    RuntimePublication::animation_cue_definitions(definitions)
-                        .map_err(publication_error)?,
-                );
-            }
         }
     }
     for frame in output.frames {
@@ -4626,28 +4615,6 @@ fn call_outputs(
 ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
     executor.submit(std::mem::take(&mut output.render_output));
     service_outputs(output)
-}
-
-fn product_dev_animation_cue_definition(
-    definition: csharp_engine_services::AnimationCueDefinition,
-) -> Result<RuntimeAnimationCueDefinition, CsharpProductRuntimeError> {
-    let signal_domain = match definition.signal_domain {
-        csharp_engine_abi::NativeAnimationCueSignalDomain::Audio => {
-            RuntimeAnimationCueSignalDomain::Audio
-        }
-        csharp_engine_abi::NativeAnimationCueSignalDomain::Particle => {
-            RuntimeAnimationCueSignalDomain::Particle
-        }
-    };
-    RuntimeAnimationCueDefinition::new(
-        definition.cue_id,
-        definition.asset,
-        definition.clip,
-        definition.marker_millis,
-        signal_domain,
-        definition.signal_id,
-    )
-    .map_err(publication_error)
 }
 
 fn assert_ui_projection_binding(
@@ -4767,7 +4734,6 @@ mod tests {
             RuntimePublication::Frame(_) => "frame",
             RuntimePublication::ViewComposition(_) => "view-composition",
             RuntimePublication::Presentation(_) => "presentation",
-            RuntimePublication::AnimationCueDefinitions(_) => "animation-cue-definitions",
             RuntimePublication::UiProjection(_) => "ui-projection",
         }
     }
@@ -6898,53 +6864,6 @@ mod tests {
             frame.ops.as_ptr(),
             operations,
             "owned operations must not be deep-copied in transit"
-        );
-    }
-
-    #[test]
-    fn animation_cue_definition_output_maps_to_its_publication() {
-        let output = csharp_engine_services::CsharpEngineCallOutput {
-            render_output: Vec::new(),
-            appearance: vec![CsharpAppearanceCallOutput::AnimationCueDefinitions(vec![
-                csharp_engine_services::AnimationCueDefinition {
-                    cue_id: "footfall".to_owned(),
-                    asset: "animated-mesh-resource/test".to_owned(),
-                    clip: "run".to_owned(),
-                    marker_millis: 125,
-                    signal_domain: NativeAnimationCueSignalDomain::Particle,
-                    signal_id: "footfall.spark".to_owned(),
-                },
-            ])],
-            frames: Vec::new(),
-            view_composition: None,
-            ui: Vec::new(),
-            presentation: Vec::new(),
-        };
-        let values = service_outputs(output).expect("cue output maps");
-        assert_eq!(values.len(), 1);
-        let RuntimePublication::AnimationCueDefinitions(definitions) = &values[0] else {
-            panic!("animation cue definitions");
-        };
-        let [definition] = definitions.as_slice() else {
-            panic!("one definition");
-        };
-        assert_eq!(
-            (
-                definition.cue_id(),
-                definition.asset(),
-                definition.clip(),
-                definition.marker_millis(),
-                definition.signal_domain(),
-                definition.signal_id(),
-            ),
-            (
-                "footfall",
-                "animated-mesh-resource/test",
-                "run",
-                125,
-                RuntimeAnimationCueSignalDomain::Particle,
-                "footfall.spark",
-            )
         );
     }
 

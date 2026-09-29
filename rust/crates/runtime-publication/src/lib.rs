@@ -57,85 +57,6 @@ impl RuntimePublicationFrontier {
     }
 }
 
-/// Closed realization family for one typed animation cue definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeAnimationCueSignalDomain {
-    Audio,
-    Particle,
-}
-
-/// Copied Engine animation facts. The marker remains in admitted milliseconds
-/// until a host-specific renderer wire adapter derives its presentation unit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeAnimationCueDefinition {
-    cue_id: String,
-    asset: String,
-    clip: String,
-    marker_millis: u64,
-    signal_domain: RuntimeAnimationCueSignalDomain,
-    signal_id: String,
-}
-
-impl RuntimeAnimationCueDefinition {
-    pub const MAX_TEXT_BYTES: usize = 96;
-
-    pub fn new(
-        cue_id: impl Into<String>,
-        asset: impl Into<String>,
-        clip: impl Into<String>,
-        marker_millis: u64,
-        signal_domain: RuntimeAnimationCueSignalDomain,
-        signal_id: impl Into<String>,
-    ) -> Result<Self, RuntimePublicationError> {
-        let cue_id = cue_id.into();
-        let asset = asset.into();
-        let clip = clip.into();
-        let signal_id = signal_id.into();
-        for (field, value) in [
-            ("cue_id", cue_id.as_str()),
-            ("asset", asset.as_str()),
-            ("clip", clip.as_str()),
-            ("signal_id", signal_id.as_str()),
-        ] {
-            if value.is_empty() || value.len() > Self::MAX_TEXT_BYTES {
-                return Err(RuntimePublicationError::InvalidAnimationCueField { field });
-            }
-        }
-        Ok(Self {
-            cue_id,
-            asset,
-            clip,
-            marker_millis,
-            signal_domain,
-            signal_id,
-        })
-    }
-
-    pub fn cue_id(&self) -> &str {
-        &self.cue_id
-    }
-
-    pub fn asset(&self) -> &str {
-        &self.asset
-    }
-
-    pub fn clip(&self) -> &str {
-        &self.clip
-    }
-
-    pub const fn marker_millis(&self) -> u64 {
-        self.marker_millis
-    }
-
-    pub const fn signal_domain(&self) -> RuntimeAnimationCueSignalDomain {
-        self.signal_domain
-    }
-
-    pub fn signal_id(&self) -> &str {
-        &self.signal_id
-    }
-}
-
 /// One logical output from a runtime operation.
 ///
 /// Progress pulses, readouts, and input-result receipts remain operation/host
@@ -156,7 +77,6 @@ pub enum RuntimePublication {
     Frame(RenderFrameDiff),
     ViewComposition(RendererViewComposition),
     Presentation(PresentationFrameDiff),
-    AnimationCueDefinitions(Vec<RuntimeAnimationCueDefinition>),
     UiProjection(RuntimeUiProjectionEnvelope),
 }
 
@@ -167,19 +87,6 @@ impl RuntimePublication {
             next_input_sequence,
             publication_frontiers: None,
         }
-    }
-
-    pub fn animation_cue_definitions(
-        definitions: Vec<RuntimeAnimationCueDefinition>,
-    ) -> Result<Self, RuntimePublicationError> {
-        let mut keys = BTreeSet::new();
-        for definition in &definitions {
-            definition.validate()?;
-            if !keys.insert((definition.asset(), definition.clip(), definition.cue_id())) {
-                return Err(RuntimePublicationError::DuplicateAnimationCueDefinition);
-            }
-        }
-        Ok(Self::AnimationCueDefinitions(definitions))
     }
 
     pub fn complete_baseline_with_frontiers(
@@ -207,16 +114,6 @@ impl RuntimePublication {
                 publication_frontiers,
                 ..
             } => validate_frontiers(publication_frontiers),
-            Self::AnimationCueDefinitions(definitions) => {
-                let mut keys = BTreeSet::new();
-                for definition in definitions {
-                    definition.validate()?;
-                    if !keys.insert((definition.asset(), definition.clip(), definition.cue_id())) {
-                        return Err(RuntimePublicationError::DuplicateAnimationCueDefinition);
-                    }
-                }
-                Ok(())
-            }
             // Frame/content invariants belong to their Engine owner. Publications
             // move those trusted values; host conversion must not readmit them.
             Self::Frame(_)
@@ -256,22 +153,6 @@ impl RuntimePublication {
     }
 }
 
-impl RuntimeAnimationCueDefinition {
-    pub fn validate(&self) -> Result<(), RuntimePublicationError> {
-        for (field, value) in [
-            ("cue_id", self.cue_id()),
-            ("asset", self.asset()),
-            ("clip", self.clip()),
-            ("signal_id", self.signal_id()),
-        ] {
-            if value.is_empty() || value.len() > Self::MAX_TEXT_BYTES {
-                return Err(RuntimePublicationError::InvalidAnimationCueField { field });
-            }
-        }
-        Ok(())
-    }
-}
-
 fn validate_frontiers(
     frontiers: &[RuntimePublicationFrontier],
 ) -> Result<(), RuntimePublicationError> {
@@ -297,8 +178,6 @@ pub enum RuntimePublicationError {
     InvalidFrontierStream,
     InvalidFrontierRevision,
     DuplicateFrontierStream,
-    InvalidAnimationCueField { field: &'static str },
-    DuplicateAnimationCueDefinition,
 }
 
 impl std::fmt::Display for RuntimePublicationError {
@@ -310,12 +189,6 @@ impl std::fmt::Display for RuntimePublicationError {
             }
             Self::DuplicateFrontierStream => {
                 "runtime publication frontiers contain a duplicate stream"
-            }
-            Self::InvalidAnimationCueField { field } => {
-                return write!(formatter, "runtime animation cue field {field} is invalid")
-            }
-            Self::DuplicateAnimationCueDefinition => {
-                "runtime animation cue definitions contain a duplicate identity"
             }
         })
     }
@@ -392,25 +265,6 @@ mod tests {
             .expect("one emitted event");
         assert!(matches!(transient, RuntimePublication::Presentation(_)));
         assert!(transient.validate().is_ok());
-    }
-
-    #[test]
-    fn cue_validation_rejects_duplicate_identity() {
-        let cue = |id| {
-            RuntimeAnimationCueDefinition::new(
-                id,
-                "hero",
-                "walk",
-                125,
-                RuntimeAnimationCueSignalDomain::Audio,
-                "footstep",
-            )
-            .expect("cue")
-        };
-        assert_eq!(
-            RuntimePublication::animation_cue_definitions(vec![cue("left"), cue("left")]),
-            Err(RuntimePublicationError::DuplicateAnimationCueDefinition)
-        );
     }
 
     #[test]

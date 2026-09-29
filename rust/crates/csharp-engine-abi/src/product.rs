@@ -870,11 +870,6 @@ pub type NativeSetAnimationPlayback = unsafe extern "C" fn(
     *const NativeAnimationPlaybackRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeReplaceAnimationCueDefinitions = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeAnimationCueDefinitionReplaceRequest,
-    *mut crate::NativeOperationErrorReceipt,
-) -> i32;
 pub type NativeCreateAnimationGraph = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimationGraphCreateRequest,
@@ -1396,7 +1391,6 @@ pub struct NativeAnimationApi {
     pub destroy_instance: NativeDestroyAnimationInstance,
     pub replace_instance: NativeReplaceAnimationInstance,
     pub set_playback: NativeSetAnimationPlayback,
-    pub replace_cue_definitions: NativeReplaceAnimationCueDefinitions,
     pub create_graph: NativeCreateAnimationGraph,
     pub destroy_graph: NativeDestroyAnimationGraph,
     pub define_parameter: NativeDefineAnimationParameter,

@@ -40,8 +40,8 @@ use crate::appearance::{
     replace_sprite_from_atlas, replace_static_mesh_appearance,
     replace_static_mesh_from_content_appearance, sample_sprite_playback,
     select_sprite_playback_frame, set_sprite_frame, set_sprite_viewport, take_mesh_partition_part,
-    update_light, update_material, update_static_mesh_materials, AnimationCueDefinition,
-    CsharpRenderResource, RuntimeAppearanceBridge, RuntimeAppearanceCall,
+    update_light, update_material, update_static_mesh_materials, CsharpRenderResource,
+    RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
 
 #[allow(
@@ -326,7 +326,6 @@ pub struct CsharpEngineCallOutput {
 pub enum CsharpAppearanceCallOutput {
     Frame(render_model::RenderFrameDiff),
     Presentation(render_presentation::PresentationFrameDiff),
-    AnimationCueDefinitions(Vec<AnimationCueDefinition>),
 }
 
 /// Parsed optional appearance catalog retained with admitted product content.
@@ -674,7 +673,6 @@ impl EngineServiceSet {
                         .apply_presentation(std::mem::take(frame))
                         .map_err(presentation_world_error)?;
                 }
-                CsharpAppearanceCallOutput::AnimationCueDefinitions(_) => {}
             }
         }
         for frame in &mut output.frames {
@@ -792,12 +790,7 @@ impl EngineServiceSet {
         }
         Ok(CsharpEngineCallOutput {
             render_output: Vec::new(),
-            appearance: vec![
-                CsharpAppearanceCallOutput::Frame(snapshot.frame),
-                CsharpAppearanceCallOutput::AnimationCueDefinitions(
-                    self.appearance.snapshot_animation_cue_definitions(),
-                ),
-            ],
+            appearance: vec![CsharpAppearanceCallOutput::Frame(snapshot.frame)],
             frames: Vec::new(),
             view_composition: Some(self.camera_view.snapshot_composition()?),
             ui: self.ui.snapshot_projections(binding),
@@ -818,9 +811,6 @@ impl EngineServiceSet {
                 crate::appearance::RuntimeAppearanceCallOutput::Presentation(frame) => {
                     CsharpAppearanceCallOutput::Presentation(frame)
                 }
-                crate::appearance::RuntimeAppearanceCallOutput::AnimationCueDefinitions(
-                    definitions,
-                ) => CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions),
             })
             .collect::<Vec<_>>();
         let mut frames = Vec::new();

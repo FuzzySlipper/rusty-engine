@@ -60,7 +60,7 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | Math vocabulary | Rust | Engine value types are plain arrays and the small f32 [`core-math`](../rust/crates/core-math) types. World-space spatial work is f64 and uses nalgebra through parry and rapier inside `svc-collision` and `svc-implicit`. glam is private to `render-wgpu`, which needs f32 column-major matrices for GPU rows, and `scripts/dependency_boundary_check.py` refuses it anywhere else. Conversions between Engine arrays and glam go only through `render-wgpu/src/convert.rs` (#8846). |
 | Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) owns the runtime's `render-wgpu` renderer: it applies each committed call's publications, draws offscreen on its own thread, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-dev-host` serves them at `/__rusty/product/runtime/frames`. |
 | Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
-| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, cues, and baseline facts. The runtime's renderer and audio output apply them in process; the host sends the browser shell only its binding, baseline markers and UI projections. Input acknowledgements and the runtime readout remain host observations. |
+| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, and baseline facts. The runtime's renderer and audio output apply them in process; the host sends the browser shell only its binding, baseline markers and UI projections. Input acknowledgements and the runtime readout remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
 | Safe C# contracts and native bridge | Generated and handwritten C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles the generated contracts, values, internal interop and service implementations from ignored `obj/Generated` output, plus the handwritten [`ProductBridge`](../csharp/Rusty.Engine/NativeProduct/ProductBridge.cs) that implements the product ABI table and lifetime. |
@@ -179,7 +179,7 @@ machine with no output device runs silent after one warning, with no
 completions reported; `RUSTY_AUDIO_OUTPUT=device` requires the device instead.
 Continuous emitters restart their cosmetic simulation from their retained
 descriptor. Animation baselines carry playback cursors and per-clip controller
-phases, suppressing historical cues and completion callbacks. A ghost plate
+phases, suppressing historical completion callbacks. A ghost plate
 retains its capture-time graphics subtree, resource definitions, lights, and
 sampled animation pose; the renderer rebuilds its capture bank from that
 immutable input, and only explicit recapture replaces the source pose.

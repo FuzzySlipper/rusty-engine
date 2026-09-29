@@ -68,8 +68,7 @@ pub use model::{
     ProductDevUpdateAttributionSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use runtime_publication::{
-    RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
-    RuntimePublicationError, RuntimePublicationFrontier, RuntimeReceipt,
+    RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier, RuntimeReceipt,
 };
 pub use scheduler::advance_realtime_with_input_and_publish;
 pub use session::ProductDevOperationOwner;
