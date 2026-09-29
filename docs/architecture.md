@@ -262,8 +262,10 @@ The world is realized either by the browser's Three surface or, with
   under one lock with the simulation step and held state the call left, so a
   frame never shows a call's changes under the previous step.
   A call whose renderer work was lost, or a world replacement, rebuilds the
-  renderer from the committed snapshot. Animation facts from drawn frames
-  reach the Engine through the ordinary animation realization feedback. The
+  renderer from the committed snapshot. Animation and video facts from drawn
+  frames reach the Engine through the ordinary realization feedback, and the
+  renderer's ghost plates are reported as the complete ghost plate snapshot
+  after each product call. The
   renderer draws when a change is applied: every step while the simulation
   runs, once per change while it is paused or inspection time is held. It
   takes the product manifest's default light rigs.

@@ -1076,7 +1076,12 @@ export function createProductBrowserGhostPlateFeedbackReporter(options: {
   const flush = async (): Promise<void> => {
     const binding = currentBinding;
     if (binding === null) return;
-    const plates = options.renderer.ghostPlateReadout()?.plates ?? [];
+    const readout = options.renderer.ghostPlateReadout();
+    // A surface that does not realize ghost plates (the runtime renders them
+    // and reports their facts) has nothing to report; an empty snapshot would
+    // clear the runtime's.
+    if (readout === null) return;
+    const plates = readout.plates;
     const facts: ProductBrowserGhostPlateFeedbackFact[] = plates.map((plate) => Object.freeze({
       presentation: canonicalSafeU64(Number(plate.handle), 'ghost plate presentation'),
       sourceMatches: plate.sourceMatch,

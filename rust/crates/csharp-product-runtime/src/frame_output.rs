@@ -31,8 +31,12 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use csharp_engine_abi::NativeVideoFailureCode;
-use csharp_engine_services::{AnimationRealizationFact, EngineServiceSet, VideoRealizationFact};
+use csharp_engine_abi::{
+    NativeGhostPlateFallbackReason, NativeGhostPlateLimitationMask, NativeVideoFailureCode,
+};
+use csharp_engine_services::{
+    AnimationRealizationFact, EngineServiceSet, GhostPlateRealizationFact, VideoRealizationFact,
+};
 use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::RendererViewTarget;
 use render_stream::{
@@ -196,6 +200,10 @@ impl FrameOutput {
             // would be the Engine's defect, not the product's.
             let _ = services.ingest_video_realization_feedback(false, 0, facts);
         }
+        // A complete latest snapshot; it replaces the Engine's observation.
+        let plates = self.driver.ghost_plate_readouts();
+        services
+            .ingest_ghost_plate_realization_feedback(false, plates.iter().map(ghost_plate_fact));
     }
 
     fn video_fact(&mut self, fact: VideoFact) -> VideoRealizationFact {
@@ -509,6 +517,37 @@ fn primary_camera_pose(composition: &RendererViewComposition) -> Option<Renderer
         .map(|camera| camera.pose)
 }
 
+/// One realized ghost plate as the Engine's realization fact. render-wgpu
+/// ports the Three lane's capture bank, so the retained-profile limits apply
+/// unchanged (single capture view with one sector). The plate is built from
+/// its own descriptor's captured source, so the source always matches. A plate
+/// whose capture failed is not realized and has no fact; no realized plate
+/// draws a stand-in, so there is no fallback. The whole CPU build (the plate's
+/// isolated renderer and every sector's capture) is its capture submission
+/// time. Its meshes and materials are the frozen source's parts and
+/// materials; it borrows no textures.
+fn ghost_plate_fact(plate: &render_wgpu::GhostPlateReadout) -> GhostPlateRealizationFact {
+    GhostPlateRealizationFact {
+        handle: plate.handle.raw(),
+        source_matches: true,
+        current_sector: plate.current_sector,
+        local_angular_offset_degrees: Some(plate.local_azimuth_degrees),
+        fallback_active: false,
+        fallback_reason: NativeGhostPlateFallbackReason::None,
+        limitation_mask: if plate.sector_count == 1 {
+            NativeGhostPlateLimitationMask::SingleCaptureViewProfile
+        } else {
+            NativeGhostPlateLimitationMask::DirectionalCaptureBankProfile
+        },
+        preparation_cpu_milliseconds: None,
+        capture_cpu_submission_milliseconds: Some(plate.capture_milliseconds),
+        retained_sector_count: plate.sector_count,
+        retained_mesh_count: plate.parts,
+        retained_material_count: plate.materials,
+        retained_borrowed_texture_count: 0,
+    }
+}
+
 /// The submitted cameras: each composition camera with the pose and basis it
 /// drew from in this frame (motion sampled, or the observer's where the
 /// observer replaced it in primary views). `observer` marks the latter, and
@@ -544,6 +583,46 @@ mod tests {
         RendererCameraBasis, RendererCameraPose, RendererCameraProjection,
         RendererCompositionCamera,
     };
+
+    #[test]
+    fn a_drawn_ghost_plate_reports_its_sector_and_bank_profile() {
+        let readout = |sector_count: u32| render_wgpu::GhostPlateReadout {
+            handle: render_presentation::GhostPlateHandle::new(7),
+            source: render_model::RenderHandle::new(41),
+            sector_count,
+            current_sector: sector_count - 1,
+            local_azimuth_degrees: 271.5,
+            capture_milliseconds: 3.25,
+            parts: 2,
+            materials: 1,
+        };
+        let fact = ghost_plate_fact(&readout(4));
+        assert_eq!(fact.handle, 7);
+        assert!(fact.source_matches);
+        assert_eq!(fact.current_sector, 3, "the sector the last view drew");
+        assert_eq!(fact.local_angular_offset_degrees, Some(271.5));
+        assert!(!fact.fallback_active);
+        assert_eq!(fact.fallback_reason, NativeGhostPlateFallbackReason::None);
+        assert_eq!(
+            fact.limitation_mask,
+            NativeGhostPlateLimitationMask::DirectionalCaptureBankProfile
+        );
+        assert_eq!(fact.preparation_cpu_milliseconds, None);
+        assert_eq!(fact.capture_cpu_submission_milliseconds, Some(3.25));
+        assert_eq!(
+            (
+                fact.retained_sector_count,
+                fact.retained_mesh_count,
+                fact.retained_material_count,
+                fact.retained_borrowed_texture_count
+            ),
+            (4, 2, 1, 0)
+        );
+        assert_eq!(
+            ghost_plate_fact(&readout(1)).limitation_mask,
+            NativeGhostPlateLimitationMask::SingleCaptureViewProfile
+        );
+    }
 
     #[test]
     fn submitted_cameras_carry_the_drawn_pose_and_keep_the_offscreen_one() {

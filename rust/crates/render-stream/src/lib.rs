@@ -291,6 +291,11 @@ impl SceneDriver {
         std::mem::take(&mut self.scene().video_facts)
     }
 
+    /// Every realized ghost plate as the last drawn view left it.
+    pub fn ghost_plate_readouts(&self) -> Vec<render_wgpu::GhostPlateReadout> {
+        self.scene().renderer.ghost_plate_readouts()
+    }
+
     /// Draw the committed scene: `draw` renders with the renderer at the
     /// presentation time it is given, to its own target. Facts the frame
     /// produced are kept for [`Self::take_animation_facts`] and

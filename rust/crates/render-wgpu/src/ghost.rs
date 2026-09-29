@@ -54,6 +54,10 @@ pub struct GhostPlateReadout {
     /// The last view's azimuth around the plate, in [0, 360).
     pub local_azimuth_degrees: f32,
     pub capture_milliseconds: f64,
+    /// Parts of the frozen source the plate redraws.
+    pub parts: u32,
+    /// Materials the frozen source retains.
+    pub materials: u32,
 }
 
 struct Sector {
@@ -294,6 +298,8 @@ impl Renderer {
                 current_sector: plate.drawing as u32,
                 local_azimuth_degrees: plate.local_azimuth,
                 capture_milliseconds: plate.capture_milliseconds,
+                parts: plate.source.table_counts().parts as u32,
+                materials: plate.source.table_counts().materials as u32,
             })
             .collect();
         readouts.sort_by_key(|readout| readout.handle);
