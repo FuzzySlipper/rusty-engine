@@ -126,8 +126,7 @@ pub(crate) struct RuntimeImplicitBridge {
     // Volume identities are independent from field/node identities.
     next_volume: u64,
     appearance: Option<*mut RuntimeAppearanceBridge>,
-    diagnostic_leases: BTreeMap<u64, Box<GenerationDiagnosticLease>>,
-    next_diagnostic_lease: u64,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     density_snapshot_leases: BTreeMap<u64, DensitySnapshotLease>,
     next_density_snapshot_lease: u64,
     next_audit: u64,
@@ -144,8 +143,7 @@ impl RuntimeImplicitBridge {
             next_node: 1,
             next_volume: 1,
             appearance: None,
-            diagnostic_leases: BTreeMap::new(),
-            next_diagnostic_lease: 1,
+            operation_diagnostics: Default::default(),
             density_snapshot_leases: BTreeMap::new(),
             next_density_snapshot_lease: 1,
             next_audit: 1,
@@ -478,7 +476,6 @@ pub(crate) fn api(
         sample,
         generate,
         read_generation,
-        destroy_operation_diagnostic_lease,
         create_audit,
         destroy_audit,
         capture_audit_piece,
@@ -509,14 +506,13 @@ fn call<T>(
         }
         Ok(Err(e)) => {
             if !operation_error.is_null() {
-                bridge.retain_operation_error(b"", e, operation_error);
+                bridge.operation_diagnostics.retain(&e, operation_error);
             }
             0
         }
         Err(_) => {
-            bridge.retain_operation_error(
-                b"",
-                error("implicit backend panicked during generation or evaluation"),
+            bridge.operation_diagnostics.retain(
+                &error("implicit backend panicked during generation or evaluation"),
                 operation_error,
             );
             0
@@ -527,7 +523,6 @@ fn call_operation<T>(
     context: *mut c_void,
     result: *mut T,
     receipt: *mut NativeOperationErrorReceipt,
-    operation: &'static [u8],
     action: impl FnOnce(&mut RuntimeImplicitBridge) -> Result<T>,
 ) -> i32 {
     if receipt.is_null() {
@@ -546,13 +541,12 @@ fn call_operation<T>(
             ABI_OK
         }
         Ok(Err(error)) => {
-            bridge.retain_operation_error(operation, error, receipt);
+            bridge.operation_diagnostics.retain(&error, receipt);
             0
         }
         Err(_) => {
-            bridge.retain_operation_error(
-                operation,
-                error("implicit backend panicked during operation"),
+            bridge.operation_diagnostics.retain(
+                &error("implicit backend panicked during operation"),
                 receipt,
             );
             0
@@ -605,7 +599,7 @@ unsafe extern "C" fn create_sampled_volume(
     result: *mut NativeSampledVolumeHandle,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"CreateSampledVolume", |b| {
+    call_operation(context, result, receipt, |b| {
         let volume = SampledVolume::new(
             v(request.origin),
             request.spacing,
@@ -646,7 +640,7 @@ unsafe extern "C" fn describe_sampled_volume(
     result: *mut NativeSampledVolumeDescriptor,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"DescribeSampledVolume", |b| {
+    call_operation(context, result, receipt, |b| {
         Ok(native_volume_descriptor(
             b.retained_volume(volume)?.volume.descriptor(),
         ))
@@ -657,7 +651,7 @@ unsafe extern "C" fn write_sampled_volume(
     request: *const NativeSampledVolumeWriteRequest,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, &mut (), receipt, b"WriteSampledVolume", |b| {
+    call_operation(context, &mut (), receipt, |b| {
         if request.is_null() {
             return Err(error("sampled volume write request was null"));
         }
@@ -684,7 +678,7 @@ unsafe extern "C" fn read_sampled_volume(
     result: *mut NativeDensitySnapshotLease,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"ReadSampledVolume", |b| {
+    call_operation(context, result, receipt, |b| {
         let (descriptor, samples) = {
             let retained = b.retained_volume(request.volume)?;
             let samples = retained
@@ -722,7 +716,7 @@ unsafe extern "C" fn sample_sampled_volume(
     result: *mut NativeDensitySample,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"SampleSampledVolume", |b| {
+    call_operation(context, result, receipt, |b| {
         let value = b
             .retained_volume(request.volume)?
             .volume
@@ -736,7 +730,7 @@ unsafe extern "C" fn rasterize_sampled_volume(
     request: NativeSampledVolumeRasterizeRequest,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, &mut (), receipt, b"RasterizeSampledVolume", |b| {
+    call_operation(context, &mut (), receipt, |b| {
         let (field, source) = {
             let retained = b.retained(request.field)?;
             (retained.field.clone(), retained.node(request.source)?)
@@ -755,7 +749,7 @@ unsafe extern "C" fn generate_sampled_volume(
     result: *mut NativeMeshResourceHandle,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"GenerateSampledVolume", |b| {
+    call_operation(context, result, receipt, |b| {
         if request.is_null() {
             return Err(error("sampled volume generate request was null"));
         }
@@ -809,17 +803,11 @@ unsafe extern "C" fn read_sampled_volume_generation(
     result: *mut NativeImplicitGenerationReadout,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(
-        context,
-        result,
-        receipt,
-        b"ReadSampledVolumeGeneration",
-        |b| {
-            b.retained_volume(volume)?
-                .generation
-                .ok_or_else(|| error("sampled volume has not produced a mesh"))
-        },
-    )
+    call_operation(context, result, receipt, |b| {
+        b.retained_volume(volume)?
+            .generation
+            .ok_or_else(|| error("sampled volume has not produced a mesh"))
+    })
 }
 unsafe extern "C" fn generate(
     context: *mut c_void,
@@ -850,13 +838,12 @@ unsafe extern "C" fn generate(
             ABI_OK
         }
         Ok(Err(error)) => {
-            bridge.retain_operation_error(b"Generate", error, receipt);
+            bridge.operation_diagnostics.retain(&error, receipt);
             0
         }
         Err(_) => {
-            bridge.retain_operation_error(
-                b"Generate",
-                error("implicit backend panicked during generation"),
+            bridge.operation_diagnostics.retain(
+                &error("implicit backend panicked during generation"),
                 receipt,
             );
             0
@@ -864,72 +851,6 @@ unsafe extern "C" fn generate(
     }
 }
 
-struct GenerationDiagnosticLease {
-    _code: Box<str>,
-    _message: Box<str>,
-    diagnostic: NativeEngineDiagnostic,
-}
-
-fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
-    NativeUtf8Slice {
-        bytes: value.as_ptr(),
-        len: value.len(),
-    }
-}
-
-impl RuntimeImplicitBridge {
-    fn retain_operation_error(
-        &mut self,
-        operation: &'static [u8],
-        failure: CsharpEngineServicesError,
-        receipt: *mut NativeOperationErrorReceipt,
-    ) {
-        if receipt.is_null() {
-            return;
-        }
-        let value = self.next_diagnostic_lease;
-        let next = value + 1;
-        let code: Box<str> = failure.code().into();
-        let message: Box<str> = failure.detail().into();
-        // Box the lease itself so additional leases cannot move this readout
-        // while a native caller retains its pointer until exact release.
-        let lease = Box::new(GenerationDiagnosticLease {
-            diagnostic: NativeEngineDiagnostic {
-                code: native_utf8(code.as_bytes()),
-                message: native_utf8(message.as_bytes()),
-                source: native_utf8(b""),
-            },
-            _code: code,
-            _message: message,
-        });
-        let diagnostics = NativeEngineDiagnosticLease {
-            handle: NativeEngineDiagnosticLeaseHandle { value },
-            diagnostics: std::ptr::from_ref(&lease.diagnostic),
-            diagnostics_len: 1,
-        };
-        self.diagnostic_leases.insert(value, lease);
-        self.next_diagnostic_lease = next;
-        unsafe {
-            *receipt = NativeOperationErrorReceipt {
-                service: native_utf8(b"ImplicitSurfaces"),
-                operation: native_utf8(operation),
-                status: 0,
-                diagnostics,
-            };
-        }
-    }
-}
-
-unsafe extern "C" fn destroy_operation_diagnostic_lease(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
-    i32::from(handle.value != 0 && bridge.diagnostic_leases.remove(&handle.value).is_some())
-}
 unsafe extern "C" fn read_generation(
     context: *mut c_void,
     field: NativeImplicitFieldHandle,

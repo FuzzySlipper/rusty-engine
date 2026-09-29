@@ -93,7 +93,7 @@ pub(super) unsafe extern "C" fn observe_anchor(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"ObserveAnchor"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 pub(super) unsafe extern "C" fn step_with_reactions(
@@ -113,6 +113,6 @@ pub(super) unsafe extern "C" fn step_with_reactions(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"StepWithReactions"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }

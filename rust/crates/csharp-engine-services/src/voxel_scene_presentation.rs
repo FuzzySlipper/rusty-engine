@@ -5,8 +5,6 @@
 //! normal incremental voxel projector, and stages renderer work.  No mesh or
 //! renderer object is ever admitted from C#.
 
-mod errors;
-
 use runtime_diagnostics::RuntimeUpdateAttribution;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -67,8 +65,7 @@ pub(crate) struct RuntimeVoxelScenePresentationBridge {
     staged: Option<RuntimeVoxelScenePresentationCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
     update_attribution: RuntimeUpdateAttribution,
-    diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
-    next_diagnostic_lease: u64,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
 
 impl RuntimeVoxelScenePresentationBridge {
@@ -85,8 +82,7 @@ impl RuntimeVoxelScenePresentationBridge {
             staged: None,
             appearance: None,
             update_attribution: RuntimeUpdateAttribution::default(),
-            diagnostic_leases: BTreeMap::new(),
-            next_diagnostic_lease: 1,
+            operation_diagnostics: Default::default(),
         }
     }
 
@@ -948,7 +944,6 @@ pub(crate) fn api(
         update_scene_directional,
         read_material_mapping,
         destroy_material_mapping_lease,
-        destroy_operation_diagnostic_lease: errors::destroy_operation_diagnostic_lease,
     }
 }
 
@@ -973,7 +968,7 @@ unsafe extern "C" fn project_scene(
             ABI_OK
         }
         Err(failure) => {
-            bridge.retain_operation_error(&failure, error, b"ProjectScene");
+            bridge.operation_diagnostics.retain(&failure, error);
             0
         }
     }
@@ -1000,7 +995,7 @@ unsafe extern "C" fn project_scene_directional(
             ABI_OK
         }
         Err(failure) => {
-            bridge.retain_operation_error(&failure, error, b"ProjectSceneDirectional");
+            bridge.operation_diagnostics.retain(&failure, error);
             0
         }
     }
@@ -1026,7 +1021,7 @@ unsafe extern "C" fn refresh_scene(
             ABI_OK
         }
         Err(failure) => {
-            bridge.retain_operation_error(&failure, error, b"RefreshScene");
+            bridge.operation_diagnostics.retain(&failure, error);
             0
         }
     }
@@ -1053,7 +1048,7 @@ unsafe extern "C" fn update_scene(
             ABI_OK
         }
         Err(failure) => {
-            bridge.retain_operation_error(&failure, error, b"UpdateScene");
+            bridge.operation_diagnostics.retain(&failure, error);
             0
         }
     }
@@ -1080,7 +1075,7 @@ unsafe extern "C" fn update_scene_directional(
             ABI_OK
         }
         Err(failure) => {
-            bridge.retain_operation_error(&failure, error, b"UpdateSceneDirectional");
+            bridge.operation_diagnostics.retain(&failure, error);
             0
         }
     }
@@ -1346,7 +1341,6 @@ mod tests {
         bridge.begin_call();
         let api = super::api(&mut bridge, &mut appearance);
         let mut rejected = NativeVoxelScenePresentationHandle::default();
-        let mut errors = Vec::new();
         for _ in 0..32 {
             let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
             assert_eq!(
@@ -1364,7 +1358,15 @@ mod tests {
                 },
                 0
             );
-            errors.push(error);
+            // Each refusal is readable until the next call on this bridge.
+            let diagnostic = unsafe { &*error.diagnostics };
+            let message = unsafe {
+                std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len)
+            };
+            assert_eq!(
+                std::str::from_utf8(message).unwrap(),
+                "voxel scene material bindings are missing used source slots [1]"
+            );
         }
         assert_eq!(rejected.value, 0);
         assert!(bridge
@@ -1374,29 +1376,6 @@ mod tests {
             .state
             .presentations
             .is_empty());
-        for error in errors {
-            let diagnostic = unsafe { &*error.diagnostics.diagnostics };
-            let message = unsafe {
-                std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len)
-            };
-            assert_eq!(
-                std::str::from_utf8(message).unwrap(),
-                "voxel scene material bindings are missing used source slots [1]"
-            );
-            assert_eq!(
-                unsafe {
-                    (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
-                },
-                ABI_OK
-            );
-            assert_eq!(
-                unsafe {
-                    (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
-                },
-                0
-            );
-        }
-        assert!(bridge.diagnostic_leases.is_empty());
         let bindings = [NativeVoxelSceneMaterialBinding {
             material_slot: 1,
             material,

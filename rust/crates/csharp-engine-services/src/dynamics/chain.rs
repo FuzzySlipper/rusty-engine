@@ -299,11 +299,9 @@ pub(super) unsafe extern "C" fn create_fixed_chain(
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.create_fixed_chain(request) {
         Ok(()) => ABI_OK,
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"CreateFixedChain",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -323,11 +321,9 @@ pub(super) unsafe extern "C" fn create_body_chain(
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.create_body_chain(request) {
         Ok(()) => ABI_OK,
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"CreateBodyChain",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -351,11 +347,9 @@ pub(super) unsafe extern "C" fn read_chain(
             ABI_OK
         }
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"ReadChain",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -379,11 +373,9 @@ pub(super) unsafe extern "C" fn read_chain_point(
             ABI_OK
         }
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"ReadChainPoint",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -407,11 +399,9 @@ pub(super) unsafe extern "C" fn remove_chain(
             ABI_OK
         }
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"RemoveChain",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -432,11 +422,9 @@ pub(super) unsafe extern "C" fn set_chain_length(
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_chain_length(request) {
         Ok(()) => ABI_OK,
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"SetChainLength",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -469,11 +457,9 @@ pub(super) unsafe extern "C" fn configure_ropes(
     match result {
         Ok(()) => ABI_OK,
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"ConfigureRopes",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }

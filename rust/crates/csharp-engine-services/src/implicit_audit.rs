@@ -47,7 +47,7 @@ pub(super) unsafe extern "C" fn capture_audit_piece(
     request: NativeImplicitAuditPieceRequest,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, &mut (), receipt, b"CaptureAuditPiece", |b| {
+    call_operation(context, &mut (), receipt, |b| {
         let collection = b
             .stage()?
             .audits
@@ -95,7 +95,7 @@ pub(super) unsafe extern "C" fn read_audit(
     result: *mut NativeImplicitAuditReportLease,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"ReadAudit", |b| {
+    call_operation(context, result, receipt, |b| {
         let pieces = b
             .stage()?
             .audits
@@ -242,7 +242,7 @@ pub(super) unsafe extern "C" fn read_mesh_integrity(
         return 0;
     }
     let request = unsafe { *request };
-    call_operation(context, result, receipt, b"ReadMeshIntegrity", |b| {
+    call_operation(context, result, receipt, |b| {
         let openings = unsafe { copied_slice(request.openings, request.openings_len) }?
             .into_iter()
             .map(|r| audit::OpenRegion {
@@ -264,7 +264,7 @@ pub(super) unsafe extern "C" fn read_expected_join(
     result: *mut NativeImplicitAnalysisReportLease,
     receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    call_operation(context, result, receipt, b"ReadExpectedJoin", |b| {
+    call_operation(context, result, receipt, |b| {
         let report = audit::continuity::expected_join(
             &pieces(b, request.audit)?,
             audit::continuity::Join {
@@ -293,7 +293,7 @@ pub(super) unsafe extern "C" fn read_enclosure(
         return 0;
     }
     let request = unsafe { *request };
-    call_operation(context, result, receipt, b"ReadEnclosure", |b| {
+    call_operation(context, result, receipt, |b| {
         let openings = unsafe { copied_slice(request.openings, request.openings_len) }?
             .into_iter()
             .map(|r| Bounds {

@@ -1652,7 +1652,6 @@ pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
 pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
     NativeAudioApi {
         context: (bridge as *mut RuntimeAudioBridge).cast(),
-        destroy_operation_diagnostic_lease,
         open_clip: open_audio_clip,
         open_clip_from_content: open_audio_clip_from_content,
         destroy_clip: destroy_audio_clip,
@@ -1672,17 +1671,6 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         read_realization: read_audio_realization,
         read_realization_fact_at: read_audio_realization_fact_at,
     }
-}
-
-unsafe extern "C" fn destroy_operation_diagnostic_lease(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
-    bridge.operation_diagnostics.destroy(handle)
 }
 
 #[cfg(test)]

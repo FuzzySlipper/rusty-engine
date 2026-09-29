@@ -373,8 +373,6 @@ pub type NativeSpatialRestoreTriggers = unsafe extern "C" fn(
     *mut NativeSpatialTriggerRestoreReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroySpatialOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeSpatialReadTrigger = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerReadRequest,
@@ -1137,8 +1135,6 @@ pub type NativePublishUiProjection = unsafe extern "C" fn(
     *const NativeUiProjection,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyUiOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
@@ -1222,13 +1218,9 @@ pub type NativeRemoveDynamicsChain = unsafe extern "C" fn(
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 
-pub type NativeDestroyDynamicsOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsApi {
-    pub destroy_operation_diagnostic_lease: NativeDestroyDynamicsOperationDiagnosticLease,
     pub context: *mut c_void,
     pub observe_anchor: NativeObserveDynamicsAnchor,
     pub step_with_reactions: NativeStepDynamicsWithReactions,
@@ -1322,7 +1314,6 @@ pub struct NativeSpatialApi {
     pub reconcile_triggers: NativeSpatialReconcileTriggers,
     pub set_trigger_active: NativeSpatialSetTriggerActive,
     pub restore_triggers: NativeSpatialRestoreTriggers,
-    pub destroy_operation_diagnostic_lease: NativeDestroySpatialOperationDiagnosticLease,
     pub read_trigger: NativeSpatialReadTrigger,
     pub read_trigger_overlap_at: NativeSpatialReadTriggerOverlapAt,
     pub read_trigger_overlap_page: NativeSpatialReadTriggerOverlapPage,
@@ -1351,7 +1342,6 @@ pub struct NativeUiApi {
     pub open_stream: NativeOpenUiStream,
     pub destroy_stream: NativeDestroyUiStream,
     pub publish_projection: NativePublishUiProjection,
-    pub destroy_operation_diagnostic_lease: NativeDestroyUiOperationDiagnosticLease,
 }
 
 #[repr(C)]
@@ -1401,7 +1391,6 @@ pub struct NativeGraphicsApi {
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
     pub publish_changes: NativePublishAppearanceChanges,
-    pub destroy_operation_diagnostic_lease: NativeDestroyAnimationOperationDiagnosticLease,
     pub create_light: NativeCreateLight,
     pub update_light: NativeUpdateLight,
     pub replace_light: NativeReplaceLight,
@@ -1416,7 +1405,6 @@ pub struct NativeGraphicsApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationApi {
-    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub create_billboard: NativeCreatePresentationBillboard,
     pub update_billboard: NativeUpdatePresentationBillboard,
@@ -1445,7 +1433,6 @@ pub struct NativeContentApi {
     pub read_portable_asset: NativeReadPortableAsset,
     pub destroy_portable_asset_readout_lease: NativeDestroyPortableAssetReadoutLease,
     pub open_portable_asset_member: NativeOpenPortableAssetMember,
-    pub destroy_operation_diagnostic_lease: NativeDestroyContentOperationDiagnosticLease,
     pub admit_reference: NativeAdmitContentReference,
     pub list_bundles: NativeListContentBundles,
     pub destroy_bundle_info_lease: NativeDestroyContentBundleInfoLease,
@@ -1492,14 +1479,12 @@ pub struct NativeAuthoredContentApi {
     pub destroy_scene_plan: NativeDestroyAuthoredScenePlan,
     pub read_scene_plan: NativeReadAuthoredScenePlan,
     pub destroy_scene_plan_readout_lease: NativeDestroyAuthoredScenePlanReadoutLease,
-    pub destroy_operation_diagnostic_lease: NativeDestroyAuthoredContentOperationDiagnosticLease,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationApi {
     pub context: *mut c_void,
-    pub destroy_operation_diagnostic_lease: NativeDestroyAnimationOperationDiagnosticLease,
     pub read_mesh_info: NativeReadAnimatedMeshInfo,
     pub read_clips: NativeReadAnimationClips,
     pub destroy_clip_info_lease: NativeDestroyAnimationClipInfoLease,
@@ -1539,7 +1524,6 @@ pub struct NativeAnimationApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAudioApi {
-    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub open_clip: NativeOpenAudioClip,
     pub open_clip_from_content: NativeOpenAudioClipFromContent,
@@ -1564,7 +1548,6 @@ pub struct NativeAudioApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVideoApi {
-    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub play: NativePlayVideo,
     pub play_from_content: NativePlayVideoFromContent,
@@ -1578,7 +1561,6 @@ pub struct NativeVideoApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCameraViewApi {
-    pub destroy_operation_diagnostic_lease: crate::NativeDestroyEngineDiagnosticLease,
     pub context: *mut c_void,
     pub create_camera: NativeCreateCamera,
     pub update_camera: NativeUpdateCamera,
@@ -1895,8 +1877,6 @@ pub type NativeOpenAnimationResourceFromContent = unsafe extern "C" fn(
     *mut NativeRenderResourceHandle,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyAnimationOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeCreateStaticMeshFromContentReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeStaticMeshContentReferenceRequest,

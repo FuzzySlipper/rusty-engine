@@ -1,9 +1,8 @@
 //! Typed, retained authored-content catalog access for trusted NativeAOT products.
 
 use crate::{
-    NativeColor, NativeContentReferenceHandle, NativeEngineDiagnosticLeaseHandle,
-    NativeLightShadowIntent, NativeOperationErrorReceipt, NativeTransform, NativeUtf8Slice,
-    NativeVec3,
+    NativeColor, NativeContentReferenceHandle, NativeLightShadowIntent,
+    NativeOperationErrorReceipt, NativeTransform, NativeUtf8Slice, NativeVec3,
 };
 use std::ffi::c_void;
 
@@ -1106,5 +1105,3 @@ pub type NativeReadAuthoredScenePlan = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyAuthoredScenePlanReadoutLease =
     unsafe extern "C" fn(*mut c_void, NativeAuthoredScenePlanReadoutLeaseHandle) -> i32;
-pub type NativeDestroyAuthoredContentOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;

@@ -243,7 +243,6 @@ pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
         read_portable_asset: portable::read,
         destroy_portable_asset_readout_lease: portable::destroy_readout,
         open_portable_asset_member: portable::open_member,
-        destroy_operation_diagnostic_lease: portable::destroy_diagnostic,
         context: (bridge as *mut RuntimeContentBridge).cast(),
         list_bundles: bundles::list_bundles,
         destroy_bundle_info_lease: bundles::destroy_bundle_info_lease,

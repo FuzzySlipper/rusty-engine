@@ -1,7 +1,6 @@
 //! Typed portable asset semantics resolved from an existing Content reference.
 use crate::{
-    NativeContentReferenceHandle, NativeEngineDiagnosticLeaseHandle, NativeOperationErrorReceipt,
-    NativeUtf8Slice, NativeVec2,
+    NativeContentReferenceHandle, NativeOperationErrorReceipt, NativeUtf8Slice, NativeVec2,
 };
 use std::ffi::c_void;
 
@@ -152,5 +151,3 @@ pub type NativeOpenPortableAssetMember = unsafe extern "C" fn(
     *mut NativeContentReferenceHandle,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyContentOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;

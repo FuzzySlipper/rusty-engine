@@ -32,7 +32,6 @@ use crate::{
     content::RuntimeContentBridge,
 };
 
-const SERVICE: &[u8] = b"AuthoredContent";
 const MAX_DIAGNOSTICS: usize = 128;
 
 pub(crate) struct RuntimeAuthoredContentBridge {
@@ -42,8 +41,7 @@ pub(crate) struct RuntimeAuthoredContentBridge {
     next_lease: u64,
     resolved_leases: BTreeMap<u64, ResolvedLease>,
     next_resolved_lease: u64,
-    diagnostics: BTreeMap<u64, DiagnosticLease>,
-    next_diagnostic: u64,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     material_leases: BTreeMap<u64, MaterialResolutionLease>,
     next_material_lease: u64,
     surface_leases: BTreeMap<u64, SurfaceResolutionLease>,
@@ -247,10 +245,6 @@ struct PayloadReadouts {
     atlas_regions: Vec<NativeAuthoredAtlasRegionReadout>,
     voxel_surfaces: Vec<NativeAuthoredVoxelSurfaceReadout>,
 }
-struct DiagnosticLease {
-    _text: Text,
-    values: Vec<NativeEngineDiagnostic>,
-}
 struct PrefabRegistryLease {
     _text: Text,
     definitions: Vec<NativeAuthoredPrefabDefinitionReadout>,
@@ -310,8 +304,7 @@ impl RuntimeAuthoredContentBridge {
             next_lease: 1,
             resolved_leases: BTreeMap::new(),
             next_resolved_lease: 1,
-            diagnostics: BTreeMap::new(),
-            next_diagnostic: 1,
+            operation_diagnostics: Default::default(),
             material_leases: BTreeMap::new(),
             next_material_lease: 1,
             surface_leases: BTreeMap::new(),
@@ -1413,47 +1406,6 @@ impl RuntimeAuthoredContentBridge {
             voxel_surfaces_len: lease.voxel_surfaces.len(),
         };
         self.leases.insert(value, lease);
-        Some(out)
-    }
-    fn diagnostic(&mut self, error: AuthoredError) -> Option<NativeEngineDiagnosticLease> {
-        let value = self.next_diagnostic;
-        self.next_diagnostic = value.checked_add(1)?;
-        let mut text = Text { values: vec![] };
-        let facts = match error {
-            AuthoredError::Validation(values) => values
-                .into_iter()
-                .take(MAX_DIAGNOSTICS)
-                .map(|value| (value.code, value.message, value.path))
-                .collect(),
-            AuthoredError::PrefabValidation(values) => values
-                .into_iter()
-                .take(MAX_DIAGNOSTICS)
-                .map(|value| (value.code.as_str().to_owned(), value.message, value.path))
-                .collect(),
-            AuthoredError::Simple {
-                code,
-                message,
-                source,
-            } => vec![(code.to_owned(), message, source)],
-        };
-        let values = facts
-            .into_iter()
-            .map(|(code, message, source)| NativeEngineDiagnostic {
-                code: text.copy(&code),
-                message: text.copy(&message),
-                source: text.copy(&source),
-            })
-            .collect();
-        let lease = DiagnosticLease {
-            _text: text,
-            values,
-        };
-        let out = NativeEngineDiagnosticLease {
-            handle: NativeEngineDiagnosticLeaseHandle { value },
-            diagnostics: lease.values.as_ptr(),
-            diagnostics_len: lease.values.len(),
-        };
-        self.diagnostics.insert(value, lease);
         Some(out)
     }
 }
@@ -2908,32 +2860,37 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         destroy_scene_plan,
         read_scene_plan,
         destroy_scene_plan_readout_lease,
-        destroy_operation_diagnostic_lease,
     }
 }
 fn receipt(
     bridge: &mut RuntimeAuthoredContentBridge,
-    operation: &[u8],
     error: AuthoredError,
 ) -> NativeOperationErrorReceipt {
-    NativeOperationErrorReceipt {
-        service: NativeUtf8Slice {
-            bytes: SERVICE.as_ptr(),
-            len: SERVICE.len(),
-        },
-        operation: NativeUtf8Slice {
-            bytes: operation.as_ptr(),
-            len: operation.len(),
-        },
-        status: 0,
-        diagnostics: bridge
-            .diagnostic(error)
-            .unwrap_or(NativeEngineDiagnosticLease {
-                handle: NativeEngineDiagnosticLeaseHandle::default(),
-                diagnostics: std::ptr::null(),
-                diagnostics_len: 0,
-            }),
-    }
+    let facts: Vec<(String, String, String)> = match error {
+        AuthoredError::Validation(values) => values
+            .into_iter()
+            .take(MAX_DIAGNOSTICS)
+            .map(|value| (value.code, value.message, value.path))
+            .collect(),
+        AuthoredError::PrefabValidation(values) => values
+            .into_iter()
+            .take(MAX_DIAGNOSTICS)
+            .map(|value| (value.code.as_str().to_owned(), value.message, value.path))
+            .collect(),
+        AuthoredError::Simple {
+            code,
+            message,
+            source,
+        } => vec![(code.to_owned(), message, source)],
+    };
+    let mut out = crate::operation_diagnostics::empty_receipt();
+    bridge.operation_diagnostics.retain_all(
+        facts
+            .iter()
+            .map(|(code, message, source)| (code.as_str(), message.as_str(), source.as_str())),
+        &mut out,
+    );
+    out
 }
 unsafe extern "C" fn admit_catalog(
     context: *mut c_void,
@@ -2976,7 +2933,7 @@ unsafe extern "C" fn admit_catalog(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"AdmitCatalog", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3002,7 +2959,7 @@ unsafe extern "C" fn admit_catalog_from_content(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"AdmitCatalogFromContent", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3027,7 +2984,7 @@ unsafe extern "C" fn admit_catalog_payload(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"AdmitCatalogPayload", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3089,7 +3046,7 @@ unsafe extern "C" fn resolve_reference(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"ResolveReference", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3124,7 +3081,7 @@ unsafe extern "C" fn resolve_material(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"ResolveMaterial", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3159,7 +3116,7 @@ unsafe extern "C" fn resolve_voxel_surface(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"ResolveVoxelSurface", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3194,7 +3151,7 @@ unsafe extern "C" fn resolve_fallback(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"ResolveFallback", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3282,7 +3239,7 @@ unsafe extern "C" fn admit_prefab_registry(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"AdmitPrefabRegistry", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3318,7 +3275,7 @@ unsafe extern "C" fn admit_prefab_registry_from_content(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"AdmitPrefabRegistryFromContent", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3391,7 +3348,7 @@ unsafe extern "C" fn resolve_prefab(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"ResolvePrefab", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3535,7 +3492,7 @@ unsafe extern "C" fn prepare_scene(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"PrepareScene", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3596,7 +3553,7 @@ unsafe extern "C" fn prepare_scene_from_content(
             ABI_OK
         }
         Err(error) => {
-            unsafe { *receipt_out = receipt(bridge, b"PrepareSceneFromContent", error) };
+            unsafe { *receipt_out = receipt(bridge, error) };
             0
         }
     }
@@ -3643,16 +3600,6 @@ unsafe extern "C" fn destroy_scene_plan_readout_lease(
                 .remove(&handle.value)
                 .is_some(),
     )
-}
-unsafe extern "C" fn destroy_operation_diagnostic_lease(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
-    i32::from(handle.value != 0 && bridge.diagnostics.remove(&handle.value).is_some())
 }
 
 #[cfg(test)]
@@ -3930,16 +3877,7 @@ mod tests {
         let api = super::api(&mut bridge);
 
         let mut from_content = NativeAuthoredCatalogHandle::default();
-        let mut receipt = NativeOperationErrorReceipt {
-            service: slice(b""),
-            operation: slice(b""),
-            status: 0,
-            diagnostics: NativeEngineDiagnosticLease {
-                handle: NativeEngineDiagnosticLeaseHandle::default(),
-                diagnostics: std::ptr::null(),
-                diagnostics_len: 0,
-            },
-        };
+        let mut receipt = crate::operation_diagnostics::empty_receipt();
         assert_eq!(
             unsafe {
                 (api.admit_catalog_from_content)(
@@ -3951,7 +3889,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!(receipt.diagnostics.handle.value, 0);
+        assert_eq!(receipt.diagnostics_len, 0);
         let mut readout = NativeAuthoredCatalogReadoutLease {
             handle: NativeAuthoredCatalogReadoutLeaseHandle::default(),
             canonical_hash: slice(b""),
@@ -4169,13 +4107,7 @@ mod tests {
             },
             0
         );
-        assert_ne!(receipt.diagnostics.handle.value, 0);
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
-            },
-            ABI_OK
-        );
+        assert_ne!(receipt.diagnostics_len, 0);
     }
 
     #[test]
@@ -4353,16 +4285,7 @@ mod tests {
             voxel_surfaces_len: surfaces.len(),
         };
         let mut catalog = NativeAuthoredCatalogHandle::default();
-        let mut receipt = NativeOperationErrorReceipt {
-            service: slice(b""),
-            operation: slice(b""),
-            status: 0,
-            diagnostics: NativeEngineDiagnosticLease {
-                handle: NativeEngineDiagnosticLeaseHandle::default(),
-                diagnostics: std::ptr::null(),
-                diagnostics_len: 0,
-            },
-        };
+        let mut receipt = crate::operation_diagnostics::empty_receipt();
         assert_eq!(
             unsafe {
                 (api.admit_catalog_payload)(api.context, &request, &mut catalog, &mut receipt)
@@ -4527,16 +4450,7 @@ mod tests {
         }
         let mut bridge = RuntimeAuthoredContentBridge::new();
         let api = super::api(&mut bridge);
-        let mut receipt = NativeOperationErrorReceipt {
-            service: slice(b""),
-            operation: slice(b""),
-            status: 0,
-            diagnostics: NativeEngineDiagnosticLease {
-                handle: NativeEngineDiagnosticLeaseHandle::default(),
-                diagnostics: std::ptr::null(),
-                diagnostics_len: 0,
-            },
-        };
+        let mut receipt = crate::operation_diagnostics::empty_receipt();
         let catalog_rows = [NativeAuthoredCatalogEntryInput {
             id: slice(b"scene/test"),
             version: 1,
@@ -4702,13 +4616,7 @@ mod tests {
             },
             0
         );
-        assert_ne!(receipt.diagnostics.handle.value, 0);
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
-            },
-            ABI_OK
-        );
+        assert_ne!(receipt.diagnostics_len, 0);
         assert_eq!(
             unsafe { (api.destroy_prefab_registry)(api.context, registry) },
             ABI_OK
@@ -4749,16 +4657,7 @@ mod tests {
             value
         }
         fn empty_receipt() -> NativeOperationErrorReceipt {
-            NativeOperationErrorReceipt {
-                service: slice(b""),
-                operation: slice(b""),
-                status: 0,
-                diagnostics: NativeEngineDiagnosticLease {
-                    handle: NativeEngineDiagnosticLeaseHandle::default(),
-                    diagnostics: std::ptr::null(),
-                    diagnostics_len: 0,
-                },
-            }
+            crate::operation_diagnostics::empty_receipt()
         }
 
         let mut bridge = RuntimeAuthoredContentBridge::new();

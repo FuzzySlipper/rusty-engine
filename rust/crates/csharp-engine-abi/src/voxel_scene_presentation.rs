@@ -5,8 +5,8 @@
 //! renderer handles, or a parallel scene representation.
 
 use crate::{
-    NativeEngineDiagnosticLeaseHandle, NativeMaterialHandle, NativeOperationErrorReceipt,
-    NativeSpatialFace, NativeSpatialSessionHandle,
+    NativeMaterialHandle, NativeOperationErrorReceipt, NativeSpatialFace,
+    NativeSpatialSessionHandle,
 };
 use std::ffi::c_void;
 
@@ -194,9 +194,5 @@ pub struct NativeVoxelScenePresentationApi {
     pub project_scene_directional: NativeProjectVoxelSceneDirectional,
     pub update_scene_directional: NativeUpdateVoxelScenePresentationDirectional,
     pub read_material_mapping: NativeReadVoxelSceneMaterialMapping,
-    pub destroy_operation_diagnostic_lease: NativeDestroyVoxelSceneOperationDiagnosticLease,
     pub destroy_material_mapping_lease: NativeDestroyVoxelSceneMaterialMappingLease,
 }
-
-pub type NativeDestroyVoxelSceneOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;

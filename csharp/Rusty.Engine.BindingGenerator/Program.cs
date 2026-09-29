@@ -182,16 +182,12 @@ internal sealed class BindingModel
     private static void ValidateOperationErrorReceipt(string family, string method, string signature, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
     {
         if (!structs.TryGetValue("NativeOperationErrorReceipt", out Struct? value) || value is null) { Fail(family, method, signature, "operation error receipt was not emitted"); return; }
-        if (value.Fields.Count != 4
-            || value.Fields[0].Name != "service" || Bare(value.Fields[0].Type) != "NativeUtf8Slice"
-            || value.Fields[1].Name != "operation" || Bare(value.Fields[1].Type) != "NativeUtf8Slice"
-            || value.Fields[2].Name != "status" || Bare(value.Fields[2].Type) is not ("int" or "int32_t")
-            || value.Fields[3].Name != "diagnostics" || Bare(value.Fields[3].Type) != "NativeEngineDiagnosticLease")
+        if (value.Fields.Count != 2
+            || value.Fields[0].Name != "diagnostics" || Bare(value.Fields[0].Type) != "NativeEngineDiagnostic"
+            || value.Fields[1].Name != "diagnostics_len" || Bare(value.Fields[1].Type) != "size_t")
         {
-            Fail(family, method, signature, "NativeOperationErrorReceipt must preserve service/operation/status plus NativeEngineDiagnosticLease");
-            return;
+            Fail(family, method, signature, "NativeOperationErrorReceipt must be a borrowed diagnostics/diagnostics_len collection");
         }
-        ValidateLeaseResult(family, method, signature, "NativeEngineDiagnosticLease", structs, enums);
     }
 
     private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen, string role)
@@ -582,7 +578,9 @@ internal static class Emit
         output.AppendLine("// Compiled into Rusty.Engine beside the public contracts and values.");
         output.AppendLine("internal static unsafe class NativeCall").AppendLine("{");
         output.AppendLine("    internal static void Require(string service, string operation, int status) { if (status != 1) throw new EngineCallException(service, operation, status); }");
-        output.AppendLine("    internal static void Require(string service, string operation, int status, NativeOperationErrorReceipt error, void* context, delegate* unmanaged[Cdecl]<void*, NativeEngineDiagnosticLeaseHandle, int> destroy) { if (status == 1) { if (error.diagnostics.handle.value == 0) return; int disposeStatus = destroy(context, error.diagnostics.handle); Require(service, \"DestroyOperationDiagnosticLease\", disposeStatus); throw new InvalidOperationException($\"Rusty Engine {service}.{operation} returned success with an operation diagnostic lease.\"); } ReadOnlyMemory<EngineDiagnostic> diagnostics = ReadOnlyMemory<EngineDiagnostic>.Empty; string receiptService = service; string receiptOperation = operation; int receiptStatus = error.status == 0 ? status : error.status; try { if (error.diagnostics.handle.value != 0) diagnostics = NativeConversions.CopyLease(error.diagnostics); if (error.service.len != 0) receiptService = NativeConversions.CopyUtf8(error.service); if (error.operation.len != 0) receiptOperation = NativeConversions.CopyUtf8(error.operation); } finally { if (error.diagnostics.handle.value != 0) { int disposeStatus = destroy(context, error.diagnostics.handle); Require(service, \"DestroyOperationDiagnosticLease\", disposeStatus); } } throw new EngineCallException(receiptService, receiptOperation, receiptStatus, diagnostics); }");
+        output.AppendLine("    internal static void Require(string service, string operation, int status, NativeOperationErrorReceipt error) { if (status == 1) return; throw new EngineCallException(service, operation, status, CopyDiagnostics(error)); }");
+        output.AppendLine("    // The receipt borrows bridge storage that the next call on that service replaces.");
+        output.AppendLine("    private static ReadOnlyMemory<EngineDiagnostic> CopyDiagnostics(NativeOperationErrorReceipt error) { if (error.diagnostics_len == 0) return ReadOnlyMemory<EngineDiagnostic>.Empty; if (error.diagnostics is null) throw new InvalidOperationException(\"Native operation receipt had diagnostics without storage.\"); EngineDiagnostic[] copy = new EngineDiagnostic[checked((int)error.diagnostics_len)]; for (int index = 0; index < copy.Length; index++) { NativeEngineDiagnostic value = error.diagnostics[index]; copy[index] = new EngineDiagnostic(NativeConversions.CopyUtf8(value.code), NativeConversions.CopyUtf8(value.message), NativeConversions.CopyUtf8(value.source)); } return copy; }");
         output.AppendLine("}").AppendLine();
         EmitConversions(output, model);
         foreach (Service service in model.Services)
@@ -1127,9 +1125,7 @@ internal static class Emit
             output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", {status});");
             return;
         }
-        DestroyOperation destroy = DestroyLeaseFor(model, operationService, "NativeEngineDiagnosticLease");
-        string native = NativeTableField(emittedService, destroy.Owner);
-        output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", {status}, {errorReadout}, {native}.context, {native}.{RawIdentifier(destroy.Name)}.Pointer);");
+        output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", {status}, {errorReadout});");
     }
 
     private static string BorrowedFieldExpression(Field field, string requestArgument)
@@ -1280,7 +1276,6 @@ internal static class Emit
         {
             Callback callback = model.Callbacks[callbackName];
             if (IsDestroy(callback)) continue;
-            if (BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray())) names.Add(DestroyLeaseFor(model, service, "NativeEngineDiagnosticLease").Owner.Name);
             string? result = ResultParameter(callback);
             if (result is null) continue;
             if (BindingModel.IsLeaseResult(result, model.Structs)) names.Add(DestroyLeaseFor(model, service, result).Owner.Name);

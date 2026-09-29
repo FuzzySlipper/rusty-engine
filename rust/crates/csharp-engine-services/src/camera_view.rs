@@ -1229,17 +1229,6 @@ pub(crate) unsafe extern "C" fn set_sky_background_blend(
     }
 }
 
-pub(crate) unsafe extern "C" fn destroy_operation_diagnostic_lease(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
-    bridge.operation_diagnostics.destroy(handle)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

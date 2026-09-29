@@ -5,7 +5,7 @@ use asset_catalog::portable::{PortableAssets, PortableDefinition};
 pub(super) struct PortableState {
     assets: BTreeMap<u64, Asset>,
     leases: BTreeMap<u64, Readout>,
-    errors: BTreeMap<u64, Diagnostic>,
+    errors: crate::operation_diagnostics::OperationDiagnostics,
     next: u64,
 }
 struct Asset {
@@ -27,10 +27,6 @@ fn slice(s: &str) -> NativeUtf8Slice {
         len: s.len(),
     }
 }
-struct Diagnostic {
-    _message: String,
-    _row: Box<NativeEngineDiagnostic>,
-}
 #[derive(Default)]
 struct Readout {
     text: Text,
@@ -48,41 +44,9 @@ impl PortableState {
         self.next += 1;
         self.next
     }
-    fn fail(
-        &mut self,
-        operation: &'static str,
-        message: String,
-        out: *mut NativeOperationErrorReceipt,
-    ) -> i32 {
-        if !out.is_null() {
-            let value = self.id();
-            let row = Box::new(NativeEngineDiagnostic {
-                code: slice("portable_asset"),
-                message: slice(&message),
-                source: slice(""),
-            });
-            let diagnostics = NativeEngineDiagnosticLease {
-                handle: NativeEngineDiagnosticLeaseHandle { value },
-                diagnostics: &*row,
-                diagnostics_len: 1,
-            };
-            self.errors.insert(
-                value,
-                Diagnostic {
-                    _message: message,
-                    _row: row,
-                },
-            );
-            // Operation names are static literals at every call site.
-            unsafe {
-                *out = NativeOperationErrorReceipt {
-                    service: slice("Content"),
-                    operation: slice(operation),
-                    status: 0,
-                    diagnostics,
-                };
-            }
-        }
+    fn fail(&mut self, message: String, out: *mut NativeOperationErrorReceipt) -> i32 {
+        self.errors
+            .retain_all([("portable_asset", message.as_str(), "")], out);
         0
     }
 }
@@ -157,7 +121,7 @@ pub(super) unsafe extern "C" fn load(
             }
             ABI_OK
         }
-        Err(message) => bridge.portable.fail("LoadPortableAsset", message, error),
+        Err(message) => bridge.portable.fail(message, error),
     }
 }
 pub(super) unsafe extern "C" fn destroy(
@@ -201,9 +165,7 @@ pub(super) unsafe extern "C" fn open_member(
             }
             None => 0,
         },
-        Err(message) => bridge
-            .portable
-            .fail("OpenPortableAssetMember", message, error),
+        Err(message) => bridge.portable.fail(message, error),
     }
 }
 fn vec2(v: [u32; 2]) -> NativeVec2 {
@@ -439,16 +401,6 @@ pub(super) unsafe extern "C" fn destroy_readout(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
     i32::from(bridge.portable.leases.remove(&handle.value).is_some())
-}
-pub(super) unsafe extern "C" fn destroy_diagnostic(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    i32::from(bridge.portable.errors.remove(&handle.value).is_some())
 }
 
 #[cfg(test)]

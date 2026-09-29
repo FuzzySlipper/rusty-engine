@@ -94,8 +94,6 @@ fn engine_api(
         authored_content: crate::authored_content::api(authored_content_bridge),
         graphics: NativeGraphicsApi {
             publish_changes: crate::appearance::publish_appearance_changes,
-            destroy_operation_diagnostic_lease:
-                crate::appearance::destroy_animation_admission_diagnostic,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
             read_texture_info: crate::appearance::read_texture_info,
@@ -149,8 +147,6 @@ fn engine_api(
             create_authored_material: crate::appearance::create_authored_material,
         },
         presentation: NativePresentationApi {
-            destroy_operation_diagnostic_lease:
-                crate::appearance::destroy_animation_admission_diagnostic,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             create_billboard: crate::presentation::create_billboard,
             update_billboard: crate::presentation::update_billboard,
@@ -174,8 +170,6 @@ fn engine_api(
         video: crate::video::api(video_bridge),
         render_output: crate::render_output::api(render_output_bridge),
         camera_view: NativeCameraViewApi {
-            destroy_operation_diagnostic_lease:
-                crate::camera_view::destroy_operation_diagnostic_lease,
             context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
             create_camera: crate::camera_view::create_camera,
             update_camera: crate::camera_view::update_camera,
@@ -1123,8 +1117,8 @@ mod tests {
                 "sprite atlas is not live",
             ),
         ] {
-            assert_eq!(receipt.diagnostics.diagnostics_len, 1);
-            let diagnostic = unsafe { &*receipt.diagnostics.diagnostics };
+            assert_eq!(receipt.diagnostics_len, 1);
+            let diagnostic = unsafe { &*receipt.diagnostics };
             assert_eq!(
                 unsafe { borrowed_utf8(diagnostic.code.bytes, diagnostic.code.len, "code") }
                     .unwrap(),
@@ -1138,42 +1132,6 @@ mod tests {
                 detail
             );
         }
-        assert_eq!(
-            unsafe {
-                (api.audio.destroy_operation_diagnostic_lease)(
-                    api.audio.context,
-                    audio_error.diagnostics.handle,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe {
-                (api.graphics.destroy_operation_diagnostic_lease)(
-                    api.graphics.context,
-                    graphics_error.diagnostics.handle,
-                )
-            },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe {
-                (api.audio.destroy_operation_diagnostic_lease)(
-                    api.audio.context,
-                    audio_error.diagnostics.handle,
-                )
-            },
-            0
-        );
-        assert_eq!(
-            unsafe {
-                (api.graphics.destroy_operation_diagnostic_lease)(
-                    api.graphics.context,
-                    graphics_error.diagnostics.handle,
-                )
-            },
-            0
-        );
     }
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 
@@ -1616,11 +1574,7 @@ mod tests {
             },
             0
         );
-        assert_spatial_admission_diagnostic(
-            &api.spatial,
-            error,
-            "CSHARP_SPATIAL_CONTENT_COLLISION",
-        );
+        assert_spatial_admission_diagnostic(error, "CSHARP_SPATIAL_CONTENT_COLLISION");
         let mut after_rejection = NativeSpatialContentArtifactReadout::default();
         assert_eq!(
             unsafe {
@@ -1657,39 +1611,16 @@ mod tests {
             0,
             "a stale Content reference was accepted"
         );
-        assert_spatial_admission_diagnostic(
-            &api.spatial,
-            error,
-            "CSHARP_SPATIAL_CONTENT_REFERENCE",
-        );
+        assert_spatial_admission_diagnostic(error, "CSHARP_SPATIAL_CONTENT_REFERENCE");
         let _ = services.finish_call();
     }
-    fn assert_spatial_admission_diagnostic(
-        api: &NativeSpatialApi,
-        error: NativeOperationErrorReceipt,
-        expected: &str,
-    ) {
-        assert_eq!(error.diagnostics.diagnostics_len, 1);
-        let diagnostic = unsafe { *error.diagnostics.diagnostics };
+    fn assert_spatial_admission_diagnostic(error: NativeOperationErrorReceipt, expected: &str) {
+        assert_eq!(error.diagnostics_len, 1);
+        let diagnostic = unsafe { *error.diagnostics };
         let text = |value: NativeUtf8Slice| unsafe {
             std::str::from_utf8(std::slice::from_raw_parts(value.bytes, value.len)).unwrap()
         };
-        assert_eq!(text(error.service), "Spatial");
-        assert_eq!(text(error.operation), "ReplaceContentArtifact");
         assert_eq!(text(diagnostic.code), expected);
         assert!(!text(diagnostic.message).is_empty());
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
-            },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(api.context, error.diagnostics.handle)
-            },
-            0,
-            "diagnostic lease must be released exactly once"
-        );
     }
 }

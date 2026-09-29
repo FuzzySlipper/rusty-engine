@@ -183,23 +183,14 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         },
         0
     );
-    assert_eq!(generate_error.diagnostics.diagnostics_len, 1);
-    let diagnostic = unsafe { &*generate_error.diagnostics.diagnostics };
+    assert_eq!(generate_error.diagnostics_len, 1);
+    let diagnostic = unsafe { &*generate_error.diagnostics };
     let message =
         unsafe { std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len) };
     assert!(std::str::from_utf8(message)
         .unwrap()
         .contains("budget exceeded"));
     assert_eq!(mesh.value, 0, "failed extraction never publishes a mesh");
-    let lease = generate_error.diagnostics.handle;
-    assert_eq!(
-        unsafe { (api.destroy_operation_diagnostic_lease)(api.context, lease) },
-        ABI_OK
-    );
-    assert_eq!(
-        unsafe { (api.destroy_operation_diagnostic_lease)(api.context, lease) },
-        0
-    );
     let mut bounded_request = NativeImplicitGenerateRequest {
         field,
         source: carved,
@@ -237,12 +228,6 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         ABI_OK
     );
     assert_eq!(mesh.value, 0);
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(api.context, generate_error.diagnostics.handle)
-        },
-        ABI_OK
-    );
     bounded_request.max_extraction_triangles = 10_000;
     // A caught budget rejection must allow successful generation and the
     // appearance/implicit callback commit below, without restarting the host.
@@ -281,7 +266,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     assert_eq!(generation.boundary_edges, 0);
     assert_eq!(generation.non_manifold_edges, 0);
     assert_eq!(generation.inconsistent_winding_edges, 0);
-    assert_eq!(generate_error.diagnostics.handle.value, 0);
+    assert_eq!(generate_error.diagnostics_len, 0);
 
     let mut first = NativeAppearanceHandle::default();
     let mut second = NativeAppearanceHandle::default();
@@ -600,13 +585,7 @@ fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
         },
         0
     );
-    assert_ne!(receipt.diagnostics.handle.value, 0);
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
-        },
-        ABI_OK
-    );
+    assert_ne!(receipt.diagnostics_len, 0);
     let retained = implicit
         .take_call()
         .expect("expected generation readout rejection leaves the call usable");
@@ -764,9 +743,9 @@ fn native_implicit_nodes_reject_foreign_tokens() {
         },
         0
     );
-    assert_ne!(malformed_error.diagnostics.handle.value, 0);
-    assert_eq!(malformed_error.diagnostics.diagnostics_len, 1);
-    let diagnostic = unsafe { *malformed_error.diagnostics.diagnostics };
+    assert_ne!(malformed_error.diagnostics_len, 0);
+    assert_eq!(malformed_error.diagnostics_len, 1);
+    let diagnostic = unsafe { *malformed_error.diagnostics };
     let code = unsafe {
         std::str::from_utf8(std::slice::from_raw_parts(
             diagnostic.code.bytes,
@@ -776,24 +755,6 @@ fn native_implicit_nodes_reject_foreign_tokens() {
     .unwrap();
     assert_eq!(code, "CSHARP_SPATIAL_POINTER");
     assert!(diagnostic.message.len > 0);
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(
-                api.context,
-                malformed_error.diagnostics.handle,
-            )
-        },
-        ABI_OK
-    );
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(
-                api.context,
-                malformed_error.diagnostics.handle,
-            )
-        },
-        0
-    );
     appearance.end_call();
     implicit.end_call();
 
@@ -816,9 +777,8 @@ fn native_implicit_nodes_reject_foreign_tokens() {
         },
         0
     );
-    assert_eq!(sampling_error.status, 0);
-    assert_eq!(sampling_error.diagnostics.diagnostics_len, 1);
-    let diagnostic = unsafe { *sampling_error.diagnostics.diagnostics };
+    assert_eq!(sampling_error.diagnostics_len, 1);
+    let diagnostic = unsafe { *sampling_error.diagnostics };
     let message = unsafe {
         std::str::from_utf8(std::slice::from_raw_parts(
             diagnostic.message.bytes,
@@ -827,12 +787,6 @@ fn native_implicit_nodes_reject_foreign_tokens() {
     }
     .expect("implicit sampling diagnostic is UTF-8");
     assert!(message.contains("requires interpolated material boundaries"));
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(api.context, sampling_error.diagnostics.handle)
-        },
-        ABI_OK
-    );
     let retained = implicit
         .take_call()
         .expect("expected sampling rejection leaves the implicit call usable");
@@ -854,16 +808,7 @@ fn native_implicit_nodes_reject_foreign_tokens() {
         },
         0
     );
-    assert_ne!(foreign_node_error.diagnostics.handle.value, 0);
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(
-                api.context,
-                foreign_node_error.diagnostics.handle,
-            )
-        },
-        ABI_OK
-    );
+    assert_ne!(foreign_node_error.diagnostics_len, 0);
     appearance.end_call();
     implicit.end_call();
 
@@ -886,16 +831,7 @@ fn native_implicit_nodes_reject_foreign_tokens() {
         },
         0
     );
-    assert_ne!(foreign_region_error.diagnostics.handle.value, 0);
-    assert_eq!(
-        unsafe {
-            (api.destroy_operation_diagnostic_lease)(
-                api.context,
-                foreign_region_error.diagnostics.handle,
-            )
-        },
-        ABI_OK
-    );
+    assert_ne!(foreign_region_error.diagnostics_len, 0);
     appearance.end_call();
     implicit.end_call();
 }
@@ -998,7 +934,7 @@ fn implicit_backend_panics_return_their_diagnostic() {
         let mut result = 0_u32;
         let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         let status = if operation_receipt {
-            super::call_operation(context, &mut result, &mut receipt, b"Probe", |_| {
+            super::call_operation(context, &mut result, &mut receipt, |_| {
                 panic!("controlled implicit backend failure")
             })
         } else {
@@ -1007,9 +943,9 @@ fn implicit_backend_panics_return_their_diagnostic() {
             })
         };
         assert_eq!(status, 0);
-        assert_ne!(receipt.diagnostics.handle.value, 0);
-        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
-        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        assert_ne!(receipt.diagnostics_len, 0);
+        assert_eq!(receipt.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics };
         let code = unsafe {
             std::str::from_utf8(std::slice::from_raw_parts(
                 diagnostic.code.bytes,
@@ -1026,12 +962,6 @@ fn implicit_backend_panics_return_their_diagnostic() {
         }
         .unwrap();
         assert!(message.contains("panicked"));
-        assert_eq!(
-            unsafe {
-                super::destroy_operation_diagnostic_lease(context, receipt.diagnostics.handle)
-            },
-            ABI_OK
-        );
         bridge.end_call();
     }
 }

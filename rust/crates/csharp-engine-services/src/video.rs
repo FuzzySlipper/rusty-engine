@@ -407,7 +407,6 @@ call!(read_video_fact, read_fact, request: NativeVideoRealizationFactAtRequest =
 pub(crate) fn api(bridge: &mut RuntimeVideoBridge) -> NativeVideoApi {
     NativeVideoApi {
         context: (bridge as *mut RuntimeVideoBridge).cast(),
-        destroy_operation_diagnostic_lease,
         play: play_video,
         play_from_content: play_video_from_content,
         stop: stop_video,
@@ -416,17 +415,6 @@ pub(crate) fn api(bridge: &mut RuntimeVideoBridge) -> NativeVideoApi {
         read_realization: read_video_realization,
         read_realization_fact_at: read_video_fact,
     }
-}
-
-unsafe extern "C" fn destroy_operation_diagnostic_lease(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeVideoBridge>() };
-    bridge.operation_diagnostics.destroy(handle)
 }
 
 #[cfg(test)]

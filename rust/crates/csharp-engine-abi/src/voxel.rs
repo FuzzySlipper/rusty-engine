@@ -1,7 +1,5 @@
-use crate::{
-    NativeEngineDiagnosticLeaseHandle, NativeOperationErrorReceipt, NativeSpatialSessionHandle,
-};
 use crate::{NativeLightDescriptor, NativeVec3};
+use crate::{NativeOperationErrorReceipt, NativeSpatialSessionHandle};
 use std::ffi::c_void;
 
 /// One signed voxel address in the session's canonical world grid.
@@ -274,8 +272,6 @@ pub type NativeApplyVoxelResidency = unsafe extern "C" fn(
     *mut NativeVoxelResidencyReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyVoxelOperationDiagnosticLease =
-    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -290,7 +286,6 @@ pub struct NativeVoxelApi {
     pub apply_edits: NativeApplyVoxelEdits,
     pub read_dirty_chunk_at: NativeReadVoxelDirtyChunkAt,
     pub apply_residency: NativeApplyVoxelResidency,
-    pub destroy_operation_diagnostic_lease: NativeDestroyVoxelOperationDiagnosticLease,
 }
 
 /// Samples direct incident light at address + offset (in voxel units). Descriptors

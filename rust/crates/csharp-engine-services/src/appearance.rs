@@ -1884,11 +1884,6 @@ struct AnimationClipInfoLease {
     _readout: Box<[NativeAnimationClipInfo]>,
 }
 
-struct AnimationAdmissionDiagnostic {
-    _error: CsharpEngineServicesError,
-    readout: Box<[NativeEngineDiagnostic]>,
-}
-
 pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
     /// Held in `state` while a product call owns the real state.
@@ -1899,8 +1894,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     imported_static: BTreeMap<String, ImportedStaticContent>,
     imported_mesh: BTreeMap<String, CsharpRenderResource>,
     imported_animated: BTreeMap<String, ImportedAnimatedContent>,
-    admission_diagnostics: BTreeMap<u64, AnimationAdmissionDiagnostic>,
-    next_admission_diagnostic: u64,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     clip_info_leases: BTreeMap<u64, AnimationClipInfoLease>,
     next_clip_info_lease: u64,
     content: Option<*const crate::content::RuntimeContentBridge>,
@@ -1983,8 +1977,7 @@ impl RuntimeAppearanceBridge {
             imported_static: BTreeMap::new(),
             imported_mesh: BTreeMap::new(),
             imported_animated: BTreeMap::new(),
-            admission_diagnostics: BTreeMap::new(),
-            next_admission_diagnostic: 1,
+            operation_diagnostics: Default::default(),
             clip_info_leases: BTreeMap::new(),
             next_clip_info_lease: 1,
             content: None,
@@ -9856,7 +9849,6 @@ pub(crate) unsafe extern "C" fn read_animation_realization_fact_at(
 
 pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnimationApi {
     NativeAnimationApi {
-        destroy_operation_diagnostic_lease: destroy_animation_admission_diagnostic,
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
         read_mesh_info: read_animated_mesh_info,
         read_clips: read_animation_clips,
@@ -10732,57 +10724,9 @@ fn animation_content_result(
             ABI_OK
         }
         Err(error) => {
-            if !receipt.is_null() {
-                let handle = bridge.next_admission_diagnostic;
-                bridge.next_admission_diagnostic += 1;
-                let utf8 = |value: &str| NativeUtf8Slice {
-                    bytes: value.as_ptr(),
-                    len: value.len(),
-                };
-                let lease = AnimationAdmissionDiagnostic {
-                    readout: vec![NativeEngineDiagnostic {
-                        code: utf8(error.code()),
-                        message: utf8(error.detail()),
-                        source: utf8(""),
-                    }]
-                    .into_boxed_slice(),
-                    _error: error,
-                };
-                unsafe {
-                    *receipt = NativeOperationErrorReceipt {
-                        service: utf8("Animation"),
-                        operation: utf8(if clip_pack {
-                            "OpenAnimationClipPackFromContent"
-                        } else {
-                            "OpenAnimatedMeshFromContent"
-                        }),
-                        status: 0,
-                        diagnostics: NativeEngineDiagnosticLease {
-                            handle: NativeEngineDiagnosticLeaseHandle { value: handle },
-                            diagnostics: lease.readout.as_ptr(),
-                            diagnostics_len: lease.readout.len(),
-                        },
-                    };
-                }
-                bridge.admission_diagnostics.insert(handle, lease);
-            }
+            bridge.operation_diagnostics.retain(&error, receipt);
             0
         }
-    }
-}
-
-pub(crate) unsafe extern "C" fn destroy_animation_admission_diagnostic(
-    context: *mut c_void,
-    handle: NativeEngineDiagnosticLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
-    if bridge.admission_diagnostics.remove(&handle.value).is_some() {
-        ABI_OK
-    } else {
-        0
     }
 }
 
@@ -10913,34 +10857,7 @@ pub(crate) fn appearance_operation(
                     "graphics operation refused its supplied handle or request",
                 )
             });
-        let handle = bridge.next_admission_diagnostic;
-        bridge.next_admission_diagnostic += 1;
-        let text = |s: &str| NativeUtf8Slice {
-            bytes: s.as_ptr(),
-            len: s.len(),
-        };
-        let lease = AnimationAdmissionDiagnostic {
-            readout: vec![NativeEngineDiagnostic {
-                code: text(error.code()),
-                message: text(error.detail()),
-                source: text(""),
-            }]
-            .into_boxed_slice(),
-            _error: error,
-        };
-        unsafe {
-            *receipt = NativeOperationErrorReceipt {
-                service: text(""),
-                operation: text(""),
-                status,
-                diagnostics: NativeEngineDiagnosticLease {
-                    handle: NativeEngineDiagnosticLeaseHandle { value: handle },
-                    diagnostics: lease.readout.as_ptr(),
-                    diagnostics_len: 1,
-                },
-            };
-        }
-        bridge.admission_diagnostics.insert(handle, lease);
+        bridge.operation_diagnostics.retain(&error, receipt);
     }
     status
 }
@@ -11032,17 +10949,12 @@ pub(super) mod tests {
             0
         });
         assert_eq!(status, 0);
-        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
-        let diagnostic = unsafe { &*receipt.diagnostics.diagnostics };
+        assert_eq!(receipt.diagnostics_len, 1);
+        let diagnostic = unsafe { &*receipt.diagnostics };
         assert_eq!(
             unsafe { borrowed_utf8(diagnostic.code.bytes, diagnostic.code.len, "code") }.unwrap(),
             "REFUSED"
         );
-        assert_eq!(
-            unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
-            ABI_OK
-        );
-        assert!(bridge.admission_diagnostics.is_empty());
         assert!(bridge.operation_error.is_none());
         bridge.end_call();
     }
@@ -11106,8 +11018,8 @@ pub(super) mod tests {
         );
         let message = unsafe {
             borrowed_utf8(
-                (*receipt.diagnostics.diagnostics).message.bytes,
-                (*receipt.diagnostics.diagnostics).message.len,
+                (*receipt.diagnostics).message.bytes,
+                (*receipt.diagnostics).message.len,
                 "diagnostic",
             )
         }
@@ -11116,10 +11028,6 @@ pub(super) mod tests {
         assert!(message.contains("MissingJoint"));
         assert_eq!(bridge.staged_ref().unwrap().outputs.len(), outputs);
         assert!(bridge.operation_error.is_none());
-        assert_eq!(
-            unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
-            ABI_OK
-        );
         // A snapshot cannot name joints, so it keeps the attachment.
         unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.unwrap();
         let call = bridge.take_staged_call();
@@ -13098,14 +13006,9 @@ pub(super) mod tests {
             0
         );
         let receipt = unsafe { receipt.assume_init() };
-        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        assert_eq!(receipt.diagnostics_len, 1);
         assert!(bridge.operation_error.is_none());
         assert!(bridge.resource(resource.value).is_ok());
-        assert_eq!(
-            unsafe { destroy_animation_admission_diagnostic(context, receipt.diagnostics.handle) },
-            ABI_OK
-        );
-        assert!(bridge.admission_diagnostics.is_empty());
         let external = external_image_glb(CHARACTER, "texture.png");
         let external_reference = admit(&mut content, &external);
         let mut external_content = content.retained_content(external_reference).unwrap();

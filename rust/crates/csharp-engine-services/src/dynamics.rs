@@ -37,8 +37,7 @@ pub(crate) struct RuntimeDynamicsBridge {
     /// pointers stay valid until the next call on this bridge.
     body_facts: Vec<NativeDynamicsBodyFact>,
     contacts: Vec<NativeDynamicsContact>,
-    diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
-    next_diagnostic_lease: u64,
+    operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
 
 #[allow(
@@ -198,8 +197,7 @@ impl RuntimeDynamicsBridge {
             next_body: 1,
             body_facts: Vec::new(),
             contacts: Vec::new(),
-            diagnostic_leases: BTreeMap::new(),
-            next_diagnostic_lease: 1,
+            operation_diagnostics: Default::default(),
         }
     }
 
@@ -1103,7 +1101,7 @@ unsafe extern "C" fn create_world(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"CreateWorld"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1118,7 +1116,7 @@ unsafe extern "C" fn destroy_world(
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.destroy_world(handle) {
         Ok(()) => ABI_OK,
-        Err(error) => refuse(context, &error, operation_error, b"DestroyWorld"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1138,7 +1136,7 @@ unsafe extern "C" fn create_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"CreateBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1159,7 +1157,7 @@ unsafe extern "C" fn create_sphere_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"CreateSphereBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1180,7 +1178,7 @@ unsafe extern "C" fn create_cuboid_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"CreateCuboidBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1201,12 +1199,7 @@ unsafe extern "C" fn create_sphere_body_with_properties(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(
-            context,
-            &error,
-            operation_error,
-            b"CreateSphereBodyWithProperties",
-        ),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1227,7 +1220,7 @@ unsafe extern "C" fn create_capsule_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"CreateCapsuleBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1242,7 +1235,7 @@ unsafe extern "C" fn bind_world_collision(
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.bind_world_collision(request) {
         Ok(()) => ABI_OK,
-        Err(error) => refuse(context, &error, operation_error, b"BindWorldCollision"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1257,7 +1250,7 @@ unsafe extern "C" fn rebase_world_origin(
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.rebase_world_origin(request) {
         Ok(()) => ABI_OK,
-        Err(error) => refuse(context, &error, operation_error, b"RebaseWorldOrigin"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1272,7 +1265,7 @@ unsafe extern "C" fn destroy_body(
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.destroy_body(handle) {
         Ok(()) => ABI_OK,
-        Err(error) => refuse(context, &error, operation_error, b"DestroyBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1291,7 +1284,7 @@ unsafe extern "C" fn step(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"Step"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1312,7 +1305,7 @@ unsafe extern "C" fn step_and_read(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"StepAndRead"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1331,7 +1324,7 @@ unsafe extern "C" fn read(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"Read"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1346,7 +1339,7 @@ unsafe extern "C" fn reset(
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.reset(request) {
         Ok(()) => ABI_OK,
-        Err(error) => refuse(context, &error, operation_error, b"Reset"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1361,7 +1354,7 @@ unsafe extern "C" fn update_body(
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.update_body(request) {
         Ok(()) => ABI_OK,
-        Err(error) => refuse(context, &error, operation_error, b"UpdateBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1380,7 +1373,7 @@ unsafe extern "C" fn read_world(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"ReadWorld"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1399,7 +1392,7 @@ unsafe extern "C" fn replace_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"ReplaceBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1418,7 +1411,7 @@ unsafe extern "C" fn replace_cuboid_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"ReplaceCuboidBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1437,7 +1430,7 @@ unsafe extern "C" fn replace_sphere_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"ReplaceSphereBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1456,7 +1449,7 @@ unsafe extern "C" fn replace_capsule_body(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(error) => refuse(context, &error, operation_error, b"ReplaceCapsuleBody"),
+        Err(error) => refuse(context, &error, operation_error),
     }
 }
 
@@ -1466,7 +1459,6 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         observe_anchor: anchor::observe_anchor,
         step_with_reactions: anchor::step_with_reactions,
         configure_ropes: chain::configure_ropes,
-        destroy_operation_diagnostic_lease: errors::destroy_operation_diagnostic_lease,
         set_chain_length: chain::set_chain_length,
         create_fixed_chain: chain::create_fixed_chain,
         create_body_chain: chain::create_body_chain,
@@ -1515,11 +1507,9 @@ unsafe extern "C" fn set_fixed_tether(
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_fixed_tether(request) {
         Ok(()) => ABI_OK,
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"SetFixedTether",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -1539,11 +1529,9 @@ unsafe extern "C" fn set_body_tether(
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.set_body_tether(request) {
         Ok(()) => ABI_OK,
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"SetBodyTether",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -1567,11 +1555,9 @@ unsafe extern "C" fn remove_tether(
             ABI_OK
         }
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"RemoveTether",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
@@ -1597,11 +1583,9 @@ unsafe extern "C" fn read_tether(
             ABI_OK
         }
         Err(error) => {
-            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.retain_operation_error(
-                &error,
-                receipt,
-                b"ReadTether",
-            );
+            unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+                .operation_diagnostics
+                .retain(&error, receipt);
             0
         }
     }
