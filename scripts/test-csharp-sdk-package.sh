@@ -155,6 +155,7 @@ EOF
 cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
 cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitAuditChecks.cs"
+cp "$repo_root/scripts/fixtures/DynamicsResultChecks.cs" "$consumer_dir/DynamicsResultChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
 cp "$repo_root/fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs" "$consumer_dir/SpatialArtifactChecks.cs"
@@ -184,6 +185,7 @@ public sealed class Product : IEngineProduct
         SpatialArtifactChecks.Run(context.Engine);
         ImplicitRecipeChecks.Run();
         ImplicitAuditChecks.Run(context.Engine);
+        DynamicsResultChecks.Run(context.Engine);
         ProductContentBundleChecks.Run(context);
         _mixedBundleChecks = new ProductContentMixedBundleChecks(context);
         _engine = context.Engine;

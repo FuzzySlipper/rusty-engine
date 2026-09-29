@@ -33,8 +33,10 @@ pub(crate) struct RuntimeDynamicsBridge {
     collision_source: SpatialCollisionSource,
     next_world: u64,
     next_body: u64,
-    step_and_read_leases: BTreeMap<u64, DynamicsStepAndReadLeaseBacking>,
-    next_step_and_read_lease: u64,
+    /// Backing for the latest borrowed step/read or world result. Returned
+    /// pointers stay valid until the next call on this bridge.
+    body_facts: Vec<NativeDynamicsBodyFact>,
+    contacts: Vec<NativeDynamicsContact>,
     diagnostic_leases: BTreeMap<u64, errors::OperationDiagnosticLease>,
     next_diagnostic_lease: u64,
 }
@@ -67,10 +69,6 @@ struct DynamicsWorld {
 struct BodyContactSummary {
     count: u32,
     latest: NativeDynamicsContactFact,
-}
-
-struct DynamicsStepAndReadLeaseBacking {
-    _bodies: Box<[NativeDynamicsStepAndReadBody]>,
 }
 
 enum BodySlot {
@@ -198,8 +196,8 @@ impl RuntimeDynamicsBridge {
             collision_source,
             next_world: 1,
             next_body: 1,
-            step_and_read_leases: BTreeMap::new(),
-            next_step_and_read_lease: 1,
+            body_facts: Vec::new(),
+            contacts: Vec::new(),
             diagnostic_leases: BTreeMap::new(),
             next_diagnostic_lease: 1,
         }
@@ -430,7 +428,7 @@ impl RuntimeDynamicsBridge {
     fn step_and_read(
         &mut self,
         request: &NativeDynamicsStepAndReadRequest,
-    ) -> Result<NativeDynamicsStepAndReadLease, CsharpEngineServicesError> {
+    ) -> Result<NativeDynamicsStepAndReadResult, CsharpEngineServicesError> {
         let actions = unsafe {
             borrowed_slice(
                 request.actions,
@@ -449,46 +447,29 @@ impl RuntimeDynamicsBridge {
         for body in bodies {
             self.world_body(request.world.value, body.value, "CSHARP_DYNAMICS_BODY")?;
         }
-        let lease_handle = Self::allocate(&mut self.next_step_and_read_lease, "step/read lease")?;
         let receipt = self.execute_step(
             request.world.value,
             request.step_seconds,
             request.steps,
             &actions,
         )?;
-        let world = self.active_world(request.world.value)?;
-        let copied = bodies
-            .iter()
-            .map(|body| NativeDynamicsStepAndReadBody {
+        let world = match self.worlds.get(&request.world.value) {
+            Some(WorldSlot::Active(world)) => world,
+            _ => return Err(unknown("world", request.world.value)),
+        };
+        self.body_facts.clear();
+        self.body_facts
+            .extend(bodies.iter().map(|body| NativeDynamicsBodyFact {
                 body: NativeDynamicsBodyReference { value: body.value },
                 readout: world.readout(body.value),
-            })
-            .collect::<Box<[_]>>();
-        let lease = NativeDynamicsStepAndReadLease {
-            handle: NativeDynamicsStepAndReadLeaseHandle {
-                value: lease_handle,
-            },
-            bodies: copied.as_ptr(),
-            bodies_len: copied.len(),
+            }));
+        Ok(NativeDynamicsStepAndReadResult {
+            bodies: self.body_facts.as_ptr(),
+            bodies_len: self.body_facts.len(),
             generation: receipt.generation,
             body_count: receipt.body_count,
             contact_count: receipt.contact_count,
-        };
-        self.step_and_read_leases.insert(
-            lease_handle,
-            DynamicsStepAndReadLeaseBacking { _bodies: copied },
-        );
-        Ok(lease)
-    }
-
-    fn destroy_step_and_read_lease(
-        &mut self,
-        handle: NativeDynamicsStepAndReadLeaseHandle,
-    ) -> Result<(), CsharpEngineServicesError> {
-        if handle.value == 0 || self.step_and_read_leases.remove(&handle.value).is_none() {
-            return Err(unknown("step/read lease", handle.value));
-        }
-        Ok(())
+        })
     }
 
     fn step_actions(
@@ -567,43 +548,6 @@ impl RuntimeDynamicsBridge {
             .map_err(solver_error("CSHARP_DYNAMICS_RESET"))
     }
 
-    fn read_body_at(
-        &mut self,
-        request: NativeDynamicsBodyAtRequest,
-    ) -> Result<NativeDynamicsBodyAtReceipt, CsharpEngineServicesError> {
-        let world = self.active_world(request.world.value)?;
-        let Some(handle) = world.bodies.keys().nth(request.index as usize).copied() else {
-            return Ok(NativeDynamicsBodyAtReceipt::default());
-        };
-        Ok(NativeDynamicsBodyAtReceipt {
-            present: true,
-            body: NativeDynamicsBodyReference { value: handle },
-            readout: world.readout(handle),
-        })
-    }
-
-    fn read_contact_at(
-        &mut self,
-        request: NativeDynamicsContactAtRequest,
-    ) -> Result<NativeDynamicsContactAtReceipt, CsharpEngineServicesError> {
-        let world = self.active_world(request.world.value)?;
-        let Some(contact) = world.solver.contacts().get(request.index as usize) else {
-            return Ok(NativeDynamicsContactAtReceipt::default());
-        };
-        Ok(NativeDynamicsContactAtReceipt {
-            present: true,
-            environment: contact.second.is_none(),
-            first: NativeDynamicsBodyReference {
-                value: contact.first.0,
-            },
-            second: NativeDynamicsBodyReference {
-                value: contact.second.map_or(0, |body| body.0),
-            },
-            impulse: native_vec3(vec3_f32(contact.impulse)),
-            impulse_magnitude: contact.impulse_magnitude as f32,
-        })
-    }
-
     fn replace_body(
         &mut self,
         request: NativeDynamicsReplaceBodyRequest,
@@ -679,12 +623,42 @@ impl RuntimeDynamicsBridge {
     fn read_world(
         &mut self,
         request: NativeDynamicsWorldReadRequest,
-    ) -> Result<NativeDynamicsWorldReadout, CsharpEngineServicesError> {
-        let world = self.active_world(request.world.value)?;
-        Ok(NativeDynamicsWorldReadout {
+    ) -> Result<NativeDynamicsWorldResult, CsharpEngineServicesError> {
+        let world = match self.worlds.get(&request.world.value) {
+            Some(WorldSlot::Active(world)) => world,
+            Some(WorldSlot::Tombstoned) => return Err(tombstoned("world")),
+            None => return Err(unknown("world", request.world.value)),
+        };
+        self.body_facts.clear();
+        self.body_facts
+            .extend(world.bodies.keys().map(|&body| NativeDynamicsBodyFact {
+                body: NativeDynamicsBodyReference { value: body },
+                readout: world.readout(body),
+            }));
+        self.contacts.clear();
+        self.contacts.extend(
+            world
+                .solver
+                .contacts()
+                .iter()
+                .map(|contact| NativeDynamicsContact {
+                    environment: contact.second.is_none(),
+                    first: NativeDynamicsBodyReference {
+                        value: contact.first.0,
+                    },
+                    second: NativeDynamicsBodyReference {
+                        value: contact.second.map_or(0, |body| body.0),
+                    },
+                    impulse: native_vec3(vec3_f32(contact.impulse)),
+                    impulse_magnitude: contact.impulse_magnitude as f32,
+                }),
+        );
+        Ok(NativeDynamicsWorldResult {
+            bodies: self.body_facts.as_ptr(),
+            bodies_len: self.body_facts.len(),
+            contacts: self.contacts.as_ptr(),
+            contacts_len: self.contacts.len(),
             generation: world.solver.generation(),
-            body_count: world.bodies.len() as u32,
-            contact_count: world.solver.contacts().len() as u32,
         })
     }
 
@@ -1324,36 +1298,21 @@ unsafe extern "C" fn step(
 unsafe extern "C" fn step_and_read(
     context: *mut c_void,
     request: *const NativeDynamicsStepAndReadRequest,
-    lease: *mut NativeDynamicsStepAndReadLease,
+    result: *mut NativeDynamicsStepAndReadResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     clear_receipt(operation_error);
-    if context.is_null() || request.is_null() || lease.is_null() {
+    if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
         .step_and_read(unsafe { &*request })
     {
         Ok(value) => {
-            unsafe { *lease = value };
+            unsafe { *result = value };
             ABI_OK
         }
         Err(error) => refuse(context, &error, operation_error, b"StepAndRead"),
-    }
-}
-
-unsafe extern "C" fn destroy_step_and_read_lease(
-    context: *mut c_void,
-    handle: NativeDynamicsStepAndReadLeaseHandle,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
-        .destroy_step_and_read_lease(handle)
-    {
-        Ok(()) => ABI_OK,
-        Err(_) => 0,
     }
 }
 
@@ -1409,7 +1368,7 @@ unsafe extern "C" fn update_body(
 unsafe extern "C" fn read_world(
     context: *mut c_void,
     request: NativeDynamicsWorldReadRequest,
-    readout: *mut NativeDynamicsWorldReadout,
+    readout: *mut NativeDynamicsWorldResult,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     clear_receipt(operation_error);
@@ -1422,44 +1381,6 @@ unsafe extern "C" fn read_world(
             ABI_OK
         }
         Err(error) => refuse(context, &error, operation_error, b"ReadWorld"),
-    }
-}
-
-unsafe extern "C" fn read_body_at(
-    context: *mut c_void,
-    request: NativeDynamicsBodyAtRequest,
-    receipt: *mut NativeDynamicsBodyAtReceipt,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    clear_receipt(operation_error);
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.read_body_at(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(error) => refuse(context, &error, operation_error, b"ReadBodyAt"),
-    }
-}
-
-unsafe extern "C" fn read_contact_at(
-    context: *mut c_void,
-    request: NativeDynamicsContactAtRequest,
-    receipt: *mut NativeDynamicsContactAtReceipt,
-    operation_error: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    clear_receipt(operation_error);
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.read_contact_at(request) {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(error) => refuse(context, &error, operation_error, b"ReadContactAt"),
     }
 }
 
@@ -1568,13 +1489,10 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         destroy_body,
         step,
         step_and_read,
-        destroy_step_and_read_lease,
         read,
         reset,
         update_body,
         read_world,
-        read_body_at,
-        read_contact_at,
         replace_body,
         replace_cuboid_body,
         replace_sphere_body,
@@ -2527,8 +2445,30 @@ mod tests {
         bridge.destroy_body(parent_first_body).unwrap();
     }
 
+    /// Copies one borrowed world result, as the generated managed caller does.
+    fn world_facts(
+        bridge: &mut RuntimeDynamicsBridge,
+        world: NativeDynamicsWorldHandle,
+    ) -> (u64, Vec<NativeDynamicsBodyFact>, Vec<NativeDynamicsContact>) {
+        let result = bridge
+            .read_world(NativeDynamicsWorldReadRequest { world })
+            .unwrap();
+        (
+            result.generation,
+            borrowed_copy(result.bodies, result.bodies_len),
+            borrowed_copy(result.contacts, result.contacts_len),
+        )
+    }
+
+    fn borrowed_copy<T: Copy>(pointer: *const T, len: usize) -> Vec<T> {
+        match len {
+            0 => Vec::new(),
+            len => unsafe { std::slice::from_raw_parts(pointer, len) }.to_vec(),
+        }
+    }
+
     #[test]
-    fn step_and_read_preserves_explicit_body_order_and_releases_exactly() {
+    fn step_and_read_returns_ordered_borrowed_result_that_the_next_call_replaces() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
         let world = bridge
@@ -2564,41 +2504,47 @@ mod tests {
             torque_impulse: NativeVec3::default(),
             wake: true,
         }];
-        let selected = [second, first];
-        let lease = bridge
-            .step_and_read(&NativeDynamicsStepAndReadRequest {
-                world,
-                step_seconds: ONE_SIXTIETH_SECOND,
-                steps: 1,
-                actions: actions.as_ptr(),
-                actions_len: actions.len(),
-                bodies: selected.as_ptr(),
-                bodies_len: selected.len(),
-            })
-            .unwrap();
-        let copied = unsafe { std::slice::from_raw_parts(lease.bodies, lease.bodies_len) };
-        assert_eq!(copied.len(), 2);
-        assert_eq!(copied[0].body.value, second.value);
-        assert_eq!(copied[1].body.value, first.value);
-        assert!(copied[1].readout.linear_velocity.x > 0.0);
-        bridge.destroy_step_and_read_lease(lease.handle).unwrap();
-        assert!(bridge.destroy_step_and_read_lease(lease.handle).is_err());
+        let step = |bridge: &mut RuntimeDynamicsBridge,
+                    actions: &[NativeDynamicsAction],
+                    bodies: &[NativeDynamicsBodyHandle]| {
+            let result = bridge
+                .step_and_read(&NativeDynamicsStepAndReadRequest {
+                    world,
+                    step_seconds: ONE_SIXTIETH_SECOND,
+                    steps: 1,
+                    actions: actions.as_ptr(),
+                    actions_len: actions.len(),
+                    bodies: bodies.as_ptr(),
+                    bodies_len: bodies.len(),
+                })
+                .unwrap();
+            (
+                result.generation,
+                borrowed_copy(result.bodies, result.bodies_len),
+            )
+        };
 
-        let duplicate = [first, first];
-        let lease = bridge
-            .step_and_read(&NativeDynamicsStepAndReadRequest {
-                world,
-                step_seconds: ONE_SIXTIETH_SECOND,
-                steps: 1,
-                actions: std::ptr::null(),
-                actions_len: 0,
-                bodies: duplicate.as_ptr(),
-                bodies_len: duplicate.len(),
-            })
-            .unwrap();
-        let copied = unsafe { std::slice::from_raw_parts(lease.bodies, lease.bodies_len) };
-        assert_eq!(copied[0].body.value, copied[1].body.value);
-        bridge.destroy_step_and_read_lease(lease.handle).unwrap();
+        let (ordinary_generation, ordinary) = step(&mut bridge, &actions, &[second, first]);
+        assert_eq!(ordinary.len(), 2);
+        assert_eq!(ordinary[0].body.value, second.value);
+        assert_eq!(ordinary[1].body.value, first.value);
+        assert!(ordinary[1].readout.linear_velocity.x > 0.0);
+
+        // An empty selection still steps exactly once.
+        let (empty_generation, empty) = step(&mut bridge, &[], &[]);
+        assert!(empty.is_empty());
+        assert_eq!(empty_generation, ordinary_generation + 1);
+
+        // A larger selection grows the bridge buffer inside the one call; the
+        // step is not repeated to fit the result.
+        let many = [first, second, first, second, first, second, first, second];
+        let (grown_generation, grown) = step(&mut bridge, &[], &many);
+        assert_eq!(grown_generation, empty_generation + 1);
+        assert_eq!(grown.len(), many.len());
+        for (fact, body) in grown.iter().zip(many) {
+            assert_eq!(fact.body.value, body.value);
+        }
+        assert_eq!(bridge.body_facts.len(), many.len());
     }
 
     #[test]
@@ -2661,20 +2607,10 @@ mod tests {
                 },
             })
             .unwrap();
-        assert_eq!(
-            bridge
-                .read_world(NativeDynamicsWorldReadRequest { world })
-                .unwrap()
-                .body_count,
-            1
-        );
-        let first = bridge
-            .read_body_at(NativeDynamicsBodyAtRequest { world, index: 0 })
-            .unwrap();
+        let (_, bodies, _) = world_facts(&mut bridge, world);
+        assert_eq!(bodies.len(), 1);
         assert!(
-            first.present
-                && first.body.value == cuboid.value
-                && first.readout.mass_properties.available
+            bodies[0].body.value == cuboid.value && bodies[0].readout.mass_properties.available
         );
         bridge
             .update_body(NativeDynamicsUpdateBodyRequest {
@@ -2862,14 +2798,9 @@ mod tests {
             })
             .unwrap();
         assert!(contact.contact_count > 0);
-        let indexed = bridge
-            .read_contact_at(NativeDynamicsContactAtRequest { world, index: 0 })
-            .unwrap();
+        let indexed = world_facts(&mut bridge, world).2[0];
         assert!(
-            indexed.present
-                && indexed.environment
-                && indexed.first.value == body.value
-                && indexed.second.value == 0
+            indexed.environment && indexed.first.value == body.value && indexed.second.value == 0
         );
 
         let readout = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
@@ -3085,13 +3016,9 @@ mod tests {
             ABI_OK
         );
 
-        let before_world = bridge
-            .read_world(NativeDynamicsWorldReadRequest { world })
-            .unwrap();
+        let (before_generation, _, before_contacts) = world_facts(&mut bridge, world);
         let before_body = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
-        let before_contact = bridge
-            .read_contact_at(NativeDynamicsContactAtRequest { world, index: 0 })
-            .unwrap();
+        let before_contact = before_contacts[0];
         bridge
             .rebase_world_origin(NativeDynamicsRebaseWorldOriginRequest {
                 world,
@@ -3117,14 +3044,10 @@ mod tests {
                 local_anchor: [0.0; 3]
             }
         );
-        let after_world = bridge
-            .read_world(NativeDynamicsWorldReadRequest { world })
-            .unwrap();
+        let (after_generation, _, after_contacts) = world_facts(&mut bridge, world);
         let after_body = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
-        let after_contact = bridge
-            .read_contact_at(NativeDynamicsContactAtRequest { world, index: 0 })
-            .unwrap();
-        assert_eq!(after_world.generation, before_world.generation);
+        let after_contact = after_contacts[0];
+        assert_eq!(after_generation, before_generation);
         assert_eq!(
             after_body.transform.translation.x,
             before_body.transform.translation.x - 5.0
@@ -3143,7 +3066,7 @@ mod tests {
             before_body.angular_velocity.y
         );
         assert_eq!(after_body.sleeping, before_body.sleeping);
-        assert!(after_contact.present && after_contact.environment);
+        assert!(after_contact.environment);
         assert_eq!(after_contact.first.value, before_contact.first.value);
         assert_eq!(
             after_contact.impulse_magnitude,

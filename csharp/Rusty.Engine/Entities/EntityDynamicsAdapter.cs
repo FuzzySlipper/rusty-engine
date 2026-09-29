@@ -29,7 +29,7 @@ public readonly record struct DynamicsEntityAction(
 
 /// <summary>One native step/read and the managed writes that applied it.</summary>
 public readonly record struct EntityDynamicsAdapterReceipt(
-    DynamicsStepAndReadLeaseReceipt Native,
+    DynamicsStepAndReadResult Native,
     EntityBatchReceipt Managed);
 
 /// <summary>
@@ -65,7 +65,7 @@ public sealed class EntityDynamicsAdapter
         ReadOnlyMemory<DynamicsEntityAction> actions)
     {
         DynamicsEntityBinding[] bound = bindings.ToArray();
-        DynamicsStepAndReadLeaseReceipt native = _dynamics.StepAndRead(new DynamicsStepAndReadRequest(
+        DynamicsStepAndReadResult native = _dynamics.StepAndRead(new DynamicsStepAndReadRequest(
             _world,
             stepSeconds,
             steps,
@@ -73,7 +73,7 @@ public sealed class EntityDynamicsAdapter
             bound.Select(binding => binding.Body).ToArray()));
 
         var batch = new EntityBatch();
-        ReadOnlySpan<DynamicsStepAndReadBody> rows = native.Bodies.Span;
+        ReadOnlySpan<DynamicsBodyFact> rows = native.Bodies.Span;
         for (int index = 0; index < rows.Length; index++)
         {
             EntityId entity = bound[index].Entity;

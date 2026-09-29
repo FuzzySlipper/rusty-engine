@@ -1207,10 +1207,10 @@ public sealed class Product : IEngineProduct
                 configured)));
         _engine.Dynamics.UpdateBody(new DynamicsUpdateBodyRequest(configuredBody, configured with { Sleeping = true }));
         Require(_engine.Dynamics.Read(new DynamicsReadRequest(configuredBody)).Sleeping, "full body properties did not preserve sleep state");
-        DynamicsWorldReadout configuredWorld = _engine.Dynamics.ReadWorld(new DynamicsWorldReadRequest(world));
-        Require(configuredWorld.BodyCount == 1, "world receipt did not report the retained body");
-        DynamicsBodyAtReceipt configuredAt = _engine.Dynamics.ReadBodyAt(new DynamicsBodyAtRequest(world, 0));
-        Require(configuredAt.Present && configuredAt.Body.Value != 0 && configuredAt.Readout.MassProperties.Mass == 4.0f, "bounded body enumeration lost Engine-owned readout");
+        DynamicsWorldResult configuredWorld = _engine.Dynamics.ReadWorld(new DynamicsWorldReadRequest(world));
+        Require(configuredWorld.Bodies.Length == 1, "world result did not report the retained body");
+        DynamicsBodyFact configuredAt = configuredWorld.Bodies.Span[0];
+        Require(configuredAt.Body.Value != 0 && configuredAt.Readout.MassProperties.Mass == 4.0f, "world body readout lost Engine-owned readout");
         DynamicsBody capsule = _engine.Dynamics.CreateCapsuleBody(new DynamicsCreateCapsuleBodyRequest(
             world,
             new DynamicsCapsuleBodyConfig(
@@ -1327,8 +1327,10 @@ public sealed class Product : IEngineProduct
             && sphereContact.FirstContact.Present
             && sphereContact.FirstContact.Environment,
             "sphere contact was not projected from Engine dynamics");
-        DynamicsContactAtReceipt indexedContact = _engine.Dynamics.ReadContactAt(new DynamicsContactAtRequest(sphereWorld, 0));
-        Require(indexedContact.Present && indexedContact.Environment && indexedContact.First.Value != 0 && indexedContact.Second.Value == 0, "bounded world contact receipt lost Engine ownership facts");
+        ReadOnlyMemory<DynamicsContact> worldContacts = _engine.Dynamics.ReadWorld(new DynamicsWorldReadRequest(sphereWorld)).Contacts;
+        Require(worldContacts.Length > 0, "world result did not report the sphere contact");
+        DynamicsContact indexedContact = worldContacts.Span[0];
+        Require(indexedContact.Environment && indexedContact.First.Value != 0 && indexedContact.Second.Value == 0, "world contact result lost Engine ownership facts");
         ExpectEngineFailure(() => _engine.Dynamics.Step(new DynamicsStepRequest(sphereWorld, rejectedStepSeconds, oneStep, ReadOnlyMemory<DynamicsAction>.Empty)));
         Require(_engine.Dynamics.Read(new DynamicsReadRequest(sphere)).Equals(sphereContact), "rejected step partially published contact facts");
         sphere.Dispose();

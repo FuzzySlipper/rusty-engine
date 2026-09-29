@@ -379,7 +379,7 @@ pub struct NativeDynamicsStepReceipt {
 }
 
 /// One explicit retained body selected for correlated post-step readout.
-/// Request order is preserved in the returned lease so product-side adapters
+/// Request order is preserved in the returned result so product-side adapters
 /// can retain their own identity mapping without a native entity mirror.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -393,29 +393,21 @@ pub struct NativeDynamicsStepAndReadRequest {
     pub bodies_len: usize,
 }
 
-/// One copied post-step fact correlated with the requested retained body.
+/// One retained body and its current readout.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeDynamicsStepAndReadBody {
+pub struct NativeDynamicsBodyFact {
     pub body: NativeDynamicsBodyReference,
     pub readout: NativeDynamicsReadout,
 }
 
-/// Typed owner for one bounded copied Dynamics step/read result.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeDynamicsStepAndReadLeaseHandle {
-    pub value: u64,
-}
-
-/// Temporary Engine-owned backing for one completed Dynamics step/read. The
-/// generated managed binding copies the ordered body facts and then releases
-/// this exact lease before returning to product code.
+/// Borrowed result of one completed Dynamics step/read. `bodies` points into
+/// Dynamics bridge storage and stays valid until the next call on the same
+/// Dynamics context; the generated managed binding copies it before returning.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeDynamicsStepAndReadLease {
-    pub handle: NativeDynamicsStepAndReadLeaseHandle,
-    pub bodies: *const NativeDynamicsStepAndReadBody,
+pub struct NativeDynamicsStepAndReadResult {
+    pub bodies: *const NativeDynamicsBodyFact,
     pub bodies_len: usize,
     pub generation: u64,
     pub body_count: u32,
@@ -482,42 +474,24 @@ pub struct NativeDynamicsWorldReadRequest {
     pub world: NativeDynamicsWorldHandle,
 }
 
+/// Borrowed readout of every retained body and solver contact in one world.
+/// Both collections point into Dynamics bridge storage and stay valid until
+/// the next call on the same Dynamics context.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeDynamicsWorldReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsWorldResult {
+    pub bodies: *const NativeDynamicsBodyFact,
+    pub bodies_len: usize,
+    pub contacts: *const NativeDynamicsContact,
+    pub contacts_len: usize,
     pub generation: u64,
-    pub body_count: u32,
-    pub contact_count: u32,
 }
 
-/// Fixed-size indexed queries keep contact and body receipts bounded without
-/// exposing retained solver buffers or native memory to product code.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeDynamicsBodyAtRequest {
-    pub world: NativeDynamicsWorldHandle,
-    pub index: u32,
-}
-
+/// One solver contact from the latest successful step. `second` is zero for a
+/// contact with the bound static environment.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeDynamicsBodyAtReceipt {
-    pub present: bool,
-    pub body: NativeDynamicsBodyReference,
-    pub readout: NativeDynamicsReadout,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeDynamicsContactAtRequest {
-    pub world: NativeDynamicsWorldHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeDynamicsContactAtReceipt {
-    pub present: bool,
+pub struct NativeDynamicsContact {
     pub environment: bool,
     pub first: NativeDynamicsBodyReference,
     pub second: NativeDynamicsBodyReference,

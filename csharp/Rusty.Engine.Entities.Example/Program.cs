@@ -1063,15 +1063,13 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsReadout Read(DynamicsReadRequest request) => throw new NotSupportedException();
     public void Reset(DynamicsResetRequest request) => throw new NotSupportedException();
     public void UpdateBody(DynamicsUpdateBodyRequest request) => throw new NotSupportedException();
-    public DynamicsWorldReadout ReadWorld(DynamicsWorldReadRequest request) => throw new NotSupportedException();
-    public DynamicsBodyAtReceipt ReadBodyAt(DynamicsBodyAtRequest request) => throw new NotSupportedException();
-    public DynamicsContactAtReceipt ReadContactAt(DynamicsContactAtRequest request) => throw new NotSupportedException();
+    public DynamicsWorldResult ReadWorld(DynamicsWorldReadRequest request) => throw new NotSupportedException();
     public DynamicsBody ReplaceBody(DynamicsReplaceBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody ReplaceCuboidBody(DynamicsReplaceCuboidBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody ReplaceSphereBody(DynamicsReplaceSphereBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody ReplaceCapsuleBody(DynamicsReplaceCapsuleBodyRequest request) => throw new NotSupportedException();
 
-    public DynamicsStepAndReadLeaseReceipt StepAndRead(DynamicsStepAndReadRequest request)
+    public DynamicsStepAndReadResult StepAndRead(DynamicsStepAndReadRequest request)
     {
         StepAndReadCalls++;
         if (request.World.Handle.Value != 10 || request.Bodies.Length != 1 || request.Actions.Length > 1)
@@ -1090,8 +1088,8 @@ sealed class DynamicsServiceFake : IDynamicsService
             default,
             0,
             default);
-        return new DynamicsStepAndReadLeaseReceipt(
-            new[] { new DynamicsStepAndReadBody(new DynamicsBodyReference(body.Handle.Value), readout) },
+        return new DynamicsStepAndReadResult(
+            new[] { new DynamicsBodyFact(new DynamicsBodyReference(body.Handle.Value), readout) },
             4,
             1,
             0);

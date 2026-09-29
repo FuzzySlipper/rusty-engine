@@ -92,11 +92,9 @@ pub type NativeStepDynamics = unsafe extern "C" fn(
 pub type NativeStepAndReadDynamics = unsafe extern "C" fn(
     *mut c_void,
     *const NativeDynamicsStepAndReadRequest,
-    *mut NativeDynamicsStepAndReadLease,
+    *mut NativeDynamicsStepAndReadResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyDynamicsStepAndReadLease =
-    unsafe extern "C" fn(*mut c_void, NativeDynamicsStepAndReadLeaseHandle) -> i32;
 pub type NativeReadDynamics = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsReadRequest,
@@ -116,19 +114,7 @@ pub type NativeUpdateDynamicsBody = unsafe extern "C" fn(
 pub type NativeReadDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldReadRequest,
-    *mut NativeDynamicsWorldReadout,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadDynamicsBodyAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeDynamicsBodyAtRequest,
-    *mut NativeDynamicsBodyAtReceipt,
-    *mut NativeOperationErrorReceipt,
-) -> i32;
-pub type NativeReadDynamicsContactAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeDynamicsContactAtRequest,
-    *mut NativeDynamicsContactAtReceipt,
+    *mut NativeDynamicsWorldResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceDynamicsBody = unsafe extern "C" fn(
@@ -1269,13 +1255,10 @@ pub struct NativeDynamicsApi {
     pub destroy_body: NativeDestroyDynamicsBody,
     pub step: NativeStepDynamics,
     pub step_and_read: NativeStepAndReadDynamics,
-    pub destroy_step_and_read_lease: NativeDestroyDynamicsStepAndReadLease,
     pub read: NativeReadDynamics,
     pub reset: NativeResetDynamics,
     pub update_body: NativeUpdateDynamicsBody,
     pub read_world: NativeReadDynamicsWorld,
-    pub read_body_at: NativeReadDynamicsBodyAt,
-    pub read_contact_at: NativeReadDynamicsContactAt,
     pub replace_body: NativeReplaceDynamicsBody,
     pub replace_cuboid_body: NativeReplaceDynamicsCuboidBody,
     pub replace_sphere_body: NativeReplaceDynamicsSphereBody,

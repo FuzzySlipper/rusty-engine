@@ -117,7 +117,12 @@ Add runtime verification only for a concrete identified requirement.
    input events into C# values and forwards `ProductUpdate` to the product.
 4. The product uses named services to read or publish facts. Explicit leases
    make retained native resources disposable on the C# side; borrowed data must
-   not be stored past its documented call/lease boundary.
+   not be stored past its documented call/lease boundary. A borrowed result
+   (a `Native*Result` with pointer/`_len` collections, such as Dynamics
+   `StepAndRead` and `ReadWorld`) points into bridge storage that stays valid
+   until the next call on the same service context. The generated wrapper
+   copies it before returning, with no handle or destroy call. Other transient
+   results still use a lease and destroy call until they move to this shape.
 5. The Engine turns admitted product presentation facts into its renderer
    state. DOM UI observes Engine-supported UI/projection paths and emits
    semantic input; it does not become a second game implementation.
