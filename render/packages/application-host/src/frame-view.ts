@@ -139,7 +139,12 @@ export function mountRustyApplicationFrameView(
             `${FRAME_STREAM_PATH}?after=${after}&width=${width}&height=${height}&cssWidth=${cssWidth}`,
             { cache: 'no-store', signal: pulling.signal },
           );
-          if (response.status === 204) continue;
+          if (response.status === 204) {
+            // No newer frame within the wait. Reading the empty body finishes
+            // the request; left unread, Chromium reports it as aborted.
+            await response.arrayBuffer();
+            continue;
+          }
           if (!response.ok) throw new Error(`frame request refused: HTTP ${response.status}`);
           const frame = parseRustyApplicationStreamedFrame(new Uint8Array(await response.arrayBuffer()));
           if (frame.sequence > newest) {
