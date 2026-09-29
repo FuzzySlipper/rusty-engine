@@ -196,11 +196,15 @@ env -u CARGO -u CARGO_HOME -u RUSTUP_HOME RUSTY_OUTPUT_TEST_DIR="$output_dir" RU
     "$runtime/bin/rusty-product-host" --supervised --runtime-instance-id "$$" --product "$staged" --loader "$loader" --persistence-root "$work/persistence-$loader" < "$control_fifo" 9>&- > "$host_log" 2>&1 &
 host_pid=$!
 origin=""
-for _ in $(seq 1 40); do
+# Wait for the host itself: until it listens or exits, up to a minute. A
+# slow runner can take well over ten seconds to load CoreCLR and a GPU.
+for _ in $(seq 1 240); do
     origin=$(sed -n 's/.*listening at \(http:\/\/[^ ]*\).*/\1/p' "$host_log" | head -n 1)
     if [[ -n "$origin" ]] && curl --fail --silent "$origin/" >/dev/null; then
         break
     fi
+    origin=""
+    kill -0 "$host_pid" 2>/dev/null || break
     sleep 0.25
 done
 [[ -n "$origin" ]] || { cat "$host_log" >&2; echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not launch the CoreCLR product" >&2; exit 1; }

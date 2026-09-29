@@ -64,7 +64,9 @@ start_and_assert() {
   "$PACK/bin/rusty-product-host" --product "$product" --loader "$loader" "$@" > "$log" 2>&1 &
   local pid=$!
   local ready=false
-  for _ in $(seq 1 40); do
+  # Until the host listens or exits, up to a minute (see test-csharp-release-pair.sh).
+  for _ in $(seq 1 240); do
+    kill -0 "$pid" 2>/dev/null || break
     if grep -q "product host listening at http://" "$log"; then
       local origin
       origin="$(sed -n 's/.*listening at \(http:\/\/[^ ]*\).*/\1/p' "$log" | head -n 1)"
