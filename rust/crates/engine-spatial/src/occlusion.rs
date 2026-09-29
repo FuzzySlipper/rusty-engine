@@ -1,23 +1,10 @@
 use std::cmp::Ordering;
 
 use core_ids::EntityId;
-use entity_state::{BoundsComponent, EntityState};
 
-use crate::active_collision::active_entity_colliders;
 use crate::{CollisionRayHit, SpatialCollisionHit, StaticMeshHit, VoxelCollisionScene};
 
-/// A caller-owned world-space AABB used for one occlusion query. The entity
-/// must also be an active collider in the supplied [`EntityState`]; this value
-/// only replaces that entity's ordinary bounds for this call.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SpatialOcclusionHitboxOverride {
-    pub entity: EntityId,
-    pub min: [f64; 3],
-    pub max: [f64; 3],
-}
-
-/// One caller-supplied world-space entity box for
-/// [`SpatialOcclusionService::cast_ray_against_colliders`].
+/// One caller-supplied world-space entity box for [`SpatialOcclusionService::cast_ray`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpatialOcclusionCollider {
     pub entity: EntityId,
@@ -25,8 +12,8 @@ pub struct SpatialOcclusionCollider {
     pub max: [f64; 3],
 }
 
-/// One bounded ray against canonical world geometry and current active entity
-/// colliders. World geometry includes the voxel and retained static-mesh
+/// One bounded ray against canonical world geometry and caller-supplied entity
+/// boxes. World geometry includes the voxel and retained static-mesh
 /// projections. Callers normally ignore the source and intended target identities.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpatialOcclusionQuery<'a> {
@@ -71,7 +58,6 @@ pub enum SpatialOcclusionError {
     InvalidOrigin,
     InvalidDirection,
     InvalidMaxDistance,
-    InvalidHitboxOverride { entity: EntityId },
 }
 
 impl std::fmt::Display for SpatialOcclusionError {
@@ -82,65 +68,16 @@ impl std::fmt::Display for SpatialOcclusionError {
 
 impl std::error::Error for SpatialOcclusionError {}
 
-/// Read-only owner for combined world and retained-entity occlusion.
+/// Read-only occlusion over world geometry and caller-supplied entity boxes.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SpatialOcclusionService;
 
 impl SpatialOcclusionService {
-    /// Return the nearest hit using strict distance order. Exact cross-domain
-    /// ties prefer an entity so stable entity identity is not lost to coincident
-    /// voxel geometry; exact entity ties prefer the lower [`EntityId`].
+    /// Return the nearest hit against world geometry and the caller's entity
+    /// boxes, using strict distance order. Exact cross-domain ties prefer an
+    /// entity so stable entity identity is not lost to coincident voxel
+    /// geometry; exact entity ties prefer the lower [`EntityId`].
     pub fn cast_ray(
-        self,
-        scene: &VoxelCollisionScene,
-        entities: &EntityState,
-        query: SpatialOcclusionQuery<'_>,
-    ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
-        let _direction = validate_and_normalize(query)?;
-
-        Self::cast_ray_with_overrides(scene, entities, query, &[])
-    }
-
-    /// Variant of [`Self::cast_ray`] that replaces the active bounds for named
-    /// entities with bounded caller-owned world-space boxes. This is the
-    /// Engine implementation for product hitboxes: target eligibility and the
-    /// box dimensions stay product-owned, while normalization, filtering,
-    /// nearest ordering, and voxel/entity ties remain one shared service.
-    pub fn cast_ray_with_overrides(
-        scene: &VoxelCollisionScene,
-        entities: &EntityState,
-        query: SpatialOcclusionQuery<'_>,
-        overrides: &[SpatialOcclusionHitboxOverride],
-    ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
-        let direction = validate_and_normalize(query)?;
-        for value in overrides {
-            if !value.min.into_iter().chain(value.max).all(f64::is_finite)
-                || value.min.iter().zip(value.max).any(|(min, max)| min > &max)
-            {
-                return Err(SpatialOcclusionError::InvalidHitboxOverride {
-                    entity: value.entity,
-                });
-            }
-        }
-        let colliders = active_entity_colliders(entities).map(|collider| {
-            let (min, max) = overrides
-                .iter()
-                .find(|value| value.entity == collider.entity)
-                .map(|value| (value.min, value.max))
-                .unwrap_or_else(|| bounds_as_f64(collider.bounds));
-            SpatialOcclusionCollider {
-                entity: collider.entity,
-                min,
-                max,
-            }
-        });
-        Ok(nearest_hit(scene, query, direction, colliders))
-    }
-
-    /// Nearest hit against world geometry and caller-supplied entity boxes,
-    /// with the same ordering as [`Self::cast_ray`]. Hosts that already hold
-    /// typed collider facts use this instead of building an [`EntityState`].
-    pub fn cast_ray_against_colliders(
         scene: &VoxelCollisionScene,
         query: SpatialOcclusionQuery<'_>,
         colliders: impl IntoIterator<Item = SpatialOcclusionCollider>,
@@ -209,12 +146,6 @@ fn validate_and_normalize(
         return Err(SpatialOcclusionError::InvalidDirection);
     }
     Ok(query.direction.map(|value| value / length))
-}
-
-fn bounds_as_f64(bounds: BoundsComponent) -> ([f64; 3], [f64; 3]) {
-    let min = bounds.min.to_array().map(f64::from);
-    let max = bounds.max.to_array().map(f64::from);
-    (min, max)
 }
 
 fn ray_aabb_distance(

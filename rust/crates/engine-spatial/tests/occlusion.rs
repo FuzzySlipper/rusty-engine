@@ -1,96 +1,47 @@
 use core_ids::EntityId;
-use core_math::Vec3;
 use engine_spatial::{
-    EntityMotionCommand, EntityMotionOutcome, EntityMotionService, SpatialOcclusionError,
-    SpatialOcclusionHit, SpatialOcclusionQuery, SpatialOcclusionService, VoxelCollisionScene,
+    SpatialOcclusionCollider, SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionQuery,
+    SpatialOcclusionService, VoxelCollisionScene,
 };
-use entity_state::{EntityCommand, EntityCommandBatch, EntityDefinition, EntityState};
 
 const MOVER: EntityId = EntityId::new(1);
 const DOOR: EntityId = EntityId::new(9);
 
+fn cube(entity: EntityId, center: [f64; 3]) -> SpatialOcclusionCollider {
+    SpatialOcclusionCollider {
+        entity,
+        min: center.map(|value| value - 0.5),
+        max: center.map(|value| value + 0.5),
+    }
+}
+
 #[test]
-fn hidden_active_door_matches_motion_until_disabled_or_moved_open() {
+fn supplied_door_box_blocks_until_omitted_or_moved_away() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
-    let mut entities = motion_fixture();
     let ignored = [MOVER];
-    let query = || SpatialOcclusionQuery {
+    let query = SpatialOcclusionQuery {
         origin: [0.0, 0.0, 0.0],
         direction: [1.0, 0.0, 0.0],
         max_distance: 10.0,
         ignored_entities: &ignored,
     };
+    let mover = cube(MOVER, [0.0, 0.0, 0.0]);
 
-    let hit = SpatialOcclusionService
-        .cast_ray(&scene, &entities, query())
-        .unwrap()
-        .unwrap();
     assert_eq!(
-        hit,
-        SpatialOcclusionHit::Entity {
+        SpatialOcclusionService::cast_ray(&scene, query, [mover, cube(DOOR, [2.0, 0.0, 0.0])])
+            .unwrap(),
+        Some(SpatialOcclusionHit::Entity {
             entity: DOOR,
             point: [1.5, 0.0, 0.0],
             distance: 1.5,
-        }
+        })
     );
-    let blocked = EntityMotionService
-        .resolve(
-            &entities,
-            EntityMotionCommand {
-                entity: MOVER,
-                delta: Vec3::new(2.0, 0.0, 0.0),
-            },
-        )
-        .unwrap();
-    assert_eq!(blocked.hit, Some(DOOR));
     assert_eq!(
-        blocked.outcome,
-        EntityMotionOutcome::Blocked { at: Vec3::ZERO }
-    );
-
-    entities
-        .apply_batch(EntityCommandBatch::new([
-            EntityCommand::SetCollisionEnabled {
-                entity: DOOR,
-                enabled: false,
-            },
-        ]))
-        .unwrap();
-    assert_eq!(
-        SpatialOcclusionService
-            .cast_ray(&scene, &entities, query())
-            .unwrap(),
+        SpatialOcclusionService::cast_ray(&scene, query, [mover]).unwrap(),
         None
     );
-    assert!(matches!(
-        EntityMotionService
-            .resolve(
-                &entities,
-                EntityMotionCommand {
-                    entity: MOVER,
-                    delta: Vec3::new(2.0, 0.0, 0.0),
-                },
-            )
-            .unwrap()
-            .outcome,
-        EntityMotionOutcome::Moved { .. }
-    ));
-
-    entities
-        .apply_batch(EntityCommandBatch::new([
-            EntityCommand::SetTranslation {
-                entity: DOOR,
-                translation: Vec3::new(20.0, 0.0, 0.0),
-            },
-            EntityCommand::SetCollisionEnabled {
-                entity: DOOR,
-                enabled: true,
-            },
-        ]))
-        .unwrap();
     assert_eq!(
-        SpatialOcclusionService
-            .cast_ray(&scene, &entities, query())
+        SpatialOcclusionService::cast_ray(&scene, query, [mover, cube(DOOR, [20.0, 0.0, 0.0])])
             .unwrap(),
         None
     );
@@ -101,11 +52,7 @@ fn strict_nearest_order_selects_entity_then_voxel_when_entity_is_ignored() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[4, 0, 0]]).unwrap();
     let front = EntityId::new(3);
     let behind = EntityId::new(7);
-    let entities = EntityState::from_definitions([
-        collider(front, Vec3::new(2.0, 0.5, 0.5)),
-        collider(behind, Vec3::new(6.0, 0.5, 0.5)),
-    ])
-    .unwrap();
+    let colliders = [cube(front, [2.0, 0.5, 0.5]), cube(behind, [6.0, 0.5, 0.5])];
     let base = SpatialOcclusionQuery {
         origin: [0.5, 0.5, 0.5],
         direction: [1.0, 0.0, 0.0],
@@ -114,9 +61,7 @@ fn strict_nearest_order_selects_entity_then_voxel_when_entity_is_ignored() {
     };
 
     assert!(matches!(
-        SpatialOcclusionService
-            .cast_ray(&scene, &entities, base)
-            .unwrap(),
+        SpatialOcclusionService::cast_ray(&scene, base, colliders).unwrap(),
         Some(SpatialOcclusionHit::Entity {
             entity,
             distance: 1.0,
@@ -124,16 +69,15 @@ fn strict_nearest_order_selects_entity_then_voxel_when_entity_is_ignored() {
         }) if entity == front
     ));
     assert!(matches!(
-        SpatialOcclusionService
-            .cast_ray(
-                &scene,
-                &entities,
-                SpatialOcclusionQuery {
-                    ignored_entities: &[front],
-                    ..base
-                },
-            )
-            .unwrap(),
+        SpatialOcclusionService::cast_ray(
+            &scene,
+            SpatialOcclusionQuery {
+                ignored_entities: &[front],
+                ..base
+            },
+            colliders,
+        )
+        .unwrap(),
         Some(SpatialOcclusionHit::Voxel(hit))
             if hit.voxel == [4, 0, 0] && hit.distance == 3.5
     ));
@@ -144,11 +88,7 @@ fn exact_ties_prefer_lowest_entity_identity_before_voxel() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[2, 0, 0]]).unwrap();
     let lower = EntityId::new(3);
     let higher = EntityId::new(9);
-    let entities = EntityState::from_definitions([
-        collider(higher, Vec3::new(2.5, 0.5, 0.5)),
-        collider(lower, Vec3::new(2.5, 0.5, 0.5)),
-    ])
-    .unwrap();
+    let colliders = [cube(higher, [2.5, 0.5, 0.5]), cube(lower, [2.5, 0.5, 0.5])];
     let base = SpatialOcclusionQuery {
         origin: [0.5, 0.5, 0.5],
         direction: [5.0, 0.0, 0.0],
@@ -157,9 +97,7 @@ fn exact_ties_prefer_lowest_entity_identity_before_voxel() {
     };
 
     assert_eq!(
-        SpatialOcclusionService
-            .cast_ray(&scene, &entities, base)
-            .unwrap(),
+        SpatialOcclusionService::cast_ray(&scene, base, colliders).unwrap(),
         Some(SpatialOcclusionHit::Entity {
             entity: lower,
             point: [2.0, 0.5, 0.5],
@@ -167,31 +105,27 @@ fn exact_ties_prefer_lowest_entity_identity_before_voxel() {
         })
     );
     assert!(matches!(
-        SpatialOcclusionService
-            .cast_ray(
-                &scene,
-                &entities,
-                SpatialOcclusionQuery {
-                    ignored_entities: &[lower, higher],
-                    ..base
-                },
-            )
-            .unwrap(),
+        SpatialOcclusionService::cast_ray(
+            &scene,
+            SpatialOcclusionQuery {
+                ignored_entities: &[lower, higher],
+                ..base
+            },
+            colliders,
+        )
+        .unwrap(),
         Some(SpatialOcclusionHit::Voxel(hit))
             if hit.voxel == [2, 0, 0] && hit.distance == 1.5
     ));
 }
 
 #[test]
-fn large_queries_run_and_invalid_queries_are_typed_without_changing_authority() {
-    // 5,000 entities and 16 ignored identities: past the former 4,096 and 8 caps.
-    const ENTITIES: u64 = 5_000;
+fn large_queries_run_and_invalid_queries_are_typed() {
+    // 5,000 boxes and 16 ignored identities: past the former 4,096 and 8 caps.
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[2, 0, 0]]).unwrap();
-    let definitions = (1..=ENTITIES)
-        .map(|raw| EntityDefinition::new(EntityId::new(raw), format!("entity-{raw}")));
-    let entities = EntityState::from_definitions(definitions).unwrap();
-    let entity_revision = entities.revision();
-    let scene_hash = scene.authority_hash();
+    let colliders: Vec<_> = (1..=5_000)
+        .map(|raw| cube(EntityId::new(raw), [0.5, 100.0 + raw as f64, 0.5]))
+        .collect();
     let ignored: Vec<EntityId> = (1..=16).map(EntityId::new).collect();
     let query = SpatialOcclusionQuery {
         origin: [0.5, 0.5, 0.5],
@@ -201,42 +135,18 @@ fn large_queries_run_and_invalid_queries_are_typed_without_changing_authority() 
     };
 
     assert!(matches!(
-        SpatialOcclusionService.cast_ray(&scene, &entities, query).unwrap(),
+        SpatialOcclusionService::cast_ray(&scene, query, colliders.iter().copied()).unwrap(),
         Some(SpatialOcclusionHit::Voxel(hit)) if hit.voxel == [2, 0, 0]
     ));
     assert_eq!(
-        SpatialOcclusionService.cast_ray(
+        SpatialOcclusionService::cast_ray(
             &scene,
-            &entities,
             SpatialOcclusionQuery {
                 direction: [0.0, 0.0, 0.0],
                 ..query
             },
+            colliders.iter().copied(),
         ),
         Err(SpatialOcclusionError::InvalidDirection)
     );
-    assert_eq!(entities.revision(), entity_revision);
-    assert_eq!(scene.authority_hash(), scene_hash);
-}
-
-fn motion_fixture() -> EntityState {
-    EntityState::from_definitions([
-        EntityDefinition::new(MOVER, "mover")
-            .with_transform(Vec3::ZERO)
-            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5))
-            .with_collision(true, false),
-        EntityDefinition::new(DOOR, "hidden-door")
-            .with_transform(Vec3::new(2.0, 0.0, 0.0))
-            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5))
-            .with_collision(true, true)
-            .with_renderable("mesh/door", false),
-    ])
-    .unwrap()
-}
-
-fn collider(entity: EntityId, translation: Vec3) -> EntityDefinition {
-    EntityDefinition::new(entity, format!("collider-{}", entity.raw()))
-        .with_transform(translation)
-        .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5))
-        .with_collision(true, true)
 }

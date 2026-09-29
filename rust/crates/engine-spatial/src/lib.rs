@@ -49,8 +49,8 @@ pub use entity_motion::{
     FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose, MotionSpatialEntity,
 };
 pub use occlusion::{
-    SpatialOcclusionCollider, SpatialOcclusionError, SpatialOcclusionHit,
-    SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
+    SpatialOcclusionCollider, SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionQuery,
+    SpatialOcclusionService,
 };
 pub use perception::{
     SpatialPerceptionAggregate, SpatialPerceptionError, SpatialPerceptionObserver,

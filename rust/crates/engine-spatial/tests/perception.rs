@@ -1,11 +1,10 @@
 use core_ids::EntityId;
 use engine_spatial::{
-    SpatialPerceptionError, SpatialPerceptionObserver, SpatialPerceptionPairKind,
-    SpatialPerceptionQuery, SpatialPerceptionService, SpatialPerceptionTarget, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    VoxelCollisionScene,
+    SpatialOcclusionCollider, SpatialPerceptionError, SpatialPerceptionObserver,
+    SpatialPerceptionPairKind, SpatialPerceptionQuery, SpatialPerceptionService,
+    SpatialPerceptionTarget, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, VoxelCollisionScene,
 };
-use entity_state::EntityState;
 
 fn observer(entity: u64, origin: [f64; 3], evidence: f64) -> SpatialPerceptionObserver {
     SpatialPerceptionObserver {
@@ -27,13 +26,13 @@ fn target(entity: u64, center: [f64; 3]) -> SpatialPerceptionTarget {
 
 fn query<'a>(
     scene: &'a VoxelCollisionScene,
-    entities: &'a EntityState,
+    occluders: &'a [SpatialOcclusionCollider],
     observers: &'a [SpatialPerceptionObserver],
     targets: &'a [SpatialPerceptionTarget],
 ) -> SpatialPerceptionQuery<'a> {
     SpatialPerceptionQuery {
         scene,
-        entities,
+        occluders,
         observers,
         targets,
     }
@@ -42,14 +41,13 @@ fn query<'a>(
 #[test]
 fn evaluates_distance_facing_and_deterministic_visible_reduction() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
-    let entities = EntityState::default();
     let observers = [
         observer(9, [0.0, 0.0, 0.0], 0.25),
         observer(3, [0.0, 0.0, 0.0], 0.75),
     ];
     let targets = [target(22, [4.0, 0.0, 0.0]), target(11, [4.0, 0.0, 0.0])];
     let readout = SpatialPerceptionService
-        .evaluate(query(&scene, &entities, &observers, &targets))
+        .evaluate(query(&scene, &[], &observers, &targets))
         .unwrap();
 
     assert_eq!(readout.selected_observers, 2);
@@ -71,13 +69,12 @@ fn evaluates_distance_facing_and_deterministic_visible_reduction() {
 #[test]
 fn reports_facing_rejection_and_voxel_occlusion_as_typed_pair_facts() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[2, 0, 0]]).unwrap();
-    let entities = EntityState::default();
     let mut behind_observer = observer(1, [0.0, 0.0, 0.0], 1.0);
     behind_observer.forward = [-1.0, 0.0, 0.0];
     let observers = [behind_observer, observer(2, [0.0, 2.0, 0.0], 2.0)];
     let targets = [target(7, [4.0, 0.0, 0.0])];
     let readout = SpatialPerceptionService
-        .evaluate(query(&scene, &entities, &observers, &targets))
+        .evaluate(query(&scene, &[], &observers, &targets))
         .unwrap();
 
     assert_eq!(readout.facing_rejects, 1);
@@ -110,12 +107,11 @@ fn retained_static_mesh_occludes_visibility_while_a_clear_target_remains_visible
             }],
         )
         .unwrap();
-    let entities = EntityState::default();
     let observers = [observer(1, [0.0, 0.0, 0.0], 1.0)];
     let targets = [target(7, [4.0, 0.0, 0.0]), target(8, [4.0, 3.0, 0.0])];
 
     let readout = SpatialPerceptionService
-        .evaluate(query(&scene, &entities, &observers, &targets))
+        .evaluate(query(&scene, &[], &observers, &targets))
         .unwrap();
 
     assert_eq!(readout.visibility_casts, 2);
@@ -130,11 +126,10 @@ fn retained_static_mesh_occludes_visibility_while_a_clear_target_remains_visible
 #[test]
 fn distance_rejected_pairs_are_not_retained_and_duplicate_ids_are_rejected() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
-    let entities = EntityState::default();
     let observers = [observer(1, [0.0, 0.0, 0.0], 1.0)];
     let targets = [target(2, [100.0, 0.0, 0.0])];
     let readout = SpatialPerceptionService
-        .evaluate(query(&scene, &entities, &observers, &targets))
+        .evaluate(query(&scene, &[], &observers, &targets))
         .unwrap();
     assert_eq!(readout.distance_rejects, 1);
     assert!(readout.pairs.is_empty());
@@ -144,7 +139,7 @@ fn distance_rejected_pairs_are_not_retained_and_duplicate_ids_are_rejected() {
         observer(1, [1.0, 0.0, 0.0], 1.0),
     ];
     assert_eq!(
-        SpatialPerceptionService.evaluate(query(&scene, &entities, &duplicate_observers, &targets)),
+        SpatialPerceptionService.evaluate(query(&scene, &[], &duplicate_observers, &targets)),
         Err(SpatialPerceptionError::DuplicateObserver(EntityId::new(1)))
     );
 }
@@ -152,7 +147,6 @@ fn distance_rejected_pairs_are_not_retained_and_duplicate_ids_are_rejected() {
 #[test]
 fn qualified_pairs_page_deterministically_without_silent_cap_loss() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
-    let entities = EntityState::default();
     let observers = [
         observer(9, [0.0, 0.0, 0.0], 0.25),
         observer(3, [0.0, 0.0, 0.0], 0.75),
@@ -160,7 +154,7 @@ fn qualified_pairs_page_deterministically_without_silent_cap_loss() {
     let targets = [target(22, [4.0, 0.0, 0.0]), target(11, [4.0, 0.0, 0.0])];
 
     let first = SpatialPerceptionService
-        .evaluate_page(query(&scene, &entities, &observers, &targets), 0, 2)
+        .evaluate_page(query(&scene, &[], &observers, &targets), 0, 2)
         .unwrap();
     assert_eq!(first.pair_total, 4);
     assert_eq!(first.next_pair_cursor, Some(2));
@@ -170,23 +164,19 @@ fn qualified_pairs_page_deterministically_without_silent_cap_loss() {
     assert_eq!(first.aggregates.len(), 2);
 
     let second = SpatialPerceptionService
-        .evaluate_page(query(&scene, &entities, &observers, &targets), 2, 2)
+        .evaluate_page(query(&scene, &[], &observers, &targets), 2, 2)
         .unwrap();
     assert_eq!(second.pair_total, 4);
     assert_eq!(second.next_pair_cursor, None);
     assert_eq!(second.pairs.len(), 2);
 
     let final_empty = SpatialPerceptionService
-        .evaluate_page(query(&scene, &entities, &observers, &targets), 4, 2)
+        .evaluate_page(query(&scene, &[], &observers, &targets), 4, 2)
         .unwrap();
     assert!(final_empty.pairs.is_empty());
     assert_eq!(final_empty.next_pair_cursor, None);
     assert!(matches!(
-        SpatialPerceptionService.evaluate_page(
-            query(&scene, &entities, &observers, &targets),
-            5,
-            2
-        ),
+        SpatialPerceptionService.evaluate_page(query(&scene, &[], &observers, &targets), 5, 2),
         Err(SpatialPerceptionError::InvalidPairCursor {
             cursor: 5,
             total: 4
@@ -199,7 +189,6 @@ fn evaluates_more_observers_targets_and_pairs_than_the_former_caps() {
     // 80 observers and 300 targets, all mutually visible: 24,000 pairs and 300
     // aggregates, past the former 64, 256, 1,024 and 256 caps.
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
-    let entities = EntityState::default();
     let observers: Vec<_> = (1..=80)
         .map(|id| observer(id, [0.0, 0.0, 0.0], 1.0))
         .collect();
@@ -207,8 +196,36 @@ fn evaluates_more_observers_targets_and_pairs_than_the_former_caps() {
         .map(|id| target(id, [4.0, 0.0, 0.0]))
         .collect();
     let readout = SpatialPerceptionService
-        .evaluate(query(&scene, &entities, &observers, &targets))
+        .evaluate(query(&scene, &[], &observers, &targets))
         .unwrap();
     assert_eq!(readout.pairs.len(), 80 * 300);
     assert_eq!(readout.aggregates.len(), 300);
+}
+
+#[test]
+fn entity_occluders_block_sight_except_for_the_observer_and_target_boxes() {
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let observers = [observer(1, [0.0, 0.0, 0.0], 1.0)];
+    let targets = [target(7, [4.0, 0.0, 0.0])];
+    let cube = |entity, x: f64| SpatialOcclusionCollider {
+        entity: EntityId::new(entity),
+        min: [x - 0.5, -0.5, -0.5],
+        max: [x + 0.5, 0.5, 0.5],
+    };
+    let kind = |occluders: &[SpatialOcclusionCollider]| {
+        SpatialPerceptionService
+            .evaluate(query(&scene, occluders, &observers, &targets))
+            .unwrap()
+            .pairs[0]
+            .kind
+    };
+
+    assert_eq!(
+        kind(&[cube(1, 0.0), cube(7, 4.0)]),
+        SpatialPerceptionPairKind::Visible
+    );
+    assert_eq!(
+        kind(&[cube(1, 0.0), cube(7, 4.0), cube(9, 2.0)]),
+        SpatialPerceptionPairKind::Occluded
+    );
 }

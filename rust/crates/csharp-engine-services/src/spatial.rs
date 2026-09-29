@@ -27,8 +27,7 @@ use engine_spatial::{
     VoxelCollisionScene, VoxelPickHint, VoxelPickService,
 };
 use entity_state::{
-    CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform,
-    Quat, TransformComponent,
+    CharacterMotionComponent, CharacterStance, EntityTransform, Quat, TransformComponent,
 };
 use runtime_diagnostics::RuntimeUpdateAttribution;
 use serde::Deserialize;
@@ -5460,22 +5459,6 @@ fn trigger_colliders(
     })
 }
 
-pub(crate) fn entity_state(
-    values: &[NativeSpatialEntityCollider],
-) -> Result<EntityState, CsharpEngineServicesError> {
-    let definitions = values.iter().copied().map(|value| {
-        EntityDefinition::new(
-            EntityId::new(value.entity),
-            format!("spatial-entity-{}", value.entity),
-        )
-        .with_transform(Vec3::ZERO)
-        .with_bounds(native_vec3_value(value.min), native_vec3_value(value.max))
-        .with_collision(value.enabled, value.static_collider)
-    });
-    EntityState::from_definitions(definitions)
-        .map_err(|error| spatial_error("CSHARP_SPATIAL_ENTITY", error.to_string()))
-}
-
 fn collider_bounds(value: NativeSpatialEntityCollider) -> ([f64; 3], [f64; 3]) {
     (native_array(value.min), native_array(value.max))
 }
@@ -5562,7 +5545,7 @@ fn cast_ray_parts(
             max: native_array(bounds.max),
         }
     });
-    let hit = SpatialOcclusionService::cast_ray_against_colliders(
+    let hit = SpatialOcclusionService::cast_ray(
         scene,
         SpatialOcclusionQuery {
             origin,

@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use core_ids::EntityId;
-use entity_state::EntityState;
 
 use crate::{
-    SpatialOcclusionError, SpatialOcclusionQuery, SpatialOcclusionService, VoxelCollisionScene,
+    SpatialOcclusionCollider, SpatialOcclusionError, SpatialOcclusionQuery,
+    SpatialOcclusionService, VoxelCollisionScene,
 };
 
 /// A caller-owned world-space sensing origin and policy-independent observation fact.
@@ -95,7 +95,8 @@ pub struct SpatialPerceptionPage {
 /// Inputs for one read-only perception evaluation.
 pub struct SpatialPerceptionQuery<'a> {
     pub scene: &'a VoxelCollisionScene,
-    pub entities: &'a EntityState,
+    /// World-space entity boxes that block sight, in addition to world geometry.
+    pub occluders: &'a [SpatialOcclusionCollider],
     pub observers: &'a [SpatialPerceptionObserver],
     pub targets: &'a [SpatialPerceptionTarget],
 }
@@ -207,18 +208,17 @@ impl SpatialPerceptionService {
                 visibility_casts = visibility_casts
                     .checked_add(1)
                     .ok_or(SpatialPerceptionError::ArithmeticOverflow)?;
-                let hit = SpatialOcclusionService
-                    .cast_ray(
-                        query.scene,
-                        query.entities,
-                        SpatialOcclusionQuery {
-                            origin: observer.origin,
-                            direction: delta,
-                            max_distance: distance,
-                            ignored_entities: &[observer.entity, target.entity],
-                        },
-                    )
-                    .map_err(SpatialPerceptionError::Occlusion)?;
+                let hit = SpatialOcclusionService::cast_ray(
+                    query.scene,
+                    SpatialOcclusionQuery {
+                        origin: observer.origin,
+                        direction: delta,
+                        max_distance: distance,
+                        ignored_entities: &[observer.entity, target.entity],
+                    },
+                    query.occluders.iter().copied(),
+                )
+                .map_err(SpatialPerceptionError::Occlusion)?;
                 let kind = if hit.is_some() {
                     occlusion_rejects = occlusion_rejects
                         .checked_add(1)

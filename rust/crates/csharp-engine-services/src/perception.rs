@@ -2,13 +2,13 @@ use std::{collections::BTreeMap, ffi::c_void};
 
 use csharp_engine_abi::*;
 use engine_spatial::{
-    SpatialPerceptionObserver, SpatialPerceptionPairKind, SpatialPerceptionQuery,
-    SpatialPerceptionService, SpatialPerceptionTarget,
+    SpatialOcclusionCollider, SpatialPerceptionObserver, SpatialPerceptionPairKind,
+    SpatialPerceptionQuery, SpatialPerceptionService, SpatialPerceptionTarget,
 };
 
 use crate::{
     composition::{borrowed_slice, ABI_OK},
-    spatial::{entity_state, native_array, RuntimeSpatialBridge, SpatialCollisionSource},
+    spatial::{native_array, RuntimeSpatialBridge, SpatialCollisionSource},
     CsharpEngineServicesError,
 };
 
@@ -70,7 +70,16 @@ impl RuntimePerceptionBridge {
         let page_size = usize::try_from(request.page_size).map_err(|_| {
             CsharpEngineServicesError::new("CSHARP_PERCEPTION", "perception page size overflow")
         })?;
-        let entities = entity_state(occluders)?;
+        // Disabled colliders do not block sight.
+        let occluders = occluders
+            .iter()
+            .filter(|value| value.enabled)
+            .map(|value| SpatialOcclusionCollider {
+                entity: core_ids::EntityId::new(value.entity),
+                min: native_array(value.min),
+                max: native_array(value.max),
+            })
+            .collect::<Vec<_>>();
         let observers = observers
             .iter()
             .map(|value| SpatialPerceptionObserver {
@@ -93,7 +102,7 @@ impl RuntimePerceptionBridge {
             .evaluate_page(
                 SpatialPerceptionQuery {
                     scene: scene.as_ref(),
-                    entities: &entities,
+                    occluders: &occluders,
                     observers: &observers,
                     targets: &targets,
                 },
@@ -320,6 +329,111 @@ mod tests {
                 (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
             },
             ABI_OK
+        );
+        assert_eq!(
+            unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn native_visibility_is_blocked_only_by_enabled_occluder_rows() {
+        let mut spatial_bridge = RuntimeSpatialBridge::new();
+        let mut perception_bridge = RuntimePerceptionBridge::new(&spatial_bridge);
+        let spatial_api = spatial::api(&mut spatial_bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        let observers = [NativePerceptionObserver {
+            entity: 1,
+            origin: NativeVec3::default(),
+            forward: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            maximum_distance: 10.0,
+            minimum_facing_cosine: 0.5,
+            evidence: 1.0,
+        }];
+        let targets = [NativePerceptionTarget {
+            entity: 2,
+            center: NativeVec3 {
+                x: 4.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        }];
+        let cube = |entity, x: f32, enabled| NativeSpatialEntityCollider {
+            entity,
+            min: NativeVec3 {
+                x: x - 0.5,
+                y: -0.5,
+                z: -0.5,
+            },
+            max: NativeVec3 {
+                x: x + 0.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            enabled,
+            ..Default::default()
+        };
+        let perception_api = api(&mut perception_bridge);
+        let kind = |occluders: &[NativeSpatialEntityCollider]| {
+            let request = NativePerceptionQueryRequest {
+                session,
+                observers: observers.as_ptr(),
+                observers_len: observers.len(),
+                targets: targets.as_ptr(),
+                targets_len: targets.len(),
+                occluders: occluders.as_ptr(),
+                occluders_len: occluders.len(),
+                expected_projection_identity: 0,
+                pair_cursor: 0,
+                page_size: 64,
+            };
+            let mut result = NativePerceptionReadoutLease::default();
+            assert_eq!(
+                unsafe {
+                    (perception_api.query_visibility)(perception_api.context, &request, &mut result)
+                },
+                ABI_OK
+            );
+            let pair = unsafe { *result.pairs };
+            assert_eq!(
+                unsafe {
+                    (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
+                },
+                ABI_OK
+            );
+            pair.kind
+        };
+
+        // The target's own box never hides it.
+        assert_eq!(
+            kind(&[cube(2, 4.0, true)]),
+            NativePerceptionPairKind::Visible
+        );
+        assert_eq!(
+            kind(&[cube(2, 4.0, true), cube(5, 2.0, true)]),
+            NativePerceptionPairKind::Occluded
+        );
+        assert_eq!(
+            kind(&[cube(2, 4.0, true), cube(5, 2.0, false)]),
+            NativePerceptionPairKind::Visible
         );
         assert_eq!(
             unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
