@@ -1356,60 +1356,27 @@ pub struct NativeCharacterPlatform {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterDynamicImpulse {
-    pub entity: u64,
-    pub point: NativeVec3,
-    pub impulse: NativeVec3,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCharacterControllerReadRequest {
     pub session: NativeSpatialSessionHandle,
 }
 
+/// Borrowed, session-scoped diagnostic readout of the latest proposal.
+/// Character motion remains product-held continuity returned by every
+/// proposal; disposing the session drops this observation only. `contacts`
+/// points into Spatial bridge storage and stays valid until the next call on
+/// the same Spatial context; the generated managed binding copies it before
+/// returning.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterContactAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterContactAtReceipt {
-    pub present: bool,
-    pub contact: NativeCharacterContact,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterDynamicImpulseAtRequest {
-    pub session: NativeSpatialSessionHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterDynamicImpulseAtReceipt {
-    pub present: bool,
-    pub proposal: NativeCharacterDynamicImpulse,
-}
-
-/// Session-scoped diagnostic readout. Character motion remains product-held
-/// continuity returned by every proposal; disposing the session drops this
-/// last-proposal observation only.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeCharacterControllerReadout {
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterControllerResult {
+    pub contacts: *const NativeCharacterContact,
+    pub contacts_len: usize,
     pub present: bool,
     pub generation: u64,
     pub entity: u64,
     pub command_sequence: u64,
     pub grounded: bool,
-    pub contact_count: u32,
     pub block_count: u32,
-    pub dynamic_impulse_count: u32,
     pub collision_world_hash: u64,
     pub recovery_distance: f32,
 }

@@ -3,11 +3,6 @@ using Rusty.Engine;
 
 namespace Rusty.Engine.Entities;
 
-/// <summary>Copied facts from a prepared rebase before either owner applies it.</summary>
-public readonly record struct EntityOriginRebaserPrepareReceipt(
-    WorldOriginPreparedReadout Native,
-    ReadOnlyMemory<WorldOriginAffectedAtReceipt> Affected);
-
 /// <summary>One paired native-origin and managed-transform publication result.</summary>
 public readonly record struct EntityOriginRebaserCommitReceipt(
     WorldOriginCommitReceipt Native,
@@ -64,14 +59,8 @@ public sealed class EntityOriginRebaser
             rows));
         try
         {
-            WorldOriginPreparedReadout summary = _worldOrigins.ReadPrepared(
-                new WorldOriginPreparedReadRequest(native));
-            var affected = new WorldOriginAffectedAtReceipt[summary.AffectedEntityCount];
-            for (uint index = 0; index < (uint)affected.Length; index++)
-            {
-                affected[index] = _worldOrigins.ReadAffectedAt(new WorldOriginAffectedAtRequest(native, index));
-            }
-            return new EntityOriginRebaserPrepared(this, native, new EntityOriginRebaserPrepareReceipt(summary, affected));
+            WorldOriginPreparedResult prepared = _worldOrigins.ReadPrepared(new WorldOriginPreparedReadRequest(native));
+            return new EntityOriginRebaserPrepared(this, native, prepared);
         }
         catch
         {
@@ -82,11 +71,11 @@ public sealed class EntityOriginRebaser
 
     internal EntityOriginRebaserCommitReceipt CommitPrepared(
         WorldOriginPrepared native,
-        EntityOriginRebaserPrepareReceipt prepared)
+        WorldOriginPreparedResult prepared)
     {
         WorldOriginCommitReceipt nativeReceipt = _worldOrigins.Commit(new WorldOriginCommitRequest(native));
         var batch = new EntityBatch();
-        foreach (WorldOriginAffectedAtReceipt fact in prepared.Affected.Span)
+        foreach (WorldOriginAffectedTransform fact in prepared.Affected.Span)
         {
             batch.Set(new EntityId(fact.EntityId), EngineComponentTypes.Transform, fact.LocalTransform);
         }
@@ -114,14 +103,15 @@ public sealed class EntityOriginRebaserPrepared : IDisposable
     internal EntityOriginRebaserPrepared(
         EntityOriginRebaser owner,
         WorldOriginPrepared native,
-        EntityOriginRebaserPrepareReceipt receipt)
+        WorldOriginPreparedResult receipt)
     {
         _owner = owner;
         _native = native;
         Receipt = receipt;
     }
 
-    public EntityOriginRebaserPrepareReceipt Receipt { get; }
+    /// <summary>The copied target and rebased root transforms, before either owner applies them.</summary>
+    public WorldOriginPreparedResult Receipt { get; }
 
     /// <summary>
     /// Commits Engine's prepared origin/scene, then writes the rebased transforms

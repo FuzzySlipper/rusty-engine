@@ -2097,60 +2097,36 @@ impl RuntimeSpatialBridge {
     fn read_character_controller(
         &mut self,
         request: NativeCharacterControllerReadRequest,
-    ) -> Result<NativeCharacterControllerReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeCharacterControllerResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(readout) = session.controller.readout() else {
-            return Ok(NativeCharacterControllerReadout::default());
-        };
+        let readout = session.controller.readout();
         let receipt = session.last_character_receipt.as_ref();
-        Ok(NativeCharacterControllerReadout {
-            present: true,
-            generation: readout.generation,
-            entity: readout.entity.raw(),
-            command_sequence: readout.command_sequence,
-            grounded: readout.grounded,
-            contact_count: readout.contact_count as u32,
+        let contacts = receipt
+            .map(|value| {
+                value
+                    .contacts
+                    .iter()
+                    .map(|contact| {
+                        native_character_contact(*contact, &session.last_character_mesh_entities)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into_boxed_slice();
+        let result = NativeCharacterControllerResult {
+            contacts: contacts.as_ptr(),
+            contacts_len: contacts.len(),
+            present: readout.is_some(),
+            generation: readout.map_or(0, |value| value.generation),
+            entity: readout.map_or(0, |value| value.entity.raw()),
+            command_sequence: readout.map_or(0, |value| value.command_sequence),
+            grounded: readout.is_some_and(|value| value.grounded),
             block_count: receipt.map_or(0, |value| value.blocks.len() as u32),
-            dynamic_impulse_count: receipt.map_or(0, |value| value.dynamic_impulses.len() as u32),
-            collision_world_hash: readout.collision_world_hash,
+            collision_world_hash: readout.map_or(0, |value| value.collision_world_hash),
             recovery_distance: receipt.map_or(0.0, |value| value.recovery_distance),
-        })
-    }
-
-    fn read_character_contact_at(
-        &mut self,
-        request: NativeCharacterContactAtRequest,
-    ) -> Result<NativeCharacterContactAtReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(session
-            .last_character_receipt
-            .as_ref()
-            .and_then(|receipt| receipt.contacts.get(request.index as usize))
-            .map(|contact| NativeCharacterContactAtReceipt {
-                present: true,
-                contact: native_character_contact(*contact, &session.last_character_mesh_entities),
-            })
-            .unwrap_or_default())
-    }
-
-    fn read_character_dynamic_impulse_at(
-        &mut self,
-        request: NativeCharacterDynamicImpulseAtRequest,
-    ) -> Result<NativeCharacterDynamicImpulseAtReceipt, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
-        Ok(session
-            .last_character_receipt
-            .as_ref()
-            .and_then(|receipt| receipt.dynamic_impulses.get(request.index as usize))
-            .map(|proposal| NativeCharacterDynamicImpulseAtReceipt {
-                present: true,
-                proposal: NativeCharacterDynamicImpulse {
-                    entity: proposal.entity.raw(),
-                    point: native_vec3(proposal.point),
-                    impulse: native_vec3(proposal.impulse),
-                },
-            })
-            .unwrap_or_default())
+        };
+        self.borrowed.hold(contacts);
+        Ok(result)
     }
 
     fn read_projection(
@@ -4301,52 +4277,15 @@ fn retain_character_validation_error(
 unsafe extern "C" fn read_character_controller(
     context: *mut c_void,
     request: NativeCharacterControllerReadRequest,
-    readout: *mut NativeCharacterControllerReadout,
+    result: *mut NativeCharacterControllerResult,
 ) -> i32 {
-    if context.is_null() || readout.is_null() {
+    if context.is_null() || result.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_character_controller(request)
     {
         Ok(value) => {
-            unsafe { *readout = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_character_contact_at(
-    context: *mut c_void,
-    request: NativeCharacterContactAtRequest,
-    receipt: *mut NativeCharacterContactAtReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_character_contact_at(request)
-    {
-        Ok(value) => {
-            unsafe { *receipt = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_character_dynamic_impulse_at(
-    context: *mut c_void,
-    request: NativeCharacterDynamicImpulseAtRequest,
-    receipt: *mut NativeCharacterDynamicImpulseAtReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .read_character_dynamic_impulse_at(request)
-    {
-        Ok(value) => {
-            unsafe { *receipt = value };
+            unsafe { *result = value };
             ABI_OK
         }
         Err(_) => 0,
@@ -4713,8 +4652,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         capture_character_continuation,
         restore_character_continuation,
         read_character_controller,
-        read_character_contact_at,
-        read_character_dynamic_impulse_at,
         propose_navigation_step,
         evaluate_navigation_step,
         read_projection,
@@ -7775,6 +7712,20 @@ mod tests {
         assert!(first.motion.support_entity_present);
         assert_eq!(first.motion.support_entity, 2);
         assert!((first.motion.support_point_velocity.x - 12.0).abs() < 1.0e-4);
+        // One borrowed result carries the last proposal's contacts; copy it
+        // before the next call, as generated C# does.
+        let latest = bridge
+            .read_character_controller(NativeCharacterControllerReadRequest { session })
+            .unwrap();
+        let contacts =
+            unsafe { std::slice::from_raw_parts(latest.contacts, latest.contacts_len) }.to_vec();
+        assert!(latest.present && latest.generation == first.generation);
+        assert_eq!(contacts.len(), first.contact_count as usize);
+        assert_eq!(contacts.len(), 1);
+        if let Some(contact) = contacts.first() {
+            assert_eq!(contact.source_entity, first.contact.source_entity);
+            assert_eq!(contact.kind as u32, first.contact.kind as u32);
+        }
 
         let second_obstacles = [platform(0.2)];
         let second = bridge

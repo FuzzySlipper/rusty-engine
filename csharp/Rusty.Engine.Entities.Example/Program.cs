@@ -417,7 +417,7 @@ static void ExerciseWorldOriginEntityComposition()
     var adapter = new EntityOriginRebaser(world, service, service.Session, globalPositions);
 
     using EntityOriginRebaserPrepared prepared = adapter.Prepare(100, 0, 0);
-    Require(prepared.Receipt.Native.AffectedEntityCount == 1
+    Require(prepared.Receipt.Affected.Length == 1
         && prepared.Receipt.Affected.Span[0].EntityId == entity.Value,
         "world-origin prepare did not retain one deterministic root fact");
     EntityOriginRebaserCommitReceipt committed = prepared.Commit();
@@ -713,9 +713,7 @@ sealed class SpatialServiceFake : ISpatialService
             0,
             0);
     }
-    public CharacterControllerReadout ReadCharacterController(CharacterControllerReadRequest arg0) => throw new NotSupportedException();
-    public CharacterContactAtReceipt ReadCharacterContactAt(CharacterContactAtRequest arg0) => throw new NotSupportedException();
-    public CharacterDynamicImpulseAtReceipt ReadCharacterDynamicImpulseAt(CharacterDynamicImpulseAtRequest arg0) => throw new NotSupportedException();
+    public CharacterControllerResult ReadCharacterController(CharacterControllerReadRequest arg0) => throw new NotSupportedException();
     public NavigationStepReceipt ProposeNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
     public NavigationStepReceipt EvaluateNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
     public SpatialProjectionReadout ReadProjection(SpatialProjectionReadRequest arg0) => throw new NotSupportedException();
@@ -951,7 +949,7 @@ sealed class WorldOriginServiceFake : IWorldOriginService
     public WorldOriginPrepared Prepare(WorldOriginPrepareRequest request)
     {
         ulong handle = _nextPrepared++;
-        var facts = new WorldOriginAffectedAtReceipt[request.Entities.Length];
+        var facts = new WorldOriginAffectedTransform[request.Entities.Length];
         ReadOnlySpan<WorldOriginEntityRow> rows = request.Entities.Span;
         for (int index = 0; index < rows.Length; index++)
         {
@@ -963,7 +961,7 @@ sealed class WorldOriginServiceFake : IWorldOriginService
                     checked((float)(row.GlobalPosition.CellY - request.TargetCellY)) + (float)row.GlobalPosition.OffsetY,
                     checked((float)(row.GlobalPosition.CellZ - request.TargetCellZ)) + (float)row.GlobalPosition.OffsetZ),
             };
-            facts[index] = new WorldOriginAffectedAtReceipt(true, row.EntityId, local);
+            facts[index] = new WorldOriginAffectedTransform(row.EntityId, local);
         }
         _prepared.Add(handle, new Prepared(request, facts));
         return new WorldOriginPrepared(new WorldOriginPreparedHandle(handle), () => _prepared.Remove(handle));
@@ -972,24 +970,15 @@ sealed class WorldOriginServiceFake : IWorldOriginService
     public WorldOriginReadout Read(WorldOriginReadRequest request)
         => new(0, 0, 0, InitialRevision, 16_384.0f, 0, 0);
 
-    public WorldOriginPreparedReadout ReadPrepared(WorldOriginPreparedReadRequest request)
+    public WorldOriginPreparedResult ReadPrepared(WorldOriginPreparedReadRequest request)
     {
         Prepared prepared = Require(request.Prepared);
-        return new WorldOriginPreparedReadout(
-            true,
+        return new WorldOriginPreparedResult(
+            prepared.Facts,
             prepared.Request.TargetCellX,
             prepared.Request.TargetCellY,
             prepared.Request.TargetCellZ,
-            checked((uint)prepared.Facts.Length),
             16_384.0f);
-    }
-
-    public WorldOriginAffectedAtReceipt ReadAffectedAt(WorldOriginAffectedAtRequest request)
-    {
-        Prepared prepared = Require(request.Prepared);
-        return request.Index < prepared.Facts.Length
-            ? prepared.Facts[request.Index]
-            : default;
     }
 
     public WorldOriginCommitReceipt Commit(WorldOriginCommitRequest request)
@@ -1016,7 +1005,7 @@ sealed class WorldOriginServiceFake : IWorldOriginService
             ? value
             : throw new InvalidOperationException("world-origin prepared handle was unavailable");
 
-    private sealed record Prepared(WorldOriginPrepareRequest Request, WorldOriginAffectedAtReceipt[] Facts);
+    private sealed record Prepared(WorldOriginPrepareRequest Request, WorldOriginAffectedTransform[] Facts);
 }
 
 sealed class MotionServiceFake : IMotionService

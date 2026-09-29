@@ -277,17 +277,7 @@ pub type NativeRestoreCharacterContinuation = unsafe extern "C" fn(
 pub type NativeReadCharacterController = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterControllerReadRequest,
-    *mut NativeCharacterControllerReadout,
-) -> i32;
-pub type NativeReadCharacterContactAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeCharacterContactAtRequest,
-    *mut NativeCharacterContactAtReceipt,
-) -> i32;
-pub type NativeReadCharacterDynamicImpulseAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeCharacterDynamicImpulseAtRequest,
-    *mut NativeCharacterDynamicImpulseAtReceipt,
+    *mut NativeCharacterControllerResult,
 ) -> i32;
 pub type NativeProposeNavigationStep = unsafe extern "C" fn(
     *mut c_void,
@@ -402,12 +392,7 @@ pub type NativeWorldOriginRead = unsafe extern "C" fn(
 pub type NativeWorldOriginReadPrepared = unsafe extern "C" fn(
     *mut c_void,
     NativeWorldOriginPreparedReadRequest,
-    *mut NativeWorldOriginPreparedReadout,
-) -> i32;
-pub type NativeWorldOriginReadAffectedAt = unsafe extern "C" fn(
-    *mut c_void,
-    NativeWorldOriginAffectedAtRequest,
-    *mut NativeWorldOriginAffectedAtReceipt,
+    *mut NativeWorldOriginPreparedResult,
 ) -> i32;
 pub type NativeWorldOriginCommit = unsafe extern "C" fn(
     *mut c_void,
@@ -1285,8 +1270,6 @@ pub struct NativeSpatialApi {
     pub capture_character_continuation: NativeCaptureCharacterContinuation,
     pub restore_character_continuation: NativeRestoreCharacterContinuation,
     pub read_character_controller: NativeReadCharacterController,
-    pub read_character_contact_at: NativeReadCharacterContactAt,
-    pub read_character_dynamic_impulse_at: NativeReadCharacterDynamicImpulseAt,
     pub propose_navigation_step: NativeProposeNavigationStep,
     pub evaluate_navigation_step: NativeEvaluateNavigationStep,
     pub read_projection: NativeReadSpatialProjection,
@@ -1317,7 +1300,6 @@ pub struct NativeWorldOriginApi {
     pub prepare: NativeWorldOriginPrepare,
     pub read: NativeWorldOriginRead,
     pub read_prepared: NativeWorldOriginReadPrepared,
-    pub read_affected_at: NativeWorldOriginReadAffectedAt,
     pub commit: NativeWorldOriginCommit,
     pub destroy_prepared: NativeDestroyWorldOriginPrepared,
 }

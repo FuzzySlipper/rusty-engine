@@ -851,7 +851,7 @@ public sealed class Product : IEngineProduct
             new CharacterContinuationCaptureRequest(checkpointSource, checkpointSecond.Generation));
         ExpectEngineFailure(() => _engine.Spatial.CaptureCharacterContinuation(
             new CharacterContinuationCaptureRequest(checkpointSource, checkpointSecond.Generation + 1)));
-        CharacterControllerReadout checkpointSourceAfterStale = _engine.Spatial.ReadCharacterController(
+        CharacterControllerResult checkpointSourceAfterStale = _engine.Spatial.ReadCharacterController(
             new CharacterControllerReadRequest(checkpointSource));
         Require(checkpointSourceAfterStale.Present
             && checkpointSourceAfterStale.Generation == checkpointSecond.Generation,
@@ -946,13 +946,12 @@ public sealed class Product : IEngineProduct
             && groundedResumed.Motion.LastCommandSequence == groundedUninterrupted.Motion.LastCommandSequence
             && MathF.Abs(groundedResumed.Transform.Translation.Y - groundedUninterrupted.Transform.Translation.Y) < 0.0001f,
             "restored grounded continuation did not preserve support motion");
-        CharacterControllerReadout readout = _engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial));
+        CharacterControllerResult readout = _engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial));
         Require(readout.Present && readout.CommandSequence == 2 && readout.Generation == second.Generation,
             "character session readout did not describe the latest proposal");
-        CharacterContactAtReceipt contact = _engine.Spatial.ReadCharacterContactAt(new CharacterContactAtRequest(_spatial, 0));
-        Require(!contact.Present || contact.Contact.Present, "indexed character contact readout was incoherent");
-        CharacterDynamicImpulseAtReceipt impulse = _engine.Spatial.ReadCharacterDynamicImpulseAt(new CharacterDynamicImpulseAtRequest(_spatial, 0));
-        Require(!impulse.Present || impulse.Proposal.Entity != 0, "indexed dynamic impulse readout was incoherent");
+        Require(readout.Contacts.Length == second.ContactCount
+            && (readout.Contacts.IsEmpty || readout.Contacts.Span[0].Present),
+            "character session readout did not carry the latest proposal's contacts");
     }
 
     private static void ExpectCharacterValidationFailure(

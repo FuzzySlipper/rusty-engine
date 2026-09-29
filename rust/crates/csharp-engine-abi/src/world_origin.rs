@@ -68,30 +68,26 @@ pub struct NativeWorldOriginPreparedReadRequest {
     pub prepared: NativeWorldOriginPreparedHandle,
 }
 
+/// One root's local transform in the prepared target frame.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct NativeWorldOriginPreparedReadout {
-    pub present: bool,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeWorldOriginAffectedTransform {
+    pub entity_id: u64,
+    pub local_transform: NativeTransform,
+}
+
+/// Borrowed readout of one prepared rebase. `affected` points into Spatial
+/// bridge storage and stays valid until the next call on the same context;
+/// the generated managed binding copies it before returning.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeWorldOriginPreparedResult {
+    pub affected: *const NativeWorldOriginAffectedTransform,
+    pub affected_len: usize,
     pub target_cell_x: i64,
     pub target_cell_y: i64,
     pub target_cell_z: i64,
-    pub affected_entity_count: u32,
     pub local_envelope: f32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NativeWorldOriginAffectedAtRequest {
-    pub prepared: NativeWorldOriginPreparedHandle,
-    pub index: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NativeWorldOriginAffectedAtReceipt {
-    pub present: bool,
-    pub entity_id: u64,
-    pub local_transform: NativeTransform,
 }
 
 /// Moves the session origin to the prepared target and rebases the live

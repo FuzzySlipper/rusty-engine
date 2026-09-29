@@ -93,39 +93,33 @@ impl RuntimeSpatialBridge {
     fn read_prepared_world_origin(
         &mut self,
         request: NativeWorldOriginPreparedReadRequest,
-    ) -> Result<NativeWorldOriginPreparedReadout, CsharpEngineServicesError> {
+    ) -> Result<NativeWorldOriginPreparedResult, CsharpEngineServicesError> {
         let owner = self.prepared_world_origin(request.prepared)?;
         let target = owner.candidate.target_origin().cell();
         let local_envelope = self
             .sessions
             .get(&owner.session)
             .map_or(0.0, |session| session.world_origin.local_envelope());
-        Ok(NativeWorldOriginPreparedReadout {
-            present: true,
-            target_cell_x: target[0],
-            target_cell_y: target[1],
-            target_cell_z: target[2],
-            affected_entity_count: owner.candidate.affected_transforms().len() as u32,
-            local_envelope,
-        })
-    }
-
-    fn read_world_origin_affected_at(
-        &mut self,
-        request: NativeWorldOriginAffectedAtRequest,
-    ) -> Result<NativeWorldOriginAffectedAtReceipt, CsharpEngineServicesError> {
-        let owner = self.prepared_world_origin(request.prepared)?;
-        Ok(owner
+        let affected = owner
             .candidate
             .affected_transforms()
-            .get(request.index as usize)
-            .copied()
-            .map(|value| NativeWorldOriginAffectedAtReceipt {
-                present: true,
+            .iter()
+            .map(|value| NativeWorldOriginAffectedTransform {
                 entity_id: value.entity.raw(),
                 local_transform: native_transform(value.transform),
             })
-            .unwrap_or_default())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let result = NativeWorldOriginPreparedResult {
+            affected: affected.as_ptr(),
+            affected_len: affected.len(),
+            target_cell_x: target[0],
+            target_cell_y: target[1],
+            target_cell_z: target[2],
+            local_envelope,
+        };
+        self.borrowed.hold(affected);
+        Ok(result)
     }
 
     fn commit_world_origin(
@@ -272,35 +266,16 @@ unsafe extern "C" fn read(
 unsafe extern "C" fn read_prepared(
     context: *mut c_void,
     request: NativeWorldOriginPreparedReadRequest,
-    readout: *mut NativeWorldOriginPreparedReadout,
+    result: *mut NativeWorldOriginPreparedResult,
 ) -> i32 {
-    if context.is_null() || readout.is_null() {
+    if context.is_null() || result.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
         .read_prepared_world_origin(request)
     {
         Ok(value) => {
-            unsafe { *readout = value };
-            ABI_OK
-        }
-        Err(_) => 0,
-    }
-}
-
-unsafe extern "C" fn read_affected_at(
-    context: *mut c_void,
-    request: NativeWorldOriginAffectedAtRequest,
-    receipt: *mut NativeWorldOriginAffectedAtReceipt,
-) -> i32 {
-    if context.is_null() || receipt.is_null() {
-        return 0;
-    }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .read_world_origin_affected_at(request)
-    {
-        Ok(value) => {
-            unsafe { *receipt = value };
+            unsafe { *result = value };
             ABI_OK
         }
         Err(_) => 0,
@@ -341,7 +316,6 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeWorldOriginApi {
         prepare,
         read,
         read_prepared,
-        read_affected_at,
         commit,
         destroy_prepared,
     }
@@ -439,7 +413,7 @@ mod tests {
             ABI_OK
         );
 
-        let mut summary = NativeWorldOriginPreparedReadout::default();
+        let mut summary: NativeWorldOriginPreparedResult = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe {
                 (world_origin_api.read_prepared)(
@@ -452,26 +426,16 @@ mod tests {
         );
         assert_eq!(summary.target_cell_x, 100);
         assert_eq!(summary.local_envelope, 16_384.0);
-        assert_eq!(summary.affected_entity_count, 1);
-
-        let mut affected = NativeWorldOriginAffectedAtReceipt::default();
-        assert_eq!(
-            unsafe {
-                (world_origin_api.read_affected_at)(
-                    world_origin_api.context,
-                    NativeWorldOriginAffectedAtRequest { prepared, index: 0 },
-                    &mut affected,
-                )
-            },
-            ABI_OK
-        );
-        assert!(affected.present);
-        assert_eq!(affected.entity_id, 41);
-        assert_eq!(affected.local_transform.translation.x, 0.0);
-        assert_eq!(affected.local_transform.translation.y, 2.0);
-        assert_eq!(affected.local_transform.translation.z, -3.0);
-        assert_eq!(affected.local_transform.scale.x, 2.0);
-        assert_eq!(affected.local_transform.rotation.w, 1.0);
+        // Copy the borrowed rows before the next call, as generated C# does.
+        let affected =
+            unsafe { std::slice::from_raw_parts(summary.affected, summary.affected_len) }.to_vec();
+        assert_eq!(affected.len(), 1);
+        assert_eq!(affected[0].entity_id, 41);
+        assert_eq!(affected[0].local_transform.translation.x, 0.0);
+        assert_eq!(affected[0].local_transform.translation.y, 2.0);
+        assert_eq!(affected[0].local_transform.translation.z, -3.0);
+        assert_eq!(affected[0].local_transform.scale.x, 2.0);
+        assert_eq!(affected[0].local_transform.rotation.w, 1.0);
 
         let mut receipt = NativeWorldOriginCommitReceipt::default();
         assert_eq!(
