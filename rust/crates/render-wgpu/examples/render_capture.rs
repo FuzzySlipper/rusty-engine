@@ -10,10 +10,11 @@
 //! `disabled`, as Dagger does for the world.
 //!
 //! `<dir>` holds `world-frame.json` (the fresh-attachment presentation-world
-//! frame), `view.json` (the camera composition) and `resources/` (texture and
-//! mesh resources, `/` in identities replaced by `__`). The frame renders
-//! through the installed composition: every primary view, its viewmodel
-//! pass, offscreen targets and presentations.
+//! frame), `view.json` (the camera composition), optionally
+//! `presentation.json` (the baseline's presentation frames, for billboards,
+//! particles and ghost plates) and `resources/` (`/` in identities replaced by
+//! `__`). The frame renders through the installed composition: every primary
+//! view, its viewmodel pass and labels, offscreen targets and presentations.
 //!
 //! With `source` (a retained node handle), an output image job then captures
 //! that node's subtree from the composition's first camera, as
@@ -23,7 +24,7 @@ use std::{borrow::Cow, fs, path::PathBuf};
 
 use render_host_contracts::{RenderOutputJob, RenderOutputOperation, RendererViewComposition};
 use render_model::{RenderFrameDiff, RenderHandle};
-use render_presentation::PresentationWorld;
+use render_presentation::{PresentationFrameDiff, PresentationWorld};
 use render_wgpu::{encode_png, Gpu, OffscreenTarget, Renderer, RendererOptions, ResourceSource};
 
 struct DirectoryResources(PathBuf);
@@ -88,6 +89,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if let Some(issue) = issues.first() {
         eprintln!("first skipped op: {issue:?}");
+    }
+    if let Ok(bytes) = fs::read(dir.join("presentation.json")) {
+        let frames: Vec<PresentationFrameDiff> = serde_json::from_slice(&bytes)?;
+        let entities = |entity| world.entity_world_position(entity);
+        for frame in &frames {
+            for issue in renderer.apply_presentation(frame, &resources, &entities) {
+                eprintln!("presentation issue: {issue:?}");
+            }
+        }
     }
     let target = OffscreenTarget::new(&gpu, width, height);
     renderer.set_view_composition(&view, 0.0);

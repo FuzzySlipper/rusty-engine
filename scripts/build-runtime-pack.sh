@@ -80,6 +80,8 @@ cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
 # Include the corresponding source and license for our modified MPL component.
 install -d "$STAGE/share/third-party"
 cp -a rust/vendor/fidget-mesh "$STAGE/share/third-party/fidget-mesh"
+# render-wgpu embeds DejaVu Sans; its license travels with the binaries.
+install -D -m 0644 rust/crates/render-wgpu/fonts/LICENSE "$STAGE/share/third-party/dejavu-sans/LICENSE"
 
 if command -v objcopy >/dev/null 2>&1; then
   objcopy --only-keep-debug "$STAGE/bin/rusty-product-host" \

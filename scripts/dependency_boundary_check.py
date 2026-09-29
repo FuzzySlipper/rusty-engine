@@ -48,11 +48,13 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "kira": "render-audio",
     "opus-decoder": "render-audio",
     "symphonia": "render-audio",
+    "fontdue": "render-wgpu",
     "naga": "render-wgpu",
     "wgpu": "render-wgpu",
     "wgpu-core": "render-wgpu",
     "wgpu-hal": "render-wgpu",
     "wgpu-types": "render-wgpu",
+    "wuff": "render-wgpu",
 }
 
 

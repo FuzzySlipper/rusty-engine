@@ -436,7 +436,7 @@ impl BillboardProjector {
                     .get(handle)
                     .cloned()
                     .ok_or(BillboardProjectionDiagnosticCode::UnknownHandle)?;
-                let updated = apply_patch(current, patch);
+                let updated = current.patched(patch);
                 validate_descriptor(assets, &updated)?;
                 self.record_assets(&updated);
                 self.active.insert(*handle, updated);
@@ -706,42 +706,47 @@ pub(crate) fn validate_font(
     }
 }
 
-fn apply_patch(mut descriptor: BillboardDescriptor, patch: &BillboardPatch) -> BillboardDescriptor {
-    if let Some(value) = &patch.anchor {
-        descriptor.anchor = value.clone();
-    }
-    if let Some(value) = &patch.content {
-        let structured = matches!(value, BillboardContent::Structured { .. });
-        descriptor.content = value.clone();
-        if !structured && patch.layout.is_none() {
-            descriptor.layout = None;
+impl BillboardDescriptor {
+    /// This descriptor with `patch` applied. Patching content to anything but
+    /// a structured indicator drops the layout unless the patch carries one.
+    pub fn patched(self, patch: &BillboardPatch) -> Self {
+        let mut descriptor = self;
+        if let Some(value) = &patch.anchor {
+            descriptor.anchor = value.clone();
         }
+        if let Some(value) = &patch.content {
+            let structured = matches!(value, BillboardContent::Structured { .. });
+            descriptor.content = value.clone();
+            if !structured && patch.layout.is_none() {
+                descriptor.layout = None;
+            }
+        }
+        if let Some(value) = &patch.font {
+            descriptor.font = value.clone();
+        }
+        if let Some(value) = patch.height_pixels {
+            descriptor.height_pixels = value;
+        }
+        if let Some(value) = patch.color {
+            descriptor.color = value;
+        }
+        if let Some(value) = patch.background {
+            descriptor.background = value;
+        }
+        if let Some(value) = patch.max_distance {
+            descriptor.max_distance = value;
+        }
+        if let Some(value) = patch.layer {
+            descriptor.layer = value;
+        }
+        if let Some(value) = patch.visible {
+            descriptor.visible = value;
+        }
+        if let Some(value) = &patch.layout {
+            descriptor.layout = Some(value.clone());
+        }
+        descriptor
     }
-    if let Some(value) = &patch.font {
-        descriptor.font = value.clone();
-    }
-    if let Some(value) = patch.height_pixels {
-        descriptor.height_pixels = value;
-    }
-    if let Some(value) = patch.color {
-        descriptor.color = value;
-    }
-    if let Some(value) = patch.background {
-        descriptor.background = value;
-    }
-    if let Some(value) = patch.max_distance {
-        descriptor.max_distance = value;
-    }
-    if let Some(value) = patch.layer {
-        descriptor.layer = value;
-    }
-    if let Some(value) = patch.visible {
-        descriptor.visible = value;
-    }
-    if let Some(value) = &patch.layout {
-        descriptor.layout = Some(value.clone());
-    }
-    descriptor
 }
 
 fn anchor_is_finite(anchor: &BillboardAnchor) -> bool {

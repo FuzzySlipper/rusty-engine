@@ -659,8 +659,8 @@ impl Renderer {
     /// Apply the renderer ops of one presentation delta: particles, ghost
     /// plates and animation controllers. `entities` resolves entity-attached
     /// anchors (the runtime passes `PresentationWorld::entity_world_position`).
-    /// Billboard labels (#8827) come back as issues; telemetry overlays (DOM
-    /// UI), audio and video are not renderer ops.
+    /// Billboard labels are drawn by the primary views; telemetry overlays
+    /// (DOM UI), audio and video are not renderer ops.
     pub fn apply_presentation(
         &mut self,
         frame: &PresentationFrameDiff,
@@ -696,10 +696,11 @@ impl Renderer {
                         Err(detail) => Some(("particle", detail)),
                     }
                 }
-                PresentationOp::Billboard { .. } => Some((
-                    "billboard",
-                    "billboard labels are realized by #8827".to_owned(),
-                )),
+                PresentationOp::Billboard { op, .. } => self
+                    .labels
+                    .apply(op, resources, entities)
+                    .err()
+                    .map(|detail| ("billboard", detail)),
                 PresentationOp::Animation { op, .. } => self
                     .apply_animation_op(op)
                     .err()
@@ -724,13 +725,15 @@ impl Renderer {
         issues
     }
 
-    /// Advance particles by `seconds` of Engine update time. The backend reads
-    /// no clock: a held simulation passes no time and every particle holds.
+    /// Advance particles by `seconds` of Engine update time, and move entity
+    /// anchored labels to their entities. The backend reads no clock: a held
+    /// simulation passes no time and every particle holds.
     pub fn advance_effects(
         &mut self,
         seconds: f64,
         entities: EntityPositions<'_>,
     ) -> Vec<ApplyIssue> {
+        self.labels.refresh_anchors(entities);
         if self.particles.is_empty() || seconds <= 0.0 {
             return Vec::new();
         }

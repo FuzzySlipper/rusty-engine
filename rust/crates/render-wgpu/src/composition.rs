@@ -27,6 +27,7 @@ use render_host_contracts::{
 
 use crate::camera::{self, CameraMatrices, CameraMotion, CameraPose, CameraSampleReadout};
 use crate::frame::{PassStart, PixelRect, ViewLayer, ViewPass, ViewStats};
+use crate::labels::LabelPass;
 use crate::target::{self, TargetView, OFFSCREEN_FORMAT};
 use crate::{FrameStats, OffscreenTarget, PresentSkip, Renderer, WindowSurface};
 
@@ -253,15 +254,20 @@ impl Renderer {
         start: PassStart,
     ) -> ViewStats {
         let clear = self.environment_clear();
+        let world_camera = camera::camera_matrices(pose, &camera.projection, area.aspect());
+        let labels = self.place_labels(&world_camera, area);
         let world = self.encode_view(ViewPass {
             target: *target,
             viewport: area,
-            camera: camera::camera_matrices(pose, &camera.projection, area.aspect()),
+            camera: world_camera,
             layer: ViewLayer::World,
             start,
             clear,
             sky: true,
         });
+        // Depth-layer labels test the world's depth before the viewmodel
+        // pass clears it.
+        let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth);
         // Every view pass clears its own viewport's depth first, so the
         // viewmodel's depth break may clear the whole target.
         let viewmodel = self.encode_view(ViewPass {
@@ -273,7 +279,10 @@ impl Renderer {
             clear,
             sky: false,
         });
-        world + viewmodel
+        let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
+        let mut stats = world + viewmodel;
+        stats.draws += depth_labels + top_labels;
+        stats
     }
 
     fn render_composition(&mut self, primary: TargetView<'_>, time_seconds: f64) -> FrameStats {

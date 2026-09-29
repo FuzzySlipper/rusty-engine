@@ -6,12 +6,15 @@ Usage: capture-presentation.py [origin] [output-dir]
   output-dir  default target/render-wgpu-capture under the repository root
 
 Writes world-frame.json (the presentation-world frame), view.json (camera
-composition) and resources/ (every texture and mesh resource the frame names).
+composition), presentation.json (the baseline's presentation frames: billboards,
+particles, ghost plates) and resources/ (every texture, mesh and font resource
+the frames name).
 Render it with `cargo run -p render-wgpu --example render_capture`.
 """
 
 import json
 import pathlib
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -54,6 +57,8 @@ frame = outputs["frame"]["frame"]
 out.mkdir(parents=True, exist_ok=True)
 (out / "world-frame.json").write_text(json.dumps(frame))
 (out / "view.json").write_text(json.dumps(outputs["view-composition"]["composition"]))
+presentation = [output["frame"] for output in batch["outputs"] if output["kind"] == "presentation"]
+(out / "presentation.json").write_text(json.dumps(presentation))
 
 resources = out / "resources"
 resources.mkdir(exist_ok=True)
@@ -69,6 +74,16 @@ for op in frame["ops"]:
         continue
     if source.get("kind") == "resource":
         names.add(source["resource"])
+# Billboard icons are texture resources named by content hash; asset fonts by
+# their asset identity.
+for presentation_frame in presentation:
+    for op in presentation_frame["ops"]:
+        if op["domain"] != "billboard":
+            continue
+        text = json.dumps(op["op"])
+        for texture in re.findall(r'"contentHash": "sha256:([0-9a-f]{64})"', text):
+            names.add(f"texture-resource/{texture}")
+        names.update(re.findall(r'"asset": "(font/[^"]+)"', text))
 # Animated mesh GLBs and clip packs are named only in the binding's list.
 names.update(outputs["binding"].get("rendererResources", []))
 for name in sorted(names):

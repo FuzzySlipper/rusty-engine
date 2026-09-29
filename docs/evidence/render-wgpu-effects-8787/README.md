@@ -13,7 +13,7 @@ The Three lane is untouched, and no downstream change is needed.
 Billboard *labels* (`PresentationOp::Billboard`: text, value, icon and
 structured meters) are the DOM host's, not a Three realization. By owner
 decision (2026-09-29) they are rendered by `render-wgpu` in their own task,
-**#8827**. Until then `apply_presentation` reports them as issues.
+**#8827**, which realizes them (`docs/evidence/render-wgpu-labels-8827`).
 
 ![Fixtures](fixtures.jpg)
 
@@ -24,7 +24,7 @@ decision (2026-09-29) they are rendered by `render-wgpu` in their own task,
 | Item | Purpose |
 |---|---|
 | `Renderer::apply` | Unchanged. `CreateSprite`, `UpdateSprite` and atlases were already retained by #8783; they now draw. |
-| `Renderer::apply_presentation(&PresentationFrameDiff, &dyn ResourceSource, entities)` | Applies particle ops: emit, create, update and destroy. `entities` resolves entity-attached anchors; the runtime passes `PresentationWorld::entity_world_position`. Other domains come back as issues naming their task: billboard labels #8827, ghost plates and animation #8788, telemetry. Audio and video are not renderer ops. |
+| `Renderer::apply_presentation(&PresentationFrameDiff, &dyn ResourceSource, entities)` | Applies particle ops: emit, create, update and destroy. `entities` resolves entity-attached anchors; the runtime passes `PresentationWorld::entity_world_position`. It also applies ghost plates and animation (#8788) and billboard labels (#8827). Telemetry overlays, audio and video are not renderer ops. |
 | `Renderer::advance_effects(seconds, entities)` | Ages particles by Engine update time. |
 | `Renderer::particle_counts()` | Live particles and retained emitters. |
 | `EntityPositions` | `&dyn Fn(u64) -> Option<[f32; 3]>` |
@@ -228,4 +228,5 @@ the Dagger frame render pixel-identical to the images above.
   alongside `apply`. Call `advance_effects` with the same Engine update
   seconds the runtime passes to `PresentationWorld::advance_elapsed`; while
   the simulation is held it passes none.
-- **#8827.** Billboard labels.
+- **#8827.** Billboard labels arrive through the same `apply_presentation`
+  call; `advance_effects` also moves entity-anchored labels.

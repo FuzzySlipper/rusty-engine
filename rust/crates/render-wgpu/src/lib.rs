@@ -31,6 +31,7 @@ mod frame;
 mod ghost;
 mod glb;
 mod gpu;
+mod labels;
 mod particles;
 mod pick;
 mod pipelines;
@@ -144,6 +145,7 @@ pub struct Renderer {
     composition: composition::ViewComposition,
     effects: effects::Effects,
     particles: particles::Particles,
+    labels: labels::Labels,
 }
 
 /// Initial storage sizes; both grow by doubling.
@@ -216,6 +218,7 @@ impl Renderer {
             composition: Default::default(),
             effects,
             particles: Default::default(),
+            labels: Default::default(),
         };
         for kind in [
             Builtin::Cube,
