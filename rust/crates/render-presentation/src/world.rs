@@ -34,6 +34,10 @@ impl NodeKind {
         }
     }
 
+    fn source_entity(&self) -> Option<u64> {
+        self.metadata().and_then(|metadata| metadata.source_entity)
+    }
+
     fn metadata(&self) -> Option<&RenderMetadata> {
         match self {
             Self::Primitive(node) => Some(&node.metadata),
@@ -105,6 +109,9 @@ struct RetainedGraphics {
     ghost_captures: BTreeMap<crate::GhostPlateHandle, Arc<RenderFrameDiff>>,
     ghost_sources: BTreeMap<crate::GhostPlateHandle, RenderHandle>,
     nodes: BTreeMap<RenderHandle, Arc<PresentationNode>>,
+    /// Nodes by `RenderMetadata::source_entity`, kept with `nodes`, so an
+    /// entity's node is found without scanning every node.
+    entity_nodes: BTreeMap<u64, BTreeSet<RenderHandle>>,
     textures: BTreeMap<String, Arc<TextureDescriptor>>,
     materials: BTreeMap<String, Arc<RenderMaterialDescriptor>>,
     atlases: BTreeMap<String, Arc<SpriteAtlasDescriptor>>,
@@ -114,6 +121,26 @@ struct RetainedGraphics {
     sky: Option<SkyBackgroundDescriptor>,
     background_color: Option<[f32; 4]>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
+}
+
+impl RetainedGraphics {
+    fn index_entity(&mut self, handle: RenderHandle, entity: Option<u64>) {
+        if let Some(entity) = entity {
+            self.entity_nodes.entry(entity).or_default().insert(handle);
+        }
+    }
+
+    fn unindex_entity(&mut self, handle: RenderHandle, entity: Option<u64>) {
+        let Some(entity) = entity else {
+            return;
+        };
+        if let Some(handles) = self.entity_nodes.get_mut(&entity) {
+            handles.remove(&handle);
+            if handles.is_empty() {
+                self.entity_nodes.remove(&entity);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -173,17 +200,9 @@ impl PresentationWorld {
     /// World-space origin of the retained node published for `entity`
     /// (`RenderMetadata::source_entity`), composed through its parents. A
     /// joint attachment uses its parent node's transform, not the joint's.
+    /// Of several nodes published for one entity, the lowest handle answers.
     pub fn entity_world_position(&self, entity: u64) -> Option<[f32; 3]> {
-        let node = self
-            .retained
-            .nodes
-            .iter()
-            .find(|(_, node)| {
-                node.kind
-                    .metadata()
-                    .is_some_and(|metadata| metadata.source_entity == Some(entity))
-            })
-            .map(|(&handle, _)| handle)?;
+        let node = *self.retained.entity_nodes.get(&entity)?.first()?;
         let mut cursor = Some(node);
         let mut position = [0.0; 3];
         // Parents are admitted acyclic; the bound only stops a corrupt chain.
@@ -744,6 +763,8 @@ impl PresentationWorld {
                     .map_err(|_| PresentationWorldError::InvalidPlayback)?;
             }
         }
+        let entity = kind.source_entity();
+        self.retained.index_entity(handle, entity);
         self.retained.nodes.insert(
             handle,
             Arc::new(PresentationNode {
@@ -852,6 +873,10 @@ impl PresentationWorld {
                         break;
                     }
                 }
+                for handle in &removed {
+                    let entity = self.retained.nodes[handle].kind.source_entity();
+                    self.retained.unindex_entity(*handle, entity);
+                }
                 self.retained
                     .nodes
                     .retain(|handle, _| !removed.contains(handle));
@@ -863,6 +888,11 @@ impl PresentationWorld {
                 visible,
                 metadata,
             } => {
+                let before = self
+                    .retained
+                    .nodes
+                    .get(handle)
+                    .and_then(|node| node.kind.source_entity());
                 let node = self.node_mut(*handle)?;
                 if material.is_some() {
                     node.material_override = *material;
@@ -902,6 +932,11 @@ impl PresentationWorld {
                     NodeKind::Light(_) => {
                         return Err(PresentationWorldError::WrongNodeKind(*handle))
                     }
+                }
+                let after = node.kind.source_entity();
+                if after != before {
+                    self.retained.unindex_entity(*handle, before);
+                    self.retained.index_entity(*handle, after);
                 }
             }
             RenderDiff::ReplaceMeshPayload { handle, payload } => {
@@ -1272,6 +1307,119 @@ mod tests {
         let position = world.entity_world_position(42).expect("entity node");
         assert!(close(position, [1.0, 0.5, 5.0]), "{position:?}");
         assert_eq!(world.entity_world_position(7), None);
+    }
+
+    fn entity_node(entity: u64, x: f32) -> RenderNode {
+        let mut node = RenderNode::new(Geometry::Cube);
+        node.transform.translation = [x, 0.0, 0.0];
+        node.metadata.source_entity = Some(entity);
+        node
+    }
+
+    fn assert_entity_index_matches_nodes(world: &PresentationWorld) {
+        let mut expected: BTreeMap<u64, BTreeSet<RenderHandle>> = BTreeMap::new();
+        for (handle, node) in &world.retained.nodes {
+            if let Some(entity) = node.kind.source_entity() {
+                expected.entry(entity).or_default().insert(*handle);
+            }
+        }
+        assert_eq!(world.retained.entity_nodes, expected);
+    }
+
+    #[test]
+    fn the_entity_index_follows_creation_metadata_updates_and_subtree_removal() {
+        let mut world = PresentationWorld::default();
+        let group = RenderNode::new(Geometry::Group);
+        world
+            .apply(frame(vec![
+                RenderDiff::Create {
+                    handle: RenderHandle::new(1),
+                    parent: None,
+                    node: group,
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(2),
+                    parent: Some(RenderHandle::new(1)),
+                    node: entity_node(42, 1.0),
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(3),
+                    parent: None,
+                    node: entity_node(7, 3.0),
+                },
+                // A second node for 42 with a higher handle: the lowest answers.
+                RenderDiff::Create {
+                    handle: RenderHandle::new(4),
+                    parent: None,
+                    node: entity_node(42, 4.0),
+                },
+            ]))
+            .unwrap();
+        assert_entity_index_matches_nodes(&world);
+        assert_eq!(world.entity_world_position(42), Some([1.0, 0.0, 0.0]));
+        assert_eq!(world.entity_world_position(7), Some([3.0, 0.0, 0.0]));
+
+        // Metadata moves node 3 from entity 7 to entity 9.
+        world
+            .apply(frame(vec![RenderDiff::Update {
+                handle: RenderHandle::new(3),
+                transform: None,
+                material: None,
+                visible: None,
+                metadata: Some(entity_node(9, 0.0).metadata),
+            }]))
+            .unwrap();
+        assert_entity_index_matches_nodes(&world);
+        assert_eq!(world.entity_world_position(7), None);
+        assert_eq!(world.entity_world_position(9), Some([3.0, 0.0, 0.0]));
+
+        // Destroying the group removes node 2 with it; node 4 answers for 42.
+        world
+            .apply(frame(vec![RenderDiff::Destroy {
+                handle: RenderHandle::new(1),
+            }]))
+            .unwrap();
+        assert_entity_index_matches_nodes(&world);
+        assert_eq!(world.entity_world_position(42), Some([4.0, 0.0, 0.0]));
+    }
+
+    /// Lookup cost follows the entity's parent depth, not the node count.
+    #[test]
+    fn entity_lookup_work_does_not_grow_with_unrelated_nodes() {
+        const LOOKUPS: u32 = 20_000;
+        let time_lookups = |unrelated: u64| {
+            let mut world = PresentationWorld::default();
+            let mut ops: Vec<_> = (0..unrelated)
+                .map(|index| RenderDiff::Create {
+                    handle: RenderHandle::new(index + 1),
+                    parent: None,
+                    node: RenderNode::new(Geometry::Cube),
+                })
+                .collect();
+            // The anchored entity sorts last, where a scan finds it latest.
+            ops.push(RenderDiff::Create {
+                handle: RenderHandle::new(unrelated + 1),
+                parent: None,
+                node: entity_node(42, 1.0),
+            });
+            world.apply(frame(ops)).unwrap();
+            let started = std::time::Instant::now();
+            for _ in 0..LOOKUPS {
+                std::hint::black_box(world.entity_world_position(std::hint::black_box(42)));
+            }
+            started.elapsed()
+        };
+        let small = time_lookups(10);
+        let large = time_lookups(20_000);
+        println!(
+            "{LOOKUPS} lookups: 10 unrelated nodes {small:?}, 20000 unrelated nodes {large:?}"
+        );
+        // A scan is about 2000 times slower here; the index stays within a
+        // small factor (the map's log term and cache effects).
+        assert!(
+            large < small * 20,
+            "lookups grew with unrelated nodes: {small:?} -> {large:?}"
+        );
     }
 
     #[test]
