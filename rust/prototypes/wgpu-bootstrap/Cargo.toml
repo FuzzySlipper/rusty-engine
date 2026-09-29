@@ -1,0 +1,25 @@
+# Throwaway #8796 bootstrap spike. Kept out of the Engine workspace so its
+# candidate renderers never enter `cargo test --workspace` or the runtime pack.
+[workspace]
+resolver = "2"
+members = ["fixture", "raw", "kiss3d", "bevy"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+publish = false
+rust-version = "1.95"
+
+[workspace.dependencies]
+bootstrap-fixture = { path = "fixture" }
+render-model = { path = "../../crates/render-model" }
+render-presentation = { path = "../../crates/render-presentation" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+png = "0.18"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.30"
+
+[profile.release]
+debug = false

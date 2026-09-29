@@ -1,0 +1,16 @@
+[package]
+name = "bootstrap-bevy"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bootstrap-fixture.workspace = true
+render-model.workspace = true
+# The survey's smallest documented set for PBR, shadows, skinning and sprites,
+# with no Bevy-owned window or input platform.
+bevy = { version = "=0.19.1", default-features = false, features = ["std", "default_app", "3d_bevy_render", "2d_bevy_render"] }
+# Must be the exact wgpu Bevy 0.19.1 links, or the device types differ.
+wgpu = "29"
+pollster.workspace = true
