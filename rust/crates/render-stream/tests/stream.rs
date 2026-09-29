@@ -7,7 +7,16 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use product_dev_host::ProductDevFrameStream;
-use render_stream::{FrameStreamer, RendererOptions, ResourceSource, StreamFormat};
+use render_stream::{FrameStreamer, RendererOptions, ResourceSource, SceneState, StreamFormat};
+
+fn state(step: u64, held: bool) -> SceneState {
+    SceneState {
+        elapsed_seconds: step as f64 / 60.0,
+        world_revision: 0,
+        step,
+        held,
+    }
+}
 
 struct NoResources;
 
@@ -59,22 +68,23 @@ fn frames_follow_viewers_and_simulation_time() {
     let pixel = &first[40..44];
     assert_eq!(pixel, &[16, 24, 32, 255], "the default clear colour");
 
-    // Running: each applied step draws a frame.
-    streamer.set_simulation(false, 7);
+    // Running: each applied step draws a frame that shows that step.
     let mut running = Vec::new();
     for step in 1..=10 {
-        streamer.apply(&[], &NoResources, &|_| None, f64::from(step) / 60.0, 0);
+        streamer.apply(&[], &NoResources, &|_| None, state(step, false));
         let after = running.last().map_or(head.sequence, |last: &Header| last.sequence);
         if let Some(frame) = frames.next_after(after, None, wait) {
-            running.push(header(&frame));
+            let shown = header(&frame);
+            assert_eq!(shown.step, step, "a frame shows the step it was applied with");
+            running.push(shown);
         }
     }
     assert!(running.len() >= 5, "only {} frames while running", running.len());
+    assert!(!running.last().unwrap().held);
     let last = running.last().unwrap();
-    assert!(!last.held && last.step == 7);
-    assert!(running.windows(2).all(|pair| pair[0].sequence < pair[1].sequence));
 
     // Held again: one frame shows the change, then nothing until the next one.
+    // A lifecycle change no call published (pause) draws once.
     streamer.set_simulation(true, 8);
     let mut after = last.sequence;
     let held = loop {
@@ -89,9 +99,19 @@ fn frames_follow_viewers_and_simulation_time() {
         .next_after(after, None, Duration::from_millis(400))
         .is_none());
 
+    // A held call's step lands with its changes: one frame, at the new
+    // step, and no second frame for the same change.
+    streamer.apply(&[], &NoResources, &|_| None, state(9, true));
+    let stepped = header(&frames.next_after(held.sequence, None, wait).unwrap());
+    assert_eq!((stepped.step, stepped.held), (9, true));
+    assert!(frames
+        .next_after(stepped.sequence, None, Duration::from_millis(300))
+        .is_none());
+    let held = stepped;
+
     // On demand: a change waits for a request, which draws exactly one frame.
     streamer.set_on_demand(true);
-    streamer.apply(&[], &NoResources, &|_| None, 1.0, 0);
+    streamer.apply(&[], &NoResources, &|_| None, state(10, true));
     assert!(frames
         .next_after(held.sequence, None, Duration::from_millis(300))
         .is_none());

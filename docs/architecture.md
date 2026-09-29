@@ -257,7 +257,9 @@ The world is realized either by the browser's Three surface or, with
 (`csharp-product-runtime/src/frame_output.rs`, `render-stream`). In that mode:
 
 - **Runtime.** Each finished product call's frame, presentation and view
-  composition publications are applied to the renderer as they are committed.
+  composition publications are applied to the renderer as they are committed,
+  under one lock with the simulation step and held state the call left, so a
+  frame never shows a call's changes under the previous step.
   A call whose renderer work was lost, or a world replacement, rebuilds the
   renderer from the committed snapshot. Animation facts from drawn frames
   reach the Engine through the ordinary animation realization feedback. The

@@ -93,6 +93,19 @@ struct Scene {
     last_drawn: Option<DrawnFrame>,
 }
 
+/// The Engine state applied publications bring the scene to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneState {
+    /// Engine presentation time the call reached.
+    pub elapsed_seconds: f64,
+    /// Retained world revision the publications reach.
+    pub world_revision: u64,
+    /// Simulation step the scene shows.
+    pub step: u64,
+    /// Paused, or inspection time held.
+    pub held: bool,
+}
+
 /// What one drawn and published frame showed.
 #[derive(Debug, Clone)]
 pub struct DrawnFrame {
@@ -203,51 +216,21 @@ impl FrameStreamer {
         })
     }
 
-    /// Applies one committed call's renderer publications in order, then
-    /// moves effects and animation to the Engine presentation time the call
-    /// reached. Other publications are not the renderer's. `world_revision`
-    /// is the retained world revision they bring the renderer to.
+    /// Applies one committed call's renderer publications in order and moves
+    /// effects and animation to the Engine presentation time the call
+    /// reached. Other publications are not the renderer's. `state` is what
+    /// the call brought the Engine to; it lands with the publications, so no
+    /// frame shows them under the previous step.
     pub fn apply(
         &self,
         publications: &[RuntimePublication],
         resources: &dyn ResourceSource,
         entities: EntityPositions<'_>,
-        elapsed_seconds: f64,
-        world_revision: u64,
+        state: SceneState,
     ) {
         let now = self.shared.now();
         let mut scene = self.shared.scene();
-        scene.world_revision = world_revision;
-        let mut applied = false;
-        for publication in publications {
-            let issues = match publication {
-                RuntimePublication::Frame(frame) => scene.renderer.apply(frame, resources),
-                RuntimePublication::Presentation(frame) => {
-                    scene
-                        .renderer
-                        .apply_presentation(frame, resources, entities)
-                }
-                RuntimePublication::ViewComposition(composition) => {
-                    scene.renderer.set_view_composition(composition, now);
-                    scene.composition = Some(Arc::new(composition.clone()));
-                    scene.composition_revision += 1;
-                    Vec::new()
-                }
-                _ => continue,
-            };
-            applied = true;
-            scene.record_issues(issues);
-        }
-        let advanced = elapsed_seconds - scene.elapsed_seconds;
-        if advanced > 0.0 {
-            let issues = scene.renderer.advance_effects(advanced, entities);
-            scene.record_issues(issues);
-            scene.renderer.set_animation_time(elapsed_seconds);
-            applied = true;
-        }
-        scene.elapsed_seconds = elapsed_seconds;
-        if applied {
-            scene.dirty = true;
+        if scene.apply(publications, resources, entities, state, now) {
             drop(scene);
             self.shared.wake.notify_all();
         }
@@ -255,30 +238,33 @@ impl FrameStreamer {
 
     /// Replaces the renderer with one built from a complete baseline, after
     /// a product call's renderer work was lost or the world was replaced.
+    /// The render thread never sees the empty renderer in between.
     pub fn rebaseline(
         &self,
         baseline: &[RuntimePublication],
         resources: &dyn ResourceSource,
         entities: EntityPositions<'_>,
-        elapsed_seconds: f64,
-        world_revision: u64,
+        state: SceneState,
     ) {
-        {
-            let mut scene = self.shared.scene();
-            scene.renderer = Renderer::new(&self.shared.gpu, self.shared.options);
-            let observer = scene.observer;
-            scene.renderer.set_observer(observer);
-            scene.renderer_id += 1;
-            scene.composition = None;
-            scene.composition_revision = 0;
-            scene.elapsed_seconds = elapsed_seconds;
-            scene.renderer.set_animation_time(elapsed_seconds);
-            scene.animation_facts.clear();
-        }
-        self.apply(baseline, resources, entities, elapsed_seconds, world_revision);
+        let now = self.shared.now();
+        let mut scene = self.shared.scene();
+        scene.renderer = Renderer::new(&self.shared.gpu, self.shared.options);
+        let observer = scene.observer;
+        scene.renderer.set_observer(observer);
+        scene.renderer_id += 1;
+        scene.composition = None;
+        scene.composition_revision = 0;
+        scene.elapsed_seconds = state.elapsed_seconds;
+        scene.renderer.set_animation_time(state.elapsed_seconds);
+        scene.animation_facts.clear();
+        scene.apply(baseline, resources, entities, state, now);
+        scene.dirty = true;
+        drop(scene);
+        self.shared.wake.notify_all();
     }
 
-    /// Whether the simulation is held, and the step the scene shows. A held
+    /// Whether the simulation is held, and the step the scene shows, for a
+    /// lifecycle change no product call published (pause, time mode). A held
     /// scene is drawn once per change instead of continuously.
     pub fn set_simulation(&self, held: bool, step: u64) {
         let mut scene = self.shared.scene();
@@ -407,6 +393,51 @@ impl Shared {
 }
 
 impl Scene {
+    /// Applies publications and the state they reach under the caller's
+    /// lock. Returns whether anything changed.
+    fn apply(
+        &mut self,
+        publications: &[RuntimePublication],
+        resources: &dyn ResourceSource,
+        entities: EntityPositions<'_>,
+        state: SceneState,
+        now: f64,
+    ) -> bool {
+        let mut applied = false;
+        for publication in publications {
+            let issues = match publication {
+                RuntimePublication::Frame(frame) => self.renderer.apply(frame, resources),
+                RuntimePublication::Presentation(frame) => {
+                    self.renderer.apply_presentation(frame, resources, entities)
+                }
+                RuntimePublication::ViewComposition(composition) => {
+                    self.renderer.set_view_composition(composition, now);
+                    self.composition = Some(Arc::new(composition.clone()));
+                    self.composition_revision += 1;
+                    Vec::new()
+                }
+                _ => continue,
+            };
+            applied = true;
+            self.record_issues(issues);
+        }
+        let advanced = state.elapsed_seconds - self.elapsed_seconds;
+        if advanced > 0.0 {
+            let issues = self.renderer.advance_effects(advanced, entities);
+            self.record_issues(issues);
+            self.renderer.set_animation_time(state.elapsed_seconds);
+            applied = true;
+        }
+        self.elapsed_seconds = state.elapsed_seconds;
+        self.world_revision = state.world_revision;
+        if (self.step, self.held) != (state.step, state.held) {
+            (self.step, self.held) = (state.step, state.held);
+            applied = true;
+        }
+        self.dirty |= applied;
+        applied
+    }
+
     fn record_issues(&mut self, issues: Vec<render_wgpu::ApplyIssue>) {
         for issue in issues {
             *self.skipped_ops.entry(issue.op).or_default() += 1;

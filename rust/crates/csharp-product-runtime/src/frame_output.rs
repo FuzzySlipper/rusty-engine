@@ -29,7 +29,7 @@ use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::RendererViewTarget;
 use render_stream::{
     AnimationFact, DrawnFrame, FrameStreamer, RendererCameraPose, RendererOptions,
-    RendererViewComposition, ResourceSource, StreamFormat, StreamStats,
+    RendererViewComposition, ResourceSource, SceneState, StreamFormat, StreamStats,
 };
 use serde_json::{json, Value};
 use runtime_publication::RuntimePublication;
@@ -103,14 +103,19 @@ impl FrameOutput {
         Arc::clone(&self.frames)
     }
 
-    /// Applies a committed call's renderer publications.
-    pub(crate) fn realize(&self, services: &EngineServiceSet, outputs: &[RuntimePublication]) {
+    /// Applies a committed call's renderer publications, with the simulation
+    /// step and held state the call left.
+    pub(crate) fn realize(
+        &self,
+        services: &EngineServiceSet,
+        outputs: &[RuntimePublication],
+        simulation: Simulation,
+    ) {
         self.streamer.apply(
             outputs,
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
-            services.presentation_elapsed_seconds(),
-            world_revision(services),
+            scene_state(services, simulation),
         );
     }
 
@@ -120,18 +125,20 @@ impl FrameOutput {
         &self,
         services: &EngineServiceSet,
         baseline: &[RuntimePublication],
+        simulation: Simulation,
     ) {
         self.streamer.rebaseline(
             baseline,
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
-            services.presentation_elapsed_seconds(),
-            world_revision(services),
+            scene_state(services, simulation),
         );
     }
 
-    pub(crate) fn follow_simulation(&self, held: bool, step: u64) {
-        self.streamer.set_simulation(held, step);
+    /// Follows a lifecycle or time-mode change that no product call
+    /// published.
+    pub(crate) fn follow_simulation(&self, simulation: Simulation) {
+        self.streamer.set_simulation(simulation.held, simulation.step);
     }
 
     /// Reports what the drawn frames observed since the last call. Call
@@ -347,11 +354,23 @@ impl ResourceSource for EngineResources<'_> {
     }
 }
 
-fn world_revision(services: &EngineServiceSet) -> u64 {
-    services
-        .renderer_publication_frontiers()
-        .first()
-        .map_or(0, |(_, revision)| *revision)
+/// The simulation step a frame shows, and whether time is held.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Simulation {
+    pub held: bool,
+    pub step: u64,
+}
+
+fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneState {
+    SceneState {
+        elapsed_seconds: services.presentation_elapsed_seconds(),
+        world_revision: services
+            .renderer_publication_frontiers()
+            .first()
+            .map_or(0, |(_, revision)| *revision),
+        step: simulation.step,
+        held: simulation.held,
+    }
 }
 
 /// The camera pose of the lowest-ordered primary view.

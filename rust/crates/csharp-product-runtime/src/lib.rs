@@ -1181,7 +1181,14 @@ impl CsharpProductRuntime {
         }
         if let Some(frames) = &frame_output {
             // The renderer shows the created world before Start publishes it.
-            frames.realize(&services, &initial_output);
+            frames.realize(
+                &services,
+                &initial_output,
+                frame_output::Simulation {
+                    held: true,
+                    step: lifecycle.readout().admitted_simulation_steps(),
+                },
+            );
         }
         let initial_output = Some(initial_output);
         observe_product_runtime(&api, handle, lifecycle.readout());
@@ -2078,7 +2085,7 @@ impl CsharpProductRuntime {
                             audio.realize(&self.services, &mut outputs);
                         }
                         if let Some(frames) = &self.frame_output {
-                            frames.realize(&self.services, &outputs);
+                            frames.realize(&self.services, &outputs, self.frame_simulation());
                         }
                         outputs.retain(|output| !is_empty_frame(output));
                         finished.outputs = outputs;
@@ -2622,11 +2629,15 @@ impl CsharpProductRuntime {
     /// moves: a paused product or held inspection time draws once per change.
     pub(crate) fn follow_simulation_with_frames(&self) {
         if let Some(frames) = &self.frame_output {
-            frames.follow_simulation(
-                self.lifecycle.state() != RuntimeState::Running
-                    || self.playtest_time != playtest::TimeMode::Realtime,
-                self.lifecycle.readout().admitted_simulation_steps(),
-            );
+            frames.follow_simulation(self.frame_simulation());
+        }
+    }
+
+    fn frame_simulation(&self) -> frame_output::Simulation {
+        frame_output::Simulation {
+            held: self.lifecycle.state() != RuntimeState::Running
+                || self.playtest_time != playtest::TimeMode::Realtime,
+            step: self.lifecycle.readout().admitted_simulation_steps(),
         }
     }
 
@@ -2642,7 +2653,7 @@ impl CsharpProductRuntime {
             .map_err(CsharpProductRuntimeError::from)
             .and_then(service_outputs)
         {
-            Ok(baseline) => frames.rebaseline(&self.services, &baseline),
+            Ok(baseline) => frames.rebaseline(&self.services, &baseline, self.frame_simulation()),
             Err(error) => {
                 let _ = self.diagnostics.publish(
                     ProductDevLogEvent::new(
