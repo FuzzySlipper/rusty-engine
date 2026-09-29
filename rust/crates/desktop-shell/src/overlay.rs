@@ -9,8 +9,10 @@ use render_wgpu::web::{
 };
 use render_wgpu::Gpu;
 use winit::{
+    dpi::PhysicalPosition,
     event::{ElementState, MouseScrollDelta, WindowEvent},
     keyboard::{KeyCode, ModifiersState, PhysicalKey},
+    raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{CursorGrabMode, CursorIcon, Window},
 };
 
@@ -87,6 +89,9 @@ pub(crate) struct UiOverlay {
     modifiers: ModifiersState,
     buttons: [bool; 3],
     grabbed: bool,
+    /// The lock keeps the cursor in the window by warping it back to the
+    /// centre, not by a pointer grab (X11).
+    recentring: bool,
     focused: bool,
     motion: (f64, f64),
 }
@@ -116,6 +121,7 @@ impl UiOverlay {
             modifiers: ModifiersState::empty(),
             buttons: [false; 3],
             grabbed: false,
+            recentring: false,
             focused: window.has_focus(),
             motion: (0.0, 0.0),
         })
@@ -179,17 +185,40 @@ impl UiOverlay {
     }
 
     fn grab(&mut self, window: &Window) {
-        let grabbed = window
-            .set_cursor_grab(CursorGrabMode::Locked)
-            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
-        if grabbed.is_err() {
+        let recentring = match window.set_cursor_grab(CursorGrabMode::Locked) {
+            Ok(()) => Some(false),
+            // X11 has no locked grab, and a confining grab makes XInput
+            // deliver every raw motion twice (to the root window's selection
+            // and to the grabbing client), doubling the turn rate. Keep the
+            // hidden cursor in the window by recentring it instead.
+            Err(_) if is_x11(window) => Some(true),
+            Err(_) => window
+                .set_cursor_grab(CursorGrabMode::Confined)
+                .ok()
+                .map(|_| false),
+        };
+        let Some(recentring) = recentring else {
             // No grab on this platform: tell the page the lock is gone.
             let _ = self.page.execute_script("window.__rustyDesktopUnlocked();");
             return;
-        }
+        };
         window.set_cursor_visible(false);
         self.grabbed = true;
+        self.recentring = recentring;
         self.motion = (0.0, 0.0);
+        self.recentre(window);
+    }
+
+    /// Warp a recentring lock's cursor back to the window's centre.
+    fn recentre(&mut self, window: &Window) {
+        if !self.recentring {
+            return;
+        }
+        let size = window.inner_size();
+        let centre = (size.width as i32 / 2, size.height as i32 / 2);
+        if self.cursor != centre {
+            let _ = window.set_cursor_position(PhysicalPosition::new(centre.0, centre.1));
+        }
     }
 
     /// Release the cursor. `tell_page` when the shell, not the page, ended
@@ -201,6 +230,7 @@ impl UiOverlay {
         let _ = window.set_cursor_grab(CursorGrabMode::None);
         window.set_cursor_visible(true);
         self.grabbed = false;
+        self.recentring = false;
         if tell_page {
             let _ = self.page.execute_script("window.__rustyDesktopUnlocked();");
         }
@@ -241,6 +271,8 @@ impl UiOverlay {
                 self.cursor = (position.x as i32, position.y as i32);
                 if !self.grabbed {
                     self.mouse(MouseButton::Left, MouseAction::Moved);
+                } else {
+                    self.recentre(window);
                 }
             }
             WindowEvent::CursorLeft { .. } if !self.grabbed => {
@@ -379,4 +411,13 @@ fn cursor_icon(shape: &CursorShape) -> CursorIcon {
         CursorShape::ZoomOut => CursorIcon::ZoomOut,
         _ => CursorIcon::Default,
     }
+}
+
+fn is_x11(window: &Window) -> bool {
+    window.window_handle().is_ok_and(|handle| {
+        matches!(
+            handle.as_raw(),
+            RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)
+        )
+    })
 }
