@@ -573,26 +573,19 @@ impl ProductDevAnimationFeedback {
                     selected_clip,
                     sampled_at_seconds,
                     ..
-                } => {
-                    if !matches!(
-                        status.as_str(),
-                        "unavailable"
-                            | "not_started"
-                            | "playing"
-                            | "paused"
-                            | "sampled"
-                            | "stopped"
-                    ) || !animation_feedback_text_fits(status)
-                        || selected_clip
-                            .as_ref()
-                            .is_some_and(|clip| !animation_feedback_text_fits(clip))
-                        || sampled_at_seconds.is_some_and(|time| !time.is_finite() || time < 0.0)
-                    {
-                        return Err(ProductDevHostError::new(
-                            "DEV_HOST_ANIMATION_FEEDBACK_FACT",
-                            "animation playback observation is invalid",
-                        ));
-                    }
+                } if !matches!(
+                    status.as_str(),
+                    "unavailable" | "not_started" | "playing" | "paused" | "sampled" | "stopped"
+                ) || !animation_feedback_text_fits(status)
+                    || selected_clip
+                        .as_ref()
+                        .is_some_and(|clip| !animation_feedback_text_fits(clip))
+                    || sampled_at_seconds.is_some_and(|time| !time.is_finite() || time < 0.0) =>
+                {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
+                        "animation playback observation is invalid",
+                    ));
                 }
                 ProductDevAnimationFeedbackFact::NaturalCompletion { clip, .. }
                     if !animation_feedback_text_fits(clip) =>

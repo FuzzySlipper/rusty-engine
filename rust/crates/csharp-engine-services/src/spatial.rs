@@ -663,8 +663,8 @@ impl RuntimeSpatialBridge {
                 || session.navigation.is_some()
                 || session.navigation_revision != 0
                 || session.last_character_receipt.is_some()
-                || !session.triggers.definitions().next().is_none()
-                || !session.triggers.active_overlaps().next().is_none()
+                || session.triggers.definitions().next().is_some()
+                || session.triggers.active_overlaps().next().is_some()
                 || !session.last_trigger_facts.is_empty()
                 || session.world_origin.origin() != core_space::WorldOrigin::ZERO
                 || session.world_origin.revision() != 0

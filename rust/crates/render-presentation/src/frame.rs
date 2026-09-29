@@ -416,18 +416,16 @@ fn validate_ghost_plate_capture(
     capture: &GhostPlateCaptureSettings,
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
-    if !(8..=4096).contains(&capture.resolution)
-        || !(capture.azimuth_degrees.is_finite()
-            && (-360.0..=360.0).contains(&capture.azimuth_degrees))
-        || !(capture.elevation_degrees.is_finite()
-            && (-89.0..=89.0).contains(&capture.elevation_degrees))
-        || !(capture.near.is_finite() && capture.near >= 0.001)
-        || !(capture.far.is_finite()
-            && capture.far > capture.near + 0.001
-            && capture.far <= 10_000.0)
-        || !(capture.field_of_view_degrees.is_finite()
-            && (10.0..=120.0).contains(&capture.field_of_view_degrees))
-    {
+    // A bounded range already rejects NaN and infinities.
+    let valid = (8..=4096).contains(&capture.resolution)
+        && (-360.0..=360.0).contains(&capture.azimuth_degrees)
+        && (-89.0..=89.0).contains(&capture.elevation_degrees)
+        && capture.near.is_finite()
+        && capture.near >= 0.001
+        && capture.far > capture.near + 0.001
+        && capture.far <= 10_000.0
+        && (10.0..=120.0).contains(&capture.field_of_view_degrees);
+    if !valid {
         return invalid_ghost_plate(sequence, "ghostPlate.capture");
     }
     let lighting = &capture.lighting;
@@ -460,14 +458,13 @@ fn validate_ghost_plate_config(
     config: &GhostPlateConfig,
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
-    if !(config.depth_retention.is_finite() && (0.02..=1.0).contains(&config.depth_retention))
-        || !(config.anchor_value.is_finite() && (0.0..=1.0).contains(&config.anchor_value))
-        || !(config.shell_depth_epsilon.is_finite()
-            && (0.0..=2.0).contains(&config.shell_depth_epsilon))
-        || !(config.sector_hysteresis_degrees.is_finite()
-            && (0.0..=22.5).contains(&config.sector_hysteresis_degrees))
-        || ![1, 4, 8, 16].contains(&config.sector_count)
-    {
+    // A bounded range already rejects NaN and infinities.
+    let valid = (0.02..=1.0).contains(&config.depth_retention)
+        && (0.0..=1.0).contains(&config.anchor_value)
+        && (0.0..=2.0).contains(&config.shell_depth_epsilon)
+        && (0.0..=22.5).contains(&config.sector_hysteresis_degrees)
+        && [1, 4, 8, 16].contains(&config.sector_count);
+    if !valid {
         return invalid_ghost_plate(sequence, "ghostPlate.config");
     }
     Ok(())

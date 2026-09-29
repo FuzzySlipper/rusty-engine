@@ -129,12 +129,10 @@ impl ApplicationHandler for SmokeApplication {
                     self.state_request = Some(renderer.read_state().expect("read mounted state"));
                 }
                 RendererWebviewObservation::StateRead { request_id, .. }
-                    if Some(request_id) == self.state_request =>
+                    if Some(request_id) == self.state_request && self.render_request.is_none() =>
                 {
-                    if self.render_request.is_none() {
-                        self.render_request =
-                            Some(renderer.render_once(Some(1.0)).expect("render once"));
-                    }
+                    self.render_request =
+                        Some(renderer.render_once(Some(1.0)).expect("render once"));
                 }
                 RendererWebviewObservation::FrameRendered {
                     request_id,
