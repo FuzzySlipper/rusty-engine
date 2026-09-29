@@ -632,7 +632,8 @@ export interface ProductBrowserHostOptions {
   /**
    * Owner of realtime simulation admission. Defaults to `browser`; use
    * `rust-host` only when a packaged in-process Rust host advances the runtime
-   * and publishes outputs through `transport.subscribeOutputs`.
+   * and publishes outputs through `transport.subscribeOutputs`. Only realtime
+   * products read it; demand and external products ignore it.
    */
   readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
   readonly mountUi: RustyApplicationUiMount;
@@ -3247,12 +3248,6 @@ function validateOptions(options: ProductBrowserHostOptions): void {
     && options.realtimeAdvanceOwner !== 'rust-host') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host realtime advance owner is invalid');
   }
-  if (options.realtimeAdvanceOwner === 'rust-host' && options.lifecycleMode !== 'realtime') {
-    throw new ProductBrowserHostError(
-      'invalid_options',
-      'Product Browser Host rust-host realtime advance ownership requires realtime lifecycle mode',
-    );
-  }
   if (typeof options.mountUi !== 'function') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host mountUi must be a function');
   }
@@ -3350,9 +3345,6 @@ export function productBrowserBundleAssets(
     && options.realtimeAdvanceOwner !== 'browser'
     && options.realtimeAdvanceOwner !== 'rust-host') {
     throw new RangeError('realtimeAdvanceOwner must be browser or rust-host');
-  }
-  if (options.realtimeAdvanceOwner === 'rust-host' && options.lifecycleMode !== 'realtime') {
-    throw new RangeError('rust-host realtimeAdvanceOwner requires realtime lifecycle mode');
   }
   if (options.gameplayCursorMode !== undefined
     && options.gameplayCursorMode !== 'pointer-lock'

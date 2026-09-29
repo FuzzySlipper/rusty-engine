@@ -2332,12 +2332,13 @@ impl CsharpProductRuntime {
     }
 
     fn readout(&self) -> ProductDevRuntimeReadout {
-        let hz = match self.lifecycle.configuration() {
-            RuntimeLifecycleConfig::Realtime(config) => config.fixed_step_hz(),
-            _ => 0,
-        };
-        dev_readout(self.lifecycle.readout())
-            .with_inspection_time(self.playtest_time.name().to_owned(), hz)
+        let readout = dev_readout(self.lifecycle.readout());
+        // Inspection time counts fixed steps, so only a realtime product has it.
+        match self.lifecycle.configuration() {
+            RuntimeLifecycleConfig::Realtime(config) => readout
+                .with_inspection_time(self.playtest_time.name().to_owned(), config.fixed_step_hz()),
+            _ => readout,
+        }
     }
 
     fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
@@ -7930,6 +7931,25 @@ mod tests {
             *result = NativeProductUpdateResult::None;
         }
         ABI_OK
+    }
+
+    #[test]
+    fn only_a_realtime_readout_carries_inspection_time() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (demand, demand_root) = drop_fixture_runtime("demand-inspection-time");
+        let readout = serde_json::to_value(demand.readout()).unwrap();
+        assert_eq!(readout["mode"], "demand");
+        assert!(readout.get("inspectionTime").is_none(), "{readout}");
+        drop(demand);
+        fs::remove_dir_all(demand_root).unwrap();
+
+        let (realtime, realtime_root) = realtime_drop_fixture_runtime("realtime-inspection-time");
+        let readout = serde_json::to_value(realtime.readout()).unwrap();
+        assert_eq!(readout["inspectionTime"], serde_json::json!(["realtime", 30]));
+        drop(realtime);
+        fs::remove_dir_all(realtime_root).unwrap();
     }
 
     #[test]

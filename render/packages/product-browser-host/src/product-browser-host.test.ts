@@ -260,6 +260,8 @@ test('a same-incarnation rebind (pause, resume, mapping) keeps the mounted rende
       root: root as unknown as HTMLElement,
       transport: transport as never,
       lifecycleMode: 'demand',
+      // The runtime-pack shell passes this for every product; demand ignores it.
+      realtimeAdvanceOwner: 'rust-host',
       mountUi: async () => undefined,
       autoStart: false,
     }, async () => fakeApplication as never);
@@ -2935,16 +2937,6 @@ test('bundle path and identity admission is fail-closed', () => {
       lifecycleMode: 'realtime',
     }),
     /bare Engine package imports/u,
-  );
-  assert.throws(
-    () => productBrowserBundleAssets({
-      engineHostModule: 'export const engineHost = true;\n',
-      uiModule: './ui/main.js',
-      runtimeAdapterModule: './runtime-adapter.js',
-      lifecycleMode: 'demand',
-      realtimeAdvanceOwner: 'rust-host',
-    }),
-    /requires realtime lifecycle mode/u,
   );
   assert.throws(
     () => productBrowserBundleAssets({
