@@ -1,4 +1,8 @@
 //! Owns an optional headless Chromium process for a foreground product host.
+//!
+//! The runtime starts when the first page attaches, so an unattended run
+//! (`rusty dev --headless`) opens this page to start the product and keep it
+//! attached while nobody watches.
 
 use std::{
     env, fs,
@@ -26,12 +30,9 @@ impl HeadlessBrowser {
             .arg("--headless=new")
             .arg("--no-sandbox")
             .arg("--disable-dev-shm-usage")
-            .arg("--disable-gpu-sandbox")
-            .arg("--use-gl=angle")
-            .arg("--use-angle=swiftshader")
-            .arg("--enable-unsafe-swiftshader")
-            .arg("--enable-webgl")
-            .arg("--ignore-gpu-blocklist")
+            // The page draws the runtime's frames on a 2D canvas and hosts the
+            // product UI; the runtime renders the world, so no GPU is needed.
+            .arg("--disable-gpu")
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
             // This disposable unattended profile must not wait for a desktop

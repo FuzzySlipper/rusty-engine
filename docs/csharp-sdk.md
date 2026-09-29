@@ -55,7 +55,9 @@ rusty dev --project src/Game/Game.csproj --port 8787
 declared inputs. UI and content-bundle edits reload into the running product;
 C#, project and loose-content edits rebuild and replace the runtime. Useful
 flags: `--live-debug`, `--debugger` (managed breakpoints, see
-[CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`.
+[CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`. The product
+starts when the first page attaches; `--headless` opens that page in headless
+Chromium (`RUSTY_CHROMIUM_PATH` selects it) for an unattended run.
 
 `rusty build --project …` stages without running; `--aot` also publishes the
 NativeAOT product, an explicit fidelity/release check rather than the edit
