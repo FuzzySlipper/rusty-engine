@@ -217,16 +217,64 @@ fn collect_loose_references(
     Ok(())
 }
 
-/// The `Version` of each `<PackageReference Include="Rusty.Engine" ...>`.
+/// The version each `PackageReference` or `PackageVersion` element names for
+/// Rusty.Engine, through `Include` or `Update`, in any attribute order, from
+/// its `Version` attribute or a child `<Version>` element.
 fn rusty_engine_reference_versions(text: &str) -> Vec<String> {
-    text.match_indices("Include=\"Rusty.Engine\"")
-        .filter_map(|(at, _)| {
-            let element = &text[at..at + text[at..].find('>')?];
-            let start = element.find("Version=\"")? + "Version=\"".len();
-            let end = start + element[start..].find('"')?;
-            Some(element[start..end].to_owned())
-        })
-        .collect()
+    let mut versions = Vec::new();
+    for element in ["PackageReference", "PackageVersion"] {
+        let open = format!("<{element}");
+        let mut rest = text;
+        while let Some(at) = rest.find(&open) {
+            rest = &rest[at + open.len()..];
+            // `<PackageReferences` or similar is another element.
+            if !rest.starts_with(|c: char| c.is_whitespace() || c == '/' || c == '>') {
+                continue;
+            }
+            let Some(tag_end) = rest.find('>') else {
+                break;
+            };
+            let tag = &rest[..tag_end];
+            let package = xml_attribute(tag, "Include").or_else(|| xml_attribute(tag, "Update"));
+            if package.is_none_or(|package| !package.trim().eq_ignore_ascii_case("Rusty.Engine")) {
+                continue;
+            }
+            let version = xml_attribute(tag, "Version").or_else(|| {
+                if tag.trim_end().ends_with('/') {
+                    return None;
+                }
+                let body = &rest[tag_end + 1..];
+                let body = &body[..body.find(&format!("</{element}"))?];
+                let start = body.find("<Version>")? + "<Version>".len();
+                Some(body[start..start + body[start..].find("</Version>")?].to_owned())
+            });
+            if let Some(version) = version {
+                versions.push(version.trim().to_owned());
+            }
+        }
+    }
+    versions
+}
+
+/// An attribute's value from an XML start tag, in single or double quotes.
+fn xml_attribute(tag: &str, name: &str) -> Option<String> {
+    let mut search = tag;
+    while let Some(at) = search.find(name) {
+        let before = &search[..at];
+        let after = search[at + name.len()..].trim_start();
+        search = &search[at + name.len()..];
+        if !before.ends_with(char::is_whitespace) {
+            continue;
+        }
+        let Some(value) = after.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim_start();
+        let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let value = &value[1..];
+        return Some(value[..value.find(quote)?].to_owned());
+    }
+    None
 }
 
 pub fn validate_version(version: &str) -> Result<(), String> {
@@ -679,6 +727,30 @@ mod tests {
         .unwrap();
         assert!(shape_problems(&pin).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reference_versions_are_found_in_every_ordinary_form() {
+        let cases = [
+            (r#"<PackageReference Include="Rusty.Engine" Version="$(V)" />"#, vec!["$(V)"]),
+            (r#"<PackageReference Version="$(V)" Include="Rusty.Engine" />"#, vec!["$(V)"]),
+            (r#"<PackageReference Include='Rusty.Engine' Version='[$(V)]'/>"#, vec!["[$(V)]"]),
+            (
+                "<PackageReference Include=\"Rusty.Engine\">\n  <Version>$(V)</Version>\n</PackageReference>",
+                vec!["$(V)"],
+            ),
+            (
+                "<PackageReference\n    Include=\"Rusty.Engine\"\n    ExcludeAssets=\"x\"\n    Version=\"$(V)\">\n</PackageReference>",
+                vec!["$(V)"],
+            ),
+            (r#"<PackageReference Update="Rusty.Engine" Version="$(V)" />"#, vec!["$(V)"]),
+            (r#"<PackageVersion Include="Rusty.Engine" Version="$(V)" />"#, vec!["$(V)"]),
+            (r#"<PackageReference Include="Rusty.Engine.Tools" Version="$(V)" />"#, vec![]),
+            (r#"<PackageReference Include="Other" Version="$(V)" /><Version>1</Version>"#, vec![]),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(rusty_engine_reference_versions(text), expected, "{text}");
+        }
     }
 
     #[test]

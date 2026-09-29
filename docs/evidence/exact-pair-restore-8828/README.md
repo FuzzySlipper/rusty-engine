@@ -119,3 +119,40 @@ For a product still on the old shape:
 - Bracket every `Rusty.Engine` version.
 - Delete any `export $(rusty env)` or `rusty env >> "$GITHUB_ENV"` line; the
   command no longer exists.
+
+## Review fix: order-independent reference detection
+
+The first check read a reference only as `Include="Rusty.Engine"` followed by
+`Version=` inside the same tag. It therefore passed
+`<PackageReference Version="…" Include="Rusty.Engine" />` and a child
+`<Version>…</Version>` element, both minimum references. The check now reads
+each `PackageReference` and `PackageVersion` start tag as a whole:
+
+- `Include` or `Update`, with attributes in any order;
+- single or double quotes;
+- the `Version` attribute, or else a child `<Version>` element.
+
+A unit test covers nine forms, including a longer package name and an
+unrelated `<Version>` element, neither of which may match.
+
+The reviewer's probe, rerun with this build (the Dagger feed declaration plus a
+minimal project):
+
+| Reference | `rusty status` |
+|---|---|
+| `Include` then minimum `Version` | needs changes, exit 1 |
+| minimum `Version` then `Include` | needs changes, exit 1 |
+| child `<Version>` minimum | needs changes, exit 1 |
+| `Version="[$(RustyEnginePackageVersion)]"` then `Include` | exact pin, pair feed declared, exit 0 |
+
+All twelve migrated products report `exact pin, pair feed declared`, checked
+on asset-pipeline's pushed `main`.
+
+The rerun found one real case that `~/.local/bin/rusty` had missed because
+that build predated the check. asset-pipeline's obsolete
+`legacy/tools/micro-voxel-studio` `MicroVoxel.Host` pinned its own unpublished
+`0.1.0-dev.8752652edcef` as a minimum. It now references the repository pin
+exactly (asset-pipeline `4ab29c9`). It does not compile on current pairs
+(`IEngineContext.Appearance` is gone), but it now fails there instead of
+restoring an arbitrary cached SDK. Nothing builds it; the recipe job uses
+`MicroVoxel.Cli`.
