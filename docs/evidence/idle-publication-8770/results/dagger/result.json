@@ -1,0 +1,140 @@
+{
+  "checkpoints": [
+    {
+      "label": "title",
+      "hostState": "ready",
+      "mode": "Title",
+      "step": 4858,
+      "beginVisible": true
+    },
+    {
+      "label": "began",
+      "hostState": "ready",
+      "mode": "Title",
+      "step": 5408
+    },
+    {
+      "label": "controls-open",
+      "hostState": "ready",
+      "mode": "Title",
+      "step": 5851
+    },
+    {
+      "label": "rebound-k",
+      "hostState": "ready",
+      "mode": "Title",
+      "step": 5973
+    },
+    {
+      "label": "restored-w",
+      "hostState": "ready",
+      "mode": "Title",
+      "step": 6094
+    },
+    {
+      "label": "returned",
+      "hostState": "ready",
+      "mode": "Title",
+      "step": 6226
+    }
+  ],
+  "idleTitleFiveSeconds": {
+    "batches": 0,
+    "emptyFrames": 0,
+    "kinds": {},
+    "ui": {}
+  },
+  "begin": {
+    "batches": 2,
+    "emptyFrames": 0,
+    "kinds": {
+      "runtime-input-result": 2
+    },
+    "ui": {},
+    "beginStillVisible": true
+  },
+  "idlePlayingFiveSeconds": {
+    "batches": 0,
+    "emptyFrames": 0,
+    "kinds": {},
+    "ui": {}
+  },
+  "controls": {
+    "batches": 3,
+    "emptyFrames": 0,
+    "kinds": {
+      "runtime-input-result": 3
+    },
+    "ui": {},
+    "menuVisible": true,
+    "rebindVisible": true
+  },
+  "rebind": {
+    "domBefore": "move.forward: KeyW ",
+    "toK": {
+      "batches": 8,
+      "emptyFrames": 0,
+      "kinds": {
+        "binding": 1,
+        "ui-projection": 2,
+        "runtime-readout": 1,
+        "runtime-input-result": 5
+      },
+      "ui": {
+        "dagger.hud": 2
+      },
+      "domText": "move.forward: KeyK ",
+      "productBinding": [
+        "KeyK"
+      ]
+    },
+    "toW": {
+      "batches": 8,
+      "emptyFrames": 0,
+      "kinds": {
+        "binding": 1,
+        "ui-projection": 2,
+        "runtime-readout": 1,
+        "runtime-input-result": 5
+      },
+      "ui": {
+        "dagger.hud": 2
+      },
+      "domText": "move.forward: KeyW ",
+      "productBinding": [
+        "KeyW"
+      ]
+    }
+  },
+  "returned": {
+    "batches": 4,
+    "emptyFrames": 0,
+    "kinds": {
+      "runtime-input-result": 4
+    },
+    "ui": {},
+    "rebindStillVisible": false
+  },
+  "total": {
+    "batches": 31,
+    "kinds": {
+      "binding": 3,
+      "frame": 1,
+      "animation-cue-definitions": 1,
+      "view-composition": 1,
+      "ui-projection": 7,
+      "presentation": 2,
+      "render-output": 1,
+      "runtime-readout": 3,
+      "runtime-input-result": 20
+    },
+    "emptyFrames": 0,
+    "ui": {
+      "dagger.hud": 7
+    },
+    "uiModes": [
+      "title"
+    ]
+  },
+  "errors": []
+}

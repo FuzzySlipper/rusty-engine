@@ -223,6 +223,17 @@ impl RuntimeUiBridge {
         }
         // SAFETY: pointer/null and range checks occur in the decoder before every slice.
         let value = unsafe { decode_structured_value(projection.value) }?;
+        // The browser already shows an unchanged value under the same binding;
+        // only the product's sequence advances. A rebind or baseline still
+        // sends `latest`.
+        if stream
+            .latest
+            .as_ref()
+            .is_some_and(|latest| latest.runtime() == binding && *latest.value() == value)
+        {
+            stream.last_sequence = Some(projection.sequence);
+            return Ok(());
+        }
         let envelope = RuntimeUiProjectionEnvelope::new(
             binding,
             projection.sequence,
@@ -673,6 +684,40 @@ mod tests {
         let rebound = bridge.finish_call();
         assert_eq!(rebound.len(), 1);
         assert_eq!(rebound[0].runtime(), binding(14));
+
+        projection.sequence = 3;
+        bridge.begin_call(binding(14));
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            ABI_OK
+        );
+        assert!(
+            bridge.finish_call().is_empty(),
+            "an unchanged value under the same binding is not republished"
+        );
+        bridge.begin_call(binding(14));
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            0,
+            "the skipped publish still advanced the stream sequence"
+        );
+        bridge.finish_call();
+        let changed = [NativeStructuredValueNode {
+            kind: NativeStructuredValueKind::Bool,
+            bool_value: 1,
+            ..nodes[0]
+        }];
+        projection.sequence = 4;
+        projection.value.nodes = changed.as_ptr();
+        bridge.begin_call(binding(14));
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            ABI_OK
+        );
+        let published = bridge.finish_call();
+        assert_eq!(published.len(), 1, "a changed value is published");
+        assert_eq!(published[0].sequence(), 4);
+        projection.value.nodes = nodes.as_ptr();
 
         bridge.begin_call(binding(14));
         assert_eq!(

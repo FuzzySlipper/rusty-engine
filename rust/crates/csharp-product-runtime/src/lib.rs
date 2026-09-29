@@ -1482,14 +1482,19 @@ impl CsharpProductRuntime {
 
     fn exercise_pause_resume(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let running_binding = self.binding();
-        self.lifecycle_with_binding(ProductDevLifecycleOperation::Pause, Some(running_binding))
-            .map_err(exercise_runtime_error)?;
+        let (_, paused_outputs) = self
+            .lifecycle_with_binding(ProductDevLifecycleOperation::Pause, Some(running_binding))
+            .map_err(exercise_runtime_error)?
+            .into_parts();
         if self.lifecycle.state() != RuntimeState::Paused {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_PAUSE",
                 "pause did not leave the Rust lifecycle paused",
             ));
         }
+        // The fixture's Pause publishes nothing; the current projection still
+        // follows the paused binding, so the browser does not blank its UI.
+        assert_ui_projection_binding(&paused_outputs, input_binding(&self.lifecycle))?;
         let paused_binding = self.binding();
         let paused_operation = self.advance_realtime(CanonicalU64::new(0));
         if paused_operation.is_ok() {
@@ -2067,7 +2072,10 @@ impl CsharpProductRuntime {
             Ok(mut call) => {
                 finished.input_mapping_replacement = call.take_input_mapping_replacement();
                 match service_outputs(call.take_output()) {
-                    Ok(outputs) => finished.outputs = outputs,
+                    Ok(mut outputs) => {
+                        outputs.retain(|output| !is_empty_frame(output));
+                        finished.outputs = outputs;
+                    }
                     Err(error) => {
                         finished.failure.get_or_insert(error);
                     }
@@ -2224,6 +2232,7 @@ impl CsharpProductRuntime {
     where
         F: FnOnce(&mut RuntimeLifecycle) -> Result<T, runtime_lifecycle::RuntimeLifecycleError>,
     {
+        let call_binding = ui_binding(&self.lifecycle);
         if matches!(
             operation,
             ProductDevOperationKind::Start
@@ -2231,10 +2240,9 @@ impl CsharpProductRuntime {
                 | ProductDevOperationKind::Resume
                 | ProductDevOperationKind::Restart
         ) {
-            self.services
-                .begin_lifecycle_call(ui_binding(&self.lifecycle));
+            self.services.begin_lifecycle_call(call_binding);
         } else {
-            self.services.begin_call(ui_binding(&self.lifecycle));
+            self.services.begin_call(call_binding);
         }
         let callback_result = call_action(&self.api, action, self.handle, operation);
         let finished = self.finish_product_call(callback_result.err());
@@ -2252,14 +2260,24 @@ impl CsharpProductRuntime {
             return Ok(call_outputs);
         }
         let binding = ui_binding(&self.lifecycle);
-        rebind_ui_output(&mut call_outputs, binding);
         let mut outputs = if matches!(operation, ProductDevOperationKind::Start) {
             self.initial_output.take().unwrap_or_default()
         } else {
             Vec::new()
         };
-        rebind_ui_output(&mut outputs, binding);
         outputs.extend(call_outputs);
+        if binding != call_binding {
+            // The browser clears UI when the binding changes. Each stream's
+            // current projection follows the new binding, whether or not the
+            // lifecycle callback published one, as in the other rebinds.
+            outputs.retain(|output| !matches!(output, RuntimePublication::UiProjection(_)));
+            outputs.extend(
+                self.services
+                    .snapshot_ui_projections(binding)
+                    .into_iter()
+                    .map(RuntimePublication::UiProjection),
+            );
+        }
         if let Some(replacement) = finished.input_mapping_replacement {
             self.input_lane
                 .replace_physical_mappings(replacement)
@@ -2604,12 +2622,7 @@ impl CsharpProductRuntime {
             ProductDevOperationKind::Start,
             |lifecycle| lifecycle.start(),
         )?;
-        if assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))? != 2 {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_UI_BINDING",
-                "Start did not expose one create-time and one Start UI projection",
-            ));
-        }
+        assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))?;
         self.rebind_input(InputClearReason::Restart)
     }
 
@@ -5225,11 +5238,15 @@ fn admit_renderer_resource(
     .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))
 }
 
-fn rebind_ui_output(outputs: &mut [RuntimePublication], binding: RuntimeUiRuntimeBinding) {
-    for output in outputs {
-        if let RuntimePublication::UiProjection(projection) = output {
-            projection.rebind_runtime(binding);
+/// A call's frame with no operations and no publication revision changes
+/// nothing a renderer holds. Baselines are built separately and keep theirs.
+fn is_empty_frame(output: &RuntimePublication) -> bool {
+    match output {
+        RuntimePublication::Frame(frame) => frame.ops.is_empty() && frame.publication.is_none(),
+        RuntimePublication::Presentation(frame) => {
+            frame.ops.is_empty() && frame.publication.is_none()
         }
+        _ => false,
     }
 }
 
