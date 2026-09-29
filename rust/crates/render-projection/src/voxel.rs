@@ -1,17 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap};
 
 use core_space::Direction6;
 use engine_spatial::{SurfaceMode, VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
-    Geometry, Material, MaterialDescriptorError, MeshAttribute, MeshAttributeKind,
-    MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshDescriptorError,
-    MeshGroupDescriptor, MeshIndexWidth, MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance,
-    RenderDiff, RenderFrameDiff, RenderFrameError, RenderHandle, RenderLayer,
-    RenderMaterialDescriptor, RenderMetadata, RenderNode, Transform, TransformError,
+    Geometry, Material, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
+    MeshBufferLayout, MeshGroupDescriptor, MeshIndexWidth, MeshPayloadDescriptor,
+    MeshPayloadSource, MeshProvenance, RenderDiff, RenderFrameDiff, RenderFramePublication,
+    RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode, Transform,
 };
 
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
 
+/// One voxel scene to project. `instance_id` is the retained key and must be
+/// unique within a projection.
 #[derive(Debug)]
 pub struct VoxelProjectionInstance<'a> {
     pub instance_id: String,
@@ -29,18 +30,33 @@ pub struct VoxelMaterialSlotMapping {
     pub directional: BTreeMap<(u16, u16, Direction6), u16>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl VoxelMaterialSlotMapping {
+    fn renderer_slot(&self, slot: u16, state: u16, direction: Option<Direction6>) -> u16 {
+        direction
+            .and_then(|direction| {
+                self.directional
+                    .get(&(slot, state >> 2, direction))
+                    .or_else(|| self.directional.get(&(slot, 0, direction)))
+                    .copied()
+            })
+            .or_else(|| self.base.get(&slot).copied())
+            .unwrap_or(slot)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct ChunkSnapshot {
     content_hash: u64,
     translation: [f32; 3],
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// What the renderer holds for one instance.
+#[derive(Debug, Clone)]
 struct InstanceSnapshot {
     asset_id: String,
     transform: Transform,
+    mesh_lineage: u64,
     source_revision: u64,
-    rebase_revision: u64,
     material_slots: VoxelMaterialSlotMapping,
     chunks: BTreeMap<[i64; 3], ChunkSnapshot>,
 }
@@ -51,6 +67,29 @@ enum VoxelRenderKey {
     Chunk { instance: String, chunk: [i64; 3] },
 }
 
+/// Which of an instance's chunks a projection visits.
+enum ChunkVisit<'a> {
+    /// The scene is at the revision last projected.
+    None,
+    /// The scene is one revision past the one last projected, in the same
+    /// mesh lineage, so its dirty list names every changed chunk.
+    Dirty(&'a [[i64; 3]]),
+    /// Compare every chunk: a new or rebound instance, a new mesh lineage, a
+    /// skipped revision, or a changed slot mapping.
+    All,
+}
+
+struct InstancePlan<'a> {
+    instance: &'a VoxelProjectionInstance<'a>,
+    slots: &'a VoxelMaterialSlotMapping,
+    /// The slot mapping changed, so every payload is rewritten.
+    replace_all: bool,
+    visit: ChunkVisit<'a>,
+}
+
+/// Retained voxel projection. Each call visits only the chunks whose meshes
+/// changed since the last call, as named by the scene's mesh update, and
+/// checks them before touching retained state.
 #[derive(Debug, Clone)]
 pub struct VoxelRenderProjector {
     registry: StableHandleRegistry<VoxelRenderKey>,
@@ -126,184 +165,207 @@ impl VoxelRenderProjector {
         materials: &BTreeMap<u16, RenderMaterialDescriptor>,
         material_slots: &BTreeMap<String, VoxelMaterialSlotMapping>,
     ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
-        let current = validate_and_snapshot(instances, materials, material_slots)?;
-        for (instance, next) in &current {
-            let Some(previous) = self.last_instances.get(instance) else {
-                continue;
-            };
-            if next.asset_id != previous.asset_id {
-                continue;
-            }
-            if next.rebase_revision < previous.rebase_revision {
-                return Err(VoxelProjectionError::StaleRebaseRevision {
-                    instance: instance.clone(),
-                    previous: previous.rebase_revision,
-                    candidate: next.rebase_revision,
-                });
-            }
-            if next.source_revision < previous.source_revision
-                || (next.source_revision == previous.source_revision
-                    && next.rebase_revision == previous.rebase_revision
-                    && (next.asset_id != previous.asset_id || next.chunks != previous.chunks))
-            {
-                return Err(VoxelProjectionError::StaleSourceRevision {
-                    instance: instance.clone(),
-                    previous: previous.source_revision,
-                    candidate: next.source_revision,
-                });
-            }
-        }
-        let mut registry = self.registry.clone();
-        let mut operations = Vec::new();
+        let empty_mapping = VoxelMaterialSlotMapping::default();
+        let materials_changed = *materials != self.last_materials;
 
-        for (slot, material) in materials {
-            if self.last_materials.get(slot) != Some(material) {
-                operations.push(RenderDiff::DefineMaterial {
-                    material: material.clone(),
-                });
-            }
-        }
-
-        for (instance_id, previous) in &self.last_instances {
-            let rebound = current
-                .get(instance_id)
-                .is_some_and(|next| next.asset_id != previous.asset_id);
-            if !current.contains_key(instance_id) || rebound {
-                retire_instance(&mut registry, instance_id, previous);
-                let root = VoxelRenderKey::Root(instance_id.clone());
-                let handle = registry
-                    .remove(&root)
-                    .expect("retained voxel root has a render handle");
-                operations.push(RenderDiff::Destroy { handle });
-            }
-        }
-
+        // Plan and check every instance before any retained state changes.
+        let mut plans = Vec::with_capacity(instances.len());
         for instance in instances_by_id(instances) {
-            let snapshot = &current[&instance.instance_id];
-            let previous = self.last_instances.get(&instance.instance_id);
-            let was_rebound = previous.is_some_and(|value| value.asset_id != snapshot.asset_id);
-            let root_key = VoxelRenderKey::Root(instance.instance_id.clone());
-            let root_handle = if previous.is_none() || was_rebound {
-                let handle = registry
-                    .allocate(root_key)
-                    .map_err(VoxelProjectionError::Handle)?;
-                operations.push(RenderDiff::Create {
-                    handle,
-                    parent: None,
-                    node: root_node(instance),
-                });
-                handle
-            } else {
-                let handle = registry
-                    .handle_of(&root_key)
-                    .expect("retained voxel root has a render handle");
-                if previous.is_some_and(|value| value.transform != snapshot.transform) {
-                    operations.push(RenderDiff::Update {
-                        handle,
-                        transform: Some(snapshot.transform),
-                        material: None,
-                        visible: None,
-                        metadata: None,
-                    });
-                }
-                handle
-            };
-
-            let previous_chunks = if was_rebound {
-                None
-            } else {
-                previous.map(|value| &value.chunks)
-            };
-            if let Some(previous_chunks) = previous_chunks {
-                for coord in previous_chunks.keys() {
-                    if !snapshot.chunks.contains_key(coord) {
-                        let key = VoxelRenderKey::Chunk {
-                            instance: instance.instance_id.clone(),
-                            chunk: *coord,
-                        };
-                        let handle = registry
-                            .remove(&key)
-                            .expect("retained voxel chunk has a render handle");
-                        operations.push(RenderDiff::Destroy { handle });
+            let slots = material_slots
+                .get(&instance.instance_id)
+                .unwrap_or(&empty_mapping);
+            let scene = instance.scene;
+            let revision = scene.source_revision().raw();
+            let previous = self
+                .last_instances
+                .get(&instance.instance_id)
+                .filter(|previous| previous.asset_id == instance.asset_id);
+            let replace_all = previous.is_some_and(|previous| previous.material_slots != *slots);
+            let visit = match previous {
+                Some(previous)
+                    if !replace_all && previous.mesh_lineage == scene.mesh_lineage() =>
+                {
+                    if previous.source_revision == revision {
+                        ChunkVisit::None
+                    } else if previous.source_revision.checked_add(1) == Some(revision) {
+                        ChunkVisit::Dirty(&scene.mesh_update().dirty_chunks)
+                    } else {
+                        ChunkVisit::All
                     }
                 }
+                _ => ChunkVisit::All,
+            };
+            // A material change can invalidate chunks that did not change.
+            match (&visit, materials_changed) {
+                (ChunkVisit::All, _) | (_, true) => {
+                    check_chunks(instance, slots, materials, scene.mesh_chunks())?
+                }
+                (ChunkVisit::Dirty(coords), false) => check_chunks(
+                    instance,
+                    slots,
+                    materials,
+                    coords.iter().filter_map(|coord| scene.mesh_chunk(*coord)),
+                )?,
+                (ChunkVisit::None, false) => {}
             }
+            plans.push(InstancePlan {
+                instance,
+                slots,
+                replace_all,
+                visit,
+            });
+        }
 
-            let chunks: BTreeMap<[i64; 3], &VoxelMeshChunk> = instance
-                .scene
-                .mesh_chunks()
-                .map(|chunk| (chunk.chunk, chunk))
-                .collect();
-            for (coord, chunk) in chunks {
-                let key = VoxelRenderKey::Chunk {
-                    instance: instance.instance_id.clone(),
-                    chunk: coord,
-                };
-                let previous_chunk = previous_chunks.and_then(|values| values.get(&coord));
-                let handle = if let Some(handle) = registry.handle_of(&key) {
-                    handle
-                } else {
-                    let handle = registry
-                        .allocate(key)
+        let mut operations = Vec::new();
+        if materials_changed {
+            for (slot, material) in materials {
+                if self.last_materials.get(slot) != Some(material) {
+                    operations.push(RenderDiff::DefineMaterial {
+                        material: material.clone(),
+                    });
+                }
+            }
+            self.last_materials = materials.clone();
+        }
+
+        // Retire instances that left or were rebound to another asset.
+        let current: BTreeMap<&str, &str> = plans
+            .iter()
+            .map(|plan| {
+                (
+                    plan.instance.instance_id.as_str(),
+                    plan.instance.asset_id.as_str(),
+                )
+            })
+            .collect();
+        let retired: Vec<String> = self
+            .last_instances
+            .iter()
+            .filter(|(id, previous)| {
+                current.get(id.as_str()) != Some(&previous.asset_id.as_str())
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for instance_id in retired {
+            let previous = self
+                .last_instances
+                .remove(&instance_id)
+                .expect("retired voxel instance is retained");
+            for chunk in previous.chunks.keys() {
+                self.registry.remove(&VoxelRenderKey::Chunk {
+                    instance: instance_id.clone(),
+                    chunk: *chunk,
+                });
+            }
+            let handle = self
+                .registry
+                .remove(&VoxelRenderKey::Root(instance_id))
+                .expect("retained voxel root has a render handle");
+            operations.push(RenderDiff::Destroy { handle });
+        }
+
+        for plan in &plans {
+            let instance = plan.instance;
+            let scene = instance.scene;
+            let root_key = VoxelRenderKey::Root(instance.instance_id.clone());
+            let (snapshot, root) = match self.last_instances.entry(instance.instance_id.clone())
+            {
+                Entry::Occupied(entry) => {
+                    let snapshot = entry.into_mut();
+                    let handle = self
+                        .registry
+                        .handle_of(&root_key)
+                        .expect("retained voxel root has a render handle");
+                    if snapshot.transform != instance.transform {
+                        snapshot.transform = instance.transform;
+                        operations.push(RenderDiff::Update {
+                            handle,
+                            transform: Some(instance.transform),
+                            material: None,
+                            visible: None,
+                            metadata: None,
+                        });
+                    }
+                    if plan.replace_all {
+                        snapshot.material_slots = plan.slots.clone();
+                    }
+                    (snapshot, handle)
+                }
+                Entry::Vacant(entry) => {
+                    let handle = self
+                        .registry
+                        .allocate(root_key)
                         .map_err(VoxelProjectionError::Handle)?;
                     operations.push(RenderDiff::Create {
                         handle,
-                        parent: Some(root_handle),
-                        node: chunk_node(&instance.instance_id, chunk),
+                        parent: None,
+                        node: root_node(instance),
                     });
-                    handle
-                };
-                if previous_chunk.is_none_or(|value| value.content_hash != chunk.content_hash)
-                    || previous.is_some_and(|value| value.material_slots != snapshot.material_slots)
-                {
-                    operations.push(RenderDiff::ReplaceMeshPayload {
-                        handle,
-                        payload: voxel_mesh_payload_with_material_slots(
-                            chunk,
-                            &snapshot.material_slots,
-                        ),
+                    let snapshot = entry.insert(InstanceSnapshot {
+                        asset_id: instance.asset_id.clone(),
+                        transform: instance.transform,
+                        mesh_lineage: scene.mesh_lineage(),
+                        source_revision: scene.source_revision().raw(),
+                        material_slots: plan.slots.clone(),
+                        chunks: BTreeMap::new(),
                     });
-                } else if previous_chunk.is_some_and(|value| value.translation != chunk.translation)
-                {
-                    operations.push(RenderDiff::Update {
-                        handle,
-                        transform: Some(Transform {
-                            translation: chunk.translation,
-                            ..Transform::IDENTITY
-                        }),
-                        material: None,
-                        visible: None,
-                        metadata: None,
-                    });
+                    (snapshot, handle)
+                }
+            };
+            let mut chunks = ChunkProjection {
+                registry: &mut self.registry,
+                operations: &mut operations,
+                instance_id: &instance.instance_id,
+                root,
+                retained: &mut snapshot.chunks,
+                slots: plan.slots,
+                replace_all: plan.replace_all,
+            };
+            match plan.visit {
+                ChunkVisit::None => {}
+                ChunkVisit::Dirty(coords) => {
+                    for coord in coords {
+                        chunks.project(*coord, scene.mesh_chunk(*coord))?;
+                    }
+                }
+                ChunkVisit::All => {
+                    let gone: Vec<_> = chunks
+                        .retained
+                        .keys()
+                        .filter(|coord| scene.mesh_chunk(**coord).is_none())
+                        .copied()
+                        .collect();
+                    for coord in gone {
+                        chunks.project(coord, None)?;
+                    }
+                    for chunk in scene.mesh_chunks() {
+                        chunks.project(chunk.chunk, Some(chunk))?;
+                    }
                 }
             }
+            snapshot.mesh_lineage = scene.mesh_lineage();
+            snapshot.source_revision = scene.source_revision().raw();
         }
 
         let stream = self
             .publication_stream
-            .clone()
-            .unwrap_or_else(|| voxel_publication_stream(current.keys()));
-        let publication_revision = self
-            .publication_revision
-            .checked_add(1)
-            .ok_or(VoxelProjectionError::PublicationRevisionExhausted)?;
-        let frame = RenderFrameDiff::try_from_published_ops(
-            stream.clone(),
-            self.publication_revision,
-            publication_revision,
-            operations,
-        )
-        .map_err(VoxelProjectionError::Frame)?;
-        self.registry = registry;
-        self.last_instances = current;
-        self.last_materials = materials.clone();
-        self.publication_stream = Some(stream);
-        self.publication_revision = publication_revision;
-        let source_revisions = self
-            .last_instances
-            .iter()
-            .map(|(id, value)| (id.clone(), value.source_revision))
-            .collect();
+            .get_or_insert_with(|| {
+                voxel_publication_stream(plans.iter().map(|plan| &plan.instance.instance_id))
+            })
+            .clone();
+        let base_revision = self.publication_revision;
+        self.publication_revision += 1;
+        let frame = RenderFrameDiff {
+            publication: Some(RenderFramePublication {
+                stream,
+                base_revision,
+                revision: self.publication_revision,
+                operation_count: u32::try_from(operations.len())
+                    .expect("a voxel frame holds fewer than 2^32 operations"),
+            }),
+            ops: operations,
+            ..RenderFrameDiff::default()
+        };
         Ok(VoxelProjectionResult {
             readout: VoxelProjectionReadout {
                 instance_count: self.last_instances.len(),
@@ -312,7 +374,11 @@ impl VoxelRenderProjector {
                     .values()
                     .map(|value| value.chunks.len())
                     .sum(),
-                source_revisions,
+                source_revisions: self
+                    .last_instances
+                    .iter()
+                    .map(|(id, value)| (id.clone(), value.source_revision))
+                    .collect(),
             },
             frame,
         })
@@ -340,6 +406,88 @@ impl VoxelRenderProjector {
     }
 }
 
+/// Renderer work for one instance's chunks.
+struct ChunkProjection<'a> {
+    registry: &'a mut StableHandleRegistry<VoxelRenderKey>,
+    operations: &'a mut Vec<RenderDiff>,
+    instance_id: &'a str,
+    root: RenderHandle,
+    retained: &'a mut BTreeMap<[i64; 3], ChunkSnapshot>,
+    slots: &'a VoxelMaterialSlotMapping,
+    replace_all: bool,
+}
+
+impl ChunkProjection<'_> {
+    /// Bring one chunk to the scene's mesh: create, replace, move or destroy.
+    fn project(
+        &mut self,
+        coord: [i64; 3],
+        chunk: Option<&VoxelMeshChunk>,
+    ) -> Result<(), VoxelProjectionError> {
+        let key = VoxelRenderKey::Chunk {
+            instance: self.instance_id.to_string(),
+            chunk: coord,
+        };
+        let Some(chunk) = chunk else {
+            if self.retained.remove(&coord).is_some() {
+                let handle = self
+                    .registry
+                    .remove(&key)
+                    .expect("retained voxel chunk has a render handle");
+                self.operations.push(RenderDiff::Destroy { handle });
+            }
+            return Ok(());
+        };
+        let previous = self.retained.insert(
+            coord,
+            ChunkSnapshot {
+                content_hash: chunk.content_hash,
+                translation: chunk.translation,
+            },
+        );
+        let handle = match previous {
+            Some(_) => self
+                .registry
+                .handle_of(&key)
+                .expect("retained voxel chunk has a render handle"),
+            None => {
+                let handle = self
+                    .registry
+                    .allocate(key)
+                    .map_err(VoxelProjectionError::Handle)?;
+                self.operations.push(RenderDiff::Create {
+                    handle,
+                    parent: Some(self.root),
+                    node: chunk_node(self.instance_id, chunk),
+                });
+                handle
+            }
+        };
+        if previous.is_none_or(|previous| {
+            previous.content_hash != chunk.content_hash || self.replace_all
+        }) {
+            self.operations.push(RenderDiff::ReplaceMeshPayload {
+                handle,
+                payload: voxel_mesh_payload_with_material_slots(chunk, self.slots),
+            });
+        }
+        // A rebuilt chunk can also move (a world-origin rebase does both).
+        if previous.is_some_and(|previous| previous.translation != chunk.translation) {
+            self.operations.push(RenderDiff::Update {
+                handle,
+                transform: Some(Transform {
+                    translation: chunk.translation,
+                    ..Transform::IDENTITY
+                }),
+                material: None,
+                visible: None,
+                metadata: None,
+            });
+        }
+        Ok(())
+    }
+}
+
 fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> String {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut empty = true;
@@ -357,131 +505,37 @@ fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> 
     }
 }
 
-fn validate_and_snapshot(
-    instances: &[VoxelProjectionInstance<'_>],
+/// Every group of these chunks must resolve to a defined material, and a
+/// reconstructed (non-cube) surface has no tile coordinates for a texture.
+fn check_chunks<'a>(
+    instance: &VoxelProjectionInstance<'_>,
+    slots: &VoxelMaterialSlotMapping,
     materials: &BTreeMap<u16, RenderMaterialDescriptor>,
-    material_slots: &BTreeMap<String, VoxelMaterialSlotMapping>,
-) -> Result<BTreeMap<String, InstanceSnapshot>, VoxelProjectionError> {
-    for (slot, material) in materials {
-        material
-            .validate()
-            .map_err(|source| VoxelProjectionError::InvalidMaterial {
-                slot: *slot,
-                source,
-            })?;
-        let expected = voxel_material_id(*slot);
-        if material.id != expected {
-            return Err(VoxelProjectionError::MaterialIdMismatch {
-                slot: *slot,
-                expected,
-                actual: material.id.clone(),
-            });
-        }
-    }
-
-    let mut current = BTreeMap::new();
-    for instance in instances {
-        if instance.instance_id.trim().is_empty() {
-            return Err(VoxelProjectionError::EmptyInstanceId);
-        }
-        if instance.asset_id.trim().is_empty() {
-            return Err(VoxelProjectionError::EmptyAssetId {
-                instance: instance.instance_id.clone(),
-            });
-        }
-        instance
-            .transform
-            .validate()
-            .map_err(|source| VoxelProjectionError::InvalidTransform {
-                instance: instance.instance_id.clone(),
-                source,
-            })?;
-        if current.contains_key(&instance.instance_id) {
-            return Err(VoxelProjectionError::DuplicateInstanceId {
-                instance: instance.instance_id.clone(),
-            });
-        }
-        let empty_mapping = VoxelMaterialSlotMapping::default();
-        let slots = material_slots
-            .get(&instance.instance_id)
-            .unwrap_or(&empty_mapping);
-        let map_slot = |slot, state: u16, direction: Option<Direction6>| {
-            direction
-                .and_then(|direction| {
-                    slots
-                        .directional
-                        .get(&(slot, state >> 2, direction))
-                        .or_else(|| slots.directional.get(&(slot, 0, direction)))
-                        .copied()
-                })
-                .or_else(|| slots.base.get(&slot).copied())
-                .unwrap_or(slot)
-        };
-        let mut chunks = BTreeMap::new();
-        let mut used_slots = BTreeSet::new();
-        for chunk in instance.scene.mesh_chunks() {
-            let payload = voxel_mesh_payload_with_material_slots(chunk, slots);
-            payload
-                .validate()
-                .map_err(|source| VoxelProjectionError::InvalidMesh {
+    chunks: impl Iterator<Item = &'a VoxelMeshChunk>,
+) -> Result<(), VoxelProjectionError> {
+    for chunk in chunks {
+        for group in &chunk.groups {
+            let slot = slots.renderer_slot(group.material_slot, group.state, group.direction);
+            let material =
+                materials
+                    .get(&slot)
+                    .ok_or_else(|| VoxelProjectionError::MissingMaterial {
+                        instance: instance.instance_id.clone(),
+                        slot,
+                    })?;
+            if chunk.surface_mode != SurfaceMode::GreedyCubes
+                && (material.texture.is_some() || material.voxel_surface.is_some())
+            {
+                return Err(VoxelProjectionError::TexturedReconstructedSurface {
                     instance: instance.instance_id.clone(),
                     chunk: chunk.chunk,
-                    source,
-                })?;
-            used_slots.extend(
-                chunk
-                    .groups
-                    .iter()
-                    .map(|group| map_slot(group.material_slot, group.state, group.direction)),
-            );
-            chunks.insert(
-                chunk.chunk,
-                ChunkSnapshot {
-                    content_hash: chunk.content_hash,
-                    translation: chunk.translation,
-                },
-            );
-        }
-        if let Some(slot) = used_slots.iter().find(|slot| !materials.contains_key(slot)) {
-            return Err(VoxelProjectionError::MissingMaterial {
-                instance: instance.instance_id.clone(),
-                slot: *slot,
-            });
-        }
-        if let Some((chunk, slot)) = instance.scene.mesh_chunks().find_map(|chunk| {
-            if chunk.surface_mode == SurfaceMode::GreedyCubes {
-                return None;
+                    slot,
+                    mode: chunk.surface_mode,
+                });
             }
-            chunk.groups.iter().find_map(|group| {
-                let effective_slot = map_slot(group.material_slot, group.state, group.direction);
-                materials
-                    .get(&effective_slot)
-                    .filter(|material| {
-                        material.texture.is_some() || material.voxel_surface.is_some()
-                    })
-                    .map(|_| (chunk, effective_slot))
-            })
-        }) {
-            return Err(VoxelProjectionError::TexturedReconstructedSurface {
-                instance: instance.instance_id.clone(),
-                chunk: chunk.chunk,
-                slot,
-                mode: chunk.surface_mode,
-            });
         }
-        current.insert(
-            instance.instance_id.clone(),
-            InstanceSnapshot {
-                asset_id: instance.asset_id.clone(),
-                transform: instance.transform,
-                source_revision: instance.scene.source_revision().raw(),
-                rebase_revision: instance.scene.rebase_revision(),
-                material_slots: slots.clone(),
-                chunks,
-            },
-        );
     }
-    Ok(current)
+    Ok(())
 }
 
 fn instances_by_id<'a>(
@@ -492,18 +546,6 @@ fn instances_by_id<'a>(
     values
 }
 
-fn retire_instance(
-    registry: &mut StableHandleRegistry<VoxelRenderKey>,
-    instance_id: &str,
-    snapshot: &InstanceSnapshot,
-) {
-    for chunk in snapshot.chunks.keys() {
-        registry.remove(&VoxelRenderKey::Chunk {
-            instance: instance_id.to_string(),
-            chunk: *chunk,
-        });
-    }
-}
 
 fn root_node(instance: &VoxelProjectionInstance<'_>) -> RenderNode {
     RenderNode {
@@ -588,21 +630,11 @@ fn voxel_mesh_payload_with_material_slots(
             .groups
             .iter()
             .map(|group| MeshGroupDescriptor {
-                material_slot: group
-                    .direction
-                    .and_then(|direction| {
-                        material_slots
-                            .directional
-                            .get(&(group.material_slot, group.state >> 2, direction))
-                            .or_else(|| {
-                                material_slots
-                                    .directional
-                                    .get(&(group.material_slot, 0, direction))
-                            })
-                            .copied()
-                    })
-                    .or_else(|| material_slots.base.get(&group.material_slot).copied())
-                    .unwrap_or(group.material_slot),
+                material_slot: material_slots.renderer_slot(
+                    group.material_slot,
+                    group.state,
+                    group.direction,
+                ),
                 start: group.start,
                 count: group.count,
             })
@@ -642,28 +674,10 @@ pub struct VoxelProjectionReadout {
     pub source_revisions: BTreeMap<String, u64>,
 }
 
+/// Material errors are reported before any retained state changes. Handle
+/// exhaustion (2^40 handles) is not recoverable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VoxelProjectionError {
-    EmptyInstanceId,
-    EmptyAssetId {
-        instance: String,
-    },
-    DuplicateInstanceId {
-        instance: String,
-    },
-    InvalidTransform {
-        instance: String,
-        source: TransformError,
-    },
-    InvalidMaterial {
-        slot: u16,
-        source: MaterialDescriptorError,
-    },
-    MaterialIdMismatch {
-        slot: u16,
-        expected: String,
-        actual: String,
-    },
     MissingMaterial {
         instance: String,
         slot: u16,
@@ -674,24 +688,7 @@ pub enum VoxelProjectionError {
         slot: u16,
         mode: SurfaceMode,
     },
-    InvalidMesh {
-        instance: String,
-        chunk: [i64; 3],
-        source: MeshDescriptorError,
-    },
-    StaleSourceRevision {
-        instance: String,
-        previous: u64,
-        candidate: u64,
-    },
-    StaleRebaseRevision {
-        instance: String,
-        previous: u64,
-        candidate: u64,
-    },
-    PublicationRevisionExhausted,
     Handle(HandleAllocationError),
-    Frame(RenderFrameError),
 }
 
 #[cfg(test)]
@@ -1093,9 +1090,10 @@ mod tests {
     }
 
     #[test]
-    fn stale_or_same_revision_changed_scene_rejects_without_projector_mutation() {
+    fn a_replaced_scene_at_the_same_revision_is_projected_in_full() {
+        let empty = VoxelCollisionScene::from_solid_voxels(1.0, 4, []).unwrap();
         let first = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[0, 0, 0]]).unwrap();
-        let conflicting = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[1, 0, 0]]).unwrap();
+        let second = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[5, 0, 0]]).unwrap();
         let materials = BTreeMap::from([(1, material(1))]);
         let mut projector = VoxelRenderProjector::new();
         let instance = |scene| VoxelProjectionInstance {
@@ -1104,17 +1102,16 @@ mod tests {
             transform: Transform::IDENTITY,
             scene,
         };
+        projector.project(&[instance(&empty)], &materials).unwrap();
         projector.project(&[instance(&first)], &materials).unwrap();
-        let handle = projector.chunk_handle("room", [0, 0, 0]);
-        assert!(matches!(
-            projector.project(&[instance(&conflicting)], &materials),
-            Err(VoxelProjectionError::StaleSourceRevision {
-                previous: 0,
-                candidate: 0,
-                ..
-            })
-        ));
-        assert_eq!(projector.chunk_handle("room", [0, 0, 0]), handle);
+        let replaced = projector.chunk_handle("room", [0, 0, 0]).unwrap();
+        let update = projector.project(&[instance(&second)], &materials).unwrap();
+        assert!(update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::Destroy { handle } if *handle == replaced
+        )));
+        assert!(projector.chunk_handle("room", [1, 0, 0]).is_some());
+        assert_eq!(projector.chunk_handle("room", [0, 0, 0]), None);
     }
 
     #[test]
@@ -1232,5 +1229,270 @@ mod tests {
             projector.chunk_handle("terrain", untouched.to_array()),
             Some(untouched_handle)
         );
+    }
+
+    /// A renderer that keeps only what a viewer can see, and refuses any
+    /// operation on a handle it does not hold.
+    #[derive(Default)]
+    struct Renderer {
+        nodes: BTreeMap<RenderHandle, Realized>,
+        materials: BTreeMap<String, RenderMaterialDescriptor>,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Realized {
+        parent: Option<RenderHandle>,
+        label: String,
+        transform: Transform,
+        payload: Option<MeshPayloadDescriptor>,
+    }
+
+    impl Renderer {
+        fn apply(&mut self, frame: &RenderFrameDiff) {
+            for operation in &frame.ops {
+                match operation {
+                    RenderDiff::DefineMaterial { material } => {
+                        self.materials.insert(material.id.clone(), material.clone());
+                    }
+                    RenderDiff::Create {
+                        handle,
+                        parent,
+                        node,
+                    } => {
+                        assert!(!self.nodes.contains_key(handle), "{handle:?} created twice");
+                        if let Some(parent) = parent {
+                            assert!(self.nodes.contains_key(parent), "parent {parent:?} not live");
+                        }
+                        self.nodes.insert(
+                            *handle,
+                            Realized {
+                                parent: *parent,
+                                label: node.metadata.label.clone().unwrap(),
+                                transform: node.transform,
+                                payload: None,
+                            },
+                        );
+                    }
+                    RenderDiff::Destroy { handle } => {
+                        assert!(self.nodes.contains_key(handle), "destroy of stale {handle:?}");
+                        let mut doomed = vec![*handle];
+                        while let Some(next) = doomed.pop() {
+                            self.nodes.remove(&next);
+                            doomed.extend(
+                                self.nodes
+                                    .iter()
+                                    .filter(|(_, node)| node.parent == Some(next))
+                                    .map(|(child, _)| *child),
+                            );
+                        }
+                    }
+                    RenderDiff::Update {
+                        handle, transform, ..
+                    } => {
+                        let node = self.nodes.get_mut(handle).expect("update of a live handle");
+                        node.transform = transform.unwrap_or(node.transform);
+                    }
+                    RenderDiff::ReplaceMeshPayload { handle, payload } => {
+                        let node = self.nodes.get_mut(handle).expect("payload of a live handle");
+                        node.payload = Some(payload.clone());
+                    }
+                    other => panic!("unexpected operation {other:?}"),
+                }
+            }
+        }
+
+        /// The realized scene by label, with each parent's label.
+        fn by_label(&self) -> BTreeMap<String, (Option<String>, Realized)> {
+            self.nodes
+                .values()
+                .map(|node| {
+                    let parent = node.parent.map(|parent| self.nodes[&parent].label.clone());
+                    let mut node = node.clone();
+                    node.parent = None;
+                    (node.label.clone(), (parent, node))
+                })
+                .collect()
+        }
+    }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, bound: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % bound
+        }
+
+        fn address(&mut self) -> [i64; 3] {
+            [
+                self.below(12) as i64,
+                self.below(6) as i64,
+                self.below(12) as i64,
+            ]
+        }
+    }
+
+    struct Placed {
+        id: &'static str,
+        scene: VoxelCollisionScene,
+        transform: Transform,
+        present: bool,
+    }
+
+    #[test]
+    fn incremental_projection_realizes_the_same_scene_as_a_fresh_attachment() {
+        let mut rng = Rng(0x8797_5eed);
+        let build = |mode, voxels: Vec<MaterialVoxel>| {
+            VoxelCollisionScene::from_material_voxels_with_mesh_options(
+                1.0,
+                4,
+                voxels,
+                SurfaceMeshOptions {
+                    mode,
+                    ..SurfaceMeshOptions::default()
+                },
+            )
+            .unwrap()
+        };
+        let terrain = |rng: &mut Rng| {
+            (0..80)
+                .map(|_| (rng.address(), 1 + rng.below(2) as u16))
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .map(|(address, material_slot)| MaterialVoxel {
+                    address,
+                    material_slot,
+                    state: 0,
+                })
+                .collect::<Vec<_>>()
+        };
+        let modes = [
+            ("cubes", SurfaceMode::GreedyCubes),
+            ("contoured", SurfaceMode::DualContouring),
+            ("marched", SurfaceMode::MarchingCubes),
+        ];
+        let mut placed: Vec<Placed> = modes
+            .iter()
+            .map(|(id, mode)| Placed {
+                id,
+                scene: build(*mode, terrain(&mut rng)),
+                transform: Transform::IDENTITY,
+                present: true,
+            })
+            .collect();
+        let materials: BTreeMap<_, _> = (1..=3).map(|slot| (slot, material(slot))).collect();
+        let remapped = VoxelMaterialSlotMapping {
+            base: BTreeMap::from([(2, 3)]),
+            directional: BTreeMap::new(),
+        };
+        let mut mapped = false;
+        let mut origin = WorldOriginState::default();
+        let mut entities = EntityState::default();
+        let mut projector = VoxelRenderProjector::new();
+        let mut renderer = Renderer::default();
+        let mut partial = 0;
+
+        for step in 0..300 {
+            let target = rng.below(3) as usize;
+            let edits: Vec<_> = (0..=rng.below(4))
+                .map(|_| {
+                    let address = rng.address();
+                    if rng.below(2) == 0 {
+                        VoxelEdit::Clear { address }
+                    } else {
+                        VoxelEdit::Set {
+                            address,
+                            material_slot: 1 + rng.below(2) as u16,
+                        }
+                    }
+                })
+                .collect();
+            let _ = VoxelEditService::apply(&mut placed[target].scene, &edits);
+            match rng.below(40) {
+                0..=3 => {
+                    placed[target].transform.translation = [rng.below(5) as f32, 0.0, 0.0];
+                }
+                4..=6 => mapped = !mapped,
+                7..=9 => placed[2].present = !placed[2].present,
+                // A replacement scene starts a new lineage at revision zero.
+                10 | 11 => {
+                    let scene = &placed[1].scene;
+                    let mut voxels = scene.material_voxels();
+                    voxels.retain(|_| rng.below(4) != 0);
+                    placed[1].scene = build(SurfaceMode::DualContouring, voxels);
+                }
+                12 => {
+                    let scene = &mut placed[0].scene;
+                    let target_origin = WorldOrigin::new([4 * rng.below(3) as i64, 0, 0]);
+                    let request = WorldOriginRebaseRequest {
+                        expected_origin_revision: origin.revision(),
+                        expected_entity_revision: entities.revision(),
+                        expected_voxel_source_revision: scene.source_revision().raw(),
+                        expected_static_mesh_revision: scene.static_mesh_collision_revision(),
+                        target_origin,
+                        entities: Vec::new(),
+                    };
+                    WorldOriginRebaseService
+                        .apply(&mut origin, &mut entities, scene, request)
+                        .unwrap();
+                }
+                _ => {}
+            }
+            // Some steps let several revisions pass before projecting.
+            if rng.below(5) == 0 {
+                continue;
+            }
+            let instances: Vec<_> = placed
+                .iter()
+                .filter(|value| value.present)
+                .map(|value| VoxelProjectionInstance {
+                    instance_id: value.id.to_string(),
+                    asset_id: format!("voxel-object/{}", value.id),
+                    transform: value.transform,
+                    scene: &value.scene,
+                })
+                .collect();
+            let slots = BTreeMap::from([(
+                "cubes".to_string(),
+                if mapped {
+                    remapped.clone()
+                } else {
+                    VoxelMaterialSlotMapping::default()
+                },
+            )]);
+            let update = projector
+                .project_mapped_directional(&instances, &materials, &slots)
+                .unwrap();
+            let replaced = update
+                .frame
+                .ops
+                .iter()
+                .filter(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. }))
+                .count();
+            if replaced < update.readout.chunk_count {
+                partial += 1;
+            }
+            renderer.apply(&update.frame);
+
+            let mut attached = Renderer::default();
+            attached.apply(
+                &VoxelRenderProjector::new()
+                    .project_mapped_directional(&instances, &materials, &slots)
+                    .unwrap()
+                    .frame,
+            );
+            let (incremental, fresh) = (renderer.by_label(), attached.by_label());
+            let differing: Vec<_> = incremental
+                .keys()
+                .chain(fresh.keys())
+                .filter(|label| incremental.get(*label) != fresh.get(*label))
+                .collect();
+            assert!(differing.is_empty(), "step {step}: {differing:?}");
+            assert_eq!(renderer.materials, attached.materials, "step {step}");
+        }
+        // Most frames touch only some chunks.
+        assert!(partial > 200, "{partial} partial frames");
     }
 }

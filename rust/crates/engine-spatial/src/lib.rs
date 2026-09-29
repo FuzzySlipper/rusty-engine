@@ -227,6 +227,10 @@ pub struct VoxelCollisionScene {
     mesh_chunks: BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>,
     mesh_options: SurfaceMeshOptions,
     mesh_update: VoxelChunkMeshUpdate,
+    /// Process-unique identity of this scene's chunk-mesh history. A build
+    /// (including a world-origin rebase) starts a new lineage; local changes
+    /// and clones continue it.
+    mesh_lineage: u64,
     source_revision: VoxelSourceRevision,
     /// Order-independent sum of every solid voxel's hash, maintained by each
     /// local change.
@@ -257,6 +261,11 @@ impl SceneBuildRevision {
             rebase: 0,
         }
     }
+}
+
+fn next_mesh_lineage() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl std::fmt::Debug for VoxelCollisionScene {
@@ -580,6 +589,7 @@ impl VoxelCollisionScene {
                 reused_chunks: 0,
                 removed_chunks: 0,
             },
+            mesh_lineage: next_mesh_lineage(),
             source_revision: revisions.source,
             authority_hash,
             world_origin: revisions.world_origin,
@@ -644,8 +654,23 @@ impl VoxelCollisionScene {
         self.mesh_options
     }
 
+    /// The mesh of one chunk, if it has one.
+    pub fn mesh_chunk(&self, chunk: [i64; 3]) -> Option<&VoxelMeshChunk> {
+        self.mesh_chunks
+            .get(&ChunkCoord::new(chunk[0], chunk[1], chunk[2]))
+            .map(|chunk| chunk.as_ref())
+    }
+
     pub fn mesh_update(&self) -> &VoxelChunkMeshUpdate {
         &self.mesh_update
+    }
+
+    /// Identity of the chunk-mesh history. While it is unchanged, each source
+    /// revision's `mesh_update().dirty_chunks` names every chunk mesh that
+    /// changed since the previous revision, so a consumer that saw revision
+    /// `n` can catch up to `n + 1` from that list alone.
+    pub const fn mesh_lineage(&self) -> u64 {
+        self.mesh_lineage
     }
 
     pub const fn source_revision(&self) -> VoxelSourceRevision {

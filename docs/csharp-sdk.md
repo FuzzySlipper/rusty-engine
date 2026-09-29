@@ -794,7 +794,10 @@ or presentation needs are an upstream Engine task and a valid stopping point.
 `VoxelScenePresentation` projects the canonical `Spatial` session voxel scene
 through the Engine renderer. Bind every currently used scene material slot to
 a live `Appearance` material, retain the disposable projection, and call
-`RefreshScene` after voxel edits, residency changes, or origin changes. For a
+`RefreshScene` after voxel edits, residency changes, or origin changes. A
+refresh after one voxel change visits only the chunks that change named; after
+several changes, a replaced scene or an origin rebase it compares each chunk's
+mesh hash instead. For a
 `GreedyCubes` session, `ProjectSceneDirectional` and
 `UpdateSceneDirectional` additionally accept sparse `SpatialFace` overrides;
 omitted faces use the required base slot binding. `ReadMaterialMapping` returns
