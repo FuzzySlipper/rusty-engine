@@ -1476,6 +1476,35 @@ impl ProductDevDebugCatalog {
         }
     }
 
+    /// Adds the inspection commands of a runtime that renders the world in
+    /// its own process (the streaming browser mode).
+    pub fn with_runtime_renderer_inspection(mut self) -> Self {
+        for (name, description) in [
+            (
+                "engine.renderer.camera",
+                "Read the observer camera, set it with `x y z yawDegrees pitchDegrees`, or clear it with `none`; a change draws a frame and names it",
+            ),
+            (
+                "engine.renderer.drawing",
+                "Read the drawing mode or select `continuous` or `on-demand`",
+            ),
+            (
+                "engine.renderer.frame",
+                "Draw one frame now, even on demand, and name its frame sequence and step",
+            ),
+        ] {
+            if self.commands.iter().any(|command| command.name == name) {
+                continue;
+            }
+            self.commands.push(ProductDevDebugCommandDescriptor {
+                name: name.to_owned(),
+                description: description.to_owned(),
+                parameters: Vec::new(),
+            });
+        }
+        self
+    }
+
     pub fn with_renderer_diagnostics(mut self) -> Self {
         self.available = true;
         for (name, description) in [

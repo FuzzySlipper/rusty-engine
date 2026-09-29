@@ -1,0 +1,353 @@
+{
+  "application_renderer": "unavailable",
+  "capture_id": "87cf346f-b3c2-4979-8b05-a07ad434c567",
+  "comparison": {
+    "baseline_capture_id": "11d39c1f-bcc1-4fbc-a600-4ff2ef8f05fe",
+    "baseline_path": "/home/agent/.local/state/crew-playtest-local/browser/70713137-78ff-4f64-b81f-685d3ddd40a8/db5f9cd6-b5d3-44ae-a966-0d398a6968c3.png",
+    "engine_presentation": {
+      "baseline_available": true,
+      "baseline_state": "submitted",
+      "current_available": true,
+      "current_state": "submitted",
+      "frame_correlation": "unavailable",
+      "meaning": "separate submitted observations; camera equality does not correlate either PNG",
+      "same_runtime": true,
+      "same_submitted_cameras": true,
+      "same_submitted_fallback_camera": "unknown",
+      "same_submitted_view_layout": true,
+      "same_submitted_view_revision": false,
+      "same_submitted_viewport": true,
+      "same_surface": true
+    },
+    "readiness_comparable": "unknown",
+    "same_observed_canvases": true,
+    "same_observed_viewport": true,
+    "same_pixel_dimensions": true,
+    "same_supplied_viewpoint": "unknown",
+    "visual_verdict": "not assessed; inspect both original images"
+  },
+  "engine_presentation": {
+    "available": true,
+    "command": "engine.renderer.presentation",
+    "completed_at": "2026-09-29T12:39:00.754459398Z",
+    "evidence_path": "/home/agent/.local/state/crew-playtest-local/presentation-8c8db974-a4fc-4de9-86b4-3acaedced441.json",
+    "facts": {
+      "available": true,
+      "captureCorrelation": "frame-sequence",
+      "observationAgeMs": 62,
+      "observationRuntime": {
+        "controlRevision": "1",
+        "generation": "1",
+        "instanceId": "2555391"
+      },
+      "presentation": {
+        "captureCorrelation": "frame-sequence",
+        "gpuCompletion": "unavailable",
+        "pendingRealizations": 0,
+        "realizedPublicationFrontiers": [
+          {
+            "revision": 248,
+            "stream": "presentation-world"
+          }
+        ],
+        "realizedViewRevision": 4136,
+        "state": "submitted",
+        "submitted": {
+          "fallbackCamera": null,
+          "frameSequence": 2657,
+          "held": true,
+          "observer": {
+            "pitchDegrees": -90.0,
+            "position": [
+              -7.0,
+              1.6200000047683716,
+              3.0
+            ],
+            "yawDegrees": 180.0
+          },
+          "publicationFrontiers": [
+            {
+              "revision": 248,
+              "stream": "presentation-world"
+            }
+          ],
+          "renderSequence": 2657,
+          "simulationStep": 4215,
+          "viewRevision": 4136,
+          "viewport": {
+            "backingHeight": 720,
+            "backingWidth": 1280,
+            "cssHeight": 720,
+            "cssWidth": 1280
+          },
+          "views": {
+            "cameras": [
+              {
+                "id": "csharp-camera-1",
+                "pose": {
+                  "pitchDegrees": 0.0,
+                  "position": [
+                    -7.0,
+                    1.6200000047683716,
+                    3.0
+                  ],
+                  "yawDegrees": 0.0
+                },
+                "projection": {
+                  "far": 100.0,
+                  "fovYDegrees": 90.0,
+                  "kind": "perspective",
+                  "near": 0.1
+                }
+              }
+            ],
+            "presentations": [],
+            "revision": 4136,
+            "schemaVersion": 1,
+            "sourceCameras": [
+              {
+                "id": "csharp-camera-1",
+                "pose": {
+                  "pitchDegrees": 0.0,
+                  "position": [
+                    -7.0,
+                    1.6200000047683716,
+                    3.0
+                  ],
+                  "yawDegrees": 0.0
+                },
+                "projection": {
+                  "far": 100.0,
+                  "fovYDegrees": 90.0,
+                  "kind": "perspective",
+                  "near": 0.1
+                }
+              }
+            ],
+            "targets": [],
+            "views": [
+              {
+                "cameraId": "csharp-camera-1",
+                "id": "csharp-view-0",
+                "order": 0,
+                "target": {
+                  "kind": "primary"
+                },
+                "viewport": {
+                  "height": 1.0,
+                  "width": 1.0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              }
+            ]
+          }
+        },
+        "surfaceId": "runtime-stream-2"
+      },
+      "runtime": {
+        "controlRevision": "1",
+        "generation": "1",
+        "instanceId": "2555391"
+      },
+      "schemaVersion": 1,
+      "stream": {
+        "adapter": "AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)",
+        "bytesPerSecond": 5272230.478150334,
+        "framesPerSecond": 59.57763827163667,
+        "lastSkip": null,
+        "medianBytesPerFrame": 88352.0,
+        "medianMs": {
+          "encode": 4.466612,
+          "readback": 1.301372,
+          "render": 0.629139
+        },
+        "recentFrames": 120,
+        "skippedOps": {},
+        "viewerSize": [
+          1280,
+          720
+        ]
+      },
+      "worldReadiness": "unavailable"
+    },
+    "frame_correlation": "unavailable",
+    "http_status": 200,
+    "observation_completed_at": "2026-09-29T12:39:00.768542137Z",
+    "observation_requested_at": "2026-09-29T12:39:00.724188137Z",
+    "origin": "http://127.0.0.1:4394",
+    "query_id": "8c8db974-a4fc-4de9-86b4-3acaedced441",
+    "raw_result": "{\n  \"available\": true,\n  \"captureCorrelation\": \"frame-sequence\",\n  \"observationAgeMs\": 62,\n  \"observationRuntime\": {\n    \"controlRevision\": \"1\",\n    \"generation\": \"1\",\n    \"instanceId\": \"2555391\"\n  },\n  \"presentation\": {\n    \"captureCorrelation\": \"frame-sequence\",\n    \"gpuCompletion\": \"unavailable\",\n    \"pendingRealizations\": 0,\n    \"realizedPublicationFrontiers\": [\n      {\n        \"revision\": 248,\n        \"stream\": \"presentation-world\"\n      }\n    ],\n    \"realizedViewRevision\": 4136,\n    \"state\": \"submitted\",\n    \"submitted\": {\n      \"fallbackCamera\": null,\n      \"frameSequence\": 2657,\n      \"held\": true,\n      \"observer\": {\n        \"pitchDegrees\": -90.0,\n        \"position\": [\n          -7.0,\n          1.6200000047683716,\n          3.0\n        ],\n        \"yawDegrees\": 180.0\n      },\n      \"publicationFrontiers\": [\n        {\n          \"revision\": 248,\n          \"stream\": \"presentation-world\"\n        }\n      ],\n      \"renderSequence\": 2657,\n      \"simulationStep\": 4215,\n      \"viewRevision\": 4136,\n      \"viewport\": {\n        \"backingHeight\": 720,\n        \"backingWidth\": 1280,\n        \"cssHeight\": 720,\n        \"cssWidth\": 1280\n      },\n      \"views\": {\n        \"cameras\": [\n          {\n            \"id\": \"csharp-camera-1\",\n            \"pose\": {\n              \"pitchDegrees\": 0.0,\n              \"position\": [\n                -7.0,\n                1.6200000047683716,\n                3.0\n              ],\n              \"yawDegrees\": 0.0\n            },\n            \"projection\": {\n              \"far\": 100.0,\n              \"fovYDegrees\": 90.0,\n              \"kind\": \"perspective\",\n              \"near\": 0.1\n            }\n          }\n        ],\n        \"presentations\": [],\n        \"revision\": 4136,\n        \"schemaVersion\": 1,\n        \"sourceCameras\": [\n          {\n            \"id\": \"csharp-camera-1\",\n            \"pose\": {\n              \"pitchDegrees\": 0.0,\n              \"position\": [\n                -7.0,\n                1.6200000047683716,\n                3.0\n              ],\n              \"yawDegrees\": 0.0\n            },\n            \"projection\": {\n              \"far\": 100.0,\n              \"fovYDegrees\": 90.0,\n              \"kind\": \"perspective\",\n              \"near\": 0.1\n            }\n          }\n        ],\n        \"targets\": [],\n        \"views\": [\n          {\n            \"cameraId\": \"csharp-camera-1\",\n            \"id\": \"csharp-view-0\",\n            \"order\": 0,\n            \"target\": {\n              \"kind\": \"primary\"\n            },\n            \"viewport\": {\n              \"height\": 1.0,\n              \"width\": 1.0,\n              \"x\": 0.0,\n              \"y\": 0.0\n            }\n          }\n        ]\n      }\n    },\n    \"surfaceId\": \"runtime-stream-2\"\n  },\n  \"runtime\": {\n    \"controlRevision\": \"1\",\n    \"generation\": \"1\",\n    \"instanceId\": \"2555391\"\n  },\n  \"schemaVersion\": 1,\n  \"stream\": {\n    \"adapter\": \"AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)\",\n    \"bytesPerSecond\": 5272230.478150334,\n    \"framesPerSecond\": 59.57763827163667,\n    \"lastSkip\": null,\n    \"medianBytesPerFrame\": 88352.0,\n    \"medianMs\": {\n      \"encode\": 4.466612,\n      \"readback\": 1.301372,\n      \"render\": 0.629139\n    },\n    \"recentFrames\": 120,\n    \"skippedOps\": {},\n    \"viewerSize\": [\n      1280,\n      720\n    ]\n  },\n  \"worldReadiness\": \"unavailable\"\n}",
+    "requested_at": "2026-09-29T12:39:00.72477534Z",
+    "session_id": "70713137-78ff-4f64-b81f-685d3ddd40a8",
+    "source": "Engine browser feedback; separate from screenshot"
+  },
+  "engine_presentation_state": "submitted",
+  "engine_readiness": "unavailable",
+  "frame_correlation": "unavailable",
+  "gpu_completion": "unavailable",
+  "hardware_acceleration": "unavailable",
+  "label": "",
+  "metadata_path": "/home/agent/.local/state/crew-playtest-local/capture-87cf346f-b3c2-4979-8b05-a07ad434c567.json",
+  "observation": {
+    "artifact_id": "b48e06d2-ef60-4954-ba7f-1af39973146e",
+    "canvases": [
+      {
+        "backing": {
+          "height": 720,
+          "width": 1280
+        },
+        "css": {
+          "height": 720,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        }
+      }
+    ],
+    "capture_ended_at": "2026-09-29T12:39:00.919350056Z",
+    "capture_ended_at_ns": 1790685540919350056,
+    "capture_started_at": "2026-09-29T12:39:00.768554974Z",
+    "capture_started_at_ns": 1790685540768554974,
+    "console": [],
+    "cursor": {
+      "x": 0,
+      "y": 0
+    },
+    "dom_assistance": [],
+    "event": "observation",
+    "events_path": "/home/agent/.local/state/crew-playtest-local/browser/70713137-78ff-4f64-b81f-685d3ddd40a8/events.jsonl",
+    "frame_freshness": "not measured",
+    "game_readiness": "unknown",
+    "height": 720,
+    "lease_id": "70713137-78ff-4f64-b81f-685d3ddd40a8",
+    "metadata_path": "/home/agent/.local/state/crew-playtest-local/browser/70713137-78ff-4f64-b81f-685d3ddd40a8/b48e06d2-ef60-4954-ba7f-1af39973146e.json",
+    "page_errors": [],
+    "path": "/home/agent/.local/state/crew-playtest-local/browser/70713137-78ff-4f64-b81f-685d3ddd40a8/b48e06d2-ef60-4954-ba7f-1af39973146e.png",
+    "pointer_lock": false,
+    "renderer": "unknown",
+    "source": "headless Chromium screenshot through the private Playwright context",
+    "title": "Loading Bay — Doom E1M1",
+    "url": "http://127.0.0.1:4394/",
+    "viewport": {
+      "device_pixel_ratio": 1,
+      "height": 720,
+      "width": 1280
+    },
+    "width": 1280
+  },
+  "overlay_policy": "preserve",
+  "path": "/home/agent/.local/state/crew-playtest-local/browser/70713137-78ff-4f64-b81f-685d3ddd40a8/b48e06d2-ef60-4954-ba7f-1af39973146e.png",
+  "pool_activity": {
+    "after": {
+      "active_count": 1,
+      "capacity": 10,
+      "observed_at": "2026-09-29T12:39:00.992513854Z",
+      "queued_starts": 0,
+      "slots": [
+        {
+          "game": "rusty-doom",
+          "occupied": true,
+          "phase": "connected",
+          "session_id": "70713137-78ff-4f64-b81f-685d3ddd40a8",
+          "slot_id": "slot-1"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-2"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-3"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-4"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-5"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-6"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-7"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-8"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-9"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-10"
+        }
+      ]
+    },
+    "before": {
+      "active_count": 1,
+      "capacity": 10,
+      "observed_at": "2026-09-29T12:39:00.724176127Z",
+      "queued_starts": 0,
+      "slots": [
+        {
+          "game": "rusty-doom",
+          "occupied": true,
+          "phase": "connected",
+          "session_id": "70713137-78ff-4f64-b81f-685d3ddd40a8",
+          "slot_id": "slot-1"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-2"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-3"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-4"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-5"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-6"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-7"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-8"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-9"
+        },
+        {
+          "occupied": false,
+          "slot_id": "slot-10"
+        }
+      ]
+    },
+    "performance_isolated": false,
+    "slot_id": "slot-1"
+  },
+  "recorded_at": "2026-09-29T12:39:00.992316616Z",
+  "session_id": "70713137-78ff-4f64-b81f-685d3ddd40a8",
+  "slot_id": "slot-1",
+  "supplied_assistance": null,
+  "supplied_metadata_source": "caller; not independently verified",
+  "supplied_viewpoint": null
+}

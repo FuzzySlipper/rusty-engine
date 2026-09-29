@@ -402,6 +402,7 @@ export function mountStreamedFrameSurface(
       void canvas.requestPointerLock();
     },
     movementState: () => ({ mode: 'caller_resolved', blockedAxes: [], collided: false, resolutionId: null }),
+    // No browser or runtime caller asks the renderer for a pick.
     pick: () => unsupported('renderer picking'),
     pointerLocked: () => document.pointerLockElement === canvas,
     projectWorldPoint: () => unsupported('world point projection'),
@@ -415,11 +416,10 @@ export function mountStreamedFrameSurface(
     resetCameraMotion: () => undefined,
     retainResources: () => undefined,
     renderOnce: (timeMs) => draw('explicit', timeMs ?? performance.now()),
-    // Held time and the observer camera belong to the runtime renderer here.
-    inspection: (request) => {
-      if (request.camera != null) unsupported('the observer camera');
-      return { drawing: 'continuous', held: latest?.frame.held ?? false, observer: false, camera: cameraPose() };
-    },
+    // Held time, drawing, the observer camera and explicit frames are the
+    // runtime renderer's (`engine.renderer.*`); the page never asks this
+    // surface for them.
+    inspection: () => unsupported('surface inspection (use engine.renderer.camera, .drawing and .frame)'),
     executeRenderOutput: async () => unsupported('render output images'),
     resetCamera: () => undefined,
     setCameraPose: () => undefined,

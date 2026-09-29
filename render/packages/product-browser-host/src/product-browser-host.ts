@@ -1,4 +1,5 @@
 import { installPlaytestInspection } from './playtest-inspection.js';
+import { mountStreamedFrameSurface } from './streamed-frame-surface.js';
 import type { RenderOutputJob, RenderOutputChunk } from "@rusty-engine/render-contracts";
 import {
   mountRustyApplication,
@@ -1351,6 +1352,9 @@ export async function mountProductBrowserHostWithApplication(
 ): Promise<ProductBrowserHost> {
   validateOptions(options);
   const realtimeAdvanceOwner = options.realtimeAdvanceOwner ?? 'browser';
+  // The streaming browser mode: the runtime renders the world, so its
+  // renderer owns held time, drawing and the observer camera.
+  const runtimeRenderer = options.renderer?.mountSurface === mountStreamedFrameSurface;
   const transport = options.transport;
   const queue = createOperationQueue();
   let state: ProductBrowserHostReadout['state'] = 'starting';
@@ -2087,7 +2091,7 @@ export async function mountProductBrowserHostWithApplication(
           return;
         case 'runtime-readout':
           runtimeReadout = output.readout;
-          if (output.readout.inspectionTime !== undefined) {
+          if (output.readout.inspectionTime !== undefined && !runtimeRenderer) {
             const [mode, hz] = output.readout.inspectionTime;
             host.renderer.inspection?.({ simulationMs: mode === 'realtime' ? null : Number(output.readout.admittedSimulationSteps) * 1000 / hz });
           }
@@ -2921,7 +2925,8 @@ export async function mountProductBrowserHostWithApplication(
     async (through) => {
       if (through !== undefined) await transport.waitUntilOutputSequence?.(through);
       await rendererOutputTail;
-    });
+    },
+    runtimeRenderer);
 
   const readout = (): ProductBrowserHostReadout => Object.freeze({
     artifact: PRODUCT_BROWSER_HOST_ARTIFACT,

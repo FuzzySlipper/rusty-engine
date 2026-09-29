@@ -14,8 +14,8 @@ use glam::{Mat3, Mat4, Quat, Vec3};
 
 use crate::convert::world_vec3;
 use render_host_contracts::{
-    RendererCameraInterpolation, RendererCameraMotion, RendererCameraProjection,
-    RendererCompositionCamera,
+    RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
+    RendererCameraProjection, RendererCompositionCamera,
 };
 
 /// Matrices and eye position for one view pass.
@@ -39,21 +39,26 @@ pub(crate) struct CameraPose {
 /// The descriptor's published pose. Engine yaw zero faces -Z and positive yaw
 /// turns toward +X; an explicit basis overrides yaw and pitch.
 pub(crate) fn descriptor_pose(camera: &RendererCompositionCamera) -> CameraPose {
-    let orientation = match &camera.basis {
+    match &camera.basis {
         Some(basis) => {
             let forward = world_vec3(basis.forward).normalize_or(Vec3::NEG_Z);
             let right = forward.cross(world_vec3(basis.up)).normalize_or(Vec3::X);
             let up = right.cross(forward);
-            Quat::from_mat3(&Mat3::from_cols(right, up, -forward))
+            CameraPose {
+                position: world_vec3(camera.pose.position),
+                orientation: Quat::from_mat3(&Mat3::from_cols(right, up, -forward)),
+            }
         }
-        None => {
-            Quat::from_rotation_y(-(camera.pose.yaw_degrees as f32).to_radians())
-                * Quat::from_rotation_x((camera.pose.pitch_degrees as f32).to_radians())
-        }
-    };
+        None => pose_from_degrees(&camera.pose),
+    }
+}
+
+/// Yaw 0 faces -Z, positive yaw turns right and positive pitch looks up.
+pub(crate) fn pose_from_degrees(pose: &RendererCameraPose) -> CameraPose {
     CameraPose {
-        position: world_vec3(camera.pose.position),
-        orientation,
+        position: world_vec3(pose.position),
+        orientation: Quat::from_rotation_y(-(pose.yaw_degrees as f32).to_radians())
+            * Quat::from_rotation_x((pose.pitch_degrees as f32).to_radians()),
     }
 }
 

@@ -6,8 +6,27 @@ export interface PlaytestInspectionRequest {
   x?: number; y?: number; z?: number; radius?: number; verticalRadius?: number; cellSize?: number; distance?: number;
   move?: readonly [number, number, number]; lookAt?: readonly [number, number, number]; orbit?: { target: readonly [number, number, number]; yaw: number };
 }
-/** Engine-owned browser inspection adapter; gameplay remains in the product. */
-export function installPlaytestInspection(renderer: RustyApplicationRendererPort, flushInput: () => Promise<void>, settle: (through?: string) => Promise<void>): () => void {
+type InspectionState = { drawing: string; held: boolean; observer: boolean; camera: Camera | null };
+type InspectionRequest = { drawing?: 'continuous' | 'on-demand'; simulationMs?: number | null; camera?: Camera | null };
+/** Where drawing, the observer camera and explicit frames are answered. */
+interface Presenter {
+  inspect(request: InspectionRequest): Promise<InspectionState>;
+  /** Draw one frame of the current state, even on demand, and show it. */
+  draw(): Promise<void>;
+  /** Draw and describe the drawn frame. */
+  frame(): Promise<unknown>;
+}
+/** The streamed frame the Engine canvas shows (streaming browser mode). */
+const shownFrameSequence = (): number =>
+  Number(document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]')?.dataset['rustyFrameSequence'] ?? 0);
+const FRAME_SHOWN_WAIT_MS = 2000;
+/**
+ * Engine-owned browser inspection adapter; gameplay remains in the product.
+ * With `runtimeRenderer` the world is rendered in the runtime (the streaming
+ * browser mode): inspection goes to its `engine.renderer.*` commands, and each
+ * answer waits until the canvas shows the frame the command drew.
+ */
+export function installPlaytestInspection(renderer: RustyApplicationRendererPort, flushInput: () => Promise<void>, settle: (through?: string) => Promise<void>, runtimeRenderer = false): () => void {
   const target = globalThis as typeof globalThis & { __rustyPlaytest?: (request: PlaytestInspectionRequest) => Promise<unknown> };
   async function debug(command: string): Promise<unknown> {
     const response = await fetch('/__rusty/product/runtime/debug/execute', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: command });
@@ -17,8 +36,38 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
     return JSON.parse(text);
   }
   const inspect = renderer.inspection;
+  const threePresenter: Presenter = {
+    inspect: async (request) => {
+      if (!inspect) throw new Error('Engine inspection is unavailable');
+      return inspect(request);
+    },
+    draw: async () => { renderer.renderOnce(); },
+    frame: async () => { renderer.renderOnce(); return renderer.diagnosticsReadout(); },
+  };
+  const shown = async (answer: InspectionState & { frame?: { sequence: number } | null }): Promise<InspectionState> => {
+    const sequence = answer.frame?.sequence ?? 0;
+    const deadline = performance.now() + FRAME_SHOWN_WAIT_MS;
+    while (shownFrameSequence() < sequence && performance.now() < deadline) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    return answer;
+  };
+  const runtimePresenter: Presenter = {
+    inspect: async (request) => {
+      if (request.drawing !== undefined) await debug(`engine.renderer.drawing ${request.drawing}`);
+      if (request.camera === null) return shown(await debug('engine.renderer.camera none') as InspectionState);
+      if (request.camera !== undefined) {
+        const { position: [x, y, z], yawDegrees, pitchDegrees } = request.camera;
+        return shown(await debug(`engine.renderer.camera ${x} ${y} ${z} ${yawDegrees} ${pitchDegrees}`) as InspectionState);
+      }
+      // Held simulation time is the runtime's own; there is nothing to set.
+      return debug('engine.renderer.camera') as Promise<InspectionState>;
+    },
+    draw: async () => { await shown(await debug('engine.renderer.frame') as InspectionState); },
+    frame: async () => { await runtimePresenter.draw(); return debug('engine.renderer.presentation'); },
+  };
+  const presenter = runtimeRenderer ? runtimePresenter : threePresenter;
   const invoke = async (request: PlaytestInspectionRequest): Promise<unknown> => {
-    if (!inspect) throw new Error('Engine inspection is unavailable');
     const id = request.id ?? '';
     if (id && !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('invalid target/action id');
     switch (request.op) {
@@ -56,31 +105,33 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
       case 'look': {
         const yaw = request.yaw ?? 0, pitch = request.pitch ?? 0;
         if (![yaw, pitch].every(Number.isFinite) || Math.abs(yaw) > 360 || Math.abs(pitch) > 180) throw new Error('look degrees exceed bounds');
-        const result = await debug(`playtest.look ${yaw} ${pitch}`); await settle(); renderer.renderOnce(); return result;
+        const result = await debug(`playtest.look ${yaw} ${pitch}`); await settle(); await presenter.draw(); return result;
       }
       case 'time': {
         if (request.mode && !['realtime', 'manual', 'action-driven'].includes(request.mode)) throw new Error('unknown time mode');
         if (request.mode) await flushInput();
         const result = await debug(request.mode ? `engine.time.mode ${request.mode}` : 'engine.time') as { mode: string; simulationStep: string; fixedStepHz: number };
-        inspect({ simulationMs: result.mode === 'realtime' ? null : Number(result.simulationStep) * 1000 / result.fixedStepHz }); return result;
+        await presenter.inspect({ simulationMs: result.mode === 'realtime' ? null : Number(result.simulationStep) * 1000 / result.fixedStepHz }); return result;
       }
       case 'advance': {
         if (!Number.isFinite(request.ms) || request.ms! <= 0 || request.ms! > 2000) throw new Error('advance ms must be in (0, 2000]');
         await flushInput();
         const result = await debug(`engine.time.advance ${request.ms}`) as { simulationStep: string; fixedStepHz: number };
-        await settle(); inspect({ simulationMs: Number(result.simulationStep) * 1000 / result.fixedStepHz });
-        if (inspect({}).drawing !== 'on-demand') renderer.renderOnce(); return result;
+        await settle();
+        const state = await presenter.inspect({ simulationMs: Number(result.simulationStep) * 1000 / result.fixedStepHz });
+        if (state.drawing !== 'on-demand') await presenter.draw(); return result;
       }
       case 'drawing': {
         if (request.mode !== 'continuous' && request.mode !== 'on-demand') throw new Error('drawing mode must be continuous or on-demand');
-        return inspect({ drawing: request.mode });
+        return presenter.inspect({ drawing: request.mode });
       }
-      case 'frame': await settle(); renderer.renderOnce(); return renderer.diagnosticsReadout();
+      case 'frame': await settle(); return presenter.frame();
       case 'camera': {
         if (request.camera && ![...request.camera.position, request.camera.yawDegrees, request.camera.pitchDegrees].every(Number.isFinite)) throw new Error('camera must be finite');
         let camera = request.camera;
         if (request.move || request.lookAt || request.orbit || request.yaw !== undefined || request.pitch !== undefined) {
-          const current = camera ?? inspect({}).camera;
+          const current = camera ?? (await presenter.inspect({})).camera;
+          if (current === null) throw new Error('no camera to move from; set an absolute camera');
           let position: [number, number, number] = [...current.position];
           if (request.move) position = position.map((v, i) => v + request.move![i]!) as typeof position;
           if (request.orbit) {
@@ -98,8 +149,8 @@ export function installPlaytestInspection(renderer: RustyApplicationRendererPort
           camera = { position, yawDegrees, pitchDegrees };
         }
         if (camera && (camera.position.length !== 3 || ![...camera.position, camera.yawDegrees, camera.pitchDegrees].every(Number.isFinite))) throw new Error('camera must be finite');
-        const result = inspect(camera === undefined ? {} : { camera });
-        await settle(); renderer.renderOnce(); return result;
+        const result = await presenter.inspect(camera === undefined ? {} : { camera });
+        await settle(); await presenter.draw(); return result;
       }
       default: throw new Error('unknown inspection operation');
     }

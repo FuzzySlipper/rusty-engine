@@ -12,15 +12,26 @@
 //! realization feedback the browser reports.
 //! `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of JPEG, to
 //! measure what the encoder saves.
+//!
+//! Playtest inspection reaches this renderer through Engine debug commands:
+//! `engine.renderer.camera` (the observer camera), `engine.renderer.drawing`
+//! (continuous or on-demand) and `engine.renderer.frame` (draw one frame now
+//! and wait for it). `engine.renderer.presentation` describes the last drawn
+//! frame. Each answer names the frame's sequence on the frame route, so a
+//! page can wait until it shows that frame.
 
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use csharp_engine_services::{AnimationRealizationFact, EngineServiceSet};
 use product_dev_host::ProductDevFrameStream;
+use render_host_contracts::RendererViewTarget;
 use render_stream::{
-    AnimationFact, FrameStreamer, RendererOptions, ResourceSource, StreamFormat, StreamStats,
+    AnimationFact, DrawnFrame, FrameStreamer, RendererCameraPose, RendererOptions,
+    RendererViewComposition, ResourceSource, StreamFormat, StreamStats,
 };
+use serde_json::{json, Value};
 use runtime_publication::RuntimePublication;
 
 use crate::CsharpProductRuntimeError;
@@ -30,6 +41,16 @@ const RENDER_OUTPUT_STREAM: &str = "stream";
 const STREAM_FORMAT_ENV: &str = "RUSTY_RENDER_STREAM_FORMAT";
 /// The Engine's realization feedback admits this many facts per report.
 const MAX_FACTS_PER_REPORT: usize = 128;
+/// How long an inspection command waits for the frame it asked for.
+const INSPECTION_FRAME_WAIT: Duration = Duration::from_secs(2);
+
+/// Whether `command` is one of the runtime renderer's inspection commands.
+pub(crate) fn is_inspection_command(command: &str) -> bool {
+    matches!(
+        command.split_whitespace().next(),
+        Some("engine.renderer.camera" | "engine.renderer.drawing" | "engine.renderer.frame")
+    )
+}
 
 /// Whether this process renders the world and streams it. An unset variable
 /// keeps browser realization; an unknown value is an error rather than a
@@ -89,6 +110,7 @@ impl FrameOutput {
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
             services.presentation_elapsed_seconds(),
+            world_revision(services),
         );
     }
 
@@ -104,6 +126,7 @@ impl FrameOutput {
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
             services.presentation_elapsed_seconds(),
+            world_revision(services),
         );
     }
 
@@ -122,6 +145,136 @@ impl FrameOutput {
                 .collect();
             services.ingest_animation_realization_feedback(false, 0, facts);
         }
+    }
+
+    /// Runs an inspection command (see [`is_inspection_command`]). A change
+    /// draws a frame and waits for it; the answer carries that frame.
+    pub(crate) fn execute_inspection(&self, command: &str) -> Result<Value, String> {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let drawn = match words.as_slice() {
+            ["engine.renderer.camera"] | ["engine.renderer.drawing"] => None,
+            ["engine.renderer.camera", "none"] => {
+                self.streamer.set_observer(None);
+                self.draw_now()?
+            }
+            ["engine.renderer.camera", x, y, z, yaw, pitch] => {
+                let number = |value: &str| {
+                    value
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| value.is_finite())
+                        .ok_or("camera values must be finite numbers")
+                };
+                self.streamer.set_observer(Some(RendererCameraPose {
+                    position: [number(x)?, number(y)?, number(z)?],
+                    yaw_degrees: number(yaw)?,
+                    pitch_degrees: number(pitch)?,
+                }));
+                self.draw_now()?
+            }
+            ["engine.renderer.drawing", mode @ ("continuous" | "on-demand")] => {
+                self.streamer.set_on_demand(*mode == "on-demand");
+                None
+            }
+            ["engine.renderer.frame"] => self.draw_now()?,
+            _ => {
+                return Err(
+                    "usage: engine.renderer.camera [none | x y z yawDegrees pitchDegrees], \
+                     engine.renderer.drawing [continuous | on-demand], engine.renderer.frame"
+                        .to_owned(),
+                )
+            }
+        };
+        let inspection = self.streamer.inspection();
+        let camera = inspection.observer.or_else(|| {
+            inspection
+                .composition
+                .as_deref()
+                .and_then(primary_camera_pose)
+        });
+        let frame = drawn.or(inspection.last_drawn);
+        Ok(json!({
+            "drawing": if inspection.on_demand { "on-demand" } else { "continuous" },
+            "held": inspection.held,
+            "observer": inspection.observer.is_some(),
+            "camera": camera,
+            "frame": frame.map(|frame| json!({ "sequence": frame.sequence, "step": frame.step })),
+        }))
+    }
+
+    fn draw_now(&self) -> Result<Option<DrawnFrame>, String> {
+        self.streamer
+            .draw_now(INSPECTION_FRAME_WAIT)
+            .map(Some)
+            .ok_or_else(|| "the renderer did not draw the requested frame in time".to_owned())
+    }
+
+    /// The `engine.renderer.presentation` observation of the last drawn
+    /// frame, in the browser surface's shape. Rendering and the runtime share
+    /// one process, so the observation always belongs to `runtime`.
+    pub(crate) fn presentation(&self, runtime: Value) -> Value {
+        let inspection = self.streamer.inspection();
+        let Some(frame) = inspection.last_drawn else {
+            return json!({
+                "schemaVersion": 1,
+                "runtime": runtime,
+                "observationRuntime": runtime,
+                "available": false,
+                "presentation": null,
+                "captureCorrelation": "unavailable",
+                "worldReadiness": "unavailable",
+            });
+        };
+        let frontiers = |revision: u64| {
+            json!([{ "stream": render_presentation::PRESENTATION_WORLD_STREAM, "revision": revision }])
+        };
+        let viewport = json!({
+            "cssWidth": frame.width,
+            "cssHeight": frame.height,
+            "backingWidth": frame.width,
+            "backingHeight": frame.height,
+        });
+        let views = frame.composition.as_deref().map(|composition| {
+            json!({
+                "schemaVersion": 1,
+                "revision": frame.composition_revision,
+                "cameras": composition.cameras,
+                "sourceCameras": composition.cameras,
+                "targets": composition.targets,
+                "views": composition.views,
+                "presentations": composition.presentations,
+            })
+        });
+        json!({
+            "schemaVersion": 1,
+            "runtime": runtime,
+            "observationRuntime": runtime,
+            "available": true,
+            "observationAgeMs": frame.drawn_at.elapsed().as_millis() as u64,
+            "presentation": {
+                "surfaceId": format!("runtime-stream-{}", frame.renderer_id),
+                "state": if inspection.pending { "pending" } else { "submitted" },
+                "pendingRealizations": 0,
+                "realizedPublicationFrontiers": frontiers(frame.world_revision),
+                "realizedViewRevision": frame.composition_revision,
+                "submitted": {
+                    "renderSequence": frame.sequence,
+                    "frameSequence": frame.sequence,
+                    "simulationStep": frame.step,
+                    "held": frame.held,
+                    "publicationFrontiers": frontiers(frame.world_revision),
+                    "viewRevision": frame.composition_revision,
+                    "viewport": viewport,
+                    "fallbackCamera": null,
+                    "observer": frame.observer,
+                    "views": views,
+                },
+                "gpuCompletion": "unavailable",
+                "captureCorrelation": "frame-sequence",
+            },
+            "captureCorrelation": "frame-sequence",
+            "worldReadiness": "unavailable",
+        })
     }
 
     /// What the recent streamed frames cost, for `engine.renderer.*`.
@@ -192,4 +345,25 @@ impl ResourceSource for EngineResources<'_> {
             .borrowed_renderer_resource(identity)
             .map(|resource| Cow::Borrowed(resource.bytes()))
     }
+}
+
+fn world_revision(services: &EngineServiceSet) -> u64 {
+    services
+        .renderer_publication_frontiers()
+        .first()
+        .map_or(0, |(_, revision)| *revision)
+}
+
+/// The camera pose of the lowest-ordered primary view.
+fn primary_camera_pose(composition: &RendererViewComposition) -> Option<RendererCameraPose> {
+    let view = composition
+        .views
+        .iter()
+        .filter(|view| matches!(view.target, RendererViewTarget::Primary))
+        .min_by(|left, right| left.order.cmp(&right.order).then(left.id.cmp(&right.id)))?;
+    composition
+        .cameras
+        .iter()
+        .find(|camera| camera.id == view.camera_id)
+        .map(|camera| camera.pose)
 }

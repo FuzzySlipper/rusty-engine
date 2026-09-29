@@ -107,12 +107,15 @@ impl ProductDevFrameStream {
             .then(|| state.size.unwrap_or(DEFAULT_FRAME_SIZE))
     }
 
-    pub fn publish(&self, frame: ProductDevFrame) {
+    /// Numbers `frame`, makes it the latest, and returns its sequence.
+    pub fn publish(&self, frame: ProductDevFrame) -> u64 {
         let mut state = self.state();
         state.sequence += 1;
-        state.latest = Some(encode_frame(state.sequence, &frame));
+        let sequence = state.sequence;
+        state.latest = Some(encode_frame(sequence, &frame));
         drop(state);
         self.changed.notify_all();
+        sequence
     }
 
     /// The latest encoded frame (header and payload) newer than `after`,

@@ -208,6 +208,29 @@ fn camera_motion_interpolates_on_the_host_clock_and_holds_when_samples_stop() {
     assert_eq!(cameras[0].sample_id.as_deref(), Some("2"));
 }
 
+#[test]
+fn an_observer_pose_replaces_the_primary_view_camera_until_it_is_cleared() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(room());
+    let product = camera("player", [0.0, 0.6, 3.0], 0.0, -6.0);
+    harness.renderer.set_view_composition(
+        &composition(
+            vec![product.clone()],
+            vec![primary_view("main", "player", viewport(0.0, 0.0, 1.0, 1.0), 0)],
+        ),
+        0.0,
+    );
+    let (_, own) = harness.composition(0.0);
+    let observer = camera("observer", [2.0, 1.5, 2.0], 35.0, -20.0);
+    harness.renderer.set_observer(Some(observer.pose));
+    let (_, observed) = harness.composition(0.0);
+    assert_ne!(observed, own);
+    assert_eq!(observed, harness.single(&observer));
+    harness.renderer.set_observer(None);
+    let (_, restored) = harness.composition(0.0);
+    assert_eq!(restored, own);
+}
+
 fn capture_job(world: &PresentationWorld, operation: RenderOutputOperation) -> RenderOutputJob {
     RenderOutputJob {
         id: 1,

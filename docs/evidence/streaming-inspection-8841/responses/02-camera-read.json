@@ -1,0 +1,19 @@
+{
+  "camera": {
+    "pitchDegrees": -30,
+    "position": [
+      0,
+      3,
+      3
+    ],
+    "yawDegrees": 45
+  },
+  "drawing": "continuous",
+  "frame": {
+    "sequence": 531,
+    "step": 1869
+  },
+  "held": false,
+  "observer": true,
+  "slot_id": "slot-1"
+}

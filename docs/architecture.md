@@ -279,10 +279,20 @@ The world is realized either by the browser's Three surface or, with
   `data-rusty-frame-sequence`, `-step` and `-held`. Graphics publications
   still reach the page and are acknowledged there. Audio, video and the
   telemetry overlay stay browser presentation hosts.
-- **Not yet in this mode:** the playtest observer camera, on-demand drawing,
-  renderer pick and the `engine.renderer.presentation` observation (#8841; it
-  reports `available: false`, while `engine.renderer.status` adds the stream's
-  frame rate and per-stage costs), ghost plate realization feedback (#8842),
+- **Inspection.** The runtime renderer answers playtest inspection through
+  Engine debug commands the catalog lists only in this mode:
+  `engine.renderer.camera` (read; set an observer pose that replaces every
+  primary view's camera; `none` restores), `engine.renderer.drawing`
+  (`continuous` or `on-demand`, which draws only on request) and
+  `engine.renderer.frame` (draw one frame now). A change draws a frame and
+  the answer names its sequence and step; the page's `__rustyPlaytest` hook
+  waits until the canvas shows that frame. `engine.renderer.presentation`
+  describes the last drawn frame in the browser observation's shape, with
+  `frameSequence`, `simulationStep`, `held` and `observer` added and
+  `captureCorrelation: "frame-sequence"`. The observer and drawing mode belong
+  to the runtime, so every attached page sees them. Held simulation time is
+  the runtime's own. Nothing asks for a renderer pick.
+- **Not yet in this mode:** ghost plate realization feedback (#8842),
   `RenderOutput` image jobs (#8826) and billboard labels (#8827).
 
 Measured costs and the encoding decision: `docs/evidence/streaming-8786/`.

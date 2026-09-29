@@ -14,6 +14,8 @@
 //! There is no fallback world pass: primary area no view covers keeps the
 //! environment clear. Camera poses come from the composition; motion
 //! interpolates between its samples on the presentation time the host passes.
+//! An observer pose, while the host sets one, replaces every primary view's
+//! camera pose (each keeps its own projection); offscreen views keep theirs.
 //! The backend neither validates nor sequences compositions: the runtime
 //! validated this one, a target reallocates when its descriptor or revision
 //! changes, and a view naming a missing camera or target draws nothing.
@@ -21,7 +23,7 @@
 use std::collections::HashMap;
 
 use render_host_contracts::{
-    RendererCompositionCamera, RendererCompositionTarget, RendererTargetSampling,
+    RendererCameraPose, RendererCompositionCamera, RendererCompositionTarget, RendererTargetSampling,
     RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 
@@ -52,6 +54,8 @@ pub(crate) struct ViewComposition {
     revision: u64,
     /// Counts composition frames rendered.
     frame: u64,
+    /// Inspection camera that replaces the primary views' poses.
+    observer: Option<CameraPose>,
 }
 
 /// Whether an offscreen target shows the current scene.
@@ -153,6 +157,13 @@ impl Renderer {
         state.motions = motions;
         state.composition = Some(composition.clone());
         state.revision += 1;
+    }
+
+    /// Draw every primary view from `pose` instead of its camera's pose, or
+    /// from the composition's cameras again with `None`. Inspection only: the
+    /// product's cameras and their motion are unchanged.
+    pub fn set_observer(&mut self, pose: Option<RendererCameraPose>) {
+        self.composition.observer = pose.map(|pose| camera::pose_from_degrees(&pose));
     }
 
     /// Render the installed composition into the offscreen target at
@@ -415,13 +426,14 @@ impl Renderer {
                     let Some((pose, camera)) = poses.get(view.camera_id.as_str()) else {
                         continue;
                     };
+                    let pose = self.composition.observer.unwrap_or(*pose);
                     let area = pixel_viewport(&view.viewport, primary.width, primary.height);
                     let start = if position == 0 && first_covers {
                         PassStart::Target
                     } else {
                         PassStart::Viewport
                     };
-                    stats += self.draw_primary_view(&primary, area, *pose, camera, start);
+                    stats += self.draw_primary_view(&primary, area, pose, camera, start);
                 }
                 PrimaryStep::Presentation(index) => {
                     let presentation = &composition.presentations[*index];

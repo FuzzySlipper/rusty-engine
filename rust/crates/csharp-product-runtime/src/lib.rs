@@ -220,6 +220,15 @@ fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) ->
     })
 }
 
+fn pretty_json(value: &serde_json::Value) -> Result<String, ProductDevRuntimeError> {
+    serde_json::to_string_pretty(value).map_err(|error| {
+        ProductDevRuntimeError::new(
+            "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
+            format!("renderer inspection answer could not be encoded: {error}"),
+        )
+    })
+}
+
 const RENDERER_DETAIL_RECENT_ATTEMPTS: usize = 16;
 
 fn renderer_diagnostics_detail(
@@ -2714,7 +2723,11 @@ impl CsharpProductRuntime {
             | RendererDebugCommand::Status => {}
         }
         let snapshot = self.services.renderer_diagnostics_json();
-        let summary = if action == RendererDebugCommand::Presentation {
+        let summary = if let (RendererDebugCommand::Presentation, Some(frames)) =
+            (action, &self.frame_output)
+        {
+            frames.presentation(serde_json::to_value(self.binding()).unwrap_or_default())
+        } else if action == RendererDebugCommand::Presentation {
             let observation = snapshot
                 .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
                 .and_then(|value| value.get("presentation").cloned())
@@ -3082,6 +3095,17 @@ impl ProductDevRuntime for CsharpProductRuntime {
         }) {
             return self.execute_time_debug(command);
         }
+        if let Some(frames) = self
+            .frame_output
+            .as_ref()
+            .filter(|_| frame_output::is_inspection_command(command))
+        {
+            let result = match frames.execute_inspection(command) {
+                Ok(answer) => ProductDevDebugResult::new(true, pretty_json(&answer)?),
+                Err(detail) => ProductDevDebugResult::new(false, detail),
+            };
+            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
         if let Some(action) = renderer_debug_command(command) {
             let result = self.execute_renderer_debug(action)?;
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
@@ -3126,8 +3150,13 @@ impl ProductDevRuntime for CsharpProductRuntime {
                         error.detail().to_owned(),
                     ))
                 })?;
-        ProductDevRuntimeReceipt::new(catalog.with_renderer_diagnostics(), Vec::new())
-            .map_err(host_runtime_error)
+        let catalog = catalog.with_renderer_diagnostics();
+        let catalog = if self.frame_output.is_some() {
+            catalog.with_runtime_renderer_inspection()
+        } else {
+            catalog
+        };
+        ProductDevRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
     }
 
     fn advance_realtime(

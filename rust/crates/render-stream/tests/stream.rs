@@ -63,7 +63,7 @@ fn frames_follow_viewers_and_simulation_time() {
     streamer.set_simulation(false, 7);
     let mut running = Vec::new();
     for step in 1..=10 {
-        streamer.apply(&[], &NoResources, &|_| None, f64::from(step) / 60.0);
+        streamer.apply(&[], &NoResources, &|_| None, f64::from(step) / 60.0, 0);
         let after = running.last().map_or(head.sequence, |last: &Header| last.sequence);
         if let Some(frame) = frames.next_after(after, None, wait) {
             running.push(header(&frame));
@@ -88,5 +88,20 @@ fn frames_follow_viewers_and_simulation_time() {
     assert!(frames
         .next_after(after, None, Duration::from_millis(400))
         .is_none());
+
+    // On demand: a change waits for a request, which draws exactly one frame.
+    streamer.set_on_demand(true);
+    streamer.apply(&[], &NoResources, &|_| None, 1.0, 0);
+    assert!(frames
+        .next_after(held.sequence, None, Duration::from_millis(300))
+        .is_none());
+    assert!(streamer.inspection().pending);
+    let drawn = streamer.draw_now(wait).expect("a requested frame");
+    assert!(drawn.sequence > held.sequence && drawn.held);
+    let shown = header(&frames.next_after(held.sequence, None, wait).unwrap());
+    assert_eq!(shown.sequence, drawn.sequence);
+    let inspection = streamer.inspection();
+    assert!(inspection.on_demand && !inspection.pending);
+    assert_eq!(inspection.last_drawn.unwrap().sequence, drawn.sequence);
     drop(streamer);
 }

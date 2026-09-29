@@ -4029,6 +4029,7 @@ version = "0.1.0"
 dependencies = [
  "jpeg-encoder",
  "product-dev-host",
+ "render-host-contracts",
  "render-presentation",
  "render-wgpu",
  "runtime-publication",

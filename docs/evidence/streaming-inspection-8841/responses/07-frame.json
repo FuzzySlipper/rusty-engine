@@ -1,0 +1,141 @@
+{
+  "available": true,
+  "captureCorrelation": "frame-sequence",
+  "observationAgeMs": 24,
+  "observationRuntime": {
+    "controlRevision": "1",
+    "generation": "1",
+    "instanceId": "2555391"
+  },
+  "presentation": {
+    "captureCorrelation": "frame-sequence",
+    "gpuCompletion": "unavailable",
+    "pendingRealizations": 0,
+    "realizedPublicationFrontiers": [
+      {
+        "revision": 199,
+        "stream": "presentation-world"
+      }
+    ],
+    "realizedViewRevision": 3285,
+    "state": "pending",
+    "submitted": {
+      "fallbackCamera": null,
+      "frameSequence": 1806,
+      "held": false,
+      "observer": {
+        "pitchDegrees": -45,
+        "position": [
+          -7,
+          14,
+          14
+        ],
+        "yawDegrees": 0
+      },
+      "publicationFrontiers": [
+        {
+          "revision": 199,
+          "stream": "presentation-world"
+        }
+      ],
+      "renderSequence": 1806,
+      "simulationStep": 3364,
+      "viewRevision": 3285,
+      "viewport": {
+        "backingHeight": 720,
+        "backingWidth": 1280,
+        "cssHeight": 720,
+        "cssWidth": 1280
+      },
+      "views": {
+        "cameras": [
+          {
+            "id": "csharp-camera-1",
+            "pose": {
+              "pitchDegrees": 0,
+              "position": [
+                -7,
+                1.6200000047683716,
+                3
+              ],
+              "yawDegrees": 0
+            },
+            "projection": {
+              "far": 100,
+              "fovYDegrees": 90,
+              "kind": "perspective",
+              "near": 0.1
+            }
+          }
+        ],
+        "presentations": [],
+        "revision": 3285,
+        "schemaVersion": 1,
+        "sourceCameras": [
+          {
+            "id": "csharp-camera-1",
+            "pose": {
+              "pitchDegrees": 0,
+              "position": [
+                -7,
+                1.6200000047683716,
+                3
+              ],
+              "yawDegrees": 0
+            },
+            "projection": {
+              "far": 100,
+              "fovYDegrees": 90,
+              "kind": "perspective",
+              "near": 0.1
+            }
+          }
+        ],
+        "targets": [],
+        "views": [
+          {
+            "cameraId": "csharp-camera-1",
+            "id": "csharp-view-0",
+            "order": 0,
+            "target": {
+              "kind": "primary"
+            },
+            "viewport": {
+              "height": 1,
+              "width": 1,
+              "x": 0,
+              "y": 0
+            }
+          }
+        ]
+      }
+    },
+    "surfaceId": "runtime-stream-2"
+  },
+  "runtime": {
+    "controlRevision": "1",
+    "generation": "1",
+    "instanceId": "2555391"
+  },
+  "schemaVersion": 1,
+  "slot_id": "slot-1",
+  "stream": {
+    "adapter": "AMD Radeon RX 9070 XT (RADV GFX1201) (Vulkan)",
+    "bytesPerSecond": 2783812.0984788644,
+    "framesPerSecond": 26.52867027844466,
+    "lastSkip": null,
+    "medianBytesPerFrame": 88360,
+    "medianMs": {
+      "encode": 9.237222,
+      "readback": 2.4054520000000004,
+      "render": 1.312734
+    },
+    "recentFrames": 120,
+    "skippedOps": {},
+    "viewerSize": [
+      1280,
+      720
+    ]
+  },
+  "worldReadiness": "unavailable"
+}

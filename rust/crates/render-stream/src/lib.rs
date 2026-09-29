@@ -9,6 +9,12 @@
 //! held, so the last frame stays on screen and inspection can still redraw
 //! it.
 //!
+//! Inspection can replace the primary views' camera with an observer pose,
+//! switch to on-demand drawing (a frame only when one is requested), and
+//! request a frame and wait for it. Each drawn frame's facts (sequence,
+//! simulation step, size, observer, composition) are kept for the runtime's
+//! presentation observation.
+//!
 //! Only this crate may depend on the frame encoder
 //! (`scripts/dependency_boundary_check.py`).
 
@@ -20,10 +26,13 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use product_dev_host::{ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream};
+pub use render_host_contracts::{RendererCameraPose, RendererViewComposition};
 pub use render_wgpu::{AnimationFact, EntityPositions, RendererOptions, ResourceSource};
 use render_wgpu::{Gpu, OffscreenTarget, Renderer};
 use runtime_publication::RuntimePublication;
 
+/// Size drawn for an explicit request while no viewer states one.
+const UNWATCHED_SIZE: (u32, u32) = (1280, 720);
 /// How long an idle render thread sleeps before rechecking for viewers.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
 /// JPEG quality: 88 KB per 1280x720 Doom frame, without visible blocking.
@@ -68,6 +77,51 @@ struct Scene {
     last_skip: Option<String>,
     stats: VecDeque<FrameCost>,
     stop: bool,
+    /// Counts renderers built; a rebaseline replaces the renderer.
+    renderer_id: u64,
+    /// The retained world revision the last applied publications reached.
+    world_revision: u64,
+    composition: Option<Arc<RendererViewComposition>>,
+    /// Counts installed compositions on the current renderer.
+    composition_revision: u64,
+    observer: Option<RendererCameraPose>,
+    /// Draw only on request, not on change.
+    on_demand: bool,
+    /// Frame requests made, and the latest one a drawn frame answered.
+    requested: u64,
+    answered: u64,
+    last_drawn: Option<DrawnFrame>,
+}
+
+/// What one drawn and published frame showed.
+#[derive(Debug, Clone)]
+pub struct DrawnFrame {
+    /// The frame's sequence on the frame route.
+    pub sequence: u64,
+    pub step: u64,
+    pub held: bool,
+    pub width: u32,
+    pub height: u32,
+    pub drawn_at: Instant,
+    /// Changes with each renderer the streamer builds.
+    pub renderer_id: u64,
+    /// The retained world revision the frame shows.
+    pub world_revision: u64,
+    pub composition: Option<Arc<RendererViewComposition>>,
+    pub composition_revision: u64,
+    pub observer: Option<RendererCameraPose>,
+}
+
+/// The inspection state and the last drawn frame.
+#[derive(Debug, Clone)]
+pub struct StreamInspection {
+    pub on_demand: bool,
+    pub held: bool,
+    pub observer: Option<RendererCameraPose>,
+    pub composition: Option<Arc<RendererViewComposition>>,
+    /// A change or request is waiting for a frame.
+    pub pending: bool,
+    pub last_drawn: Option<DrawnFrame>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,6 +169,15 @@ impl FrameStreamer {
                 last_skip: None,
                 stats: VecDeque::with_capacity(STATS_WINDOW),
                 stop: false,
+                renderer_id: 1,
+                world_revision: 0,
+                composition: None,
+                composition_revision: 0,
+                observer: None,
+                on_demand: false,
+                requested: 0,
+                answered: 0,
+                last_drawn: None,
             }),
             gpu,
             options,
@@ -142,16 +205,19 @@ impl FrameStreamer {
 
     /// Applies one committed call's renderer publications in order, then
     /// moves effects and animation to the Engine presentation time the call
-    /// reached. Other publications are not the renderer's.
+    /// reached. Other publications are not the renderer's. `world_revision`
+    /// is the retained world revision they bring the renderer to.
     pub fn apply(
         &self,
         publications: &[RuntimePublication],
         resources: &dyn ResourceSource,
         entities: EntityPositions<'_>,
         elapsed_seconds: f64,
+        world_revision: u64,
     ) {
         let now = self.shared.now();
         let mut scene = self.shared.scene();
+        scene.world_revision = world_revision;
         let mut applied = false;
         for publication in publications {
             let issues = match publication {
@@ -163,6 +229,8 @@ impl FrameStreamer {
                 }
                 RuntimePublication::ViewComposition(composition) => {
                     scene.renderer.set_view_composition(composition, now);
+                    scene.composition = Some(Arc::new(composition.clone()));
+                    scene.composition_revision += 1;
                     Vec::new()
                 }
                 _ => continue,
@@ -193,15 +261,21 @@ impl FrameStreamer {
         resources: &dyn ResourceSource,
         entities: EntityPositions<'_>,
         elapsed_seconds: f64,
+        world_revision: u64,
     ) {
         {
             let mut scene = self.shared.scene();
             scene.renderer = Renderer::new(&self.shared.gpu, self.shared.options);
+            let observer = scene.observer;
+            scene.renderer.set_observer(observer);
+            scene.renderer_id += 1;
+            scene.composition = None;
+            scene.composition_revision = 0;
             scene.elapsed_seconds = elapsed_seconds;
             scene.renderer.set_animation_time(elapsed_seconds);
             scene.animation_facts.clear();
         }
-        self.apply(baseline, resources, entities, elapsed_seconds);
+        self.apply(baseline, resources, entities, elapsed_seconds, world_revision);
     }
 
     /// Whether the simulation is held, and the step the scene shows. A held
@@ -214,6 +288,56 @@ impl FrameStreamer {
             scene.dirty = true;
             drop(scene);
             self.shared.wake.notify_all();
+        }
+    }
+
+    /// Draws the primary views from `pose` instead of the product's cameras,
+    /// or from the product's cameras again with `None`.
+    pub fn set_observer(&self, pose: Option<RendererCameraPose>) {
+        let mut scene = self.shared.scene();
+        scene.observer = pose;
+        scene.renderer.set_observer(pose);
+        scene.dirty = true;
+        drop(scene);
+        self.shared.wake.notify_all();
+    }
+
+    /// On demand, changes wait for [`Self::draw_now`] instead of drawing.
+    pub fn set_on_demand(&self, on_demand: bool) {
+        let mut scene = self.shared.scene();
+        scene.on_demand = on_demand;
+        drop(scene);
+        self.shared.wake.notify_all();
+    }
+
+    /// Draws a frame of the current scene, even on demand or with no viewer,
+    /// and waits up to `timeout` for it to be published.
+    pub fn draw_now(&self, timeout: Duration) -> Option<DrawnFrame> {
+        let mut scene = self.shared.scene();
+        scene.requested += 1;
+        let request = scene.requested;
+        self.shared.wake.notify_all();
+        let (scene, _) = self
+            .shared
+            .wake
+            .wait_timeout_while(scene, timeout, |scene| {
+                scene.answered < request && !scene.stop
+            })
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (scene.answered >= request)
+            .then(|| scene.last_drawn.clone())
+            .flatten()
+    }
+
+    pub fn inspection(&self) -> StreamInspection {
+        let scene = self.shared.scene();
+        StreamInspection {
+            on_demand: scene.on_demand,
+            held: scene.held,
+            observer: scene.observer,
+            composition: scene.composition.clone(),
+            pending: scene.dirty || scene.requested > scene.answered,
+            last_drawn: scene.last_drawn.clone(),
         }
     }
 
@@ -302,7 +426,12 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             }
             // A running simulation applies a change every step, so frames
             // follow the simulation rate; a held scene draws once per change.
-            if let Some(size) = shared.frames.wanted_size().filter(|_| scene.dirty) {
+            // On demand, only requests draw.
+            let wanted = shared.frames.wanted_size();
+            if scene.requested > scene.answered {
+                break wanted.unwrap_or(UNWATCHED_SIZE);
+            }
+            if let Some(size) = wanted.filter(|_| scene.dirty && !scene.on_demand) {
                 break size;
             }
             scene = shared
@@ -320,6 +449,20 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
         };
         let started = Instant::now();
         scene.dirty = false;
+        let request = scene.requested;
+        let mut drawn = DrawnFrame {
+            sequence: 0,
+            step: scene.step,
+            held: scene.held,
+            width: 0,
+            height: 0,
+            drawn_at: started,
+            renderer_id: scene.renderer_id,
+            world_revision: scene.world_revision,
+            composition: scene.composition.clone(),
+            composition_revision: scene.composition_revision,
+            observer: scene.observer,
+        };
         scene.renderer.render_view_composition(target, shared.now());
         let facts = scene.renderer.take_animation_facts();
         scene.animation_facts.extend(facts);
@@ -341,7 +484,7 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             encode_ms: ms(encoded - read),
             bytes: payload.len(),
         };
-        shared.frames.publish(ProductDevFrame {
+        drawn.sequence = shared.frames.publish(ProductDevFrame {
             width,
             height,
             format,
@@ -349,11 +492,16 @@ fn render_loop(shared: &Shared, format: StreamFormat) {
             step,
             payload,
         });
+        (drawn.width, drawn.height) = (width, height);
         let mut scene = shared.scene();
         if scene.stats.len() == STATS_WINDOW {
             scene.stats.pop_front();
         }
         scene.stats.push_back(cost);
+        scene.answered = scene.answered.max(request);
+        scene.last_drawn = Some(drawn);
+        drop(scene);
+        shared.wake.notify_all();
     }
 }
 
