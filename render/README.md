@@ -17,6 +17,8 @@ boundary is summarized in the
 [Engine architecture overview](../docs/architecture.md). Historical renderer
 notes remain available in Git history as implementation donor material.
 
-Do not edit `render/artifacts/application-host/index.js` or the webview artifact
-by hand. Change typed source, rebuild through the workspace scripts, and verify
-artifact freshness through the complete gate.
+`render/artifacts/` and `rust/crates/renderer-webview-host/artifacts/` are
+ignored build outputs. `pnpm --dir render run build` writes the browser bundles
+(the runtime pack builder runs it), and `pnpm --dir render run
+build:webview-artifact` writes the webview bundle that `renderer-webview-host`
+embeds.

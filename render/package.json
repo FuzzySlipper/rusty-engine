@@ -20,7 +20,7 @@
     "test": "pnpm -r test",
     "test:compiled": "pnpm -r test:compiled",
     "test:browser": "playwright test --config playwright.config.ts",
-    "verify": "pnpm run boundary && pnpm run build && pnpm run typecheck:browser && pnpm run test:compiled && pnpm run test:browser"
+    "verify": "pnpm run build && pnpm run boundary && pnpm run typecheck:browser && pnpm run test:compiled && pnpm run test:browser"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

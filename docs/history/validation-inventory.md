@@ -1,5 +1,9 @@
 # Validation inventory
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 Start with the [operation audit and dispositions](validation-operation-audit.md)
 for the actionable campaign; the raw rows below are a search index.
 

@@ -13,7 +13,6 @@ on:
       - 'rust/crates/render-presentation/**'
       - 'scripts/verify-render.sh'
       - 'scripts/performance-results*.mjs'
-      - 'scripts/verify-render-artifacts.sh'
       - '.github/workflows/render.yml'
   pull_request:
     paths:
@@ -25,7 +24,6 @@ on:
       - 'rust/crates/render-presentation/**'
       - 'scripts/verify-render.sh'
       - 'scripts/performance-results*.mjs'
-      - 'scripts/verify-render-artifacts.sh'
       - '.github/workflows/render.yml'
 
 concurrency:

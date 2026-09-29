@@ -1,5 +1,9 @@
 # Test and CI audit follow-through (#7881–7882)
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 The workflow/script survey found no obsolete verification lane to delete. Rust
 invariants, generated C# bindings/lifecycle, renderer artifacts, and browser
 behavior remain distinct useful checks. The assertion/call-path survey did find

@@ -1,10 +1,13 @@
 /target/
 /node_modules/
-/render/artifacts/live-debug-panel/
+__pycache__/
+/artifacts/csharp-sdk-feed/
 /render/**/node_modules/
 /render/.nx/
 /render/dist/
 /render/packages/*/dist/
+/render/artifacts/
+/rust/crates/renderer-webview-host/artifacts/
 /render/**/*.tsbuildinfo
 /render/coverage/
 /render/playwright-report/

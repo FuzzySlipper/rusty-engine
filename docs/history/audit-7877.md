@@ -1,5 +1,9 @@
 # Diagnostic serialization audit
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 Task **#7877**, 2026-09-07. This records the narrow dispositions for timeline
 inspection and retained runtime diagnostics. It does not redesign the host
 writer, worker transport, browser route, or ring retention.

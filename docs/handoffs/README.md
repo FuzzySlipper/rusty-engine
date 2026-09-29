@@ -94,10 +94,9 @@ projector.
 
 ## Shared generated files
 
-- **`render/artifacts/*`** (browser bundles). Rebuild them with
-  `pnpm run build` in `render/` only if your lane changed TypeScript. On a
-  rebase conflict, take either side and rebuild; never hand-merge minified
-  output. #8752 may stop tracking them.
+- **`render/artifacts/*`** (browser bundles) are ignored build output since
+  #8752. Do not commit them. `pnpm run build` in `render/` rebuilds them, and
+  `scripts/build-runtime-pack.sh` builds them itself.
 - **`rust/crates/csharp-engine-abi/src/generated_abi_identity.rs`.** On
   conflict, regenerate it with `scripts/generate-csharp-native-bindings.sh`
   (building the SDK also regenerates it).

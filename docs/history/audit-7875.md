@@ -1,5 +1,9 @@
 # Audit 7875: opaque UI, input, and timeline data
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 UI projections and direct input payloads remain plain JSON data. Their
 identities, lifecycle fences, contracts, sequence rules, finite/safe numeric
 representation, and private immutable snapshots remain enforced.

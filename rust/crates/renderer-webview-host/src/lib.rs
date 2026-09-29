@@ -32,6 +32,7 @@ use wry::{
 };
 
 const BRIDGE_VERSION: &str = "rusty_renderer_webview_bridge.v1";
+// Ignored build output: `pnpm --dir render run build:webview-artifact` writes it.
 const RENDERER_ARTIFACT: &str = include_str!("../artifacts/renderer-webview.js");
 const MAX_RESOURCE_COUNT: usize = 1_536;
 const MAX_RESOURCE_BYTES: usize = 64 * 1024 * 1024;

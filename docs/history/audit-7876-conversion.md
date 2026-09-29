@@ -1,5 +1,9 @@
 # Audit 7876: conversion source capacity
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 - Removed the inherited 64 MiB conversion-source policy from request validation,
   volume and object provenance validation, public exports, and both converter
   CLIs. Source-byte provenance remains a nonzero `u64` fact.

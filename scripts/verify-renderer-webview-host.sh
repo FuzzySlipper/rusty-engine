@@ -2,24 +2,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ARTIFACT="$REPO_ROOT/rust/crates/renderer-webview-host/artifacts/renderer-webview.js"
-ARTIFACT_COPY="$(mktemp -t rusty-renderer-webview-artifact.XXXXXX.js)"
-trap 'rm -f "$ARTIFACT_COPY"' EXIT
-
-if [[ "$#" -gt 1 ]] || { [[ "$#" -eq 1 ]] && [[ "$1" != "--artifacts-ready" ]]; }; then
-  echo "usage: $0 [--artifacts-ready]" >&2
-  exit 2
-fi
-
-if [[ "${1:-}" != "--artifacts-ready" ]]; then
-  cp "$ARTIFACT" "$ARTIFACT_COPY"
-  pnpm --dir "$REPO_ROOT/render" run typecheck
-  pnpm --dir "$REPO_ROOT/render" run build:webview-artifact
-  if ! cmp -s "$ARTIFACT_COPY" "$ARTIFACT"; then
-    echo "checked renderer webview artifact does not match its reproducible build" >&2
-    exit 1
-  fi
-fi
+# The crate embeds this ignored bundle with include_str!, so build it first.
+pnpm --dir "$REPO_ROOT/render" run typecheck
+pnpm --dir "$REPO_ROOT/render" run build:webview-artifact
 
 pnpm --dir "$REPO_ROOT/render" exec playwright test --config playwright.webview.config.ts
 

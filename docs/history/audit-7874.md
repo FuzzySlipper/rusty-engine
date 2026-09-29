@@ -1,5 +1,9 @@
 # Retained mesh publication audit
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 Task #7874. The public RenderFrameDiff and projector resource catalogue remain
 mutable; this audit preserves validation at their actual admission points.
 

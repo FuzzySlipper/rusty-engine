@@ -114,7 +114,6 @@ def main() -> None:
         {
             "render/**",
             "rust/crates/render-host-contracts/**",
-            "scripts/verify-render-artifacts.sh",
         },
         set(),
     )
@@ -129,17 +128,10 @@ def main() -> None:
         "scripts/test-csharp-binding-generator-lease-fixture.sh": {"csharp"},
         "render/browser/application-host.browser.spec.ts": {"render"},
         "render/packages/renderer-three/src/backend.ts": {"render"},
-        "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": set(),
         "rust/crates/renderer-webview-host/src/lib.rs": set(),
         "rust/crates/entity-state/src/lib.rs": {"verify"},
         "docs/csharp-sdk.md": {"docs"},
         ".github/workflows/render.yml": {"docs", "render"},
-        "render/artifacts/application-host/index.js": {
-            "render",
-        },
-        "render/artifacts/product-browser-host/product-browser-host.js": {
-            "render",
-        },
     }
     for path, expected in routing_cases.items():
         actual = {

@@ -1,5 +1,9 @@
 # Validation operation audit — first pass
 
+> **Historical record, superseded by campaign #8723.** This ledger records decisions
+> made in September 2026 before the architecture reset. Nothing it says to keep,
+> preserve or enforce is current policy. See [history](README.md).
+
 Task **#7872**, 2026-09-07. This is an operation/family ledger, not approval of
 all rows in the [raw inventory](validation-inventory.md). Bounded source surveys
 supply leads; dispositions below belong to the root audit. Unresolved means

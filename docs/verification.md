@@ -9,7 +9,7 @@ Changes route to their owning lanes; superseded runs are cancelled.
 | --- | --- |
 | Rust | Formatting, Cargo dependency boundaries, mechanism tests, Clippy with warnings as errors |
 | C# | Binding generation and a disposable packaged SDK consumer staged and exercised through the Rust CoreCLR host |
-| Render | TypeScript package boundaries, current browser artifact freshness, compiled unit tests and Chromium behavior |
+| Render | Browser bundle build, TypeScript package boundaries, compiled unit tests and Chromium behavior |
 | Docs | Local links and CI owner routing |
 
 Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
