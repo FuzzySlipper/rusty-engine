@@ -90,13 +90,10 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
         );
     }
     let mut runtime = Some(launch.start(&unavailable)?);
-    let headless_browser = if args.headless {
-        Some(headless_browser::HeadlessBrowser::launch(&browser_url(
-            address,
-        ))?)
-    } else {
-        None
-    };
+    // Until the first runtime serves, a failed start stops the supervisor.
+    // Later ones, and any restaged Product, pause for a restage instead.
+    let mut initial_start = true;
+    let mut headless_browser = None;
     let commands = args.supervised.then(read_supervisor_commands);
     // One automatic recovery attempt is intentionally small. A repeated
     // failure pauses until source restaging supplies a new product; no
@@ -106,7 +103,30 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
         if termination.load(Ordering::Relaxed) {
             break "termination-signal";
         }
-        if let Some(status) = runtime.as_mut().and_then(RuntimeProcess::exited) {
+        if let Some(starting) = runtime.as_mut().filter(|runtime| !runtime.serving) {
+            // A starting runtime is polled here, so signals, stdin EOF and
+            // restages below still reach the supervisor while it loads.
+            if let Err(error) = starting.poll_startup(&unavailable) {
+                runtime = None;
+                if initial_start {
+                    return Err(error);
+                }
+                publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_RUNTIME_START", &error);
+                pause(
+                    &diagnostics,
+                    &unavailable,
+                    "the runtime could not start; waiting for source restage",
+                );
+                automatic_restart_used = true;
+            } else if starting.serving {
+                initial_start = false;
+                if args.headless && headless_browser.is_none() {
+                    headless_browser = Some(headless_browser::HeadlessBrowser::launch(
+                        &browser_url(address),
+                    )?);
+                }
+            }
+        } else if let Some(status) = runtime.as_mut().and_then(RuntimeProcess::exited) {
             runtime = None;
             let detail = format!("runtime exited unexpectedly ({status})");
             publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_RUNTIME_EXIT", &detail);
@@ -145,6 +165,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
                     continue;
                 }
                 automatic_restart_used = false;
+                initial_start = false;
                 if let Some(previous) = runtime.take() {
                     if let Err(error) = previous.stop() {
                         publish_supervisor_diagnostic(
@@ -271,18 +292,15 @@ struct RuntimeLaunch {
 }
 
 impl RuntimeLaunch {
-    /// Starts one runtime incarnation. Requests are answered with 503 while
-    /// it loads; the supervisor stops answering before the runtime accepts,
-    /// so the two processes never accept from the listener at once.
+    /// Spawns one runtime incarnation. Requests are answered with 503 while
+    /// it loads; [`RuntimeProcess::poll_startup`] hands it the listener.
     fn start(&mut self, unavailable: &Unavailable) -> Result<RuntimeProcess, String> {
         unavailable.answer("the runtime is starting");
         let runtime_instance_id = self.next_runtime_instance_id;
         self.next_runtime_instance_id = runtime_instance_id.saturating_add(1).max(1);
         let arguments = self.runtime_arguments(runtime_instance_id)?;
         let mut runtime = RuntimeProcess::spawn(&self.executable, &arguments, self.listener_fd)?;
-        runtime.wait_ready(self.startup_timeout)?;
-        unavailable.suspend();
-        runtime.serve()?;
+        runtime.startup_deadline = self.startup_timeout.map(|timeout| Instant::now() + timeout);
         Ok(runtime)
     }
 
@@ -327,6 +345,8 @@ struct RuntimeProcess {
     child: Child,
     stdin: Option<ChildStdin>,
     ready: mpsc::Receiver<()>,
+    startup_deadline: Option<Instant>,
+    serving: bool,
 }
 
 impl RuntimeProcess {
@@ -367,28 +387,37 @@ impl RuntimeProcess {
             stdin: child.stdin.take(),
             child,
             ready: ready_rx,
+            startup_deadline: None,
+            serving: false,
         })
     }
 
-    fn wait_ready(&mut self, timeout: Option<Duration>) -> Result<(), String> {
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
-        loop {
-            if self.ready.recv_timeout(POLL_INTERVAL).is_ok() {
-                return Ok(());
-            }
-            if let Some(status) = self.exited() {
-                return Err(format!(
-                    "DEV_HOST_RUNTIME_EXIT: the runtime exited during startup ({status})"
-                ));
-            }
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                self.kill();
-                return Err(
-                    "DEV_HOST_RUNTIME_STARTUP_TIMEOUT: the runtime did not load its product within 30 seconds"
-                        .to_owned(),
-                );
-            }
+    /// Checks a starting runtime once. When it reports ready, the supervisor
+    /// stops answering before the runtime accepts, so the two processes never
+    /// accept from the listener at once.
+    fn poll_startup(&mut self, unavailable: &Unavailable) -> Result<(), String> {
+        if self.ready.try_recv().is_ok() {
+            unavailable.suspend();
+            self.serve()?;
+            self.serving = true;
+            return Ok(());
         }
+        if let Some(status) = self.exited() {
+            return Err(format!(
+                "DEV_HOST_RUNTIME_EXIT: the runtime exited during startup ({status})"
+            ));
+        }
+        if self
+            .startup_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.kill();
+            return Err(
+                "DEV_HOST_RUNTIME_STARTUP_TIMEOUT: the runtime did not load its product within 30 seconds"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 
     fn serve(&mut self) -> Result<(), String> {

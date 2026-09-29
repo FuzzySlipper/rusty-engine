@@ -1,0 +1,9 @@
+initial runtime serves: 200
+restage to a Product whose assembly is empty: supervisor alive True | GET / 503
+restage to the good Product: GET / 200 after 0.4 s
+stdin EOF: supervisor exit code 0
+RUSTY_HOST shutdown={"reason":"supervisor-stdin-closed"}
+RUSTY_HOST DEV_HOST_RUNTIME_START: DEV_HOST_RUNTIME_EXIT: the runtime exited during startup (exit status: 1)
+RUSTY_HOST DEV_HOST_RUNTIME_PAUSED: the runtime could not start; waiting for source restage
+RUSTY_HOST shutdown={"reason":"supervisor-stdin-closed"}
+RUSTY_HOST shutdown={"reason":"supervisor-stdin-closed"}

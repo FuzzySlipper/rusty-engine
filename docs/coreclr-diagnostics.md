@@ -80,9 +80,10 @@ Start an explicitly debuggable session:
 `--debugger` removes the runtime's 30-second startup deadline for this
 CoreCLR session; the development host has no callback deadline in any mode. A
 paused or hung callback holds its runtime until you continue, detach or stop
-the session. Source restaging still replaces the runtime (a runtime that does
-not stop within ten seconds is killed), so avoid editing while inspecting a
-paused callback, and rediscover before attaching again. `--live-debug`
+the session. Source restaging still replaces the runtime, and stopping the
+session still stops it, even while it is loading at a breakpoint. A runtime
+that does not stop within ten seconds is killed, so avoid editing while
+inspecting a paused callback, and rediscover before attaching again. `--live-debug`
 controls the Engine browser diagnostic console; it does not enable managed
 breakpoints.
 

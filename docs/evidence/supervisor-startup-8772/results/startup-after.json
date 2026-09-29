@@ -1,0 +1,37 @@
+{
+  "pageWhileHeld": 503,
+  "groupSigint": {
+    "supervisorExited": true,
+    "exitCode": 1,
+    "seconds": 10.147,
+    "heldRuntimeReaped": true,
+    "log": [
+      "RUSTY_HOST shutdown={\"reason\":\"termination-signal\"}"
+    ]
+  },
+  "stdinEof": {
+    "supervisorExited": true,
+    "exitCode": 1,
+    "seconds": 10.136,
+    "heldRuntimeReaped": true,
+    "log": [
+      "RUSTY_HOST shutdown={\"reason\":\"supervisor-stdin-closed\"}"
+    ]
+  },
+  "restage": {
+    "servedAfterSeconds": 10.129,
+    "heldRuntimeReaped": true,
+    "replacementRuntime": true,
+    "thenStdinEof": {
+      "supervisorExited": true,
+      "exitCode": 0,
+      "seconds": 0.063,
+      "heldRuntimeReaped": true,
+      "log": [
+        "RUSTY_HOST DEV_HOST_RUNTIME_STOP: DEV_HOST_RUNTIME_SHUTDOWN_TIMEOUT: the runtime did not dispose within 10 seconds",
+        "RUSTY_HOST shutdown={\"reason\":\"supervisor-stdin-closed\"}",
+        "RUSTY_HOST shutdown={\"reason\":\"supervisor-stdin-closed\"}"
+      ]
+    }
+  }
+}

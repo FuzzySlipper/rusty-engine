@@ -179,6 +179,6 @@ A unit test covers the forwarded argument for both loaders.
 - **Startup cannot be interrupted.** While a runtime loads, the supervisor
   does not observe a termination signal, stdin EOF or a restage; with
   `--debugger` it can wait indefinitely. The worker startup loop behaved the
-  same (#8772).
+  same. Fixed by #8772 (`docs/evidence/supervisor-startup-8772`).
 - **The replay machinery is untouched:** history ring, `Last-Event-ID`,
   fragments. It is #8767.

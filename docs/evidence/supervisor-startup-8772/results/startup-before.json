@@ -1,0 +1,29 @@
+{
+  "pageWhileHeld": 503,
+  "groupSigint": {
+    "supervisorExited": true,
+    "exitCode": 1,
+    "seconds": 29.107,
+    "heldRuntimeReaped": true,
+    "log": []
+  },
+  "stdinEof": {
+    "supervisorExited": true,
+    "exitCode": 1,
+    "seconds": 29.135,
+    "heldRuntimeReaped": true,
+    "log": []
+  },
+  "restage": {
+    "servedAfterSeconds": null,
+    "heldRuntimeReaped": true,
+    "replacementRuntime": false,
+    "thenStdinEof": {
+      "supervisorExited": true,
+      "exitCode": 1,
+      "seconds": 0.0,
+      "heldRuntimeReaped": true,
+      "log": []
+    }
+  }
+}
