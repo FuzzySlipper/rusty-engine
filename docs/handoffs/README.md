@@ -24,7 +24,7 @@ protocol and the ownership map.
 | cli | [cli.md](cli.md) | #8779, #8781 | after #8775 is on main |
 | wgpu | [wgpu.md](wgpu.md) | #8796, #8783 | after the #8795 survey document exists |
 | audio | [audio.md](audio.md) | #8789 | now |
-| playtest | [playtest.md](playtest.md) | #8765, #8769 | now |
+| playtest | [playtest.md](playtest.md) | #8765, #8769 | deferred by the owner; #8769 is in backlog |
 
 Not assigned yet:
 - **#8744** (result buffers) sweeps every service's result API. It starts after

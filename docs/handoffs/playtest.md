@@ -1,6 +1,6 @@
 # Lane: playtest
 
-**Tasks, in order:** #8765, #8769. **Start:** now.
+**Tasks, in order:** #8765, #8769. **Start:** deferred by the owner (2026-09-29); #8769 is in backlog pending an owner decision.
 Campaign #8723. Shared protocol: [README.md](README.md).
 
 ## Tasks
