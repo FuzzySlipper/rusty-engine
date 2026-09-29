@@ -51,8 +51,10 @@ jobs:
 
       - name: Install architecture audit dependency
         # mesa-vulkan-drivers supplies llvmpipe (lavapipe), the software Vulkan
-        # adapter the render-wgpu screenshot tests run on.
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1
+        # adapter the render-wgpu screenshot tests run on. The GTK/WebKit
+        # headers build desktop-shell's overlay-spike dev-dependencies (wry,
+        # gtk) under `cargo test --workspace` (#8790, #8857).
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1 libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev
 
       - name: Verify
         env:
