@@ -51,7 +51,9 @@ rusty update
   `.sha256` beside it.
 - `rusty dev` and `rusty build` restore the SDK package from the cached pair's
   `sdk-feed`, so a product needs no feed of its own. After one restore through
-  `rusty`, plain `dotnet build` also finds the package. `rusty dev` runs the
+  `rusty`, plain `dotnet build` also finds the package; before that (for
+  example in CI running test projects), `export $(rusty env)` or
+  `rusty env >> "$GITHUB_ENV"` gives plain `dotnet` the same feed. `rusty dev` runs the
   pinned pair's own `runtime-pack/bin/rusty`, whose supervisor matches its
   host, and sets `DOTNET_ROOT` from `dotnet` on `PATH` when it is unset.
 - `rusty update` is the only thing that moves the pin. It installs the target
