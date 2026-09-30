@@ -339,7 +339,8 @@ impl RuntimeImplicitBridge {
             .ok_or_else(|| error("Graphics is not bound"))?;
         // The EngineServiceSet refreshes this sibling pointer for the current
         // synchronous call. Admission copies all streams before returning.
-        let handle = unsafe { (&mut *appearance).create_mesh_resource(&raw) }?;
+        let handle =
+            unsafe { crate::render_resources::create_generated_mesh(&mut *appearance, &raw) }?;
         Ok((
             handle,
             NativeImplicitGenerationReadout {

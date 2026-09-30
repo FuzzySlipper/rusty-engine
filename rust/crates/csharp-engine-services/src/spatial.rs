@@ -813,7 +813,7 @@ impl RuntimeSpatialBridge {
     fn copy_inline_mesh_collision(
         &mut self,
         resource: NativeMeshResourceReference,
-    ) -> Result<crate::appearance::CollisionMeshGeometry, CsharpEngineServicesError> {
+    ) -> Result<crate::render_resources::CollisionMeshGeometry, CsharpEngineServicesError> {
         let appearance = self.sibling_appearance.ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_COLLISION_MESH_UNBOUND",
@@ -823,9 +823,12 @@ impl RuntimeSpatialBridge {
         // SAFETY: bind_appearance points at the sibling owner retained by
         // EngineServiceSet. The Geometry helper copies the staged inline
         // payload before this Spatial call returns.
-        unsafe { &mut *appearance }.copy_inline_mesh_geometry(NativeMeshResourceHandle {
-            value: resource.value,
-        })
+        crate::render_resources::copy_inline_mesh_geometry(
+            unsafe { &*appearance },
+            NativeMeshResourceHandle {
+                value: resource.value,
+            },
+        )
     }
 
     fn replace_content_artifact(
@@ -5655,7 +5658,7 @@ mod tests {
         let mut mesh = NativeMeshResourceHandle::default();
         assert_eq!(
             unsafe {
-                crate::appearance::create_mesh_resource(
+                crate::render_resources::create_mesh_resource(
                     appearance_context,
                     &NativeMeshResourceCreateRequest {
                         positions: positions.as_ptr(),

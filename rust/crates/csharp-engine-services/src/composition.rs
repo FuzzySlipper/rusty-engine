@@ -33,17 +33,18 @@ use crate::appearance::{
     create_primitive_appearance, create_sprite_appearance, create_sprite_atlas,
     create_sprite_from_atlas, create_sprite_playback, create_static_mesh_appearance,
     create_static_mesh_from_content_appearance, destroy_appearance, destroy_light,
-    destroy_material, destroy_mesh_partition, destroy_sprite_atlas, destroy_sprite_playback,
-    open_render_resource, partition_mesh, publish_appearance_snapshot, read_light,
-    read_mesh_partition, read_presentation, read_sprite, read_sprite_playback, replace_light,
-    replace_material, replace_primitive_appearance, replace_sprite_appearance,
+    destroy_material, destroy_sprite_atlas, destroy_sprite_playback, open_render_resource,
+    publish_appearance_snapshot, read_light, read_presentation, read_sprite, read_sprite_playback,
+    replace_light, replace_material, replace_primitive_appearance, replace_sprite_appearance,
     replace_sprite_from_atlas, replace_static_mesh_appearance,
     replace_static_mesh_from_content_appearance, sample_sprite_playback,
-    select_sprite_playback_frame, set_sprite_frame, set_sprite_viewport, take_mesh_partition_part,
-    update_light, update_material, update_static_mesh_materials, RuntimeAppearanceBridge,
-    RuntimeAppearanceCall,
+    select_sprite_playback_frame, set_sprite_frame, set_sprite_viewport, update_light,
+    update_material, update_static_mesh_materials, RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
-use crate::render_resources::CsharpRenderResource;
+use crate::render_resources::{
+    create_mesh_resource, destroy_mesh_partition, partition_mesh, read_mesh_partition,
+    take_mesh_partition_part, CsharpRenderResource,
+};
 
 #[allow(
     clippy::too_many_arguments,
@@ -108,7 +109,7 @@ fn engine_api(
             destroy_material,
             create_primitive: create_primitive_appearance,
             replace_primitive: replace_primitive_appearance,
-            create_mesh_resource: crate::appearance::create_mesh_resource,
+            create_mesh_resource,
             destroy_mesh_resource: crate::appearance::destroy_mesh_resource,
             create_mesh_appearance: crate::appearance::create_mesh_appearance,
             partition_mesh,

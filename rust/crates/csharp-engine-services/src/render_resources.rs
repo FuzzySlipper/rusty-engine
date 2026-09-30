@@ -1,24 +1,37 @@
 //! Renderer resource admission and the resource registry. Graphics, audio,
-//! video and offline output read the same admitted bodies; the decoders and
-//! slot bookkeeping stay private here.
+//! video and offline output read the same admitted bodies, and implicit
+//! surfaces and spatial collision reach generated meshes here; the decoders
+//! and slot bookkeeping stay private.
 
-use crate::composition::CsharpEngineServicesError;
+use crate::appearance::{
+    animation_result, appearance_operation, appearance_void, RuntimeAppearanceBridge,
+};
+use crate::composition::{borrowed_slice, CsharpEngineServicesError};
 use crate::content::RetainedContent;
 use asset_import::{
     admit_glb_source, glb_relative_resource_uris, import_animated_glb_asset, GlbSourceClosure,
     GltfResource, ImportContext, SourceUri,
 };
 use csharp_engine_abi::{
-    NativeRenderResourceHandle, NativeRenderResourceInfo, NativeRenderResourceKind,
-    NativeTextureFilter, NativeTextureWrap,
+    NativeMeshMaterialBinding, NativeMeshPartitionHandle, NativeMeshPartitionPartRequest,
+    NativeMeshPartitionReadout, NativeMeshPartitionRequest, NativeMeshResourceCreateRequest,
+    NativeMeshResourceHandle, NativeOperationErrorReceipt, NativeRenderResourceHandle,
+    NativeRenderResourceInfo, NativeRenderResourceKind, NativeTextureFilter, NativeTextureWrap,
+    NativeVec3,
 };
 use render_model::{
-    mesh_resource_content_hash, pack_mesh_resources, validate_mesh_resource_header,
-    AnimatedMeshAsset, MeshMaterialSlot, MeshPayloadDescriptor, PackedMeshResource,
-    StaticMeshAsset, TextureDescriptor, TextureFilter, TexturePayloadSource, TextureWrap,
-    MAX_MESH_RESOURCE_BYTES,
+    mesh_resource_content_hash, pack_mesh_resources, partition_mesh_spatially,
+    validate_mesh_resource_header, AnimatedMeshAsset, MeshAttribute, MeshAttributeKind,
+    MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshCollisionPolicy,
+    MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot, MeshPayloadDescriptor,
+    MeshPayloadSource, MeshProvenance, PackedMeshResource, StaticMeshAsset, TextureDescriptor,
+    TextureFilter, TexturePayloadSource, TextureWrap, MAX_MESH_RESOURCE_BYTES,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::c_void,
+    sync::Arc,
+};
 
 /// Immutable renderer content selected through the Engine appearance API.
 /// Host bundle realization remains the runtime's responsibility.
@@ -805,6 +818,530 @@ impl RenderResourceImports {
     }
 }
 
+pub(crate) type CollisionMeshGeometry = (Vec<[f64; 3]>, Vec<[u32; 3]>);
+
+/// Generated mesh resources and the partitions cut from them. Each resource
+/// retains its typed definition, which the renderer catalog shares, and the
+/// materials its slots bind.
+#[derive(Clone)]
+pub(crate) struct GeneratedMeshes {
+    resources: BTreeMap<u64, GeneratedMesh>,
+    next_resource: u64,
+    partitions: BTreeMap<u64, GeneratedMeshPartition>,
+    next_partition: u64,
+}
+
+#[derive(Clone)]
+struct GeneratedMesh {
+    definition: Arc<StaticMeshAsset>,
+    material_handles: BTreeSet<u64>,
+}
+
+#[derive(Clone)]
+struct GeneratedMeshPartition {
+    parts: Vec<Option<Arc<StaticMeshAsset>>>,
+    material_handles: BTreeSet<u64>,
+}
+
+/// A bound generated mesh that has passed every admission check.
+struct BoundGeneratedMesh {
+    handle: u64,
+    next: u64,
+    definition: StaticMeshAsset,
+    material_handles: BTreeSet<u64>,
+}
+
+impl Default for GeneratedMeshes {
+    fn default() -> Self {
+        Self {
+            resources: BTreeMap::new(),
+            next_resource: 1,
+            partitions: BTreeMap::new(),
+            next_partition: 1,
+        }
+    }
+}
+
+impl GeneratedMeshes {
+    pub(crate) fn len(&self) -> usize {
+        self.resources.len()
+    }
+
+    /// The catalog asset of a live generated mesh.
+    pub(crate) fn asset(&self, handle: u64) -> Option<&str> {
+        self.resources
+            .get(&handle)
+            .map(|mesh| mesh.definition.asset.as_str())
+    }
+
+    /// A live mesh or a prepared partition binds this material.
+    pub(crate) fn uses_material(&self, material: u64) -> bool {
+        self.partitions
+            .values()
+            .any(|partition| partition.material_handles.contains(&material))
+            || self
+                .resources
+                .values()
+                .any(|mesh| mesh.material_handles.contains(&material))
+    }
+
+    pub(crate) fn remove(&mut self, handle: u64) {
+        self.resources.remove(&handle);
+    }
+
+    fn bind(
+        &self,
+        payload: MeshPayloadDescriptor,
+        slots: BTreeSet<u16>,
+        bindings: &[NativeMeshMaterialBinding],
+        material_id: impl Fn(u64) -> Option<String>,
+    ) -> Result<BoundGeneratedMesh, CsharpEngineServicesError> {
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
+        let mut bound_slots = BTreeSet::new();
+        let mut material_slots = Vec::new();
+        let mut material_handles = BTreeSet::new();
+        for binding in bindings {
+            let slot = u16::try_from(binding.material_slot)
+                .map_err(|_| invalid("mesh material slot exceeds u16"))?;
+            if !slots.contains(&slot) || !bound_slots.insert(slot) {
+                return Err(invalid(
+                    "mesh bindings must name each used slot exactly once",
+                ));
+            }
+            let material = material_id(binding.material.value)
+                .ok_or_else(|| invalid("mesh binding requires a live material"))?;
+            material_slots.push(MeshMaterialSlot { slot, material });
+            material_handles.insert(binding.material.value);
+        }
+        if slots != bound_slots {
+            return Err(invalid(
+                "mesh bindings must cover every group material slot",
+            ));
+        }
+        let handle = self.next_resource;
+        let next = handle
+            .checked_add(1)
+            .ok_or_else(|| invalid("mesh handle overflow"))?;
+        let definition = StaticMeshAsset {
+            asset: format!("mesh/runtime-{handle}"),
+            payload,
+            material_slots,
+            collision: MeshCollisionPolicy::VisualOnly,
+        };
+        definition
+            .validate()
+            .map_err(|error| invalid(&format!("invalid mesh resource: {error:?}")))?;
+        Ok(BoundGeneratedMesh {
+            handle,
+            next,
+            definition,
+            material_handles,
+        })
+    }
+
+    fn insert(&mut self, bound: BoundGeneratedMesh) -> Arc<StaticMeshAsset> {
+        // Retain the typed definition. Delivery owns its eventual encoding;
+        // do not serialize and discard an extra copy merely to measure it.
+        let definition = Arc::new(bound.definition);
+        self.resources.insert(
+            bound.handle,
+            GeneratedMesh {
+                definition: Arc::clone(&definition),
+                material_handles: bound.material_handles,
+            },
+        );
+        self.next_resource = bound.next;
+        definition
+    }
+
+    fn partition(
+        &mut self,
+        request: NativeMeshPartitionRequest,
+    ) -> Result<NativeMeshPartitionHandle, CsharpEngineServicesError> {
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
+        let source = self
+            .resources
+            .get(&request.source.value)
+            .ok_or_else(|| invalid("partition source mesh is not live"))?;
+        let definition = &source.definition;
+        let payloads = partition_mesh_spatially(
+            &definition.payload,
+            native_vec3_array(request.origin),
+            native_vec3_array(request.cell_size),
+        )
+        .map_err(invalid)?;
+        let parts = payloads
+            .into_iter()
+            .map(|payload| {
+                let used: BTreeSet<_> = payload.groups.iter().map(|g| g.material_slot).collect();
+                Some(Arc::new(StaticMeshAsset {
+                    asset: String::new(),
+                    payload,
+                    material_slots: definition
+                        .material_slots
+                        .iter()
+                        .filter(|m| used.contains(&m.slot))
+                        .cloned()
+                        .collect(),
+                    collision: MeshCollisionPolicy::VisualOnly,
+                }))
+            })
+            .collect();
+        let material_handles = source.material_handles.clone();
+        let handle = self.next_partition;
+        self.next_partition = handle
+            .checked_add(1)
+            .ok_or_else(|| invalid("mesh partition handle overflow"))?;
+        self.partitions.insert(
+            handle,
+            GeneratedMeshPartition {
+                parts,
+                material_handles,
+            },
+        );
+        Ok(NativeMeshPartitionHandle { value: handle })
+    }
+
+    fn read_partition(
+        &self,
+        partition: NativeMeshPartitionHandle,
+    ) -> Result<NativeMeshPartitionReadout, CsharpEngineServicesError> {
+        let prepared = self.partitions.get(&partition.value).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", "mesh partition is not live")
+        })?;
+        Ok(NativeMeshPartitionReadout {
+            part_count: prepared.parts.len() as u32,
+        })
+    }
+
+    fn take_part(
+        &mut self,
+        request: NativeMeshPartitionPartRequest,
+    ) -> Result<(NativeMeshResourceHandle, Arc<StaticMeshAsset>), CsharpEngineServicesError> {
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
+        let prepared = self
+            .partitions
+            .get_mut(&request.partition.value)
+            .ok_or_else(|| invalid("mesh partition is not live"))?;
+        let part = prepared
+            .parts
+            .get_mut(request.index as usize)
+            .ok_or_else(|| invalid("mesh partition index is out of range"))?;
+        let handle = self.next_resource;
+        let next = handle
+            .checked_add(1)
+            .ok_or_else(|| invalid("mesh resource handle overflow"))?;
+        let mut definition = part
+            .take()
+            .ok_or_else(|| invalid("mesh partition part was already taken"))?;
+        let material_handles = prepared.material_handles.clone();
+        Arc::make_mut(&mut definition).asset = format!("mesh/runtime-{handle}");
+        self.resources.insert(
+            handle,
+            GeneratedMesh {
+                definition: Arc::clone(&definition),
+                material_handles,
+            },
+        );
+        self.next_resource = next;
+        Ok((NativeMeshResourceHandle { value: handle }, definition))
+    }
+
+    fn copy_inline(
+        &self,
+        resource: NativeMeshResourceHandle,
+    ) -> Result<CollisionMeshGeometry, CsharpEngineServicesError> {
+        let mesh = self.resources.get(&resource.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_STALE",
+                "collision mesh reference does not name a live Graphics mesh",
+            )
+        })?;
+        let MeshPayloadSource::Inline {
+            positions, indices, ..
+        } = &mesh.definition.payload.source
+        else {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_NONINLINE",
+                "collision mesh references require an inline Graphics mesh",
+            ));
+        };
+        let (position_chunks, position_remainder) = positions.as_chunks::<3>();
+        let (index_chunks, index_remainder) = indices.as_chunks::<3>();
+        if !position_remainder.is_empty() || !index_remainder.is_empty() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_INVALID",
+                "inline Graphics mesh had incomplete collision geometry",
+            ));
+        }
+        Ok((
+            position_chunks
+                .iter()
+                .map(|position| {
+                    [
+                        f64::from(position[0]),
+                        f64::from(position[1]),
+                        f64::from(position[2]),
+                    ]
+                })
+                .collect(),
+            index_chunks.to_vec(),
+        ))
+    }
+}
+
+/// Admits a generated mesh in the staged Graphics call. Its streams are
+/// copied before this returns, each binding names a live material, and its
+/// definition joins the renderer catalog.
+pub(crate) unsafe fn create_generated_mesh(
+    bridge: &mut RuntimeAppearanceBridge,
+    request: &NativeMeshResourceCreateRequest,
+) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
+    let (payload, slots, bindings) = generated_mesh_payload(request)?;
+    let state = &mut *bridge.staged_mut()?.state;
+    let bound = state
+        .generated_meshes
+        .bind(payload, slots, bindings, |material| {
+            state.material_id(material).map(str::to_owned)
+        })?;
+    let handle = bound.handle;
+    let definition = state.generated_meshes.insert(bound);
+    state.project_static_mesh(definition);
+    Ok(NativeMeshResourceHandle { value: handle })
+}
+
+/// Copies staged inline mesh geometry for Engine spatial or authoring
+/// consumers. The Graphics resource remains borrowed for this call and
+/// may be released as soon as the copy completes.
+pub(crate) fn copy_inline_mesh_geometry(
+    bridge: &RuntimeAppearanceBridge,
+    resource: NativeMeshResourceHandle,
+) -> Result<CollisionMeshGeometry, CsharpEngineServicesError> {
+    let staged = bridge.staged_ref().map_err(|_| {
+        CsharpEngineServicesError::new(
+            "CSHARP_COLLISION_MESH_UNBOUND",
+            "collision mesh references require a current staged Graphics call",
+        )
+    })?;
+    staged.state.generated_meshes.copy_inline(resource)
+}
+
+pub(crate) unsafe extern "C" fn create_mesh_resource(
+    context: *mut c_void,
+    request: *const NativeMeshResourceCreateRequest,
+    result: *mut NativeMeshResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| unsafe {
+            create_generated_mesh(bridge, &*request)
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn partition_mesh(
+    context: *mut c_void,
+    request: NativeMeshPartitionRequest,
+    result: *mut NativeMeshPartitionHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge
+                .staged_mut()?
+                .state
+                .generated_meshes
+                .partition(request)
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn read_mesh_partition(
+    context: *mut c_void,
+    partition: NativeMeshPartitionHandle,
+    result: *mut NativeMeshPartitionReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            bridge
+                .staged_ref()?
+                .state
+                .generated_meshes
+                .read_partition(partition)
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn take_mesh_partition_part(
+    context: *mut c_void,
+    request: NativeMeshPartitionPartRequest,
+    result: *mut NativeMeshResourceHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        animation_result(context, result, |bridge| {
+            let state = &mut *bridge.staged_mut()?.state;
+            let (handle, definition) = state.generated_meshes.take_part(request)?;
+            state.project_static_mesh(definition);
+            Ok(handle)
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn destroy_mesh_partition(
+    context: *mut c_void,
+    partition: NativeMeshPartitionHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| {
+            bridge
+                .staged_mut()?
+                .state
+                .generated_meshes
+                .partitions
+                .remove(&partition.value);
+            Ok(())
+        })
+    })
+}
+
+fn native_vec3_array(value: NativeVec3) -> [f32; 3] {
+    [value.x, value.y, value.z]
+}
+
+/// Copies a generated mesh request's streams into a typed inline payload.
+/// Returns the group slots the bindings must cover, and the bindings.
+unsafe fn generated_mesh_payload(
+    request: &NativeMeshResourceCreateRequest,
+) -> Result<
+    (
+        MeshPayloadDescriptor,
+        BTreeSet<u16>,
+        &[NativeMeshMaterialBinding],
+    ),
+    CsharpEngineServicesError,
+> {
+    let invalid = |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
+    // Counts are stored as u32 in the mesh layout. This is a representation
+    // constraint, not a byte budget on trusted product geometry.
+    let vertex_count = u32::try_from(request.positions_len)
+        .map_err(|_| invalid("mesh vertex count exceeds the u32 layout representation"))?;
+    let index_count = u32::try_from(request.indices_len)
+        .map_err(|_| invalid("mesh index count exceeds the u32 layout representation"))?;
+    if request.positions_len < 3
+        || request.normals_len != request.positions_len
+        || (request.uvs_len != 0 && request.uvs_len != request.positions_len)
+        || (request.colors_len != 0 && request.colors_len != request.positions_len)
+        || request.indices_len < 3
+        || !request.indices_len.is_multiple_of(3)
+        || request.groups_len == 0
+        || request.bindings_len == 0
+    {
+        return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color streams, complete triangle indices, and nonempty groups/bindings"));
+    }
+    let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
+    let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
+    let uvs = borrowed_slice(request.uvs, request.uvs_len, "mesh UVs")?;
+    let colors = borrowed_slice(request.colors, request.colors_len, "mesh colors")?;
+    let indices = borrowed_slice(request.indices, request.indices_len, "mesh indices")?;
+    let groups = borrowed_slice(request.groups, request.groups_len, "mesh groups")?;
+    let bindings = borrowed_slice(request.bindings, request.bindings_len, "mesh bindings")?;
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for position in positions {
+        for (axis, value) in native_vec3_array(*position).into_iter().enumerate() {
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
+        }
+    }
+    let groups = groups
+        .iter()
+        .map(|group| {
+            if !group.start.is_multiple_of(3) || group.count == 0 || !group.count.is_multiple_of(3)
+            {
+                return Err(invalid(
+                    "mesh groups must contain complete nonempty triangles",
+                ));
+            }
+            Ok(MeshGroupDescriptor {
+                material_slot: u16::try_from(group.material_slot)
+                    .map_err(|_| invalid("mesh material slot exceeds u16"))?,
+                start: group.start,
+                count: group.count,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let slots = groups
+        .iter()
+        .map(|group| group.material_slot)
+        .collect::<BTreeSet<_>>();
+    let mut attributes = vec![
+        MeshAttribute {
+            name: MeshAttributeName::Position,
+            components: 3,
+            kind: MeshAttributeKind::F32,
+        },
+        MeshAttribute {
+            name: MeshAttributeName::Normal,
+            components: 3,
+            kind: MeshAttributeKind::F32,
+        },
+    ];
+    if !uvs.is_empty() {
+        attributes.push(MeshAttribute {
+            name: MeshAttributeName::Uv,
+            components: 2,
+            kind: MeshAttributeKind::F32,
+        });
+    }
+    if !colors.is_empty() {
+        attributes.push(MeshAttribute {
+            name: MeshAttributeName::Color,
+            components: 4,
+            kind: MeshAttributeKind::F32,
+        });
+    }
+    let payload = MeshPayloadDescriptor {
+        layout: MeshBufferLayout {
+            vertex_count,
+            index_count,
+            index_width: MeshIndexWidth::U32,
+            attributes,
+        },
+        groups,
+        bounds: MeshBoundsDescriptor { min, max },
+        source: MeshPayloadSource::Inline {
+            positions: positions
+                .iter()
+                .flat_map(|value| native_vec3_array(*value))
+                .collect(),
+            normals: normals
+                .iter()
+                .flat_map(|value| native_vec3_array(*value))
+                .collect(),
+            uvs: (!uvs.is_empty())
+                .then(|| uvs.iter().flat_map(|value| [value.x, value.y]).collect()),
+            colors: (!colors.is_empty()).then(|| {
+                colors
+                    .iter()
+                    .flat_map(|value| [value.r, value.g, value.b, value.a])
+                    .collect()
+            }),
+            indices: indices.to_vec(),
+        },
+        provenance: MeshProvenance::Generated,
+    };
+    Ok((payload, slots, bindings))
+}
+
 fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineServicesError> {
     if !path.starts_with("content/") || !path.ends_with(extension) {
         return Err(CsharpEngineServicesError::new(
@@ -902,6 +1439,7 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
 pub(crate) mod tests {
     use super::*;
     use crate::appearance::tests::RGBA_PNG;
+    use csharp_engine_abi::{NativeColor, NativeMaterialHandle, NativeMeshGroup};
 
     const CHARACTER_GLB: &[u8] = include_bytes!(
         "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
@@ -994,6 +1532,19 @@ pub(crate) mod tests {
                 "pub(crate) fn static_mesh",
                 "pub(crate) fn animated",
                 "pub(crate) fn cached",
+                "pub(crate) type CollisionMeshGeometry",
+                "pub(crate) struct GeneratedMeshes",
+                "pub(crate) fn len",
+                "pub(crate) fn asset",
+                "pub(crate) fn uses_material",
+                "pub(crate) fn remove",
+                "pub(crate) unsafe fn create_generated_mesh",
+                "pub(crate) fn copy_inline_mesh_geometry",
+                "pub(crate) unsafe extern \"C\" fn create_mesh_resource",
+                "pub(crate) unsafe extern \"C\" fn partition_mesh",
+                "pub(crate) unsafe extern \"C\" fn read_mesh_partition",
+                "pub(crate) unsafe extern \"C\" fn take_mesh_partition_part",
+                "pub(crate) unsafe extern \"C\" fn destroy_mesh_partition",
             ]
         );
     }
@@ -1096,5 +1647,234 @@ pub(crate) mod tests {
         ));
         files.remove("texture.png");
         assert!(imports.animated(content(&files), false).is_err());
+    }
+
+    const MATERIAL: NativeMaterialHandle = NativeMaterialHandle { value: 1 };
+
+    /// Admits through the lane without a Graphics call: material 1 is live.
+    fn admit_generated(
+        meshes: &mut GeneratedMeshes,
+        request: &NativeMeshResourceCreateRequest,
+    ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
+        let (payload, slots, bindings) = unsafe { generated_mesh_payload(request) }?;
+        let bound = meshes.bind(payload, slots, bindings, |material| {
+            (material == MATERIAL.value).then(|| "material/runtime-1".to_owned())
+        })?;
+        let handle = bound.handle;
+        meshes.insert(bound);
+        Ok(NativeMeshResourceHandle { value: handle })
+    }
+
+    fn triangle_positions() -> [NativeVec3; 3] {
+        [
+            NativeVec3::default(),
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ]
+    }
+
+    const TRIANGLE_NORMALS: [NativeVec3; 3] = [NativeVec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+    }; 3];
+
+    #[test]
+    fn generated_mesh_copies_streams_and_refuses_atomically() {
+        let mut meshes = GeneratedMeshes::default();
+        let mut positions = triangle_positions();
+        let normals = TRIANGLE_NORMALS;
+        let mut colors = [
+            NativeColor {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            NativeColor {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            NativeColor {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        ];
+        let mut indices = [0, 1, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 3,
+            start: 0,
+            count: 3,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 3,
+            material: MATERIAL,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: colors.as_ptr(),
+            colors_len: colors.len(),
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+        let resource = admit_generated(&mut meshes, &request).unwrap();
+        positions[1].x = 99.0;
+        colors[0].r = 0.25;
+        indices[1] = 99;
+        assert_eq!(positions[1].x, 99.0);
+        assert_eq!(colors[0].r, 0.25);
+        assert_eq!(indices[1], 99);
+        match &meshes.resources[&resource.value].definition.payload.source {
+            MeshPayloadSource::Inline {
+                positions,
+                colors,
+                indices,
+                ..
+            } => {
+                assert_eq!(positions[3], 1.0);
+                assert_eq!(
+                    colors.as_deref(),
+                    Some(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0][..])
+                );
+                assert_eq!(indices, &[0, 1, 2]);
+            }
+            _ => panic!("generated streams are retained inline"),
+        }
+        let (collision_positions, triangles) = meshes.copy_inline(resource).unwrap();
+        assert_eq!(collision_positions[1], [1.0, 0.0, 0.0]);
+        assert_eq!(triangles, [[0, 1, 2]]);
+        // Bad indices fail before admission, preserving the prior owner/allocator.
+        assert!(admit_generated(&mut meshes, &request).is_err());
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes.next_resource, 2);
+        let unrepresentable = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: usize::MAX,
+            normals: normals.as_ptr(),
+            normals_len: usize::MAX,
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: 3,
+            groups: groups.as_ptr(),
+            groups_len: 1,
+            bindings: bindings.as_ptr(),
+            bindings_len: 1,
+        };
+        assert_eq!(
+            admit_generated(&mut meshes, &unrepresentable)
+                .expect_err("mesh count must fit its layout representation")
+                .code(),
+            "CSHARP_MESH_ADMISSION"
+        );
+        // A valid mesh above the former 64 MiB copied-stream cap is admitted.
+        // It has no byte-budget preflight or throwaway JSON-size encoding.
+        let mut large_positions = vec![NativeVec3::default(); 2_900_000];
+        large_positions[1].x = 1.0;
+        large_positions[2].y = 1.0;
+        let large_normals = vec![TRIANGLE_NORMALS[0]; 2_900_000];
+        let large_indices = [0u32, 1, 2];
+        let large_request = NativeMeshResourceCreateRequest {
+            positions: large_positions.as_ptr(),
+            positions_len: large_positions.len(),
+            normals: large_normals.as_ptr(),
+            normals_len: large_normals.len(),
+            indices: large_indices.as_ptr(),
+            indices_len: large_indices.len(),
+            ..unrepresentable
+        };
+        assert!(
+            std::mem::size_of_val(large_positions.as_slice())
+                + std::mem::size_of_val(large_normals.as_slice())
+                > 64 * 1024 * 1024
+        );
+        let large_resource = admit_generated(&mut meshes, &large_request).unwrap();
+        meshes.remove(large_resource.value);
+        assert_eq!(
+            meshes.copy_inline(large_resource).unwrap_err().code(),
+            "CSHARP_COLLISION_MESH_STALE"
+        );
+    }
+
+    #[test]
+    fn generated_mesh_accepts_more_than_256_groups_and_bindings() {
+        const GROUP_COUNT: usize = 300;
+
+        let mut meshes = GeneratedMeshes::default();
+        let positions = triangle_positions();
+        let normals = TRIANGLE_NORMALS;
+        let indices = (0..GROUP_COUNT)
+            .flat_map(|_| [0, 1, 2])
+            .collect::<Vec<u32>>();
+        let groups = (0..GROUP_COUNT)
+            .map(|group_index| NativeMeshGroup {
+                material_slot: group_index as u32,
+                start: (group_index * 3) as u32,
+                count: 3,
+            })
+            .collect::<Vec<_>>();
+        let bindings = (0..GROUP_COUNT)
+            .map(|group_index| NativeMeshMaterialBinding {
+                material_slot: group_index as u32,
+                material: MATERIAL,
+            })
+            .collect::<Vec<_>>();
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+
+        let resource = admit_generated(&mut meshes, &request).unwrap();
+        assert_eq!(resource.value, 1);
+        let definition = &meshes.resources[&resource.value].definition;
+        assert_eq!(definition.payload.groups.len(), GROUP_COUNT);
+        assert_eq!(definition.material_slots.len(), GROUP_COUNT);
+
+        let malformed = NativeMeshResourceCreateRequest {
+            bindings_len: bindings.len() - 1,
+            ..request
+        };
+        assert_eq!(
+            admit_generated(&mut meshes, &malformed)
+                .expect_err("missing material coverage must fail atomically")
+                .code(),
+            "CSHARP_MESH_ADMISSION"
+        );
+        assert_eq!(meshes.len(), 1);
     }
 }

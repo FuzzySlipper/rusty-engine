@@ -64,8 +64,10 @@ pub(super) unsafe extern "C" fn capture_audit_piece(
             .ok_or_else(|| error("Graphics bridge is not bound"))?;
         // Existing Engine mesh copy mechanism; no retained native pointers or
         // renderer material dependencies belong to an audit collection.
-        let (positions, triangles) =
-            unsafe { &mut *appearance }.copy_inline_mesh_geometry(request.mesh)?;
+        let (positions, triangles) = crate::render_resources::copy_inline_mesh_geometry(
+            unsafe { &*appearance },
+            request.mesh,
+        )?;
         let t = request.placement;
         let piece = Piece::new_trs(
             request.piece_id,
