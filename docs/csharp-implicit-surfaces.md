@@ -363,6 +363,19 @@ not hold another ledger, grant writable access to internal maps, or synchronize
 EntityStore parent relationships. Grouped operations still use the same store's
 `Prepare()` edit. Inventory-only owners need no EntityStore attachment.
 
+`RetireOwner(owner)` removes an owner's inventory registration and its equipment
+registration, if it has one. It refuses with `AlreadyPresent` while the owner
+still holds a stack or contains a unique item, and with `NotFound` for an
+unregistered or already retired owner. It never consumes, destroys or unequips
+anything itself: the store ends a unique item's identity or an equipped
+assignment only through an explicit call with its own receipt, which the product
+uses to retire keyed metadata and equipped-item sources. Empty the owner with
+those calls first, in the same `Prepare()` edit when they must apply together.
+An owner with no contained items has no equipped items, so no assignment is left
+behind. Retiring advances `Revision`, so an edit prepared earlier refuses to
+publish. Components for the owner refuse afterwards, and the owner may be
+registered again from a new state.
+
 For metadata-bearing quantities, give each distinct stack a product-selected
 `InventoryStackId` and use `Grant(owner, definition, stackId, quantity)`.
 `InventoryView.Stacks` exposes the IDs; their scope is the owner inventory.

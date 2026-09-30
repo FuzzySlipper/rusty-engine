@@ -81,7 +81,7 @@ public enum MechanicsRefusal
     Insufficient,
     /// <summary>The owner, stack, item, effect, equipped item or containment named is not present.</summary>
     NotFound,
-    /// <summary>The identity, stack, registration, container, equipped item or effect is already present.</summary>
+    /// <summary>The identity, stack, registration, container, equipped item or effect is already present, or an owner being retired still holds stacks or unique items.</summary>
     AlreadyPresent,
     /// <summary>An equipment slot or exclusivity group already holds another item.</summary>
     Occupied,

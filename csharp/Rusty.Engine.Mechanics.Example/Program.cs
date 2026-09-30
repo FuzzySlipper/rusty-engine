@@ -7,6 +7,7 @@ TrackExercise.Run();
 StatsComponentExercise.Run();
 MechanicsComponentsExercise.Run();
 AddressableInventoryStacksExercise.Run();
+OwnerRetirementExercise.Run();
 ExerciseEffectPolicies();
 ExerciseManagedInventory();
 ManagedLimitsExercise.Run();

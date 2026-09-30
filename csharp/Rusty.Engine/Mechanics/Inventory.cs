@@ -563,6 +563,31 @@ public sealed partial class InventoryStore
         TouchStore();
     }
 
+    /// <summary>
+    /// Removes an empty owner's inventory registration and, when present, its
+    /// equipment registration, so the owner no longer appears in
+    /// <see cref="InventoryOwners"/> or <see cref="EquipmentOwners"/>.
+    /// </summary>
+    /// <remarks>
+    /// The owner must hold no stacks and contain no unique items; empty it first
+    /// with <see cref="Consume"/>, <see cref="TransferFungible(EntityId, EntityId, InventoryStackId, ulong)"/>,
+    /// <see cref="Unequip"/>, <see cref="TransferUnique"/> or <see cref="DestroyUnique"/>,
+    /// in one <see cref="Prepare"/> edit together with this call when they must apply
+    /// together. Retiring never ends a unique item or an equipped assignment itself, so
+    /// each of those still comes with its own receipt. An owner with no contained items
+    /// has no equipped items, so its equipment registration is empty when removed.
+    /// Retiring advances <see cref="Revision"/>, so an edit prepared before it refuses
+    /// to publish. Components for the owner refuse afterwards; the owner may be
+    /// registered again, starting from the newly registered state.
+    /// </remarks>
+    /// <exception cref="MechanicsException">
+    /// <see cref="MechanicsRefusal.NotFound"/> when the owner has no registered
+    /// inventory, including when it was already retired;
+    /// <see cref="MechanicsRefusal.AlreadyPresent"/> while it still holds a stack or
+    /// contains a unique item.
+    /// </exception>
+    public void RetireOwner(EntityId owner) => RetireOwnerCore(owner);
+
     public bool TryGetInventory(EntityId owner, out InventoryState? state)
     {
         if (_inventories.TryGetValue(owner, out InventoryState? value))
@@ -673,6 +698,21 @@ public sealed partial class InventoryStore
         MergeFungibleCore(owner, sourceStack, destinationStack);
 
     public InventoryView Read(EntityId owner) => View(owner);
+
+    internal void RetireOwnerCore(EntityId owner)
+    {
+        InventoryState inventory = RequireInventory(owner);
+        if (inventory.Entries().Any() || _containedChildren.ContainsKey(owner))
+        {
+            throw new MechanicsException(
+                MechanicsRefusal.AlreadyPresent,
+                $"Inventory owner {owner.Value} still holds stacks or unique items.");
+        }
+
+        _inventories.Remove(owner);
+        _equipment.Remove(owner);
+        TouchStore();
+    }
 
     internal InventoryMutationReceipt GrantCore(
         EntityId owner,
@@ -1303,6 +1343,14 @@ public sealed partial class InventoryEdit : IDisposable
         EntityId incomingItem,
         IEnumerable<EquipmentSlotDefinition> slots)
         => Execute(working => working.SwapCore(owner, outgoingItem, incomingItem, slots));
+
+    /// <summary>Retires an empty owner in this edit; see <see cref="InventoryStore.RetireOwner"/>.</summary>
+    public void RetireOwner(EntityId owner) =>
+        Execute(working =>
+        {
+            working.RetireOwnerCore(owner);
+            return owner;
+        });
 
     private T Execute<T>(Func<InventoryStore, T> operation)
     {

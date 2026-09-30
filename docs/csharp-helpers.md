@@ -32,6 +32,12 @@ to their owning stores. The entity adapters read those facts and call named
 Engine mechanisms; they do not create another entity world or own native
 resources supplied by the caller.
 
+`InventoryStore.RegisterInventory` and `RegisterEquipment` add an owner;
+`RetireOwner` removes both registrations once the owner holds no stacks or
+unique items, and refuses otherwise. See
+[owner-scoped inventory components](csharp-implicit-surfaces.md#effects-and-owner-scoped-inventory-components)
+for why it refuses instead of discarding the owner's contents.
+
 Adapter receipts follow their owning adapter name.
 `InventoryView.StoreRevision` identifies the whole inventory
 store revision; its `InventoryRevision` identifies the individual owner
