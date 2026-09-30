@@ -17,8 +17,14 @@ through that pair's `rusty dev`. The runtime renderer plays the clips
   `FIXTURE_NATIVE_REASON` observations to the Engine diagnostic sink. The
   product keeps running afterward.
 
-`proof.webm` is an authored test pattern generated with FFmpeg `testsrc2`,
-320x180 at 24 fps, eight seconds, VP8, no audio. The runtime admits WebM with
-one VP9 profile 0 track only, so `video.proof.play` on this clip reports
-Failed/DecodeFailed. `invalid.webm` contains only a broken EBML/WebM header for
-the decoder-failure probe.
+`proof.webm` is FFmpeg's `testsrc2` pattern, 320x180 at 24 fps, eight
+seconds, VP9 profile 0, no audio: the format the runtime admits. It plays to
+Completed. Regenerate it with:
+
+```bash
+ffmpeg -f lavfi -i testsrc2=size=320x180:rate=24 -t 8 -c:v libvpx-vp9 -profile:v 0 \
+  -pix_fmt yuv420p -b:v 200k -g 24 -an proof.webm
+```
+
+`invalid.webm` contains only a broken EBML/WebM header for the decoder-failure
+probe.

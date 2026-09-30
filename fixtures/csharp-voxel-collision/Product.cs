@@ -52,17 +52,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         List<VoxelEdit> edits=[];
         for(int x=-2;x<=2;x++) for(int z=-2;z<=2;z++) for(int y=0;y<=3;y++)
             edits.Add(new(VoxelEditKind.Set,new(x,y,z),y==0?1u:11u));
-        engine.Voxel.ApplyEdits(new(scene,0,edits.ToArray()));
+        engine.Voxel.ApplyEdits(new(scene,edits.ToArray()));
         presentation=engine.VoxelScenePresentation.ProjectSceneDirectional(new(scene,Bindings(),ReadOnlyMemory<VoxelSceneFaceMaterialBinding>.Empty));
     }
     [DebugCommand("voxel.proof.edit")]
     public string Edit(int count = 64, uint slot = 11)
     {
         if(count<1 || count>64 || slot<1 || slot>Count) throw new ArgumentOutOfRangeException(nameof(count));
-        ulong revision=engine.Voxel.ReadScene(new(scene)).SourceRevision;
         VoxelEdit[] edits=Enumerable.Range(0,count).Select(i=>new VoxelEdit(VoxelEditKind.Set,
             new(8+i%4,4+(i/4)%4,8+i/16),slot)).ToArray();
-        lastEdit=engine.Voxel.ApplyEdits(new(scene,revision,edits)).ToString();
+        lastEdit=engine.Voxel.ApplyEdits(new(scene,edits)).ToString();
         // Deliberately no product residency follow-up: subsequent updates must run.
         return $"updates={updates};edit={lastEdit}";
     }
@@ -72,7 +71,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         using SpatialSession embedded = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
         VoxelEdit[] solid = Enumerable.Range(0,64).Select(i=>new VoxelEdit(VoxelEditKind.Set,
             new(i%4,(i/4)%4,i/16),1)).ToArray();
-        engine.Voxel.ApplyEdits(new(embedded,0,solid));
+        engine.Voxel.ApplyEdits(new(embedded,solid));
         try
         {
             CharacterMotion initial = new(Vector3.Zero,Vector3.Zero,false,CharacterStance.Standing,

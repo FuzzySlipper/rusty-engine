@@ -353,6 +353,27 @@ mkdir -p "$consumer_home" "$consumer_packages"
             -p:RustyEngineProductLiveDebug=true \
             > "$work_dir/coreclr-staging.log" 2>&1
 )
+
+# Every fixture product that consumes the package must still compile against
+# it. They build from a copy of fixtures/ (some share sibling content), so the
+# checkout gets no obj/ or bin/. csharp-crossover-performance compiles the SDK
+# source instead; the performance regression script builds it.
+fixture_root="$work_dir/fixtures"
+cp -a "$repo_root/fixtures" "$fixture_root"
+find "$fixture_root" -type d \( -name obj -o -name bin \) -prune -exec rm -rf -- {} +
+while IFS= read -r fixture_project; do
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet build "$fixture_root/${fixture_project#fixtures/}" \
+            -p:RustyEngineFixtureSdkVersion="$package_version" \
+            -p:RestoreAdditionalProjectSources="$feed_dir" \
+            > "$work_dir/fixture-build.log" 2>&1 || {
+        echo "test-csharp-sdk-package: $fixture_project does not build against the package." >&2
+        cat "$work_dir/fixture-build.log" >&2
+        exit 1
+    }
+done < <(cd "$repo_root" && git grep -l 'Version="$(RustyEngineFixtureSdkVersion)"' -- 'fixtures/csharp-*/*.csproj' \
+    | grep -v '^fixtures/csharp-crossover-performance/')
+
 if [[ "$coreclr_smoke" != true ]]; then
     (
         cd "$source_override_dir"

@@ -112,7 +112,7 @@ public sealed class Product : IEngineProduct
     private Material CreateMaterial(Color color, Vector3 emission) => _engine.Graphics.CreateMaterial(
         new MaterialRequest(
             color,
-            new RenderResourceHandle(0),
+            default,
             0.35f,
             new Color(1, 1, 1, 1),
             emission,
