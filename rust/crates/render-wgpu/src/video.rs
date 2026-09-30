@@ -442,9 +442,12 @@ fn fs_video(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
     let uv = (position.xy - rect.xy) / (rect.zw - rect.xy);
-    let y = (textureSample(y_plane, planes, uv).r - 16.0 / 255.0) * (255.0 / 219.0);
-    let u = (textureSample(u_plane, planes, uv).r - 128.0 / 255.0) * (255.0 / 224.0);
-    let v = (textureSample(v_plane, planes, uv).r - 128.0 / 255.0) * (255.0 / 224.0);
+    // The planes have one mip level. An explicit level keeps the samples out
+    // of WGSL's uniform-control-flow rule after the early return, which
+    // browsers enforce (#8874).
+    let y = (textureSampleLevel(y_plane, planes, uv, 0.0).r - 16.0 / 255.0) * (255.0 / 219.0);
+    let u = (textureSampleLevel(u_plane, planes, uv, 0.0).r - 128.0 / 255.0) * (255.0 / 224.0);
+    let v = (textureSampleLevel(v_plane, planes, uv, 0.0).r - 128.0 / 255.0) * (255.0 / 224.0);
     var rgb = clamp(vec3<f32>(
         y + 1.402 * v,
         y - 0.344136 * u - 0.714136 * v,
