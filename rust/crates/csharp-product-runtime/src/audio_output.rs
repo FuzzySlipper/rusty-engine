@@ -5,10 +5,10 @@
 //! call's publications. Natural completions and device diagnostics reach the
 //! Engine as realization facts.
 //!
-//! With `RUSTY_AUDIO_OUTPUT` unset, a machine with no output device (a CI
-//! runner, a headless server) runs silent after one warning: its audio ops
-//! are dropped and report no completions. `RUSTY_AUDIO_OUTPUT=device`
-//! requires the device and fails the load without one.
+//! With the manifest's `audio.output` at `device-optional` (the default), a
+//! machine with no output device (a CI runner, a headless server) runs silent
+//! after one warning: its audio ops are dropped and report no completions.
+//! `device-required` fails the load without one.
 //!
 //! The listener follows the camera of the primary view in the committed view
 //! composition, and entity-attached emitters follow the committed graphics
@@ -23,8 +23,6 @@ use render_presentation::{PresentationFrameDiff, PresentationOp, VideoProjection
 
 use crate::{native_audio_diagnostic_code, CsharpProductRuntimeError};
 
-pub(crate) const AUDIO_OUTPUT_ENV: &str = "RUSTY_AUDIO_OUTPUT";
-const AUDIO_OUTPUT_DEVICE: &str = "device";
 /// The Engine's realization feedback admits this many facts per report.
 const MAX_FACTS_PER_REPORT: usize = 128;
 
@@ -35,18 +33,8 @@ pub(crate) struct AudioOutput {
 
 impl AudioOutput {
     /// Opens the default output device. `None` when none opens and the
-    /// device was not required; an unknown `RUSTY_AUDIO_OUTPUT` is an error.
-    pub(crate) fn from_environment() -> Result<Option<Self>, CsharpProductRuntimeError> {
-        let required = match std::env::var_os(AUDIO_OUTPUT_ENV) {
-            None => false,
-            Some(value) if value == AUDIO_OUTPUT_DEVICE => true,
-            Some(_) => {
-                return Err(CsharpProductRuntimeError::new(
-                    "CSHARP_AUDIO_OUTPUT",
-                    format!("{AUDIO_OUTPUT_ENV} must be `{AUDIO_OUTPUT_DEVICE}` when set"),
-                ))
-            }
-        };
+    /// device was not `required` (the manifest's `audio.output`).
+    pub(crate) fn open(required: bool) -> Result<Option<Self>, CsharpProductRuntimeError> {
         match AudioRealizer::open_default_device() {
             Ok(realizer) => Ok(Some(Self {
                 realizer,

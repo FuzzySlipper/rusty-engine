@@ -37,14 +37,6 @@ const JPEG_QUALITY: u8 = 80;
 /// Frames the rolling statistics cover.
 const STATS_WINDOW: usize = 120;
 
-/// How frames travel. JPEG is the default; raw RGBA exists to measure what
-/// the encoder saves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamFormat {
-    Jpeg,
-    Rgba8,
-}
-
 /// The stream's render thread over a [`SceneDriver`]. Dropping it stops the
 /// thread.
 pub struct FrameStreamer {
@@ -144,7 +136,6 @@ impl FrameStreamer {
     /// whenever a viewer is attached there.
     pub fn start(
         driver: Arc<SceneDriver>,
-        format: StreamFormat,
         frames: Arc<ProductHostFrameStream>,
     ) -> Result<Self, String> {
         let waker = Arc::downgrade(&driver);
@@ -169,7 +160,7 @@ impl FrameStreamer {
         let thread_shared = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("rusty-render-stream".to_owned())
-            .spawn(move || render_loop(&thread_driver, &thread_shared, &frames, format))
+            .spawn(move || render_loop(&thread_driver, &thread_shared, &frames))
             .map_err(|error| format!("could not start the render thread: {error}"))?;
         Ok(Self {
             driver,
@@ -295,12 +286,7 @@ enum Next {
     Draw((u32, u32), u64),
 }
 
-fn render_loop(
-    driver: &SceneDriver,
-    shared: &Shared,
-    frames: &ProductHostFrameStream,
-    format: StreamFormat,
-) {
+fn render_loop(driver: &SceneDriver, shared: &Shared, frames: &ProductHostFrameStream) {
     let mut target: Option<OffscreenTarget> = None;
     let mut pixels = Vec::new();
     loop {
@@ -345,13 +331,7 @@ fn render_loop(
         target.read_rgba_into(driver.gpu(), &mut pixels);
         let read = Instant::now();
         let (width, height) = target.size();
-        let (format, payload) = match format {
-            StreamFormat::Jpeg => (
-                ProductHostFrameFormat::Jpeg,
-                encode_jpeg(&pixels, width, height),
-            ),
-            StreamFormat::Rgba8 => (ProductHostFrameFormat::Rgba8, pixels.clone()),
-        };
+        let payload = encode_jpeg(&pixels, width, height);
         let encoded = Instant::now();
         let mut cost = FrameCost {
             at: started,
@@ -365,7 +345,7 @@ fn render_loop(
         let sequence = frames.publish(ProductHostFrame {
             width,
             height,
-            format,
+            format: ProductHostFrameFormat::Jpeg,
             held: shown.held,
             video,
             step: shown.step,

@@ -42,10 +42,11 @@ bytes.
 The runtime process plays committed audio on its default output device
 (`render-audio`, kira over cpal; on Linux the host links `libasound.so.2`),
 for streamed frames and the desktop window alike. The device opens when the
-runtime loads and closes when it drops. With `RUSTY_AUDIO_OUTPUT` unset, a
-machine with no output device (a CI runner, a headless server) runs silent
-after one warning: its audio ops are dropped and report no completions.
-`RUSTY_AUDIO_OUTPUT=device` requires the device and fails the load without one.
+runtime loads and closes when it drops. With the manifest's `audio.output` at
+its default, `device-optional`, a machine with no output device (a CI runner, a
+headless server) runs silent after one warning: its audio ops are dropped and
+report no completions. `device-required` (`RustyEngineProductAudioOutput`, or
+`rusty dev --audio-output device-required`) fails the load without one.
 Audio ops are taken out of each call's publications before anything else sees
 them. The device follows the runtime: it plays only while the product runs, a
 binding change (Start, Restart, fault) replays the committed baseline, and

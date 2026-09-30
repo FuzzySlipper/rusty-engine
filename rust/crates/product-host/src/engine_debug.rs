@@ -164,7 +164,7 @@ pub enum ProductHostRenderOutput {
 }
 
 impl ProductHostRenderOutput {
-    /// Its name in `RUSTY_RENDER_OUTPUT` and the browser bootstrap.
+    /// Its name in `renderer.output` and the browser bootstrap.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Stream => "stream",

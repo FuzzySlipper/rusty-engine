@@ -53,6 +53,13 @@
          selects the independently configurable world or viewmodel setting. -->
     <RustyEngineProductDefaultWorldLights Condition="'$(RustyEngineProductDefaultWorldLights)' == ''">neutral</RustyEngineProductDefaultWorldLights>
     <RustyEngineProductDefaultViewmodelLights Condition="'$(RustyEngineProductDefaultViewmodelLights)' == ''">neutral</RustyEngineProductDefaultViewmodelLights>
+    <!-- Where the runtime draws: streamed to the browser shell, or presented
+         to a native window (the pair's desktop pack). The rusty dev output
+         option sets it for one launch. -->
+    <RustyEngineProductRenderOutput Condition="'$(RustyEngineProductRenderOutput)' == ''">stream</RustyEngineProductRenderOutput>
+    <!-- Whether a missing audio output device fails the load or runs silent.
+         The rusty dev audio-output option sets it for one launch. -->
+    <RustyEngineProductAudioOutput Condition="'$(RustyEngineProductAudioOutput)' == ''">device-optional</RustyEngineProductAudioOutput>
   </PropertyGroup>
 
   <!-- Every file under the UI source root except the build's own output is a
@@ -78,6 +85,10 @@
            Text="RustyEngineProductDefaultViewmodelLights must be neutral or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductInputCursorMode)', '\A(pointer-lock|unlocked)\z'))"
            Text="RustyEngineProductInputCursorMode must be pointer-lock or unlocked." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductRenderOutput)', '\A(stream|window)\z'))"
+           Text="RustyEngineProductRenderOutput must be stream or window." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAudioOutput)', '\A(device-optional|device-required)\z'))"
+           Text="RustyEngineProductAudioOutput must be device-optional or device-required." />
   </Target>
 
   <!-- The stamp lists the files the last UI build produced. When any of them
@@ -201,7 +212,7 @@
       <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
     </PropertyGroup>
     <WriteLinesToFile File="$(RustyEngineStagedProductDirectory)/product.json" Overwrite="true"
-                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;lighting&quot;:{&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
+                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductRenderOutput)&quot;,&quot;lighting&quot;:{&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;audio&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductAudioOutput)&quot;},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
   </Target>
 
   <!-- CoreCLR is the normal, explicit staging operation used by development. -->

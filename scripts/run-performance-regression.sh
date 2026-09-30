@@ -14,7 +14,6 @@ BROWSER_RUNTIME_ROOT="${RUSTY_PERF_RUNTIME_PACK:-$REPO_ROOT/target/runtime-pack/
 SDK_VERSION="0.1.0-crossover.$$.${RANDOM}"
 CROSSOVER_FIXTURE="$REPO_ROOT/fixtures/csharp-crossover-performance/CsharpCrossoverPerformance.csproj"
 export RUSTY_ENGINE_FIXTURE_SDK_VERSION="$SDK_VERSION"
-export RUSTY_PERF_PRODUCT_CONFIGURATION=Release
 
 cleanup() {
   rm -rf -- "$PROBE_ROOT"
@@ -72,6 +71,7 @@ for loader in coreclr nativeaot; do
     --product "$PRODUCT_DIRECTORY" \
     --loader "$loader" \
     --persistence-root "$PROBE_ROOT/$loader-persistence" \
-    --performance-probe "$ITERATIONS"
+    --performance-probe "$ITERATIONS" \
+    --performance-configuration Release
 done
 

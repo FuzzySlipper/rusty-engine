@@ -34,7 +34,6 @@ can resolve a different dev pair from `~/.nuget/packages`):
 <Project>
   <PropertyGroup>
     <RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
-    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(RUSTY_ENGINE_CACHE)</RustyEngineCache>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
     <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
@@ -63,8 +62,8 @@ rusty update
 ```
 
 - `rusty install` downloads the pinned pair once into
-  `~/.cache/rusty-engine/pairs/<version>` (`RUSTY_ENGINE_CACHE` moves the
-  cache), checking the archive's SHA-256 and the manifest's package identity.
+  `~/.cache/rusty-engine/pairs/<version>` (`$XDG_CACHE_HOME/rusty-engine`
+  when that is set), checking the archive's SHA-256 and the manifest's package identity.
   Every product shares the cache, and an installed pair needs no network.
   `--archive <pair.tar.gz>` installs an archive obtained another way; keep its
   `.sha256` beside it.
@@ -73,8 +72,9 @@ rusty update
   fails with "run `rusty install`". `rusty dev` runs the
   pinned pair's own `runtime-pack/bin/rusty`, whose supervisor matches its
   host, and sets `DOTNET_ROOT` from `dotnet` on `PATH` when it is unset.
-  With `RUSTY_RENDER_OUTPUT=window`, the first run downloads the pair's
-  desktop pack into `pairs/<version>/desktop-pack` and checks its SHA-256 and
+  When the staged manifest's `renderer.output` is `window`
+  (`RustyEngineProductRenderOutput`, or `rusty dev --output window`), the
+  first run downloads the pair's desktop pack into `pairs/<version>/desktop-pack` and checks its SHA-256 and
   ABI identity.
 - `rusty update` is the only thing that moves the pin. It installs the target
   pair (the newest, or `--to <version>`), rewrites the pin, and lists the
@@ -120,8 +120,9 @@ https://github.com/FuzzySlipper/rusty-engine/releases/download/csharp-sdk-v<vers
 ```
 
 Latest only makes an update available. A product keeps its explicit pin until
-someone runs `rusty update`. `RUSTY_ENGINE_RELEASES` points the CLI and the
-bootstrap at another copy of this releases layout.
+someone runs `rusty update`. To use another copy of this releases layout,
+bootstrap with `install-rusty.sh --releases <url>`: it records the mirror in
+the cache's `config.json` (`{"releases": "<url>"}`), which the CLI reads.
 
 ## What changed in a pair
 

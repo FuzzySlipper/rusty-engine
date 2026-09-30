@@ -166,8 +166,26 @@ fn packages() -> Vec<(&'static str, String)> {
 
 #[test]
 fn typescript_contracts_are_current() {
+    let stale = contracts(false);
+    assert!(
+        stale.is_empty(),
+        "these TypeScript contracts differ from the Rust types: {stale:?}\n\
+         run scripts/generate-typescript-contracts.sh and commit the result"
+    );
+}
+
+/// Rewrites the checked-in contracts; `scripts/generate-typescript-contracts.sh`
+/// runs it by name.
+#[test]
+#[ignore = "writes the checked-in TypeScript contracts"]
+fn write_typescript_contracts() {
+    contracts(true);
+}
+
+/// The contract files that differ from the Rust types, after rewriting them
+/// when `write`.
+fn contracts(write: bool) -> Vec<PathBuf> {
     let render = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../render/packages");
-    let write = std::env::var_os("RUSTY_WRITE_TYPESCRIPT_CONTRACTS").is_some();
     let mut stale = Vec::new();
     for (package, contents) in packages() {
         let path = render.join(package).join("src/generated/contracts.ts");
@@ -179,9 +197,5 @@ fn typescript_contracts_are_current() {
             stale.push(path);
         }
     }
-    assert!(
-        stale.is_empty(),
-        "these TypeScript contracts differ from the Rust types: {stale:?}\n\
-         run scripts/generate-typescript-contracts.sh and commit the result"
-    );
+    stale
 }

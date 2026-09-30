@@ -21,8 +21,10 @@ use sha2::{Digest, Sha256};
 
 pub const PIN_FILE: &str = "Directory.Build.props";
 pub const PIN_ELEMENT: &str = "RustyEnginePackageVersion";
-pub const CACHE_VARIABLE: &str = "RUSTY_ENGINE_CACHE";
-pub const RELEASES_VARIABLE: &str = "RUSTY_ENGINE_RELEASES";
+/// The CLI's own settings, beside the installed pairs: `{"releases": <url>}`
+/// names a release mirror (an HTTP base or a `file://` directory) instead of
+/// GitHub. `install-rusty.sh --releases` writes it.
+pub const CONFIG_FILE: &str = "config.json";
 const DEFAULT_RELEASES: &str = "https://github.com/FuzzySlipper/rusty-engine/releases";
 const RELEASE_METADATA: &str = "pair-release.json";
 const TARGET: &str = "linux-x64";
@@ -31,13 +33,31 @@ const TARGET: &str = "linux-x64";
 const MAX_NOTES_CHAIN: usize = 30;
 
 pub fn releases_base() -> String {
-    env::var(RELEASES_VARIABLE)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map_or_else(
-            || DEFAULT_RELEASES.to_owned(),
-            |value| value.trim_end_matches('/').to_owned(),
-        )
+    configured_releases().map_or_else(
+        || DEFAULT_RELEASES.to_owned(),
+        |value| value.trim_end_matches('/').to_owned(),
+    )
+}
+
+/// The release mirror `config.json` names, if any. A config that cannot be
+/// read as JSON is reported and ignored.
+fn configured_releases() -> Option<String> {
+    let path = cache_root().ok()?.join(CONFIG_FILE);
+    let bytes = fs::read(&path).ok()?;
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(config) => config["releases"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        Err(error) => {
+            eprintln!(
+                "rusty: ignoring `{}`: {error}; using the default releases",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -135,8 +155,7 @@ fn pin_value_range(text: &str) -> Result<Option<(usize, usize)>, String> {
 /// What a product's `Directory.Build.props` declares next to the pin, so every
 /// restore (plain `dotnet` included) finds exactly the pinned SDK in the shared
 /// cache and an uninstalled pin fails with the fix instead of NU1301.
-pub const FEED_DECLARATION: &str = r#"    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(RUSTY_ENGINE_CACHE)</RustyEngineCache>
-    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
+pub const FEED_DECLARATION: &str = r#"    <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
     <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
   </PropertyGroup>
@@ -382,16 +401,13 @@ pub fn validate_version(version: &str) -> Result<(), String> {
 }
 
 pub fn cache_root() -> Result<PathBuf, String> {
-    if let Some(root) = env::var_os(CACHE_VARIABLE).filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(root));
-    }
     if let Some(root) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(root).join("rusty-engine"));
     }
     env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(|home| PathBuf::from(home).join(".cache/rusty-engine"))
-        .ok_or_else(|| format!("RUSTY_CACHE: set HOME or {CACHE_VARIABLE}"))
+        .ok_or_else(|| "RUSTY_CACHE: set HOME or XDG_CACHE_HOME".to_owned())
 }
 
 fn pairs_root() -> Result<PathBuf, String> {
@@ -736,7 +752,7 @@ fn http_get(url: &str, destination: &Path) -> Result<bool, String> {
     }
     match code.as_str() {
         "200" => Ok(true),
-        // A file:// mirror (RUSTY_ENGINE_RELEASES) has no HTTP status.
+        // A file:// mirror (config.json `releases`) has no HTTP status.
         "000" if url.starts_with("file://") => Ok(true),
         "404" => {
             let _ = fs::remove_file(destination);

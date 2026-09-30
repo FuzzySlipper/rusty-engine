@@ -154,7 +154,8 @@ resume loops and preserve paused or completed voices; direct sounds and emitter
 creation bursts are not replayed. `render-audio` plays audio on the runtime's
 output device ([recorded audio](recorded-audio.md#device-realization)). A
 machine with no output device runs silent after one warning, with no
-completions reported; `RUSTY_AUDIO_OUTPUT=device` requires the device instead.
+completions reported; `audio.output: device-required` in `product.json`
+(`RustyEngineProductAudioOutput`) requires the device instead.
 Continuous emitters restart their cosmetic simulation from their retained
 descriptor. Animation baselines carry playback cursors and per-clip controller
 phases, suppressing historical completion callbacks. A ghost plate
@@ -197,10 +198,16 @@ checked-in file differs from the Rust types, and
 
 ### Runtime-rendered output
 
-`RUSTY_RENDER_OUTPUT` selects where the runtime's renderer draws: `stream`
-(the default) streams frames to the browser shell, and `window` presents to
-the [desktop shell](desktop-shell.md)'s native window
-(`csharp-product-runtime/src/frame_output.rs`, render-wgpu's `SceneDriver`, `render-stream`).
+The product manifest's `renderer.output` selects where the runtime's renderer
+draws: `stream` (the default) streams frames to the browser shell, and
+`window` presents to the [desktop shell](desktop-shell.md)'s native window
+(`csharp-product-runtime/src/frame_output.rs`, render-wgpu's `SceneDriver`,
+`render-stream`). The product project sets it with
+`RustyEngineProductRenderOutput`, and `rusty dev --output` overrides it for one
+launch. No environment variable selects Engine behaviour:
+`scripts/test_architecture_checks.py` refuses new reads in the runtime, host,
+renderer, shell and CLI crates beyond the platform's own (`PATH`, `HOME`,
+`XDG_CACHE_HOME`, `DOTNET_ROOT`, `WAYLAND_DISPLAY`, `WGPU_BACKEND`).
 
 - **Runtime.** Each finished product call's frame, presentation and view
   composition publications are applied to the renderer as they are committed,
@@ -223,7 +230,6 @@ the [desktop shell](desktop-shell.md)'s native window
   at the most recent viewer's size, and at its pixel ratio (`W / C`): labels,
   pixel-sized sprites and particle points are CSS pixels
   (`Renderer::set_pixel_ratio`). The desktop window uses its scale factor.
-  `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames, for measurement only.
 - **Browser.** `product-bootstrap.json` carries `renderer.output`. The
   runtime-pack shell (`product-browser-host` over `application-host`) owns the
   Engine canvas: with `stream` it paints the frames under the unchanged

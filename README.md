@@ -48,7 +48,8 @@ through CoreCLR, and restarts it when declared C#, UI, or content inputs change.
 The runtime pack supplies the Engine host and browser shell; a Product bundle
 contains only managed Product output, Product UI, Product content, and
 `product.json`. The runtime renders the world with `render-wgpu` and streams
-frames to the browser shell; `RUSTY_RENDER_OUTPUT=window` presents to a native
+frames to the browser shell; `RustyEngineProductRenderOutput=window` in the
+product project (or `rusty dev --output window`) presents to a native
 [desktop window](docs/desktop-shell.md) instead. Audio plays on the runtime's
 output device.
 

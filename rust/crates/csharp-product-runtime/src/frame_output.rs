@@ -1,7 +1,7 @@
 //! The world rendered in this process: streamed to the browser shell, or
 //! presented to the desktop shell's window.
 //!
-//! `RUSTY_RENDER_OUTPUT` selects it; `stream` is the default. With `stream`, a
+//! The product manifest's `renderer.output` selects it; `stream` is the default. With `stream`, a
 //! `render-wgpu` renderer starts on a headless device when the runtime loads,
 //! and the host serves the frames it draws at
 //! `/__rusty/product/runtime/frames`. With `window`, the renderer is built on
@@ -14,8 +14,7 @@
 //!
 //! Animation, video and ghost plate facts reach the Engine from this
 //! renderer, drawn or not: an unwatched stream advances clips and video on
-//! Engine time without drawing (#8871). `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of
-//! JPEG, to measure what the encoder saves.
+//! Engine time without drawing (#8871).
 //!
 //! Playtest inspection reaches the streamed renderer through Engine debug
 //! commands (the window takes only the observer camera):
@@ -44,7 +43,7 @@ use product_host::{
     ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
-use render_stream::{DrawnFrame, FrameStreamer, StreamFormat, StreamStats};
+use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
 use render_wgpu::{
     AnimationFact, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState,
     VideoFact, VideoFailure,
@@ -53,8 +52,6 @@ use serde_json::{json, Value};
 
 use crate::{CsharpProductRuntimeError, RenderOutput};
 
-pub(crate) const RENDER_OUTPUT_ENV: &str = "RUSTY_RENDER_OUTPUT";
-const STREAM_FORMAT_ENV: &str = "RUSTY_RENDER_STREAM_FORMAT";
 /// The Engine's realization feedback admits this many facts per report.
 const MAX_FACTS_PER_REPORT: usize = 128;
 /// How long an inspection command waits for the frame it asked for.
@@ -72,23 +69,6 @@ pub(crate) fn is_inspection_command(command: &str) -> bool {
         command.split_whitespace().next(),
         Some("engine.renderer.camera" | "engine.renderer.drawing" | "engine.renderer.frame")
     )
-}
-
-/// `RUSTY_RENDER_OUTPUT`: `stream` when unset. An unknown value is an error
-/// rather than a silent fallback.
-pub(crate) fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
-    let Some(value) = std::env::var_os(RENDER_OUTPUT_ENV) else {
-        return Ok(RenderOutput::Stream);
-    };
-    [RenderOutput::Stream, RenderOutput::Window]
-        .into_iter()
-        .find(|output| value == output.as_str())
-        .ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_RENDER_OUTPUT",
-                format!("{RENDER_OUTPUT_ENV} must be `stream` or `window` when set"),
-            )
-        })
 }
 
 pub(crate) struct FrameOutput {
@@ -202,29 +182,20 @@ impl FrameOutput {
         let (driver, stream) = match output {
             RenderOutput::Window => {
                 let gpu = window_gpu.ok_or_else(|| {
-                    error(format!(
-                        "{RENDER_OUTPUT_ENV}=window needs the desktop shell (a runtime built with the `desktop` feature)"
-                    ))
+                    error(
+                        "window output needs the desktop shell: run the pair's desktop pack (a runtime built with the `desktop` feature)"
+                            .to_owned(),
+                    )
                 })?;
                 (SceneDriver::new(gpu.clone(), options), None)
             }
             RenderOutput::Stream => {
-                let format = match std::env::var(STREAM_FORMAT_ENV).as_deref() {
-                    Err(_) | Ok("jpeg") => StreamFormat::Jpeg,
-                    Ok("rgba") => StreamFormat::Rgba8,
-                    Ok(_) => {
-                        return Err(error(format!(
-                            "{STREAM_FORMAT_ENV} must be `jpeg` or `rgba` when set"
-                        )))
-                    }
-                };
                 let gpu = Gpu::headless().map_err(|gpu| error(gpu.to_string()))?;
                 let driver = SceneDriver::new(gpu, options);
                 let frames = ProductHostFrameStream::new();
-                let streamer =
-                    FrameStreamer::start(Arc::clone(&driver), format, Arc::clone(&frames))
-                        .map(Arc::new)
-                        .map_err(error)?;
+                let streamer = FrameStreamer::start(Arc::clone(&driver), Arc::clone(&frames))
+                    .map(Arc::new)
+                    .map_err(error)?;
                 (driver, Some((streamer, frames)))
             }
         };

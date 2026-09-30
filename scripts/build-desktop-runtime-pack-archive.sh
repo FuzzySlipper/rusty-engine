@@ -6,7 +6,7 @@ set -euo pipefail
 # its .sha256. It is the pair's runtime pack built with the desktop shell and
 # Chromium's runtime (lib/cef), so its ABI fingerprint equals the pair's; the
 # default pack stays free of Chromium. `rusty dev` fetches it on the first
-# RUSTY_RENDER_OUTPUT=window run of a pinned product (#8860).
+# window-output run of a pinned product (#8860).
 #
 # usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory>
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

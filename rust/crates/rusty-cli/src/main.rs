@@ -107,13 +107,9 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         if let Some((pin, pair)) = pinned {
             warn_shape(&pin, &absolute(&options.project)?);
             if options.runtime.is_none() {
-                // Window mode runs the pair's desktop pack: the same host with
-                // the desktop shell and Chromium's runtime.
-                let runtime = if window_output() {
-                    pair::install_desktop_pack(&pair)?.0
-                } else {
-                    pair.runtime_pack()
-                };
+                // Window output switches to the pair's desktop pack once the
+                // staged manifest says so (see `window_runtime`).
+                let runtime = pair.runtime_pack();
                 diagnostic(
                     "pin-resolved",
                     serde_json::json!({
@@ -135,6 +131,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     let initial = stage_product(&options)?;
     let mut staged = initial.directory;
     verify_staged_product(&staged)?;
+    let runtime = window_runtime(runtime, &staged)?;
     let mut watches = initial.watches;
     let mut asset_roots = initial.asset_roots;
     let mut snapshot = FileSnapshot::capture(&watches)?;
@@ -142,8 +139,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         &runtime.host,
         &staged,
         &persistence_root,
-        options.debugger,
-        options.headless,
+        &options,
     )?);
     let mut crash_budget = CrashBudget::new(MAX_UNEXPECTED_EXITS_PER_ARTIFACT);
 
@@ -197,8 +193,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                             &runtime.host,
                             &staged,
                             &persistence_root,
-                            options.debugger,
-                            options.headless,
+                            &options,
                         )?;
                         diagnostic(
                             "restarted-after-unexpected-exit",
@@ -362,8 +357,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 &runtime.host,
                 &next_staged,
                 &persistence_root,
-                options.debugger,
-                options.headless,
+                &options,
             )?);
             true
         };
@@ -372,8 +366,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
                 &runtime.host,
                 &next_staged,
                 &persistence_root,
-                options.debugger,
-                options.headless,
+                &options,
             )?);
         }
         if replacement_failed {
@@ -482,6 +475,16 @@ struct DevOptions {
     live_debug: bool,
     debugger: bool,
     headless: bool,
+    /// `stream` or `window`, for this launch (`RustyEngineProductRenderOutput`).
+    output: Option<String>,
+    /// `device-optional` or `device-required` (`RustyEngineProductAudioOutput`).
+    audio_output: Option<String>,
+    /// Chromium switches for the window's UI page, `name[=value]`.
+    cef_switches: Vec<String>,
+    /// The Chromium executable `--headless` opens.
+    chromium: Option<PathBuf>,
+    /// Where the host writes its NDJSON diagnostics.
+    diagnostics_log: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -571,6 +574,11 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     let mut live_debug = false;
     let mut debugger = false;
     let mut headless = false;
+    let mut output = None;
+    let mut audio_output = None;
+    let mut cef_switches = Vec::new();
+    let mut chromium = None;
+    let mut diagnostics_log = None;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
@@ -598,6 +606,33 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
             "--live-debug" => live_debug = true,
             "--debugger" => debugger = true,
             "--headless" => headless = true,
+            "--output" => {
+                let value = required_value(&mut values, "--output")?;
+                if !matches!(value.as_str(), "stream" | "window") {
+                    return Err("RUSTY_DEV_ARGUMENT: --output must be stream or window".to_owned());
+                }
+                output = Some(value);
+            }
+            "--audio-output" => {
+                let value = required_value(&mut values, "--audio-output")?;
+                if !matches!(value.as_str(), "device-optional" | "device-required") {
+                    return Err(
+                        "RUSTY_DEV_ARGUMENT: --audio-output must be device-optional or device-required"
+                            .to_owned(),
+                    );
+                }
+                audio_output = Some(value);
+            }
+            "--cef-switch" => cef_switches.push(required_value(&mut values, "--cef-switch")?),
+            "--chromium" => {
+                chromium = Some(PathBuf::from(required_value(&mut values, "--chromium")?))
+            }
+            "--diagnostics-log" => {
+                diagnostics_log = Some(PathBuf::from(required_value(
+                    &mut values,
+                    "--diagnostics-log",
+                )?))
+            }
             _ => return Err(unknown_argument("dev", &value, dev_usage)),
         }
     }
@@ -605,6 +640,9 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         return Err(
             "RUSTY_DEV_ARGUMENT: --runtime and --engine-source are mutually exclusive".to_owned(),
         );
+    }
+    if chromium.is_some() && !headless {
+        return Err("RUSTY_DEV_ARGUMENT: --chromium selects the --headless browser".to_owned());
     }
     let project = project.ok_or_else(|| {
         "RUSTY_DEV_ARGUMENT: --project <ordinary-product.csproj> is required".to_owned()
@@ -618,6 +656,11 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         live_debug,
         debugger,
         headless,
+        output,
+        audio_output,
+        cef_switches,
+        chromium,
+        diagnostics_log,
     })
 }
 
@@ -746,21 +789,24 @@ Everyday use, from the product repository:
 
 The pin is the one <{pin}> element in the product's {pin_file}.
 Nothing moves it except `rusty update`. Installed pairs live in {cache}
-(set {cache_variable} to move it).
+(under XDG_CACHE_HOME when set); its {config} may name a release mirror as
+{{\"releases\": \"<url>\"}}.
 
 Get or refresh this command:
   curl -fsSL {bootstrap} | bash",
         pin = pair::PIN_ELEMENT,
         pin_file = pair::PIN_FILE,
         cache = pair::cache_root().map_or_else(|error| error, |root| root.display().to_string()),
-        cache_variable = pair::CACHE_VARIABLE,
+        config = pair::CONFIG_FILE,
         bootstrap = BOOTSTRAP_URL,
     )
 }
 
 fn dev_usage() -> String {
-    "usage: rusty dev --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger] [--headless]
-                 [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
+    "usage: rusty dev --project <ordinary-product.csproj> [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
+                 [--headless [--chromium <executable>]] [--output <stream|window>]
+                 [--audio-output <device-optional|device-required>] [--cef-switch <name[=value]>]...
+                 [--diagnostics-log <file>] [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
 
 Builds and stages the product through its SDK, starts it on CoreCLR, and restages when declared
 C#, UI or content inputs change. UI and content-bundle edits reload into the running product; other
@@ -768,13 +814,19 @@ edits replace the runtime.
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
 `rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host.
-With RUSTY_RENDER_OUTPUT=window the product opens in a native window; the first such run downloads
-the pair's desktop runtime pack (Chromium's runtime for the UI) into the cache beside the pair.
+A product whose project sets RustyEngineProductRenderOutput=window (or a run with --output window)
+opens in a native window; the first such run downloads the pair's desktop runtime pack (Chromium's
+runtime for the UI) into the cache beside the pair.
 
   --port, --bind-host  where the browser host listens
   --live-debug         enable the live-debug command surface
   --debugger           no runtime startup deadline, for managed breakpoints
-  --headless           run unattended: a headless Chromium page keeps the world drawing and the UI mounted (RUSTY_CHROMIUM_PATH selects it)
+  --headless           run unattended: a headless Chromium page keeps the world drawing and the UI mounted
+  --chromium           the Chromium executable --headless opens (else one on PATH)
+  --output             stream (the default) or window, for this launch
+  --audio-output       device-required fails the load without an audio device; device-optional runs silent
+  --cef-switch         a Chromium switch for the window's UI page, e.g. remote-debugging-port=9333
+  --diagnostics-log    write the host's NDJSON diagnostics to this file
   --runtime            Engine contributors: use this runtime pack instead of the pin
   --engine-source      Engine contributors: build the SDK and runtime from this checkout
 
@@ -783,7 +835,7 @@ This command never invokes Cargo and never searches for an adjacent Engine check
 Examples:
   rusty dev --project src/Game/Game.csproj --port 8787
   rusty dev --project src/Game/Game.csproj --live-debug --headless
-  RUSTY_RENDER_OUTPUT=window rusty dev --project src/Game/Game.csproj"
+  rusty dev --project src/Game/Game.csproj --output window"
         .to_owned()
 }
 
@@ -883,6 +935,10 @@ impl RuntimePack {
         } else {
             runtime_beside_current_executable(&options.project)?
         };
+        Self::at(root)
+    }
+
+    fn at(root: PathBuf) -> Result<Self, String> {
         let manifest_path = root.join("runtime-manifest.json");
         let manifest = fs::read(&manifest_path)
             .map_err(|error| {
@@ -1055,9 +1111,60 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// `RUSTY_RENDER_OUTPUT=window`: the runtime presents to a native window.
-fn window_output() -> bool {
-    env::var_os("RUSTY_RENDER_OUTPUT").is_some_and(|value| value == "window")
+/// The staged manifest's `renderer.output` is `window`: the runtime presents
+/// to a native window.
+fn window_output(staged: &Path) -> Result<bool, String> {
+    let manifest = staged.join("product.json");
+    let bytes = fs::read(&manifest).map_err(|error| {
+        format!(
+            "RUSTY_DEV_STAGE: could not read `{}`: {error}",
+            manifest.display()
+        )
+    })?;
+    let manifest: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "RUSTY_DEV_STAGE: `{}` is invalid JSON: {error}",
+            manifest.display()
+        )
+    })?;
+    Ok(manifest["renderer"]["output"] == "window")
+}
+
+/// Window output runs a desktop pack: the same host with the desktop shell
+/// and Chromium's runtime (`lib/cef`). A pinned pair's pack is swapped for
+/// the pair's desktop pack, installed on first use; an explicit runtime pack
+/// must already be one.
+fn window_runtime(runtime: RuntimePack, staged: &Path) -> Result<RuntimePack, String> {
+    if !window_output(staged)? || runtime.root.join("lib/cef").is_dir() {
+        return Ok(runtime);
+    }
+    let pair = runtime
+        .root
+        .parent()
+        .filter(|root| {
+            runtime.root.file_name() == Some("runtime-pack".as_ref())
+                && root.join("pair-manifest.json").is_file()
+        })
+        .and_then(|root| {
+            Some(pair::InstalledPair {
+                version: root.file_name()?.to_str()?.to_owned(),
+                root: root.to_owned(),
+            })
+        })
+        .ok_or_else(|| {
+            format!(
+                "RUSTY_DEV_WINDOW: window output needs a desktop runtime pack; `{}` has no lib/cef. Pass --runtime <desktop pack>",
+                runtime.root.display()
+            )
+        })?;
+    let (root, downloaded) = pair::install_desktop_pack(&pair)?;
+    diagnostic(
+        "desktop-pack",
+        serde_json::json!({ "runtimePack": root, "downloaded": downloaded }),
+    );
+    let desktop = RuntimePack::at(root)?;
+    desktop.verify()?;
+    Ok(desktop)
 }
 
 /// Runs the pinned pair's own `rusty dev`, whose supervisor protocol and
@@ -1093,6 +1200,21 @@ fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), Stri
         if enabled {
             command.arg(flag);
         }
+    }
+    if let Some(output) = &options.output {
+        command.args(["--output", output]);
+    }
+    if let Some(audio_output) = &options.audio_output {
+        command.args(["--audio-output", audio_output]);
+    }
+    for switch in &options.cef_switches {
+        command.args(["--cef-switch", switch]);
+    }
+    if let Some(chromium) = &options.chromium {
+        command.arg("--chromium").arg(chromium);
+    }
+    if let Some(log) = &options.diagnostics_log {
+        command.arg("--diagnostics-log").arg(log);
     }
     let error = command.exec();
     Err(format!(
@@ -1257,7 +1379,9 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
                     if desktop.join("runtime-manifest.json").is_file() {
                         println!("desktop pack   {}", desktop.display());
                     } else {
-                        println!("desktop pack   not installed (fetched on the first RUSTY_RENDER_OUTPUT=window run)");
+                        println!(
+                            "desktop pack   not installed (fetched on the first window-output run)"
+                        );
                     }
                     println!("sdk feed       {}", pair.sdk_feed().display());
                 }
@@ -1545,6 +1669,12 @@ fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {
     if options.live_debug {
         properties.push("-p:RustyEngineProductLiveDebug=true".to_owned());
     }
+    if let Some(output) = &options.output {
+        properties.push(format!("-p:RustyEngineProductRenderOutput={output}"));
+    }
+    if let Some(audio_output) = &options.audio_output {
+        properties.push(format!("-p:RustyEngineProductAudioOutput={audio_output}"));
+    }
     Ok(properties)
 }
 
@@ -1607,17 +1737,11 @@ impl SupervisedHost {
         host: &Path,
         product: &Path,
         persistence_root: &Path,
-        debugger: bool,
-        headless: bool,
+        options: &DevOptions,
     ) -> Result<Self, String> {
         let runtime_instance_id = next_supervised_runtime_instance_id()?;
-        let arguments = supervised_host_arguments(
-            product,
-            persistence_root,
-            runtime_instance_id,
-            debugger,
-            headless,
-        )?;
+        let arguments =
+            supervised_host_arguments(product, persistence_root, runtime_instance_id, options)?;
         let mut child = Command::new(host)
             .args(&arguments)
             .stdin(Stdio::piped())
@@ -1734,8 +1858,7 @@ fn supervised_host_arguments(
     product: &Path,
     persistence_root: &Path,
     runtime_instance_id: u64,
-    debugger: bool,
-    headless: bool,
+    options: &DevOptions,
 ) -> Result<Vec<String>, String> {
     if runtime_instance_id == 0 {
         return Err(
@@ -1759,11 +1882,29 @@ fn supervised_host_arguments(
             .ok_or("RUSTY_DEV_PERSISTENCE: persistence root path must be UTF-8")?
             .to_owned(),
     ];
-    if debugger {
+    if options.debugger {
         arguments.push("--debugger".to_owned());
     }
-    if headless {
+    if options.headless {
         arguments.push("--headless".to_owned());
+    }
+    let path = |path: &Path, what: &str| {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| format!("RUSTY_DEV_ARGUMENT: the {what} path must be UTF-8"))
+    };
+    if let Some(chromium) = &options.chromium {
+        arguments.extend(["--chromium".to_owned(), path(chromium, "--chromium")?]);
+    }
+    for switch in &options.cef_switches {
+        arguments.extend(["--cef-switch".to_owned(), switch.clone()]);
+    }
+    if let Some(log) = &options.diagnostics_log {
+        let log = absolute(log)?;
+        arguments.extend([
+            "--diagnostics-log".to_owned(),
+            path(&log, "--diagnostics-log")?,
+        ]);
     }
     Ok(arguments)
 }
@@ -1969,8 +2110,7 @@ mod tests {
             Path::new("/product"),
             Path::new("/persistence"),
             7,
-            options.debugger,
-            options.headless,
+            &options,
         )
         .expect("host arguments");
         assert!(host.iter().any(|argument| argument == "--debugger"));
@@ -1990,8 +2130,7 @@ mod tests {
             Path::new("/product"),
             Path::new("/persistence"),
             7,
-            options.debugger,
-            options.headless,
+            &options,
         )
         .expect("host arguments");
         assert!(host.iter().any(|argument| argument == "--headless"));
@@ -2050,6 +2189,11 @@ mod tests {
             live_debug: false,
             debugger: false,
             headless: false,
+            output: None,
+            audio_output: None,
+            cef_switches: Vec::new(),
+            chromium: None,
+            diagnostics_log: None,
         };
 
         let properties = stage_properties(&options).expect("source properties");
@@ -2093,14 +2237,69 @@ mod tests {
         );
     }
 
+    fn dev_options(extra: &[&str]) -> DevOptions {
+        let arguments = Arguments::parse(
+            ["dev", "--project", "Product.csproj"]
+                .iter()
+                .chain(extra)
+                .map(|value| (*value).to_owned()),
+        )
+        .expect("dev options");
+        let CommandName::Dev(options) = arguments.command else {
+            panic!("dev command");
+        };
+        options
+    }
+
+    #[test]
+    fn output_options_stage_and_launch_options_reach_the_host() {
+        let options = dev_options(&[
+            "--output",
+            "window",
+            "--audio-output",
+            "device-required",
+            "--headless",
+            "--chromium",
+            "/usr/bin/chromium",
+            "--cef-switch",
+            "remote-debugging-port=9333",
+            "--diagnostics-log",
+            "/logs/diagnostics.ndjson",
+        ]);
+        let properties = stage_properties(&options).expect("staging properties");
+        assert!(properties.contains(&"-p:RustyEngineProductRenderOutput=window".to_owned()));
+        assert!(properties.contains(&"-p:RustyEngineProductAudioOutput=device-required".to_owned()));
+        let host = supervised_host_arguments(
+            Path::new("/product"),
+            Path::new("/persistence"),
+            7,
+            &options,
+        )
+        .expect("host arguments");
+        for pair in [
+            ["--chromium", "/usr/bin/chromium"],
+            ["--cef-switch", "remote-debugging-port=9333"],
+            ["--diagnostics-log", "/logs/diagnostics.ndjson"],
+        ] {
+            assert!(host.windows(2).any(|window| window == pair), "{pair:?}");
+        }
+        assert!(Arguments::parse(
+            ["dev", "--project", "P.csproj", "--output", "tv"].map(str::to_owned)
+        )
+        .is_err());
+        assert!(Arguments::parse(
+            ["dev", "--project", "P.csproj", "--chromium", "/c"].map(str::to_owned)
+        )
+        .is_err());
+    }
+
     #[test]
     fn supervised_host_arguments_include_distinct_stable_runtime_roots() {
         let arguments = supervised_host_arguments(
             Path::new("/workspace/Product/obj/RustyEngineProduct"),
             Path::new("/workspace/Product/.runtime/persistence"),
             41,
-            false,
-            false,
+            &dev_options(&[]),
         )
         .expect("supervised host arguments");
 
@@ -2206,8 +2405,7 @@ mod tests {
             Path::new("/workspace/Product"),
             Path::new("/workspace/Product/.runtime/persistence"),
             0,
-            false,
-            false,
+            &dev_options(&[]),
         )
         .expect_err("zero runtime incarnation is not a valid shell seed");
         assert!(error.contains("must be nonzero"));

@@ -41,6 +41,10 @@ pub(super) struct ProductBundle {
     ui_entry: String,
     ui_projection: Option<ProductUiProjection>,
     renderer_lighting: ProductRendererLighting,
+    /// Where the runtime draws (`renderer.output`).
+    pub(super) render_output: csharp_product_runtime::RenderOutput,
+    /// A missing audio device fails the load (`audio.output`).
+    pub(super) audio_device_required: bool,
     pub(super) lifecycle: RuntimeLifecycleConfig,
     pub(super) lifecycle_mode: ProductHostRuntimeMode,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
@@ -116,6 +120,21 @@ impl ProductBundle {
             .ui_projection
             .map(ProductUiProjection::from_manifest)
             .transpose()?;
+        let render_output = match manifest.renderer.output.as_deref() {
+            None | Some("stream") => csharp_product_runtime::RenderOutput::Stream,
+            Some("window") => csharp_product_runtime::RenderOutput::Window,
+            Some(_) => return Err(field_error("renderer.output", "must be stream or window")),
+        };
+        let audio_device_required = match manifest.audio.output.as_deref() {
+            None | Some("device-optional") => false,
+            Some("device-required") => true,
+            Some(_) => {
+                return Err(field_error(
+                    "audio.output",
+                    "must be device-optional or device-required",
+                ))
+            }
+        };
         let renderer_lighting = ProductRendererLighting::from_manifest(manifest.renderer)?;
 
         let (lifecycle, lifecycle_mode) = lifecycle(&manifest.lifecycle)?;
@@ -137,6 +156,8 @@ impl ProductBundle {
             ui_entry,
             ui_projection,
             renderer_lighting,
+            render_output,
+            audio_device_required,
             lifecycle,
             lifecycle_mode,
             direct_intents,
@@ -202,8 +223,7 @@ impl ProductBundle {
                 }
             }),
             renderer: ProductHostBootstrapRenderer {
-                output: csharp_product_runtime::render_output_mode()
-                    .map_err(|error| error.to_string())?,
+                output: self.render_output,
             },
         };
         entries.push(
@@ -446,6 +466,8 @@ struct Manifest {
     ui_projection: Option<ManifestUiProjection>,
     #[serde(default)]
     renderer: ManifestRenderer,
+    #[serde(default)]
+    audio: ManifestAudio,
     lifecycle: ManifestLifecycle,
     input: ManifestInput,
     #[serde(default)]
@@ -510,7 +532,14 @@ struct ManifestContent {
 #[derive(Debug, Default, Deserialize)]
 struct ManifestRenderer {
     #[serde(default)]
+    output: Option<String>,
+    #[serde(default)]
     lighting: ManifestRendererLighting,
+}
+#[derive(Debug, Default, Deserialize)]
+struct ManifestAudio {
+    #[serde(default)]
+    output: Option<String>,
 }
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -810,6 +839,42 @@ mod tests {
 
         let error = ProductBundle::read(&root).expect_err("invalid cursor mode rejects");
         assert!(error.contains("product.json:input.cursorMode"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_manifest_selects_render_and_audio_output() {
+        let root = fixture_root("output-selection");
+        write_manifest(&root, "native/product.so");
+        let bundle = ProductBundle::read(&root).expect("default outputs admit");
+        assert_eq!(
+            bundle.render_output,
+            csharp_product_runtime::RenderOutput::Stream
+        );
+        assert!(!bundle.audio_device_required);
+
+        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&manifest_path).unwrap();
+        let with = |renderer: &str, audio: &str| {
+            original.replace(
+                "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}",
+                &format!("\"renderer\":{{\"output\":\"{renderer}\"}},\"audio\":{{\"output\":\"{audio}\"}}"),
+            )
+        };
+        fs::write(&manifest_path, with("window", "device-required")).unwrap();
+        let bundle = ProductBundle::read(&root).expect("window output admits");
+        assert_eq!(
+            bundle.render_output,
+            csharp_product_runtime::RenderOutput::Window
+        );
+        assert!(bundle.audio_device_required);
+
+        fs::write(&manifest_path, with("tv", "device-required")).unwrap();
+        let error = ProductBundle::read(&root).expect_err("unknown output rejects");
+        assert!(error.contains("product.json:renderer.output"));
+        fs::write(&manifest_path, with("stream", "speakers")).unwrap();
+        let error = ProductBundle::read(&root).expect_err("unknown audio output rejects");
+        assert!(error.contains("product.json:audio.output"));
         fs::remove_dir_all(root).unwrap();
     }
 

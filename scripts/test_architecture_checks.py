@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Focused positive and negative tests for Rust workspace dependency boundaries."""
+"""Focused positive and negative tests for workspace dependency boundaries and environment reads."""
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 import unittest
@@ -245,6 +246,66 @@ class DependencyBoundaryTests(unittest.TestCase):
                 "workspace dependencies"
             ],
         )
+
+
+# Crates that must not read the environment to select behaviour (owner
+# decision 2026-09-30, #8954): settings belong in the product manifest, launch
+# arguments or a config file, where they can be found.
+ENVIRONMENT_CHECKED_CRATES = (
+    "csharp-product-runtime",
+    "desktop-shell",
+    "product-host",
+    "render-audio",
+    "render-export",
+    "render-stream",
+    "render-wgpu",
+    "rusty-cli",
+)
+# Platform conventions these crates may read, and why.
+ALLOWED_ENVIRONMENT_READS = {
+    "PATH": "finding executables (dotnet, Chromium)",
+    "HOME": "the default cache location",
+    "XDG_CACHE_HOME": "the platform's cache location",
+    "DOTNET_ROOT": ".NET's own convention for locating its runtime",
+    "WAYLAND_DISPLAY": "which display server the window opens on",
+    "WGPU_BACKEND": "wgpu's own adapter override, honoured before choosing one",
+    # Temporary: den-serve passes --diagnostics-log instead (crew-services #8955).
+    "DEN_SERVE_SESSION_DIR": "den-serve's session directory until #8955 lands",
+}
+ENVIRONMENT_READ = re.compile(r"env::var(?:_os)?\(\s*([^)]*)\)")
+
+
+def environment_reads(crate: str) -> list[tuple[str, str]]:
+    reads = []
+    for source in sorted((REPO_ROOT / "rust" / "crates" / crate / "src").rglob("*.rs")):
+        text = source.read_text(encoding="utf-8")
+        for match in ENVIRONMENT_READ.finditer(text):
+            reads.append((str(source.relative_to(REPO_ROOT)), match.group(1).strip()))
+    return reads
+
+
+class EnvironmentReadTests(unittest.TestCase):
+    def test_behaviour_is_not_selected_by_environment_variables(self) -> None:
+        refused = [
+            f"{path}: env::var({argument})"
+            for crate in ENVIRONMENT_CHECKED_CRATES
+            for path, argument in environment_reads(crate)
+            if argument.strip('"') not in ALLOWED_ENVIRONMENT_READS
+            or not argument.startswith('"')
+        ]
+        self.assertEqual(
+            refused,
+            [],
+            "select behaviour through the product manifest, a launch argument or a config file",
+        )
+
+    def test_the_check_sees_a_behaviour_variable(self) -> None:
+        text = 'let output = std::env::var_os("RUSTY_RENDER_OUTPUT");'
+        self.assertEqual(
+            [match.group(1) for match in ENVIRONMENT_READ.finditer(text)],
+            ['"RUSTY_RENDER_OUTPUT"'],
+        )
+        self.assertNotIn("RUSTY_RENDER_OUTPUT", ALLOWED_ENVIRONMENT_READS)
 
 
 if __name__ == "__main__":

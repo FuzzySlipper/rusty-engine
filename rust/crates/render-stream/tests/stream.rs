@@ -12,7 +12,7 @@ use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
     RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
-use render_stream::{FrameStreamer, StreamFormat};
+use render_stream::FrameStreamer;
 use render_wgpu::{Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState};
 
 fn state(step: u64, held: bool) -> SceneState {
@@ -61,16 +61,15 @@ fn frames_follow_viewers_and_simulation_time() {
     let frames = ProductHostFrameStream::new();
     let gpu = Gpu::headless().expect("a headless adapter");
     let scene = SceneDriver::new(gpu.clone(), RendererOptions::default());
-    let streamer = FrameStreamer::start(scene.clone(), StreamFormat::Rgba8, frames.clone())
-        .expect("the render thread starts");
+    let streamer =
+        FrameStreamer::start(scene.clone(), frames.clone()).expect("the render thread starts");
     let wait = Duration::from_secs(5);
-    // A new viewer gets the held scene: with no composition, the clear colour.
+    // A new viewer gets the held scene as a JPEG frame.
     let first = frames.next_after(0, Some((64, 32)), wait).unwrap();
     let head = header(&first);
-    assert_eq!((head.width, head.height, head.format), (64, 32, 2));
+    assert_eq!((head.width, head.height, head.format), (64, 32, 1));
+    assert_eq!(&first[40..42], &[0xFF, 0xD8], "a JPEG payload");
     assert!(head.held);
-    let pixel = &first[40..44];
-    assert_eq!(pixel, &[16, 24, 32, 255], "the default clear colour");
 
     // Running: each applied step draws a frame that shows that step.
     let mut running = Vec::new();

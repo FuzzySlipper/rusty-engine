@@ -57,7 +57,7 @@ enum SupervisorCommand {
 
 pub(crate) fn run(args: Arguments) -> Result<(), String> {
     let termination = install_termination_signal_hook();
-    let diagnostics = ProductHostLog::new(Default::default()).map_err(|error| error.to_string())?;
+    let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
     let listener = TcpListener::bind(SocketAddr::from((args.bind_host(), args.port())))
         .map_err(|error| format!("PRODUCT_HOST_BIND: {error}"))?;
     let address = listener
@@ -81,6 +81,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
             .ok_or("PRODUCT_HOST_SUPERVISOR: the runtime incarnation was not allocated")?
             .value(),
         persistence_root: args.persistence_root.clone(),
+        forwarded: args.runtime_forwarded_arguments()?,
         startup_timeout: (!args.debugger).then_some(RUNTIME_STARTUP_TIMEOUT),
     };
     if args.debugger {
@@ -122,6 +123,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
                 if args.headless && headless_browser.is_none() {
                     headless_browser = Some(headless_browser::HeadlessBrowser::launch(
                         &browser_url(address),
+                        args.chromium.as_deref(),
                     )?);
                 }
             }
@@ -294,6 +296,9 @@ struct RuntimeLaunch {
     loader: ProductLoader,
     next_runtime_instance_id: u64,
     persistence_root: Option<PathBuf>,
+    /// Launch options the runtime process applies itself (Chromium for the
+    /// window, the diagnostics file).
+    forwarded: Vec<String>,
     startup_timeout: Option<Duration>,
 }
 
@@ -331,6 +336,7 @@ impl RuntimeLaunch {
                 arguments.push(path_argument(root)?);
             }
         }
+        arguments.extend(self.forwarded.iter().cloned());
         Ok(arguments)
     }
 }
@@ -680,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_launch_forwards_the_selected_loader() {
+    fn runtime_launch_forwards_the_selected_loader_and_launch_options() {
         for loader in [ProductLoader::NativeAot, ProductLoader::CoreClr] {
             let launch = RuntimeLaunch {
                 executable: PathBuf::from("/runtime/rusty-product-host"),
@@ -689,6 +695,10 @@ mod tests {
                 loader,
                 next_runtime_instance_id: 7,
                 persistence_root: None,
+                forwarded: vec![
+                    "--cef-switch".to_owned(),
+                    "remote-debugging-port=9333".to_owned(),
+                ],
                 startup_timeout: None,
             };
             let arguments = launch.runtime_arguments(7).unwrap();
@@ -697,6 +707,9 @@ mod tests {
                 .position(|argument| argument == "--loader")
                 .map(|index| arguments[index + 1].as_str());
             assert_eq!(selected, Some(loader.identifier()));
+            assert!(arguments
+                .windows(2)
+                .any(|pair| pair == ["--cef-switch", "remote-debugging-port=9333"]));
         }
     }
 

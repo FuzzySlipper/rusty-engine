@@ -35,7 +35,7 @@ pub struct ProductHostLogConfig {
 impl Default for ProductHostLogConfig {
     fn default() -> Self {
         Self {
-            path: diagnostic_path_from_environment(),
+            path: den_serve_session_path(),
             ring_capacity: 256,
             rotate_bytes: DEFAULT_ROTATE_BYTES,
             retention_files: 3,
@@ -255,13 +255,12 @@ impl Drop for HostFileDiagnosticsWriter {
     }
 }
 
-fn diagnostic_path_from_environment() -> Option<PathBuf> {
-    std::env::var_os("RUSTY_ENGINE_DIAGNOSTICS_PATH")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("DEN_SERVE_SESSION_DIR")
-                .map(|directory| PathBuf::from(directory).join("rusty-engine-diagnostics.ndjson"))
-        })
+/// The file `--diagnostics-log` names is set with [`ProductHostLogConfig::with_path`].
+/// Until den-serve passes it (crew-services #8955), a den-serve session's
+/// directory still receives the file.
+fn den_serve_session_path() -> Option<PathBuf> {
+    std::env::var_os("DEN_SERVE_SESSION_DIR")
+        .map(|directory| PathBuf::from(directory).join("rusty-engine-diagnostics.ndjson"))
 }
 
 fn open_writer(

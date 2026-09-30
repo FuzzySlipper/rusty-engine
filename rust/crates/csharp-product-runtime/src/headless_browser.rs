@@ -7,7 +7,7 @@
 
 use std::{
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread,
@@ -23,8 +23,9 @@ pub(crate) struct HeadlessBrowser {
 }
 
 impl HeadlessBrowser {
-    pub(crate) fn launch(url: &str) -> Result<Self, String> {
-        let executable = chromium_executable()?;
+    /// Opens `url` in `chromium`, else a Chromium on `PATH`.
+    pub(crate) fn launch(url: &str, chromium: Option<&Path>) -> Result<Self, String> {
+        let executable = chromium_executable(chromium)?;
         let profile = create_profile_directory()?;
         let mut command = Command::new(&executable);
         command
@@ -196,16 +197,15 @@ impl Drop for HeadlessBrowser {
     }
 }
 
-fn chromium_executable() -> Result<PathBuf, String> {
-    if let Some(configured) = env::var_os("RUSTY_CHROMIUM_PATH") {
-        let path = PathBuf::from(configured);
+fn chromium_executable(configured: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(path) = configured {
         if !path.is_file() {
             return Err(format!(
-                "RUSTY_HEADLESS_BROWSER_PATH: RUSTY_CHROMIUM_PATH does not name a file: `{}`",
+                "RUSTY_HEADLESS_BROWSER_PATH: --chromium does not name a file: `{}`",
                 path.display()
             ));
         }
-        return Ok(path);
+        return Ok(path.to_owned());
     }
 
     let path_entries = env::var_os("PATH")
@@ -225,7 +225,10 @@ fn chromium_executable() -> Result<PathBuf, String> {
         }
     }
 
-    Err("RUSTY_HEADLESS_BROWSER_MISSING: install Chromium or set RUSTY_CHROMIUM_PATH to its executable".to_owned())
+    Err(
+        "RUSTY_HEADLESS_BROWSER_MISSING: install Chromium or pass --chromium <executable>"
+            .to_owned(),
+    )
 }
 
 fn create_profile_directory() -> Result<PathBuf, String> {

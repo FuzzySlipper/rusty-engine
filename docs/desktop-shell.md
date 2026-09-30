@@ -44,10 +44,10 @@ TypeScript UI is composited over it.
   soundtracks included, as it does for streamed frames (see
   [recorded audio](recorded-audio.md#device-realization)).
 - **Live debug.** `rusty-live-debug --origin http://127.0.0.1:<port>`
-  reaches the runtime's HTTP host over loopback, as in streaming mode. `RUSTY_CEF_SWITCHES`
-  passes Chromium switches (comma-separated `name[=value]`); with
-  `remote-debugging-port=<port>` a CDP client such as Playwright attaches
-  to the page.
+  reaches the runtime's HTTP host over loopback, as in streaming mode.
+  `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
+  `rusty-product-host --cef-switch`) passes Chromium switches; with
+  `remote-debugging-port=<port>` a CDP client attaches to the page.
 - **UI storage.** The page's local storage persists under the runtime's
   persistence root (`desktop-ui/`).
 - **Window placement.** The window reopens at its last size, position (where
@@ -63,11 +63,15 @@ TypeScript UI is composited over it.
 
 ## Running
 
-`RUSTY_RENDER_OUTPUT=window` selects the shell. A pinned product needs nothing
-else:
+The product manifest's `renderer.output: window` selects the shell. Set it in
+the product project, or for one launch on the command line:
+
+```xml
+<RustyEngineProductRenderOutput>window</RustyEngineProductRenderOutput>
+```
 
 ```bash
-RUSTY_RENDER_OUTPUT=window rusty dev --project <product.csproj>
+rusty dev --project <product.csproj> --output window
 ```
 
 - **Fetching.** The first window run downloads the pinned pair's desktop
@@ -88,8 +92,9 @@ RUSTY_RENDER_OUTPUT=window rusty dev --project <product.csproj>
   - The CEF build script downloads CEF into `CEF_PATH` (default `target/cef`).
   - Default workspace builds and the verify workflow never enable the
     feature.
-- **What `lib/cef` holds.** About 292 MB installed; `RUSTY_CEF_DIR` overrides
-  the location.
+- **What `lib/cef` holds.** About 292 MB installed; `rusty-product-host
+  --cef-dir <directory>` overrides the location for the browser process
+  (Linux subprocesses load `libcef.so` through the dynamic linker).
   - `libcef.so`, stripped;
   - its paks, ICU data and V8 snapshot;
   - ANGLE's `libEGL.so` and `libGLESv2.so`;

@@ -5,19 +5,20 @@
 #   curl -fsSL .../install-rusty.sh | bash -s -- --version 0.1.0-dev.abc123def456
 #
 # Downloads the newest published SDK/runtime pair (or --version), checks its
-# SHA-256, puts that pair's `rusty` in ~/.local/bin (or RUSTY_BIN_DIR), and
-# hands the same archive to `rusty install --archive`, so the pair also lands
-# in the shared cache. It never changes a product's pin. Everything after this
-# is `rusty --help`.
+# SHA-256, puts that pair's `rusty` in ~/.local/bin (or --bin-dir), and hands
+# the same archive to `rusty install --archive`, so the pair also lands in the
+# shared cache. It never changes a product's pin. `--releases <url>` installs
+# from a release mirror and records it in the cache's config.json, where
+# `rusty` reads it. Everything after this is `rusty --help`.
 set -euo pipefail
 
-releases=${RUSTY_ENGINE_RELEASES:-https://github.com/FuzzySlipper/rusty-engine/releases}
-releases=${releases%/}
-bin_dir=${RUSTY_BIN_DIR:-$HOME/.local/bin}
+releases=https://github.com/FuzzySlipper/rusty-engine/releases
+mirror=""
+bin_dir=$HOME/.local/bin
 version=""
 
 usage() {
-    echo "usage: install-rusty.sh [--version <pair-version>]" >&2
+    echo "usage: install-rusty.sh [--version <pair-version>] [--releases <url>] [--bin-dir <directory>]" >&2
 }
 
 while (($#)); do
@@ -25,6 +26,17 @@ while (($#)); do
         --version)
             (($# >= 2)) || { usage; exit 2; }
             version=$2
+            shift 2
+            ;;
+        --releases)
+            (($# >= 2)) || { usage; exit 2; }
+            mirror=${2%/}
+            releases=$mirror
+            shift 2
+            ;;
+        --bin-dir)
+            (($# >= 2)) || { usage; exit 2; }
+            bin_dir=$2
             shift 2
             ;;
         -h|--help)
@@ -77,6 +89,11 @@ candidate="$work/$name/runtime-pack/bin/rusty"
     echo "install-rusty: pair $version predates \`rusty install\`; bootstrap the newest pair (omit --version). A newer rusty still installs and runs products pinned to $version." >&2
     exit 1
 }
+if [[ -n "$mirror" ]]; then
+    cache=${XDG_CACHE_HOME:-$HOME/.cache}/rusty-engine
+    mkdir -p "$cache"
+    printf '{"releases": "%s"}\n' "$mirror" > "$cache/config.json"
+fi
 "$candidate" install --archive "$work/$archive"
 mkdir -p "$bin_dir"
 install -m 755 "$candidate" "$bin_dir/.rusty.incoming.$$"

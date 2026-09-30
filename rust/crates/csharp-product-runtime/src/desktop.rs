@@ -4,14 +4,10 @@
 
 use std::path::PathBuf;
 
-/// Overrides where Chromium's runtime files are; a runtime pack keeps them in
-/// `lib/cef` beside `bin`.
-const CEF_DIR_ENV: &str = "RUSTY_CEF_DIR";
-
+/// Where Chromium's runtime files are: a runtime pack keeps them in `lib/cef`
+/// beside `bin`. `--cef-dir` overrides it for the browser process; Linux
+/// subprocesses load libcef through the dynamic linker and do not read it.
 pub(crate) fn cef_dir() -> Result<PathBuf, String> {
-    if let Some(dir) = std::env::var_os(CEF_DIR_ENV) {
-        return Ok(PathBuf::from(dir));
-    }
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     executable
         .parent()
@@ -40,10 +36,6 @@ use desktop_shell::{
     DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, WebRuntimeConfig,
 };
 
-/// Extra Chromium switches for the UI page, comma-separated `name[=value]`;
-/// for example `remote-debugging-port=9333` lets a CDP client (the playtest
-/// harness, a debugger) attach to the page.
-const CHROMIUM_SWITCHES_ENV: &str = "RUSTY_CEF_SWITCHES";
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 720;
 
@@ -51,19 +43,28 @@ const WINDOW_HEIGHT: u32 = 720;
 /// renderer on the window's device.
 pub(crate) struct Desktop {
     shell: DesktopShell,
+    cef_dir: Option<PathBuf>,
+    /// Extra Chromium switches for the UI page, `name[=value]`; for example
+    /// `remote-debugging-port=9333` lets a CDP client (the playtest harness,
+    /// a debugger) attach to the page.
+    switches: Vec<String>,
 }
 
 impl Desktop {
-    /// Opens the event loop and device when `RUSTY_RENDER_OUTPUT=window`.
-    /// Call on the main thread, before any other thread starts.
-    pub(crate) fn open_if_selected() -> Result<Option<Self>, String> {
-        if csharp_product_runtime::render_output_mode().map_err(|error| error.to_string())?
-            != csharp_product_runtime::RenderOutput::Window
-        {
+    /// Opens the event loop and device in window output. Call on the main
+    /// thread, before any other thread starts.
+    pub(crate) fn open_if_selected(
+        output: csharp_product_runtime::RenderOutput,
+        cef_dir: Option<PathBuf>,
+        switches: &[String],
+    ) -> Result<Option<Self>, String> {
+        if output != csharp_product_runtime::RenderOutput::Window {
             return Ok(None);
         }
         Ok(Some(Self {
             shell: DesktopShell::open()?,
+            cef_dir,
+            switches: switches.to_vec(),
         }))
     }
 
@@ -107,9 +108,12 @@ impl Desktop {
                 ui_url: Some(format!("{}/", origin.trim_end_matches('/'))),
                 placement_file: persistence_root.map(|root| root.join("desktop-window")),
                 web: WebRuntimeConfig {
-                    cef_dir: cef_dir()?,
+                    cef_dir: match self.cef_dir {
+                        Some(directory) => directory,
+                        None => cef_dir()?,
+                    },
                     cache_dir,
-                    switches: chromium_switches(),
+                    switches: chromium_switches(&self.switches),
                 },
             },
             scene,
@@ -128,7 +132,7 @@ impl Desktop {
 
 /// Chromium renders off-screen but still opens the display it runs on;
 /// point it at the one the window uses.
-fn chromium_switches() -> Vec<(String, Option<String>)> {
+fn chromium_switches(extra: &[String]) -> Vec<(String, Option<String>)> {
     // winit prefers Wayland when WAYLAND_DISPLAY names a display.
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty());
     let platform = if wayland { "wayland" } else { "x11" };
@@ -137,10 +141,9 @@ fn chromium_switches() -> Vec<(String, Option<String>)> {
     } else {
         Vec::new()
     };
-    let extra = std::env::var(CHROMIUM_SWITCHES_ENV).unwrap_or_default();
     switches.extend(
         extra
-            .split(',')
+            .iter()
             .filter(|switch| !switch.is_empty())
             .map(|switch| match switch.split_once('=') {
                 Some((name, value)) => (name.to_owned(), Some(value.to_owned())),

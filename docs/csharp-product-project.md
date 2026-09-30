@@ -147,6 +147,26 @@ Each value is `neutral` or `disabled`. These are host defaults, not product
 lights: disabling the world rig does not change the viewmodel setting or remove
 product-owned point, directional, or spot lights. Invalid values reject staging.
 
+### Output
+
+The runtime draws the world and plays its audio itself. Two build properties
+select where, and are carried in `product.json` as `renderer.output` and
+`audio.output`:
+
+```xml
+<PropertyGroup>
+  <RustyEngineProductRenderOutput>window</RustyEngineProductRenderOutput>
+  <RustyEngineProductAudioOutput>device-required</RustyEngineProductAudioOutput>
+</PropertyGroup>
+```
+
+`RustyEngineProductRenderOutput` is `stream` (the default: frames streamed to
+the browser shell page) or `window` (a native [desktop window](desktop-shell.md)).
+`RustyEngineProductAudioOutput` is `device-optional` (the default: a machine
+with no audio device runs silent) or `device-required` (the load fails without
+one). `rusty dev --output` and `--audio-output` set them for one launch.
+Invalid values reject staging.
+
 ## Read bundled product files
 
 Set `RustyEngineProductContentRoot` to the authored or build-generated content

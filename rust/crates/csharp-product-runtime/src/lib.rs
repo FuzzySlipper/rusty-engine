@@ -176,7 +176,10 @@ pub struct CsharpProductRuntimeConfig {
     renderer_options: render_wgpu::RendererOptions,
     /// Where the runtime's renderer draws; `None` builds no renderer.
     render_output: Option<RenderOutput>,
-    /// The desktop shell's device, for `RUSTY_RENDER_OUTPUT=window`.
+    /// A missing audio output device fails the load instead of running
+    /// silent.
+    audio_device_required: bool,
+    /// The desktop shell's device, for window output.
     window_gpu: Option<render_wgpu::Gpu>,
 }
 
@@ -197,6 +200,7 @@ impl CsharpProductRuntimeConfig {
                 .expect("fixed diagnostic defaults"),
             renderer_options: render_wgpu::RendererOptions::default(),
             render_output: None,
+            audio_device_required: false,
             window_gpu: None,
         }
     }
@@ -208,15 +212,22 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
-    /// The desktop shell's device: with `RUSTY_RENDER_OUTPUT=window` the
-    /// runtime's renderer is built on it and the shell draws it.
+    /// The manifest's `audio.output`: whether a missing output device fails
+    /// the load (`device-required`) or the product runs silent.
+    pub fn with_audio_device_required(mut self, required: bool) -> Self {
+        self.audio_device_required = required;
+        self
+    }
+
+    /// The desktop shell's device: in window output the runtime's renderer
+    /// is built on it and the shell draws it.
     pub fn with_window_gpu(mut self, gpu: render_wgpu::Gpu) -> Self {
         self.window_gpu = Some(gpu);
         self
     }
 
     /// The product manifest's default light rigs, for a renderer in this
-    /// process (`RUSTY_RENDER_OUTPUT`).
+    /// process.
     pub fn with_default_lights(mut self, world: bool, viewmodel: bool) -> Self {
         self.renderer_options.default_world_lights = world;
         self.renderer_options.default_viewmodel_lights = viewmodel;
@@ -618,12 +629,6 @@ mod render_output;
 
 pub use product_host::ProductHostRenderOutput as RenderOutput;
 
-/// Where `RUSTY_RENDER_OUTPUT` has this process draw the world: `stream`
-/// (the default) or `window`.
-pub fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
-    frame_output::render_output_mode()
-}
-
 pub use frame_output::{WindowFrame, WindowTiming};
 pub use render_wgpu::{Gpu, Renderer, SceneDriver};
 
@@ -752,7 +757,7 @@ impl CsharpProductRuntime {
             .transpose()?;
         // The process that draws the world plays its sound.
         let audio_output = match frame_output {
-            Some(_) => audio_output::AudioOutput::from_environment()?,
+            Some(_) => audio_output::AudioOutput::open(config.audio_device_required)?,
             None => None,
         };
         let render_outputs = render_output::OutputExecutor::start(config.renderer_options)
@@ -2411,7 +2416,7 @@ impl CsharpProductRuntime {
             .map(frame_output::FrameOutput::capture)
     }
 
-    /// The renderer the desktop shell draws, with `RUSTY_RENDER_OUTPUT=window`.
+    /// The renderer the desktop shell draws, in window output.
     pub fn scene_driver(&self) -> Option<Arc<SceneDriver>> {
         self.frame_output
             .as_ref()

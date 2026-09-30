@@ -23,7 +23,6 @@ declaration in `Directory.Build.props` and exact package references:
 <Project>
   <PropertyGroup>
     <RustyEnginePackageVersion>0.1.0-dev.abc123def456</RustyEnginePackageVersion>
-    <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(RUSTY_ENGINE_CACHE)</RustyEngineCache>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == '' and '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/rusty-engine</RustyEngineCache>
     <RustyEngineCache Condition="'$(RustyEngineCache)' == ''">$(HOME)/.cache/rusty-engine</RustyEngineCache>
     <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(RustyEngineCache)/pairs/$(RustyEnginePackageVersion)/sdk-feed</RestoreAdditionalProjectSources>
@@ -63,10 +62,14 @@ frames to the browser shell page that `rusty dev` serves. The product runs
 from load either way. The runtime draws only while a page watches that stream,
 but animation and video completions do not wait for one: unwatched, they
 advance on Engine time without drawing. `--headless` opens a page in headless
-Chromium (`RUSTY_CHROMIUM_PATH` selects it) for an unattended run that wants
-frames drawn or the product UI mounted. `RUSTY_RENDER_OUTPUT=window rusty dev …`
-presents to a native window instead; the first such run downloads the pair's
-desktop runtime pack into the cache (see [desktop shell](desktop-shell.md)).
+Chromium (`--chromium <executable>` selects it) for an unattended run that
+wants frames drawn or the product UI mounted. `RustyEngineProductRenderOutput`
+set to `window` in the product project (or `rusty dev --output window` for one
+launch) presents to a native window instead; the first such run downloads the
+pair's desktop runtime pack into the cache (see
+[desktop shell](desktop-shell.md)). `RustyEngineProductAudioOutput` set to
+`device-required` (or `--audio-output device-required`) fails the load when no
+audio device opens.
 
 `rusty build --project …` stages without running; `--aot` also publishes the
 NativeAOT product, an explicit fidelity/release check rather than the edit

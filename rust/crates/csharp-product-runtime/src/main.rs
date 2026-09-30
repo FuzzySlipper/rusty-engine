@@ -16,7 +16,8 @@ use csharp_product_runtime::{
 };
 use product_host::{
     ProductHost, ProductHostAssetReload, ProductHostBundle, ProductHostBundleEntry,
-    ProductHostConfig, ProductHostLog, ProductHostRuntime, RunningProductHost,
+    ProductHostConfig, ProductHostLog, ProductHostLogConfig, ProductHostRuntime,
+    RunningProductHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -104,9 +105,19 @@ fn main() -> Result<(), String> {
     }
     // The window's device must exist before the product loads, so its
     // renderer is built on it.
+    let render_output = args
+        .product
+        .as_ref()
+        .map_or(csharp_product_runtime::RenderOutput::Stream, |product| {
+            product.render_output
+        });
     #[cfg(feature = "desktop")]
-    let desktop = desktop::Desktop::open_if_selected()?;
-    let diagnostics = ProductHostLog::new(Default::default()).map_err(|error| error.to_string())?;
+    let desktop = desktop::Desktop::open_if_selected(
+        render_output,
+        args.cef_dir.clone(),
+        &args.cef_switches,
+    )?;
+    let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
     let (library, runtimeconfig) = args.selected_artifacts()?;
@@ -115,9 +126,7 @@ fn main() -> Result<(), String> {
     // Exercise and probe runs assert Engine behaviour and exit; they draw
     // nothing, so they need no GPU.
     if !args.exercise && args.performance_probe.is_none() {
-        runtime_config = runtime_config.with_render_output(
-            csharp_product_runtime::render_output_mode().map_err(|error| error.to_string())?,
-        );
+        runtime_config = runtime_config.with_render_output(render_output);
     }
     #[cfg(feature = "desktop")]
     if let Some(desktop) = &desktop {
@@ -220,6 +229,7 @@ fn main() -> Result<(), String> {
                 &durations,
                 args.loader,
                 args.product.as_ref(),
+                args.performance_configuration.as_deref(),
             )
         );
         let output_stream = open_fresh_output_stream(host.address())?;
@@ -237,6 +247,7 @@ fn main() -> Result<(), String> {
                 &host_durations,
                 args.loader,
                 args.product.as_ref(),
+                args.performance_configuration.as_deref(),
             )
         );
         drop(output_stream);
@@ -535,6 +546,7 @@ fn performance_summary(
     durations: &[u128],
     loader: ProductLoader,
     product: Option<&ProductBundle>,
+    configuration: Option<&str>,
 ) -> serde_json::Value {
     let mut sorted = durations.to_vec();
     sorted.sort_unstable();
@@ -543,16 +555,15 @@ fn performance_summary(
         sorted[index] as f64 / 1_000_000.0
     };
     let mean = sorted.iter().copied().sum::<u128>() as f64 / sorted.len() as f64 / 1_000_000.0;
-    let configuration = env::var("RUSTY_PERF_PRODUCT_CONFIGURATION")
-        .ok()
+    let configuration = configuration
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "unspecified".to_owned());
+        .unwrap_or("unspecified");
     let workload = product.map_or_else(
         || {
             serde_json::json!({
                 "id": "legacy-source-launch",
                 "version": 1,
-                "configuration": configuration.as_str(),
+                "configuration": configuration,
                 "launch": "legacy",
                 "loader": loader.identifier(),
             })
@@ -561,7 +572,7 @@ fn performance_summary(
             serde_json::json!({
                 "id": product.id.as_str(),
                 "version": 1,
-                "configuration": configuration.as_str(),
+                "configuration": configuration,
                 "launch": "canonical-product-v1",
                 "lifecycle": product.lifecycle_mode,
                 "loader": loader.identifier(),
@@ -605,6 +616,17 @@ struct Arguments {
     supervised: bool,
     debugger: bool,
     headless: bool,
+    /// The Chromium executable `--headless` opens; else one on `PATH`.
+    chromium: Option<PathBuf>,
+    /// Chromium's runtime files for the desktop window; else `lib/cef` in the
+    /// runtime pack.
+    cef_dir: Option<PathBuf>,
+    /// Extra Chromium switches for the window's UI page, `name[=value]`.
+    cef_switches: Vec<String>,
+    /// Where the host writes its NDJSON diagnostics.
+    diagnostics_log: Option<PathBuf>,
+    /// The build configuration a `--performance-probe` result names.
+    performance_configuration: Option<String>,
     runtime_instance_id: Option<RuntimeInstanceId>,
     /// Set on the runtime process a supervisor starts: serve this inherited
     /// listener instead of binding one.
@@ -712,6 +734,36 @@ impl Arguments {
                     && self.performance_probe.is_none()))
     }
 
+    /// The launch options a supervisor hands the runtime process it starts.
+    #[cfg(unix)]
+    fn runtime_forwarded_arguments(&self) -> Result<Vec<String>, String> {
+        let path = |path: &Path| {
+            path.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("`{}` is not UTF-8", path.display()))
+        };
+        let mut arguments = Vec::new();
+        if let Some(directory) = &self.cef_dir {
+            arguments.extend(["--cef-dir".to_owned(), path(directory)?]);
+        }
+        for switch in &self.cef_switches {
+            arguments.extend(["--cef-switch".to_owned(), switch.clone()]);
+        }
+        if let Some(file) = &self.diagnostics_log {
+            arguments.extend(["--diagnostics-log".to_owned(), path(file)?]);
+        }
+        Ok(arguments)
+    }
+
+    /// Where diagnostics are written: `--diagnostics-log`, else the default.
+    fn log_config(&self) -> ProductHostLogConfig {
+        let config = ProductHostLogConfig::default();
+        match &self.diagnostics_log {
+            Some(path) => config.with_path(path),
+            None => config,
+        }
+    }
+
     fn runtime_config(&self) -> CsharpProductRuntimeConfig {
         let (direct_intents, physical_mappings) = self.input_configuration();
         let lifecycle = match &self.product {
@@ -732,7 +784,8 @@ impl Arguments {
             let (world_lights, viewmodel_lights) = product.default_lights();
             config = config
                 .with_input_cursor_mode(product.input_cursor_mode.native())
-                .with_default_lights(world_lights, viewmodel_lights);
+                .with_default_lights(world_lights, viewmodel_lights)
+                .with_audio_device_required(product.audio_device_required);
         }
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
@@ -835,6 +888,11 @@ impl Arguments {
         let mut supervised = false;
         let mut debugger = false;
         let mut headless = false;
+        let mut chromium = None;
+        let mut cef_dir = None;
+        let mut cef_switches = Vec::new();
+        let mut diagnostics_log = None;
+        let mut performance_configuration = None;
         let mut runtime_instance_id = None;
         let mut serve_listener_fd = None;
         let mut values = values.into_iter();
@@ -916,6 +974,31 @@ impl Arguments {
                 "--supervised" => supervised = true,
                 "--debugger" => debugger = true,
                 "--headless" => headless = true,
+                "--chromium" => {
+                    chromium = Some(PathBuf::from(
+                        values.next().ok_or("--chromium requires an executable")?,
+                    ))
+                }
+                "--cef-dir" => {
+                    cef_dir = Some(PathBuf::from(
+                        values.next().ok_or("--cef-dir requires a directory")?,
+                    ))
+                }
+                "--cef-switch" => {
+                    cef_switches.push(values.next().ok_or("--cef-switch requires name[=value]")?)
+                }
+                "--diagnostics-log" => {
+                    diagnostics_log = Some(PathBuf::from(
+                        values.next().ok_or("--diagnostics-log requires a file")?,
+                    ))
+                }
+                "--performance-configuration" => {
+                    performance_configuration = Some(
+                        values
+                            .next()
+                            .ok_or("--performance-configuration requires a label")?,
+                    )
+                }
                 "--serve-listener-fd" => {
                     serve_listener_fd = Some(
                         values
@@ -938,7 +1021,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; set `RUSTY_CHROMIUM_PATH` to select its executable. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -998,6 +1081,11 @@ impl Arguments {
             supervised,
             debugger,
             headless,
+            chromium,
+            cef_dir,
+            cef_switches,
+            diagnostics_log,
+            performance_configuration,
             runtime_instance_id,
             serve_listener_fd,
         };
