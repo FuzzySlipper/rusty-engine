@@ -141,7 +141,7 @@ pub(crate) enum MeshRef {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Builtin {
+pub enum Builtin {
     Cube,
     Sphere,
     Quad,

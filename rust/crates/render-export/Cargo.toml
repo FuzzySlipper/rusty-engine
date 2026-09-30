@@ -1,0 +1,23 @@
+[package]
+name = "render-export"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+render-model.workspace = true
+render-host-contracts.workspace = true
+# Decoding, built-in geometry and slot colours, so the export matches what is
+# drawn. No device is created.
+render-wgpu.workspace = true
+# The glTF JSON document and its little-endian binary chunk.
+serde_json.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+render-presentation.workspace = true
+# Exports are reopened as the runtime admits GLBs, and read back by gltf.
+asset-import.workspace = true
+gltf.workspace = true

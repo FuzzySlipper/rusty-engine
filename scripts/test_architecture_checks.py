@@ -206,6 +206,19 @@ class DependencyBoundaryTests(unittest.TestCase):
             ],
         )
 
+    def test_render_wgpu_may_not_write_json(self) -> None:
+        metadata = metadata_fixture(["render-wgpu", "render-export"], [])
+        packages = {package["name"]: package for package in metadata["packages"]}
+        packages["render-export"]["dependencies"] = [{"name": "serde_json", "kind": None}]
+        packages["render-wgpu"]["dependencies"] = [{"name": "serde_json", "kind": "dev"}]
+        self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
+
+        packages["render-wgpu"]["dependencies"] = [{"name": "serde_json", "kind": None}]
+        self.assertEqual(
+            dependency_boundary_check.find_violations(metadata),
+            ["render-wgpu may not depend on serde_json"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

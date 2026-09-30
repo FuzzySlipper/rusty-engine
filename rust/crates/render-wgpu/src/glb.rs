@@ -7,9 +7,10 @@ use glam::{Mat4, Quat, Vec3};
 use gltf::animation::util::ReadOutputs;
 use gltf::animation::{Interpolation, Property};
 
+use crate::convert;
 use crate::resources::{decode_png, DecodedImage};
 
-pub(crate) struct GlbNode {
+pub struct GlbNode {
     pub name: Option<String>,
     pub parent: Option<usize>,
     pub rest: Trs,
@@ -18,19 +19,32 @@ pub(crate) struct GlbNode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Trs {
-    pub translation: Vec3,
-    pub rotation: Quat,
-    pub scale: Vec3,
+pub struct Trs {
+    pub(crate) translation: Vec3,
+    pub(crate) rotation: Quat,
+    pub(crate) scale: Vec3,
 }
 
 impl Trs {
-    pub fn matrix(&self) -> Mat4 {
+    pub(crate) fn matrix(&self) -> Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+    }
+
+    pub fn translation(&self) -> [f32; 3] {
+        convert::array(self.translation)
+    }
+
+    /// `[x, y, z, w]`.
+    pub fn rotation(&self) -> [f32; 4] {
+        convert::quat_array(self.rotation)
+    }
+
+    pub fn scale(&self) -> [f32; 3] {
+        convert::array(self.scale)
     }
 }
 
-pub(crate) struct GlbPrimitive {
+pub struct GlbPrimitive {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Option<Vec<[f32; 2]>>,
@@ -42,26 +56,37 @@ pub(crate) struct GlbPrimitive {
     pub material: Option<usize>,
 }
 
-pub(crate) struct GlbSkin {
+pub struct GlbSkin {
     pub joints: Vec<usize>,
-    pub inverse_binds: Vec<Mat4>,
+    pub(crate) inverse_binds: Vec<Mat4>,
+}
+
+impl GlbSkin {
+    /// Column-major, one per joint.
+    pub fn inverse_binds(&self) -> Vec<[[f32; 4]; 4]> {
+        self.inverse_binds
+            .iter()
+            .copied()
+            .map(convert::matrix_columns)
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Path {
+pub enum Path {
     Translation,
     Rotation,
     Scale,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Interp {
+pub enum Interp {
     Step,
     Linear,
     CubicSpline,
 }
 
-pub(crate) struct Channel {
+pub struct Channel {
     pub node: usize,
     pub path: Path,
     pub interpolation: Interp,
@@ -71,13 +96,13 @@ pub(crate) struct Channel {
     pub values: Vec<f32>,
 }
 
-pub(crate) struct GlbClip {
+pub struct GlbClip {
     pub name: Option<String>,
     pub duration: f32,
     pub channels: Vec<Channel>,
 }
 
-pub(crate) struct GlbMaterial {
+pub struct GlbMaterial {
     pub base_color: [f32; 4],
     pub base_color_texture: Option<usize>,
     pub metallic: f32,
@@ -89,19 +114,19 @@ pub(crate) struct GlbMaterial {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum GlbAlpha {
+pub enum GlbAlpha {
     Opaque,
     Mask(f32),
     Blend,
 }
 
-pub(crate) struct GlbTexture {
+pub struct GlbTexture {
     pub image: Option<DecodedImage>,
     pub nearest: bool,
     pub repeat: bool,
 }
 
-pub(crate) struct GlbModel {
+pub struct GlbModel {
     pub nodes: Vec<GlbNode>,
     /// Node indices, parents before children.
     pub order: Vec<usize>,
@@ -389,7 +414,7 @@ impl Channel {
             .collect()
     }
 
-    pub fn sample_vec3(&self, time: f32) -> Vec3 {
+    pub(crate) fn sample_vec3(&self, time: f32) -> Vec3 {
         let (left, right, t, span) = self.segment(time);
         let a = Vec3::from_slice(self.key(left));
         if left == right {
@@ -402,7 +427,7 @@ impl Channel {
         }
     }
 
-    pub fn sample_quat(&self, time: f32) -> Quat {
+    pub(crate) fn sample_quat(&self, time: f32) -> Quat {
         let (left, right, t, span) = self.segment(time);
         let a = Quat::from_slice(self.key(left)).normalize();
         if left == right {

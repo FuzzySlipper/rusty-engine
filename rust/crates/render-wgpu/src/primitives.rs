@@ -10,7 +10,7 @@ const POINT_SIZE: f32 = 0.1;
 const SPHERE_RADIUS: f32 = 0.5;
 const SPHERE_SEGMENTS: u32 = 8;
 
-pub(crate) struct Geometry {
+pub struct Geometry {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
 }
@@ -26,7 +26,7 @@ impl Geometry {
     }
 }
 
-pub(crate) fn builtin(kind: Builtin) -> Geometry {
+pub fn builtin(kind: Builtin) -> Geometry {
     match kind {
         Builtin::Cube => cube(1.0),
         Builtin::Point => cube(POINT_SIZE),
@@ -113,7 +113,7 @@ fn quad() -> Geometry {
 }
 
 /// A two-vertex line segment for a `Line { a, b }` node.
-pub(crate) fn line(a: [f32; 3], b: [f32; 3]) -> Geometry {
+pub fn line(a: [f32; 3], b: [f32; 3]) -> Geometry {
     let mut geometry = Geometry {
         vertices: Vec::new(),
         indices: Vec::new(),

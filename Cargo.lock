@@ -1102,6 +1102,7 @@ dependencies = [
  "netcorehost",
  "product-dev-host",
  "render-audio",
+ "render-export",
  "render-host-contracts",
  "render-model",
  "render-presentation",
@@ -4317,6 +4318,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-export"
+version = "0.1.0"
+dependencies = [
+ "asset-import",
+ "bytemuck",
+ "gltf",
+ "render-host-contracts",
+ "render-model",
+ "render-presentation",
+ "render-wgpu",
+ "serde_json",
+]
+
+[[package]]
 name = "render-host-contracts"
 version = "0.1.0"
 dependencies = [
@@ -4399,7 +4414,6 @@ dependencies = [
  "render-projection",
  "render-video",
  "serde",
- "serde_json",
  "welding",
  "wgpu",
  "winit",

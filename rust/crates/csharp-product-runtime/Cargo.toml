@@ -24,6 +24,7 @@ render-audio.workspace = true
 render-stream.workspace = true
 # RenderOutput jobs: image capture and GLB export (#8826).
 render-wgpu.workspace = true
+render-export.workspace = true
 render-host-contracts.workspace = true
 render-presentation.workspace = true
 runtime-input.workspace = true

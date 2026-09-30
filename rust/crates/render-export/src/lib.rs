@@ -15,11 +15,14 @@
 //! Some nodes fail the job, naming the node, where glTF has no counterpart:
 //! sprites, voxel-surface materials and voxel objects, and ambient lights.
 //! Hidden nodes are exported too.
-//! No GPU is involved.
+//! No GPU is involved: the geometry, decoding and slot colours come from
+//! render-wgpu's CPU-side vocabulary (`render_wgpu::cpu`), so the export
+//! matches what is drawn.
+
+#![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, HashMap};
 
-use glam::{Quat, Vec3};
 use render_host_contracts::{RenderOutputJob, RenderOutputOperation};
 use render_model::{
     AnimatedMeshAsset, Geometry, LightDescriptor, Material, MaterialAlphaModeDescriptor,
@@ -29,12 +32,11 @@ use render_model::{
 };
 use serde_json::{json, Value};
 
-use crate::animated::{decode_animated_asset, joint_nodes};
-use crate::glb::{GlbAlpha, GlbClip, GlbModel, GlbTexture, Interp, Path};
-use crate::pipelines::VERTEX_FLOATS;
-use crate::primitives;
-use crate::resources::{self, encode_png, ResourceSource};
-use crate::tables::Builtin;
+use render_wgpu::cpu::{
+    self, decode_animated_asset, joint_nodes, rotation_facing, slot_color, Builtin, GlbAlpha,
+    GlbClip, GlbModel, GlbPrimitive, GlbTexture, Interp, Path, VERTEX_FLOATS,
+};
+use render_wgpu::{encode_png, ResourceSource};
 
 /// The material a static mesh or payload slot without one draws with.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
@@ -629,7 +631,7 @@ impl<'a> Writer<'a> {
         let streams = match geometry {
             Geometry::Group => return Ok(None),
             Geometry::Line { a, b } => {
-                let line = primitives::line(a, b);
+                let line = cpu::line(a, b);
                 let mut streams = self.interleaved(&line.vertices, &line.indices);
                 streams.lines = true;
                 streams
@@ -714,7 +716,7 @@ impl<'a> Writer<'a> {
         if let Some(streams) = self.builtin_geometry.get(&kind) {
             return streams.clone();
         }
-        let geometry = primitives::builtin(kind);
+        let geometry = cpu::builtin(kind);
         let streams = self.interleaved(&geometry.vertices, &geometry.indices);
         self.builtin_geometry.insert(kind, streams.clone());
         streams
@@ -751,7 +753,7 @@ impl<'a> Writer<'a> {
         &mut self,
         payload: &MeshPayloadDescriptor,
     ) -> Result<(Streams, Groups), String> {
-        let streams = resources::mesh_streams(payload, self.resources)
+        let streams = cpu::mesh_streams(payload, self.resources)
             .map_err(|detail| format!("exportGlb: mesh payload: {detail}"))?;
         let position = self
             .document
@@ -816,7 +818,7 @@ impl<'a> Writer<'a> {
         tint: [f32; 4],
     ) -> Result<usize, String> {
         let Some(descriptor) = id.and_then(|id| self.scene.materials.get(id)) else {
-            let color = crate::apply::slot_color(slot);
+            let color = slot_color(slot);
             return Ok(self.document.material(json!({
                 "pbrMetallicRoughness": {
                     "baseColorFactor": mul(color, tint),
@@ -957,9 +959,9 @@ impl<'a> Writer<'a> {
             .map(|(glb_index, node)| {
                 self.document.node(json!({
                     "name": node.name.clone().unwrap_or_else(|| format!("{asset} node {glb_index}")),
-                    "translation": node.rest.translation.to_array(),
-                    "rotation": node.rest.rotation.to_array(),
-                    "scale": node.rest.scale.to_array(),
+                    "translation": node.rest.translation(),
+                    "rotation": node.rest.rotation(),
+                    "scale": node.rest.scale(),
                 }))
             })
             .collect();
@@ -1034,7 +1036,7 @@ impl<'a> Writer<'a> {
 
     fn skinned_primitive(
         &mut self,
-        primitive: &crate::glb::GlbPrimitive,
+        primitive: &GlbPrimitive,
         material: Option<usize>,
         skinned: bool,
     ) -> Value {
@@ -1077,9 +1079,10 @@ impl<'a> Writer<'a> {
     fn skin(&mut self, model: &GlbModel, skin: usize, nodes: &[usize]) -> usize {
         let skin = &model.skins[skin];
         let matrices: Vec<f32> = skin
-            .inverse_binds
-            .iter()
-            .flat_map(|matrix| matrix.to_cols_array())
+            .inverse_binds()
+            .into_iter()
+            .flatten()
+            .flatten()
             .collect();
         let inverse = self.document.floats(&matrices, 16, None, false);
         self.document.skins.push(json!({
@@ -1245,16 +1248,11 @@ impl<'a> Writer<'a> {
             value["spot"] = json!({ "innerConeAngle": inner, "outerConeAngle": outer });
         }
         self.document.lights.push(value);
-        let rotation = direction.map_or(Quat::IDENTITY, |direction| {
-            Quat::from_rotation_arc(
-                Vec3::NEG_Z,
-                crate::convert::vec3(direction).normalize_or(Vec3::NEG_Z),
-            )
-        });
+        let rotation = direction.map_or([0.0, 0.0, 0.0, 1.0], rotation_facing);
         let light_node = self.document.node(json!({
             "name": format!("light {}", handle.raw()),
             "translation": position,
-            "rotation": rotation.to_array(),
+            "rotation": rotation,
             "extensions": { "KHR_lights_punctual": { "light": self.document.lights.len() - 1 } },
         }));
         self.document.children[index].push(light_node);

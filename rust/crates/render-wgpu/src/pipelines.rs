@@ -6,7 +6,7 @@ use crate::target::{ColorTarget, DEPTH_FORMAT};
 
 /// Interleaved position (3), normal (3), uv (2), linear RGBA colour (4;
 /// white unless a static mesh supplies vertex colours).
-pub(crate) const VERTEX_FLOATS: usize = 12;
+pub const VERTEX_FLOATS: usize = 12;
 
 pub(crate) struct Layouts {
     pub frame: wgpu::BindGroupLayout,

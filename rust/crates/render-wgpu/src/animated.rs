@@ -228,7 +228,7 @@ pub(crate) fn resource_identity(kind: &str, content_hash: Option<&str>) -> Optio
 /// Decode an animated asset's GLB and resolve its clips by descriptor id:
 /// its own clips by name, then clip packs, whose channels bind to the rig by
 /// node name. Rendering and GLB export read the asset through this.
-pub(crate) fn decode_animated_asset(
+pub fn decode_animated_asset(
     asset: &AnimatedMeshAsset,
     resources: &dyn ResourceSource,
 ) -> Result<(GlbModel, HashMap<String, GlbClip>), String> {
@@ -1549,7 +1549,7 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
 /// The skin joints retained children attach to, by name: a name shared by
 /// two different joints names neither. Nodes that are not skin joints never
 /// take a joint's name. Rendering and GLB export attach by this rule.
-pub(crate) fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
+pub fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
     let mut joint_counts: HashMap<String, Vec<usize>> = HashMap::new();
     for skin in &model.skins {
         for joint in &skin.joints {

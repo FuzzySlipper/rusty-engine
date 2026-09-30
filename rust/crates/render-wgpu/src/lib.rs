@@ -28,7 +28,6 @@ mod compose;
 mod composition;
 mod convert;
 mod effects;
-mod export;
 mod frame;
 mod ghost;
 mod glb;
@@ -49,11 +48,29 @@ pub mod web;
 
 use std::collections::HashMap;
 
+/// The CPU-side realization vocabulary, for readers that need exactly the
+/// geometry and materials the renderer draws without a device
+/// (`render-export`): decoded animated GLBs, mesh streams, built-in
+/// primitives and slot colours. Values cross as plain arrays; glam stays
+/// private to this crate.
+pub mod cpu {
+    pub use crate::animated::{decode_animated_asset, joint_nodes};
+    pub use crate::apply::slot_color;
+    pub use crate::convert::rotation_facing;
+    pub use crate::glb::{
+        Channel, GlbAlpha, GlbClip, GlbMaterial, GlbModel, GlbNode, GlbPrimitive, GlbSkin,
+        GlbTexture, Interp, Path, Trs,
+    };
+    pub use crate::pipelines::VERTEX_FLOATS;
+    pub use crate::primitives::{builtin, line, Geometry};
+    pub use crate::resources::{mesh_streams, DecodedImage, MeshStreams};
+    pub use crate::tables::Builtin;
+}
+
 pub use animated::AnimationFact;
 pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
-pub use export::export_glb;
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, Gpu, GpuError};

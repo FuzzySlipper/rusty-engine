@@ -2,15 +2,19 @@
 //! glTF, read back by the `gltf` crate and reopened through `asset-import` as
 //! `Animation.OpenAnimatedMesh` admits it.
 
+// render-wgpu's scene harness: the reopened export is drawn beside the
+// original.
+#[path = "../../render-wgpu/tests/support/mod.rs"]
 mod support;
 
 use std::path::PathBuf;
 
 use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
+use render_export::export_glb;
 use render_host_contracts::{RenderOutputJob, RenderOutputOperation};
 use render_model::*;
 use render_presentation::PresentationWorld;
-use render_wgpu::{export_glb, RendererOptions};
+use render_wgpu::RendererOptions;
 use support::*;
 
 const BODY: u64 = 1;

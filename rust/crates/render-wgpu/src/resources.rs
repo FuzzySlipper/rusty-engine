@@ -23,7 +23,7 @@ impl ResourceSource for NoResources {
     }
 }
 
-pub(crate) struct DecodedImage {
+pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
@@ -76,7 +76,7 @@ fn expand(pixels: &[u8], stride: usize, to_rgba: impl Fn(&[u8]) -> [u8; 4]) -> V
 
 /// Vertex streams ready for upload. Colours (RGBA) are drawn only for static
 /// meshes; the other families clear them before upload.
-pub(crate) struct MeshStreams {
+pub struct MeshStreams {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub uvs: Option<Vec<f32>>,
@@ -84,7 +84,7 @@ pub(crate) struct MeshStreams {
     pub indices: Vec<u32>,
 }
 
-pub(crate) fn mesh_streams(
+pub fn mesh_streams(
     payload: &MeshPayloadDescriptor,
     resources: &dyn ResourceSource,
 ) -> Result<MeshStreams, String> {

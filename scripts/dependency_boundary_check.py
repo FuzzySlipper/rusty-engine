@@ -71,6 +71,13 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     ),
 }
 
+# External crates a workspace crate may not depend on, because the work that
+# needs them has its own owner.
+FORBIDDEN_EXTERNAL_DEPENDENCIES = {
+    # Writing glTF documents belongs to render-export, not GPU realization.
+    "render-wgpu": frozenset({"serde_json"}),
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -224,6 +231,10 @@ def add_external_owner_violations(metadata: dict[str, Any], violations: set[str]
         for dependency in package.get("dependencies", []):
             if dependency.get("kind") == "dev":
                 continue
+            if dependency["name"] in FORBIDDEN_EXTERNAL_DEPENDENCIES.get(
+                package["name"], frozenset()
+            ):
+                violations.add(f"{package['name']} may not depend on {dependency['name']}")
             owners = EXTERNAL_DEPENDENCY_OWNERS.get(dependency["name"])
             if owners is not None and package["name"] not in owners:
                 violations.add(

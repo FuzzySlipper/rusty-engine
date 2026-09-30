@@ -1,5 +1,5 @@
 //! RenderOutput jobs run in the runtime (#8826): `CaptureImage` through
-//! render-wgpu's `capture_image`, `ExportSceneGlb` through `export_glb`. No
+//! render-wgpu's `capture_image`, `ExportSceneGlb` through render-export's `export_glb`. No
 //! browser is involved, so unattended batches need no Chromium.
 //!
 //! A worker thread runs jobs in settle order, away from the product call path.
@@ -12,8 +12,9 @@ use std::collections::HashMap;
 use std::sync::mpsc::{self, Sender};
 
 use csharp_engine_services::{CsharpRenderResource, RenderOutputWork};
+use render_export::export_glb;
 use render_host_contracts::RenderOutputOperation;
-use render_wgpu::{export_glb, Gpu, Renderer, RendererOptions, ResourceSource};
+use render_wgpu::{Gpu, Renderer, RendererOptions, ResourceSource};
 
 pub(crate) struct OutputExecutor {
     jobs: Sender<RenderOutputWork>,
