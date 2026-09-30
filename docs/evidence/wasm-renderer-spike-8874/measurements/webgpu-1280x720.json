@@ -1,0 +1,39 @@
+{
+  "state": "done",
+  "webgpu": true,
+  "load": {
+    "parseMs": 119.7,
+    "applyMs": 67.1,
+    "skippedOps": 0,
+    "tables": "TableCounts { textures: 25, materials: 9, static_meshes: 125, nodes: 155, parts: 125, lights: 0, atlases: 15, voxel_objects: 0, animated_meshes: 0, animated_instances: 0, shadow_layers: 0 }",
+    "adapter": "AdapterSummary { name: \"\", backend: \"BrowserWebGpu\", device_type: \"Other\", driver: \"\" }",
+    "wasmInitMs": 16.900000005960464,
+    "deviceMs": 21.5,
+    "fetchMs": 138.90000000596046,
+    "loadCallMs": 198.5,
+    "worldFrameBytes": 28386338,
+    "resourceBytes": 2776836
+  },
+  "firstFrameMs": 381,
+  "frames": 600,
+  "cpuMs": {
+    "median": 0.20000001788139343,
+    "p90": 0.4000000059604645,
+    "max": 5
+  },
+  "rafMs": {
+    "median": 16.699999999999818,
+    "p90": 16.700000000000728,
+    "max": 183.4
+  },
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+  "gpuAdapter": {
+    "vendor": "amd",
+    "architecture": "rdna-4",
+    "device": "",
+    "description": ""
+  },
+  "preferredCanvasFormat": "rgba8unorm",
+  "webgl2Renderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 9070 XT (RADV GFX1201) (0x00007550)), radv)",
+  "console": []
+}

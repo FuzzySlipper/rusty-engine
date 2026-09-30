@@ -1,0 +1,5 @@
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+adapter: AdapterSummary { name: "AMD Radeon RX 9070 XT (RADV GFX1201)", backend: "Vulkan", device_type: "DiscreteGpu", driver: "radv" }
+load: LoadReport { parse_ms: 124.38430199999999, apply_ms: 33.45147300000002, skipped_ops: 0, tables: "TableCounts { textures: 25, materials: 9, static_meshes: 125, nodes: 155, parts: 125, lights: 0, atlases: 15, voxel_objects: 0, animated_meshes: 0, animated_instances: 0, shadow_layers: 0 }" }
+wrote target/wasm-spike/out/native-1280x720.png
+600 frames: cpu median 0.107 ms, p90 0.193 ms; wall 0.154 ms per frame incl. GPU

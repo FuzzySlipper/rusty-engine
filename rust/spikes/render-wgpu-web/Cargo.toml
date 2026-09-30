@@ -1,0 +1,35 @@
+# #8874 spike: render-wgpu in the page as WebAssembly on WebGPU.
+#
+# Outside the Engine workspace on purpose (its own `[workspace]`), so the
+# workspace metadata and `scripts/dependency_boundary_check.py` do not see it.
+# It depends on render-wgpu and never on wgpu.
+[package]
+name = "render-wgpu-web"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+render-wgpu = { path = "../../crates/render-wgpu" }
+render-model = { path = "../../crates/render-model" }
+render-presentation = { path = "../../crates/render-presentation" }
+render-host-contracts = { path = "../../crates/render-host-contracts" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.127"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "console"] }
+console_error_panic_hook = "0.1"
+
+[profile.release]
+# Bundle size is one of the spike's measurements.
+opt-level = 3
+lto = true
+codegen-units = 1

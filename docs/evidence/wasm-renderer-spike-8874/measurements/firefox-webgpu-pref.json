@@ -1,0 +1,34 @@
+{
+  "state": "done",
+  "webgpu": true,
+  "load": {
+    "parseMs": 112,
+    "applyMs": 56,
+    "skippedOps": 0,
+    "tables": "TableCounts { textures: 25, materials: 9, static_meshes: 125, nodes: 155, parts: 125, lights: 0, atlases: 15, voxel_objects: 0, animated_meshes: 0, animated_instances: 0, shadow_layers: 0 }",
+    "adapter": "AdapterSummary { name: \"\", backend: \"BrowserWebGpu\", device_type: \"Other\", driver: \"\" }",
+    "wasmInitMs": 76,
+    "deviceMs": 248,
+    "fetchMs": 150,
+    "loadCallMs": 178,
+    "worldFrameBytes": 28386338,
+    "resourceBytes": 2776836
+  },
+  "firstFrameMs": 654,
+  "frames": 600,
+  "cpuMs": {
+    "median": 0,
+    "p90": 1,
+    "max": 2
+  },
+  "rafMs": {
+    "median": 17.0600000000004,
+    "p90": 17.100000000000364,
+    "max": 66.34000000000003
+  },
+  "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
+  "gpuAdapter": {
+    "vendor": "",
+    "architecture": ""
+  }
+}

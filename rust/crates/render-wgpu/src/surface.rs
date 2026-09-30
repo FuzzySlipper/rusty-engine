@@ -9,6 +9,9 @@ use crate::{target, Gpu, GpuError};
 pub struct WindowSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    /// The format the scene is drawn in: the surface format when it is sRGB,
+    /// else its sRGB view (a WebGPU canvas offers no sRGB format, #8874).
+    scene_format: wgpu::TextureFormat,
     /// The window is a primary destination: passes draw multisampled and
     /// resolve into the swapchain image.
     multisampled: wgpu::TextureView,
@@ -71,17 +74,26 @@ impl WindowSurface {
                 .copied()
                 .unwrap_or(wgpu::CompositeAlphaMode::Auto),
             // Overlays blend in gamma space through the non-sRGB view, as a
-            // browser composites its page.
+            // browser composites its page. A non-sRGB surface draws its scene
+            // through the sRGB view instead.
             view_formats: if format.is_srgb() {
                 vec![format.remove_srgb_suffix()]
+            } else if format.add_srgb_suffix() != format {
+                vec![format.add_srgb_suffix()]
             } else {
                 Vec::new()
             },
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&gpu.device, &config);
+        let scene_format = format.add_srgb_suffix();
         Ok(Self {
-            multisampled: target::multisampled_color(gpu, config.width, config.height, format),
+            multisampled: target::multisampled_color(
+                gpu,
+                config.width,
+                config.height,
+                scene_format,
+            ),
             depth_view: target::multisampled_depth(
                 gpu,
                 config.width,
@@ -90,6 +102,7 @@ impl WindowSurface {
             ),
             surface,
             config,
+            scene_format,
         })
     }
 
@@ -109,7 +122,7 @@ impl WindowSurface {
     fn reconfigure(&mut self, gpu: &Gpu) {
         self.surface.configure(&gpu.device, &self.config);
         let (width, height) = (self.config.width, self.config.height);
-        self.multisampled = target::multisampled_color(gpu, width, height, self.config.format);
+        self.multisampled = target::multisampled_color(gpu, width, height, self.scene_format);
         self.depth_view = target::multisampled_depth(gpu, width, height, target::PRIMARY_SAMPLES);
     }
 
@@ -140,7 +153,10 @@ impl WindowSurface {
             }
             _ => return Err(PresentSkip::Unavailable),
         };
-        let view = frame.texture.create_view(&Default::default());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.scene_format),
+            ..Default::default()
+        });
         let (color, resolve) = if target::PRIMARY_SAMPLES > 1 {
             (&self.multisampled, Some(&view))
         } else {
@@ -156,7 +172,7 @@ impl WindowSurface {
                 color,
                 resolve,
                 depth: &self.depth_view,
-                format: self.config.format,
+                format: self.scene_format,
                 samples: target::PRIMARY_SAMPLES,
                 width: self.config.width,
                 height: self.config.height,

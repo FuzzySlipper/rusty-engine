@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>render-wgpu in the page (#8874 spike)</title>
+<style>
+  html, body { margin: 0; background: #000; color: #ccc; font: 12px monospace; }
+  canvas { display: block; }
+  #status { position: fixed; left: 8px; bottom: 8px; white-space: pre; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="engine" width="1280" height="720"></canvas>
+<div id="status">loading</div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

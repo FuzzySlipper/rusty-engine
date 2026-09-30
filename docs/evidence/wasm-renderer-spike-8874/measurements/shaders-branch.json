@@ -1,0 +1,34 @@
+{
+  "world": {
+    "ok": true,
+    "messages": []
+  },
+  "shadow": {
+    "ok": true,
+    "messages": []
+  },
+  "compose": {
+    "ok": true,
+    "messages": []
+  },
+  "ghost": {
+    "ok": true,
+    "messages": []
+  },
+  "effects": {
+    "ok": true,
+    "messages": []
+  },
+  "labels (single-sample depth)": {
+    "ok": true,
+    "messages": []
+  },
+  "labels (multisampled depth)": {
+    "ok": true,
+    "messages": []
+  },
+  "video": {
+    "ok": true,
+    "messages": []
+  }
+}

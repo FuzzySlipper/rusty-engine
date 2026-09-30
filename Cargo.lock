@@ -4401,6 +4401,7 @@ dependencies = [
  "render-video",
  "serde",
  "serde_json",
+ "web-time",
  "welding",
  "wgpu",
  "winit",

@@ -1,0 +1,21 @@
+Throwaway experiment, not committed: render-wgpu's wgpu dependency with
+features = ["webgl"], and Gpu::for_canvas asking for Backends::GL.
+Headless Chromium 149 (crew-services GPU flags), same page and capture.
+
+1. As written (WebGPU limits requested):
+   wgpu device request failed: Limit 'max_compute_workgroups_per_dimension'
+   value 65535 is better than allowed 0
+
+2. With required_limits: adapter.limits():
+   panicked at wgpu-30.0.1/src/backend/wgpu_core.rs:3981:18:
+   This is not an invalid use of WebGPU: the underlying API or device does not
+   support enough features to be a fully compliant implementation. ...
+   Caused by:
+     In Surface::configure
+       Downlevel flags DownlevelFlags(SURFACE_VIEW_FORMATS) are required but
+       not supported on the device.
+
+Not reached: world.wgsl (4), shadow.wgsl (3) and ghost.wgsl (1) bind
+var<storage> buffers; WebGL2 has none (max_storage_buffers_per_shader_stage 0).
+
+wasm size with the webgl feature: 5,714,478 bytes (WebGPU only: 2,628,275).

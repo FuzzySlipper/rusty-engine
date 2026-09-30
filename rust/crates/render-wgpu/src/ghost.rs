@@ -16,7 +16,11 @@
 //! uniforms. Nothing recaptures on its own.
 
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+// `std::time::Instant::now` panics on wasm32-unknown-unknown (#8874 spike).
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 use render_host_contracts::RendererCameraProjection;

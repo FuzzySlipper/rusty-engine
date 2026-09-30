@@ -141,6 +141,49 @@ impl Gpu {
     }
 }
 
+/// The browser build (#8874 spike): WebGPU only offers asynchronous adapter
+/// and device requests, and the page cannot block on them.
+#[cfg(target_arch = "wasm32")]
+impl Gpu {
+    /// A device and a presentation surface for a page canvas.
+    pub async fn for_canvas(
+        canvas: wgpu::web_sys::HtmlCanvasElement,
+    ) -> Result<(Self, crate::WindowSurface), GpuError> {
+        let (width, height) = (canvas.width(), canvas.height());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|error| GpuError::Surface(error.to_string()))?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| GpuError::NoAdapter(error.to_string()))?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("render-wgpu"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| GpuError::Device(error.to_string()))?;
+        let gpu = Self {
+            instance,
+            adapter,
+            device,
+            queue,
+        };
+        let surface = crate::WindowSurface::new(&gpu, surface, width, height)?;
+        Ok((gpu, surface))
+    }
+}
+
 #[cfg(not(all(feature = "web-overlay", target_os = "linux")))]
 fn request_device(
     adapter: &wgpu::Adapter,

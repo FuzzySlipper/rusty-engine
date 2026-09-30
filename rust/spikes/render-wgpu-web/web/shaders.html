@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>render-wgpu shaders in the browser (#8874 spike)</title>
+</head>
+<body>
+<pre id="out">compiling</pre>
+<script type="module">
+// Compile every render-wgpu WGSL module, as the renderer assembles it, with
+// the browser's own WGSL compiler (Tint in Chromium). naga accepts some code
+// the WebGPU spec rejects, and pipelines built lazily are not reached by the
+// room study. The sources are staged from the checkout by stage.sh.
+const text = async (name) => (await fetch(`./shaders/${name}`)).text();
+const world = await text('world.wgsl');
+const labels = await text('labels.wgsl');
+const modules = {
+  world,
+  shadow: await text('shadow.wgsl'),
+  compose: await text('compose.wgsl'),
+  ghost: await text('ghost.wgsl'),
+  effects: world + (await text('effects.wgsl')),
+  'labels (single-sample depth)': labels.replaceAll('SCENE_DEPTH', 'texture_depth_2d'),
+  'labels (multisampled depth)': labels.replaceAll('SCENE_DEPTH', 'texture_depth_multisampled_2d'),
+  video: await text('video.wgsl'),
+};
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice();
+const results = {};
+for (const [name, code] of Object.entries(modules)) {
+  device.pushErrorScope('validation');
+  const module = device.createShaderModule({ label: name, code });
+  const info = await module.getCompilationInfo();
+  const error = await device.popErrorScope();
+  results[name] = {
+    ok: !error && !info.messages.some((message) => message.type === 'error'),
+    messages: info.messages.map((message) => `${message.type} ${message.lineNum}:${message.linePos} ${message.message}`),
+  };
+}
+window.__shaders = results;
+document.getElementById('out').textContent = JSON.stringify(results, null, 2);
+</script>
+</body>
+</html>

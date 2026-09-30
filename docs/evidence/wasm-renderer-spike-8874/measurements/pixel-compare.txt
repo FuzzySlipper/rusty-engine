@@ -1,0 +1,3 @@
+target/wasm-spike/out/native-1280x720.png vs target/wasm-spike/out/webgpu-1280x720.png: 1280x720, 0 of 921600 pixels differ (0.0000%), max 0, mean 0.00000
+target/wasm-spike/out/native-1920x1080.png vs target/wasm-spike/out/webgpu-1920x1080.png: 1920x1080, 0 of 2073600 pixels differ (0.0000%), max 0, mean 0.00000
+target/wasm-spike/out/native-1280x720.png vs target/wasm-spike/out/firefox-webgpu-pref.png: 1280x720, 870 of 921600 pixels differ (0.0944%), max 1, mean 0.00045

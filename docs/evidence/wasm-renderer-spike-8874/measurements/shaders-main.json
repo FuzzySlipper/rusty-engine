@@ -1,0 +1,38 @@
+{
+  "world": {
+    "ok": true,
+    "messages": []
+  },
+  "shadow": {
+    "ok": true,
+    "messages": []
+  },
+  "compose": {
+    "ok": true,
+    "messages": []
+  },
+  "ghost": {
+    "ok": true,
+    "messages": []
+  },
+  "effects": {
+    "ok": true,
+    "messages": []
+  },
+  "labels (single-sample depth)": {
+    "ok": true,
+    "messages": []
+  },
+  "labels (multisampled depth)": {
+    "ok": true,
+    "messages": []
+  },
+  "video": {
+    "ok": false,
+    "messages": [
+      "error 28:14 'textureSample' must only be called from uniform control flow",
+      "info 24:9 control flow depends on possibly non-uniform value",
+      "info 24:9 builtin 'position' of 'fs_video' may be non-uniform"
+    ]
+  }
+}
