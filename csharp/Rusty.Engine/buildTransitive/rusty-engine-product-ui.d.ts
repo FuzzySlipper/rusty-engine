@@ -319,6 +319,16 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         stream?: ProductDevStreamStatistics;
         /**
+         * The recent frames the desktop window presented.
+         */
+        window?: ProductDevWindowStatistics;
+        /**
+         * When each recent product update that received input finished, and
+         * the step it simulated: the first frame showing that step or a later
+         * one is the first to show the input.
+         */
+        inputSteps: Array<ProductDevTimedStep>;
+        /**
          * Retained operations the renderer skipped, by kind.
          */
         skippedOps: Record<string, number>;
@@ -371,6 +381,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         medianMs: ProductDevStreamMedians;
         medianBytesPerFrame: number;
         bytesPerSecond: number;
+        /**
+         * When each recent frame was published, and the step it showed.
+         */
+        shown: Array<ProductDevTimedStep>;
     };
     /**
      * Bounded host-owned product-lane telemetry returned alongside the existing
@@ -405,6 +419,14 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * are nested within the callback duration, not additional frame time.
          */
         updateAttribution: ProductDevUpdateAttributionSnapshot | null;
+    };
+    /**
+     * A simulation step and when something happened to it, in Unix
+     * milliseconds.
+     */
+    export type ProductDevTimedStep = {
+        atUnixMs: number;
+        step: number;
     };
     /**
      * One complete C# update callback observation. Durations are integer
@@ -457,6 +479,35 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         slowest: ProductDevUpdateAttribution;
         slowestAgeMs: CanonicalU64;
+    };
+    /**
+     * Median milliseconds per frame for each stage of presenting it: waiting
+     * for the swapchain image, waiting for the scene, encoding and submitting
+     * the frame, and presenting it.
+     */
+    export type ProductDevWindowMedians = {
+        acquire: number;
+        lock: number;
+        draw: number;
+        present: number;
+    };
+    /**
+     * What the recent frames the desktop window presented cost, and when they
+     * reached it.
+     */
+    export type ProductDevWindowStatistics = {
+        recentFrames: number;
+        framesPerSecond: number;
+        medianMs: ProductDevWindowMedians;
+        /**
+         * When each recent frame was presented, and the step it showed.
+         */
+        shown: Array<ProductDevTimedStep>;
+        /**
+         * When recent key and mouse button events reached the window, in Unix
+         * milliseconds.
+         */
+        inputsReceivedAtUnixMs: Array<number>;
     };
     export type RuntimeDiagnosticDisposition = "accepted" | "rejected-recoverable" | "degraded" | "resync-required" | "terminal";
     export type RuntimeDiagnosticEvent = {

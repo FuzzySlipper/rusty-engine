@@ -71,7 +71,7 @@ impl SpinningCube {
 }
 
 impl DesktopScene for SpinningCube {
-    fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) {
+    fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) -> u64 {
         let mut renderer = self.renderer.lock().unwrap();
         let (s, c) = (self.started.elapsed().as_secs_f32() * 0.5).sin_cos();
         renderer.apply(
@@ -91,7 +91,12 @@ impl DesktopScene for SpinningCube {
             &NoResources,
         );
         draw(&mut renderer, self.started.elapsed().as_secs_f64());
+        0
     }
+
+    fn presented(&self, _: desktop_shell::PresentedFrame) {}
+
+    fn input_received(&self, _: std::time::SystemTime) {}
 
     fn stopped(&self) -> bool {
         self.closed.load(Ordering::Relaxed)

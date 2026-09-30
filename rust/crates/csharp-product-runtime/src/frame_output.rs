@@ -26,8 +26,9 @@
 //! page can wait until it shows that frame.
 
 use std::borrow::Cow;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 
 use csharp_engine_abi::{
     NativeGhostPlateFallbackReason, NativeGhostPlateLimitationMask, NativeVideoFailureCode,
@@ -38,7 +39,8 @@ use csharp_engine_services::{
 use product_dev_host::{
     ProductDevDrawingMode, ProductDevDrawnFrame, ProductDevFrameStream,
     ProductDevRendererInspection, ProductDevRendererStatistics, ProductDevStreamMedians,
-    ProductDevStreamStatistics,
+    ProductDevStreamStatistics, ProductDevTimedStep, ProductDevWindowMedians,
+    ProductDevWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamFormat, StreamStats};
@@ -59,6 +61,10 @@ const MAX_FACTS_PER_REPORT: usize = 128;
 const INSPECTION_FRAME_WAIT: Duration = Duration::from_secs(2);
 /// How often the renderer statistics C# reads are refreshed.
 const STATISTICS_INTERVAL: Duration = Duration::from_secs(1);
+/// Presented frames the window statistics cover: two seconds at 60 Hz.
+const WINDOW_FRAMES: usize = 120;
+/// Input receipts and input-consuming updates the statistics keep.
+const RECENT_INPUTS: usize = 32;
 
 /// Whether `command` is one of the runtime renderer's inspection commands.
 pub(crate) fn is_inspection_command(command: &str) -> bool {
@@ -94,6 +100,95 @@ pub(crate) struct FrameOutput {
     /// When the renderer statistics C# reads (`Diagnostics.ReadRenderer`)
     /// were last refreshed.
     statistics_reported: Option<Instant>,
+    /// What the desktop window reports, in window output.
+    window: Option<Arc<WindowTiming>>,
+    /// When recent updates that received input finished, and their steps.
+    input_steps: VecDeque<(SystemTime, u64)>,
+}
+
+/// What the desktop window reports about the frames it presents and the
+/// input it receives, for the renderer statistics (`engine.renderer`).
+#[derive(Default)]
+pub struct WindowTiming(Mutex<WindowRecord>);
+
+#[derive(Default)]
+struct WindowRecord {
+    frames: VecDeque<WindowFrame>,
+    inputs: VecDeque<SystemTime>,
+}
+
+/// One frame the window presented: the step it showed, when, and how long
+/// each stage took.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowFrame {
+    pub step: u64,
+    pub presented_at: SystemTime,
+    /// Waiting for the swapchain image.
+    pub acquire: Duration,
+    /// Waiting for the scene.
+    pub lock: Duration,
+    /// Encoding and submitting the frame.
+    pub draw: Duration,
+    pub present: Duration,
+}
+
+impl WindowTiming {
+    pub fn presented(&self, frame: WindowFrame) {
+        let mut record = self.record();
+        if record.frames.len() == WINDOW_FRAMES {
+            record.frames.pop_front();
+        }
+        record.frames.push_back(frame);
+    }
+
+    /// A key or mouse button event reached the window at `at`.
+    pub fn input_received(&self, at: SystemTime) {
+        let mut record = self.record();
+        if record.inputs.len() == RECENT_INPUTS {
+            record.inputs.pop_front();
+        }
+        record.inputs.push_back(at);
+    }
+
+    fn statistics(&self) -> ProductDevWindowStatistics {
+        let record = self.record();
+        let frames = &record.frames;
+        let median = |stage: fn(&WindowFrame) -> Duration| {
+            let mut values: Vec<f64> = frames.iter().map(|frame| ms(stage(frame))).collect();
+            values.sort_by(f64::total_cmp);
+            values.get(values.len() / 2).copied().unwrap_or(0.0)
+        };
+        let span = match (frames.front(), frames.back()) {
+            (Some(first), Some(last)) if frames.len() > 1 => last
+                .presented_at
+                .duration_since(first.presented_at)
+                .map_or(0.0, |span| span.as_secs_f64()),
+            _ => 0.0,
+        };
+        ProductDevWindowStatistics {
+            recent_frames: frames.len(),
+            frames_per_second: if span > 0.0 {
+                (frames.len() - 1) as f64 / span
+            } else {
+                0.0
+            },
+            median_ms: ProductDevWindowMedians {
+                acquire: median(|frame| frame.acquire),
+                lock: median(|frame| frame.lock),
+                draw: median(|frame| frame.draw),
+                present: median(|frame| frame.present),
+            },
+            shown: frames
+                .iter()
+                .map(|frame| timed_step(frame.presented_at, frame.step))
+                .collect(),
+            inputs_received_at_unix_ms: record.inputs.iter().copied().map(unix_ms).collect(),
+        }
+    }
+
+    fn record(&self) -> std::sync::MutexGuard<'_, WindowRecord> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl FrameOutput {
@@ -134,12 +229,28 @@ impl FrameOutput {
             }
         };
         Ok(Self {
+            window: stream.is_none().then(Arc::default),
             driver,
             stream,
             next_fact_id: 1,
             next_video_fact_id: 1,
             statistics_reported: None,
+            input_steps: VecDeque::with_capacity(RECENT_INPUTS),
         })
+    }
+
+    /// Where the desktop window reports its frames and input.
+    pub(crate) fn window_timing(&self) -> Option<Arc<WindowTiming>> {
+        self.window.clone()
+    }
+
+    /// A product update that received input finished; `step` is the step
+    /// it simulated.
+    pub(crate) fn record_input_step(&mut self, step: u64) {
+        if self.input_steps.len() == RECENT_INPUTS {
+            self.input_steps.pop_front();
+        }
+        self.input_steps.push_back((SystemTime::now(), step));
     }
 
     /// The renderer the desktop shell draws.
@@ -500,6 +611,8 @@ impl FrameOutput {
                 adapter: format!("{} ({})", adapter.name, adapter.backend),
                 output: RenderOutput::Window,
                 stream: None,
+                window: self.window.as_deref().map(WindowTiming::statistics),
+                input_steps: self.input_steps(),
                 skipped_ops: skipped_op_counts(skipped_ops),
                 last_skip,
             };
@@ -513,6 +626,7 @@ impl FrameOutput {
             encode_ms,
             bytes_per_frame,
             bytes_per_second,
+            shown,
             skipped_ops,
             last_skip,
         } = streamer.stats();
@@ -530,10 +644,23 @@ impl FrameOutput {
                 },
                 median_bytes_per_frame: bytes_per_frame,
                 bytes_per_second,
+                shown: shown
+                    .into_iter()
+                    .map(|(at, step)| timed_step(at, step))
+                    .collect(),
             }),
+            window: None,
+            input_steps: self.input_steps(),
             skipped_ops: skipped_op_counts(skipped_ops),
             last_skip,
         }
+    }
+
+    fn input_steps(&self) -> Vec<ProductDevTimedStep> {
+        self.input_steps
+            .iter()
+            .map(|(at, step)| timed_step(*at, *step))
+            .collect()
     }
 
     fn engine_fact(&mut self, fact: AnimationFact) -> AnimationRealizationFact {
@@ -612,7 +739,22 @@ fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneStat
     }
 }
 
-/// The camera pose of the lowest-ordered primary view.
+fn timed_step(at: SystemTime, step: u64) -> ProductDevTimedStep {
+    ProductDevTimedStep {
+        at_unix_ms: unix_ms(at),
+        step,
+    }
+}
+
+fn unix_ms(at: SystemTime) -> f64 {
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0.0, |since| since.as_secs_f64() * 1000.0)
+}
+
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
 fn skipped_op_counts(
     skipped: std::collections::BTreeMap<&'static str, u64>,
 ) -> std::collections::BTreeMap<String, u64> {
@@ -622,6 +764,7 @@ fn skipped_op_counts(
         .collect()
 }
 
+/// The camera pose of the lowest-ordered primary view.
 fn primary_camera_pose(composition: &RendererViewComposition) -> Option<RendererCameraPose> {
     let view = composition
         .views

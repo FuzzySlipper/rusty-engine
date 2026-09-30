@@ -29,7 +29,7 @@ mod overlay;
 mod placement;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 pub use render_wgpu::{Gpu, Renderer, RendererOptions};
 use render_wgpu::{PresentSkip, WindowSurface};
@@ -48,12 +48,32 @@ pub use render_wgpu::web::WebRuntimeConfig;
 pub trait DesktopScene: Send + Sync {
     /// Run `draw` with the renderer, the committed scene applied, and the
     /// presentation time to render at (the clock camera samples arrived on).
-    /// The shell renders and presents inside it.
-    fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64));
+    /// The shell renders and presents inside it. Returns the simulation step
+    /// the frame showed.
+    fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) -> u64;
+    /// The window presented a frame.
+    fn presented(&self, frame: PresentedFrame);
+    /// A key or mouse button event reached the window at `at`.
+    fn input_received(&self, at: SystemTime);
     /// The runtime behind the scene has stopped; the shell closes.
     fn stopped(&self) -> bool;
     /// The window was closed; stop the runtime.
     fn close(&self);
+}
+
+/// One presented frame: the step it showed, when it was presented, and how
+/// long each stage of the frame took.
+#[derive(Debug, Clone, Copy)]
+pub struct PresentedFrame {
+    pub step: u64,
+    pub presented_at: SystemTime,
+    /// Waiting for the swapchain image.
+    pub acquire: Duration,
+    /// Waiting for the scene.
+    pub lock: Duration,
+    /// Encoding and submitting the frame.
+    pub draw: Duration,
+    pub present: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -215,21 +235,37 @@ impl Shell {
         let pixel_ratio = open.window.scale_factor() as f32;
         #[cfg(feature = "web-overlay")]
         let mut ui = open.ui.as_mut();
-        self.scene.draw(&mut |renderer, now| {
+        let called = Instant::now();
+        let mut drawn = (called, called);
+        let step = self.scene.draw(&mut |renderer, now| {
+            drawn.0 = Instant::now();
             renderer.set_pixel_ratio(pixel_ratio);
             #[cfg(feature = "web-overlay")]
             if let Some(ui) = ui.as_deref_mut() {
                 result = renderer
                     .render_view_composition_to_surface_with_overlay(surface, now, ui.page())
                     .map(|_| ());
+                drawn.1 = Instant::now();
                 return;
             }
             result = renderer
                 .render_view_composition_to_surface(surface, now)
                 .map(|_| ());
+            drawn.1 = Instant::now();
         });
         match result {
-            Ok(()) => self.report.frames_presented += 1,
+            Ok(()) => {
+                self.report.frames_presented += 1;
+                // Acquire and present happen inside the draw.
+                self.scene.presented(PresentedFrame {
+                    step,
+                    presented_at: SystemTime::now() - drawn.1.elapsed(),
+                    acquire: Duration::ZERO,
+                    lock: drawn.0 - called,
+                    draw: drawn.1 - drawn.0,
+                    present: Duration::ZERO,
+                });
+            }
             Err(_) => self.report.frames_skipped += 1,
         }
         #[cfg(feature = "web-overlay")]
@@ -274,6 +310,12 @@ impl ApplicationHandler for Shell {
         if let WindowEvent::CloseRequested = event {
             self.shut(event_loop);
             return;
+        }
+        if matches!(
+            event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. }
+        ) {
+            self.scene.input_received(SystemTime::now());
         }
         let Some(open) = &mut self.window else { return };
         if let WindowEvent::Resized(size) = event {

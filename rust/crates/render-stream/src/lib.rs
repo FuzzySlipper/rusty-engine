@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use product_dev_host::{ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream};
 use render_host_contracts::{RendererCameraPose, RendererViewComposition};
@@ -114,6 +114,8 @@ pub struct StreamInspection {
 #[derive(Debug, Clone, Copy)]
 struct FrameCost {
     at: Instant,
+    published_at: SystemTime,
+    step: u64,
     render_ms: f64,
     readback_ms: f64,
     encode_ms: f64,
@@ -131,6 +133,8 @@ pub struct StreamStats {
     pub encode_ms: f64,
     pub bytes_per_frame: f64,
     pub bytes_per_second: f64,
+    /// When each recent frame was published, and the step it showed.
+    pub shown: Vec<(SystemTime, u64)>,
     pub skipped_ops: BTreeMap<&'static str, u64>,
     pub last_skip: Option<String>,
 }
@@ -255,6 +259,10 @@ impl FrameStreamer {
             } else {
                 0.0
             },
+            shown: costs
+                .iter()
+                .map(|cost| (cost.published_at, cost.step))
+                .collect(),
             skipped_ops,
             last_skip,
         }
@@ -345,8 +353,10 @@ fn render_loop(
             StreamFormat::Rgba8 => (ProductDevFrameFormat::Rgba8, pixels.clone()),
         };
         let encoded = Instant::now();
-        let cost = FrameCost {
+        let mut cost = FrameCost {
             at: started,
+            published_at: SystemTime::UNIX_EPOCH,
+            step: shown.step,
             render_ms: ms(rendered - started),
             readback_ms: ms(read - rendered),
             encode_ms: ms(encoded - read),
@@ -361,6 +371,7 @@ fn render_loop(
             step: shown.step,
             payload,
         });
+        cost.published_at = SystemTime::now();
         let drawn = DrawnFrame {
             sequence,
             step: shown.step,

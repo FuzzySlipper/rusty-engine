@@ -35,8 +35,10 @@ pub(crate) fn run_chromium_subprocess() -> Result<(), String> {
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use csharp_product_runtime::{Gpu, Renderer, SceneDriver};
-use desktop_shell::{DesktopScene, DesktopShell, DesktopShellConfig, WebRuntimeConfig};
+use csharp_product_runtime::{Gpu, Renderer, SceneDriver, WindowFrame, WindowTiming};
+use desktop_shell::{
+    DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, WebRuntimeConfig,
+};
 
 /// Extra Chromium switches for the UI page, comma-separated `name[=value]`;
 /// for example `remote-debugging-port=9333` lets a CDP client (the playtest
@@ -80,6 +82,7 @@ impl Desktop {
         origin: &str,
         persistence_root: Option<&std::path::Path>,
         driver: Arc<SceneDriver>,
+        timing: Arc<WindowTiming>,
         stopping: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let cache_dir = match persistence_root {
@@ -91,7 +94,11 @@ impl Desktop {
             }
             None => None,
         };
-        let scene = Arc::new(WindowScene { driver, stopping });
+        let scene = Arc::new(WindowScene {
+            driver,
+            timing,
+            stopping,
+        });
         let report = self.shell.run(
             DesktopShellConfig {
                 title,
@@ -145,12 +152,29 @@ fn chromium_switches() -> Vec<(String, Option<String>)> {
 
 struct WindowScene {
     driver: Arc<SceneDriver>,
+    timing: Arc<WindowTiming>,
     stopping: Arc<AtomicBool>,
 }
 
 impl DesktopScene for WindowScene {
-    fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) {
-        self.driver.draw(|renderer, now| draw(renderer, now));
+    fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) -> u64 {
+        let ((), shown) = self.driver.draw(|renderer, now| draw(renderer, now));
+        shown.step
+    }
+
+    fn presented(&self, frame: PresentedFrame) {
+        self.timing.presented(WindowFrame {
+            step: frame.step,
+            presented_at: frame.presented_at,
+            acquire: frame.acquire,
+            lock: frame.lock,
+            draw: frame.draw,
+            present: frame.present,
+        });
+    }
+
+    fn input_received(&self, at: std::time::SystemTime) {
+        self.timing.input_received(at);
     }
 
     fn stopped(&self) -> bool {

@@ -34,10 +34,11 @@ pub use bundle::{
     PRODUCT_DEV_BOOTSTRAP_PATH, PRODUCT_DEV_INDEX_PATH,
 };
 pub use engine_debug::{
-    ProductDevDrawingMode, ProductDevDrawnFrame, ProductDevRenderOutput,
+    ProductDevCameraPose, ProductDevDrawingMode, ProductDevDrawnFrame, ProductDevRenderOutput,
     ProductDevRendererInspection, ProductDevRendererStatistics, ProductDevRendererStatus,
     ProductDevRendererWidget, ProductDevStreamMedians, ProductDevStreamStatistics,
-    ProductDevTimeAnswer, ProductDevTimeMode,
+    ProductDevTimeAnswer, ProductDevTimeMode, ProductDevTimedStep, ProductDevWindowMedians,
+    ProductDevWindowStatistics,
 };
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use frames::{

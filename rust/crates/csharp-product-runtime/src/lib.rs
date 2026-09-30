@@ -625,6 +625,7 @@ pub fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
     frame_output::render_output_mode()
 }
 
+pub use frame_output::{WindowFrame, WindowTiming};
 pub use render_wgpu::{Gpu, Renderer, SceneDriver};
 
 mod playtest;
@@ -1705,6 +1706,12 @@ impl CsharpProductRuntime {
         // The callback consumed its input whatever happened inside it.
         self.pending_inputs.clear();
         let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
+        if !events.is_empty() {
+            let step = self.lifecycle.readout().admitted_simulation_steps();
+            if let Some(frames) = &mut self.frame_output {
+                frames.record_input_step(step);
+            }
+        }
         let mut outputs = finished.outputs;
         let input_mapping_replacement = finished.input_mapping_replacement;
         if let Some(failure) = finished.failure {
@@ -2406,6 +2413,14 @@ impl CsharpProductRuntime {
         self.frame_output
             .as_ref()
             .map(frame_output::FrameOutput::driver)
+    }
+
+    /// Where the desktop shell reports its frames and input, in window
+    /// output.
+    pub fn window_timing(&self) -> Option<Arc<WindowTiming>> {
+        self.frame_output
+            .as_ref()
+            .and_then(frame_output::FrameOutput::window_timing)
     }
 
     /// Rebind input for a same-incarnation control fence. The browser keeps

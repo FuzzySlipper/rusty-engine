@@ -42,6 +42,14 @@ pub struct ProductDevRendererStatistics {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub stream: Option<ProductDevStreamStatistics>,
+    /// The recent frames the desktop window presented.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub window: Option<ProductDevWindowStatistics>,
+    /// When each recent product update that received input finished, and
+    /// the step it simulated: the first frame showing that step or a later
+    /// one is the first to show the input.
+    pub input_steps: Vec<ProductDevTimedStep>,
     /// Retained operations the renderer skipped, by kind.
     #[ts(type = "Record<string, number>")]
     pub skipped_ops: BTreeMap<String, u64>,
@@ -59,6 +67,45 @@ pub struct ProductDevStreamStatistics {
     pub median_ms: ProductDevStreamMedians,
     pub median_bytes_per_frame: f64,
     pub bytes_per_second: f64,
+    /// When each recent frame was published, and the step it showed.
+    pub shown: Vec<ProductDevTimedStep>,
+}
+
+/// What the recent frames the desktop window presented cost, and when they
+/// reached it.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevWindowStatistics {
+    pub recent_frames: usize,
+    pub frames_per_second: f64,
+    pub median_ms: ProductDevWindowMedians,
+    /// When each recent frame was presented, and the step it showed.
+    pub shown: Vec<ProductDevTimedStep>,
+    /// When recent key and mouse button events reached the window, in Unix
+    /// milliseconds.
+    pub inputs_received_at_unix_ms: Vec<f64>,
+}
+
+/// Median milliseconds per frame for each stage of presenting it: waiting
+/// for the swapchain image, waiting for the scene, encoding and submitting
+/// the frame, and presenting it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevWindowMedians {
+    pub acquire: f64,
+    pub lock: f64,
+    pub draw: f64,
+    pub present: f64,
+}
+
+/// A simulation step and when something happened to it, in Unix
+/// milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevTimedStep {
+    pub at_unix_ms: f64,
+    #[ts(type = "number")]
+    pub step: u64,
 }
 
 /// Median milliseconds per frame for each stage of streaming it.

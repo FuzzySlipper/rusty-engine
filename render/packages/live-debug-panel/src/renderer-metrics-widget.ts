@@ -121,6 +121,12 @@ function renderSummary(root: HTMLElement, summary: ProductDevRendererStatus): vo
       `Stream: ${kilobytes(stream.medianBytesPerFrame)} per frame | ${kilobytes(stream.bytesPerSecond)} per second`,
     );
   }
+  const window = renderer.window;
+  if (window !== undefined) {
+    lines.push(
+      `Frames: ${window.framesPerSecond.toFixed(1)} per second | acquire ${milliseconds(window.medianMs.acquire)} | lock ${milliseconds(window.medianMs.lock)} | draw ${milliseconds(window.medianMs.draw)} | present ${milliseconds(window.medianMs.present)}`,
+    );
+  }
   const skipped = Object.entries(renderer.skippedOps).map(([op, count]) => `${op} ×${String(count)}`);
   lines.push(`Skipped ops: ${skipped.length === 0 ? 'none' : skipped.join(', ')}${renderer.lastSkip === null ? '' : ` | last: ${renderer.lastSkip}`}`);
   root.textContent = lines.join('\n');

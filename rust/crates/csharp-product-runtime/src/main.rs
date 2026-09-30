@@ -187,7 +187,7 @@ fn main() -> Result<(), String> {
         config = config.with_listener(unsafe { TcpListener::from_raw_fd(fd) });
     }
     #[cfg(feature = "desktop")]
-    let scene_driver = runtime.scene_driver();
+    let window_scene = runtime.scene_driver().zip(runtime.window_timing());
     let host = ProductDevHost::start(runtime, config).map_err(|error| error.to_string())?;
     if args.exercise {
         let mut stream = TcpStream::connect(host.address()).map_err(|error| error.to_string())?;
@@ -261,7 +261,7 @@ fn main() -> Result<(), String> {
             .map(|product| asset_reloader(host.asset_reload(), product));
         let supervised = args.supervised || args.serve_listener_fd.is_some();
         #[cfg(feature = "desktop")]
-        if let (Some(desktop), Some(driver)) = (desktop, scene_driver) {
+        if let (Some(desktop), Some((driver, timing))) = (desktop, window_scene) {
             // The window owns the main thread. The usual stop conditions
             // (signal, supervisor stdin, host stop) close it through the
             // shared flag, and closing it stops the host the same way.
@@ -283,6 +283,7 @@ fn main() -> Result<(), String> {
                     &origin,
                     args.persistence_root.as_deref(),
                     driver,
+                    timing,
                     Arc::clone(&termination),
                 )
             });
