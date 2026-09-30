@@ -71,8 +71,8 @@ test('a host error names its code and diagnostic', async () => {
     origin: 'http://127.0.0.1:8123',
     fetch: (async () => new Response(JSON.stringify({
       accepted: false,
-      error: { code: 'DEV_HOST_ROUTE_NOT_FOUND', diagnostic: 'route is not admitted' },
+      error: { code: 'PRODUCT_HOST_ROUTE_NOT_FOUND', diagnostic: 'route is not admitted' },
     }), { status: 404 })) as typeof fetch,
   });
-  await assert.rejects(() => client.diagnostics!(), /DEV_HOST_ROUTE_NOT_FOUND: route is not admitted/u);
+  await assert.rejects(() => client.diagnostics!(), /PRODUCT_HOST_ROUTE_NOT_FOUND: route is not admitted/u);
 });

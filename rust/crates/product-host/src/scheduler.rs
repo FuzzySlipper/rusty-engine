@@ -1,14 +1,14 @@
-//! Realtime scheduler sequencing for one Product development host session.
+//! Realtime scheduler sequencing for one product host session.
 //!
 //! The scheduler owns mailbox draining and publication order. The runtime
 //! session remains neutral: it only supplies the serialized owner scope that
 //! keeps this host policy atomic with every other runtime operation.
 
 use crate::{
-    session::{runtime_poisoned, ProductDevOperationOwner},
-    CanonicalU64, ProductDevInputBatch, ProductDevInputResult, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeReceipt,
-    ProductDevUpdateAttribution,
+    session::{runtime_poisoned, ProductHostOperationOwner},
+    CanonicalU64, ProductHostInputBatch, ProductHostInputResult, ProductHostOperationResult,
+    ProductHostRuntime, ProductHostRuntimeError, ProductHostRuntimeReceipt,
+    ProductHostUpdateAttribution,
 };
 
 /// Drains one host-mailbox snapshot through the runtime input owner immediately
@@ -18,7 +18,7 @@ use crate::{
 /// runtime owner scope, preserving publication order with lifecycle and control
 /// operations.
 pub fn advance_realtime_with_input_and_publish<R, F, I, P, B, E>(
-    owner: &ProductDevOperationOwner<R>,
+    owner: &ProductHostOperationOwner<R>,
     drain: F,
     observed_time_ns: CanonicalU64,
     mut publish_input: I,
@@ -27,16 +27,16 @@ pub fn advance_realtime_with_input_and_publish<R, F, I, P, B, E>(
     finish: E,
 ) -> Result<
     (
-        Vec<ProductDevRuntimeError>,
-        Option<ProductDevUpdateAttribution>,
+        Vec<ProductHostRuntimeError>,
+        Option<ProductHostUpdateAttribution>,
     ),
-    ProductDevRuntimeError,
+    ProductHostRuntimeError,
 >
 where
-    R: ProductDevRuntime,
-    F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
-    I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
-    P: FnMut(ProductDevRuntimeReceipt<ProductDevOperationResult>),
+    R: ProductHostRuntime,
+    F: FnOnce() -> (Vec<ProductHostInputBatch>, bool),
+    I: FnMut(ProductHostRuntimeReceipt<ProductHostInputResult>),
+    P: FnMut(ProductHostRuntimeReceipt<ProductHostOperationResult>),
     B: FnOnce(),
     E: FnOnce(),
 {
@@ -68,14 +68,14 @@ where
 /// debug commands, so input accepted before one must reach the steps it runs.
 pub(crate) fn deliver_queued_input<R, I, P>(
     runtime: &mut R,
-    (batches, overflowed): (Vec<ProductDevInputBatch>, bool),
+    (batches, overflowed): (Vec<ProductHostInputBatch>, bool),
     publish_input: &mut I,
     publish: &mut P,
-) -> Vec<ProductDevRuntimeError>
+) -> Vec<ProductHostRuntimeError>
 where
-    R: ProductDevRuntime,
-    I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
-    P: FnMut(ProductDevRuntimeReceipt<ProductDevOperationResult>),
+    R: ProductHostRuntime,
+    I: FnMut(ProductHostRuntimeReceipt<ProductHostInputResult>),
+    P: FnMut(ProductHostRuntimeReceipt<ProductHostOperationResult>),
 {
     let mut input_errors = Vec::new();
     if overflowed {
@@ -104,31 +104,31 @@ mod tests {
     };
 
     use super::*;
+    use crate::publication::RuntimePublication;
     use crate::{
-        ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevRuntimeBinding,
-        ProductDevRuntimeMode, ProductDevRuntimeReadout, ProductDevRuntimeState,
-        ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+        ProductHostLifecycleOperation, ProductHostOperationKind, ProductHostRuntimeBinding,
+        ProductHostRuntimeMode, ProductHostRuntimeReadout, ProductHostRuntimeState,
+        ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
     };
     use runtime_input::RuntimeInputBinding;
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
-    use runtime_publication::RuntimePublication;
 
     struct FixtureRuntime;
 
     impl FixtureRuntime {
-        fn binding() -> ProductDevRuntimeBinding {
-            ProductDevRuntimeBinding {
+        fn binding() -> ProductHostRuntimeBinding {
+            ProductHostRuntimeBinding {
                 instance_id: CanonicalU64::new(1),
                 generation: CanonicalU64::new(1),
                 control_revision: CanonicalU64::new(1),
             }
         }
 
-        fn readout() -> ProductDevRuntimeReadout {
-            ProductDevRuntimeReadout::new(
+        fn readout() -> ProductHostRuntimeReadout {
+            ProductHostRuntimeReadout::new(
                 Self::binding(),
-                ProductDevRuntimeMode::Demand,
-                ProductDevRuntimeState::Running,
+                ProductHostRuntimeMode::Demand,
+                ProductHostRuntimeState::Running,
             )
         }
 
@@ -144,36 +144,36 @@ mod tests {
         }
 
         fn operation(
-            operation: ProductDevOperationKind,
-        ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
-            ProductDevRuntimeReceipt::new(
-                ProductDevOperationResult::rejected(operation, "fixture").unwrap(),
+            operation: ProductHostOperationKind,
+        ) -> ProductHostRuntimeReceipt<ProductHostOperationResult> {
+            ProductHostRuntimeReceipt::new(
+                ProductHostOperationResult::rejected(operation, "fixture").unwrap(),
                 Self::publications(),
             )
             .unwrap()
         }
     }
 
-    impl ProductDevRuntime for FixtureRuntime {
+    impl ProductHostRuntime for FixtureRuntime {
         fn lifecycle(
             &mut self,
-            operation: ProductDevLifecycleOperation,
-        ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>
+            operation: ProductHostLifecycleOperation,
+        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
         {
             Ok(Self::operation(operation.operation_kind()))
         }
 
         fn input(
             &mut self,
-            batch: ProductDevInputBatch,
-        ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError>
+            batch: ProductHostInputBatch,
+        ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError>
         {
             let accepted_through = batch
                 .events()
                 .last()
                 .map(|event| CanonicalU64::new(event.sequence()));
-            Ok(ProductDevRuntimeReceipt::new(
-                ProductDevInputResult::with_progress(
+            Ok(ProductHostRuntimeReceipt::new(
+                ProductHostInputResult::with_progress(
                     batch.events().len(),
                     batch.events().len(),
                     0,
@@ -192,35 +192,35 @@ mod tests {
         fn advance_realtime(
             &mut self,
             _observed_time_ns: CanonicalU64,
-        ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>
+        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
         {
-            Ok(Self::operation(ProductDevOperationKind::AdvanceRealtime))
+            Ok(Self::operation(ProductHostOperationKind::AdvanceRealtime))
         }
 
         fn admit_demand_step(
             &mut self,
-        ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>
+        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
         {
-            Ok(Self::operation(ProductDevOperationKind::AdmitDemandStep))
+            Ok(Self::operation(ProductHostOperationKind::AdmitDemandStep))
         }
 
         fn admit_external_step(
             &mut self,
             _step: CanonicalU64,
-        ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>
+        ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
         {
-            Ok(Self::operation(ProductDevOperationKind::AdmitExternalStep))
+            Ok(Self::operation(ProductHostOperationKind::AdmitExternalStep))
         }
 
         fn complete_timeline(
             &mut self,
-            completion: ProductDevTimelineCompletion,
+            completion: ProductHostTimelineCompletion,
         ) -> Result<
-            ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
-            ProductDevRuntimeError,
+            ProductHostRuntimeReceipt<ProductHostTimelineCompletionResult>,
+            ProductHostRuntimeError,
         > {
-            Ok(ProductDevRuntimeReceipt::new(
-                ProductDevTimelineCompletionResult::rejected(
+            Ok(ProductHostRuntimeReceipt::new(
+                ProductHostTimelineCompletionResult::rejected(
                     CanonicalU64::new(completion.envelope().ticket().value()),
                     "fixture",
                 )
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn scheduled_publication_stays_inside_owner_serialization() {
-        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
+        let session = Arc::new(ProductHostOperationOwner::new(FixtureRuntime));
         let (published, published_ready) = mpsc::channel();
         let (release, release_publication) = mpsc::channel();
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -243,7 +243,7 @@ mod tests {
         let scheduled = thread::spawn(move || {
             advance_realtime_with_input_and_publish(
                 &scheduled_session,
-                || (vec![ProductDevInputBatch::new(Vec::new())], false),
+                || (vec![ProductHostInputBatch::new(Vec::new())], false),
                 CanonicalU64::new(1),
                 |receipt| {
                     let _ = receipt;
@@ -272,7 +272,7 @@ mod tests {
         let competing_session = Arc::clone(&session);
         let (finished, competing_finished) = mpsc::channel();
         let competing = thread::spawn(move || {
-            let result = competing_session.lifecycle(ProductDevLifecycleOperation::Start);
+            let result = competing_session.lifecycle(ProductHostLifecycleOperation::Start);
             finished.send(result).expect("competing result");
         });
         assert!(

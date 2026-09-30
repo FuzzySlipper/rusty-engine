@@ -15,7 +15,7 @@ export {
 // debug endpoint paths.
 export {
   createLiveDebugHttpTransport,
-  type ProductDevDebugCatalog,
+  type ProductHostDebugCatalog,
   type LiveDebugHttpTransportOptions,
   type LiveDebugResult,
   type LiveDebugTransport,

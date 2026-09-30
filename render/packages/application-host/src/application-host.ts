@@ -3,8 +3,8 @@ import {
   type RustyApplicationFrameView,
 } from './frame-view.js';
 import type {
-  ProductDevCursorMode,
-  ProductDevRenderOutput,
+  ProductHostCursorMode,
+  ProductHostRenderOutput,
   RuntimeInputWireIntentValue,
 } from './generated/contracts.js';
 import {
@@ -57,7 +57,7 @@ export interface RustyApplicationHostOptions {
   readonly root: HTMLElement;
   readonly mountUi: RustyApplicationUiMount;
   /** Where the runtime draws the world: streamed to this page (the default) or to the desktop window under it. */
-  readonly output?: ProductDevRenderOutput;
+  readonly output?: ProductHostRenderOutput;
   /** Observe the one page cadence without creating another animation-frame loop. */
   readonly onCadence?: (timeMs: number) => void;
   /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
@@ -66,7 +66,7 @@ export interface RustyApplicationHostOptions {
   readonly failureLabel?: string;
   readonly initialInteractionMode?: RustyApplicationInteractionMode;
   /** Pointer lock is the existing first-person default; unlocked gameplay keeps the browser cursor. */
-  readonly gameplayCursorMode?: ProductDevCursorMode;
+  readonly gameplayCursorMode?: ProductHostCursorMode;
   /** Optional browser input ingress. Omission leaves DOM capture disabled. */
   readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
   /** Optional strict Product UI projection channel. */

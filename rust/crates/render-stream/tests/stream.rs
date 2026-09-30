@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use product_dev_host::ProductDevFrameStream;
+use product_host::ProductHostFrameStream;
 use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
     RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
@@ -58,7 +58,7 @@ fn header(frame: &[u8]) -> Header {
 
 #[test]
 fn frames_follow_viewers_and_simulation_time() {
-    let frames = ProductDevFrameStream::new();
+    let frames = ProductHostFrameStream::new();
     let gpu = Gpu::headless().expect("a headless adapter");
     let scene = SceneDriver::new(gpu.clone(), RendererOptions::default());
     let streamer = FrameStreamer::start(scene.clone(), StreamFormat::Rgba8, frames.clone())

@@ -10,7 +10,7 @@ operation into independently attributable layers:
   without Rust or browser work.
 - `csharp-rust-crossover` measures generated CoreCLR and NativeAOT callbacks,
   the Engine service call, and output conversion.
-- `product-dev-host-http` adds the local product-host HTTP admission path.
+- `product-host-http` adds the local product-host HTTP admission path.
 
 Run the complete probe from the repository root:
 
@@ -58,8 +58,8 @@ operations skipped by kind, and, for streamed frames, the recent frame rate,
 median render, readback and encode milliseconds, and bytes per frame and per
 second. The desktop window streams nothing, so it reports no frame timing.
 
-Trusted product code reads the same statistics (`ProductDevRendererStatistics`
-in `product-dev-host`) as UTF-8 JSON bytes through
+Trusted product code reads the same statistics (`ProductHostRendererStatistics`
+in `product-host`) as UTF-8 JSON bytes through
 `IEngineContext.Diagnostics.ReadRenderer()`. The runtime refreshes them once a
 second; the generated binding copies the bytes before returning. Reading them
 never draws a frame or synchronizes the GPU.

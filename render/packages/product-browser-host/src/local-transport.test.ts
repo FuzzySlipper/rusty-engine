@@ -8,7 +8,7 @@ import {
 import { RUNTIME_BASE_PATH, type RuntimeInputWireEvent } from './generated/contracts.js';
 
 const RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
-const ACCEPTED_FAULT = { code: 'DEV_HOST_ACCEPTED', disposition: 'accepted' } as const;
+const ACCEPTED_FAULT = { code: 'PRODUCT_HOST_ACCEPTED', disposition: 'accepted' } as const;
 const READOUT = {
   artifact: 'rusty.product.runtime-readout',
   runtime: RUNTIME,
@@ -599,7 +599,7 @@ test('local transport decodes scheduled input receipts with authoritative progre
     kind: 'runtime-input-result',
     result: {
       accepted: true,
-      code: 'DEV_HOST_ACCEPTED',
+      code: 'PRODUCT_HOST_ACCEPTED',
       disposition: 'accepted',
       count: 2,
       acceptedCount: 2,
@@ -615,7 +615,7 @@ test('local transport decodes scheduled input receipts with authoritative progre
     kind: 'runtime-input-result',
     result: {
       accepted: true,
-      code: 'DEV_HOST_ACCEPTED',
+      code: 'PRODUCT_HOST_ACCEPTED',
       disposition: 'accepted',
       count: 2,
       acceptedCount: 2,
@@ -664,7 +664,7 @@ test('local transport decodes scheduled input receipts with authoritative progre
     kind: 'runtime-input-result',
     result: {
       accepted: false,
-      code: 'DEV_HOST_INPUT_MAILBOX_FULL',
+      code: 'PRODUCT_HOST_INPUT_MAILBOX_FULL',
       disposition: 'resync-required',
       count: 2,
       acceptedCount: 0,
@@ -677,7 +677,7 @@ test('local transport decodes scheduled input receipts with authoritative progre
   }, '3');
   assert.deepEqual((outputs.at(-1) as { readonly result: Record<string, unknown> }).result, {
     accepted: false,
-    code: 'DEV_HOST_INPUT_MAILBOX_FULL',
+    code: 'PRODUCT_HOST_INPUT_MAILBOX_FULL',
     disposition: 'resync-required',
     count: 2,
     acceptedCount: 0,
@@ -696,7 +696,7 @@ test('local transport returns a decode-resync receipt as its result', async () =
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response({
       accepted: false,
-      code: 'DEV_HOST_INPUT_DECODE',
+      code: 'PRODUCT_HOST_INPUT_DECODE',
       disposition: 'resync-required',
       count: 1_025,
       acceptedCount: 0,
@@ -708,7 +708,7 @@ test('local transport returns a decode-resync receipt as its result', async () =
 
   assert.deepEqual(await adapter.input([]), {
     accepted: false,
-    code: 'DEV_HOST_INPUT_DECODE',
+    code: 'PRODUCT_HOST_INPUT_DECODE',
     disposition: 'resync-required',
     count: 1_025,
     acceptedCount: 0,

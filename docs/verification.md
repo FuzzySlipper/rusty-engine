@@ -45,7 +45,7 @@ resources carry their observed URL and status.
 
 Warnings/errors remain findings. A later confirmed browser-host baseline can
 resolve an exact attachment's settled response-delivery warning
-(`DEV_HOST_RESPONSE_WRITE_RESYNC`); the report preserves the original warning
+(`PRODUCT_HOST_RESPONSE_WRITE_RESYNC`); the report preserves the original warning
 and records the matching baseline sequence. A queued input acknowledgement
 does not prove C# execution, so queued-input or unknown delivery certainty
 remains unresolved. New tabs, missing correlation, incomplete capture, and

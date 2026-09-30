@@ -14,9 +14,9 @@ use csharp_product_runtime::{
     product_host_runtime_identity, CsharpProductContent, CsharpProductRuntime,
     CsharpProductRuntimeConfig,
 };
-use product_dev_host::{
-    ProductDevAssetReload, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
-    ProductDevHostConfig, ProductDevLog, ProductDevRuntime, RunningProductDevHost,
+use product_host::{
+    ProductHost, ProductHostAssetReload, ProductHostBundle, ProductHostBundleEntry,
+    ProductHostConfig, ProductHostLog, ProductHostRuntime, RunningProductHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -106,7 +106,7 @@ fn main() -> Result<(), String> {
     // renderer is built on it.
     #[cfg(feature = "desktop")]
     let desktop = desktop::Desktop::open_if_selected()?;
-    let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
+    let diagnostics = ProductHostLog::new(Default::default()).map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
     let (library, runtimeconfig) = args.selected_artifacts()?;
@@ -153,7 +153,7 @@ fn main() -> Result<(), String> {
                 .map_err(|error| error.to_string())
         })
         .transpose()?;
-    let mut config = ProductDevHostConfig::new(args.port(), bundle.clone())
+    let mut config = ProductHostConfig::new(args.port(), bundle.clone())
         .with_bind_host(args.bind_host())
         .with_live_debug(args.live_debug())
         .with_diagnostics(diagnostics);
@@ -188,7 +188,7 @@ fn main() -> Result<(), String> {
     }
     #[cfg(feature = "desktop")]
     let window_scene = runtime.scene_driver().zip(runtime.window_timing());
-    let host = ProductDevHost::start(runtime, config).map_err(|error| error.to_string())?;
+    let host = ProductHost::start(runtime, config).map_err(|error| error.to_string())?;
     if args.exercise {
         let mut stream = TcpStream::connect(host.address()).map_err(|error| error.to_string())?;
         let request = format!(
@@ -232,7 +232,7 @@ fn main() -> Result<(), String> {
         println!(
             "RUSTY_PERF {}",
             performance_summary(
-                "product-dev-host-http",
+                "product-host-http",
                 iterations,
                 &host_durations,
                 args.loader,
@@ -380,7 +380,7 @@ fn print_runtime_identity(machine_readable: bool) {
 
 /// Re-reads the staged UI into a fresh browser bundle and reloads the
 /// runtime's content, keeping the old bundle and inventory on failure.
-fn asset_reloader(reload: ProductDevAssetReload, product: ProductBundle) -> Box<dyn Fn() + Send> {
+fn asset_reloader(reload: ProductHostAssetReload, product: ProductBundle) -> Box<dyn Fn() + Send> {
     Box::new(move || {
         let result = runtime_browser_root()
             .and_then(|root| load_bundle(&root, &product))
@@ -391,7 +391,7 @@ fn asset_reloader(reload: ProductDevAssetReload, product: ProductBundle) -> Box<
             });
         match result {
             Ok(()) => print_line("RUSTY_HOST assets-reloaded"),
-            Err(error) => eprintln!("RUSTY_HOST DEV_HOST_ASSET_RELOAD: {error}"),
+            Err(error) => eprintln!("RUSTY_HOST PRODUCT_HOST_ASSET_RELOAD: {error}"),
         }
     })
 }
@@ -401,11 +401,11 @@ fn asset_reloader(reload: ProductDevAssetReload, product: ProductBundle) -> Box<
 /// not be interpreted as a request to shut the host down. The `rusty dev`
 /// supervisor opts in explicitly and retains the pipe while the child is live;
 /// closing it is its cross-platform clean-replacement signal. Returning here
-/// lets `RunningProductDevHost` and then `CsharpProductRuntime` execute their
+/// lets `RunningProductHost` and then `CsharpProductRuntime` execute their
 /// normal shutdown/drop ordering before the process exits.
 fn wait_for_process_termination(
     supervised: bool,
-    host: &RunningProductDevHost,
+    host: &RunningProductHost,
     termination: Arc<AtomicBool>,
     reload_assets: Option<Box<dyn Fn() + Send>>,
 ) {
@@ -1345,23 +1345,23 @@ fn runtime_browser_root() -> Result<PathBuf, String> {
     Ok(browser)
 }
 
-fn load_bundle(root: &Path, product: &ProductBundle) -> Result<ProductDevBundle, String> {
+fn load_bundle(root: &Path, product: &ProductBundle) -> Result<ProductHostBundle, String> {
     let mut entries = Vec::new();
     collect_bundle(root, root, &mut entries)?;
     entries.extend(product.browser_entries()?);
-    ProductDevBundle::new(entries).map_err(|error| error.to_string())
+    ProductHostBundle::new(entries).map_err(|error| error.to_string())
 }
 
-fn load_legacy_bundle(root: &Path) -> Result<ProductDevBundle, String> {
+fn load_legacy_bundle(root: &Path) -> Result<ProductHostBundle, String> {
     let mut entries = Vec::new();
     collect_bundle(root, root, &mut entries)?;
-    ProductDevBundle::new(entries).map_err(|error| error.to_string())
+    ProductHostBundle::new(entries).map_err(|error| error.to_string())
 }
 
 fn collect_bundle(
     root: &Path,
     directory: &Path,
-    entries: &mut Vec<ProductDevBundleEntry>,
+    entries: &mut Vec<ProductHostBundleEntry>,
 ) -> Result<(), String> {
     for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -1377,7 +1377,7 @@ fn collect_bundle(
             let content_type = content_type(&relative)
                 .ok_or_else(|| format!("bundle file `{relative}` has no admitted content type"))?;
             entries.push(
-                ProductDevBundleEntry::new(
+                ProductHostBundleEntry::new(
                     relative,
                     content_type,
                     fs::read(path).map_err(|error| error.to_string())?,

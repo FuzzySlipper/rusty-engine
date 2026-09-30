@@ -12,7 +12,7 @@ const CAPTURE_PROTOCOL = 'rusty-engine.playtest-warning-delta/v1';
 const MAX_MESSAGE_LENGTH = 512;
 const MAX_ENGINE_READS = 32;
 const DEFAULT_SETTLE_MS = 150;
-const DEV_HOST_RESPONSE_WRITE_RESYNC = 'DEV_HOST_RESPONSE_WRITE_RESYNC';
+const PRODUCT_HOST_RESPONSE_WRITE_RESYNC = 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC';
 const BROWSER_HOST_STATUS = 'BROWSER_HOST_STATUS';
 const RECOVERABLE_RESPONSE_CERTAINTIES = new Set(['settled', 'observation']);
 
@@ -33,7 +33,7 @@ export function normalizeMessage(value) {
 
 export function fingerprintFinding(finding) {
   const correlatedEngineFinding = finding.source === 'engine'
-    && (finding.code === DEV_HOST_RESPONSE_WRITE_RESYNC || finding.code === BROWSER_HOST_STATUS);
+    && (finding.code === PRODUCT_HOST_RESPONSE_WRITE_RESYNC || finding.code === BROWSER_HOST_STATUS);
   const identity = [
     finding.source,
     finding.kind,
@@ -144,7 +144,7 @@ export function captureBlockers(capture, comparison, findings = []) {
   }
   if (findings.some((finding) => finding.source === 'engine'
     && finding.disposition === 'resync-required'
-    && !(finding.code === DEV_HOST_RESPONSE_WRITE_RESYNC && finding.recovery?.status === 'recovered'))) {
+    && !(finding.code === PRODUCT_HOST_RESPONSE_WRITE_RESYNC && finding.recovery?.status === 'recovered'))) {
     blockers.push('Engine capture requires resynchronization');
   }
   if (findings.some((finding) => finding.source === 'engine'
@@ -450,7 +450,7 @@ export function engineFindings(events) {
     .filter(({ event }) => event?.severity === 'warning' || event?.severity === 'error')
     .map(({ event, context }) => {
       let recovery;
-      if (event.code === DEV_HOST_RESPONSE_WRITE_RESYNC && event.disposition === 'resync-required') {
+      if (event.code === PRODUCT_HOST_RESPONSE_WRITE_RESYNC && event.disposition === 'resync-required') {
         recovery = responseWriteRecovery(event, context, orderedEvents);
       } else if (event.code === BROWSER_HOST_STATUS) {
         recovery = browserStatusRecovery(event, context, orderedEvents);

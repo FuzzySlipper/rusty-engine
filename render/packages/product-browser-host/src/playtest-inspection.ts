@@ -1,21 +1,21 @@
 import type {
-  ProductDevDebugCatalog,
-  ProductDevRendererInspection,
-  ProductDevTimeAnswer,
-  ProductDevCameraPose,
+  ProductHostDebugCatalog,
+  ProductHostRendererInspection,
+  ProductHostTimeAnswer,
+  ProductHostCameraPose,
 } from './generated/contracts.js';
 
-type Camera = ProductDevCameraPose;
-const TIME_MODES = ['realtime', 'manual', 'action-driven'] as const satisfies readonly ProductDevTimeAnswer['mode'][];
-const DRAWING_MODES = ['continuous', 'on-demand'] as const satisfies readonly ProductDevRendererInspection['drawing'][];
+type Camera = ProductHostCameraPose;
+const TIME_MODES = ['realtime', 'manual', 'action-driven'] as const satisfies readonly ProductHostTimeAnswer['mode'][];
+const DRAWING_MODES = ['continuous', 'on-demand'] as const satisfies readonly ProductHostRendererInspection['drawing'][];
 export interface PlaytestInspectionRequest {
   op: 'discover' | 'observe' | 'action' | 'look' | 'time' | 'advance' | 'drawing' | 'frame' | 'camera' | 'targets' | 'route' | 'flush' | 'focus' | 'interaction' | 'grid' | 'probe' | 'jump-plan' | 'clearance';
   mode?: string; id?: string; ms?: number; yaw?: number; pitch?: number; camera?: Camera | null;
   x?: number; y?: number; z?: number; radius?: number; verticalRadius?: number; cellSize?: number; distance?: number;
   move?: readonly [number, number, number]; lookAt?: readonly [number, number, number]; orbit?: { target: readonly [number, number, number]; yaw: number };
 }
-type InspectionState = ProductDevRendererInspection;
-type InspectionRequest = { drawing?: ProductDevRendererInspection['drawing']; simulationMs?: number | null; camera?: Camera | null };
+type InspectionState = ProductHostRendererInspection;
+type InspectionRequest = { drawing?: ProductHostRendererInspection['drawing']; simulationMs?: number | null; camera?: Camera | null };
 /** Where drawing, the observer camera and explicit frames are answered. */
 interface Presenter {
   inspect(request: InspectionRequest): Promise<InspectionState>;
@@ -70,7 +70,7 @@ export function installPlaytestInspection(flushInput: () => Promise<void>, settl
     if (id && !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('invalid target/action id');
     switch (request.op) {
       case 'discover': {
-        const catalog = await fetch('/__rusty/product/runtime/debug/catalog').then(r => r.json()) as ProductDevDebugCatalog;
+        const catalog = await fetch('/__rusty/product/runtime/debug/catalog').then(r => r.json()) as ProductHostDebugCatalog;
         const names = catalog.commands.map(c => c.name);
         return { commands: names, nativeCommands: names, operations: ['discover','observe','action','look','time','advance','drawing','frame','camera','targets','route','focus', ...(names.includes('interaction.inspect') ? ['interaction'] : []), ...(names.includes('spatial.grid') ? ['grid'] : []), ...(names.includes('spatial.probe') ? ['probe'] : []), ...(names.includes('spatial.clearance') ? ['clearance'] : []), ...(names.includes('playtest.jump-plan') ? ['jump-plan'] : [])], commandNote: 'nativeCommands are debug catalog names, not assist operations; act/jump/survey/record are harness compositions', time: names.includes('engine.time'), timeModes: TIME_MODES, drawingModes: DRAWING_MODES, observer: ['pose', 'move', 'lookAt', 'orbit', 'restore'], lookAdvancesTime: false, inspection: true, product: names.includes('playtest.help') ? await debug('playtest.help') : null };
       }
@@ -108,20 +108,20 @@ export function installPlaytestInspection(flushInput: () => Promise<void>, settl
       case 'time': {
         if (request.mode && !(TIME_MODES as readonly string[]).includes(request.mode)) throw new Error('unknown time mode');
         if (request.mode) await flushInput();
-        const result = await debug(request.mode ? `engine.time.mode ${request.mode}` : 'engine.time') as ProductDevTimeAnswer;
+        const result = await debug(request.mode ? `engine.time.mode ${request.mode}` : 'engine.time') as ProductHostTimeAnswer;
         await presenter.inspect({ simulationMs: result.mode === 'realtime' ? null : Number(result.simulationStep) * 1000 / result.fixedStepHz }); return result;
       }
       case 'advance': {
         if (!Number.isFinite(request.ms) || request.ms! <= 0 || request.ms! > 2000) throw new Error('advance ms must be in (0, 2000]');
         await flushInput();
-        const result = await debug(`engine.time.advance ${request.ms}`) as ProductDevTimeAnswer;
+        const result = await debug(`engine.time.advance ${request.ms}`) as ProductHostTimeAnswer;
         await settle();
         const state = await presenter.inspect({ simulationMs: Number(result.simulationStep) * 1000 / result.fixedStepHz });
         if (state.drawing !== 'on-demand') await presenter.draw(); return result;
       }
       case 'drawing': {
         if (!(DRAWING_MODES as readonly string[]).includes(request.mode ?? '')) throw new Error('drawing mode must be continuous or on-demand');
-        return presenter.inspect({ drawing: request.mode as ProductDevRendererInspection['drawing'] });
+        return presenter.inspect({ drawing: request.mode as ProductHostRendererInspection['drawing'] });
       }
       case 'frame': await settle(); return presenter.frame();
       case 'camera': {

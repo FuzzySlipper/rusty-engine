@@ -299,7 +299,7 @@ A leak path's reported width is the grid spacing, not measured clearance.
 Enclosure diagnostics use zero piece IDs for collection-wide connectivity;
 the declared region and returned path identify their scope.
 
-These are synchronous authoring operations. The development host does not
+These are synchronous authoring operations. The product host does not
 interrupt a long callback, so full-scene capture and analysis simply hold the
 runtime until they finish; this does not make analysis asynchronous or increase
 geometric coverage. Keep analysis behind an explicit authoring switch or debug
@@ -558,13 +558,13 @@ foreground-group signals reach only the supervisor. On SIGINT or SIGTERM, to
 coreclr`, the supervisor closes the runtime's stdin. The runtime stops
 updating, runs product disposal, flushes diagnostics and exits successfully.
 A runtime that cannot dispose within ten seconds is killed with
-`DEV_HOST_RUNTIME_SHUTDOWN_TIMEOUT`.
+`PRODUCT_HOST_RUNTIME_SHUTDOWN_TIMEOUT`.
 
 A direct launch does not treat its own stdin EOF as a stop request. If its
 runtime crashes, the host stops with a named diagnostic and a nonzero exit; it
 does not silently retry gameplay. Under `rusty dev`, the first crash restarts
 the runtime once, and a second pauses until the next source restage; neither
-replays a request. The development host has no callback deadline. A product
+replays a request. The product host has no callback deadline. A product
 stuck in a callback shows `inFlightOperation` and its age in live-debug
 telemetry, and the next source restage replaces it. `--debugger` disables the
 30-second runtime startup deadline for managed breakpoints; shutdown remains

@@ -1,4 +1,4 @@
-//! Small agent-friendly client for an explicitly enabled Rusty product dev host.
+//! Small agent-friendly client for an explicitly enabled Rusty product host.
 //!
 //! The client owns only HTTP transport, local transcript/history, and
 //! descriptor-derived help. The generated product catalog remains the sole
@@ -28,7 +28,7 @@ fn main() {
 fn run(arguments: Arguments) -> Result<i32, String> {
     match arguments {
         Arguments::Help => {
-            println!("usage: rusty-live-debug --origin http://host:port [--command <line>]\nWithout --command, starts an interactive REPL. The dev host must be started with --live-debug.");
+            println!("usage: rusty-live-debug --origin http://host:port [--command <line>]\nWithout --command, starts an interactive REPL. The product host must be started with --live-debug.");
             Ok(0)
         }
         Arguments::Run { origin, command } => {
@@ -418,7 +418,7 @@ struct DiagnosticsUpdateAttributionWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
 struct DiagnosticsUpdateAttributionSampleWire {
-    runtime: Option<product_dev_host::ProductDevRuntimeBinding>,
+    runtime: Option<product_host::ProductHostRuntimeBinding>,
     simulation_step: String,
     admitted_step_count: String,
     post_callback_duration_us: String,

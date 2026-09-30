@@ -9,10 +9,10 @@
  * stays the application's focus, pointer-lock and input target, and this view
  * runs the one page cadence the application samples input on.
  *
- * Wire format: `rust/crates/product-dev-host/src/frames.rs`, whose header
+ * Wire format: `rust/crates/product-host/src/frames.rs`, whose header
  * layout is emitted as `FRAME_STREAM_HEADER`.
  */
-import { FRAME_STREAM_HEADER, FRAME_STREAM_PATH, type ProductDevRenderOutput } from './generated/contracts.js';
+import { FRAME_STREAM_HEADER, FRAME_STREAM_PATH, type ProductHostRenderOutput } from './generated/contracts.js';
 
 /** Above the product UI while a video clip covers the frame. */
 const VIDEO_Z_INDEX = '1000';
@@ -71,7 +71,7 @@ export interface RustyApplicationFrameView {
  */
 export function mountRustyApplicationFrameView(
   canvas: HTMLCanvasElement,
-  output: ProductDevRenderOutput,
+  output: ProductHostRenderOutput,
   onCadence: (timeMs: number) => void,
 ): RustyApplicationFrameView {
   const document = canvas.ownerDocument;

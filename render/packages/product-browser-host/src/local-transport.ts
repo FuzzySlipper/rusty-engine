@@ -2,20 +2,20 @@ import { browserAttachmentEvidence } from './attachment-evidence.js';
 import type { RustyApplicationRuntimeIdentity } from '@rusty-engine/application-host';
 import {
   RUNTIME_BASE_PATH,
-  type ProductDevBrowserDiagnosticsReport,
-  type ProductDevBrowserDiagnosticsResult,
-  type ProductDevConnectionBaseline,
-  type ProductDevControlRequest,
-  type ProductDevEmptyRequest,
-  type ProductDevExternalRequest,
-  type ProductDevInputRequest,
-  type ProductDevInputResult,
-  type ProductDevLifecycleRequest,
-  type ProductDevOperationResult,
-  type ProductDevRealtimeRequest,
-  type ProductDevRuntimeOutput,
-  type ProductDevTimelineCompletion,
-  type ProductDevTimelineCompletionResult,
+  type ProductHostBrowserDiagnosticsReport,
+  type ProductHostBrowserDiagnosticsResult,
+  type ProductHostConnectionBaseline,
+  type ProductHostControlRequest,
+  type ProductHostEmptyRequest,
+  type ProductHostExternalRequest,
+  type ProductHostInputRequest,
+  type ProductHostInputResult,
+  type ProductHostLifecycleRequest,
+  type ProductHostOperationResult,
+  type ProductHostRealtimeRequest,
+  type ProductHostRuntimeOutput,
+  type ProductHostTimelineCompletion,
+  type ProductHostTimelineCompletionResult,
   type RuntimeInputWireEvent,
 } from './generated/contracts.js';
 import type {
@@ -216,11 +216,11 @@ export function createProductBrowserLocalHttpAdapter(
   let pageInstanceId: string | null = null;
   let outputSubscriptionReady: Promise<void> | null = null;
   let resolveOutputSubscriptionReady: (() => void) | null = null;
-  let connectionReady: Promise<ProductDevOperationResult> | null = null;
-  let resolveConnectionReady: ((result: ProductDevOperationResult) => void) | null = null;
+  let connectionReady: Promise<ProductHostOperationResult> | null = null;
+  let resolveConnectionReady: ((result: ProductHostOperationResult) => void) | null = null;
   let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
   let connectionBaselineComplete = false;
-  let pendingConnectionOutputs: ProductDevRuntimeOutput[] = [];
+  let pendingConnectionOutputs: ProductHostRuntimeOutput[] = [];
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let nextOutputEpoch = 0;
   let currentOutputEpoch = 0;
@@ -230,7 +230,7 @@ export function createProductBrowserLocalHttpAdapter(
     readonly through: bigint;
     readonly resolve: (outcome: 'observed' | 'fresh-baseline' | 'closed') => void;
   }>();
-  const listeners = new Set<(output: ProductDevRuntimeOutput) => void>();
+  const listeners = new Set<(output: ProductHostRuntimeOutput) => void>();
   const batchListeners = new Set<ProductBrowserRuntimeOutputBatchListener>();
   const terminalFailureListeners = new Set<ProductBrowserRuntimeTerminalFailureListener>();
   const abortController = new AbortController();
@@ -562,46 +562,46 @@ export function createProductBrowserLocalHttpAdapter(
     return value as Result;
   };
 
-  const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductDevOperationResult> =>
-    post<ProductDevLifecycleRequest, ProductDevOperationResult>(ROUTES.lifecycle[operation.kind], {});
+  const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductHostOperationResult> =>
+    post<ProductHostLifecycleRequest, ProductHostOperationResult>(ROUTES.lifecycle[operation.kind], {});
 
   const replaceControl = (
     runtime: RustyApplicationRuntimeIdentity,
-  ): Promise<ProductDevOperationResult> =>
-    post<ProductDevControlRequest, ProductDevOperationResult>(ROUTES.control.replace, { runtime });
+  ): Promise<ProductHostOperationResult> =>
+    post<ProductHostControlRequest, ProductHostOperationResult>(ROUTES.control.replace, { runtime });
 
   const input = (
     batch: readonly RuntimeInputWireEvent[],
-  ): Promise<ProductDevInputResult> =>
-    post<ProductDevInputRequest, ProductDevInputResult>(ROUTES.input, { batch: [...batch] });
+  ): Promise<ProductHostInputResult> =>
+    post<ProductHostInputRequest, ProductHostInputResult>(ROUTES.input, { batch: [...batch] });
 
   const reportBrowserDiagnostics = (
-    report: ProductDevBrowserDiagnosticsReport,
-  ): Promise<ProductDevBrowserDiagnosticsResult> =>
+    report: ProductHostBrowserDiagnosticsReport,
+  ): Promise<ProductHostBrowserDiagnosticsResult> =>
     // The first terminal host report must survive closing the SSE transport.
     // This exact route remains bounded and does not reopen the runtime API.
-    post<ProductDevBrowserDiagnosticsReport, ProductDevBrowserDiagnosticsResult>(
+    post<ProductHostBrowserDiagnosticsReport, ProductHostBrowserDiagnosticsResult>(
       ROUTES.browserDiagnostics,
       { ...report, attachment: attachment.read() },
       true,
     );
 
-  const advanceRealtime = (observedTimeNs: string): Promise<ProductDevOperationResult> =>
-    post<ProductDevRealtimeRequest, ProductDevOperationResult>(ROUTES.advanceRealtime, { observedTimeNs });
+  const advanceRealtime = (observedTimeNs: string): Promise<ProductHostOperationResult> =>
+    post<ProductHostRealtimeRequest, ProductHostOperationResult>(ROUTES.advanceRealtime, { observedTimeNs });
 
-  const admitDemandStep = (): Promise<ProductDevOperationResult> =>
-    post<ProductDevEmptyRequest, ProductDevOperationResult>(ROUTES.admitDemandStep, {});
+  const admitDemandStep = (): Promise<ProductHostOperationResult> =>
+    post<ProductHostEmptyRequest, ProductHostOperationResult>(ROUTES.admitDemandStep, {});
 
-  const admitExternalStep = (step: string): Promise<ProductDevOperationResult> =>
-    post<ProductDevExternalRequest, ProductDevOperationResult>(ROUTES.admitExternalStep, { step });
+  const admitExternalStep = (step: string): Promise<ProductHostOperationResult> =>
+    post<ProductHostExternalRequest, ProductHostOperationResult>(ROUTES.admitExternalStep, { step });
 
   const completeTimeline = (
-    completion: ProductDevTimelineCompletion,
-  ): Promise<ProductDevTimelineCompletionResult> =>
-    post<ProductDevTimelineCompletion, ProductDevTimelineCompletionResult>(ROUTES.completeTimeline, completion);
+    completion: ProductHostTimelineCompletion,
+  ): Promise<ProductHostTimelineCompletionResult> =>
+    post<ProductHostTimelineCompletion, ProductHostTimelineCompletionResult>(ROUTES.completeTimeline, completion);
 
   const publishOutputBatch = (
-    outputs: readonly ProductDevRuntimeOutput[],
+    outputs: readonly ProductHostRuntimeOutput[],
     metadata: ProductBrowserRuntimeOutputBatchMetadata = {
       epoch: currentOutputEpoch,
       baseline: false,
@@ -646,7 +646,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const stageOrPublishOutputBatch = (
-    outputs: readonly ProductDevRuntimeOutput[],
+    outputs: readonly ProductHostRuntimeOutput[],
     epoch: number,
   ): void => {
     if (connectionBaselineComplete) {
@@ -725,7 +725,7 @@ export function createProductBrowserLocalHttpAdapter(
         if (event.lastEventId !== '') {
           throw new TypeError('connection baseline completion must not carry a reconnect cursor');
         }
-        const { outputThrough, ...result } = JSON.parse(event.data) as ProductDevConnectionBaseline;
+        const { outputThrough, ...result } = JSON.parse(event.data) as ProductHostConnectionBaseline;
         observedOutputSequence = BigInt(outputThrough);
         settleOutputSequenceWaiters();
         if (!result.accepted) {
@@ -780,7 +780,7 @@ export function createProductBrowserLocalHttpAdapter(
     attachedStream.onmessage = (event) => {
       if (!ownsProjection()) return;
       try {
-        const outputs = JSON.parse(event.data) as ProductDevRuntimeOutput[];
+        const outputs = JSON.parse(event.data) as ProductHostRuntimeOutput[];
         if (connectionBaselineComplete) {
           observeOutputSequence(event.lastEventId);
         }
@@ -834,7 +834,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const subscribeOutputs = (
-    listener: (output: ProductDevRuntimeOutput) => void,
+    listener: (output: ProductHostRuntimeOutput) => void,
   ): (() => void) => {
     ensureOpen();
     if (typeof listener !== 'function') {
@@ -849,7 +849,7 @@ export function createProductBrowserLocalHttpAdapter(
         outputSubscriptionReady = new Promise<void>((resolve) => {
           resolveOutputSubscriptionReady = resolve;
         });
-        connectionReady = new Promise<ProductDevOperationResult>((resolve, reject) => {
+        connectionReady = new Promise<ProductHostOperationResult>((resolve, reject) => {
           resolveConnectionReady = resolve;
           rejectConnectionReady = reject;
         });
@@ -942,7 +942,7 @@ export function createProductBrowserLocalHttpAdapter(
     ensureOpen();
   };
 
-  const connect = async (): Promise<ProductDevOperationResult> => {
+  const connect = async (): Promise<ProductHostOperationResult> => {
     ensureOpen();
     if (stream === null || connectionReady === null) {
       throw new ProductBrowserLocalTransportError(

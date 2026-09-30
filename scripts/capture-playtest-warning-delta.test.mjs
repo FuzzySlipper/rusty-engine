@@ -33,7 +33,7 @@ function diagnostic({
   sequence,
   severity,
   disposition,
-  source = 'dev-host',
+  source = 'product-host',
   code,
   message = code,
   fields = [],
@@ -69,7 +69,7 @@ function responseWarning({ sequence = '1', attachmentId = 'old', certainty = 'se
     sequence,
     severity: 'warning',
     disposition: 'resync-required',
-    code: 'DEV_HOST_RESPONSE_WRITE_RESYNC',
+    code: 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC',
     message: 'response delivery requires a fresh readout',
     fields: [
       field('attachment-id', attachmentId),
@@ -159,7 +159,7 @@ test('resolves a settled response write only through a later exact fresh baselin
     responseWarning({ sequence: '10', attachmentId: 'attachment-a', certainty: 'settled' }),
     baseline({ sequence: '11', attachmentId: 'attachment-b', replacesAttachmentId: 'attachment-a' }),
   ]);
-  const warning = findings.find((finding) => finding.code === 'DEV_HOST_RESPONSE_WRITE_RESYNC');
+  const warning = findings.find((finding) => finding.code === 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC');
   assert.equal(warning?.recovery?.status, 'recovered');
   assert.equal(warning?.recovery?.scope, 'attachment');
   assert.equal(warning?.recovery?.method, 'fresh-baseline');
@@ -182,7 +182,7 @@ test('keeps a response write unresolved when the fresh baseline replaces another
     responseWarning({ sequence: '10', attachmentId: 'attachment-a' }),
     baseline({ sequence: '11', attachmentId: 'attachment-c', replacesAttachmentId: 'attachment-b' }),
   ]);
-  const warning = findings.find((finding) => finding.code === 'DEV_HOST_RESPONSE_WRITE_RESYNC');
+  const warning = findings.find((finding) => finding.code === 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC');
   assert.equal(warning?.recovery?.status, 'unresolved');
   assert.equal(warning?.recovery?.reason, 'missing-matching-fresh-baseline');
   assert.match(captureBlockers({ browser: { status: 'complete' }, engine: { status: 'complete' } }, compatibleComparison(), findings).join('\n'), /resynchronization/);
@@ -193,7 +193,7 @@ test('does not resolve a queued-input response write even with an exact fresh ba
     responseWarning({ sequence: '10', attachmentId: 'attachment-a', certainty: 'queued-input' }),
     baseline({ sequence: '11', attachmentId: 'attachment-b', replacesAttachmentId: 'attachment-a' }),
   ]);
-  const warning = findings.find((finding) => finding.code === 'DEV_HOST_RESPONSE_WRITE_RESYNC');
+  const warning = findings.find((finding) => finding.code === 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC');
   assert.equal(warning?.recovery?.status, 'unresolved');
   assert.equal(warning?.recovery?.reason, 'response-certainty-is-not-settled-or-observation');
   assert.match(captureBlockers({ browser: { status: 'complete' }, engine: { status: 'complete' } }, compatibleComparison(), findings).join('\n'), /resynchronization/);
@@ -204,7 +204,7 @@ test('does not treat the host missing-attachment sentinel as a correlation ident
     responseWarning({ sequence: '10', attachmentId: 'none' }),
     baseline({ sequence: '11', attachmentId: 'attachment-b', replacesAttachmentId: 'none' }),
   ]);
-  const warning = findings.find((finding) => finding.code === 'DEV_HOST_RESPONSE_WRITE_RESYNC');
+  const warning = findings.find((finding) => finding.code === 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC');
   assert.equal(warning?.recovery?.status, 'unresolved');
   assert.equal(warning?.recovery?.reason, 'missing-attachment-id');
 });
@@ -221,7 +221,7 @@ test('keeps terminal diagnostics blocking after a delivery warning was recovered
       message: 'runtime stopped',
     }),
   ]);
-  const warning = findings.find((finding) => finding.code === 'DEV_HOST_RESPONSE_WRITE_RESYNC');
+  const warning = findings.find((finding) => finding.code === 'PRODUCT_HOST_RESPONSE_WRITE_RESYNC');
   assert.equal(warning?.recovery?.status, 'recovered');
   const blockers = captureBlockers({ browser: { status: 'complete' }, engine: { status: 'complete' } }, compatibleComparison(), findings);
   assert.match(blockers.join('\n'), /terminal/);

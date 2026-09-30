@@ -9,17 +9,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use product_dev_host::{
-    CanonicalU64, ProductDevBundle, ProductDevBundleEntry, ProductDevDebugCatalog,
-    ProductDevDebugResult, ProductDevHost, ProductDevHostConfig, ProductDevInputBatch,
-    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+use product_host::RuntimePublication;
+use product_host::{
+    CanonicalU64, ProductHost, ProductHostBundle, ProductHostBundleEntry, ProductHostConfig,
+    ProductHostDebugCatalog, ProductHostDebugResult, ProductHostInputBatch, ProductHostInputResult,
+    ProductHostLifecycleOperation, ProductHostLog, ProductHostOperationKind,
+    ProductHostOperationResult, ProductHostRuntime, ProductHostRuntimeBinding,
+    ProductHostRuntimeMode, ProductHostRuntimeReadout, ProductHostRuntimeReceipt,
+    ProductHostRuntimeState, ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
 };
 use runtime_input::RuntimeInputBinding;
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
-use runtime_publication::RuntimePublication;
 
 #[derive(Default)]
 struct FixtureRuntime {
@@ -45,19 +45,19 @@ struct GatedLifecycleRuntime {
 }
 
 impl FixtureRuntime {
-    fn binding() -> ProductDevRuntimeBinding {
-        ProductDevRuntimeBinding {
+    fn binding() -> ProductHostRuntimeBinding {
+        ProductHostRuntimeBinding {
             instance_id: CanonicalU64::new(7),
             generation: CanonicalU64::new(1),
             control_revision: CanonicalU64::new(2),
         }
     }
 
-    fn readout() -> ProductDevRuntimeReadout {
-        ProductDevRuntimeReadout::new(
+    fn readout() -> ProductHostRuntimeReadout {
+        ProductHostRuntimeReadout::new(
             Self::binding(),
-            ProductDevRuntimeMode::Realtime,
-            ProductDevRuntimeState::Running,
+            ProductHostRuntimeMode::Realtime,
+            ProductHostRuntimeState::Running,
         )
     }
 
@@ -80,10 +80,10 @@ impl FixtureRuntime {
     }
 
     fn operation(
-        operation: ProductDevOperationKind,
-    ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
-        ProductDevRuntimeReceipt::new(
-            ProductDevOperationResult::accepted(
+        operation: ProductHostOperationKind,
+    ) -> ProductHostRuntimeReceipt<ProductHostOperationResult> {
+        ProductHostRuntimeReceipt::new(
+            ProductHostOperationResult::accepted(
                 operation,
                 Self::binding(),
                 CanonicalU64::new(0),
@@ -99,9 +99,9 @@ impl FixtureRuntime {
 impl ReconnectRuntime {
     fn operation(
         &self,
-        operation: ProductDevOperationKind,
+        operation: ProductHostOperationKind,
         baseline: bool,
-    ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
+    ) -> ProductHostRuntimeReceipt<ProductHostOperationResult> {
         let outputs = if baseline {
             FixtureRuntime::baseline_publications()
         } else {
@@ -120,8 +120,8 @@ impl ReconnectRuntime {
                 .unwrap(),
             )]
         };
-        ProductDevRuntimeReceipt::new(
-            ProductDevOperationResult::accepted(
+        ProductHostRuntimeReceipt::new(
+            ProductHostOperationResult::accepted(
                 operation,
                 FixtureRuntime::binding(),
                 CanonicalU64::new(0),
@@ -134,49 +134,49 @@ impl ReconnectRuntime {
     }
 }
 
-impl ProductDevRuntime for ReconnectRuntime {
+impl ProductHostRuntime for ReconnectRuntime {
     fn connect(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         if self.fail_connect {
-            return Err(product_dev_host::ProductDevRuntimeError::new(
+            return Err(product_host::ProductHostRuntimeError::new(
                 "FIXTURE_CONNECT_TAINTED",
                 "fixture start callback escaped after entry",
             ));
         }
         let operation = if self.started {
             self.attaches.fetch_add(1, Ordering::SeqCst);
-            ProductDevOperationKind::Connect
+            ProductHostOperationKind::Connect
         } else {
             self.started = true;
             self.starts.fetch_add(1, Ordering::SeqCst);
-            ProductDevOperationKind::Start
+            ProductHostOperationKind::Start
         };
         Ok(self.operation(operation, true))
     }
 
     fn lifecycle(
         &mut self,
-        operation: ProductDevLifecycleOperation,
+        operation: ProductHostLifecycleOperation,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(self.operation(operation.operation_kind(), true))
     }
 
     fn input(
         &mut self,
-        batch: ProductDevInputBatch,
+        batch: ProductHostInputBatch,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevInputResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostInputResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevInputResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostInputResult::accepted(
                 batch.events().len(),
                 FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
@@ -191,40 +191,40 @@ impl ProductDevRuntime for ReconnectRuntime {
         &mut self,
         _observed_time_ns: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(self.operation(ProductDevOperationKind::AdvanceRealtime, false))
+        Ok(self.operation(ProductHostOperationKind::AdvanceRealtime, false))
     }
 
     fn admit_demand_step(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(self.operation(ProductDevOperationKind::AdmitDemandStep, false))
+        Ok(self.operation(ProductHostOperationKind::AdmitDemandStep, false))
     }
 
     fn admit_external_step(
         &mut self,
         _step: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(self.operation(ProductDevOperationKind::AdmitExternalStep, false))
+        Ok(self.operation(ProductHostOperationKind::AdmitExternalStep, false))
     }
 
     fn complete_timeline(
         &mut self,
-        completion: ProductDevTimelineCompletion,
+        completion: ProductHostTimelineCompletion,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostTimelineCompletionResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevTimelineCompletionResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
                 FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
@@ -236,16 +236,16 @@ impl ProductDevRuntime for ReconnectRuntime {
     }
 }
 
-impl ProductDevRuntime for FixtureRuntime {
+impl ProductHostRuntime for FixtureRuntime {
     fn lifecycle(
         &mut self,
-        operation: ProductDevLifecycleOperation,
+        operation: ProductHostLifecycleOperation,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         if self.fail_lifecycle {
-            return Err(product_dev_host::ProductDevRuntimeError::new(
+            return Err(product_host::ProductHostRuntimeError::new(
                 "FIXTURE_CALLBACK_UNKNOWN",
                 "callback effects are unknown",
             ));
@@ -255,14 +255,18 @@ impl ProductDevRuntime for FixtureRuntime {
 
     fn input(
         &mut self,
-        batch: ProductDevInputBatch,
+        batch: ProductHostInputBatch,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevInputResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostInputResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevInputResult::accepted(batch.events().len(), Self::binding(), Self::readout())
-                .unwrap(),
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostInputResult::accepted(
+                batch.events().len(),
+                Self::binding(),
+                Self::readout(),
+            )
+            .unwrap(),
             Vec::new(),
         )
         .unwrap())
@@ -271,92 +275,92 @@ impl ProductDevRuntime for FixtureRuntime {
     fn recover_input_overflow(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         self.recovery_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(Self::operation(ProductDevOperationKind::ReplaceControl))
+        Ok(Self::operation(ProductHostOperationKind::ReplaceControl))
     }
 
     fn describe_debug(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevDebugCatalog>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostDebugCatalog>,
+        product_host::ProductHostRuntimeError,
     > {
-        let catalog = ProductDevDebugCatalog::decode_json(
+        let catalog = ProductHostDebugCatalog::decode_json(
             br#"{"available":true,"commands":[{"name":"fixture.echo","description":"Echoes a fixture value.","parameters":[{"name":"value","type":"string"}]}]}"#,
         )
         .unwrap();
-        Ok(ProductDevRuntimeReceipt::new(catalog, Vec::new()).unwrap())
+        Ok(ProductHostRuntimeReceipt::new(catalog, Vec::new()).unwrap())
     }
 
     fn execute_debug(
         &mut self,
         command: &str,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevDebugResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostDebugResult>,
+        product_host::ProductHostRuntimeError,
     > {
         let result = match command {
             "fixture.fail" => {
-                ProductDevDebugResult::new(false, "fixture semantic failure".to_owned())
+                ProductHostDebugResult::new(false, "fixture semantic failure".to_owned())
             }
             "fixture.runtime" => {
-                return Err(product_dev_host::ProductDevRuntimeError::new(
+                return Err(product_host::ProductHostRuntimeError::new(
                     "FIXTURE_DEBUG_RUNTIME",
                     "fixture runtime failure",
                 ))
             }
-            "fixture.large" => ProductDevDebugResult::new(true, "x".repeat(100 * 1024)),
+            "fixture.large" => ProductHostDebugResult::new(true, "x".repeat(100 * 1024)),
             // The product runtime attaches its readout to a successful command.
             "fixture.readout" => {
-                ProductDevDebugResult::new(true, "executed fixture.readout".to_owned())
+                ProductHostDebugResult::new(true, "executed fixture.readout".to_owned())
                     .with_readout(Self::readout())
             }
-            _ => ProductDevDebugResult::new(true, format!("executed {command}")),
+            _ => ProductHostDebugResult::new(true, format!("executed {command}")),
         };
-        Ok(ProductDevRuntimeReceipt::new(result, Vec::new()).unwrap())
+        Ok(ProductHostRuntimeReceipt::new(result, Vec::new()).unwrap())
     }
 
     fn advance_realtime(
         &mut self,
         _observed_time_ns: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(Self::operation(ProductDevOperationKind::AdvanceRealtime))
+        Ok(Self::operation(ProductHostOperationKind::AdvanceRealtime))
     }
 
     fn admit_demand_step(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(Self::operation(ProductDevOperationKind::AdmitDemandStep))
+        Ok(Self::operation(ProductHostOperationKind::AdmitDemandStep))
     }
 
     fn admit_external_step(
         &mut self,
         _step: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(Self::operation(ProductDevOperationKind::AdmitExternalStep))
+        Ok(Self::operation(ProductHostOperationKind::AdmitExternalStep))
     }
 
     fn complete_timeline(
         &mut self,
-        completion: ProductDevTimelineCompletion,
+        completion: ProductHostTimelineCompletion,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostTimelineCompletionResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevTimelineCompletionResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
                 Self::binding(),
                 Self::readout(),
@@ -368,32 +372,32 @@ impl ProductDevRuntime for FixtureRuntime {
     }
 }
 
-impl ProductDevRuntime for OutputFailureRuntime {
+impl ProductHostRuntime for OutputFailureRuntime {
     fn connect(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(FixtureRuntime::operation(ProductDevOperationKind::Connect))
+        Ok(FixtureRuntime::operation(ProductHostOperationKind::Connect))
     }
 
     fn lifecycle(
         &mut self,
-        operation: ProductDevLifecycleOperation,
+        operation: ProductHostLifecycleOperation,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(operation.operation_kind()))
     }
 
     fn input(
         &mut self,
-        batch: ProductDevInputBatch,
+        batch: ProductHostInputBatch,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevInputResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostInputResult>,
+        product_host::ProductHostRuntimeError,
     > {
         let call = self.inputs.fetch_add(1, Ordering::SeqCst);
         let outputs = if call == 0 {
@@ -407,8 +411,8 @@ impl ProductDevRuntime for OutputFailureRuntime {
         } else {
             Vec::new()
         };
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevInputResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostInputResult::accepted(
                 batch.events().len(),
                 FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
@@ -423,22 +427,22 @@ impl ProductDevRuntime for OutputFailureRuntime {
         &mut self,
         _observed_time_ns: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(
-            ProductDevOperationKind::AdvanceRealtime,
+            ProductHostOperationKind::AdvanceRealtime,
         ))
     }
 
     fn admit_demand_step(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(
-            ProductDevOperationKind::AdmitDemandStep,
+            ProductHostOperationKind::AdmitDemandStep,
         ))
     }
 
@@ -446,23 +450,23 @@ impl ProductDevRuntime for OutputFailureRuntime {
         &mut self,
         _step: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(
-            ProductDevOperationKind::AdmitExternalStep,
+            ProductHostOperationKind::AdmitExternalStep,
         ))
     }
 
     fn complete_timeline(
         &mut self,
-        completion: ProductDevTimelineCompletion,
+        completion: ProductHostTimelineCompletion,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostTimelineCompletionResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevTimelineCompletionResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
                 FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
@@ -474,22 +478,22 @@ impl ProductDevRuntime for OutputFailureRuntime {
     }
 }
 
-impl ProductDevRuntime for GatedLifecycleRuntime {
+impl ProductHostRuntime for GatedLifecycleRuntime {
     fn connect(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(FixtureRuntime::operation(ProductDevOperationKind::Connect))
+        Ok(FixtureRuntime::operation(ProductHostOperationKind::Connect))
     }
 
     fn lifecycle(
         &mut self,
-        operation: ProductDevLifecycleOperation,
+        operation: ProductHostLifecycleOperation,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         self.lifecycle_calls.fetch_add(1, Ordering::SeqCst);
         self.entered
@@ -503,13 +507,13 @@ impl ProductDevRuntime for GatedLifecycleRuntime {
 
     fn input(
         &mut self,
-        batch: ProductDevInputBatch,
+        batch: ProductHostInputBatch,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevInputResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostInputResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevInputResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostInputResult::accepted(
                 batch.events().len(),
                 FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
@@ -524,22 +528,22 @@ impl ProductDevRuntime for GatedLifecycleRuntime {
         &mut self,
         _observed_time_ns: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(
-            ProductDevOperationKind::AdvanceRealtime,
+            ProductHostOperationKind::AdvanceRealtime,
         ))
     }
 
     fn admit_demand_step(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(
-            ProductDevOperationKind::AdmitDemandStep,
+            ProductHostOperationKind::AdmitDemandStep,
         ))
     }
 
@@ -547,23 +551,23 @@ impl ProductDevRuntime for GatedLifecycleRuntime {
         &mut self,
         _step: CanonicalU64,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevOperationResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostOperationResult>,
+        product_host::ProductHostRuntimeError,
     > {
         Ok(FixtureRuntime::operation(
-            ProductDevOperationKind::AdmitExternalStep,
+            ProductHostOperationKind::AdmitExternalStep,
         ))
     }
 
     fn complete_timeline(
         &mut self,
-        completion: ProductDevTimelineCompletion,
+        completion: ProductHostTimelineCompletion,
     ) -> Result<
-        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
-        product_dev_host::ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<ProductHostTimelineCompletionResult>,
+        product_host::ProductHostRuntimeError,
     > {
-        Ok(ProductDevRuntimeReceipt::new(
-            ProductDevTimelineCompletionResult::accepted(
+        Ok(ProductHostRuntimeReceipt::new(
+            ProductHostTimelineCompletionResult::accepted(
                 CanonicalU64::new(completion.envelope().ticket().value()),
                 FixtureRuntime::binding(),
                 FixtureRuntime::readout(),
@@ -575,15 +579,15 @@ impl ProductDevRuntime for GatedLifecycleRuntime {
     }
 }
 
-fn start() -> product_dev_host::RunningProductDevHost {
-    let bundle = ProductDevBundle::new(vec![
-        ProductDevBundleEntry::new(
+fn start() -> product_host::RunningProductHost {
+    let bundle = ProductHostBundle::new(vec![
+        ProductHostBundleEntry::new(
             "index.html",
             "text/html; charset=utf-8",
             b"<!doctype html><title>Rusty Product</title>".to_vec(),
         )
         .unwrap(),
-        ProductDevBundleEntry::new(
+        ProductHostBundleEntry::new(
             "main.js",
             "text/javascript; charset=utf-8",
             b"export {};".to_vec(),
@@ -591,20 +595,15 @@ fn start() -> product_dev_host::RunningProductDevHost {
         .unwrap(),
     ])
     .unwrap();
-    ProductDevHost::start(
-        FixtureRuntime::default(),
-        ProductDevHostConfig::new(0, bundle),
-    )
-    .unwrap()
+    ProductHost::start(FixtureRuntime::default(), ProductHostConfig::new(0, bundle)).unwrap()
 }
 
-fn start_debug() -> product_dev_host::RunningProductDevHost {
+fn start_debug() -> product_host::RunningProductHost {
     start_debug_with_recovery_calls().0
 }
 
-fn start_debug_with_recovery_calls() -> (product_dev_host::RunningProductDevHost, Arc<AtomicUsize>)
-{
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+fn start_debug_with_recovery_calls() -> (product_host::RunningProductHost, Arc<AtomicUsize>) {
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html>".to_vec(),
@@ -612,12 +611,12 @@ fn start_debug_with_recovery_calls() -> (product_dev_host::RunningProductDevHost
     .unwrap()])
     .unwrap();
     let recovery_calls = Arc::new(AtomicUsize::new(0));
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         FixtureRuntime {
             recovery_calls: Arc::clone(&recovery_calls),
             ..Default::default()
         },
-        ProductDevHostConfig::new(0, bundle).with_live_debug(true),
+        ProductHostConfig::new(0, bundle).with_live_debug(true),
     )
     .unwrap();
     (host, recovery_calls)
@@ -626,7 +625,7 @@ fn start_debug_with_recovery_calls() -> (product_dev_host::RunningProductDevHost
 fn start_reconnect(
     starts: Arc<AtomicUsize>,
     attaches: Arc<AtomicUsize>,
-) -> product_dev_host::RunningProductDevHost {
+) -> product_host::RunningProductHost {
     start_reconnect_with_failure(starts, attaches, false)
 }
 
@@ -634,22 +633,22 @@ fn start_reconnect_with_failure(
     starts: Arc<AtomicUsize>,
     attaches: Arc<AtomicUsize>,
     fail_connect: bool,
-) -> product_dev_host::RunningProductDevHost {
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+) -> product_host::RunningProductHost {
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html>".to_vec(),
     )
     .unwrap()])
     .unwrap();
-    ProductDevHost::start(
+    ProductHost::start(
         ReconnectRuntime {
             started: false,
             starts,
             attaches,
             fail_connect,
         },
-        ProductDevHostConfig::new(0, bundle),
+        ProductHostConfig::new(0, bundle),
     )
     .unwrap()
 }
@@ -728,19 +727,19 @@ fn request_bytes(origin: &str, raw: &[u8]) -> String {
 
 #[test]
 fn retries_one_injected_listener_accept_error_then_serves_the_next_connection() {
-    let diagnostics = ProductDevLog::new(Default::default()).unwrap();
+    let diagnostics = ProductHostLog::new(Default::default()).unwrap();
     let decisions = Arc::new(AtomicUsize::new(0));
     let hook_decisions = Arc::clone(&decisions);
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html>".to_vec(),
     )
     .unwrap()])
     .unwrap();
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         FixtureRuntime::default(),
-        ProductDevHostConfig::new(0, bundle)
+        ProductHostConfig::new(0, bundle)
             .with_diagnostics(diagnostics.clone())
             .with_test_accept_decision_hook(move || {
                 (hook_decisions.fetch_add(1, Ordering::SeqCst) == 0)
@@ -758,7 +757,7 @@ fn retries_one_injected_listener_accept_error_then_serves_the_next_connection() 
     assert!(snapshot
         .events
         .iter()
-        .any(|event| event.code() == "DEV_HOST_LISTENER_ACCEPT_RETRY"));
+        .any(|event| event.code() == "PRODUCT_HOST_LISTENER_ACCEPT_RETRY"));
     assert!(format!("{:?}", snapshot.events).contains("RejectedRecoverable"));
     host.shutdown().unwrap();
 }
@@ -766,18 +765,18 @@ fn retries_one_injected_listener_accept_error_then_serves_the_next_connection() 
 #[test]
 fn output_publication_failure_returns_the_consumed_receipt_for_resync_without_replay() {
     let inputs = Arc::new(AtomicUsize::new(0));
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html>".to_vec(),
     )
     .unwrap()])
     .unwrap();
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         OutputFailureRuntime {
             inputs: Arc::clone(&inputs),
         },
-        ProductDevHostConfig::new(0, bundle),
+        ProductHostConfig::new(0, bundle),
     )
     .unwrap();
     let origin = host.origin();
@@ -808,7 +807,7 @@ fn output_publication_failure_returns_the_consumed_receipt_for_resync_without_re
 
 #[test]
 fn closed_response_socket_records_the_exact_settled_attachment_before_fresh_baseline() {
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html>".to_vec(),
@@ -818,13 +817,13 @@ fn closed_response_socket_records_the_exact_settled_attachment_before_fresh_base
     let lifecycle_calls = Arc::new(AtomicUsize::new(0));
     let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
     let (release_sender, release_receiver) = mpsc::sync_channel(1);
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         GatedLifecycleRuntime {
             lifecycle_calls: Arc::clone(&lifecycle_calls),
             entered: entered_sender,
             release: release_receiver,
         },
-        ProductDevHostConfig::new(0, bundle).with_live_debug(true),
+        ProductHostConfig::new(0, bundle).with_live_debug(true),
     )
     .unwrap();
     let address = host.address();
@@ -851,7 +850,7 @@ fn closed_response_socket_records_the_exact_settled_attachment_before_fresh_base
     let deadline = Instant::now() + Duration::from_secs(2);
     let response_write_warning = loop {
         let read = request(&origin, diagnostic_request);
-        if read.contains("DEV_HOST_RESPONSE_WRITE_RESYNC") {
+        if read.contains("PRODUCT_HOST_RESPONSE_WRITE_RESYNC") {
             break read;
         }
         assert!(
@@ -904,7 +903,7 @@ fn closed_response_socket_records_the_exact_settled_attachment_before_fresh_base
     let final_diagnostics = request(&origin, diagnostic_request);
     assert_eq!(
         final_diagnostics
-            .matches("DEV_HOST_RESPONSE_WRITE_RESYNC")
+            .matches("PRODUCT_HOST_RESPONSE_WRITE_RESYNC")
             .count(),
         1,
         "the settled operation must not be replayed: {final_diagnostics}"
@@ -955,11 +954,11 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
 fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = Arc::clone(&requests);
-    let capture: product_dev_host::ProductDevFrameCapture = Arc::new(move |request| {
+    let capture: product_host::ProductHostFrameCapture = Arc::new(move |request| {
         seen.lock().unwrap().push(request);
-        Ok(product_dev_host::ProductDevCapture {
+        Ok(product_host::ProductHostCapture {
             sequence: 3,
-            frame: product_dev_host::ProductDevFrame {
+            frame: product_host::ProductHostFrame {
                 width: 2,
                 height: 1,
                 format: request.format,
@@ -971,16 +970,16 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
             cameras: serde_json::json!([{ "id": "main", "observer": false }]),
         })
     });
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html>".to_vec(),
     )
     .unwrap()])
     .unwrap();
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         FixtureRuntime::default(),
-        ProductDevHostConfig::new(0, bundle).with_frame_capture(capture),
+        ProductHostConfig::new(0, bundle).with_frame_capture(capture),
     )
     .unwrap();
     let origin = host.origin();
@@ -1021,13 +1020,13 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
     assert_eq!(
         seen,
         [
-            product_dev_host::ProductDevCaptureRequest {
+            product_host::ProductHostCaptureRequest {
                 size: Some((2, 1)),
-                format: product_dev_host::ProductDevFrameFormat::Rgba8,
+                format: product_host::ProductHostFrameFormat::Rgba8,
             },
-            product_dev_host::ProductDevCaptureRequest {
+            product_host::ProductHostCaptureRequest {
                 size: None,
-                format: product_dev_host::ProductDevFrameFormat::Png,
+                format: product_host::ProductHostFrameFormat::Png,
             },
         ]
     );
@@ -1058,7 +1057,10 @@ fn a_control_claim_reaches_the_runtime_or_is_refused_as_unsupported() {
     // The fixture runtime has no claim path: the route decodes the request
     // and answers the runtime's typed refusal.
     assert!(claim.contains("\"operation\":\"claim-control\""), "{claim}");
-    assert!(claim.contains("DEV_HOST_CONTROL_UNSUPPORTED"), "{claim}");
+    assert!(
+        claim.contains("PRODUCT_HOST_CONTROL_UNSUPPORTED"),
+        "{claim}"
+    );
     let malformed = request(
         &origin,
         "POST /__rusty/product/runtime/control/claim HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
@@ -1080,7 +1082,7 @@ fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
         ),
     );
     assert!(malformed.starts_with("HTTP/1.1 200 OK\r\n"), "{malformed}");
-    assert!(malformed.contains("\"code\":\"DEV_HOST_INPUT_DECODE\""));
+    assert!(malformed.contains("\"code\":\"PRODUCT_HOST_INPUT_DECODE\""));
     assert!(malformed.contains("\"disposition\":\"resync-required\""));
     assert!(malformed.contains("\"droppedCount\":1"));
     assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
@@ -1102,7 +1104,7 @@ fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
         "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
     );
     assert!(
-        diagnostics.contains("\"DEV_HOST_INPUT_DECODE\""),
+        diagnostics.contains("\"PRODUCT_HOST_INPUT_DECODE\""),
         "{diagnostics}"
     );
     assert!(diagnostics.contains("\"resync-required\""), "{diagnostics}");
@@ -1124,7 +1126,7 @@ fn over_limit_malformed_batch_resynchronizes_once_without_becoming_terminal() {
     );
 
     assert!(malformed.starts_with("HTTP/1.1 200 OK\r\n"), "{malformed}");
-    assert!(malformed.contains("\"code\":\"DEV_HOST_INPUT_DECODE\""));
+    assert!(malformed.contains("\"code\":\"PRODUCT_HOST_INPUT_DECODE\""));
     assert!(malformed.contains("\"disposition\":\"resync-required\""));
     assert!(malformed.contains("\"count\":1025"));
     assert!(malformed.contains("\"droppedCount\":1025"));
@@ -1231,7 +1233,7 @@ fn browser_diagnostics_establishes_a_typed_attachment_baseline() {
         "{invalid}"
     );
     assert!(
-        invalid.contains("DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"),
+        invalid.contains("PRODUCT_HOST_BROWSER_DIAGNOSTICS_BOUNDS"),
         "{invalid}"
     );
     host.shutdown().unwrap();
@@ -1372,7 +1374,7 @@ fn fresh_sse_connects_once_then_attaches_after_retained_outputs_are_evicted() {
     assert!(first_baseline.contains("\"operation\":\"start\""));
     drop(first);
 
-    for index in 0..=product_dev_host::MAX_SUBSCRIBER_QUEUE_EVENTS {
+    for index in 0..=product_host::MAX_SUBSCRIBER_QUEUE_EVENTS {
         let body = format!("{{\"observedTimeNs\":\"{}\"}}", index + 1);
         let response = request(
             &origin,
@@ -1467,7 +1469,7 @@ fn interrupted_baseline_completion_has_no_cursor_and_reattaches_without_reset() 
 #[test]
 fn idle_sse_disconnects_release_subscriber_slots() {
     let host = start();
-    for _ in 0..product_dev_host::MAX_SSE_SUBSCRIBERS {
+    for _ in 0..product_host::MAX_SSE_SUBSCRIBERS {
         let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
         let response = read_until(&mut stream, "\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
@@ -1481,7 +1483,7 @@ fn idle_sse_disconnects_release_subscriber_slots() {
     let mut final_stream = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
     let response = read_until(&mut final_stream, "\r\n\r\n");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
-    assert!(!response.contains("DEV_HOST_SSE_BOUNDS"));
+    assert!(!response.contains("PRODUCT_HOST_SSE_BOUNDS"));
     drop(final_stream);
     host.shutdown().unwrap();
 }
@@ -1566,7 +1568,7 @@ fn an_asset_reload_tells_each_attached_page_to_reload() {
     let mut page = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
     let baseline = read_until(&mut page, "event: rusty-output-baseline");
     assert!(baseline.contains("\"kind\":\"binding\""));
-    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
         b"<!doctype html><title>Reloaded</title>".to_vec(),
@@ -1671,7 +1673,7 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
 #[test]
 fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
     let bundle = || {
-        ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        ProductHostBundle::new(vec![ProductHostBundleEntry::new(
             "index.html",
             "text/html; charset=utf-8",
             b"<!doctype html>".to_vec(),
@@ -1679,9 +1681,9 @@ fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
         .unwrap()])
         .unwrap()
     };
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         FixtureRuntime::default(),
-        ProductDevHostConfig::new(0, bundle()),
+        ProductHostConfig::new(0, bundle()),
     )
     .unwrap();
     let body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"}}"#;
@@ -1693,7 +1695,7 @@ fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
         rejected.contains("X-Rusty-Commit-Disposition: not-applied\r\n"),
         "{rejected}"
     );
-    assert!(rejected.contains("DEV_HOST_CONTROL_UNSUPPORTED"));
+    assert!(rejected.contains("PRODUCT_HOST_CONTROL_UNSUPPORTED"));
     assert!(rejected.contains("\"disposition\":\"rejected-recoverable\""));
     assert!(!rejected.contains("\"recovery\""));
     assert!(!rejected.contains("X-Rusty-Output-Through:"));
@@ -1702,12 +1704,12 @@ fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
     assert!(accepted.contains("X-Rusty-Commit-Disposition: committed\r\n"));
     host.shutdown().unwrap();
 
-    let host = ProductDevHost::start(
+    let host = ProductHost::start(
         FixtureRuntime {
             fail_lifecycle: true,
             ..Default::default()
         },
-        ProductDevHostConfig::new(0, bundle()),
+        ProductHostConfig::new(0, bundle()),
     )
     .unwrap();
     let rejected = request(&host.origin(), "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
@@ -1728,12 +1730,12 @@ fn typed_runtime_rejections_set_known_and_unknown_commit_headers() {
 fn input_http_framing_remains_host_owned() {
     // A valid empty event page can exceed HTTP framing through whitespace alone.
     // The host-neutral decoder admits it; this particular HTTP host does not.
-    let bytes = format!("[{}]", " ".repeat(product_dev_host::MAX_REQUEST_BODY_BYTES));
+    let bytes = format!("[{}]", " ".repeat(product_host::MAX_REQUEST_BODY_BYTES));
     assert!(
         runtime_input::decode_runtime_input_wire_events_json(bytes.as_bytes())
             .unwrap()
             .is_empty()
     );
-    let error = ProductDevInputBatch::decode_json(bytes.as_bytes()).unwrap_err();
-    assert_eq!(error.code(), "DEV_HOST_BODY_BOUNDS");
+    let error = ProductHostInputBatch::decode_json(bytes.as_bytes()).unwrap_err();
+    assert_eq!(error.code(), "PRODUCT_HOST_BODY_BOUNDS");
 }

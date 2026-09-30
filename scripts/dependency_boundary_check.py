@@ -72,7 +72,7 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     # TypeScript declarations are generated only for the host's wire; the
     # render crates' types never reach the page.
     "ts-rs": frozenset(
-        {"product-dev-host", "runtime-diagnostics", "runtime-input", "runtime-ui"}
+        {"product-host", "runtime-diagnostics", "runtime-input", "runtime-ui"}
     ),
 }
 

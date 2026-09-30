@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use product_dev_host::ProductDevLog;
+use product_host::ProductHostLog;
 
 use crate::{
     browser_url, headless_browser, install_termination_signal_hook, Arguments, ProductLoader,
@@ -57,16 +57,16 @@ enum SupervisorCommand {
 
 pub(crate) fn run(args: Arguments) -> Result<(), String> {
     let termination = install_termination_signal_hook();
-    let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
+    let diagnostics = ProductHostLog::new(Default::default()).map_err(|error| error.to_string())?;
     let listener = TcpListener::bind(SocketAddr::from((args.bind_host(), args.port())))
-        .map_err(|error| format!("DEV_HOST_BIND: {error}"))?;
+        .map_err(|error| format!("PRODUCT_HOST_BIND: {error}"))?;
     let address = listener
         .local_addr()
-        .map_err(|error| format!("DEV_HOST_ADDRESS: {error}"))?;
+        .map_err(|error| format!("PRODUCT_HOST_ADDRESS: {error}"))?;
     let unavailable = Unavailable::start(
         listener
             .try_clone()
-            .map_err(|error| format!("DEV_HOST_BIND: {error}"))?,
+            .map_err(|error| format!("PRODUCT_HOST_BIND: {error}"))?,
     )?;
     let mut launch = RuntimeLaunch {
         executable: env::current_exe().map_err(|error| error.to_string())?,
@@ -74,11 +74,11 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
         product_directory: args
             .product_path
             .clone()
-            .ok_or("DEV_HOST_SUPERVISOR: a packaged --product directory is required")?,
+            .ok_or("PRODUCT_HOST_SUPERVISOR: a packaged --product directory is required")?,
         loader: args.loader,
         next_runtime_instance_id: args
             .runtime_instance_id
-            .ok_or("DEV_HOST_SUPERVISOR: the runtime incarnation was not allocated")?
+            .ok_or("PRODUCT_HOST_SUPERVISOR: the runtime incarnation was not allocated")?
             .value(),
         persistence_root: args.persistence_root.clone(),
         startup_timeout: (!args.debugger).then_some(RUNTIME_STARTUP_TIMEOUT),
@@ -110,7 +110,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
                 if initial_start {
                     return Err(error);
                 }
-                publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_RUNTIME_START", &error);
+                publish_supervisor_diagnostic(&diagnostics, "PRODUCT_HOST_RUNTIME_START", &error);
                 pause(
                     &diagnostics,
                     &unavailable,
@@ -128,14 +128,14 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
         } else if let Some(status) = runtime.as_mut().and_then(RuntimeProcess::exited) {
             runtime = None;
             let detail = format!("runtime exited unexpectedly ({status})");
-            publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_RUNTIME_EXIT", &detail);
+            publish_supervisor_diagnostic(&diagnostics, "PRODUCT_HOST_RUNTIME_EXIT", &detail);
             if !args.supervised {
                 unavailable.stop();
                 if let Some(browser) = headless_browser {
                     let _ = browser.shutdown();
                 }
                 return Err(format!(
-                    "DEV_HOST_RUNTIME_EXIT: {detail}; stopping the host"
+                    "PRODUCT_HOST_RUNTIME_EXIT: {detail}; stopping the host"
                 ));
             }
             if automatic_restart_used {
@@ -158,7 +158,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
                 if !product_directory.is_absolute() {
                     publish_supervisor_diagnostic(
                         &diagnostics,
-                        "DEV_HOST_SUPERVISOR_REPLACE",
+                        "PRODUCT_HOST_SUPERVISOR_REPLACE",
                         "productDirectory must be absolute",
                     );
                     continue;
@@ -169,7 +169,7 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
                     if let Err(error) = previous.stop() {
                         publish_supervisor_diagnostic(
                             &diagnostics,
-                            "DEV_HOST_RUNTIME_STOP",
+                            "PRODUCT_HOST_RUNTIME_STOP",
                             &error,
                         );
                     }
@@ -184,12 +184,20 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
             // starts, so there is nothing to forward.
             Ok(Ok(SupervisorCommand::ReloadAssets)) => {
                 if let Some(Err(error)) = runtime.as_mut().map(RuntimeProcess::reload_assets) {
-                    publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_ASSET_RELOAD", &error);
+                    publish_supervisor_diagnostic(
+                        &diagnostics,
+                        "PRODUCT_HOST_ASSET_RELOAD",
+                        &error,
+                    );
                 }
             }
             Ok(Err(error)) if error == SUPERVISOR_EOF => break "supervisor-stdin-closed",
             Ok(Err(error)) => {
-                publish_supervisor_diagnostic(&diagnostics, "DEV_HOST_SUPERVISOR_CONTROL", &error);
+                publish_supervisor_diagnostic(
+                    &diagnostics,
+                    "PRODUCT_HOST_SUPERVISOR_CONTROL",
+                    &error,
+                );
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break "supervisor-stdin-closed",
@@ -209,12 +217,12 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
 fn start_or_pause(
     launch: &mut RuntimeLaunch,
     unavailable: &Unavailable,
-    diagnostics: &ProductDevLog,
+    diagnostics: &ProductHostLog,
 ) -> Option<RuntimeProcess> {
     match launch.start(unavailable) {
         Ok(runtime) => Some(runtime),
         Err(error) => {
-            publish_supervisor_diagnostic(diagnostics, "DEV_HOST_RUNTIME_START", &error);
+            publish_supervisor_diagnostic(diagnostics, "PRODUCT_HOST_RUNTIME_START", &error);
             pause(
                 diagnostics,
                 unavailable,
@@ -225,16 +233,16 @@ fn start_or_pause(
     }
 }
 
-fn pause(diagnostics: &ProductDevLog, unavailable: &Unavailable, reason: &str) {
-    publish_supervisor_diagnostic(diagnostics, "DEV_HOST_RUNTIME_PAUSED", reason);
+fn pause(diagnostics: &ProductHostLog, unavailable: &Unavailable, reason: &str) {
+    publish_supervisor_diagnostic(diagnostics, "PRODUCT_HOST_RUNTIME_PAUSED", reason);
     unavailable.answer(reason);
 }
 
-fn publish_supervisor_diagnostic(diagnostics: &ProductDevLog, code: &str, message: &str) {
+fn publish_supervisor_diagnostic(diagnostics: &ProductHostLog, code: &str, message: &str) {
     eprintln!("RUSTY_HOST {code}: {message}");
-    let event = product_dev_host::ProductDevLogEvent::new(
-        product_dev_host::ProductDevLogSeverity::Error,
-        product_dev_host::ProductDevLogDisposition::Degraded,
+    let event = product_host::ProductHostLogEvent::new(
+        product_host::ProductHostLogSeverity::Error,
+        product_host::ProductHostLogDisposition::Degraded,
         "supervisor",
         code,
         message,
@@ -244,7 +252,7 @@ fn publish_supervisor_diagnostic(diagnostics: &ProductDevLog, code: &str, messag
     }
 }
 
-const SUPERVISOR_EOF: &str = "DEV_HOST_SUPERVISOR_EOF: supervisor stdin closed";
+const SUPERVISOR_EOF: &str = "PRODUCT_HOST_SUPERVISOR_EOF: supervisor stdin closed";
 
 fn read_supervisor_commands() -> mpsc::Receiver<Result<SupervisorCommand, String>> {
     let (commands, received) = mpsc::sync_channel(4);
@@ -268,7 +276,7 @@ fn read_supervisor_frame(input: &mut impl Read) -> Result<SupervisorCommand, Str
         return Err(if error.kind() == std::io::ErrorKind::UnexpectedEof {
             SUPERVISOR_EOF.to_owned()
         } else {
-            format!("DEV_HOST_SUPERVISOR_READ: {error}")
+            format!("PRODUCT_HOST_SUPERVISOR_READ: {error}")
         });
     }
     let mut bytes = vec![0_u8; u32::from_le_bytes(prefix) as usize];
@@ -276,7 +284,7 @@ fn read_supervisor_frame(input: &mut impl Read) -> Result<SupervisorCommand, Str
         .read_exact(&mut bytes)
         .map_err(|_| SUPERVISOR_EOF.to_owned())?;
     serde_json::from_slice(&bytes)
-        .map_err(|_| "DEV_HOST_SUPERVISOR_DECODE: command is not a closed envelope".to_owned())
+        .map_err(|_| "PRODUCT_HOST_SUPERVISOR_DECODE: command is not a closed envelope".to_owned())
 }
 
 struct RuntimeLaunch {
@@ -306,7 +314,7 @@ impl RuntimeLaunch {
         let product = self
             .product_directory
             .to_str()
-            .ok_or("DEV_HOST_SUPERVISOR: the Product directory path must be UTF-8")?;
+            .ok_or("PRODUCT_HOST_SUPERVISOR: the Product directory path must be UTF-8")?;
         let mut arguments = vec![
             "--product".to_owned(),
             product.to_owned(),
@@ -330,7 +338,7 @@ impl RuntimeLaunch {
 fn path_argument(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(str::to_owned)
-        .ok_or_else(|| format!("DEV_HOST_SUPERVISOR: `{}` is not UTF-8", path.display()))
+        .ok_or_else(|| format!("PRODUCT_HOST_SUPERVISOR: `{}` is not UTF-8", path.display()))
 }
 
 /// One runtime incarnation. Its stdin is the control pipe: one `serve`
@@ -367,7 +375,7 @@ impl RuntimeProcess {
         }
         let mut child = command
             .spawn()
-            .map_err(|error| format!("DEV_HOST_RUNTIME_SPAWN: {error}"))?;
+            .map_err(|error| format!("PRODUCT_HOST_RUNTIME_SPAWN: {error}"))?;
         let stdout = child.stdout.take().expect("piped runtime stdout");
         let (ready, ready_rx) = mpsc::channel();
         thread::spawn(move || {
@@ -404,7 +412,7 @@ impl RuntimeProcess {
         }
         if let Some(status) = self.exited() {
             return Err(format!(
-                "DEV_HOST_RUNTIME_EXIT: the runtime exited during startup ({status})"
+                "PRODUCT_HOST_RUNTIME_EXIT: the runtime exited during startup ({status})"
             ));
         }
         if self
@@ -413,7 +421,7 @@ impl RuntimeProcess {
         {
             self.kill();
             return Err(
-                "DEV_HOST_RUNTIME_STARTUP_TIMEOUT: the runtime did not load its product within 30 seconds"
+                "PRODUCT_HOST_RUNTIME_STARTUP_TIMEOUT: the runtime did not load its product within 30 seconds"
                     .to_owned(),
             );
         }
@@ -424,10 +432,10 @@ impl RuntimeProcess {
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or("DEV_HOST_RUNTIME_SERVE: runtime stdin is closed")?;
+            .ok_or("PRODUCT_HOST_RUNTIME_SERVE: runtime stdin is closed")?;
         writeln!(stdin, "{SERVE_COMMAND}")
             .and_then(|_| stdin.flush())
-            .map_err(|error| format!("DEV_HOST_RUNTIME_SERVE: {error}"))
+            .map_err(|error| format!("PRODUCT_HOST_RUNTIME_SERVE: {error}"))
     }
 
     /// A starting runtime reads only `serve` first, and may already have read
@@ -440,10 +448,10 @@ impl RuntimeProcess {
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or("DEV_HOST_ASSET_RELOAD: runtime stdin is closed")?;
+            .ok_or("PRODUCT_HOST_ASSET_RELOAD: runtime stdin is closed")?;
         writeln!(stdin, "{RELOAD_ASSETS_COMMAND}")
             .and_then(|_| stdin.flush())
-            .map_err(|error| format!("DEV_HOST_ASSET_RELOAD: {error}"))
+            .map_err(|error| format!("PRODUCT_HOST_ASSET_RELOAD: {error}"))
     }
 
     fn exited(&mut self) -> Option<ExitStatus> {
@@ -460,14 +468,14 @@ impl RuntimeProcess {
                     Ok(())
                 } else {
                     Err(format!(
-                        "DEV_HOST_RUNTIME_EXIT: the runtime exited with {status}"
+                        "PRODUCT_HOST_RUNTIME_EXIT: the runtime exited with {status}"
                     ))
                 };
             }
             if Instant::now() >= deadline {
                 self.kill();
                 return Err(
-                    "DEV_HOST_RUNTIME_SHUTDOWN_TIMEOUT: the runtime did not dispose within 10 seconds"
+                    "PRODUCT_HOST_RUNTIME_SHUTDOWN_TIMEOUT: the runtime did not dispose within 10 seconds"
                         .to_owned(),
                 );
             }
@@ -548,7 +556,7 @@ impl Unavailable {
                         }
                     }
                 })
-                .map_err(|error| format!("DEV_HOST_SUPERVISOR_THREAD: {error}"))?
+                .map_err(|error| format!("PRODUCT_HOST_SUPERVISOR_THREAD: {error}"))?
         };
         Ok(Self {
             reason,
@@ -621,7 +629,7 @@ fn answer_unavailable(mut stream: TcpStream, reason: &str) {
             "application/json",
             serde_json::json!({
                 "accepted": false,
-                "error": { "code": "DEV_HOST_RUNTIME_UNAVAILABLE", "diagnostic": reason },
+                "error": { "code": "PRODUCT_HOST_RUNTIME_UNAVAILABLE", "diagnostic": reason },
             })
             .to_string(),
         )
@@ -730,7 +738,7 @@ mod tests {
         assert!(page.starts_with("HTTP/1.1 503"));
         assert!(page.contains("http-equiv=\"refresh\""));
         let api = request("application/json");
-        assert!(api.contains("DEV_HOST_RUNTIME_UNAVAILABLE"));
+        assert!(api.contains("PRODUCT_HOST_RUNTIME_UNAVAILABLE"));
         assert!(api.contains("the runtime is starting"));
         unavailable.suspend();
         // A suspended supervisor leaves connections to the runtime's accept.

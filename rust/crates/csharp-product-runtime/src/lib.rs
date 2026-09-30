@@ -27,17 +27,18 @@ use netcorehost::{
     nethost,
     pdcstring::PdCString,
 };
-use product_dev_host::{
-    runtime_fault_disposition, CanonicalU64, ProductDevControlOperation, ProductDevDebugResult,
-    ProductDevFaultDisposition, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
-    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRendererStatus, ProductDevRendererWidget, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
-    ProductDevUpdateAttribution,
+use product_host::{
+    runtime_fault_disposition, CanonicalU64, ProductHostControlOperation, ProductHostDebugResult,
+    ProductHostFaultDisposition, ProductHostInputBatch, ProductHostInputResult,
+    ProductHostLifecycleOperation, ProductHostLog, ProductHostLogDisposition, ProductHostLogEvent,
+    ProductHostLogSeverity, ProductHostOperationKind, ProductHostOperationResult,
+    ProductHostRendererStatus, ProductHostRendererWidget, ProductHostRuntime,
+    ProductHostRuntimeBinding, ProductHostRuntimeError, ProductHostRuntimeFault,
+    ProductHostRuntimeReadout, ProductHostRuntimeReceipt, ProductHostRuntimeScheduleState,
+    ProductHostRuntimeState, ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,
+    ProductHostUpdateAttribution,
 };
+use product_host::{RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier};
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
     InputAxis, InputClearReason, InputContext, InputEdge, IntentValueKind,
@@ -49,9 +50,6 @@ use runtime_lifecycle::{
     ExternalStep, HostMonotonicTime, RealtimeLifecycleConfig, RuntimeControlOperation,
     RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig, RuntimeLifecycleReadout,
     RuntimeMode, RuntimeState,
-};
-use runtime_publication::{
-    RuntimePublication, RuntimePublicationError, RuntimePublicationFrontier,
 };
 use runtime_ui::RuntimeUiRuntimeBinding;
 
@@ -143,9 +141,9 @@ fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
     }
 }
 
-fn pretty_json(value: &impl serde::Serialize) -> Result<String, ProductDevRuntimeError> {
+fn pretty_json(value: &impl serde::Serialize) -> Result<String, ProductHostRuntimeError> {
     serde_json::to_string_pretty(value).map_err(|error| {
-        ProductDevRuntimeError::new(
+        ProductHostRuntimeError::new(
             "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
             format!("renderer answer could not be encoded: {error}"),
         )
@@ -174,7 +172,7 @@ pub struct CsharpProductRuntimeConfig {
     /// Optional host-selected application root for opaque product state.
     /// Products choose only relative scopes beneath this root.
     persistence_root: Option<PathBuf>,
-    diagnostics: ProductDevLog,
+    diagnostics: ProductHostLog,
     renderer_options: render_wgpu::RendererOptions,
     /// Where the runtime's renderer draws; `None` builds no renderer.
     render_output: Option<RenderOutput>,
@@ -195,7 +193,8 @@ impl CsharpProductRuntimeConfig {
             physical_mappings: Vec::new(),
             input_cursor_mode: NativeInputCursorMode::PointerLock,
             persistence_root: None,
-            diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
+            diagnostics: ProductHostLog::new(Default::default())
+                .expect("fixed diagnostic defaults"),
             renderer_options: render_wgpu::RendererOptions::default(),
             render_output: None,
             window_gpu: None,
@@ -247,7 +246,7 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
-    pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
+    pub fn with_diagnostics(mut self, diagnostics: ProductHostLog) -> Self {
         self.diagnostics = diagnostics;
         self
     }
@@ -284,9 +283,9 @@ impl From<CsharpEngineServicesError> for CsharpProductRuntimeError {
     }
 }
 
-impl From<CsharpProductRuntimeError> for ProductDevRuntimeError {
+impl From<CsharpProductRuntimeError> for ProductHostRuntimeError {
     fn from(error: CsharpProductRuntimeError) -> Self {
-        ProductDevRuntimeError::new(error.code, error.detail)
+        ProductHostRuntimeError::new(error.code, error.detail)
     }
 }
 
@@ -617,7 +616,7 @@ mod audio_output;
 mod frame_output;
 mod render_output;
 
-pub use product_dev_host::ProductDevRenderOutput as RenderOutput;
+pub use product_host::ProductHostRenderOutput as RenderOutput;
 
 /// Where `RUSTY_RENDER_OUTPUT` has this process draw the world: `stream`
 /// (the default) or `window`.
@@ -657,8 +656,8 @@ pub struct CsharpProductRuntime {
     initial_output: Option<Vec<RuntimePublication>>,
     renderer_metrics_visible: bool,
     shutdown_called: bool,
-    diagnostics: ProductDevLog,
-    pending_update_attribution: Option<ProductDevUpdateAttribution>,
+    diagnostics: ProductHostLog,
+    pending_update_attribution: Option<ProductHostUpdateAttribution>,
     /// Present when audio plays on this process's output device.
     audio_output: Option<audio_output::AudioOutput>,
     /// The renderer, when the configuration selected an output: absent only
@@ -680,7 +679,7 @@ struct InputClaim {
 /// The longest input lease a harness may hold between inputs.
 const MAX_INPUT_CLAIM_LEASE: std::time::Duration = std::time::Duration::from_secs(3600);
 
-// The development host serializes every call with one mutex. The native handle
+// The product host serializes every call with one mutex. The native handle
 // has no ambient access from Rust and is destroyed before the retained product
 // host is released (or the NativeAOT mapping is retained for process exit).
 unsafe impl Send for CsharpProductRuntime {}
@@ -944,13 +943,13 @@ impl CsharpProductRuntime {
         self.exercise_fresh_attachments()?;
         let started_binding = input_binding(&self.lifecycle);
         self.exercise_ui_projection_binding(started_binding)?;
-        self.input(ProductDevInputBatch::new(vec![key_press(
+        self.input(ProductHostInputBatch::new(vec![key_press(
             started_binding,
             1,
         )]))
         .map_err(exercise_runtime_error)?;
         self.control(
-            ProductDevControlOperation::Replace,
+            ProductHostControlOperation::Replace,
             dev_binding_from_input(started_binding),
         )
         .map_err(exercise_runtime_error)?;
@@ -972,7 +971,7 @@ impl CsharpProductRuntime {
             ));
         }
         if self
-            .input(ProductDevInputBatch::new(vec![input_clear(
+            .input(ProductHostInputBatch::new(vec![input_clear(
                 started_binding,
                 2,
             )]))
@@ -984,7 +983,7 @@ impl CsharpProductRuntime {
             ));
         }
         self.exercise_ui_projection_binding(replaced_binding)?;
-        self.input(ProductDevInputBatch::new(vec![key_press(
+        self.input(ProductHostInputBatch::new(vec![key_press(
             replaced_binding,
             1,
         )]))
@@ -997,7 +996,7 @@ impl CsharpProductRuntime {
             ));
         }
         self.control(
-            ProductDevControlOperation::Release,
+            ProductHostControlOperation::Release,
             dev_binding_from_input(replaced_binding),
         )
         .map_err(exercise_runtime_error)?;
@@ -1012,7 +1011,7 @@ impl CsharpProductRuntime {
         }
         if self
             .control(
-                ProductDevControlOperation::Release,
+                ProductHostControlOperation::Release,
                 dev_binding_from_input(replaced_binding),
             )
             .is_ok()
@@ -1022,7 +1021,7 @@ impl CsharpProductRuntime {
                 "stale control release was admitted after a control revision",
             ));
         }
-        self.input(ProductDevInputBatch::new(vec![input_clear(
+        self.input(ProductHostInputBatch::new(vec![input_clear(
             released_binding,
             1,
         )]))
@@ -1055,7 +1054,7 @@ impl CsharpProductRuntime {
             ));
         }
         if self.lifecycle.state() == RuntimeState::Created {
-            ProductDevRuntime::lifecycle(self, ProductDevLifecycleOperation::Start).map_err(
+            ProductHostRuntime::lifecycle(self, ProductHostLifecycleOperation::Start).map_err(
                 |error| {
                     CsharpProductRuntimeError::new(
                         "CSHARP_PERFORMANCE_RUNTIME",
@@ -1065,7 +1064,7 @@ impl CsharpProductRuntime {
             )?;
         }
         for _ in 0..iterations.min(8) {
-            ProductDevRuntime::admit_demand_step(self).map_err(|error| {
+            ProductHostRuntime::admit_demand_step(self).map_err(|error| {
                 CsharpProductRuntimeError::new(
                     "CSHARP_PERFORMANCE_RUNTIME",
                     format!("{}: {}", error.code(), error.diagnostic()),
@@ -1075,7 +1074,7 @@ impl CsharpProductRuntime {
         let mut durations = Vec::with_capacity(iterations as usize);
         for _ in 0..iterations {
             let started = Instant::now();
-            ProductDevRuntime::admit_demand_step(self).map_err(|error| {
+            ProductHostRuntime::admit_demand_step(self).map_err(|error| {
                 CsharpProductRuntimeError::new(
                     "CSHARP_PERFORMANCE_RUNTIME",
                     format!("{}: {}", error.code(), error.diagnostic()),
@@ -1106,7 +1105,7 @@ impl CsharpProductRuntime {
 
     fn exercise_timeline_completion(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let binding = self.binding();
-        let completion = ProductDevTimelineCompletion::decode_json(
+        let completion = ProductHostTimelineCompletion::decode_json(
             &serde_json::to_vec(&serde_json::json!({
                 "ticket": "7",
                 "runtime": {
@@ -1189,7 +1188,7 @@ impl CsharpProductRuntime {
     fn exercise_pause_resume(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let running_binding = self.binding();
         let (_, paused_outputs) = self
-            .lifecycle_with_binding(ProductDevLifecycleOperation::Pause, Some(running_binding))
+            .lifecycle_with_binding(ProductHostLifecycleOperation::Pause, Some(running_binding))
             .map_err(exercise_runtime_error)?
             .into_parts();
         if self.lifecycle.state() != RuntimeState::Paused {
@@ -1209,7 +1208,7 @@ impl CsharpProductRuntime {
                 "a paused lifecycle admitted realtime work",
             ));
         }
-        self.lifecycle_with_binding(ProductDevLifecycleOperation::Resume, Some(paused_binding))
+        self.lifecycle_with_binding(ProductHostLifecycleOperation::Resume, Some(paused_binding))
             .map_err(exercise_runtime_error)?;
         if self.lifecycle.state() != RuntimeState::Running {
             return Err(CsharpProductRuntimeError::new(
@@ -1250,7 +1249,7 @@ impl CsharpProductRuntime {
                     "fault input sequence overflowed",
                 )
             })?;
-        self.input(ProductDevInputBatch::new(vec![fault_key_press(
+        self.input(ProductHostInputBatch::new(vec![fault_key_press(
             before_binding,
             fault_sequence,
         )]))
@@ -1306,7 +1305,7 @@ impl CsharpProductRuntime {
             ));
         }
         if self
-            .input(ProductDevInputBatch::new(vec![key_press(
+            .input(ProductHostInputBatch::new(vec![key_press(
                 before_binding,
                 1,
             )]))
@@ -1321,7 +1320,7 @@ impl CsharpProductRuntime {
         let fault_binding = input_binding(&self.lifecycle);
         let restart = self
             .lifecycle_with_binding(
-                ProductDevLifecycleOperation::Restart,
+                ProductHostLifecycleOperation::Restart,
                 Some(dev_binding_from_input(fault_binding)),
             )
             .map_err(exercise_runtime_error)?;
@@ -1340,7 +1339,7 @@ impl CsharpProductRuntime {
             ));
         }
         if self
-            .input(ProductDevInputBatch::new(vec![key_press(
+            .input(ProductHostInputBatch::new(vec![key_press(
                 before_binding,
                 1,
             )]))
@@ -1379,7 +1378,7 @@ impl CsharpProductRuntime {
         &mut self,
         current_binding: RuntimeInputBinding,
     ) -> Result<(), CsharpProductRuntimeError> {
-        self.input(ProductDevInputBatch::new(vec![key_press(
+        self.input(ProductHostInputBatch::new(vec![key_press(
             current_binding,
             2,
         )]))
@@ -1422,7 +1421,7 @@ impl CsharpProductRuntime {
                     .map_err(exercise_runtime_error)?;
             }
         }
-        self.input(ProductDevInputBatch::new(vec![key_release(
+        self.input(ProductHostInputBatch::new(vec![key_release(
             current_binding,
             3,
         )]))
@@ -1492,7 +1491,7 @@ impl CsharpProductRuntime {
             })?;
         let stale = direct_intent(stale_binding, next_sequence, &descriptor)?;
         if self
-            .input(ProductDevInputBatch::new(vec![stale]))
+            .input(ProductHostInputBatch::new(vec![stale]))
             .is_ok_and(|receipt| receipt.result().is_accepted())
         {
             return Err(CsharpProductRuntimeError::new(
@@ -1509,7 +1508,7 @@ impl CsharpProductRuntime {
         let unmapped =
             payload_intent(current_binding, next_sequence, "runtime.unmapped", contract)?;
         if self
-            .input(ProductDevInputBatch::new(vec![unmapped]))
+            .input(ProductHostInputBatch::new(vec![unmapped]))
             .is_ok()
         {
             return Err(CsharpProductRuntimeError::new(
@@ -1524,7 +1523,7 @@ impl CsharpProductRuntime {
             "runtime.wrong.contract",
         )?;
         if self
-            .input(ProductDevInputBatch::new(vec![mismatched]))
+            .input(ProductHostInputBatch::new(vec![mismatched]))
             .is_ok()
         {
             return Err(CsharpProductRuntimeError::new(
@@ -1533,7 +1532,7 @@ impl CsharpProductRuntime {
             ));
         }
         let admitted = direct_intent(current_binding, next_sequence, &descriptor)?;
-        self.input(ProductDevInputBatch::new(vec![admitted]))
+        self.input(ProductHostInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
         // Direct claims deliberately remain in RuntimeInputLane until the
         // next admitted input snapshot. The generated fixture checks their
@@ -1559,7 +1558,7 @@ impl CsharpProductRuntime {
             })?,
             &digital,
         )?;
-        self.input(ProductDevInputBatch::new(vec![admitted]))
+        self.input(ProductHostInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
         Ok(())
     }
@@ -1568,9 +1567,9 @@ impl CsharpProductRuntime {
         let selected_mode = self.lifecycle.mode();
         let readout_mode = self.readout().mode();
         let expected_readout_mode = match selected_mode {
-            RuntimeMode::Realtime => product_dev_host::ProductDevRuntimeMode::Realtime,
-            RuntimeMode::Demand => product_dev_host::ProductDevRuntimeMode::Demand,
-            RuntimeMode::External => product_dev_host::ProductDevRuntimeMode::External,
+            RuntimeMode::Realtime => product_host::ProductHostRuntimeMode::Realtime,
+            RuntimeMode::Demand => product_host::ProductHostRuntimeMode::Demand,
+            RuntimeMode::External => product_host::ProductHostRuntimeMode::External,
         };
         if readout_mode != expected_readout_mode {
             return Err(CsharpProductRuntimeError::new(
@@ -1691,7 +1690,7 @@ impl CsharpProductRuntime {
             .elapsed()
             .as_micros()
             .min(u128::from(u64::MAX)) as u64;
-        self.pending_update_attribution = Some(ProductDevUpdateAttribution::from(
+        self.pending_update_attribution = Some(ProductHostUpdateAttribution::from(
             self.services
                 .complete_update_attribution(callback_duration_us),
         ));
@@ -1828,9 +1827,9 @@ impl CsharpProductRuntime {
     ) -> Result<(), CsharpProductRuntimeError> {
         if let Some(failure) = failure {
             let _ = self.diagnostics.publish(
-                ProductDevLogEvent::new(
-                    ProductDevLogSeverity::Error,
-                    ProductDevLogDisposition::Degraded,
+                ProductHostLogEvent::new(
+                    ProductHostLogSeverity::Error,
+                    ProductHostLogDisposition::Degraded,
                     "csharp-runtime",
                     failure.code(),
                     format!(
@@ -1878,7 +1877,8 @@ impl CsharpProductRuntime {
     /// update an explicit clear event on a fresh control revision.
     fn recover_pending_input_overflow(
         &mut self,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         self.lifecycle
             .change_control(RuntimeControlOperation::Replace)
             .map_err(|error| self.lifecycle_runtime_error(error))?;
@@ -1893,7 +1893,7 @@ impl CsharpProductRuntime {
         // receipts when input pressure persists across host observations.
         self.pending_recovery_outputs.clear();
         self.receipt(
-            ProductDevOperationKind::ReplaceControl,
+            ProductHostOperationKind::ReplaceControl,
             self.rebind_in_place(Vec::new())?,
         )
     }
@@ -1931,9 +1931,9 @@ impl CsharpProductRuntime {
             // publishes the new binding instead of leaving the browser stale.
             self.pending_recovery_outputs = outputs;
             let _ = self.diagnostics.publish(
-                ProductDevLogEvent::new(
-                    ProductDevLogSeverity::Warning,
-                    ProductDevLogDisposition::ResyncRequired,
+                ProductHostLogEvent::new(
+                    ProductHostLogSeverity::Warning,
+                    ProductHostLogDisposition::ResyncRequired,
                     "csharp-runtime",
                     error.code(),
                     error.detail(),
@@ -1950,7 +1950,7 @@ impl CsharpProductRuntime {
     fn action<F, T>(
         &mut self,
         action: NativeProductAction,
-        operation: ProductDevOperationKind,
+        operation: ProductHostOperationKind,
         transition: F,
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError>
     where
@@ -1959,10 +1959,10 @@ impl CsharpProductRuntime {
         let call_binding = ui_binding(&self.lifecycle);
         if matches!(
             operation,
-            ProductDevOperationKind::Start
-                | ProductDevOperationKind::Pause
-                | ProductDevOperationKind::Resume
-                | ProductDevOperationKind::Restart
+            ProductHostOperationKind::Start
+                | ProductHostOperationKind::Pause
+                | ProductHostOperationKind::Resume
+                | ProductHostOperationKind::Restart
         ) {
             self.services.begin_lifecycle_call(call_binding);
         } else {
@@ -1985,7 +1985,7 @@ impl CsharpProductRuntime {
             return Ok(call_outputs);
         }
         let binding = ui_binding(&self.lifecycle);
-        let mut outputs = if matches!(operation, ProductDevOperationKind::Start) {
+        let mut outputs = if matches!(operation, ProductHostOperationKind::Start) {
             self.initial_output.take().unwrap_or_default()
         } else {
             Vec::new()
@@ -2025,20 +2025,21 @@ impl CsharpProductRuntime {
 
     fn receipt(
         &mut self,
-        operation: ProductDevOperationKind,
+        operation: ProductHostOperationKind,
         outputs: Vec<RuntimePublication>,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         let mut all_outputs = self.take_pending_recovery_outputs();
         all_outputs.extend(outputs);
         let readout = self.readout();
-        let result = ProductDevOperationResult::accepted(
+        let result = ProductHostOperationResult::accepted(
             operation,
             self.binding(),
             self.next_input_sequence(),
             readout,
         )
         .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, all_outputs).map_err(host_runtime_error)
+        ProductHostRuntimeReceipt::new(result, all_outputs).map_err(host_runtime_error)
     }
 
     fn take_pending_recovery_outputs(&mut self) -> Vec<RuntimePublication> {
@@ -2052,26 +2053,28 @@ impl CsharpProductRuntime {
     /// the host retry an operation which may already have been consumed.
     fn resync_operation(
         &mut self,
-        operation: ProductDevOperationKind,
+        operation: ProductHostOperationKind,
         error: CsharpProductRuntimeError,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned());
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
+        let error = ProductHostRuntimeError::new(error.code(), error.detail().to_owned());
         self.resync_operation_runtime_error(operation, error)
     }
 
     fn resync_operation_runtime_error(
         &mut self,
-        operation: ProductDevOperationKind,
-        error: ProductDevRuntimeError,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        operation: ProductHostOperationKind,
+        error: ProductHostRuntimeError,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         // The admitted update has crossed the callback boundary or consumed
         // its input snapshot. Do not leave those borrowed native events queued
         // for a later caller to replay after this resync receipt.
         if self.pending_recovery_outputs.is_empty() {
             self.pending_inputs.clear();
         }
-        self.publish_diagnostic_as(&error, ProductDevFaultDisposition::ResyncRequired);
-        let result = ProductDevOperationResult::resync_required(
+        self.publish_diagnostic_as(&error, ProductHostFaultDisposition::ResyncRequired);
+        let result = ProductHostOperationResult::resync_required(
             operation,
             self.binding(),
             self.next_input_sequence(),
@@ -2085,16 +2088,16 @@ impl CsharpProductRuntime {
             error.diagnostic().to_owned(),
         )
         .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, self.take_pending_recovery_outputs())
+        ProductHostRuntimeReceipt::new(result, self.take_pending_recovery_outputs())
             .map_err(host_runtime_error)
     }
 
-    fn readout(&self) -> ProductDevRuntimeReadout {
+    fn readout(&self) -> ProductHostRuntimeReadout {
         dev_readout(self.lifecycle.readout())
     }
 
-    fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
-        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned());
+    fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductHostRuntimeError {
+        let runtime_error = ProductHostRuntimeError::new(error.code(), error.detail().to_owned());
         self.publish_diagnostic(&runtime_error);
         runtime_error
     }
@@ -2102,20 +2105,20 @@ impl CsharpProductRuntime {
     fn lifecycle_runtime_error(
         &self,
         error: runtime_lifecycle::RuntimeLifecycleError,
-    ) -> ProductDevRuntimeError {
+    ) -> ProductHostRuntimeError {
         let runtime_error = lifecycle_runtime_error(error);
         self.publish_diagnostic(&runtime_error);
         runtime_error
     }
 
-    fn publish_diagnostic(&self, error: &ProductDevRuntimeError) {
+    fn publish_diagnostic(&self, error: &ProductHostRuntimeError) {
         self.publish_diagnostic_as(error, runtime_fault_disposition(error));
     }
 
     fn publish_diagnostic_as(
         &self,
-        error: &ProductDevRuntimeError,
-        disposition: ProductDevFaultDisposition,
+        error: &ProductHostRuntimeError,
+        disposition: ProductHostFaultDisposition,
     ) {
         let message = if error.diagnostic().is_empty() {
             "runtime operation failed"
@@ -2123,18 +2126,18 @@ impl CsharpProductRuntime {
             error.diagnostic()
         };
         let _ = self.diagnostics.publish(
-            ProductDevLogEvent::new(
-                ProductDevLogSeverity::Error,
+            ProductHostLogEvent::new(
+                ProductHostLogSeverity::Error,
                 match disposition {
-                    ProductDevFaultDisposition::Accepted => ProductDevLogDisposition::Accepted,
-                    ProductDevFaultDisposition::RejectedRecoverable => {
-                        ProductDevLogDisposition::RejectedRecoverable
+                    ProductHostFaultDisposition::Accepted => ProductHostLogDisposition::Accepted,
+                    ProductHostFaultDisposition::RejectedRecoverable => {
+                        ProductHostLogDisposition::RejectedRecoverable
                     }
-                    ProductDevFaultDisposition::Degraded => ProductDevLogDisposition::Degraded,
-                    ProductDevFaultDisposition::ResyncRequired => {
-                        ProductDevLogDisposition::ResyncRequired
+                    ProductHostFaultDisposition::Degraded => ProductHostLogDisposition::Degraded,
+                    ProductHostFaultDisposition::ResyncRequired => {
+                        ProductHostLogDisposition::ResyncRequired
                     }
-                    ProductDevFaultDisposition::Terminal => ProductDevLogDisposition::Terminal,
+                    ProductHostFaultDisposition::Terminal => ProductHostLogDisposition::Terminal,
                 },
                 "csharp-runtime",
                 error.code(),
@@ -2145,7 +2148,7 @@ impl CsharpProductRuntime {
         );
     }
 
-    fn binding(&self) -> ProductDevRuntimeBinding {
+    fn binding(&self) -> ProductHostRuntimeBinding {
         dev_binding(self.lifecycle.readout())
     }
 
@@ -2159,10 +2162,10 @@ impl CsharpProductRuntime {
 
     fn require_control_binding(
         &self,
-        operation: ProductDevLifecycleOperation,
-        binding: Option<ProductDevRuntimeBinding>,
-    ) -> Result<(), ProductDevRuntimeError> {
-        if operation == ProductDevLifecycleOperation::Start
+        operation: ProductHostLifecycleOperation,
+        binding: Option<ProductHostRuntimeBinding>,
+    ) -> Result<(), ProductHostRuntimeError> {
+        if operation == ProductHostLifecycleOperation::Start
             && self.lifecycle.state() == RuntimeState::Created
             && binding.is_none_or(|value| value == self.binding())
         {
@@ -2182,7 +2185,7 @@ impl CsharpProductRuntime {
 
     /// Ends a harness's claim whose lease passed without input: a fresh
     /// binding clears what it held and hands input back to the page.
-    fn expire_input_claim(&mut self) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+    fn expire_input_claim(&mut self) -> Result<Vec<RuntimePublication>, ProductHostRuntimeError> {
         if !self
             .input_claim
             .as_ref()
@@ -2202,12 +2205,12 @@ impl CsharpProductRuntime {
 
     fn require_current_control_binding(
         &self,
-        binding: Option<ProductDevRuntimeBinding>,
-    ) -> Result<(), ProductDevRuntimeError> {
+        binding: Option<ProductHostRuntimeBinding>,
+    ) -> Result<(), ProductHostRuntimeError> {
         if binding == Some(self.binding()) {
             return Ok(());
         }
-        Err(ProductDevRuntimeError::new_not_applied(
+        Err(ProductHostRuntimeError::new_not_applied(
             "CSHARP_CONTROL_BINDING",
             "lifecycle control does not name the current runtime binding",
         ))
@@ -2217,14 +2220,14 @@ impl CsharpProductRuntime {
     /// counter. The product callback must not run for an impossible host
     /// transition, because the Rust lifecycle remains the authority that
     /// decides whether a new generation can be admitted.
-    fn require_restart_state(&self) -> Result<(), ProductDevRuntimeError> {
+    fn require_restart_state(&self) -> Result<(), ProductHostRuntimeError> {
         if matches!(
             self.lifecycle.state(),
             RuntimeState::Running | RuntimeState::Paused | RuntimeState::Faulted
         ) {
             return Ok(());
         }
-        Err(ProductDevRuntimeError::new_not_applied(
+        Err(ProductHostRuntimeError::new_not_applied(
             "CSHARP_LIFECYCLE_ADMISSION",
             format!(
                 "restart is not admitted from lifecycle state {:?}",
@@ -2236,7 +2239,7 @@ impl CsharpProductRuntime {
     fn tag_complete_baseline(
         &self,
         outputs: Vec<RuntimePublication>,
-    ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+    ) -> Result<Vec<RuntimePublication>, ProductHostRuntimeError> {
         self.rebind_outputs(outputs)
             .map_err(|error| self.runtime_error(error))
     }
@@ -2275,7 +2278,7 @@ impl CsharpProductRuntime {
     fn rebind_in_place(
         &self,
         outputs: Vec<RuntimePublication>,
-    ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+    ) -> Result<Vec<RuntimePublication>, ProductHostRuntimeError> {
         self.rebind_outputs_in_place(outputs)
             .map_err(|error| self.runtime_error(error))
     }
@@ -2304,7 +2307,7 @@ impl CsharpProductRuntime {
 
     fn complete_baseline_output(
         &self,
-        _binding: ProductDevRuntimeBinding,
+        _binding: ProductHostRuntimeBinding,
     ) -> Result<RuntimePublication, CsharpProductRuntimeError> {
         let frontiers = self
             .services
@@ -2380,9 +2383,9 @@ impl CsharpProductRuntime {
             Ok(baseline) => frames.rebaseline(&self.services, &baseline, self.frame_simulation()),
             Err(error) => {
                 let _ = self.diagnostics.publish(
-                    ProductDevLogEvent::new(
-                        ProductDevLogSeverity::Warning,
-                        ProductDevLogDisposition::Degraded,
+                    ProductHostLogEvent::new(
+                        ProductHostLogSeverity::Warning,
+                        ProductHostLogDisposition::Degraded,
                         "csharp-runtime",
                         error.code(),
                         error.detail(),
@@ -2395,14 +2398,14 @@ impl CsharpProductRuntime {
     }
 
     /// The host serves these frames when this process streams the world.
-    pub fn frame_stream(&self) -> Option<Arc<product_dev_host::ProductDevFrameStream>> {
+    pub fn frame_stream(&self) -> Option<Arc<product_host::ProductHostFrameStream>> {
         self.frame_output
             .as_ref()
             .and_then(frame_output::FrameOutput::frames)
     }
 
     /// Tool captures of the rendered world, in stream or window output.
-    pub fn frame_capture(&self) -> Option<product_dev_host::ProductDevFrameCapture> {
+    pub fn frame_capture(&self) -> Option<product_host::ProductHostFrameCapture> {
         self.frame_output
             .as_ref()
             .map(frame_output::FrameOutput::capture)
@@ -2459,7 +2462,7 @@ impl CsharpProductRuntime {
     fn start_for_exercise(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let outputs = self.action(
             self.api.start,
-            ProductDevOperationKind::Start,
+            ProductHostOperationKind::Start,
             |lifecycle| lifecycle.start(),
         )?;
         assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))?;
@@ -2469,7 +2472,7 @@ impl CsharpProductRuntime {
     fn execute_renderer_debug(
         &mut self,
         action: RendererDebugCommand,
-    ) -> Result<ProductDevDebugResult, ProductDevRuntimeError> {
+    ) -> Result<ProductHostDebugResult, ProductHostRuntimeError> {
         match action {
             RendererDebugCommand::Show => self.renderer_metrics_visible = true,
             RendererDebugCommand::Hide => self.renderer_metrics_visible = false,
@@ -2483,14 +2486,14 @@ impl CsharpProductRuntime {
         if let (Some(frames), RendererDebugCommand::Presentation) = (&self.frame_output, action) {
             let presentation =
                 frames.presentation(serde_json::to_value(self.binding()).unwrap_or_default());
-            return Ok(ProductDevDebugResult::new(
+            return Ok(ProductHostDebugResult::new(
                 true,
                 pretty_json(&presentation)?,
             ));
         }
-        let status = ProductDevRendererStatus {
+        let status = ProductHostRendererStatus {
             available: self.frame_output.is_some(),
-            widget: ProductDevRendererWidget {
+            widget: ProductHostRendererWidget {
                 visible: self.renderer_metrics_visible,
             },
             diagnostic: self
@@ -2514,40 +2517,40 @@ impl CsharpProductRuntime {
             | RendererDebugCommand::Status
             | RendererDebugCommand::Presentation => true,
         };
-        Ok(ProductDevDebugResult::new(succeeded, message))
+        Ok(ProductHostDebugResult::new(succeeded, message))
     }
 }
 
-impl ProductDevRuntime for CsharpProductRuntime {
+impl ProductHostRuntime for CsharpProductRuntime {
     /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
     /// edited, added and deleted bundle files. Open bundles and content
     /// references keep the bytes they were opened with. The eager loose
     /// snapshot the product received at create is not reloaded; `rusty dev`
     /// replaces the runtime for loose content edits.
-    fn reload_content(&mut self) -> Result<(), ProductDevRuntimeError> {
+    fn reload_content(&mut self) -> Result<(), ProductHostRuntimeError> {
         let bundles = csharp_engine_services::ProductContentBundles::admit(&self.content_root)
-            .map_err(|error| ProductDevRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
+            .map_err(|error| ProductHostRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
         self.services.bind_content_bundles(bundles);
         Ok(())
     }
 
-    fn take_update_attribution(&mut self) -> Option<ProductDevUpdateAttribution> {
+    fn take_update_attribution(&mut self) -> Option<ProductHostUpdateAttribution> {
         self.pending_update_attribution.take()
     }
 
-    fn realtime_schedule_state(&self) -> ProductDevRuntimeScheduleState {
+    fn realtime_schedule_state(&self) -> ProductHostRuntimeScheduleState {
         if self.playtest_time != playtest::TimeMode::Realtime {
-            return ProductDevRuntimeScheduleState::Paused;
+            return ProductHostRuntimeScheduleState::Paused;
         }
         if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
-            return ProductDevRuntimeScheduleState::Unsupported;
+            return ProductHostRuntimeScheduleState::Unsupported;
         }
         match self.lifecycle.state() {
-            RuntimeState::Created => ProductDevRuntimeScheduleState::Created,
-            RuntimeState::Running => ProductDevRuntimeScheduleState::Running,
-            RuntimeState::Paused => ProductDevRuntimeScheduleState::Paused,
-            RuntimeState::Faulted => ProductDevRuntimeScheduleState::Faulted,
-            RuntimeState::Shutdown => ProductDevRuntimeScheduleState::Shutdown,
+            RuntimeState::Created => ProductHostRuntimeScheduleState::Created,
+            RuntimeState::Running => ProductHostRuntimeScheduleState::Running,
+            RuntimeState::Paused => ProductHostRuntimeScheduleState::Paused,
+            RuntimeState::Faulted => ProductHostRuntimeScheduleState::Faulted,
+            RuntimeState::Shutdown => ProductHostRuntimeScheduleState::Shutdown,
         }
     }
 
@@ -2566,82 +2569,85 @@ impl ProductDevRuntime for CsharpProductRuntime {
 
     fn connect(
         &mut self,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         if self.lifecycle.state() == RuntimeState::Created {
-            return self.lifecycle_with_binding(ProductDevLifecycleOperation::Start, None);
+            return self.lifecycle_with_binding(ProductHostLifecycleOperation::Start, None);
         }
         if self.lifecycle.state() == RuntimeState::Shutdown {
-            return Err(ProductDevRuntimeError::new_not_applied(
+            return Err(ProductHostRuntimeError::new_not_applied(
                 "CSHARP_CONNECT_STATE",
                 "a shutdown runtime cannot accept a browser connection",
             ));
         }
         self.receipt(
-            ProductDevOperationKind::Connect,
+            ProductHostOperationKind::Connect,
             self.tag_complete_baseline(Vec::new())?,
         )
     }
 
     fn lifecycle(
         &mut self,
-        operation: ProductDevLifecycleOperation,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        operation: ProductHostLifecycleOperation,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         self.lifecycle_with_binding(operation, Some(self.binding()))
     }
 
     fn lifecycle_with_binding(
         &mut self,
-        operation: ProductDevLifecycleOperation,
-        binding: Option<ProductDevRuntimeBinding>,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        operation: ProductHostLifecycleOperation,
+        binding: Option<ProductHostRuntimeBinding>,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         self.require_control_binding(operation, binding)?;
         match operation {
-            ProductDevLifecycleOperation::Start => {
+            ProductHostLifecycleOperation::Start => {
                 let outputs = self
                     .action(
                         self.api.start,
-                        ProductDevOperationKind::Start,
+                        ProductHostOperationKind::Start,
                         |lifecycle| lifecycle.start(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
                 self.rebind_input(InputClearReason::Restart)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
-                    ProductDevOperationKind::Start,
+                    ProductHostOperationKind::Start,
                     self.tag_complete_baseline(outputs)?,
                 )
             }
-            ProductDevLifecycleOperation::Pause => {
+            ProductHostLifecycleOperation::Pause => {
                 let outputs = self
                     .action(
                         self.api.pause,
-                        ProductDevOperationKind::Pause,
+                        ProductHostOperationKind::Pause,
                         |lifecycle| lifecycle.pause(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
                 self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
-                    ProductDevOperationKind::Pause,
+                    ProductHostOperationKind::Pause,
                     self.rebind_in_place(outputs)?,
                 )
             }
-            ProductDevLifecycleOperation::Resume => {
+            ProductHostLifecycleOperation::Resume => {
                 let outputs = self
                     .action(
                         self.api.resume,
-                        ProductDevOperationKind::Resume,
+                        ProductHostOperationKind::Resume,
                         |lifecycle| lifecycle.resume(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
                 self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
-                    ProductDevOperationKind::Resume,
+                    ProductHostOperationKind::Resume,
                     self.rebind_in_place(outputs)?,
                 )
             }
-            ProductDevLifecycleOperation::Restart => {
+            ProductHostLifecycleOperation::Restart => {
                 // Keep the callback-first ordering used by the other product
                 // lifecycle actions, but validate the Rust-owned state before
                 // entering C#. A callback failure therefore leaves the
@@ -2650,18 +2656,18 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 let outputs = self
                     .action(
                         self.api.restart,
-                        ProductDevOperationKind::Restart,
+                        ProductHostOperationKind::Restart,
                         |lifecycle| lifecycle.restart(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
                 self.rebind_input(InputClearReason::Restart)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
-                    ProductDevOperationKind::Restart,
+                    ProductHostOperationKind::Restart,
                     self.tag_complete_baseline(outputs)?,
                 )
             }
-            ProductDevLifecycleOperation::ReportFault => {
+            ProductHostLifecycleOperation::ReportFault => {
                 // Fault reporting is a host control, not a reentrant product
                 // callback. RuntimeLifecycle preserves its counters while
                 // advancing the control revision and recording the typed
@@ -2673,15 +2679,15 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
                 self.receipt(
-                    ProductDevOperationKind::ReportFault,
+                    ProductHostOperationKind::ReportFault,
                     self.tag_complete_baseline(Vec::new())?,
                 )
             }
-            ProductDevLifecycleOperation::Shutdown => {
+            ProductHostLifecycleOperation::Shutdown => {
                 let outputs = self
                     .action(
                         self.api.shutdown,
-                        ProductDevOperationKind::Shutdown,
+                        ProductHostOperationKind::Shutdown,
                         |lifecycle| lifecycle.shutdown(),
                     )
                     .map_err(|error| self.runtime_error(error))?;
@@ -2692,7 +2698,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 // because serializing the host receipt later fails.
                 self.shutdown_called = true;
                 self.receipt(
-                    ProductDevOperationKind::Shutdown,
+                    ProductHostOperationKind::Shutdown,
                     self.tag_complete_baseline(outputs)?,
                 )
             }
@@ -2701,13 +2707,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
 
     fn control(
         &mut self,
-        operation: ProductDevControlOperation,
-        binding: ProductDevRuntimeBinding,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        operation: ProductHostControlOperation,
+        binding: ProductHostRuntimeBinding,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         self.require_current_control_binding(Some(binding))?;
         let lifecycle_operation = match operation {
-            ProductDevControlOperation::Replace => RuntimeControlOperation::Replace,
-            ProductDevControlOperation::Release => {
+            ProductHostControlOperation::Replace => RuntimeControlOperation::Replace,
+            ProductHostControlOperation::Release => {
                 // Release ends a harness's claim; the page takes input back.
                 self.input_claim = None;
                 RuntimeControlOperation::Release
@@ -2727,19 +2734,20 @@ impl ProductDevRuntime for CsharpProductRuntime {
 
     fn claim_control(
         &mut self,
-        binding: ProductDevRuntimeBinding,
+        binding: ProductHostRuntimeBinding,
         label: String,
         lease: std::time::Duration,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         self.require_current_control_binding(Some(binding))?;
         if label.trim().is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
-            return Err(ProductDevRuntimeError::new_not_applied(
+            return Err(ProductHostRuntimeError::new_not_applied(
                 "CSHARP_CONTROL_CLAIM",
                 "a claim label is 1..=64 bytes of visible text",
             ));
         }
         if lease.is_zero() || lease > MAX_INPUT_CLAIM_LEASE {
-            return Err(ProductDevRuntimeError::new_not_applied(
+            return Err(ProductHostRuntimeError::new_not_applied(
                 "CSHARP_CONTROL_CLAIM",
                 "a claim lease is 1 ms to one hour",
             ));
@@ -2756,15 +2764,15 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .map_err(|error| self.runtime_error(error))?;
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         self.receipt(
-            ProductDevOperationKind::ClaimControl,
+            ProductHostOperationKind::ClaimControl,
             self.rebind_in_place(Vec::new())?,
         )
     }
 
     fn input(
         &mut self,
-        batch: ProductDevInputBatch,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError> {
+        batch: ProductHostInputBatch,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
         // Input under a claim is the harness's: it keeps the lease alive.
         if let Some(claim) = &mut self.input_claim {
             claim.renewed = std::time::Instant::now();
@@ -2774,7 +2782,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         // resume rebinds input, so the product never sees the paused interval.
         let paused = self.lifecycle.state() == RuntimeState::Paused;
         if !paused && self.lifecycle.state() != RuntimeState::Running {
-            return Err(ProductDevRuntimeError::new_not_applied(
+            return Err(ProductHostRuntimeError::new_not_applied(
                 "CSHARP_INPUT_STATE",
                 "input is admitted only while the standard runtime is running or paused",
             ));
@@ -2792,9 +2800,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
         // warning.)
         if receipt.dropped_count() > 0 {
             let _ = self.diagnostics.publish(
-                ProductDevLogEvent::new(
-                    ProductDevLogSeverity::Info,
-                    ProductDevLogDisposition::Accepted,
+                ProductHostLogEvent::new(
+                    ProductHostLogSeverity::Info,
+                    ProductHostLogDisposition::Accepted,
                     "csharp-runtime",
                     "CSHARP_INPUT_STALE_DROPPED",
                     format!(
@@ -2826,14 +2834,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .map_err(|error| self.runtime_error(error))?
             == PendingInputAdmission::Resynchronized
         {
-            let result = ProductDevInputResult::pending_resynchronized(
+            let result = ProductHostInputResult::pending_resynchronized(
                 receipt.submitted_count(),
                 self.next_input_sequence(),
                 self.binding(),
                 self.readout(),
             )
             .map_err(host_runtime_error)?;
-            return ProductDevRuntimeReceipt::new(
+            return ProductHostRuntimeReceipt::new(
                 result,
                 std::mem::take(&mut self.pending_recovery_outputs),
             )
@@ -2843,7 +2851,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .next_sequence()
             .map(CanonicalU64::new)
             .unwrap_or_else(|| self.next_input_sequence());
-        let result = ProductDevInputResult::with_progress(
+        let result = ProductHostInputResult::with_progress(
             receipt.submitted_count(),
             receipt.accepted_count(),
             receipt.dropped_count(),
@@ -2854,19 +2862,20 @@ impl ProductDevRuntime for CsharpProductRuntime {
             self.readout(),
         )
         .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+        ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
 
     fn recover_input_overflow(
         &mut self,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         self.recover_pending_input_overflow()
     }
 
     fn execute_debug(
         &mut self,
         command: &str,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
         if command.split_whitespace().next().is_some_and(|name| {
             matches!(
                 name,
@@ -2881,14 +2890,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .filter(|_| frame_output::is_inspection_command(command))
         {
             let result = match frames.execute_inspection(command) {
-                Ok(answer) => ProductDevDebugResult::new(true, pretty_json(&answer)?),
-                Err(detail) => ProductDevDebugResult::new(false, detail),
+                Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
+                Err(detail) => ProductHostDebugResult::new(false, detail),
             };
-            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
         }
         if let Some(action) = renderer_debug_command(command) {
             let result = self.execute_renderer_debug(action)?;
-            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
         }
         let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
 
@@ -2899,7 +2908,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
         match (callback_result, finished.failure) {
             (Ok(result), None) => {
-                ProductDevRuntimeReceipt::new(result, finished.outputs).map_err(host_runtime_error)
+                ProductHostRuntimeReceipt::new(result, finished.outputs).map_err(host_runtime_error)
             }
             (_, Some(failure)) => {
                 // The next receipt carries what the command did publish.
@@ -2913,8 +2922,8 @@ impl ProductDevRuntime for CsharpProductRuntime {
     fn describe_debug(
         &mut self,
     ) -> Result<
-        ProductDevRuntimeReceipt<product_dev_host::ProductDevDebugCatalog>,
-        ProductDevRuntimeError,
+        ProductHostRuntimeReceipt<product_host::ProductHostDebugCatalog>,
+        ProductHostRuntimeError,
     > {
         let result = call_describe_debug(
             self.api.describe_debug,
@@ -2923,7 +2932,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         )
         .map_err(|error| self.runtime_error(error))?;
         let catalog =
-            product_dev_host::ProductDevDebugCatalog::decode_json(result.message().as_bytes())
+            product_host::ProductHostDebugCatalog::decode_json(result.message().as_bytes())
                 .map_err(|error| {
                     self.runtime_error(CsharpProductRuntimeError::new(
                         error.code(),
@@ -2936,18 +2945,19 @@ impl ProductDevRuntime for CsharpProductRuntime {
         } else {
             catalog
         };
-        ProductDevRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
+        ProductHostRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
     }
 
     fn advance_realtime(
         &mut self,
         observed_time_ns: CanonicalU64,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         // An expired claim's release is this observation's whole output; the
         // next observation simulates.
         let released = self.expire_input_claim()?;
         if !released.is_empty() || self.playtest_time != playtest::TimeMode::Realtime {
-            return self.receipt(ProductDevOperationKind::AdvanceRealtime, released);
+            return self.receipt(ProductHostOperationKind::AdvanceRealtime, released);
         }
         let admission = self
             .lifecycle
@@ -2966,22 +2976,22 @@ impl ProductDevRuntime for CsharpProductRuntime {
             ) {
                 Ok(outputs) => outputs,
                 Err(error) => {
-                    return self.resync_operation(ProductDevOperationKind::AdvanceRealtime, error);
+                    return self.resync_operation(ProductHostOperationKind::AdvanceRealtime, error);
                 }
             },
             None => Vec::new(),
         };
-        match self.receipt(ProductDevOperationKind::AdvanceRealtime, outputs) {
+        match self.receipt(ProductHostOperationKind::AdvanceRealtime, outputs) {
             Ok(receipt) => Ok(receipt),
-            Err(error) => {
-                self.resync_operation_runtime_error(ProductDevOperationKind::AdvanceRealtime, error)
-            }
+            Err(error) => self
+                .resync_operation_runtime_error(ProductHostOperationKind::AdvanceRealtime, error),
         }
     }
 
     fn admit_demand_step(
         &mut self,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         let admission = self
             .lifecycle
             .admit_demand_step()
@@ -2989,21 +2999,21 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let outputs = match self.update_admitted(DEMAND_UPDATE_MODE, None, admission, 0) {
             Ok(outputs) => outputs,
             Err(error) => {
-                return self.resync_operation(ProductDevOperationKind::AdmitDemandStep, error);
+                return self.resync_operation(ProductHostOperationKind::AdmitDemandStep, error);
             }
         };
-        match self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs) {
+        match self.receipt(ProductHostOperationKind::AdmitDemandStep, outputs) {
             Ok(receipt) => Ok(receipt),
-            Err(error) => {
-                self.resync_operation_runtime_error(ProductDevOperationKind::AdmitDemandStep, error)
-            }
+            Err(error) => self
+                .resync_operation_runtime_error(ProductHostOperationKind::AdmitDemandStep, error),
         }
     }
 
     fn admit_external_step(
         &mut self,
         step: CanonicalU64,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
         let admission = self
             .lifecycle
             .admit_external_step(ExternalStep::new(step.get()))
@@ -3011,21 +3021,23 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let outputs = match self.update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0) {
             Ok(outputs) => outputs,
             Err(error) => {
-                return self.resync_operation(ProductDevOperationKind::AdmitExternalStep, error);
+                return self.resync_operation(ProductHostOperationKind::AdmitExternalStep, error);
             }
         };
-        match self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs) {
+        match self.receipt(ProductHostOperationKind::AdmitExternalStep, outputs) {
             Ok(receipt) => Ok(receipt),
             Err(error) => self
-                .resync_operation_runtime_error(ProductDevOperationKind::AdmitExternalStep, error),
+                .resync_operation_runtime_error(ProductHostOperationKind::AdmitExternalStep, error),
         }
     }
 
     fn complete_timeline(
         &mut self,
-        completion: ProductDevTimelineCompletion,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>
-    {
+        completion: ProductHostTimelineCompletion,
+    ) -> Result<
+        ProductHostRuntimeReceipt<ProductHostTimelineCompletionResult>,
+        ProductHostRuntimeError,
+    > {
         let envelope = completion.envelope();
         let ticket = CanonicalU64::new(envelope.ticket().value());
         let binding = envelope.binding();
@@ -3035,7 +3047,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             || binding.generation().value() != current.generation.get()
             || binding.control_revision().value() != current.control_revision.get()
         {
-            let result = ProductDevTimelineCompletionResult::rejected_with_current(
+            let result = ProductHostTimelineCompletionResult::rejected_with_current(
                 ticket,
                 current,
                 self.readout(),
@@ -3043,17 +3055,17 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 "timeline completion does not name the current running product binding",
             )
             .map_err(host_runtime_error)?;
-            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
         }
 
         let outcome_data = match envelope.outcome() {
-            runtime_timeline::TimelineCompletionOutcome::Success(data)
-            | runtime_timeline::TimelineCompletionOutcome::Failure(data) => data
+            product_host::TimelineCompletionOutcome::Success(data)
+            | product_host::TimelineCompletionOutcome::Failure(data) => data
                 .as_ref()
                 .map(|value| serde_json::to_vec(value.value()))
                 .transpose()
                 .map_err(|error| {
-                    ProductDevRuntimeError::new(
+                    ProductHostRuntimeError::new(
                         "CSHARP_TIMELINE_DATA",
                         format!("timeline outcome data could not be copied: {error}"),
                     )
@@ -3065,7 +3077,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .map(|value| serde_json::to_vec(value.value()))
             .transpose()
             .map_err(|error| {
-                ProductDevRuntimeError::new(
+                ProductHostRuntimeError::new(
                     "CSHARP_TIMELINE_DATA",
                     format!("timeline provenance data could not be copied: {error}"),
                 )
@@ -3077,10 +3089,10 @@ impl ProductDevRuntime for CsharpProductRuntime {
             control_revision: current.control_revision.get(),
             correlation: native_utf8(envelope.correlation()),
             outcome: match envelope.outcome() {
-                runtime_timeline::TimelineCompletionOutcome::Success(_) => {
+                product_host::TimelineCompletionOutcome::Success(_) => {
                     NativeProductTimelineOutcome::Success
                 }
-                runtime_timeline::TimelineCompletionOutcome::Failure(_) => {
+                product_host::TimelineCompletionOutcome::Failure(_) => {
                     NativeProductTimelineOutcome::Failure
                 }
             },
@@ -3100,7 +3112,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 &mut outputs,
             )
             .map_err(|error| self.runtime_error(error))?;
-            ProductDevTimelineCompletionResult::rejected_with_current(
+            ProductHostTimelineCompletionResult::rejected_with_current(
                 ticket,
                 self.binding(),
                 self.readout(),
@@ -3108,9 +3120,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 failure.detail(),
             )
         } else if matches!(callback_result, Ok(true)) {
-            ProductDevTimelineCompletionResult::accepted(ticket, self.binding(), self.readout())
+            ProductHostTimelineCompletionResult::accepted(ticket, self.binding(), self.readout())
         } else {
-            ProductDevTimelineCompletionResult::rejected_with_current(
+            ProductHostTimelineCompletionResult::rejected_with_current(
                 ticket,
                 self.binding(),
                 self.readout(),
@@ -3119,7 +3131,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             )
         }
         .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
+        ProductHostRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 }
 
@@ -3176,7 +3188,7 @@ impl Drop for CsharpProductRuntime {
             // return a rejection, so report it on the process stream.
             if let Err(error) = self.action(
                 self.api.shutdown,
-                ProductDevOperationKind::Shutdown,
+                ProductHostOperationKind::Shutdown,
                 |lifecycle| lifecycle.shutdown(),
             ) {
                 eprintln!("CsharpProductRuntime implicit shutdown rejected: {error}");
@@ -3204,8 +3216,8 @@ impl Drop for CsharpProductRuntime {
     }
 }
 
-fn dev_binding(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeBinding {
-    ProductDevRuntimeBinding {
+fn dev_binding(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeBinding {
+    ProductHostRuntimeBinding {
         instance_id: CanonicalU64::new(readout.instance_id().value()),
         generation: CanonicalU64::new(readout.generation().value()),
         control_revision: CanonicalU64::new(readout.control_revision().value()),
@@ -3225,8 +3237,8 @@ fn ui_binding(lifecycle: &RuntimeLifecycle) -> RuntimeUiRuntimeBinding {
     RuntimeUiRuntimeBinding::from(lifecycle)
 }
 
-fn dev_binding_from_input(binding: RuntimeInputBinding) -> ProductDevRuntimeBinding {
-    ProductDevRuntimeBinding {
+fn dev_binding_from_input(binding: RuntimeInputBinding) -> ProductHostRuntimeBinding {
+    ProductHostRuntimeBinding {
         instance_id: CanonicalU64::new(binding.instance_id().value()),
         generation: CanonicalU64::new(binding.generation().value()),
         control_revision: CanonicalU64::new(binding.control_revision().value()),
@@ -3349,20 +3361,20 @@ fn standard_input_context() -> InputContext {
     InputContext::new(STANDARD_INPUT_CONTEXT).expect("fixed standard input context")
 }
 
-fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeReadout {
+fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeReadout {
     let mode = match readout.mode() {
-        RuntimeMode::Realtime => product_dev_host::ProductDevRuntimeMode::Realtime,
-        RuntimeMode::Demand => product_dev_host::ProductDevRuntimeMode::Demand,
-        RuntimeMode::External => product_dev_host::ProductDevRuntimeMode::External,
+        RuntimeMode::Realtime => product_host::ProductHostRuntimeMode::Realtime,
+        RuntimeMode::Demand => product_host::ProductHostRuntimeMode::Demand,
+        RuntimeMode::External => product_host::ProductHostRuntimeMode::External,
     };
     let state = match readout.state() {
-        RuntimeState::Created => ProductDevRuntimeState::Created,
-        RuntimeState::Running => ProductDevRuntimeState::Running,
-        RuntimeState::Paused => ProductDevRuntimeState::Paused,
-        RuntimeState::Faulted => ProductDevRuntimeState::Faulted,
-        RuntimeState::Shutdown => ProductDevRuntimeState::Shutdown,
+        RuntimeState::Created => ProductHostRuntimeState::Created,
+        RuntimeState::Running => ProductHostRuntimeState::Running,
+        RuntimeState::Paused => ProductHostRuntimeState::Paused,
+        RuntimeState::Faulted => ProductHostRuntimeState::Faulted,
+        RuntimeState::Shutdown => ProductHostRuntimeState::Shutdown,
     };
-    let mut projected = ProductDevRuntimeReadout::new(dev_binding(readout), mode, state)
+    let mut projected = ProductHostRuntimeReadout::new(dev_binding(readout), mode, state)
         .with_counters(
             readout.admitted_simulation_steps(),
             readout.admitted_presentations(),
@@ -3377,9 +3389,11 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeReadout {
         );
     if let Some(fault) = readout.fault() {
         projected = projected.with_fault(match fault {
-            runtime_lifecycle::RuntimeFault::OwnerReported => ProductDevRuntimeFault::OwnerReported,
+            runtime_lifecycle::RuntimeFault::OwnerReported => {
+                ProductHostRuntimeFault::OwnerReported
+            }
             runtime_lifecycle::RuntimeFault::CounterExhausted => {
-                ProductDevRuntimeFault::CounterExhausted
+                ProductHostRuntimeFault::CounterExhausted
             }
         });
     }
@@ -3481,8 +3495,8 @@ fn prepare_persistence_root(
     Ok(Some(root.to_path_buf()))
 }
 
-fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new_not_applied(input_error_code(&error), error.to_string())
+fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductHostRuntimeError {
+    ProductHostRuntimeError::new_not_applied(input_error_code(&error), error.to_string())
 }
 
 fn lifecycle_error(error: runtime_lifecycle::RuntimeLifecycleError) -> CsharpProductRuntimeError {
@@ -3491,8 +3505,8 @@ fn lifecycle_error(error: runtime_lifecycle::RuntimeLifecycleError) -> CsharpPro
 
 fn lifecycle_runtime_error(
     error: runtime_lifecycle::RuntimeLifecycleError,
-) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new_not_applied(lifecycle_error_code(&error), error.to_string())
+) -> ProductHostRuntimeError {
+    ProductHostRuntimeError::new_not_applied(lifecycle_error_code(&error), error.to_string())
 }
 
 fn lifecycle_error_code(error: &runtime_lifecycle::RuntimeLifecycleError) -> &'static str {
@@ -3569,7 +3583,7 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
     }
 }
 
-fn exercise_runtime_error(error: ProductDevRuntimeError) -> CsharpProductRuntimeError {
+fn exercise_runtime_error(error: ProductHostRuntimeError) -> CsharpProductRuntimeError {
     CsharpProductRuntimeError::new(
         "CSHARP_EXERCISE",
         format!("{}: {}", error.code(), error.diagnostic()),
@@ -3615,7 +3629,7 @@ fn call_action(
     api: &LoadedProductApi,
     action: NativeProductAction,
     handle: *mut c_void,
-    operation: ProductDevOperationKind,
+    operation: ProductHostOperationKind,
 ) -> Result<(), CsharpProductRuntimeError> {
     // SAFETY: `handle` is retained by the runtime.
     let status = unsafe { action(handle) };
@@ -3725,7 +3739,7 @@ fn call_debug(
     release: NativeProductReleaseDebugResult,
     handle: *mut c_void,
     command: &str,
-) -> Result<ProductDevDebugResult, CsharpProductRuntimeError> {
+) -> Result<ProductHostDebugResult, CsharpProductRuntimeError> {
     let input = native_utf8(command);
     let mut native = NativeProductDebugResult::default();
     // SAFETY: `input` borrows `command` for this immediate call; `native` is
@@ -3754,7 +3768,7 @@ fn call_describe_debug(
     describe: NativeProductDescribeDebug,
     release: NativeProductReleaseDebugResult,
     handle: *mut c_void,
-) -> Result<ProductDevDebugResult, CsharpProductRuntimeError> {
+) -> Result<ProductHostDebugResult, CsharpProductRuntimeError> {
     let mut native = NativeProductDebugResult::default();
     // SAFETY: `native` is writable for this exact callback. Returned product
     // memory is copied before the matching release below.
@@ -3784,7 +3798,7 @@ fn call_describe_debug(
 
 fn copy_debug_result(
     native: NativeProductDebugResult,
-) -> Result<ProductDevDebugResult, CsharpProductRuntimeError> {
+) -> Result<ProductHostDebugResult, CsharpProductRuntimeError> {
     let succeeded = match native.succeeded {
         0 => false,
         1 => true,
@@ -3815,7 +3829,7 @@ fn copy_debug_result(
             format!("generated debug callback returned invalid UTF-8: {error}"),
         )
     })?;
-    Ok(ProductDevDebugResult::new(succeeded, message.to_owned()))
+    Ok(ProductHostDebugResult::new(succeeded, message.to_owned()))
 }
 
 fn call_complete_timeline(
@@ -3886,14 +3900,14 @@ fn checked_status(status: i32, operation: &str) -> Result<(), CsharpProductRunti
     Ok(())
 }
 
-fn operation_name(operation: ProductDevOperationKind) -> &'static str {
+fn operation_name(operation: ProductHostOperationKind) -> &'static str {
     match operation {
-        ProductDevOperationKind::Connect => "attach",
-        ProductDevOperationKind::Start => "start",
-        ProductDevOperationKind::Pause => "pause",
-        ProductDevOperationKind::Resume => "resume",
-        ProductDevOperationKind::Restart => "restart",
-        ProductDevOperationKind::Shutdown => "shutdown",
+        ProductHostOperationKind::Connect => "attach",
+        ProductHostOperationKind::Start => "start",
+        ProductHostOperationKind::Pause => "pause",
+        ProductHostOperationKind::Resume => "resume",
+        ProductHostOperationKind::Restart => "restart",
+        ProductHostOperationKind::Shutdown => "shutdown",
         _ => "operation",
     }
 }
@@ -4821,8 +4835,8 @@ fn complete_voxel_baseline(
     ))
 }
 
-fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
+fn host_runtime_error(error: product_host::ProductHostError) -> ProductHostRuntimeError {
+    ProductHostRuntimeError::new(error.code(), error.detail().to_owned())
 }
 
 #[cfg(test)]
@@ -5511,7 +5525,7 @@ mod tests {
 
     fn drop_fixture_runtime_with_diagnostics(
         label: &str,
-        diagnostics: ProductDevLog,
+        diagnostics: ProductHostLog,
     ) -> (CsharpProductRuntime, PathBuf) {
         let root = content_fixture_root(label);
         fs::create_dir_all(&root).expect("drop fixture content root");
@@ -5619,7 +5633,7 @@ mod tests {
 
     fn voxel_failure_fixture_runtime_with_diagnostics(
         label: &str,
-        diagnostics: ProductDevLog,
+        diagnostics: ProductHostLog,
     ) -> (CsharpProductRuntime, PathBuf) {
         let root = content_fixture_root(label);
         fs::create_dir_all(&root).expect("voxel failure fixture content root");
@@ -5755,10 +5769,10 @@ mod tests {
         DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         let (mut runtime, root) = drop_fixture_runtime_with_diagnostics(
             "presentation-world-baseline",
-            ProductDevLog::new(Default::default()).unwrap(),
+            ProductHostLog::new(Default::default()).unwrap(),
         );
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         let (session, presentation) = commit_voxel_presentation_for_recovery(&mut runtime);
         runtime.services.begin_call(ui_binding(&runtime.lifecycle));
@@ -5974,7 +5988,7 @@ mod tests {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
+        let diagnostics = ProductHostLog::new(Default::default()).expect("fixture diagnostics");
         UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
         UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(true, Ordering::SeqCst);
         UPDATE_CALLBACK_DIAGNOSTIC_STATUS.store(0, Ordering::SeqCst);
@@ -5984,7 +5998,7 @@ mod tests {
         let (mut runtime, root) =
             drop_fixture_runtime_with_diagnostics("faulted-update", diagnostics.clone());
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("fixture start");
         // An ordinary update publishes the HUD before the throwing one.
         runtime.admit_demand_step().expect("ordinary update");
@@ -6039,7 +6053,7 @@ mod tests {
 
         UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .lifecycle(ProductHostLifecycleOperation::Resume)
             .expect("resume continues the same product");
         runtime.admit_demand_step().expect("simulation continues");
         assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 2);
@@ -6092,7 +6106,7 @@ mod tests {
         let _guard = DROP_FIXTURE_GATE
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
+        let diagnostics = ProductHostLog::new(Default::default()).expect("fixture diagnostics");
         UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(false, Ordering::SeqCst);
         UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
         let (mut runtime, root) =
@@ -6100,7 +6114,7 @@ mod tests {
         runtime.api.read_call_error = long_product_error_read;
         runtime.api.release_call_error = product_error_fixture_release;
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("fixture start");
         runtime
             .admit_demand_step()
@@ -6125,7 +6139,7 @@ mod tests {
         let _guard = DROP_FIXTURE_GATE
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
+        let diagnostics = ProductHostLog::new(Default::default()).expect("fixture diagnostics");
         UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
         UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
         VOXEL_FAILURE_DESTROY_SESSION_ENABLED.store(false, Ordering::SeqCst);
@@ -6135,7 +6149,7 @@ mod tests {
         let (mut runtime, root) =
             voxel_failure_fixture_runtime_with_diagnostics("voxel-edit-exception", diagnostics);
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start voxel failure fixture");
         let (session, presentation) = commit_voxel_presentation_for_recovery(&mut runtime);
         VOXEL_FAILURE_SESSION.store(session.value, Ordering::SeqCst);
@@ -6281,7 +6295,7 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = drop_fixture_runtime("debug-fault-latch");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         runtime.api.execute_debug = debug_semantic_failure;
         runtime.api.release_debug_result = release_debug_fixture;
@@ -6477,7 +6491,7 @@ mod tests {
         let (mut runtime, root) = direct_input_fixture_runtime("direct-payload-snapshot");
 
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start direct-input fixture");
         runtime
             .admit_demand_step()
@@ -6496,7 +6510,7 @@ mod tests {
         )
         .expect("fixture payload intent");
         runtime
-            .input(ProductDevInputBatch::new(vec![
+            .input(ProductHostInputBatch::new(vec![
                 input_clear(binding, 1),
                 payload,
             ]))
@@ -6605,7 +6619,7 @@ mod tests {
         let (mut runtime, root) = direct_input_fixture_runtime("duplicate-input-recovery");
 
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start duplicate-input fixture");
         runtime
             .admit_demand_step()
@@ -6618,11 +6632,11 @@ mod tests {
         let binding = input_binding(&runtime.lifecycle);
         let first = input_clear(binding, 1);
         runtime
-            .input(ProductDevInputBatch::new(vec![first.clone()]))
+            .input(ProductHostInputBatch::new(vec![first.clone()]))
             .expect("admit first input");
         let warnings = runtime.diagnostics.snapshot().warning_count;
         let duplicate = runtime
-            .input(ProductDevInputBatch::new(vec![first]))
+            .input(ProductHostInputBatch::new(vec![first]))
             .expect("safe duplicate returns a typed receipt");
         assert_eq!(
             runtime.diagnostics.snapshot().warning_count,
@@ -6670,7 +6684,7 @@ mod tests {
             .clear();
         let (mut runtime, root) = remapping_fixture_runtime("mapping-replacement-fence");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start fixture");
         runtime.admit_demand_step().expect("drain start clear");
         DIRECT_INPUT_CALLBACK_EVENTS
@@ -6689,7 +6703,7 @@ mod tests {
             },
         ));
         runtime
-            .input(ProductDevInputBatch::new(vec![old_press]))
+            .input(ProductHostInputBatch::new(vec![old_press]))
             .expect("queue old physical edge");
         let replacement = CompiledInputMappings::standard(
             runtime.direct_intents.clone(),
@@ -6717,7 +6731,7 @@ mod tests {
             "old queued facts are replaced by one clear"
         );
         let stale = runtime
-            .input(ProductDevInputBatch::new(vec![
+            .input(ProductHostInputBatch::new(vec![
                 RuntimeInputEvent::Physical(RuntimeInputIngress::new(
                     old_binding,
                     2,
@@ -6734,7 +6748,7 @@ mod tests {
             "old-binding inflight input cannot be remapped"
         );
         runtime
-            .input(ProductDevInputBatch::new(vec![
+            .input(ProductHostInputBatch::new(vec![
                 RuntimeInputEvent::Physical(RuntimeInputIngress::new(
                     fresh_binding,
                     1,
@@ -6779,7 +6793,7 @@ mod tests {
         let (mut runtime, root) =
             callback_remapping_fixture_runtime("callback-mapping-replacement");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start fixture");
         runtime.admit_demand_step().expect("drain start clear");
         let old_binding = input_binding(&runtime.lifecycle);
@@ -6814,7 +6828,7 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
         runtime
-            .input(ProductDevInputBatch::new(vec![
+            .input(ProductHostInputBatch::new(vec![
                 RuntimeInputEvent::Physical(RuntimeInputIngress::new(
                     fresh_binding,
                     1,
@@ -7163,15 +7177,15 @@ mod tests {
         let cases = [
             (
                 CsharpProductRuntime::standard_realtime_config(),
-                product_dev_host::ProductDevRuntimeMode::Realtime,
+                product_host::ProductHostRuntimeMode::Realtime,
             ),
             (
                 RuntimeLifecycleConfig::Demand,
-                product_dev_host::ProductDevRuntimeMode::Demand,
+                product_host::ProductHostRuntimeMode::Demand,
             ),
             (
                 RuntimeLifecycleConfig::External,
-                product_dev_host::ProductDevRuntimeMode::External,
+                product_host::ProductHostRuntimeMode::External,
             ),
         ];
         for (config, expected_mode) in cases {
@@ -7206,7 +7220,7 @@ mod tests {
         let (mut runtime, root) = realtime_drop_fixture_runtime("manual-realtime-facts");
         runtime.api.update = manual_time_fixture_update;
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         for mode in ["manual", "action-driven"] {
             MANUAL_UPDATE_FACTS
@@ -7246,7 +7260,7 @@ mod tests {
         let (mut realtime, root) = realtime_drop_fixture_runtime("realtime-schedule-seam");
         assert_eq!(
             realtime.realtime_schedule_state(),
-            ProductDevRuntimeScheduleState::Created
+            ProductHostRuntimeScheduleState::Created
         );
         assert_eq!(
             realtime.realtime_schedule_interval(),
@@ -7254,11 +7268,11 @@ mod tests {
         );
 
         realtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start realtime fixture");
         assert_eq!(
             realtime.realtime_schedule_state(),
-            ProductDevRuntimeScheduleState::Running
+            ProductHostRuntimeScheduleState::Running
         );
         // Pause and resume rebind in place: a new binding and completion, but
         // no world snapshot for the browser to replace its renderer with.
@@ -7273,29 +7287,29 @@ mod tests {
                     .any(|output| matches!(output, RuntimePublication::Frame(_)))
         };
         let (_, paused) = realtime
-            .lifecycle(ProductDevLifecycleOperation::Pause)
+            .lifecycle(ProductHostLifecycleOperation::Pause)
             .expect("pause realtime fixture")
             .into_parts();
         assert!(in_place(&paused), "pause rebinds in place");
         assert_eq!(
             realtime.realtime_schedule_state(),
-            ProductDevRuntimeScheduleState::Paused
+            ProductHostRuntimeScheduleState::Paused
         );
         let (_, resumed) = realtime
-            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .lifecycle(ProductHostLifecycleOperation::Resume)
             .expect("resume realtime fixture")
             .into_parts();
         assert!(in_place(&resumed), "resume rebinds in place");
         assert_eq!(
             realtime.realtime_schedule_state(),
-            ProductDevRuntimeScheduleState::Running
+            ProductHostRuntimeScheduleState::Running
         );
         realtime
-            .lifecycle(ProductDevLifecycleOperation::Shutdown)
+            .lifecycle(ProductHostLifecycleOperation::Shutdown)
             .expect("shutdown realtime fixture");
         assert_eq!(
             realtime.realtime_schedule_state(),
-            ProductDevRuntimeScheduleState::Shutdown
+            ProductHostRuntimeScheduleState::Shutdown
         );
         drop(realtime);
         fs::remove_dir_all(root).expect("remove realtime schedule fixture content");
@@ -7303,7 +7317,7 @@ mod tests {
         let (demand, root) = drop_fixture_runtime("demand-schedule-seam");
         assert_eq!(
             demand.realtime_schedule_state(),
-            ProductDevRuntimeScheduleState::Unsupported
+            ProductHostRuntimeScheduleState::Unsupported
         );
         assert_eq!(demand.realtime_schedule_interval(), None);
         drop(demand);
@@ -7317,27 +7331,27 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = drop_fixture_runtime("mailbox-fence-admission");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         let old_binding = runtime.binding();
         runtime
             .control(
-                product_dev_host::ProductDevControlOperation::Replace,
+                product_host::ProductHostControlOperation::Replace,
                 old_binding,
             )
             .unwrap();
         let binding = runtime.binding();
-        let owner = product_dev_host::ProductDevOperationOwner::new(runtime);
+        let owner = product_host::ProductHostOperationOwner::new(runtime);
         let queued = std::cell::Cell::new(2);
         let stale_control = owner.control_with_input_fence(
-            product_dev_host::ProductDevControlOperation::Replace,
+            product_host::ProductHostControlOperation::Replace,
             old_binding,
             || queued.set(0),
         );
         assert!(stale_control.is_err());
         assert_eq!(queued.get(), 2);
         let stale_lifecycle = owner.lifecycle_with_input_fence(
-            ProductDevLifecycleOperation::Pause,
+            ProductHostLifecycleOperation::Pause,
             Some(old_binding),
             || queued.set(0),
         );
@@ -7345,7 +7359,7 @@ mod tests {
         assert_eq!(queued.get(), 2);
         owner
             .control_with_input_fence(
-                product_dev_host::ProductDevControlOperation::Replace,
+                product_host::ProductHostControlOperation::Replace,
                 binding,
                 || queued.set(0),
             )
@@ -7362,7 +7376,7 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = drop_fixture_runtime("input-pressure-receipt");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         let binding = runtime.binding();
         let batch = |first: usize, count: usize| {
@@ -7370,7 +7384,7 @@ mod tests {
                 "runtime": binding, "sequence": sequence.to_string(), "context": "gameplay.default",
                 "fact": {"kind": "key", "code": "digit-1", "edge": if sequence % 2 == 1 { "pressed" } else { "released" }},
             })).collect::<Vec<_>>();
-            ProductDevInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap()
+            ProductHostInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap()
         };
         let count = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS;
         assert!(runtime
@@ -7406,7 +7420,7 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = realtime_drop_fixture_runtime("input-claim");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         let page = runtime.binding();
         let claim_of = |outputs: &[RuntimePublication]| match outputs.first() {
@@ -7414,7 +7428,7 @@ mod tests {
             other => panic!("a control change publishes a binding first, not {other:?}"),
         };
 
-        let refused = |result: Result<_, ProductDevRuntimeError>| match result {
+        let refused = |result: Result<_, ProductHostRuntimeError>| match result {
             Err(error) => error.code().to_owned(),
             Ok(_) => panic!("refused"),
         };
@@ -7452,7 +7466,7 @@ mod tests {
 
         // Release hands input back to the page.
         let (_, released) = runtime
-            .control(ProductDevControlOperation::Release, runtime.binding())
+            .control(ProductHostControlOperation::Release, runtime.binding())
             .unwrap()
             .into_parts();
         assert_eq!(claim_of(&released), None);
@@ -7488,10 +7502,10 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = drop_fixture_runtime("paused-input");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Pause)
+            .lifecycle(ProductHostLifecycleOperation::Pause)
             .unwrap();
         let binding = runtime.binding();
         let events = [serde_json::json!({
@@ -7499,7 +7513,7 @@ mod tests {
             "fact": {"kind": "key", "code": "digit-1", "edge": "pressed"},
         })];
         let batch =
-            ProductDevInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap();
+            ProductHostInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap();
         let pending_before = runtime.pending_inputs.len();
         let receipt = runtime.input(batch).expect("paused input is admitted");
         assert!(receipt.result().is_accepted());
@@ -7510,7 +7524,7 @@ mod tests {
         );
         // Resume rebinds: the product's next update sees only the clear.
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .lifecycle(ProductHostLifecycleOperation::Resume)
             .unwrap();
         assert_eq!(runtime.pending_inputs.len(), 1);
         assert_eq!(
@@ -7528,10 +7542,10 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = remapping_fixture_runtime("paused-mapped-input");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .unwrap();
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Pause)
+            .lifecycle(ProductHostLifecycleOperation::Pause)
             .unwrap();
         let binding = input_binding(&runtime.lifecycle);
         // W maps to an intent; more presses than the pending-intent capacity.
@@ -7550,13 +7564,13 @@ mod tests {
                 },
             ));
             let receipt = runtime
-                .input(ProductDevInputBatch::new(vec![event]))
+                .input(ProductHostInputBatch::new(vec![event]))
                 .unwrap_or_else(|error| panic!("paused input {sequence} is consumed: {error:?}"));
             assert!(receipt.result().is_accepted(), "paused input {sequence}");
         }
         // Resume: the product's next update sees only the clear.
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .lifecycle(ProductHostLifecycleOperation::Resume)
             .unwrap();
         assert_eq!(runtime.pending_inputs.len(), 1);
         assert_eq!(
@@ -7574,7 +7588,7 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner);
         let (mut runtime, root) = drop_fixture_runtime("pending-input-recovery");
         runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
+            .lifecycle(ProductHostLifecycleOperation::Start)
             .expect("start pending-input fixture");
         let previous_binding = runtime.binding();
         let pending_binding = input_binding(&runtime.lifecycle);
@@ -7635,10 +7649,10 @@ mod tests {
             .expect("report owner fault");
 
         let faulted = lifecycle.readout();
-        let expected_faulted = ProductDevRuntimeReadout::new(
+        let expected_faulted = ProductHostRuntimeReadout::new(
             dev_binding(faulted),
-            product_dev_host::ProductDevRuntimeMode::Demand,
-            ProductDevRuntimeState::Faulted,
+            product_host::ProductHostRuntimeMode::Demand,
+            ProductHostRuntimeState::Faulted,
         )
         .with_counters(
             before_fault.admitted_simulation_steps(),
@@ -7649,15 +7663,15 @@ mod tests {
             before_fault.clock_regressions(),
         )
         .with_clock(None, None)
-        .with_fault(ProductDevRuntimeFault::OwnerReported);
+        .with_fault(ProductHostRuntimeFault::OwnerReported);
         assert_eq!(dev_readout(faulted), expected_faulted);
 
         lifecycle.restart().expect("restart lifecycle");
         let restarted = lifecycle.readout();
-        let expected_restarted = ProductDevRuntimeReadout::new(
+        let expected_restarted = ProductHostRuntimeReadout::new(
             dev_binding(restarted),
-            product_dev_host::ProductDevRuntimeMode::Demand,
-            ProductDevRuntimeState::Running,
+            product_host::ProductHostRuntimeMode::Demand,
+            ProductHostRuntimeState::Running,
         )
         .with_counters(0, 0, 0, 0)
         .with_clock(None, None);

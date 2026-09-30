@@ -1,12 +1,10 @@
 //! Typed, host-neutral publications emitted by one product runtime.
 //!
-//! This crate is the logical boundary between a concrete runtime owner and a
+//! This module is the logical boundary between a concrete runtime owner and a
 //! serving host. It carries Engine-owned render and UI facts, binding and
 //! baseline markers, and no browser wire representation. HTTP/SSE envelopes,
 //! output retention, byte limits, and delivery cursors stay with the serving
 //! host that adapts these values.
-
-#![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
 
@@ -14,12 +12,29 @@ use render_host_contracts::RendererViewComposition;
 use render_model::{RenderFrameDiff, JSON_SAFE_U64_MAX};
 use render_presentation::PresentationFrameDiff;
 use runtime_input::RuntimeInputBinding;
-use runtime_session::RuntimeReceipt as SessionReceipt;
 use runtime_ui::RuntimeUiProjectionEnvelope;
 
 /// The neutral receipt carried by a runtime owner before a host adds delivery
-/// metadata such as an SSE/output cursor.
-pub type RuntimeReceipt<T> = SessionReceipt<T, RuntimePublication>;
+/// metadata such as an SSE/output cursor: an operation's owned result and
+/// logical outputs, independent of transport encoding, delivery cursors,
+/// queue bounds, and host DTOs.
+#[derive(Debug, Clone)]
+pub struct RuntimeReceipt<T> {
+    result: T,
+    outputs: Vec<RuntimePublication>,
+}
+
+impl<T> RuntimeReceipt<T> {
+    pub fn new(result: T, outputs: Vec<RuntimePublication>) -> Self {
+        Self { result, outputs }
+    }
+    pub fn result(&self) -> &T {
+        &self.result
+    }
+    pub fn into_parts(self) -> (T, Vec<RuntimePublication>) {
+        (self.result, self.outputs)
+    }
+}
 
 /// A typed renderer stream frontier captured at a complete baseline boundary.
 ///

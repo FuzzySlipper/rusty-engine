@@ -40,10 +40,10 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | GLB export | Rust | [`render-export`](../rust/crates/render-export) writes a `RenderOutput` job's frozen frame as binary glTF, on the CPU. It takes the built-in geometry, mesh streams, decoded GLBs and slot colours from `render_wgpu::cpu`, so an export holds what is drawn; those values cross as plain arrays and glam stays private to render-wgpu. render-wgpu writes no documents: the boundary check refuses `serde_json` there. |
 | Math vocabulary | Rust | Engine value types are plain arrays and the small f32 [`core-math`](../rust/crates/core-math) types. World-space spatial work is f64 and uses nalgebra through parry and rapier inside `svc-collision` and `svc-implicit`. glam is private to `render-wgpu`, which needs f32 column-major matrices for GPU rows, and `scripts/dependency_boundary_check.py` refuses it anywhere else. Conversions between Engine arrays and glam go only through `render-wgpu/src/convert.rs` (#8846). |
 | Desktop window | Rust | [`desktop-shell`](../rust/crates/desktop-shell) opens the native window, presents `render-wgpu` to its surface, and composites the product UI rendered by Chromium (CEF) over it. See [desktop shell](desktop-shell.md). |
-| Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) draws render-wgpu's `SceneDriver` offscreen on its own thread while a viewer watches, answers on-demand frame requests, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-dev-host` serves them at `/__rusty/product/runtime/frames`. |
-| Runtime serialization | Rust | `runtime-session` is a mutex around one runtime instance. `product-dev-host` holds it so a runtime call and its output handover happen in one ordered scope. |
-| Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, and baseline facts. The runtime's renderer and audio output apply them in process; the host sends the browser shell only its binding, baseline markers and UI projections. Input acknowledgements and the runtime readout remain host observations. |
-| Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
+| Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) draws render-wgpu's `SceneDriver` offscreen on its own thread while a viewer watches, answers on-demand frame requests, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-host` serves them at `/__rusty/product/runtime/frames`. |
+| Runtime serialization | Rust | `product-host`'s `RuntimeSession` is a mutex around one runtime instance, held so a runtime call and its output handover happen in one ordered scope. |
+| Runtime publications | Rust | `product-host`'s `publication` module carries typed graphics, presentation, UI, and baseline facts. The runtime's renderer and audio output apply them in process; the host sends the browser shell only its binding, baseline markers and UI projections. Input acknowledgements and the runtime readout remain host observations. |
+| Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The product host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
 | Safe C# contracts and native bridge | Generated and handwritten C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles the generated contracts, values, internal interop and service implementations from ignored `obj/Generated` output, plus the handwritten [`ProductBridge`](../csharp/Rusty.Engine/NativeProduct/ProductBridge.cs) that implements the product ABI table and lifetime. |
 | Product bootstrap | Generated C# | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator) emits only what depends on the product: a safe `rusty_product_bind_v1` export naming the product constructor, and the product's debug command catalog. It serves CoreCLR and NativeAOT alike. |
@@ -191,7 +191,7 @@ Every shape that crosses to the browser shell is declared once, in Rust:
 ts-rs emits them into `render/packages/*/src/generated/contracts.ts`. The
 TypeScript reads them as typed values and does not check their shape again: the
 host is first-party, and the Rust decoders reject bad requests.
-`product-dev-host`'s `typescript_contracts_are_current` test fails while a
+`product-host`'s `typescript_contracts_are_current` test fails while a
 checked-in file differs from the Rust types, and
 `scripts/generate-typescript-contracts.sh` rewrites them.
 
@@ -219,7 +219,7 @@ the [desktop shell](desktop-shell.md)'s native window
   answers with the latest frame newer than `N`, or `204` after a second. Each
   frame is a 40-byte `RSF1` header (sequence, simulation step, size, format,
   held and video flags) and a JPEG (quality 80) payload;
-  `product-dev-host/src/frames.rs` is the format's source. The renderer draws
+  `product-host/src/frames.rs` is the format's source. The renderer draws
   at the most recent viewer's size, and at its pixel ratio (`W / C`): labels,
   pixel-sized sprites and particle points are CSS pixels
   (`Renderer::set_pixel_ratio`). The desktop window uses its scale factor.

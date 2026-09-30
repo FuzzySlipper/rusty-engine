@@ -37,11 +37,11 @@ declare module "@rusty-engine/product-ui/internal/application-host/src/generated
     /**
      * How gameplay holds the pointer.
      */
-    export type ProductDevCursorMode = "pointer-lock" | "unlocked";
+    export type ProductHostCursorMode = "pointer-lock" | "unlocked";
     /**
      * Where the runtime presents the frames it renders.
      */
-    export type ProductDevRenderOutput = "stream" | "window";
+    export type ProductHostRenderOutput = "stream" | "window";
     /**
      * The runtime binding an envelope belongs to, as canonical decimal text.
      */
@@ -255,30 +255,30 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * help. It is never a dispatch schema: command invocation remains the single
      * explicit `execute_debug` operation.
      */
-    export type ProductDevDebugCatalog = {
+    export type ProductHostDebugCatalog = {
         available: boolean;
-        commands: Array<ProductDevDebugCommandDescriptor>;
+        commands: Array<ProductHostDebugCommandDescriptor>;
     };
-    export type ProductDevDebugCommandDescriptor = {
+    export type ProductHostDebugCommandDescriptor = {
         name: string;
         description: string;
-        parameters: Array<ProductDevDebugCommandParameterDescriptor>;
+        parameters: Array<ProductHostDebugCommandParameterDescriptor>;
     };
-    export type ProductDevDebugCommandParameterDescriptor = {
+    export type ProductHostDebugCommandParameterDescriptor = {
         name: string;
         type: string;
     };
     /**
      * `diagnostics/read`: diagnostics after a cursor, or the retained ones.
      */
-    export type ProductDevDiagnosticsReadRequest = {
+    export type ProductHostDiagnosticsReadRequest = {
         after?: CanonicalU64;
     };
     /**
      * The `diagnostics/read` answer: retained diagnostics and host telemetry.
      */
-    export type ProductDevDiagnosticsReadResponse = {
-        telemetry: ProductDevTelemetrySnapshot;
+    export type ProductHostDiagnosticsReadResponse = {
+        telemetry: ProductHostTelemetrySnapshot;
         events: Array<RuntimeDiagnosticEvent>;
         floorSequence: CanonicalU64;
         throughSequence: CanonicalU64;
@@ -289,45 +289,45 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         errorCount: CanonicalU64;
         droppedCount: CanonicalU64;
     };
-    export type ProductDevError = {
+    export type ProductHostErrorBody = {
         code: string;
         diagnostic: string;
     };
     /**
      * The body of every host error response.
      */
-    export type ProductDevErrorResponse = {
+    export type ProductHostErrorResponse = {
         accepted: false;
-        error: ProductDevError;
+        error: ProductHostErrorBody;
     };
     /**
      * Closed operation identities returned by direct runtime calls.
      */
-    export type ProductDevOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "admit-demand-step" | "admit-external-step" | "complete-timeline" | "execute-debug";
+    export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "admit-demand-step" | "admit-external-step" | "complete-timeline" | "execute-debug";
     /**
      * Where the runtime presents the frames it renders.
      */
-    export type ProductDevRenderOutput = "stream" | "window";
+    export type ProductHostRenderOutput = "stream" | "window";
     /**
      * The runtime renderer's adapter and what its recent frames cost.
      */
-    export type ProductDevRendererStatistics = {
+    export type ProductHostRendererStatistics = {
         adapter: string;
-        output: ProductDevRenderOutput;
+        output: ProductHostRenderOutput;
         /**
          * The recent streamed frames; the desktop window streams nothing.
          */
-        stream?: ProductDevStreamStatistics;
+        stream?: ProductHostStreamStatistics;
         /**
          * The recent frames the desktop window presented.
          */
-        window?: ProductDevWindowStatistics;
+        window?: ProductHostWindowStatistics;
         /**
          * When each recent product update that received input finished, and
          * the step it simulated: the first frame showing that step or a later
          * one is the first to show the input.
          */
-        inputSteps: Array<ProductDevTimedStep>;
+        inputSteps: Array<ProductHostTimedStep>;
         /**
          * Retained operations the renderer skipped, by kind.
          */
@@ -337,25 +337,25 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
     /**
      * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.
      */
-    export type ProductDevRendererStatus = {
+    export type ProductHostRendererStatus = {
         available: boolean;
-        widget: ProductDevRendererWidget;
+        widget: ProductHostRendererWidget;
         /**
          * Why no renderer statistics are available.
          */
         diagnostic?: string;
-        renderer?: ProductDevRendererStatistics;
+        renderer?: ProductHostRendererStatistics;
     };
     /**
      * The renderer metrics widget every mounted live-debug panel shares.
      */
-    export type ProductDevRendererWidget = {
+    export type ProductHostRendererWidget = {
         visible: boolean;
     };
     /**
      * Exact runtime generation binding used by browser input, operations, and outputs.
      */
-    export type ProductDevRuntimeBinding = {
+    export type ProductHostRuntimeBinding = {
         instanceId: CanonicalU64;
         generation: CanonicalU64;
         controlRevision: CanonicalU64;
@@ -363,7 +363,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
     /**
      * Median milliseconds per frame for each stage of streaming it.
      */
-    export type ProductDevStreamMedians = {
+    export type ProductHostStreamMedians = {
         render: number;
         readback: number;
         encode: number;
@@ -371,20 +371,20 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
     /**
      * What the recent streamed frames cost.
      */
-    export type ProductDevStreamStatistics = {
+    export type ProductHostStreamStatistics = {
         /**
          * The size the most recent viewer asked for, in its pixels.
          */
         viewerSize: [number, number] | null;
         recentFrames: number;
         framesPerSecond: number;
-        medianMs: ProductDevStreamMedians;
+        medianMs: ProductHostStreamMedians;
         medianBytesPerFrame: number;
         bytesPerSecond: number;
         /**
          * When each recent frame was published, and the step it showed.
          */
-        shown: Array<ProductDevTimedStep>;
+        shown: Array<ProductHostTimedStep>;
     };
     /**
      * Bounded host-owned product-lane telemetry returned alongside the existing
@@ -392,8 +392,8 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * answered by `engine.renderer` and are not folded into this product-lane
      * snapshot.
      */
-    export type ProductDevTelemetrySnapshot = {
-        inFlightOperation: ProductDevOperationKind | null;
+    export type ProductHostTelemetrySnapshot = {
+        inFlightOperation: ProductHostOperationKind | null;
         inFlightAgeMs: CanonicalU64 | null;
         lastProductAdmissionLatencyMs: CanonicalU64 | null;
         lastInputAdmissionLatencyMs: CanonicalU64 | null;
@@ -418,13 +418,13 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * Bounded attribution for completed C# update callbacks. Service totals
          * are nested within the callback duration, not additional frame time.
          */
-        updateAttribution: ProductDevUpdateAttributionSnapshot | null;
+        updateAttribution: ProductHostUpdateAttributionSnapshot | null;
     };
     /**
      * A simulation step and when something happened to it, in Unix
      * milliseconds.
      */
-    export type ProductDevTimedStep = {
+    export type ProductHostTimedStep = {
         atUnixMs: number;
         step: number;
     };
@@ -432,8 +432,8 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * One complete C# update callback observation. Durations are integer
      * microseconds so the diagnostics wire remains canonical and float-free.
      */
-    export type ProductDevUpdateAttribution = {
-        runtime: ProductDevRuntimeBinding | null;
+    export type ProductHostUpdateAttribution = {
+        runtime: ProductHostRuntimeBinding | null;
         simulationStep: CanonicalU64;
         admittedStepCount: CanonicalU64;
         postCallbackDurationUs: CanonicalU64;
@@ -463,21 +463,21 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
     /**
      * Host-owned rolling distribution and long-lived slowest complete update.
      */
-    export type ProductDevUpdateAttributionSnapshot = {
+    export type ProductHostUpdateAttributionSnapshot = {
         sampleCount: CanonicalU64;
         callbackDurationUsP50: CanonicalU64;
         callbackDurationUsP95: CanonicalU64;
         callbackDurationUsMax: CanonicalU64;
-        latest: ProductDevUpdateAttribution;
+        latest: ProductHostUpdateAttribution;
         /**
          * Slowest complete callback retained in the current rolling window.
          */
-        rollingSlowest: ProductDevUpdateAttribution;
+        rollingSlowest: ProductHostUpdateAttribution;
         rollingSlowestAgeMs: CanonicalU64;
         /**
          * Slowest complete callback observed for this host lifetime.
          */
-        slowest: ProductDevUpdateAttribution;
+        slowest: ProductHostUpdateAttribution;
         slowestAgeMs: CanonicalU64;
     };
     /**
@@ -485,7 +485,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * for the swapchain image, waiting for the scene, encoding and submitting
      * the frame, and presenting it.
      */
-    export type ProductDevWindowMedians = {
+    export type ProductHostWindowMedians = {
         acquire: number;
         lock: number;
         draw: number;
@@ -495,14 +495,14 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * What the recent frames the desktop window presented cost, and when they
      * reached it.
      */
-    export type ProductDevWindowStatistics = {
+    export type ProductHostWindowStatistics = {
         recentFrames: number;
         framesPerSecond: number;
-        medianMs: ProductDevWindowMedians;
+        medianMs: ProductHostWindowMedians;
         /**
          * When each recent frame was presented, and the step it showed.
          */
-        shown: Array<ProductDevTimedStep>;
+        shown: Array<ProductHostTimedStep>;
         /**
          * When recent key and mouse button events reached the window, in Unix
          * milliseconds.
@@ -543,7 +543,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/index" {
      * Descriptor data is read-only help/completion data; this client never derives
      * command schemas or dispatches anything except one command-line string.
      */
-    import type { ProductDevDebugCatalog, ProductDevDebugCommandDescriptor, ProductDevDiagnosticsReadResponse, RuntimeDiagnosticEvent } from "@rusty-engine/live-debug/internal/live-debug-client/src/generated/contracts";
+    import type { ProductHostDebugCatalog, ProductHostDebugCommandDescriptor, ProductHostDiagnosticsReadResponse, RuntimeDiagnosticEvent } from "@rusty-engine/live-debug/internal/live-debug-client/src/generated/contracts";
     export * from "@rusty-engine/live-debug/internal/live-debug-client/src/generated/contracts";
     /** A command's outcome: the host answers 200 or 422 with the message as text. */
     export interface LiveDebugResult {
@@ -551,27 +551,27 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/index" {
         readonly message: string;
     }
     export interface LiveDebugTransport {
-        catalog(signal?: AbortSignal): Promise<ProductDevDebugCatalog>;
+        catalog(signal?: AbortSignal): Promise<ProductHostDebugCatalog>;
         execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult>;
-        diagnostics?(after?: string, signal?: AbortSignal): Promise<ProductDevDiagnosticsReadResponse>;
+        diagnostics?(after?: string, signal?: AbortSignal): Promise<ProductHostDiagnosticsReadResponse>;
     }
     export interface LiveDebugHttpTransportOptions {
-        /** Defaults to the current page origin, preserving same-origin dev-host use. */
+        /** Defaults to the current page origin, preserving same-origin product-host use. */
         readonly origin?: string;
         readonly fetch?: typeof globalThis.fetch;
     }
     /** Creates the default same-origin HTTP transport without owning UI state. */
     export function createLiveDebugHttpTransport(options?: LiveDebugHttpTransportOptions): LiveDebugTransport;
     /** Small UI/CLI-neutral helper for catalog-derived completion. */
-    export function completeLiveDebug(catalog: ProductDevDebugCatalog, prefix: string): readonly ProductDevDebugCommandDescriptor[];
+    export function completeLiveDebug(catalog: ProductHostDebugCatalog, prefix: string): readonly ProductHostDebugCommandDescriptor[];
     /**
      * Computes how old a diagnostic event is at the response read clock. This is
      * distinct from any age fact carried in the event's own fields.
      */
-    export function diagnosticEventAgeMilliseconds(batch: ProductDevDiagnosticsReadResponse, event: RuntimeDiagnosticEvent): number | null;
+    export function diagnosticEventAgeMilliseconds(batch: ProductHostDiagnosticsReadResponse, event: RuntimeDiagnosticEvent): number | null;
 }
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model" {
-    import type { ProductDevDebugCommandDescriptor, ProductDevRuntimeBinding, ProductDevUpdateAttribution } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    import type { ProductHostDebugCommandDescriptor, ProductHostRuntimeBinding, ProductHostUpdateAttribution } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     export const LIVE_DEBUG_PANEL_MAX_TRANSCRIPT_ENTRIES = 128;
     /** The optional panel's DOM-only placement; it has no product-state meaning. */
     export type LiveDebugPanelPresentation = 'inline' | 'dock' | 'overlay';
@@ -581,15 +581,15 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debu
         readonly succeeded: boolean;
     }
     export function appendLiveDebugTranscript(entries: readonly LiveDebugTranscriptEntry[], entry: LiveDebugTranscriptEntry): readonly LiveDebugTranscriptEntry[];
-    export function commandSummary(command: ProductDevDebugCommandDescriptor): string;
+    export function commandSummary(command: ProductHostDebugCommandDescriptor): string;
     export function historyCommand(history: readonly string[], cursor: number | null, direction: -1 | 1): {
         readonly cursor: number | null;
         readonly command: string;
     };
     /** Formats the exact runtime incarnation without assigning any game meaning to it. */
-    export function runtimeIncarnationLabel(runtime: ProductDevRuntimeBinding | null): string;
+    export function runtimeIncarnationLabel(runtime: ProductHostRuntimeBinding | null): string;
     /** Labels a completed C# callback and its separate Rust post-callback work. */
-    export function updateAttributionLabel(sample: ProductDevUpdateAttribution): string;
+    export function updateAttributionLabel(sample: ProductHostUpdateAttribution): string;
 }
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel" {
     import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
@@ -645,7 +645,7 @@ declare module "@rusty-engine/live-debug" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     import type { LiveDebugPanelPresentation } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model";
     export { mountRendererMetricsWidget, type RendererMetricsWidgetMount, type RendererMetricsWidgetMountOptions, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-metrics-widget";
-    export { createLiveDebugHttpTransport, type ProductDevDebugCatalog, type LiveDebugHttpTransportOptions, type LiveDebugResult, type LiveDebugTransport, } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    export { createLiveDebugHttpTransport, type ProductHostDebugCatalog, type LiveDebugHttpTransportOptions, type LiveDebugResult, type LiveDebugTransport, } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     /** Explicit, product-owned configuration for one optional live-debug panel. */
     export interface LiveDebugPanelMountOptions {
         /** False keeps the mounted panel inert: it does not contact a debug host. */

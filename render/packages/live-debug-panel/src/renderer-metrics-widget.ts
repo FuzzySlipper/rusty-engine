@@ -2,7 +2,7 @@ import {
   createLiveDebugHttpTransport,
   type LiveDebugResult,
   type LiveDebugTransport,
-  type ProductDevRendererStatus,
+  type ProductHostRendererStatus,
 } from '@rusty-engine/live-debug-client';
 
 const REFRESH_INTERVAL_MS = 750;
@@ -100,11 +100,11 @@ export function mountRendererMetricsWidget(
   };
 }
 
-function decodeSummary(result: LiveDebugResult): ProductDevRendererStatus {
-  return JSON.parse(result.message) as ProductDevRendererStatus;
+function decodeSummary(result: LiveDebugResult): ProductHostRendererStatus {
+  return JSON.parse(result.message) as ProductHostRendererStatus;
 }
 
-function renderSummary(root: HTMLElement, summary: ProductDevRendererStatus): void {
+function renderSummary(root: HTMLElement, summary: ProductHostRendererStatus): void {
   const visible = summary.widget.visible;
   root.hidden = !visible;
   root.dataset['visible'] = String(visible);

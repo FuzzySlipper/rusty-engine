@@ -2,11 +2,11 @@ import {
   completeLiveDebug,
   createLiveDebugHttpTransport,
   diagnosticEventAgeMilliseconds,
-  type ProductDevDebugCatalog,
-  type ProductDevDebugCommandDescriptor,
+  type ProductHostDebugCatalog,
+  type ProductHostDebugCommandDescriptor,
   type RuntimeDiagnosticEvent,
-  type ProductDevDiagnosticsReadResponse,
-  type ProductDevTelemetrySnapshot,
+  type ProductHostDiagnosticsReadResponse,
+  type ProductHostTelemetrySnapshot,
   type LiveDebugTransport,
 } from '@rusty-engine/live-debug-client';
 
@@ -71,7 +71,7 @@ export class LiveDebugPanel {
   readonly #transport: LiveDebugTransport | null;
 
   #connection: LiveDebugConnectionState = 'disconnected';
-  #catalog: ProductDevDebugCatalog | null = null;
+  #catalog: ProductHostDebugCatalog | null = null;
   #executing = false;
   #transcript: readonly LiveDebugTranscriptEntry[] = [];
   #history: readonly string[] = [];
@@ -309,7 +309,7 @@ export class LiveDebugPanel {
     });
   }
 
-  #applyDiagnostics(batch: ProductDevDiagnosticsReadResponse): void {
+  #applyDiagnostics(batch: ProductHostDiagnosticsReadResponse): void {
     this.#diagnosticCursor = batch.nextCursor;
     this.#diagnosticCounts.textContent =
       `warn ${batch.warningCount} · error ${batch.errorCount} · dropped ${batch.droppedCount}`;
@@ -338,7 +338,7 @@ export class LiveDebugPanel {
     this.#telemetry.replaceChildren();
   }
 
-  #renderTelemetry(telemetry: ProductDevTelemetrySnapshot): void {
+  #renderTelemetry(telemetry: ProductHostTelemetrySnapshot): void {
     const lines = [
       `In flight: ${telemetry.inFlightOperation || 'none'} · age ${milliseconds(telemetry.inFlightAgeMs)}`,
       `Admission: product ${milliseconds(telemetry.lastProductAdmissionLatencyMs)} · input ${milliseconds(telemetry.lastInputAdmissionLatencyMs)}`,
@@ -393,13 +393,13 @@ export class LiveDebugPanel {
     }
   }
 
-  #applyCompletion(completion: ProductDevDebugCommandDescriptor): void {
+  #applyCompletion(completion: ProductHostDebugCommandDescriptor): void {
     this.#input.value = `${completion.name}${completion.parameters.length === 0 ? '' : ' '}`;
     this.#historyCursor = null;
     this.#renderCommand();
   }
 
-  #currentCompletions(): readonly ProductDevDebugCommandDescriptor[] {
+  #currentCompletions(): readonly ProductHostDebugCommandDescriptor[] {
     const catalog = this.#catalog;
     if (catalog === null || !catalog.available) return [];
     return completeLiveDebug(catalog, this.#input.value.trim()).slice(0, LIVE_DEBUG_PANEL_MAX_COMPLETIONS);
@@ -467,7 +467,7 @@ function statusText(enabled: boolean, connection: LiveDebugConnectionState): str
   }
 }
 
-function diagnosticDetail(batch: ProductDevDiagnosticsReadResponse, event: RuntimeDiagnosticEvent): string {
+function diagnosticDetail(batch: ProductHostDiagnosticsReadResponse, event: RuntimeDiagnosticEvent): string {
   const fields = event.fields?.map((field) => `${field.key}=${field.value}`) ?? [];
   const eventAge = diagnosticEventAgeMilliseconds(batch, event);
   if (eventAge !== null) fields.push(`event-age-ms=${String(Math.floor(eventAge))}`);

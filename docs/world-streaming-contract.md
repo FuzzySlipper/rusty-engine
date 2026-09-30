@@ -84,7 +84,7 @@ rules (for example input remapping); this contract does not widen them.
 
 This is a serialized callback lane, not a promise of one permanent OS/managed
 thread ID or an installed `SynchronizationContext`. Host operations share the
-[runtime session guard](../rust/crates/runtime-session/src/lib.rs), but that
+[runtime session guard](../rust/crates/product-host/src/session.rs), but that
 lock does not protect arbitrary product worker calls into native function
 pointers. The [spatial bridge](../rust/crates/csharp-engine-services/src/spatial.rs)
 contains mutable native state and `Rc<RefCell<...>>`; generated wrappers do not

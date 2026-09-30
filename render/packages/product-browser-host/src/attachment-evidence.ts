@@ -1,6 +1,6 @@
 import type {
-  ProductDevBrowserAttachmentBaseline,
-  ProductDevBrowserAttachment,
+  ProductHostBrowserAttachmentBaseline,
+  ProductHostBrowserAttachment,
 } from './generated/contracts.js';
 
 interface AttachmentStorage {
@@ -19,8 +19,8 @@ export function createBrowserAttachmentEvidence(options: {
   let id = options.newId();
   let replaces: string | undefined;
   let epoch: number | null = null;
-  let candidate: ProductDevBrowserAttachmentBaseline | undefined;
-  let baseline: ProductDevBrowserAttachmentBaseline | undefined;
+  let candidate: ProductHostBrowserAttachmentBaseline | undefined;
+  let baseline: ProductHostBrowserAttachmentBaseline | undefined;
   try {
     // A new navigation/duplicated tab cannot claim the prior page's recovery.
     const previous = options.reload ? options.storage?.getItem(options.key) : null;
@@ -37,7 +37,7 @@ export function createBrowserAttachmentEvidence(options: {
       baseline = undefined;
       candidate = undefined;
     },
-    stage(nextEpoch: number, value: ProductDevBrowserAttachmentBaseline): void {
+    stage(nextEpoch: number, value: ProductHostBrowserAttachmentBaseline): void {
       if (epoch === nextEpoch) candidate = value;
     },
     confirm(nextEpoch: number): void {
@@ -45,7 +45,7 @@ export function createBrowserAttachmentEvidence(options: {
       baseline = candidate;
       try { options.storage?.setItem(options.key, id); } catch { /* Report remains valid in this page. */ }
     },
-    read(): ProductDevBrowserAttachment {
+    read(): ProductHostBrowserAttachment {
       return Object.freeze({ id, ...(replaces === undefined ? {} : { replaces }),
         ...(baseline === undefined ? {} : { baseline }) });
     },

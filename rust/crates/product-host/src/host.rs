@@ -16,19 +16,20 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::{
-    CanonicalU64, ProductDevBrowserConnectionState, ProductDevBrowserDiagnosticsReport,
-    ProductDevBrowserDiagnosticsResult, ProductDevBrowserHostState, ProductDevBundle,
-    ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
-    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevRuntimeReceipt,
-    ProductDevTelemetrySnapshot, ProductDevTimelineCompletion, ProductDevUpdateAttribution,
-    ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS, MAX_REQUEST_BODY_BYTES,
-    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS, MAX_SUBSCRIBER_QUEUE_EVENTS,
+    CanonicalU64, ProductHostBrowserConnectionState, ProductHostBrowserDiagnosticsReport,
+    ProductHostBrowserDiagnosticsResult, ProductHostBrowserHostState, ProductHostBundle,
+    ProductHostControlOperation, ProductHostError, ProductHostInputBatch, ProductHostInputResult,
+    ProductHostLifecycleOperation, ProductHostLog, ProductHostLogDisposition, ProductHostLogEvent,
+    ProductHostLogSeverity, ProductHostOperationKind, ProductHostOperationResult,
+    ProductHostRuntime, ProductHostRuntimeError, ProductHostRuntimeOutput,
+    ProductHostRuntimeReceipt, ProductHostTelemetrySnapshot, ProductHostTimelineCompletion,
+    ProductHostUpdateAttribution, ProductHostUpdateAttributionSnapshot, MAX_CONNECTIONS,
+    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    MAX_SUBSCRIBER_QUEUE_EVENTS,
 };
 
-use crate::frames::ProductDevFrameStream;
-use crate::session::ProductDevOperationOwner;
+use crate::frames::ProductHostFrameStream;
+use crate::session::ProductHostOperationOwner;
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
@@ -44,29 +45,30 @@ pub const MAX_HOST_INPUT_BATCHES: usize = 256;
 /// not a transport abstraction: production always invokes `TcpListener`.
 type AcceptDecisionHook = Arc<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>;
 
-/// Configuration for the fixed development host.
+/// Configuration for the fixed product host.
 #[derive(Clone)]
-pub struct ProductDevHostConfig {
+pub struct ProductHostConfig {
     /// `0` asks the operating system for a free port.
     pub port: u16,
-    pub bundle: ProductDevBundle,
+    pub bundle: ProductHostBundle,
     bind_host: Ipv4Addr,
     live_debug_enabled: bool,
-    diagnostics: ProductDevLog,
+    diagnostics: ProductHostLog,
     accept_decision_hook: Option<AcceptDecisionHook>,
     listener: Option<Arc<TcpListener>>,
-    frames: Option<Arc<ProductDevFrameStream>>,
-    capture: Option<crate::ProductDevFrameCapture>,
+    frames: Option<Arc<ProductHostFrameStream>>,
+    capture: Option<crate::ProductHostFrameCapture>,
 }
 
-impl ProductDevHostConfig {
-    pub fn new(port: u16, bundle: ProductDevBundle) -> Self {
+impl ProductHostConfig {
+    pub fn new(port: u16, bundle: ProductHostBundle) -> Self {
         Self {
             port,
             bundle,
             bind_host: Ipv4Addr::LOCALHOST,
             live_debug_enabled: false,
-            diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
+            diagnostics: ProductHostLog::new(Default::default())
+                .expect("fixed diagnostic defaults"),
             accept_decision_hook: None,
             listener: None,
             frames: None,
@@ -85,14 +87,14 @@ impl ProductDevHostConfig {
     /// the default; `0.0.0.0` is intended for a foreground owner such as
     /// den-serve that publishes the resulting LAN origin.
     /// Serve the runtime's rendered frames at `/__rusty/product/runtime/frames`.
-    pub fn with_frame_stream(mut self, frames: Arc<ProductDevFrameStream>) -> Self {
+    pub fn with_frame_stream(mut self, frames: Arc<ProductHostFrameStream>) -> Self {
         self.frames = Some(frames);
         self
     }
 
     /// Serve tool captures at `/__rusty/product/runtime/frames/capture`, in
     /// either render output.
-    pub fn with_frame_capture(mut self, capture: crate::ProductDevFrameCapture) -> Self {
+    pub fn with_frame_capture(mut self, capture: crate::ProductHostFrameCapture) -> Self {
         self.capture = Some(capture);
         self
     }
@@ -103,14 +105,14 @@ impl ProductDevHostConfig {
     }
 
     /// Explicitly admits the trusted first-party product live-debug routes.
-    /// They are absent by default so ordinary dev hosts do not expose a
+    /// They are absent by default so ordinary product hosts do not expose a
     /// command endpoint accidentally.
     pub fn with_live_debug(mut self, enabled: bool) -> Self {
         self.live_debug_enabled = enabled;
         self
     }
 
-    pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
+    pub fn with_diagnostics(mut self, diagnostics: ProductHostLog) -> Self {
         self.diagnostics = diagnostics;
         self
     }
@@ -127,29 +129,29 @@ impl ProductDevHostConfig {
     }
 }
 
-/// Starts an Engine-owned local development host for one concrete runtime.
-pub struct ProductDevHost;
+/// Starts an Engine-owned local product host for one concrete runtime.
+pub struct ProductHost;
 
-impl ProductDevHost {
-    pub fn start<R: ProductDevRuntime>(
+impl ProductHost {
+    pub fn start<R: ProductHostRuntime>(
         runtime: R,
-        config: ProductDevHostConfig,
-    ) -> Result<RunningProductDevHost, ProductDevHostError> {
+        config: ProductHostConfig,
+    ) -> Result<RunningProductHost, ProductHostError> {
         let listener = match &config.listener {
             Some(listener) => listener.try_clone(),
             None => TcpListener::bind(SocketAddr::from((config.bind_host, config.port))),
         }
-        .map_err(|error| ProductDevHostError::io("DEV_HOST_BIND", error))?;
+        .map_err(|error| ProductHostError::io("PRODUCT_HOST_BIND", error))?;
         let address = listener
             .local_addr()
-            .map_err(|error| ProductDevHostError::io("DEV_HOST_ADDRESS", error))?;
+            .map_err(|error| ProductHostError::io("PRODUCT_HOST_ADDRESS", error))?;
         // Capture only the runtime's scheduler participation, not its
         // mutable lifecycle state. Input admission must never reacquire the
         // runtime owner behind a slow product update; Created/Paused realtime
         // products still retain their bounded mailbox for the next boundary.
         let realtime_scheduler_enabled = !matches!(
             runtime.realtime_schedule_state(),
-            crate::ProductDevRuntimeScheduleState::Unsupported
+            crate::ProductHostRuntimeScheduleState::Unsupported
         );
         let shutdown = Arc::new(AtomicBool::new(false));
         let scheduler_wake = Arc::new(SchedulerWake::default());
@@ -158,7 +160,7 @@ impl ProductDevHost {
         let outputs = Arc::new(Mutex::new(OutputBus::default()));
         let state = Arc::new(HostState {
             bundle: Arc::clone(&bundle),
-            runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
+            runtime: Arc::new(ProductHostOperationOwner::new(runtime)),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
             realtime_scheduler_enabled,
@@ -181,7 +183,7 @@ impl ProductDevHost {
         let listener_threads = Arc::clone(&handler_threads);
         let accept_decision_hook = config.accept_decision_hook;
         let listener_thread = thread::Builder::new()
-            .name("rusty-product-dev-host".to_owned())
+            .name("rusty-product-host".to_owned())
             .spawn(move || {
                 accept_loop(
                     listener,
@@ -190,7 +192,7 @@ impl ProductDevHost {
                     accept_decision_hook,
                 )
             })
-            .map_err(|error| ProductDevHostError::io("DEV_HOST_THREAD", error))?;
+            .map_err(|error| ProductHostError::io("PRODUCT_HOST_THREAD", error))?;
         let scheduler_state = Arc::clone(&state);
         let scheduler_wake_thread = Arc::clone(&scheduler_wake);
         let scheduler_thread = match thread::Builder::new()
@@ -212,17 +214,17 @@ impl ProductDevHost {
                         let _ = handler.join();
                     }
                 }
-                return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
+                return Err(ProductHostError::io("PRODUCT_HOST_THREAD", error));
             }
         };
         let content_owner = Arc::clone(&state.runtime);
-        let asset_reload = ProductDevAssetReload {
+        let asset_reload = ProductHostAssetReload {
             bundle,
             content: Arc::new(move || content_owner.reload_content()),
             outputs: Arc::clone(&state.outputs),
             output_wake: Arc::clone(&output_wake),
         };
-        Ok(RunningProductDevHost {
+        Ok(RunningProductHost {
             address,
             asset_reload,
             shutdown,
@@ -236,21 +238,21 @@ impl ProductDevHost {
     }
 }
 
-/// A running development host. Shutdown is explicit and joins every accepted
+/// A running product host. Shutdown is explicit and joins every accepted
 /// connection handler so tests and generated launchers do not leak threads.
-pub struct RunningProductDevHost {
+pub struct RunningProductHost {
     address: SocketAddr,
-    asset_reload: ProductDevAssetReload,
+    asset_reload: ProductHostAssetReload,
     shutdown: Arc<AtomicBool>,
     scheduler_wake: Arc<SchedulerWake>,
     output_wake: Arc<OutputWake>,
     scheduler_thread: Option<JoinHandle<()>>,
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    diagnostics: ProductDevLog,
+    diagnostics: ProductHostLog,
 }
 
-impl RunningProductDevHost {
+impl RunningProductHost {
     pub const fn address(&self) -> SocketAddr {
         self.address
     }
@@ -260,7 +262,7 @@ impl RunningProductDevHost {
     }
 
     /// A handle that reloads UI and content into this running host.
-    pub fn asset_reload(&self) -> ProductDevAssetReload {
+    pub fn asset_reload(&self) -> ProductHostAssetReload {
         self.asset_reload.clone()
     }
 
@@ -269,11 +271,11 @@ impl RunningProductDevHost {
         self.shutdown.load(Ordering::Acquire)
     }
 
-    pub fn shutdown(mut self) -> Result<(), ProductDevHostError> {
+    pub fn shutdown(mut self) -> Result<(), ProductHostError> {
         self.stop()
     }
 
-    fn stop(&mut self) -> Result<(), ProductDevHostError> {
+    fn stop(&mut self) -> Result<(), ProductHostError> {
         let was_shutdown = self.shutdown.swap(true, Ordering::SeqCst);
         // Stop the host-owned realtime loop first. It may be in a product
         // callback, so joining it before connection handlers/runtime drop
@@ -282,7 +284,7 @@ impl RunningProductDevHost {
         self.output_wake.notify();
         if let Some(thread) = self.scheduler_thread.take() {
             thread.join().map_err(|_| {
-                ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "scheduler thread panicked")
+                ProductHostError::new("PRODUCT_HOST_THREAD_JOIN", "scheduler thread panicked")
             })?;
         }
         // Wake a nonblocking accept loop promptly. The connection is accepted
@@ -292,15 +294,15 @@ impl RunningProductDevHost {
         }
         if let Some(thread) = self.listener_thread.take() {
             thread.join().map_err(|_| {
-                ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "listener thread panicked")
+                ProductHostError::new("PRODUCT_HOST_THREAD_JOIN", "listener thread panicked")
             })?;
         }
         let handlers = std::mem::take(&mut *self.handler_threads.lock().map_err(|_| {
-            ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "handler thread ledger poisoned")
+            ProductHostError::new("PRODUCT_HOST_THREAD_JOIN", "handler thread ledger poisoned")
         })?);
         for handler in handlers {
             handler.join().map_err(|_| {
-                ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "connection handler panicked")
+                ProductHostError::new("PRODUCT_HOST_THREAD_JOIN", "connection handler panicked")
             })?;
         }
         self.diagnostics.flush();
@@ -313,22 +315,22 @@ impl RunningProductDevHost {
 /// the next page load gets the new files; content keeps its content-addressed
 /// identities, so changed bytes get new URLs and old references keep theirs.
 #[derive(Clone)]
-pub struct ProductDevAssetReload {
-    bundle: Arc<RwLock<ProductDevBundle>>,
-    content: Arc<dyn Fn() -> Result<(), ProductDevRuntimeError> + Send + Sync>,
+pub struct ProductHostAssetReload {
+    bundle: Arc<RwLock<ProductHostBundle>>,
+    content: Arc<dyn Fn() -> Result<(), ProductHostRuntimeError> + Send + Sync>,
     outputs: Arc<Mutex<OutputBus>>,
     output_wake: Arc<OutputWake>,
 }
 
-impl ProductDevAssetReload {
+impl ProductHostAssetReload {
     /// Content admission can fail, so it runs first; a failed reload leaves
     /// the old UI served with the old content. After a successful reload,
     /// each attached page is told to reload itself: it holds the UI module it
     /// loaded, and a headless page has no one to refresh it.
-    pub fn reload(&self, bundle: ProductDevBundle) -> Result<(), ProductDevRuntimeError> {
+    pub fn reload(&self, bundle: ProductHostBundle) -> Result<(), ProductHostRuntimeError> {
         (self.content)()?;
         *self.bundle.write().map_err(|_| {
-            ProductDevRuntimeError::new("DEV_HOST_BUNDLE", "bundle lock poisoned")
+            ProductHostRuntimeError::new("PRODUCT_HOST_BUNDLE", "bundle lock poisoned")
         })? = bundle;
         if let Ok(mut outputs) = self.outputs.lock() {
             outputs.publish_ui_reloaded();
@@ -338,15 +340,15 @@ impl ProductDevAssetReload {
     }
 }
 
-impl Drop for RunningProductDevHost {
+impl Drop for RunningProductHost {
     fn drop(&mut self) {
         let _ = self.stop();
     }
 }
 
 struct HostState<R> {
-    bundle: Arc<RwLock<ProductDevBundle>>,
-    runtime: Arc<ProductDevOperationOwner<R>>,
+    bundle: Arc<RwLock<ProductHostBundle>>,
+    runtime: Arc<ProductHostOperationOwner<R>>,
     input_mailbox: Arc<HostInputMailbox>,
     telemetry: Arc<Mutex<HostTelemetry>>,
     realtime_scheduler_enabled: bool,
@@ -357,14 +359,14 @@ struct HostState<R> {
     bind_host: Ipv4Addr,
     expected_port: u16,
     live_debug_enabled: bool,
-    diagnostics: ProductDevLog,
+    diagnostics: ProductHostLog,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
     /// The last readout put on the output stream. Readouts are published
     /// only when they change what a browser shows, not every tick.
-    published_readout: Mutex<Option<crate::ProductDevRuntimeReadout>>,
-    frames: Option<Arc<ProductDevFrameStream>>,
-    capture: Option<crate::ProductDevFrameCapture>,
+    published_readout: Mutex<Option<crate::ProductHostRuntimeReadout>>,
+    frames: Option<Arc<ProductHostFrameStream>>,
+    capture: Option<crate::ProductHostFrameCapture>,
 }
 
 /// Small process-local observation state. It intentionally has no runtime
@@ -372,13 +374,13 @@ struct HostState<R> {
 /// callback and therefore never become another source of input backpressure.
 #[derive(Default)]
 struct HostTelemetry {
-    in_flight_operation: Option<ProductDevOperationKind>,
+    in_flight_operation: Option<ProductHostOperationKind>,
     in_flight_started_ns: Option<u64>,
     last_product_admission_latency_ms: Option<u64>,
     last_input_admission_latency_ms: Option<u64>,
     progress_samples_ns: VecDeque<u64>,
-    update_attribution_samples: VecDeque<(u64, ProductDevUpdateAttribution)>,
-    slowest_update_attribution: Option<(u64, ProductDevUpdateAttribution)>,
+    update_attribution_samples: VecDeque<(u64, ProductHostUpdateAttribution)>,
+    slowest_update_attribution: Option<(u64, ProductHostUpdateAttribution)>,
 }
 
 impl HostTelemetry {
@@ -386,7 +388,7 @@ impl HostTelemetry {
     const PROGRESS_WINDOW_NS: u64 = 5_000_000_000;
     const MAX_UPDATE_ATTRIBUTION_SAMPLES: usize = 2_048;
 
-    fn begin(&mut self, operation: ProductDevOperationKind, started_ns: u64) {
+    fn begin(&mut self, operation: ProductHostOperationKind, started_ns: u64) {
         self.in_flight_operation = Some(operation);
         self.in_flight_started_ns = Some(started_ns);
     }
@@ -425,7 +427,7 @@ impl HostTelemetry {
     fn record_update_attribution(
         &mut self,
         completed_ns: u64,
-        sample: ProductDevUpdateAttribution,
+        sample: ProductHostUpdateAttribution,
     ) {
         if self
             .update_attribution_samples
@@ -458,7 +460,7 @@ impl HostTelemetry {
     fn update_attribution_snapshot(
         &self,
         now_ns: u64,
-    ) -> Option<ProductDevUpdateAttributionSnapshot> {
+    ) -> Option<ProductHostUpdateAttributionSnapshot> {
         let (_, latest) = *self.update_attribution_samples.back()?;
         let mut durations = self
             .update_attribution_samples
@@ -476,7 +478,7 @@ impl HostTelemetry {
             .max_by_key(|(_, sample)| sample.callback_duration_us.get())
             .expect("a non-empty attribution window has a slowest sample");
         let (slowest_ns, slowest) = self.slowest_update_attribution.unwrap_or((now_ns, latest));
-        Some(ProductDevUpdateAttributionSnapshot {
+        Some(ProductHostUpdateAttributionSnapshot {
             sample_count: CanonicalU64::new(self.update_attribution_samples.len() as u64),
             callback_duration_us_p50: CanonicalU64::new(percentile(50, 100)),
             callback_duration_us_p95: CanonicalU64::new(percentile(95, 100)),
@@ -500,7 +502,7 @@ impl HostTelemetry {
         now_ns: u64,
         input: InputTelemetry,
         transport: TransportTelemetry,
-    ) -> ProductDevTelemetrySnapshot {
+    ) -> ProductHostTelemetrySnapshot {
         let progress_age_ms = self
             .progress_samples_ns
             .back()
@@ -521,7 +523,7 @@ impl HostTelemetry {
             }
             _ => None,
         };
-        ProductDevTelemetrySnapshot {
+        ProductHostTelemetrySnapshot {
             in_flight_operation: self.in_flight_operation,
             in_flight_age_ms: self.in_flight_started_ns.map(|started| {
                 CanonicalU64::new(now_ns.saturating_sub(started).saturating_div(1_000_000))
@@ -651,7 +653,7 @@ struct HostInputMailbox {
 
 #[derive(Default)]
 struct HostInputMailboxState {
-    batches: VecDeque<ProductDevInputBatch>,
+    batches: VecDeque<ProductHostInputBatch>,
     queued_events: usize,
     oldest_enqueued_ns: Option<u64>,
     last_drained_oldest_ns: Option<u64>,
@@ -667,7 +669,7 @@ impl Default for HostInputMailbox {
 }
 
 impl HostInputMailbox {
-    fn enqueue(&self, batch: ProductDevInputBatch, enqueued_ns: Option<u64>) -> bool {
+    fn enqueue(&self, batch: ProductHostInputBatch, enqueued_ns: Option<u64>) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
@@ -690,7 +692,7 @@ impl HostInputMailbox {
         true
     }
 
-    fn drain(&self) -> (Vec<ProductDevInputBatch>, bool) {
+    fn drain(&self) -> (Vec<ProductHostInputBatch>, bool) {
         let Ok(mut state) = self.state.lock() else {
             return (Vec::new(), false);
         };
@@ -739,7 +741,7 @@ impl HostInputMailbox {
     }
 }
 
-fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<SchedulerWake>) {
+fn scheduler_loop<R: ProductHostRuntime>(state: Arc<HostState<R>>, wake: Arc<SchedulerWake>) {
     let clock = Instant::now();
     let mut next_tick = clock;
     loop {
@@ -751,8 +753,8 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             Err(error) => {
                 publish_host_diagnostic(
                     &state.diagnostics,
-                    ProductDevLogSeverity::Error,
-                    ProductDevLogDisposition::Terminal,
+                    ProductHostLogSeverity::Error,
+                    ProductHostLogDisposition::Terminal,
                     error.code(),
                     error.diagnostic(),
                     [],
@@ -761,14 +763,14 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             }
         };
         match schedule_state {
-            crate::ProductDevRuntimeScheduleState::Unsupported => {
+            crate::ProductHostRuntimeScheduleState::Unsupported => {
                 wake.wait_timeout(SCHEDULER_IDLE_WAIT);
                 continue;
             }
-            crate::ProductDevRuntimeScheduleState::Shutdown => break,
-            crate::ProductDevRuntimeScheduleState::Created
-            | crate::ProductDevRuntimeScheduleState::Paused
-            | crate::ProductDevRuntimeScheduleState::Faulted => {
+            crate::ProductHostRuntimeScheduleState::Shutdown => break,
+            crate::ProductHostRuntimeScheduleState::Created
+            | crate::ProductHostRuntimeScheduleState::Paused
+            | crate::ProductHostRuntimeScheduleState::Faulted => {
                 // Resume from a lifecycle transition at the next admitted
                 // observation; this reset is only a phase marker, never a
                 // substitute for the runtime's fixed-step interval.
@@ -776,7 +778,7 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
                 wake.wait_timeout(SCHEDULER_IDLE_WAIT);
                 continue;
             }
-            crate::ProductDevRuntimeScheduleState::Running => {}
+            crate::ProductHostRuntimeScheduleState::Running => {}
         }
 
         let Some(interval) = (match state.runtime.realtime_schedule_interval() {
@@ -784,8 +786,8 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             Err(error) => {
                 publish_host_diagnostic(
                     &state.diagnostics,
-                    ProductDevLogSeverity::Error,
-                    ProductDevLogDisposition::Terminal,
+                    ProductHostLogSeverity::Error,
+                    ProductHostLogDisposition::Terminal,
                     error.code(),
                     error.diagnostic(),
                     [],
@@ -795,9 +797,9 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
         }) else {
             publish_host_diagnostic(
                 &state.diagnostics,
-                ProductDevLogSeverity::Error,
-                ProductDevLogDisposition::Terminal,
-                "DEV_HOST_SCHEDULER_CONFIGURATION",
+                ProductHostLogSeverity::Error,
+                ProductHostLogDisposition::Terminal,
+                "PRODUCT_HOST_SCHEDULER_CONFIGURATION",
                 "realtime runtime did not provide an admitted observation interval",
                 [],
             );
@@ -818,7 +820,7 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             |receipt| publish_scheduled_input_receipt(&state, receipt),
             |receipt| publish_scheduled_receipt(&state, receipt),
             || {
-                begin_telemetry(&state, ProductDevOperationKind::AdvanceRealtime);
+                begin_telemetry(&state, ProductHostOperationKind::AdvanceRealtime);
             },
             || {
                 let finished_ns = state.diagnostics.now_monotonic_nanoseconds();
@@ -843,7 +845,7 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
                 for error in errors {
                     publish_host_diagnostic(
                         &state.diagnostics,
-                        ProductDevLogSeverity::Warning,
+                        ProductHostLogSeverity::Warning,
                         disposition_for_runtime_error(&error),
                         error.code(),
                         error.diagnostic(),
@@ -854,7 +856,7 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             Err(error) => {
                 publish_host_diagnostic(
                     &state.diagnostics,
-                    ProductDevLogSeverity::Warning,
+                    ProductHostLogSeverity::Warning,
                     disposition_for_runtime_error(&error),
                     error.code(),
                     error.diagnostic(),
@@ -870,32 +872,32 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
     }
 }
 
-fn disposition_for_runtime_error(error: &ProductDevRuntimeError) -> ProductDevLogDisposition {
+fn disposition_for_runtime_error(error: &ProductHostRuntimeError) -> ProductHostLogDisposition {
     match crate::runtime_fault_disposition(error) {
-        crate::ProductDevFaultDisposition::Accepted => ProductDevLogDisposition::Accepted,
-        crate::ProductDevFaultDisposition::RejectedRecoverable => {
-            ProductDevLogDisposition::RejectedRecoverable
+        crate::ProductHostFaultDisposition::Accepted => ProductHostLogDisposition::Accepted,
+        crate::ProductHostFaultDisposition::RejectedRecoverable => {
+            ProductHostLogDisposition::RejectedRecoverable
         }
-        crate::ProductDevFaultDisposition::Degraded => ProductDevLogDisposition::Degraded,
-        crate::ProductDevFaultDisposition::ResyncRequired => {
-            ProductDevLogDisposition::ResyncRequired
+        crate::ProductHostFaultDisposition::Degraded => ProductHostLogDisposition::Degraded,
+        crate::ProductHostFaultDisposition::ResyncRequired => {
+            ProductHostLogDisposition::ResyncRequired
         }
-        crate::ProductDevFaultDisposition::Terminal => ProductDevLogDisposition::Terminal,
+        crate::ProductHostFaultDisposition::Terminal => ProductHostLogDisposition::Terminal,
     }
 }
 
-fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
+fn publish_scheduled_input_receipt<R: ProductHostRuntime>(
     state: &HostState<R>,
-    receipt: crate::ProductDevRuntimeReceipt<ProductDevInputResult>,
+    receipt: crate::ProductHostRuntimeReceipt<ProductHostInputResult>,
 ) {
     let (result, mut outputs) = match receipt.into_wire_parts() {
         Ok(parts) => parts,
         Err(error) => {
             publish_host_diagnostic(
                 &state.diagnostics,
-                ProductDevLogSeverity::Warning,
-                ProductDevLogDisposition::ResyncRequired,
-                "DEV_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
+                ProductHostLogSeverity::Warning,
+                ProductHostLogDisposition::ResyncRequired,
+                "PRODUCT_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
                 "committed scheduled input receipt could not be encoded; reconnect for a fresh readout instead of replaying",
                 [("cause", error.code().to_owned())],
             );
@@ -906,13 +908,13 @@ fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
     // request thread. Carry the complete typed result through the same
     // ordered SSE output family so accepted/consumed cursors and recoverable
     // stale drops remain observable without delaying POST acknowledgement.
-    outputs.insert(0, ProductDevRuntimeOutput::runtime_input_result(result));
+    outputs.insert(0, ProductHostRuntimeOutput::runtime_input_result(result));
     if let Err(error) = push_host_outputs(state, outputs) {
         publish_host_diagnostic(
             &state.diagnostics,
-            ProductDevLogSeverity::Warning,
-            ProductDevLogDisposition::ResyncRequired,
-            "DEV_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
+            ProductHostLogSeverity::Warning,
+            ProductHostLogDisposition::ResyncRequired,
+            "PRODUCT_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
             error.detail(),
             [("cause", error.code().to_owned())],
         );
@@ -921,10 +923,10 @@ fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
 
 /// Returns a readout output when `readout` changes what a browser shows
 /// relative to the last published one, and records it as published.
-fn changed_readout<R: ProductDevRuntime>(
+fn changed_readout<R: ProductHostRuntime>(
     state: &HostState<R>,
-    readout: Option<&crate::ProductDevRuntimeReadout>,
-) -> Option<ProductDevRuntimeOutput> {
+    readout: Option<&crate::ProductHostRuntimeReadout>,
+) -> Option<ProductHostRuntimeOutput> {
     let readout = readout?;
     let mut published = state
         .published_readout
@@ -937,12 +939,12 @@ fn changed_readout<R: ProductDevRuntime>(
         return None;
     }
     *published = Some(readout.clone());
-    Some(ProductDevRuntimeOutput::runtime_readout(readout.clone()))
+    Some(ProductHostRuntimeOutput::runtime_readout(readout.clone()))
 }
 
-fn publish_scheduled_receipt<R: ProductDevRuntime>(
+fn publish_scheduled_receipt<R: ProductHostRuntime>(
     state: &HostState<R>,
-    receipt: crate::ProductDevRuntimeReceipt<ProductDevOperationResult>,
+    receipt: crate::ProductHostRuntimeReceipt<ProductHostOperationResult>,
 ) {
     let progress_ns = state.diagnostics.now_monotonic_nanoseconds();
     if let Some(progress_ns) = progress_ns {
@@ -955,9 +957,9 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
         Err(error) => {
             publish_host_diagnostic(
                 &state.diagnostics,
-                ProductDevLogSeverity::Warning,
-                ProductDevLogDisposition::ResyncRequired,
-                "DEV_HOST_SCHEDULE_OUTPUT_RESYNC",
+                ProductHostLogSeverity::Warning,
+                ProductHostLogDisposition::ResyncRequired,
+                "PRODUCT_HOST_SCHEDULE_OUTPUT_RESYNC",
                 "committed scheduled receipt could not be encoded; reconnect for a fresh readout instead of replaying",
                 [("cause", error.code().to_owned())],
             );
@@ -973,16 +975,16 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
     if let Err(error) = push_host_outputs(state, outputs) {
         publish_host_diagnostic(
             &state.diagnostics,
-            ProductDevLogSeverity::Warning,
-            ProductDevLogDisposition::ResyncRequired,
-            "DEV_HOST_SCHEDULE_OUTPUT_RESYNC",
+            ProductHostLogSeverity::Warning,
+            ProductHostLogDisposition::ResyncRequired,
+            "PRODUCT_HOST_SCHEDULE_OUTPUT_RESYNC",
             error.detail(),
             [("cause", error.code().to_owned())],
         );
     }
 }
 
-fn accept_loop<R: ProductDevRuntime>(
+fn accept_loop<R: ProductHostRuntime>(
     listener: TcpListener,
     state: Arc<HostState<R>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -1000,7 +1002,7 @@ fn accept_loop<R: ProductDevRuntime>(
                         &mut stream,
                         HttpResponse::error(
                             503,
-                            "DEV_HOST_CONNECTION_BOUNDS",
+                            "PRODUCT_HOST_CONNECTION_BOUNDS",
                             "connection limit reached",
                         ),
                     );
@@ -1028,9 +1030,9 @@ fn accept_loop<R: ProductDevRuntime>(
                 AcceptErrorDisposition::Retry => {
                     publish_host_diagnostic(
                         &state.diagnostics,
-                        ProductDevLogSeverity::Warning,
-                        ProductDevLogDisposition::RejectedRecoverable,
-                        "DEV_HOST_LISTENER_ACCEPT_RETRY",
+                        ProductHostLogSeverity::Warning,
+                        ProductHostLogDisposition::RejectedRecoverable,
+                        "PRODUCT_HOST_LISTENER_ACCEPT_RETRY",
                         "listener accept failed transiently; retaining listener ownership and retrying",
                         [("backoff-ms", retry_backoff.as_millis().to_string())],
                     );
@@ -1042,9 +1044,9 @@ fn accept_loop<R: ProductDevRuntime>(
                 AcceptErrorDisposition::Terminal => {
                     publish_host_diagnostic(
                         &state.diagnostics,
-                        ProductDevLogSeverity::Error,
-                        ProductDevLogDisposition::Terminal,
-                        "DEV_HOST_LISTENER_ACCEPT_TERMINAL",
+                        ProductHostLogSeverity::Error,
+                        ProductHostLogDisposition::Terminal,
+                        "PRODUCT_HOST_LISTENER_ACCEPT_TERMINAL",
                         "listener accept failed with an irrecoverable listener or ownership state",
                         [("error-kind", format!("{:?}", error.kind()))],
                     );
@@ -1081,14 +1083,15 @@ fn classify_accept_error(error: &io::Error) -> AcceptErrorDisposition {
 }
 
 fn publish_host_diagnostic<const N: usize>(
-    diagnostics: &ProductDevLog,
-    severity: ProductDevLogSeverity,
-    disposition: ProductDevLogDisposition,
+    diagnostics: &ProductHostLog,
+    severity: ProductHostLogSeverity,
+    disposition: ProductHostLogDisposition,
     code: &str,
     message: &str,
     fields: [(&str, String); N],
 ) {
-    let Ok(mut event) = ProductDevLogEvent::new(severity, disposition, "dev-host", code, message)
+    let Ok(mut event) =
+        ProductHostLogEvent::new(severity, disposition, "product-host", code, message)
     else {
         return;
     };
@@ -1101,7 +1104,7 @@ fn publish_host_diagnostic<const N: usize>(
     let _ = diagnostics.publish(event);
 }
 
-fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<HostState<R>>) {
+fn handle_connection<R: ProductHostRuntime>(mut stream: TcpStream, state: Arc<HostState<R>>) {
     if state.shutdown.load(Ordering::Acquire) {
         return;
     }
@@ -1118,9 +1121,9 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
             // This body is our fixed parser diagnostic, never request contents.
             publish_host_diagnostic(
                 &state.diagnostics,
-                ProductDevLogSeverity::Info,
-                ProductDevLogDisposition::Degraded,
-                "DEV_HOST_REQUEST_READ_REJECTED",
+                ProductHostLogSeverity::Info,
+                ProductHostLogDisposition::Degraded,
+                "PRODUCT_HOST_REQUEST_READ_REJECTED",
                 "connection ended or failed before a complete request reached dispatch",
                 [
                     ("peer", peer),
@@ -1140,8 +1143,8 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
             &mut stream,
             HttpResponse::error(
                 400,
-                "DEV_HOST_ORIGIN",
-                "Host or Origin is not this development host origin",
+                "PRODUCT_HOST_ORIGIN",
+                "Host or Origin is not this product host origin",
             ),
         );
         return;
@@ -1155,7 +1158,7 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
             .path
             .split('?')
             .next()
-            .is_some_and(|route| route == crate::frames::PRODUCT_DEV_FRAMES_PATH)
+            .is_some_and(|route| route == crate::frames::PRODUCT_HOST_FRAMES_PATH)
     {
         handle_frames(stream, &state, &request);
         return;
@@ -1165,7 +1168,7 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
             .path
             .split('?')
             .next()
-            .is_some_and(|route| route == crate::frames::PRODUCT_DEV_FRAME_CAPTURE_PATH)
+            .is_some_and(|route| route == crate::frames::PRODUCT_HOST_FRAME_CAPTURE_PATH)
     {
         let response = capture_response(&state, &request);
         let _ = write_response(&mut stream, response);
@@ -1187,9 +1190,9 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         if let Some(certainty) = delivery_certainty {
             publish_host_diagnostic(
                 &state.diagnostics,
-                ProductDevLogSeverity::Warning,
-                ProductDevLogDisposition::ResyncRequired,
-                "DEV_HOST_RESPONSE_WRITE_RESYNC",
+                ProductHostLogSeverity::Warning,
+                ProductHostLogDisposition::ResyncRequired,
+                "PRODUCT_HOST_RESPONSE_WRITE_RESYNC",
                 "response delivery failed after a confirmed host admission; preserve its delivery certainty and do not replay the request",
                 [
                     ("error-kind", format!("{:?}", error.kind())),
@@ -1202,9 +1205,9 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         } else {
             publish_host_diagnostic(
                 &state.diagnostics,
-                ProductDevLogSeverity::Info,
-                ProductDevLogDisposition::Degraded,
-                "DEV_HOST_RESPONSE_WRITE_UNAVAILABLE",
+                ProductHostLogSeverity::Info,
+                ProductHostLogDisposition::Degraded,
+                "PRODUCT_HOST_RESPONSE_WRITE_UNAVAILABLE",
                 "response socket failed without a confirmed admission receipt; do not infer mutation outcome",
                 [
                     ("error-kind", format!("{:?}", error.kind())),
@@ -1218,7 +1221,7 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
     }
 }
 
-fn dispatch_request<R: ProductDevRuntime>(
+fn dispatch_request<R: ProductHostRuntime>(
     state: &HostState<R>,
     request: HttpRequest,
 ) -> HttpResponse {
@@ -1227,14 +1230,14 @@ fn dispatch_request<R: ProductDevRuntime>(
             if !state.live_debug_enabled {
                 return HttpResponse::error(
                     404,
-                    "DEV_HOST_ROUTE_NOT_FOUND",
+                    "PRODUCT_HOST_ROUTE_NOT_FOUND",
                     "route is not admitted",
                 );
             }
             if !request.body.is_empty() {
                 return HttpResponse::error(
                     400,
-                    "DEV_HOST_GET_BODY",
+                    "PRODUCT_HOST_GET_BODY",
                     "GET requests cannot carry a body",
                 );
             }
@@ -1246,14 +1249,22 @@ fn dispatch_request<R: ProductDevRuntime>(
                     return response;
                 }
             }
-            return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
+            return HttpResponse::error(
+                404,
+                "PRODUCT_HOST_ROUTE_NOT_FOUND",
+                "route is not admitted",
+            );
         }
-        return HttpResponse::error(400, "DEV_HOST_GET_BODY", "GET requests cannot carry a body");
+        return HttpResponse::error(
+            400,
+            "PRODUCT_HOST_GET_BODY",
+            "GET requests cannot carry a body",
+        );
     }
     if request.method != "POST" {
         return HttpResponse::error(
             405,
-            "DEV_HOST_METHOD",
+            "PRODUCT_HOST_METHOD",
             "route requires its exact admitted method",
         );
     }
@@ -1271,36 +1282,38 @@ fn dispatch_request<R: ProductDevRuntime>(
     if request.headers.get("content-type").map(String::as_str) != Some("application/json") {
         return HttpResponse::error(
             415,
-            "DEV_HOST_CONTENT_TYPE",
+            "PRODUCT_HOST_CONTENT_TYPE",
             "POST requests require application/json",
         );
     }
     match request.path.as_str() {
         "/__rusty/product/runtime/lifecycle/start" => {
-            invoke_lifecycle(state, &request.body, ProductDevLifecycleOperation::Start)
+            invoke_lifecycle(state, &request.body, ProductHostLifecycleOperation::Start)
         }
         "/__rusty/product/runtime/lifecycle/pause" => {
-            invoke_lifecycle(state, &request.body, ProductDevLifecycleOperation::Pause)
+            invoke_lifecycle(state, &request.body, ProductHostLifecycleOperation::Pause)
         }
         "/__rusty/product/runtime/lifecycle/resume" => {
-            invoke_lifecycle(state, &request.body, ProductDevLifecycleOperation::Resume)
+            invoke_lifecycle(state, &request.body, ProductHostLifecycleOperation::Resume)
         }
         "/__rusty/product/runtime/lifecycle/restart" => {
-            invoke_lifecycle(state, &request.body, ProductDevLifecycleOperation::Restart)
+            invoke_lifecycle(state, &request.body, ProductHostLifecycleOperation::Restart)
         }
-        "/__rusty/product/runtime/lifecycle/shutdown" => {
-            invoke_lifecycle(state, &request.body, ProductDevLifecycleOperation::Shutdown)
-        }
+        "/__rusty/product/runtime/lifecycle/shutdown" => invoke_lifecycle(
+            state,
+            &request.body,
+            ProductHostLifecycleOperation::Shutdown,
+        ),
         "/__rusty/product/runtime/lifecycle/report-fault" => invoke_lifecycle(
             state,
             &request.body,
-            ProductDevLifecycleOperation::ReportFault,
+            ProductHostLifecycleOperation::ReportFault,
         ),
         "/__rusty/product/runtime/control/replace" => {
-            invoke_control(state, &request.body, ProductDevControlOperation::Replace)
+            invoke_control(state, &request.body, ProductHostControlOperation::Replace)
         }
         "/__rusty/product/runtime/control/release" => {
-            invoke_control(state, &request.body, ProductDevControlOperation::Release)
+            invoke_control(state, &request.body, ProductHostControlOperation::Release)
         }
         "/__rusty/product/runtime/control/claim" => invoke_claim(state, &request.body),
         "/__rusty/product/runtime/input" => invoke_input(state, &request.body),
@@ -1314,12 +1327,12 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/browser-diagnostics" => {
             invoke_browser_diagnostics(state, &request.body)
         }
-        _ => HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
+        _ => HttpResponse::error(404, "PRODUCT_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
 }
 
 /// Serve an exact bundle path.
-fn bundle_response(bundle: &ProductDevBundle, request_path: &str) -> Option<HttpResponse> {
+fn bundle_response(bundle: &ProductHostBundle, request_path: &str) -> Option<HttpResponse> {
     let entry = bundle.get(request_path)?;
     Some(HttpResponse::bytes(
         200,
@@ -1328,12 +1341,12 @@ fn bundle_response(bundle: &ProductDevBundle, request_path: &str) -> Option<Http
     ))
 }
 
-fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpResponse {
+fn invoke_debug_catalog<R: ProductHostRuntime>(state: &HostState<R>) -> HttpResponse {
     match state
         .runtime
         .session()
         .with_locked_timed(
-            || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+            || begin_telemetry(state, ProductHostOperationKind::ExecuteDebug),
             |runtime| {
                 let result = runtime.describe_debug();
                 let receipt = match result {
@@ -1356,7 +1369,7 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
                 };
                 Ok(json_response(200, &catalog).with_output_through(output_through))
             },
-            || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+            || finish_telemetry(state, ProductHostOperationKind::ExecuteDebug),
         )
         .map_err(|_| crate::session::runtime_poisoned())
         .and_then(|response| response)
@@ -1366,7 +1379,7 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
     }
 }
 
-fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+fn invoke_debug_execute<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
     let command = match std::str::from_utf8(body) {
         Ok(command) => command,
         Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),
@@ -1375,7 +1388,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
         .runtime
         .session()
         .with_locked_timed(
-            || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+            || begin_telemetry(state, ProductHostOperationKind::ExecuteDebug),
             |runtime| {
                 if state.realtime_scheduler_enabled {
                     // Input accepted before this command reaches the runtime
@@ -1389,7 +1402,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                     for error in errors {
                         publish_host_diagnostic(
                             &state.diagnostics,
-                            ProductDevLogSeverity::Warning,
+                            ProductHostLogSeverity::Warning,
                             disposition_for_runtime_error(&error),
                             error.code(),
                             error.diagnostic(),
@@ -1434,7 +1447,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                 )
                 .with_output_through(output_through))
             },
-            || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+            || finish_telemetry(state, ProductHostOperationKind::ExecuteDebug),
         )
         .map_err(|_| crate::session::runtime_poisoned())
         .and_then(|response| response)
@@ -1444,12 +1457,12 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
     }
 }
 
-fn invoke_lifecycle<R: ProductDevRuntime>(
+fn invoke_lifecycle<R: ProductHostRuntime>(
     state: &HostState<R>,
     body: &[u8],
-    operation: ProductDevLifecycleOperation,
+    operation: ProductHostLifecycleOperation,
 ) -> HttpResponse {
-    let request: ProductDevLifecycleRequest = match decode_json(body) {
+    let request: ProductHostLifecycleRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1463,18 +1476,18 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
             }
             Ok(receipt)
         },
-        |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
+        |error| ProductHostOperationResult::rejected_runtime(operation.operation_kind(), error),
     );
     state.scheduler_wake.notify();
     response
 }
 
-fn invoke_control<R: ProductDevRuntime>(
+fn invoke_control<R: ProductHostRuntime>(
     state: &HostState<R>,
     body: &[u8],
-    operation: ProductDevControlOperation,
+    operation: ProductHostControlOperation,
 ) -> HttpResponse {
-    let request: ProductDevControlRequest = match decode_json(body) {
+    let request: ProductHostControlRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1488,21 +1501,21 @@ fn invoke_control<R: ProductDevRuntime>(
             }
             Ok(receipt)
         },
-        |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
+        |error| ProductHostOperationResult::rejected_runtime(operation.operation_kind(), error),
     );
     state.scheduler_wake.notify();
     response
 }
 
-fn invoke_claim<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ProductDevControlClaimRequest = match decode_json(body) {
+fn invoke_claim<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request: ProductHostControlClaimRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
     let lease = std::time::Duration::from_millis(request.lease_ms.get());
     let response = call_runtime(
         state,
-        ProductDevOperationKind::ClaimControl,
+        ProductHostOperationKind::ClaimControl,
         |runtime| {
             let receipt = runtime.claim_control(request.runtime, request.label.clone(), lease)?;
             if receipt.result().is_accepted() {
@@ -1511,8 +1524,8 @@ fn invoke_claim<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
             Ok(receipt)
         },
         |error| {
-            ProductDevOperationResult::rejected_runtime(
-                ProductDevOperationKind::ClaimControl,
+            ProductHostOperationResult::rejected_runtime(
+                ProductHostOperationKind::ClaimControl,
                 error,
             )
         },
@@ -1521,8 +1534,8 @@ fn invoke_claim<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
     response
 }
 
-fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ProductDevInputRequest = match decode_json(body) {
+fn invoke_input<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request: ProductHostInputRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1531,12 +1544,12 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
         Err(_) => {
             return HttpResponse::error(
                 400,
-                "DEV_HOST_INPUT_DECODE",
+                "PRODUCT_HOST_INPUT_DECODE",
                 "input batch could not be encoded",
             );
         }
     };
-    let batch = match ProductDevInputBatch::decode_json(&batch_json) {
+    let batch = match ProductHostInputBatch::decode_json(&batch_json) {
         Ok(batch) => batch,
         Err(_) => return recover_rejected_input_batch(state, request.batch.len()),
     };
@@ -1550,7 +1563,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
         return match state.input_mailbox.enqueue(batch, enqueued_ns) {
             true => {
                 state.scheduler_wake.notify();
-                match ProductDevInputResult::queued(count) {
+                match ProductHostInputResult::queued(count) {
                     // Admission committed to the mailbox; runtime consumption
                     // and its output cursor arrive separately through SSE.
                     Ok(result) => json_response(200, &result).with_queued_input(),
@@ -1559,7 +1572,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
             }
             false => {
                 state.scheduler_wake.notify();
-                match ProductDevInputResult::mailbox_full(count) {
+                match ProductHostInputResult::mailbox_full(count) {
                     Ok(result) => json_response(200, &result).with_resync_required(),
                     Err(error) => HttpResponse::error(500, error.code(), error.detail()),
                 }
@@ -1568,114 +1581,114 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
     }
     call_runtime(
         state,
-        ProductDevOperationKind::Input,
+        ProductHostOperationKind::Input,
         |runtime| runtime.input(batch),
-        crate::ProductDevInputResult::rejected_runtime,
+        crate::ProductHostInputResult::rejected_runtime,
     )
 }
 
-fn recover_rejected_input_batch<R: ProductDevRuntime>(
+fn recover_rejected_input_batch<R: ProductHostRuntime>(
     state: &HostState<R>,
     count: usize,
 ) -> HttpResponse {
     state.input_mailbox.clear();
     publish_host_diagnostic(
         &state.diagnostics,
-        ProductDevLogSeverity::Warning,
-        ProductDevLogDisposition::ResyncRequired,
-        "DEV_HOST_INPUT_DECODE",
+        ProductHostLogSeverity::Warning,
+        ProductHostLogDisposition::ResyncRequired,
+        "PRODUCT_HOST_INPUT_DECODE",
         "input batch was not a strict runtime-input wire batch; replacing the runtime input binding before continuing",
         [("submitted-count", count.to_string())],
     );
     let response = call_runtime(
         state,
-        ProductDevOperationKind::Input,
+        ProductHostOperationKind::Input,
         |runtime| {
             let recovery = runtime.recover_input_overflow()?;
             let (_operation, outputs) = recovery.into_parts();
-            let result = ProductDevInputResult::wire_decode_resynchronized(count)
+            let result = ProductHostInputResult::wire_decode_resynchronized(count)
                 .map_err(host_error_to_runtime)?;
-            ProductDevRuntimeReceipt::new(result, outputs).map_err(host_error_to_runtime)
+            ProductHostRuntimeReceipt::new(result, outputs).map_err(host_error_to_runtime)
         },
-        ProductDevInputResult::rejected_runtime,
+        ProductHostInputResult::rejected_runtime,
     );
     state.scheduler_wake.notify();
     response
 }
 
-fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new(error.code(), error.detail())
+fn host_error_to_runtime(error: ProductHostError) -> ProductHostRuntimeError {
+    ProductHostRuntimeError::new(error.code(), error.detail())
 }
 
-fn invoke_realtime<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ProductDevRealtimeRequest = match decode_json(body) {
+fn invoke_realtime<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request: ProductHostRealtimeRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
     call_runtime(
         state,
-        ProductDevOperationKind::AdvanceRealtime,
+        ProductHostOperationKind::AdvanceRealtime,
         |runtime| runtime.advance_realtime(request.observed_time_ns),
         |error| {
-            ProductDevOperationResult::rejected_runtime(
-                ProductDevOperationKind::AdvanceRealtime,
+            ProductHostOperationResult::rejected_runtime(
+                ProductHostOperationKind::AdvanceRealtime,
                 error,
             )
         },
     )
 }
 
-fn invoke_demand<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+fn invoke_demand<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
     if decode_empty(body).is_err() {
         return HttpResponse::error(
             400,
-            "DEV_HOST_REQUEST_BODY",
+            "PRODUCT_HOST_REQUEST_BODY",
             "demand route requires exactly {} JSON",
         );
     }
     call_runtime(
         state,
-        ProductDevOperationKind::AdmitDemandStep,
+        ProductHostOperationKind::AdmitDemandStep,
         |runtime| runtime.admit_demand_step(),
         |error| {
-            ProductDevOperationResult::rejected_runtime(
-                ProductDevOperationKind::AdmitDemandStep,
+            ProductHostOperationResult::rejected_runtime(
+                ProductHostOperationKind::AdmitDemandStep,
                 error,
             )
         },
     )
 }
 
-fn invoke_external<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: ProductDevExternalRequest = match decode_json(body) {
+fn invoke_external<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request: ProductHostExternalRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
     call_runtime(
         state,
-        ProductDevOperationKind::AdmitExternalStep,
+        ProductHostOperationKind::AdmitExternalStep,
         |runtime| runtime.admit_external_step(request.step),
         |error| {
-            ProductDevOperationResult::rejected_runtime(
-                ProductDevOperationKind::AdmitExternalStep,
+            ProductHostOperationResult::rejected_runtime(
+                ProductHostOperationKind::AdmitExternalStep,
                 error,
             )
         },
     )
 }
 
-fn invoke_timeline<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request = match ProductDevTimelineCompletion::decode_json(body) {
+fn invoke_timeline<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request = match ProductHostTimelineCompletion::decode_json(body) {
         Ok(value) => value,
         Err(error) => return HttpResponse::error(400, error.code(), error.detail()),
     };
     let ticket = request.envelope().ticket().value();
     call_runtime(
         state,
-        ProductDevOperationKind::CompleteTimeline,
+        ProductHostOperationKind::CompleteTimeline,
         |runtime| runtime.complete_timeline(request),
         |error| {
-            crate::ProductDevTimelineCompletionResult::rejected_runtime(
+            crate::ProductHostTimelineCompletionResult::rejected_runtime(
                 CanonicalU64::new(ticket),
                 error,
             )
@@ -1683,14 +1696,14 @@ fn invoke_timeline<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
     )
 }
 
-fn invoke_diagnostics_read<R: ProductDevRuntime>(
+fn invoke_diagnostics_read<R: ProductHostRuntime>(
     state: &HostState<R>,
     body: &[u8],
 ) -> HttpResponse {
     if !state.live_debug_enabled {
-        return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
+        return HttpResponse::error(404, "PRODUCT_HOST_ROUTE_NOT_FOUND", "route is not admitted");
     }
-    let request: ProductDevDiagnosticsReadRequest = match decode_json(body) {
+    let request: ProductHostDiagnosticsReadRequest = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1698,13 +1711,16 @@ fn invoke_diagnostics_read<R: ProductDevRuntime>(
         .diagnostics
         .read_after(request.after.map(CanonicalU64::get));
     let telemetry = telemetry_snapshot(state, batch.read_monotonic_nanoseconds);
-    json_response(200, &ProductDevDiagnosticsReadResponse { batch, telemetry })
+    json_response(
+        200,
+        &ProductHostDiagnosticsReadResponse { batch, telemetry },
+    )
 }
 
-fn telemetry_snapshot<R: ProductDevRuntime>(
+fn telemetry_snapshot<R: ProductHostRuntime>(
     state: &HostState<R>,
     now_ns: u64,
-) -> ProductDevTelemetrySnapshot {
+) -> ProductHostTelemetrySnapshot {
     let input = state.input_mailbox.telemetry();
     let transport = state
         .outputs
@@ -1727,11 +1743,11 @@ fn telemetry_snapshot<R: ProductDevRuntime>(
         .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport))
 }
 
-fn invoke_browser_diagnostics<R: ProductDevRuntime>(
+fn invoke_browser_diagnostics<R: ProductHostRuntime>(
     state: &HostState<R>,
     body: &[u8],
 ) -> HttpResponse {
-    let report: ProductDevBrowserDiagnosticsReport = match decode_json(body) {
+    let report: ProductHostBrowserDiagnosticsReport = match decode_json(body) {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1741,21 +1757,21 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
     let mut reported = 0_u8;
     let status_disposition = if matches!(
         report.host_state,
-        ProductDevBrowserHostState::Degraded | ProductDevBrowserHostState::Failed
+        ProductHostBrowserHostState::Degraded | ProductHostBrowserHostState::Failed
     ) {
-        ProductDevLogDisposition::Degraded
+        ProductHostLogDisposition::Degraded
     } else {
-        ProductDevLogDisposition::Accepted
+        ProductHostLogDisposition::Accepted
     };
     let status_severity = if matches!(
         report.host_state,
-        ProductDevBrowserHostState::Degraded | ProductDevBrowserHostState::Failed
+        ProductHostBrowserHostState::Degraded | ProductHostBrowserHostState::Failed
     ) {
-        ProductDevLogSeverity::Warning
+        ProductHostLogSeverity::Warning
     } else {
-        ProductDevLogSeverity::Info
+        ProductHostLogSeverity::Info
     };
-    let mut status = match ProductDevLogEvent::new(
+    let mut status = match ProductHostLogEvent::new(
         status_severity,
         status_disposition,
         "browser-host",
@@ -1765,12 +1781,12 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         Ok(event) => event,
         Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
     };
-    let established_baseline = matches!(report.host_state, ProductDevBrowserHostState::Ready)
+    let established_baseline = matches!(report.host_state, ProductHostBrowserHostState::Ready)
         && matches!(
             report.transport_state,
-            ProductDevBrowserConnectionState::Open
+            ProductHostBrowserConnectionState::Open
         )
-        && matches!(report.output_state, ProductDevBrowserConnectionState::Open)
+        && matches!(report.output_state, ProductHostBrowserConnectionState::Open)
         && report.first_terminal.is_none()
         && report
             .attachment
@@ -1837,9 +1853,9 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
     reported = reported.saturating_add(1);
 
     if let Some(terminal) = report.first_terminal {
-        let event = match ProductDevLogEvent::new(
-            ProductDevLogSeverity::Error,
-            ProductDevLogDisposition::Terminal,
+        let event = match ProductHostLogEvent::new(
+            ProductHostLogSeverity::Error,
+            ProductHostLogDisposition::Terminal,
             "browser-host",
             terminal.code,
             terminal.message,
@@ -1853,9 +1869,9 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         reported = reported.saturating_add(1);
     }
     if let Some(recoverable) = report.recoverable_event {
-        let event = match ProductDevLogEvent::new(
-            ProductDevLogSeverity::Warning,
-            ProductDevLogDisposition::RejectedRecoverable,
+        let event = match ProductHostLogEvent::new(
+            ProductHostLogSeverity::Warning,
+            ProductHostLogDisposition::RejectedRecoverable,
             "browser-host",
             recoverable.code,
             recoverable.message,
@@ -1869,9 +1885,9 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         reported = reported.saturating_add(1);
     }
     for page_event in report.page_events {
-        let event = match ProductDevLogEvent::new(
-            ProductDevLogSeverity::Warning,
-            ProductDevLogDisposition::Degraded,
+        let event = match ProductHostLogEvent::new(
+            ProductHostLogSeverity::Warning,
+            ProductHostLogDisposition::Degraded,
             "browser-page",
             page_event.code,
             page_event.message,
@@ -1888,7 +1904,7 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
     }
     json_response(
         200,
-        &ProductDevBrowserDiagnosticsResult {
+        &ProductHostBrowserDiagnosticsResult {
             accepted: true,
             reported,
         },
@@ -1898,31 +1914,34 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
     .with_observation()
 }
 
-fn browser_host_state(state: ProductDevBrowserHostState) -> &'static str {
+fn browser_host_state(state: ProductHostBrowserHostState) -> &'static str {
     match state {
-        ProductDevBrowserHostState::Loading => "loading",
-        ProductDevBrowserHostState::Ready => "ready",
-        ProductDevBrowserHostState::Degraded => "degraded",
-        ProductDevBrowserHostState::Failed => "failed",
-        ProductDevBrowserHostState::Disposed => "disposed",
+        ProductHostBrowserHostState::Loading => "loading",
+        ProductHostBrowserHostState::Ready => "ready",
+        ProductHostBrowserHostState::Degraded => "degraded",
+        ProductHostBrowserHostState::Failed => "failed",
+        ProductHostBrowserHostState::Disposed => "disposed",
     }
 }
 
-fn browser_connection_state(state: ProductDevBrowserConnectionState) -> &'static str {
+fn browser_connection_state(state: ProductHostBrowserConnectionState) -> &'static str {
     match state {
-        ProductDevBrowserConnectionState::Open => "open",
-        ProductDevBrowserConnectionState::Closed => "closed",
+        ProductHostBrowserConnectionState::Open => "open",
+        ProductHostBrowserConnectionState::Closed => "closed",
     }
 }
 
-fn browser_page_diagnostic_kind(kind: crate::ProductDevBrowserPageDiagnosticKind) -> &'static str {
+fn browser_page_diagnostic_kind(kind: crate::ProductHostBrowserPageDiagnosticKind) -> &'static str {
     match kind {
-        crate::ProductDevBrowserPageDiagnosticKind::Error => "error",
-        crate::ProductDevBrowserPageDiagnosticKind::UnhandledRejection => "unhandled-rejection",
+        crate::ProductHostBrowserPageDiagnosticKind::Error => "error",
+        crate::ProductHostBrowserPageDiagnosticKind::UnhandledRejection => "unhandled-rejection",
     }
 }
 
-fn begin_telemetry<R: ProductDevRuntime>(state: &HostState<R>, operation: ProductDevOperationKind) {
+fn begin_telemetry<R: ProductHostRuntime>(
+    state: &HostState<R>,
+    operation: ProductHostOperationKind,
+) {
     if let Some(started_ns) = state.diagnostics.now_monotonic_nanoseconds() {
         if let Ok(mut telemetry) = state.telemetry.lock() {
             telemetry.begin(operation, started_ns);
@@ -1930,14 +1949,14 @@ fn begin_telemetry<R: ProductDevRuntime>(state: &HostState<R>, operation: Produc
     }
 }
 
-fn finish_telemetry<R: ProductDevRuntime>(
+fn finish_telemetry<R: ProductHostRuntime>(
     state: &HostState<R>,
-    operation: ProductDevOperationKind,
+    operation: ProductHostOperationKind,
 ) {
     if let Some(finished_ns) = state.diagnostics.now_monotonic_nanoseconds() {
         if let Ok(mut telemetry) = state.telemetry.lock() {
             if let Some(latency_ms) = telemetry.finish(finished_ns) {
-                if matches!(operation, ProductDevOperationKind::Input) {
+                if matches!(operation, ProductHostOperationKind::Input) {
                     telemetry.record_input_admission(latency_ms);
                 }
             }
@@ -1945,9 +1964,9 @@ fn finish_telemetry<R: ProductDevRuntime>(
     }
 }
 
-fn record_update_attribution<R: ProductDevRuntime>(
+fn record_update_attribution<R: ProductHostRuntime>(
     state: &HostState<R>,
-    attribution: Option<ProductDevUpdateAttribution>,
+    attribution: Option<ProductHostUpdateAttribution>,
 ) {
     let Some(attribution) = attribution else {
         return;
@@ -1965,15 +1984,15 @@ fn record_update_attribution<R: ProductDevRuntime>(
 
 fn call_runtime<R, T, F, E>(
     state: &HostState<R>,
-    operation: ProductDevOperationKind,
+    operation: ProductHostOperationKind,
     call: F,
     error_result: E,
 ) -> HttpResponse
 where
-    R: ProductDevRuntime,
+    R: ProductHostRuntime,
     T: Serialize,
-    F: FnOnce(&mut R) -> Result<crate::ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
-    E: FnOnce(ProductDevRuntimeError) -> Result<T, ProductDevHostError>,
+    F: FnOnce(&mut R) -> Result<crate::ProductHostRuntimeReceipt<T>, ProductHostRuntimeError>,
+    E: FnOnce(ProductHostRuntimeError) -> Result<T, ProductHostError>,
 {
     let response = state
         .runtime
@@ -1991,8 +2010,8 @@ where
                     error.diagnostic()
                 };
                 let _ = state.diagnostics.publish(
-                    crate::ProductDevLogEvent::new(
-                        crate::ProductDevLogSeverity::Error,
+                    crate::ProductHostLogEvent::new(
+                        crate::ProductHostLogSeverity::Error,
                         disposition_for_runtime_error(&error),
                         "runtime",
                         error.code(),
@@ -2016,9 +2035,9 @@ where
             Err(error) => {
                 publish_host_diagnostic(
                     &state.diagnostics,
-                    ProductDevLogSeverity::Warning,
-                    ProductDevLogDisposition::ResyncRequired,
-                    "DEV_HOST_RESPONSE_ENCODE_RESYNC",
+                    ProductHostLogSeverity::Warning,
+                    ProductHostLogDisposition::ResyncRequired,
+                    "PRODUCT_HOST_RESPONSE_ENCODE_RESYNC",
                     "runtime result could not be encoded after mutation; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
@@ -2030,9 +2049,9 @@ where
             Err(error) => {
                 publish_host_diagnostic(
                     &state.diagnostics,
-                    ProductDevLogSeverity::Warning,
-                    ProductDevLogDisposition::ResyncRequired,
-                    "DEV_HOST_OUTPUT_COMMIT_RESYNC",
+                    ProductHostLogSeverity::Warning,
+                    ProductHostLogDisposition::ResyncRequired,
+                    "PRODUCT_HOST_OUTPUT_COMMIT_RESYNC",
                     "committed runtime receipt could not be encoded for output publication; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
@@ -2049,9 +2068,9 @@ where
                 // replay a request after the runtime has already mutated.
                 publish_host_diagnostic(
                     &state.diagnostics,
-                    ProductDevLogSeverity::Warning,
-                    ProductDevLogDisposition::ResyncRequired,
-                    "DEV_HOST_OUTPUT_COMMIT_RESYNC",
+                    ProductHostLogSeverity::Warning,
+                    ProductHostLogDisposition::ResyncRequired,
+                    "PRODUCT_HOST_OUTPUT_COMMIT_RESYNC",
                     "retained output publication failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
@@ -2075,21 +2094,21 @@ where
     }
 }
 
-fn encode_runtime_result<T: Serialize>(value: &T) -> Result<Vec<u8>, ProductDevHostError> {
+fn encode_runtime_result<T: Serialize>(value: &T) -> Result<Vec<u8>, ProductHostError> {
     match serde_json::to_vec(value) {
         Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => Ok(bytes),
-        Ok(_) => Err(ProductDevHostError::new(
-            "DEV_HOST_RESPONSE_BOUNDS",
+        Ok(_) => Err(ProductHostError::new(
+            "PRODUCT_HOST_RESPONSE_BOUNDS",
             "runtime result exceeds response bound",
         )),
-        Err(_) => Err(ProductDevHostError::new(
-            "DEV_HOST_RESPONSE_ENCODE",
+        Err(_) => Err(ProductHostError::new(
+            "PRODUCT_HOST_RESPONSE_ENCODE",
             "runtime result could not be encoded",
         )),
     }
 }
 
-fn handle_frames<R: ProductDevRuntime>(
+fn handle_frames<R: ProductHostRuntime>(
     mut stream: TcpStream,
     state: &HostState<R>,
     request: &HttpRequest,
@@ -2097,10 +2116,10 @@ fn handle_frames<R: ProductDevRuntime>(
     let response = match (&state.frames, crate::frames::frame_request(&request.path)) {
         (None, _) => HttpResponse::error(
             404,
-            "DEV_HOST_FRAMES",
+            "PRODUCT_HOST_FRAMES",
             "this runtime does not render frames",
         ),
-        (Some(_), Err(detail)) => HttpResponse::error(400, "DEV_HOST_FRAMES_REQUEST", detail),
+        (Some(_), Err(detail)) => HttpResponse::error(400, "PRODUCT_HOST_FRAMES_REQUEST", detail),
         (Some(frames), Ok(frame_request)) => {
             if let Some(ratio) = frame_request.pixel_ratio {
                 frames.set_viewer_pixel_ratio(ratio);
@@ -2122,20 +2141,20 @@ fn handle_frames<R: ProductDevRuntime>(
 
 /// A tool's capture: one frame drawn at its own size, never a viewer. The
 /// drawn cameras ride in `X-Rusty-Frame-Cameras`.
-fn capture_response<R: ProductDevRuntime>(
+fn capture_response<R: ProductHostRuntime>(
     state: &HostState<R>,
     request: &HttpRequest,
 ) -> HttpResponse {
     let Some(capture) = &state.capture else {
         return HttpResponse::error(
             404,
-            "DEV_HOST_FRAMES",
+            "PRODUCT_HOST_FRAMES",
             "this runtime does not render frames",
         );
     };
     let request = match crate::frames::capture_request(&request.path) {
         Ok(request) => request,
-        Err(detail) => return HttpResponse::error(400, "DEV_HOST_CAPTURE_REQUEST", detail),
+        Err(detail) => return HttpResponse::error(400, "PRODUCT_HOST_CAPTURE_REQUEST", detail),
     };
     match capture(request) {
         Ok(captured) => {
@@ -2147,11 +2166,11 @@ fn capture_response<R: ProductDevRuntime>(
             response.cameras = Some(captured.cameras.to_string());
             response
         }
-        Err(detail) => HttpResponse::error(500, "DEV_HOST_CAPTURE", &detail),
+        Err(detail) => HttpResponse::error(500, "PRODUCT_HOST_CAPTURE", &detail),
     }
 }
 
-fn handle_sse<R: ProductDevRuntime>(
+fn handle_sse<R: ProductHostRuntime>(
     mut stream: TcpStream,
     state: Arc<HostState<R>>,
     request: HttpRequest,
@@ -2166,7 +2185,7 @@ fn handle_sse<R: ProductDevRuntime>(
             &mut stream,
             HttpResponse::error(
                 400,
-                "DEV_HOST_SSE_REQUEST",
+                "PRODUCT_HOST_SSE_REQUEST",
                 "outputs requires empty EventSource GET",
             ),
         );
@@ -2180,7 +2199,11 @@ fn handle_sse<R: ProductDevRuntime>(
     if !try_acquire(&state.subscribers, MAX_SSE_SUBSCRIBERS) {
         let _ = write_response(
             &mut stream,
-            HttpResponse::error(503, "DEV_HOST_SSE_BOUNDS", "SSE subscriber limit reached"),
+            HttpResponse::error(
+                503,
+                "PRODUCT_HOST_SSE_BOUNDS",
+                "SSE subscriber limit reached",
+            ),
         );
         return;
     }
@@ -2191,7 +2214,7 @@ fn handle_sse<R: ProductDevRuntime>(
         .runtime
         .session()
         .with_locked_timed(
-            || begin_telemetry(&state, ProductDevOperationKind::Connect),
+            || begin_telemetry(&state, ProductHostOperationKind::Connect),
             |runtime| {
                 let result = runtime.connect();
                 let receipt = result?;
@@ -2204,7 +2227,7 @@ fn handle_sse<R: ProductDevRuntime>(
                 // Readouts are published on change, so a fresh subscriber
                 // starts from the current one.
                 if let Some(readout) = result.readout() {
-                    outputs.push(ProductDevRuntimeOutput::runtime_readout(readout.clone()));
+                    outputs.push(ProductHostRuntimeOutput::runtime_readout(readout.clone()));
                 }
                 let (baseline, binding) = match encode_output_batches(None, outputs) {
                     Ok(encoded) => encoded,
@@ -2215,14 +2238,14 @@ fn handle_sse<R: ProductDevRuntime>(
                 let Some(binding) = binding else {
                     return Ok(Err(HttpResponse::error(
                         503,
-                        "DEV_HOST_OUTPUT_BASELINE",
+                        "PRODUCT_HOST_OUTPUT_BASELINE",
                         "runtime connection did not publish a complete binding baseline",
                     )));
                 };
                 let Ok(mut outputs) = state.outputs.lock() else {
                     return Ok(Err(HttpResponse::error(
                         500,
-                        "DEV_HOST_OUTPUT_POISONED",
+                        "PRODUCT_HOST_OUTPUT_POISONED",
                         "output queue lock is poisoned",
                     )));
                 };
@@ -2231,7 +2254,7 @@ fn handle_sse<R: ProductDevRuntime>(
                 outputs.subscribers.push(Arc::downgrade(&queue));
                 Ok(Ok((baseline, result, outputs.next_id, queue)))
             },
-            || finish_telemetry(&state, ProductDevOperationKind::Connect),
+            || finish_telemetry(&state, ProductHostOperationKind::Connect),
         )
         .map_err(|_| crate::session::runtime_poisoned())
         .and_then(|response| response);
@@ -2252,7 +2275,7 @@ fn handle_sse<R: ProductDevRuntime>(
             return;
         }
     };
-    let Ok(completion) = serde_json::to_string(&ProductDevConnectionBaseline {
+    let Ok(completion) = serde_json::to_string(&ProductHostConnectionBaseline {
         result,
         output_through: CanonicalU64::new(output_through),
     }) else {
@@ -2260,7 +2283,7 @@ fn handle_sse<R: ProductDevRuntime>(
             &mut stream,
             HttpResponse::error(
                 500,
-                "DEV_HOST_RESPONSE_ENCODE",
+                "PRODUCT_HOST_RESPONSE_ENCODE",
                 "runtime connection result could not be encoded",
             ),
         );
@@ -2325,7 +2348,7 @@ struct OutputBus {
     /// Sequence of the last published event, sent as its SSE id so a caller
     /// can wait until an operation's outputs have been observed.
     next_id: u64,
-    active_binding: Option<crate::ProductDevRuntimeBinding>,
+    active_binding: Option<crate::ProductHostRuntimeBinding>,
     subscribers: Vec<Weak<SubscriberQueue>>,
 }
 
@@ -2425,10 +2448,13 @@ impl OutputBus {
 /// the binding, so the next publication must start a complete baseline.
 fn push_outputs(
     bus: &Mutex<OutputBus>,
-    outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<u64, ProductDevHostError> {
+    outputs: Vec<ProductHostRuntimeOutput>,
+) -> Result<u64, ProductHostError> {
     let mut bus = bus.lock().map_err(|_| {
-        ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
+        ProductHostError::new(
+            "PRODUCT_HOST_OUTPUT_POISONED",
+            "output queue lock is poisoned",
+        )
     })?;
     match encode_output_batches(bus.active_binding, outputs) {
         Ok((batches, binding)) => {
@@ -2443,10 +2469,10 @@ fn push_outputs(
     }
 }
 
-fn push_host_outputs<R: ProductDevRuntime>(
+fn push_host_outputs<R: ProductHostRuntime>(
     state: &HostState<R>,
-    outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<u64, ProductDevHostError> {
+    outputs: Vec<ProductHostRuntimeOutput>,
+) -> Result<u64, ProductHostError> {
     let changed = !outputs.is_empty();
     let output_through = push_outputs(&state.outputs, outputs)?;
     if changed {
@@ -2463,20 +2489,20 @@ fn push_host_outputs<R: ProductDevRuntime>(
 /// connection starts from its own complete baseline. Returns the batches and
 /// the binding that is active afterwards.
 fn encode_output_batches(
-    mut active_binding: Option<crate::ProductDevRuntimeBinding>,
-    outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<(Vec<String>, Option<crate::ProductDevRuntimeBinding>), ProductDevHostError> {
+    mut active_binding: Option<crate::ProductHostRuntimeBinding>,
+    outputs: Vec<ProductHostRuntimeOutput>,
+) -> Result<(Vec<String>, Option<crate::ProductHostRuntimeBinding>), ProductHostError> {
     let mut batches = Vec::new();
     let mut incremental = Vec::new();
     let mut baseline: Option<(
-        crate::ProductDevRuntimeBinding,
-        Vec<ProductDevRuntimeOutput>,
+        crate::ProductHostRuntimeBinding,
+        Vec<ProductHostRuntimeOutput>,
     )> = None;
     for output in outputs {
         if let Some(binding) = output.binding_marker() {
             if baseline.is_some() {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BASELINE",
+                return Err(ProductHostError::new(
+                    "PRODUCT_HOST_OUTPUT_BASELINE",
                     "a new binding arrived before the previous baseline completed",
                 ));
             }
@@ -2493,14 +2519,14 @@ fn encode_output_batches(
         }
         if let Some(binding) = output.complete_baseline_marker() {
             let Some((pending, members)) = baseline.take() else {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BASELINE",
+                return Err(ProductHostError::new(
+                    "PRODUCT_HOST_OUTPUT_BASELINE",
                     "a baseline completion arrived without its binding",
                 ));
             };
             if pending != binding {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BASELINE",
+                return Err(ProductHostError::new(
+                    "PRODUCT_HOST_OUTPUT_BASELINE",
                     "a baseline completion does not match its binding",
                 ));
             }
@@ -2517,8 +2543,8 @@ fn encode_output_batches(
         }
     }
     if baseline.is_some() {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_OUTPUT_BASELINE",
+        return Err(ProductHostError::new(
+            "PRODUCT_HOST_OUTPUT_BASELINE",
             "a baseline did not complete within its publication",
         ));
     }
@@ -2529,9 +2555,9 @@ fn encode_output_batches(
 }
 
 /// One SSE `data` event: the outputs published together, in order.
-fn encode_output_batch(outputs: &[ProductDevRuntimeOutput]) -> Result<String, ProductDevHostError> {
+fn encode_output_batch(outputs: &[ProductHostRuntimeOutput]) -> Result<String, ProductHostError> {
     serde_json::to_string(outputs)
-        .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))
+        .map_err(|error| ProductHostError::new("PRODUCT_HOST_OUTPUT_ENCODE", error.to_string()))
 }
 
 struct CounterGuard<'a> {
@@ -2562,10 +2588,58 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
 mod tests {
     use super::*;
 
+    /// The runtime routes this host answers. A shipped window-mode product
+    /// serves every route except the live-debug ones, so a new route joins
+    /// one of these lists deliberately (see the crate doc).
+    const SHIPPED_ROUTES: &[&str] = &[
+        "admit-demand-step",
+        "admit-external-step",
+        "advance-realtime",
+        "browser-diagnostics",
+        "control/claim",
+        "control/release",
+        "control/replace",
+        "frames",
+        "frames/capture",
+        "input",
+        "lifecycle/pause",
+        "lifecycle/report-fault",
+        "lifecycle/restart",
+        "lifecycle/resume",
+        "lifecycle/shutdown",
+        "lifecycle/start",
+        "outputs/fresh",
+        "timeline-completion",
+    ];
+    /// Answered only with `--live-debug`.
+    const LIVE_DEBUG_ROUTES: &[&str] = &["debug/catalog", "debug/execute", "diagnostics/read"];
+
+    #[test]
+    fn every_runtime_route_is_listed_as_shipped_or_live_debug() {
+        let mut found = std::collections::BTreeSet::new();
+        for source in [include_str!("host.rs"), include_str!("frames.rs")] {
+            let tests = source.find("#[cfg(test)]\nmod tests {");
+            let code = &source[..tests.unwrap_or(source.len())];
+            for literal in code.split('"').skip(1).step_by(2) {
+                if let Some(route) = literal.strip_prefix(crate::PRODUCT_HOST_RUNTIME_BASE_PATH) {
+                    if !route.is_empty() {
+                        found.insert(route.to_owned());
+                    }
+                }
+            }
+        }
+        let listed: std::collections::BTreeSet<String> = SHIPPED_ROUTES
+            .iter()
+            .chain(LIVE_DEBUG_ROUTES)
+            .map(|route| (*route).to_owned())
+            .collect();
+        assert_eq!(found, listed, "list a new route as shipped or live-debug");
+    }
+
     #[test]
     fn a_failed_content_reload_keeps_the_served_ui_and_tells_no_page() {
-        fn bundle(body: &[u8]) -> ProductDevBundle {
-            ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+        fn bundle(body: &[u8]) -> ProductHostBundle {
+            ProductHostBundle::new(vec![crate::ProductHostBundleEntry::new(
                 "index.html",
                 "text/html; charset=utf-8",
                 body.to_vec(),
@@ -2579,13 +2653,13 @@ mod tests {
             subscribers: vec![Arc::downgrade(&page)],
             ..OutputBus::default()
         }));
-        let reload = |content: Result<(), ProductDevRuntimeError>| ProductDevAssetReload {
+        let reload = |content: Result<(), ProductHostRuntimeError>| ProductHostAssetReload {
             bundle: Arc::clone(&served),
             content: Arc::new(move || content.clone()),
             outputs: Arc::clone(&outputs),
             output_wake: Arc::new(OutputWake::default()),
         };
-        let failed = reload(Err(ProductDevRuntimeError::new(
+        let failed = reload(Err(ProductHostRuntimeError::new(
             "CONTENT_BUNDLE_INDEX",
             "invalid index",
         )));
@@ -2665,13 +2739,13 @@ mod tests {
 
     struct BlockingRealtimeRuntime;
 
-    fn blocking_runtime_error() -> crate::ProductDevRuntimeError {
-        crate::ProductDevRuntimeError::new("TEST_RUNTIME", "test runtime operation")
+    fn blocking_runtime_error() -> crate::ProductHostRuntimeError {
+        crate::ProductHostRuntimeError::new("TEST_RUNTIME", "test runtime operation")
     }
 
-    impl crate::ProductDevRuntime for BlockingRealtimeRuntime {
-        fn realtime_schedule_state(&self) -> crate::ProductDevRuntimeScheduleState {
-            crate::ProductDevRuntimeScheduleState::Running
+    impl crate::ProductHostRuntime for BlockingRealtimeRuntime {
+        fn realtime_schedule_state(&self) -> crate::ProductHostRuntimeScheduleState {
+            crate::ProductHostRuntimeScheduleState::Running
         }
 
         fn realtime_schedule_interval(&self) -> Option<Duration> {
@@ -2680,20 +2754,20 @@ mod tests {
 
         fn lifecycle(
             &mut self,
-            _operation: crate::ProductDevLifecycleOperation,
+            _operation: crate::ProductHostLifecycleOperation,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
 
         fn input(
             &mut self,
-            _batch: crate::ProductDevInputBatch,
+            _batch: crate::ProductHostInputBatch,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevInputResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostInputResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
@@ -2702,8 +2776,8 @@ mod tests {
             &mut self,
             _observed_time_ns: CanonicalU64,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
@@ -2711,8 +2785,8 @@ mod tests {
         fn admit_demand_step(
             &mut self,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
@@ -2721,25 +2795,25 @@ mod tests {
             &mut self,
             _step: CanonicalU64,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
 
         fn complete_timeline(
             &mut self,
-            _completion: crate::ProductDevTimelineCompletion,
+            _completion: crate::ProductHostTimelineCompletion,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevTimelineCompletionResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostTimelineCompletionResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
     }
 
-    fn binding() -> crate::ProductDevRuntimeBinding {
-        crate::ProductDevRuntimeBinding {
+    fn binding() -> crate::ProductHostRuntimeBinding {
+        crate::ProductHostRuntimeBinding {
             instance_id: CanonicalU64::new(7),
             generation: CanonicalU64::new(1),
             control_revision: CanonicalU64::new(2),
@@ -2750,10 +2824,10 @@ mod tests {
     fn input_mailbox_overflow_clears_prefix_and_marks_resync() {
         let mailbox = HostInputMailbox::default();
         for _ in 0..MAX_HOST_INPUT_BATCHES {
-            assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new()), Some(0)));
+            assert!(mailbox.enqueue(ProductHostInputBatch::new(Vec::new()), Some(0)));
         }
         assert_eq!(mailbox.len(), MAX_HOST_INPUT_BATCHES);
-        assert!(!mailbox.enqueue(ProductDevInputBatch::new(Vec::new()), Some(0)));
+        assert!(!mailbox.enqueue(ProductHostInputBatch::new(Vec::new()), Some(0)));
 
         let (batches, overflowed) = mailbox.drain();
         assert!(
@@ -2765,7 +2839,7 @@ mod tests {
             "scheduler must receive an explicit resync marker"
         );
 
-        assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new()), Some(0)));
+        assert!(mailbox.enqueue(ProductHostInputBatch::new(Vec::new()), Some(0)));
         let (batches, overflowed) = mailbox.drain();
         assert_eq!(batches.len(), 1);
         assert!(!overflowed);
@@ -2788,7 +2862,7 @@ mod tests {
     #[test]
     fn in_place_rebind_group_publishes_as_one_batch() {
         let (bus, queue) = subscribed_bus();
-        let paused = crate::ProductDevRuntimeBinding {
+        let paused = crate::ProductHostRuntimeBinding {
             control_revision: CanonicalU64::new(3),
             ..binding()
         };
@@ -2797,9 +2871,9 @@ mod tests {
         push_outputs(
             &bus,
             vec![
-                ProductDevRuntimeOutput::binding(paused, CanonicalU64::new(5)),
-                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
-                ProductDevRuntimeOutput::complete_baseline(paused),
+                ProductHostRuntimeOutput::binding(paused, CanonicalU64::new(5)),
+                ProductHostRuntimeOutput::test_value(serde_json::json!({})),
+                ProductHostRuntimeOutput::complete_baseline(paused),
             ],
         )
         .expect("in-place rebind publishes");
@@ -2819,12 +2893,12 @@ mod tests {
         let output_through = push_outputs(
             &bus,
             vec![
-                ProductDevRuntimeOutput::runtime_readout(crate::ProductDevRuntimeReadout::new(
+                ProductHostRuntimeOutput::runtime_readout(crate::ProductHostRuntimeReadout::new(
                     binding(),
-                    crate::ProductDevRuntimeMode::Realtime,
-                    crate::ProductDevRuntimeState::Running,
+                    crate::ProductHostRuntimeMode::Realtime,
+                    crate::ProductHostRuntimeState::Running,
                 )),
-                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
+                ProductHostRuntimeOutput::test_value(serde_json::json!({})),
             ],
         )
         .expect("receipt batch publishes");
@@ -2866,7 +2940,7 @@ mod tests {
         let (bus, early) = subscribed_bus();
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_value(
+            vec![ProductHostRuntimeOutput::test_value(
                 serde_json::json!({"n": 1}),
             )],
         )
@@ -2875,7 +2949,7 @@ mod tests {
         bus.lock().unwrap().subscribers.push(Arc::downgrade(&late));
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_value(
+            vec![ProductHostRuntimeOutput::test_value(
                 serde_json::json!({"n": 2}),
             )],
         )
@@ -2910,7 +2984,7 @@ mod tests {
         let payload = "x".repeat(4 * 1024 * 1024);
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_value(
+            vec![ProductHostRuntimeOutput::test_value(
                 serde_json::json!({ "payload": payload }),
             )],
         )
@@ -2926,25 +3000,25 @@ mod tests {
     #[test]
     fn a_rejected_publication_sends_nothing_and_fences_the_binding() {
         let (bus, queue) = subscribed_bus();
-        let replacement = crate::ProductDevRuntimeBinding {
+        let replacement = crate::ProductHostRuntimeBinding {
             generation: CanonicalU64::new(binding().generation.get() + 1),
             ..binding()
         };
         let error = push_outputs(
             &bus,
             vec![
-                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
-                ProductDevRuntimeOutput::binding(replacement, CanonicalU64::new(0)),
-                ProductDevRuntimeOutput::test_value(serde_json::json!({})),
+                ProductHostRuntimeOutput::test_value(serde_json::json!({})),
+                ProductHostRuntimeOutput::binding(replacement, CanonicalU64::new(0)),
+                ProductHostRuntimeOutput::test_value(serde_json::json!({})),
             ],
         )
         .expect_err("a baseline must complete within its publication");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
+        assert_eq!(error.code(), "PRODUCT_HOST_OUTPUT_BASELINE");
         assert!(queue.take().unwrap().is_empty());
         assert_eq!(bus.lock().unwrap().active_binding, None);
         push_outputs(
             &bus,
-            vec![ProductDevRuntimeOutput::test_value(serde_json::json!({}))],
+            vec![ProductHostRuntimeOutput::test_value(serde_json::json!({}))],
         )
         .expect("incrementals after a fence are dropped, not rejected");
         assert!(queue.take().unwrap().is_empty());
@@ -2954,7 +3028,7 @@ mod tests {
     #[test]
     fn telemetry_snapshot_is_bounded_and_keeps_subsecond_rates() {
         let mut telemetry = HostTelemetry::default();
-        telemetry.begin(ProductDevOperationKind::AdvanceRealtime, 1_000_000);
+        telemetry.begin(ProductHostOperationKind::AdvanceRealtime, 1_000_000);
         telemetry.record_progress(1_000_000_000);
         telemetry.record_progress(3_000_000_000);
         let snapshot = telemetry.snapshot(
@@ -2974,7 +3048,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.in_flight_operation,
-            Some(ProductDevOperationKind::AdvanceRealtime)
+            Some(ProductHostOperationKind::AdvanceRealtime)
         );
         assert_eq!(snapshot.in_flight_age_ms, Some(CanonicalU64::new(3999)));
         assert_eq!(
@@ -2997,9 +3071,9 @@ mod tests {
     #[test]
     fn update_attribution_retains_a_long_window_and_lifetime_slowest_sample() {
         let mut telemetry = HostTelemetry::default();
-        let sample = |duration_us| ProductDevUpdateAttribution {
+        let sample = |duration_us| ProductHostUpdateAttribution {
             callback_duration_us: CanonicalU64::new(duration_us),
-            ..ProductDevUpdateAttribution::default()
+            ..ProductHostUpdateAttribution::default()
         };
         telemetry.record_update_attribution(1, sample(9_000));
         for duration_us in 1_u64..=2_049 {
@@ -3025,7 +3099,7 @@ mod tests {
 
     #[test]
     fn scheduled_input_result_preserves_cursor_and_recovery_disposition() {
-        let accepted = ProductDevInputResult::with_progress(
+        let accepted = ProductHostInputResult::with_progress(
             2,
             2,
             0,
@@ -3033,22 +3107,22 @@ mod tests {
             Some(CanonicalU64::new(4)),
             CanonicalU64::new(5),
             binding(),
-            crate::ProductDevRuntimeReadout::new(
+            crate::ProductHostRuntimeReadout::new(
                 binding(),
-                crate::ProductDevRuntimeMode::Realtime,
-                crate::ProductDevRuntimeState::Running,
+                crate::ProductHostRuntimeMode::Realtime,
+                crate::ProductHostRuntimeState::Running,
             ),
         )
         .unwrap();
         let accepted_wire =
-            serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(accepted)).unwrap();
+            serde_json::to_value(ProductHostRuntimeOutput::runtime_input_result(accepted)).unwrap();
         assert_eq!(accepted_wire["kind"], "runtime-input-result");
         assert_eq!(accepted_wire["result"]["acceptedThrough"], "4");
         assert_eq!(accepted_wire["result"]["consumedThrough"], "4");
         assert_eq!(accepted_wire["result"]["nextInputSequence"], "5");
         assert_eq!(accepted_wire["result"]["disposition"], "accepted");
 
-        let stale = ProductDevInputResult::with_progress(
+        let stale = ProductHostInputResult::with_progress(
             2,
             1,
             1,
@@ -3056,23 +3130,23 @@ mod tests {
             Some(CanonicalU64::new(7)),
             CanonicalU64::new(8),
             binding(),
-            crate::ProductDevRuntimeReadout::new(
+            crate::ProductHostRuntimeReadout::new(
                 binding(),
-                crate::ProductDevRuntimeMode::Realtime,
-                crate::ProductDevRuntimeState::Running,
+                crate::ProductHostRuntimeMode::Realtime,
+                crate::ProductHostRuntimeState::Running,
             ),
         )
         .unwrap();
         let stale_wire =
-            serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(stale)).unwrap();
+            serde_json::to_value(ProductHostRuntimeOutput::runtime_input_result(stale)).unwrap();
         assert_eq!(stale_wire["result"]["accepted"], false);
         assert_eq!(stale_wire["result"]["disposition"], "rejected-recoverable");
         assert_eq!(stale_wire["result"]["acceptedThrough"], "6");
         assert_eq!(stale_wire["result"]["consumedThrough"], "7");
 
-        let overflow = ProductDevInputResult::mailbox_full(2).unwrap();
+        let overflow = ProductHostInputResult::mailbox_full(2).unwrap();
         let overflow_wire =
-            serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(overflow)).unwrap();
+            serde_json::to_value(ProductHostRuntimeOutput::runtime_input_result(overflow)).unwrap();
         assert_eq!(overflow_wire["result"]["accepted"], false);
         assert_eq!(overflow_wire["result"]["disposition"], "resync-required");
     }
@@ -3081,9 +3155,9 @@ mod tests {
     /// only debug commands advance it. It records the order of its calls.
     struct HeldRealtimeRuntime(Arc<Mutex<Vec<String>>>);
 
-    impl crate::ProductDevRuntime for HeldRealtimeRuntime {
-        fn realtime_schedule_state(&self) -> crate::ProductDevRuntimeScheduleState {
-            crate::ProductDevRuntimeScheduleState::Paused
+    impl crate::ProductHostRuntime for HeldRealtimeRuntime {
+        fn realtime_schedule_state(&self) -> crate::ProductHostRuntimeScheduleState {
+            crate::ProductHostRuntimeScheduleState::Paused
         }
 
         fn realtime_schedule_interval(&self) -> Option<Duration> {
@@ -3092,20 +3166,20 @@ mod tests {
 
         fn lifecycle(
             &mut self,
-            _operation: crate::ProductDevLifecycleOperation,
+            _operation: crate::ProductHostLifecycleOperation,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
 
         fn input(
             &mut self,
-            batch: crate::ProductDevInputBatch,
+            batch: crate::ProductHostInputBatch,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevInputResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostInputResult>,
+            crate::ProductHostRuntimeError,
         > {
             self.0
                 .lock()
@@ -3118,23 +3192,23 @@ mod tests {
             &mut self,
             command: &str,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevDebugResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostDebugResult>,
+            crate::ProductHostRuntimeError,
         > {
             self.0.lock().unwrap().push(command.to_owned());
-            crate::ProductDevRuntimeReceipt::new(
-                crate::ProductDevDebugResult::new(true, String::new()),
+            crate::ProductHostRuntimeReceipt::new(
+                crate::ProductHostDebugResult::new(true, String::new()),
                 Vec::new(),
             )
-            .map_err(|error| crate::ProductDevRuntimeError::new(error.code(), error.detail()))
+            .map_err(|error| crate::ProductHostRuntimeError::new(error.code(), error.detail()))
         }
 
         fn advance_realtime(
             &mut self,
             _observed_time_ns: CanonicalU64,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
@@ -3142,8 +3216,8 @@ mod tests {
         fn admit_demand_step(
             &mut self,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
@@ -3152,18 +3226,18 @@ mod tests {
             &mut self,
             _step: CanonicalU64,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostOperationResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
 
         fn complete_timeline(
             &mut self,
-            _completion: crate::ProductDevTimelineCompletion,
+            _completion: crate::ProductHostTimelineCompletion,
         ) -> Result<
-            crate::ProductDevRuntimeReceipt<crate::ProductDevTimelineCompletionResult>,
-            crate::ProductDevRuntimeError,
+            crate::ProductHostRuntimeReceipt<crate::ProductHostTimelineCompletionResult>,
+            crate::ProductHostRuntimeError,
         > {
             Err(blocking_runtime_error())
         }
@@ -3174,7 +3248,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let state = HostState {
             bundle: Arc::new(RwLock::new(
-                ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                ProductHostBundle::new(vec![crate::ProductHostBundleEntry::new(
                     "index.html",
                     "text/html; charset=utf-8",
                     Vec::new(),
@@ -3182,7 +3256,7 @@ mod tests {
                 .unwrap()])
                 .unwrap(),
             )),
-            runtime: Arc::new(ProductDevOperationOwner::new(HeldRealtimeRuntime(
+            runtime: Arc::new(ProductHostOperationOwner::new(HeldRealtimeRuntime(
                 Arc::clone(&calls),
             ))),
             input_mailbox: Arc::new(HostInputMailbox::default()),
@@ -3195,7 +3269,7 @@ mod tests {
             bind_host: Ipv4Addr::LOCALHOST,
             expected_port: 0,
             live_debug_enabled: true,
-            diagnostics: ProductDevLog::new(Default::default()).unwrap(),
+            diagnostics: ProductHostLog::new(Default::default()).unwrap(),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
@@ -3218,10 +3292,10 @@ mod tests {
 
     #[test]
     fn realtime_input_admission_does_not_wait_for_runtime_owner() {
-        let runtime = Arc::new(ProductDevOperationOwner::new(BlockingRealtimeRuntime));
+        let runtime = Arc::new(ProductHostOperationOwner::new(BlockingRealtimeRuntime));
         let state = Arc::new(HostState {
             bundle: Arc::new(RwLock::new(
-                ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                ProductHostBundle::new(vec![crate::ProductHostBundleEntry::new(
                     "index.html",
                     "text/html; charset=utf-8",
                     Vec::new(),
@@ -3240,7 +3314,7 @@ mod tests {
             bind_host: Ipv4Addr::LOCALHOST,
             expected_port: 0,
             live_debug_enabled: false,
-            diagnostics: ProductDevLog::new(Default::default()).unwrap(),
+            diagnostics: ProductHostLog::new(Default::default()).unwrap(),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
@@ -3292,7 +3366,7 @@ mod tests {
         owner_thread.join().expect("owner worker");
     }
 
-    fn representative_realtime_receipt(tick: u64) -> Vec<ProductDevRuntimeOutput> {
+    fn representative_realtime_receipt(tick: u64) -> Vec<ProductHostRuntimeOutput> {
         let runtime = binding();
         let ui_runtime = runtime_ui::RuntimeUiRuntimeBinding::new(
             runtime_lifecycle::RuntimeInstanceId::new(runtime.instance_id.get()),
@@ -3308,13 +3382,13 @@ mod tests {
         )
         .expect("representative UI projection");
         vec![
-            ProductDevRuntimeOutput::test_value(serde_json::json!({"tick": tick})),
-            ProductDevRuntimeOutput::ui_projection(&ui_projection),
-            ProductDevRuntimeOutput::runtime_readout(
-                crate::ProductDevRuntimeReadout::new(
+            ProductHostRuntimeOutput::test_value(serde_json::json!({"tick": tick})),
+            ProductHostRuntimeOutput::ui_projection(&ui_projection),
+            ProductHostRuntimeOutput::runtime_readout(
+                crate::ProductHostRuntimeReadout::new(
                     runtime,
-                    crate::ProductDevRuntimeMode::Realtime,
-                    crate::ProductDevRuntimeState::Running,
+                    crate::ProductHostRuntimeMode::Realtime,
+                    crate::ProductHostRuntimeState::Running,
                 )
                 .with_counters(tick + 1, 0, 0, 0)
                 .with_clock(None, Some(tick + 1)),
@@ -3334,7 +3408,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
     stream.set_read_timeout(Some(SOCKET_TIMEOUT)).map_err(|_| {
         HttpResponse::error(
             500,
-            "DEV_HOST_SOCKET",
+            "PRODUCT_HOST_SOCKET",
             "could not configure request timeout",
         )
     })?;
@@ -3346,7 +3420,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
             Ok(0) => {
                 return Err(HttpResponse::error(
                     400,
-                    "DEV_HOST_REQUEST_EOF",
+                    "PRODUCT_HOST_REQUEST_EOF",
                     "request ended before headers",
                 ));
             }
@@ -3355,7 +3429,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
                 if bytes.len() > MAX_REQUEST_HEADER_BYTES + MAX_REQUEST_BODY_BYTES {
                     return Err(HttpResponse::error(
                         413,
-                        "DEV_HOST_REQUEST_BOUNDS",
+                        "PRODUCT_HOST_REQUEST_BOUNDS",
                         "request exceeds host byte limit",
                     ));
                 }
@@ -3366,7 +3440,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
                 if bytes.len() > MAX_REQUEST_HEADER_BYTES {
                     return Err(HttpResponse::error(
                         431,
-                        "DEV_HOST_HEADER_BOUNDS",
+                        "PRODUCT_HOST_HEADER_BOUNDS",
                         "request headers exceed host bound",
                     ));
                 }
@@ -3379,25 +3453,29 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
             {
                 return Err(HttpResponse::error(
                     408,
-                    "DEV_HOST_REQUEST_TIMEOUT",
+                    "PRODUCT_HOST_REQUEST_TIMEOUT",
                     "request header timeout",
                 ));
             }
             Err(_) => {
                 return Err(HttpResponse::error(
                     400,
-                    "DEV_HOST_REQUEST_READ",
+                    "PRODUCT_HOST_REQUEST_READ",
                     "could not read request",
                 ));
             }
         }
     }
     let head = std::str::from_utf8(&bytes[..header_end - 4]).map_err(|_| {
-        HttpResponse::error(400, "DEV_HOST_HEADER_UTF8", "request headers must be ASCII")
+        HttpResponse::error(
+            400,
+            "PRODUCT_HOST_HEADER_UTF8",
+            "request headers must be ASCII",
+        )
     })?;
     let mut lines = head.split("\r\n");
     let request_line = lines.next().ok_or_else(|| {
-        HttpResponse::error(400, "DEV_HOST_REQUEST_LINE", "request line is required")
+        HttpResponse::error(400, "PRODUCT_HOST_REQUEST_LINE", "request line is required")
     })?;
     let mut request_parts = request_line.split_ascii_whitespace();
     let method = request_parts.next().unwrap_or_default();
@@ -3410,7 +3488,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
     {
         return Err(HttpResponse::error(
             400,
-            "DEV_HOST_REQUEST_LINE",
+            "PRODUCT_HOST_REQUEST_LINE",
             "request line is not admitted",
         ));
     }
@@ -3419,7 +3497,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
         let Some((name, value)) = line.split_once(':') else {
             return Err(HttpResponse::error(
                 400,
-                "DEV_HOST_HEADER",
+                "PRODUCT_HOST_HEADER",
                 "request header is malformed",
             ));
         };
@@ -3431,7 +3509,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
         {
             return Err(HttpResponse::error(
                 400,
-                "DEV_HOST_HEADER",
+                "PRODUCT_HOST_HEADER",
                 "request header is not admitted",
             ));
         }
@@ -3442,7 +3520,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
     {
         return Err(HttpResponse::error(
             400,
-            "DEV_HOST_CONNECTION",
+            "PRODUCT_HOST_CONNECTION",
             "connection upgrades are not admitted",
         ));
     }
@@ -3454,13 +3532,17 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
         None => Some(0),
     }
     .ok_or_else(|| {
-        HttpResponse::error(413, "DEV_HOST_BODY_BOUNDS", "body length is not admitted")
+        HttpResponse::error(
+            413,
+            "PRODUCT_HOST_BODY_BOUNDS",
+            "body length is not admitted",
+        )
     })?;
     let mut body = bytes[header_end..].to_vec();
     if body.len() > content_length {
         return Err(HttpResponse::error(
             400,
-            "DEV_HOST_BODY_LENGTH",
+            "PRODUCT_HOST_BODY_LENGTH",
             "request has trailing bytes",
         ));
     }
@@ -3470,7 +3552,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
             Ok(0) => {
                 return Err(HttpResponse::error(
                     400,
-                    "DEV_HOST_BODY_EOF",
+                    "PRODUCT_HOST_BODY_EOF",
                     "request ended before body",
                 ));
             }
@@ -3483,14 +3565,14 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
             {
                 return Err(HttpResponse::error(
                     408,
-                    "DEV_HOST_BODY_TIMEOUT",
+                    "PRODUCT_HOST_BODY_TIMEOUT",
                     "request body timeout",
                 ));
             }
             Err(_) => {
                 return Err(HttpResponse::error(
                     400,
-                    "DEV_HOST_BODY_READ",
+                    "PRODUCT_HOST_BODY_READ",
                     "could not read request body",
                 ));
             }
@@ -3602,9 +3684,11 @@ impl HttpResponse {
     }
 
     /// Only a failure rejected before mutation is known not to have applied.
-    fn with_runtime_error(mut self, disposition: crate::ProductDevFaultDisposition) -> Self {
+    fn with_runtime_error(mut self, disposition: crate::ProductHostFaultDisposition) -> Self {
         self.commit_disposition = Some(match disposition {
-            crate::ProductDevFaultDisposition::RejectedRecoverable => CommitDisposition::NotApplied,
+            crate::ProductHostFaultDisposition::RejectedRecoverable => {
+                CommitDisposition::NotApplied
+            }
             _ => CommitDisposition::Unknown,
         });
         self
@@ -3645,9 +3729,9 @@ impl HttpResponse {
     }
 
     fn error(status: u16, code: &str, detail: &str) -> Self {
-        let body = ProductDevErrorResponse {
+        let body = ProductHostErrorResponse {
             accepted: false,
-            error: ProductDevError {
+            error: ProductHostErrorBody {
                 code: code.to_owned(),
                 diagnostic: detail.to_owned(),
             },
@@ -3712,15 +3796,15 @@ fn write_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
 /// The body of every host error response.
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProductDevErrorResponse {
+pub(crate) struct ProductHostErrorResponse {
     #[ts(type = "false")]
     accepted: bool,
-    error: ProductDevError,
+    error: ProductHostErrorBody,
 }
 
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProductDevError {
+pub(crate) struct ProductHostErrorBody {
     code: String,
     diagnostic: String,
 }
@@ -3728,12 +3812,12 @@ pub(crate) struct ProductDevError {
 /// The body of a route that takes no arguments: `{}`.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProductDevEmptyRequest {}
+pub(crate) struct ProductHostEmptyRequest {}
 
 /// `diagnostics/read`: diagnostics after a cursor, or the retained ones.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevDiagnosticsReadRequest {
+pub(crate) struct ProductHostDiagnosticsReadRequest {
     #[serde(default)]
     #[ts(optional)]
     after: Option<CanonicalU64>,
@@ -3742,27 +3826,27 @@ pub(crate) struct ProductDevDiagnosticsReadRequest {
 /// The `diagnostics/read` answer: retained diagnostics and host telemetry.
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProductDevDiagnosticsReadResponse {
+pub(crate) struct ProductHostDiagnosticsReadResponse {
     #[serde(flatten)]
-    batch: crate::ProductDevLogBatch,
-    telemetry: ProductDevTelemetrySnapshot,
+    batch: crate::ProductHostLogBatch,
+    telemetry: ProductHostTelemetrySnapshot,
 }
 
 /// A lifecycle route's body. `runtime` names the binding the operation is
 /// meant for; without it, the current one.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevLifecycleRequest {
+pub(crate) struct ProductHostLifecycleRequest {
     #[serde(default)]
     #[ts(optional)]
-    runtime: Option<crate::ProductDevRuntimeBinding>,
+    runtime: Option<crate::ProductHostRuntimeBinding>,
 }
 
 /// `control/replace`: advance the input control fence of `runtime`.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevControlRequest {
-    runtime: crate::ProductDevRuntimeBinding,
+pub(crate) struct ProductHostControlRequest {
+    runtime: crate::ProductHostRuntimeBinding,
 }
 
 /// `control/claim`: a harness takes input from `runtime`'s owner under a
@@ -3770,8 +3854,8 @@ pub(crate) struct ProductDevControlRequest {
 /// last input.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevControlClaimRequest {
-    runtime: crate::ProductDevRuntimeBinding,
+pub(crate) struct ProductHostControlClaimRequest {
+    runtime: crate::ProductHostRuntimeBinding,
     label: String,
     lease_ms: CanonicalU64,
 }
@@ -3779,7 +3863,7 @@ pub(crate) struct ProductDevControlClaimRequest {
 /// `input`: one ordered input batch.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevInputRequest {
+pub(crate) struct ProductHostInputRequest {
     #[ts(as = "Vec<runtime_input::RuntimeInputWireEvent>")]
     batch: Vec<Value>,
 }
@@ -3787,44 +3871,44 @@ pub(crate) struct ProductDevInputRequest {
 /// `advance-realtime`: the page's monotonic clock, in nanoseconds.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevRealtimeRequest {
+pub(crate) struct ProductHostRealtimeRequest {
     observed_time_ns: CanonicalU64,
 }
 
 /// `admit-external-step`: the step an external clock admits.
 #[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProductDevExternalRequest {
+pub(crate) struct ProductHostExternalRequest {
     step: CanonicalU64,
 }
 
 /// The `rusty-output-baseline` event that ends a connection's baseline.
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProductDevConnectionBaseline {
+pub(crate) struct ProductHostConnectionBaseline {
     #[serde(flatten)]
-    result: ProductDevOperationResult,
+    result: ProductHostOperationResult,
     /// The output sequence at the baseline, so a caller can wait for a
     /// later operation's outputs.
     output_through: CanonicalU64,
 }
 
 fn decode_empty(body: &[u8]) -> Result<(), HttpResponse> {
-    decode_json::<ProductDevEmptyRequest>(body).map(|_| ())
+    decode_json::<ProductHostEmptyRequest>(body).map(|_| ())
 }
 
 fn decode_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, HttpResponse> {
     if body.len() > MAX_REQUEST_BODY_BYTES {
         return Err(HttpResponse::error(
             413,
-            "DEV_HOST_BODY_BOUNDS",
+            "PRODUCT_HOST_BODY_BOUNDS",
             "request body exceeds host bound",
         ));
     }
     serde_json::from_slice(body).map_err(|_| {
         HttpResponse::error(
             400,
-            "DEV_HOST_JSON",
+            "PRODUCT_HOST_JSON",
             "request JSON is malformed or has unknown fields",
         )
     })
@@ -3837,7 +3921,7 @@ fn json_response<T: Serialize>(status: u16, value: &T) -> HttpResponse {
         }
         _ => HttpResponse::error(
             500,
-            "DEV_HOST_RESPONSE_ENCODE",
+            "PRODUCT_HOST_RESPONSE_ENCODE",
             "response could not be encoded",
         ),
     }

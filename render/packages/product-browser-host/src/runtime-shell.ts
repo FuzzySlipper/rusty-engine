@@ -1,6 +1,6 @@
 import { createProductBrowserLocalHttpAdapter } from './local-transport.js';
 import { mountProductBrowserHost } from './product-browser-host.js';
-import { BOOTSTRAP_PATH, type ProductDevBrowserBootstrap } from './generated/contracts.js';
+import { BOOTSTRAP_PATH, type ProductHostBrowserBootstrap } from './generated/contracts.js';
 
 /**
  * The runtime pack's page: reads the bootstrap the product host writes from
@@ -10,7 +10,7 @@ import { BOOTSTRAP_PATH, type ProductDevBrowserBootstrap } from './generated/con
 export async function startProductBrowserShell(root: HTMLElement): Promise<void> {
   const response = await fetch(new URL(BOOTSTRAP_PATH, document.baseURI));
   if (!response.ok) throw new Error(`Product bootstrap failed: HTTP ${String(response.status)}`);
-  const bootstrap = await response.json() as ProductDevBrowserBootstrap;
+  const bootstrap = await response.json() as ProductHostBrowserBootstrap;
   document.title = bootstrap.product.title;
   // `window`: the runtime presents the world to the desktop shell's window
   // under this page, which must let it show through.

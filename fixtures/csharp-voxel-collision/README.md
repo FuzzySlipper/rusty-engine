@@ -28,7 +28,7 @@ NativeAOT. Enable product live debug when staging and attach an Engine browser.
   a solid fill and requires the named penetration diagnostic. Later ordinary
   fixture updates must continue after this handled rejection.
 - Disposal publishes `voxel-proof/DISPOSED` and prints one disposal marker.
-  The real Dagger dev-host exercise separately proves music retirement.
+  The real Dagger product-host exercise separately proves music retirement.
 
 The geometry and collision assertions use native service receipts. Screenshots
 prove presentation remains available, not the hidden character's contact.

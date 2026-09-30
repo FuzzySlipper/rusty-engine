@@ -4,11 +4,11 @@
  * command schemas or dispatches anything except one command-line string.
  */
 import type {
-  ProductDevDebugCatalog,
-  ProductDevDebugCommandDescriptor,
-  ProductDevDiagnosticsReadRequest,
-  ProductDevDiagnosticsReadResponse,
-  ProductDevErrorResponse,
+  ProductHostDebugCatalog,
+  ProductHostDebugCommandDescriptor,
+  ProductHostDiagnosticsReadRequest,
+  ProductHostDiagnosticsReadResponse,
+  ProductHostErrorResponse,
   RuntimeDiagnosticEvent,
 } from './generated/contracts.js';
 
@@ -22,13 +22,13 @@ export interface LiveDebugResult {
 }
 
 export interface LiveDebugTransport {
-  catalog(signal?: AbortSignal): Promise<ProductDevDebugCatalog>;
+  catalog(signal?: AbortSignal): Promise<ProductHostDebugCatalog>;
   execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult>;
-  diagnostics?(after?: string, signal?: AbortSignal): Promise<ProductDevDiagnosticsReadResponse>;
+  diagnostics?(after?: string, signal?: AbortSignal): Promise<ProductHostDiagnosticsReadResponse>;
 }
 
 export interface LiveDebugHttpTransportOptions {
-  /** Defaults to the current page origin, preserving same-origin dev-host use. */
+  /** Defaults to the current page origin, preserving same-origin product-host use. */
   readonly origin?: string;
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -44,10 +44,10 @@ export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOpti
   if (origin === undefined || origin === 'null') throw new Error('A live-debug HTTP origin is required outside a browser page.');
   const url = (path: string): string => new URL(path, origin).toString();
   return {
-    async catalog(signal?: AbortSignal): Promise<ProductDevDebugCatalog> {
+    async catalog(signal?: AbortSignal): Promise<ProductHostDebugCatalog> {
       const response = await request(url(CATALOG_PATH), { method: 'GET', signal });
       if (response.status === 404) return { available: false, commands: [] };
-      return await requireSuccess(response) as ProductDevDebugCatalog;
+      return await requireSuccess(response) as ProductHostDebugCatalog;
     },
     async execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult> {
       const response = await request(url(EXECUTE_PATH), {
@@ -58,22 +58,22 @@ export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOpti
       if (response.status === 422) return { succeeded: false, message };
       throw new Error(message || `Live-debug host request failed (${response.status}).`);
     },
-    async diagnostics(after?: string, signal?: AbortSignal): Promise<ProductDevDiagnosticsReadResponse> {
-      const body: ProductDevDiagnosticsReadRequest = after === undefined ? {} : { after };
+    async diagnostics(after?: string, signal?: AbortSignal): Promise<ProductHostDiagnosticsReadResponse> {
+      const body: ProductHostDiagnosticsReadRequest = after === undefined ? {} : { after };
       const response = await request(url(DIAGNOSTICS_READ_PATH), {
         method: 'POST', signal, headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      return await requireSuccess(response) as ProductDevDiagnosticsReadResponse;
+      return await requireSuccess(response) as ProductHostDiagnosticsReadResponse;
     },
   };
 }
 
 /** Small UI/CLI-neutral helper for catalog-derived completion. */
 export function completeLiveDebug(
-  catalog: ProductDevDebugCatalog,
+  catalog: ProductHostDebugCatalog,
   prefix: string,
-): readonly ProductDevDebugCommandDescriptor[] {
+): readonly ProductHostDebugCommandDescriptor[] {
   return catalog.commands.filter((command) => command.name.startsWith(prefix));
 }
 
@@ -81,7 +81,7 @@ async function requireSuccess(response: Response): Promise<unknown> {
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     // Host errors carry a code; anything else in front of it may not.
-    const error = (body as ProductDevErrorResponse | null)?.error;
+    const error = (body as ProductHostErrorResponse | null)?.error;
     throw new Error(`${error?.code ?? `HTTP_${response.status}`}: ${error?.diagnostic ?? 'Live-debug host request failed.'}`);
   }
   return body;
@@ -92,7 +92,7 @@ async function requireSuccess(response: Response): Promise<unknown> {
  * distinct from any age fact carried in the event's own fields.
  */
 export function diagnosticEventAgeMilliseconds(
-  batch: ProductDevDiagnosticsReadResponse,
+  batch: ProductHostDiagnosticsReadResponse,
   event: RuntimeDiagnosticEvent,
 ): number | null {
   const elapsed = BigInt(batch.readMonotonicNanoseconds) - BigInt(event.monotonicNanoseconds);

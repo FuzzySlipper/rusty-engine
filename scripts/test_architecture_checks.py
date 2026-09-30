@@ -191,17 +191,17 @@ class DependencyBoundaryTests(unittest.TestCase):
         )
 
     def test_only_host_facing_crates_may_generate_typescript(self) -> None:
-        metadata = metadata_fixture(["runtime-ui", "product-dev-host", "render-host-contracts"], [])
+        metadata = metadata_fixture(["runtime-ui", "product-host", "render-host-contracts"], [])
         packages = {package["name"]: package for package in metadata["packages"]}
         packages["runtime-ui"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
-        packages["product-dev-host"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
+        packages["product-host"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
         self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
 
         packages["render-host-contracts"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
         self.assertEqual(
             dependency_boundary_check.find_violations(metadata),
             [
-                "render-host-contracts depends on ts-rs, which only product-dev-host, "
+                "render-host-contracts depends on ts-rs, which only product-host, "
                 "runtime-diagnostics, runtime-input, runtime-ui may depend on"
             ],
         )
@@ -221,7 +221,7 @@ class DependencyBoundaryTests(unittest.TestCase):
 
     def test_render_wgpu_depends_only_on_the_render_vocabulary(self) -> None:
         metadata = metadata_fixture(
-            ["render-wgpu", "render-model", "render-video", "runtime-publication", "render-stream"],
+            ["render-wgpu", "render-model", "render-video", "product-host", "render-stream"],
             [
                 ("render-wgpu", "render-model", None, "render_model"),
                 ("render-wgpu", "render-video", None, "render_video"),
@@ -232,16 +232,16 @@ class DependencyBoundaryTests(unittest.TestCase):
         self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
 
         metadata = metadata_fixture(
-            ["render-wgpu", "render-model", "runtime-publication"],
+            ["render-wgpu", "render-model", "product-host"],
             [
                 ("render-wgpu", "render-model", None, "render_model"),
-                ("render-wgpu", "runtime-publication", None, "publication"),
+                ("render-wgpu", "product-host", None, "host"),
             ],
         )
         self.assertEqual(
             dependency_boundary_check.find_violations(metadata),
             [
-                "render-wgpu depends on runtime-publication, outside the renderer's "
+                "render-wgpu depends on product-host, outside the renderer's "
                 "workspace dependencies"
             ],
         )

@@ -4,16 +4,13 @@ resolver = "2"
 members = [
     "rust/crates/rusty-cli",
     "rust/crates/render-host-contracts",
-    "rust/crates/product-dev-host",
+    "rust/crates/product-host",
     "rust/crates/runtime-diagnostics",
-    "rust/crates/runtime-session",
-    "rust/crates/runtime-publication",
     "rust/crates/csharp-engine-abi",
     "rust/crates/csharp-engine-services",
     "rust/crates/csharp-product-runtime",
     "rust/crates/runtime-lifecycle",
     "rust/crates/runtime-input",
-    "rust/crates/runtime-timeline",
     "rust/crates/runtime-ui",
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
@@ -54,16 +51,13 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-product-dev-host = { path = "rust/crates/product-dev-host" }
+product-host = { path = "rust/crates/product-host" }
 runtime-diagnostics = { path = "rust/crates/runtime-diagnostics" }
-runtime-session = { path = "rust/crates/runtime-session" }
-runtime-publication = { path = "rust/crates/runtime-publication" }
 csharp-engine-abi = { path = "rust/crates/csharp-engine-abi" }
 csharp-engine-services = { path = "rust/crates/csharp-engine-services" }
 cap-primitives = "3"
 runtime-lifecycle = { path = "rust/crates/runtime-lifecycle" }
 runtime-input = { path = "rust/crates/runtime-input" }
-runtime-timeline = { path = "rust/crates/runtime-timeline" }
 runtime-ui = { path = "rust/crates/runtime-ui" }
 render-host-contracts = { path = "rust/crates/render-host-contracts" }
 asset-import = { path = "rust/crates/asset-import" }

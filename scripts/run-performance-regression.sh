@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Emit one RUSTY_PERF JSON record per independently attributable layer: the
 # Rust appearance call stage, the managed C# update loop, and, for each loader
-# (CoreCLR and NativeAOT), the C#/Rust crossover and the product dev host's
+# (CoreCLR and NativeAOT), the C#/Rust crossover and the product host's
 # HTTP step admission. These are local regression baselines, not universal
 # pass/fail thresholds across different CPUs, operating systems, or .NET
 # runtimes.

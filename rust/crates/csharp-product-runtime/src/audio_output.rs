@@ -16,10 +16,10 @@
 //! here too, from the clip's start, beside the picture this process draws.
 
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
+use product_host::RuntimePublication;
 use render_audio::{AudioEntityPositions, AudioRealizer, RealizedAudioFact};
 use render_host_contracts::{RendererViewComposition, RendererViewTarget};
 use render_presentation::{PresentationFrameDiff, PresentationOp, VideoProjectionOp};
-use runtime_publication::RuntimePublication;
 
 use crate::{native_audio_diagnostic_code, CsharpProductRuntimeError};
 

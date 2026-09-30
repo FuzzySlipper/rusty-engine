@@ -13,43 +13,43 @@ use crate::CanonicalU64;
 /// Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevRendererStatus {
+pub struct ProductHostRendererStatus {
     pub available: bool,
-    pub widget: ProductDevRendererWidget,
+    pub widget: ProductHostRendererWidget,
     /// Why no renderer statistics are available.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diagnostic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub renderer: Option<ProductDevRendererStatistics>,
+    pub renderer: Option<ProductHostRendererStatistics>,
 }
 
 /// The renderer metrics widget every mounted live-debug panel shares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevRendererWidget {
+pub struct ProductHostRendererWidget {
     pub visible: bool,
 }
 
 /// The runtime renderer's adapter and what its recent frames cost.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevRendererStatistics {
+pub struct ProductHostRendererStatistics {
     pub adapter: String,
-    pub output: ProductDevRenderOutput,
+    pub output: ProductHostRenderOutput,
     /// The recent streamed frames; the desktop window streams nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub stream: Option<ProductDevStreamStatistics>,
+    pub stream: Option<ProductHostStreamStatistics>,
     /// The recent frames the desktop window presented.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub window: Option<ProductDevWindowStatistics>,
+    pub window: Option<ProductHostWindowStatistics>,
     /// When each recent product update that received input finished, and
     /// the step it simulated: the first frame showing that step or a later
     /// one is the first to show the input.
-    pub input_steps: Vec<ProductDevTimedStep>,
+    pub input_steps: Vec<ProductHostTimedStep>,
     /// Retained operations the renderer skipped, by kind.
     #[ts(type = "Record<string, number>")]
     pub skipped_ops: BTreeMap<String, u64>,
@@ -59,28 +59,28 @@ pub struct ProductDevRendererStatistics {
 /// What the recent streamed frames cost.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevStreamStatistics {
+pub struct ProductHostStreamStatistics {
     /// The size the most recent viewer asked for, in its pixels.
     pub viewer_size: Option<(u32, u32)>,
     pub recent_frames: usize,
     pub frames_per_second: f64,
-    pub median_ms: ProductDevStreamMedians,
+    pub median_ms: ProductHostStreamMedians,
     pub median_bytes_per_frame: f64,
     pub bytes_per_second: f64,
     /// When each recent frame was published, and the step it showed.
-    pub shown: Vec<ProductDevTimedStep>,
+    pub shown: Vec<ProductHostTimedStep>,
 }
 
 /// What the recent frames the desktop window presented cost, and when they
 /// reached it.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevWindowStatistics {
+pub struct ProductHostWindowStatistics {
     pub recent_frames: usize,
     pub frames_per_second: f64,
-    pub median_ms: ProductDevWindowMedians,
+    pub median_ms: ProductHostWindowMedians,
     /// When each recent frame was presented, and the step it showed.
-    pub shown: Vec<ProductDevTimedStep>,
+    pub shown: Vec<ProductHostTimedStep>,
     /// When recent key and mouse button events reached the window, in Unix
     /// milliseconds.
     pub inputs_received_at_unix_ms: Vec<f64>,
@@ -91,7 +91,7 @@ pub struct ProductDevWindowStatistics {
 /// the frame, and presenting it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevWindowMedians {
+pub struct ProductHostWindowMedians {
     pub acquire: f64,
     pub lock: f64,
     pub draw: f64,
@@ -102,7 +102,7 @@ pub struct ProductDevWindowMedians {
 /// milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevTimedStep {
+pub struct ProductHostTimedStep {
     pub at_unix_ms: f64,
     #[ts(type = "number")]
     pub step: u64,
@@ -111,7 +111,7 @@ pub struct ProductDevTimedStep {
 /// Median milliseconds per frame for each stage of streaming it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevStreamMedians {
+pub struct ProductHostStreamMedians {
     pub render: f64,
     pub readback: f64,
     pub encode: f64,
@@ -120,30 +120,30 @@ pub struct ProductDevStreamMedians {
 /// Answer to `engine.renderer.camera`, `.drawing` and `.frame`.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevRendererInspection {
-    pub drawing: ProductDevDrawingMode,
-    pub output: ProductDevRenderOutput,
+pub struct ProductHostRendererInspection {
+    pub drawing: ProductHostDrawingMode,
+    pub output: ProductHostRenderOutput,
     /// The simulation is held, so frames show one step.
     pub held: bool,
     /// An observer camera replaces the product's primary camera.
     pub observer: bool,
     /// The observer camera, else the primary camera, when known.
-    pub camera: Option<ProductDevCameraPose>,
+    pub camera: Option<ProductHostCameraPose>,
     /// The frame the command drew, else the last one drawn. The desktop
     /// window does not number its frames.
-    pub frame: Option<ProductDevDrawnFrame>,
+    pub frame: Option<ProductHostDrawnFrame>,
 }
 
 /// A camera pose as `engine.renderer.camera` reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevCameraPose {
+pub struct ProductHostCameraPose {
     pub position: [f64; 3],
     pub pitch_degrees: f64,
     pub yaw_degrees: f64,
 }
 
-impl From<RendererCameraPose> for ProductDevCameraPose {
+impl From<RendererCameraPose> for ProductHostCameraPose {
     fn from(pose: RendererCameraPose) -> Self {
         Self {
             position: pose.position,
@@ -156,14 +156,14 @@ impl From<RendererCameraPose> for ProductDevCameraPose {
 /// Where the runtime presents the frames it renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
-pub enum ProductDevRenderOutput {
+pub enum ProductHostRenderOutput {
     /// Streamed to the browser page.
     Stream,
     /// Presented to the desktop window, which draws every frame itself.
     Window,
 }
 
-impl ProductDevRenderOutput {
+impl ProductHostRenderOutput {
     /// Its name in `RUSTY_RENDER_OUTPUT` and the browser bootstrap.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -175,7 +175,7 @@ impl ProductDevRenderOutput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
-pub enum ProductDevDrawingMode {
+pub enum ProductHostDrawingMode {
     /// A frame for every change.
     Continuous,
     /// A frame only when a command asks for one.
@@ -185,7 +185,7 @@ pub enum ProductDevDrawingMode {
 /// A streamed frame: its sequence on the frame route and the step it shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevDrawnFrame {
+pub struct ProductHostDrawnFrame {
     #[ts(type = "number")]
     pub sequence: u64,
     #[ts(type = "number")]
@@ -195,8 +195,8 @@ pub struct ProductDevDrawnFrame {
 /// Answer to `engine.time`, `engine.time.mode` and `engine.time.advance`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevTimeAnswer {
-    pub mode: ProductDevTimeMode,
+pub struct ProductHostTimeAnswer {
+    pub mode: ProductHostTimeMode,
     /// The last admitted simulation step.
     pub simulation_step: CanonicalU64,
     pub fixed_step_hz: u32,
@@ -209,7 +209,7 @@ pub struct ProductDevTimeAnswer {
 /// Who advances simulation time. Inspection time moves only forward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
-pub enum ProductDevTimeMode {
+pub enum ProductHostTimeMode {
     Realtime,
     /// Only `engine.time.advance` advances it.
     Manual,

@@ -198,14 +198,15 @@ meaning:
   update steps without owning a product scheduler or clock.
 - [`runtime-input`](../rust/crates/runtime-input) normalizes physical/direct
   input, held state, ordering, and lifecycle fences.
-- [`runtime-timeline`](../rust/crates/runtime-timeline) carries completion binding,
-  ticket and outcome data to product callbacks; C# owns scheduling and ticket
-  meaning.
 - [`runtime-ui`](../rust/crates/runtime-ui) transports bounded copied UI
   projections and owns no DOM or gameplay state.
-- [`product-dev-host`](../rust/crates/product-dev-host) is the runtime's HTTP
-  host: it serves the browser shell, the frame stream and the live-debug routes
-  around a staged CoreCLR or NativeAOT product.
+- [`product-host`](../rust/crates/product-host) is the runtime's HTTP
+  host for both outputs: it serves the product's UI page, input, lifecycle,
+  the output stream and, in stream output, the frame stream, with the
+  live-debug routes behind `--live-debug`, around a staged CoreCLR or
+  NativeAOT product. Its `timeline` module carries completion binding, ticket
+  and outcome data to product callbacks; C# owns scheduling and ticket
+  meaning.
 - [`desktop-shell`](../rust/crates/desktop-shell) owns the native window when
   the runtime presents to it ([desktop shell](desktop-shell.md)).
 - [`csharp-product-runtime`](../rust/crates/csharp-product-runtime) loads the

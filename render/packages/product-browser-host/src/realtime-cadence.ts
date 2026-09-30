@@ -1,4 +1,4 @@
-import type { ProductDevRuntimeMode, RuntimeInputWireEvent } from './generated/contracts.js';
+import type { ProductHostRuntimeMode, RuntimeInputWireEvent } from './generated/contracts.js';
 import type { ProductBrowserRealtimeAdvanceOwner } from './product-browser-host.js';
 
 /**
@@ -8,7 +8,7 @@ import type { ProductBrowserRealtimeAdvanceOwner } from './product-browser-host.
  * without manufacturing a second DOM host.
  */
 export interface ProductBrowserCadenceDependencies {
-  readonly lifecycleMode: ProductDevRuntimeMode;
+  readonly lifecycleMode: ProductHostRuntimeMode;
   readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly isReady: () => boolean;
   readonly enqueueOperation: <T>(operation: () => Promise<T>) => Promise<T>;

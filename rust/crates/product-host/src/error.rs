@@ -1,15 +1,15 @@
 use std::{fmt, io};
 
-use crate::ProductDevFaultDisposition;
+use crate::ProductHostFaultDisposition;
 
-/// A stable, bounded diagnostic emitted by the development host.
+/// A stable, bounded diagnostic emitted by the product host.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductDevHostError {
+pub struct ProductHostError {
     code: &'static str,
     detail: String,
 }
 
-impl ProductDevHostError {
+impl ProductHostError {
     pub(crate) fn new(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
@@ -30,15 +30,15 @@ impl ProductDevHostError {
     }
 }
 
-impl fmt::Display for ProductDevHostError {
+impl fmt::Display for ProductHostError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}: {}", self.code, self.detail)
     }
 }
 
-impl std::error::Error for ProductDevHostError {}
+impl std::error::Error for ProductHostError {}
 
-impl From<runtime_diagnostics::RuntimeDiagnosticsError> for ProductDevHostError {
+impl From<runtime_diagnostics::RuntimeDiagnosticsError> for ProductHostError {
     fn from(value: runtime_diagnostics::RuntimeDiagnosticsError) -> Self {
         Self::new(value.code(), value.detail())
     }
@@ -47,17 +47,17 @@ impl From<runtime_diagnostics::RuntimeDiagnosticsError> for ProductDevHostError 
 /// A bounded runtime-owner diagnostic. It never crosses the transport as an
 /// unconstrained error display or backtrace.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductDevRuntimeError {
+pub struct ProductHostRuntimeError {
     code: String,
     diagnostic: String,
-    disposition: ProductDevFaultDisposition,
+    disposition: ProductHostFaultDisposition,
 }
 
-impl ProductDevRuntimeError {
+impl ProductHostRuntimeError {
     /// Constructs a failure that may have crossed into product or Engine
     /// ownership. Known source conditions use one of the constructors below.
     pub fn new(code: impl Into<String>, diagnostic: impl Into<String>) -> Self {
-        Self::with_disposition(code, diagnostic, ProductDevFaultDisposition::Terminal)
+        Self::with_disposition(code, diagnostic, ProductHostFaultDisposition::Terminal)
     }
 
     /// Constructs a failure known to have been rejected before mutation.
@@ -65,7 +65,7 @@ impl ProductDevRuntimeError {
         Self::with_disposition(
             code,
             diagnostic,
-            ProductDevFaultDisposition::RejectedRecoverable,
+            ProductHostFaultDisposition::RejectedRecoverable,
         )
     }
 
@@ -73,7 +73,7 @@ impl ProductDevRuntimeError {
     fn with_disposition(
         code: impl Into<String>,
         diagnostic: impl Into<String>,
-        disposition: ProductDevFaultDisposition,
+        disposition: ProductHostFaultDisposition,
     ) -> Self {
         Self {
             code: code.into(),
@@ -90,7 +90,7 @@ impl ProductDevRuntimeError {
         &self.diagnostic
     }
 
-    pub const fn disposition(&self) -> ProductDevFaultDisposition {
+    pub const fn disposition(&self) -> ProductHostFaultDisposition {
         self.disposition
     }
 }

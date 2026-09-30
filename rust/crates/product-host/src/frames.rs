@@ -35,10 +35,10 @@
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-pub const PRODUCT_DEV_FRAMES_PATH: &str = "/__rusty/product/runtime/frames";
+pub const PRODUCT_HOST_FRAMES_PATH: &str = "/__rusty/product/runtime/frames";
 /// A tool's capture: `?format=png|rgba[&width=W&height=H]`. It draws one
 /// frame at its own size and never counts as a viewer.
-pub const PRODUCT_DEV_FRAME_CAPTURE_PATH: &str = "/__rusty/product/runtime/frames/capture";
+pub const PRODUCT_HOST_FRAME_CAPTURE_PATH: &str = "/__rusty/product/runtime/frames/capture";
 /// How long one request waits for a newer frame before answering 204.
 pub const FRAME_REQUEST_WAIT: Duration = Duration::from_secs(1);
 pub(crate) const FRAME_MAGIC: &[u8; 4] = b"RSF1";
@@ -57,7 +57,7 @@ pub(crate) mod header {
     pub const WIDTH: usize = 24;
     /// u32
     pub const HEIGHT: usize = 28;
-    /// u8: a [`super::ProductDevFrameFormat`].
+    /// u8: a [`super::ProductHostFrameFormat`].
     pub const FORMAT: usize = 32;
     /// u8: [`super::FLAG_HELD`] and [`super::FLAG_VIDEO`].
     pub const FLAGS: usize = 33;
@@ -76,7 +76,7 @@ const DEFAULT_FRAME_SIZE: (u32, u32) = (1280, 720);
 const VIEWER_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProductDevFrameFormat {
+pub enum ProductHostFrameFormat {
     Jpeg = 1,
     Rgba8 = 2,
     /// Lossless; captures only.
@@ -84,10 +84,10 @@ pub enum ProductDevFrameFormat {
 }
 
 /// One rendered frame, before the stream numbers it.
-pub struct ProductDevFrame {
+pub struct ProductHostFrame {
     pub width: u32,
     pub height: u32,
-    pub format: ProductDevFrameFormat,
+    pub format: ProductHostFrameFormat,
     pub held: bool,
     /// A playing video clip covers the frame.
     pub video: bool,
@@ -98,7 +98,7 @@ pub struct ProductDevFrame {
 /// The latest rendered frame and the viewers asking for newer ones. The
 /// runtime's renderer publishes into it; the host's frame route reads it.
 #[derive(Default)]
-pub struct ProductDevFrameStream {
+pub struct ProductHostFrameStream {
     state: Mutex<FrameState>,
     changed: Condvar,
     demand_waker: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -123,7 +123,7 @@ impl FrameState {
     }
 }
 
-impl ProductDevFrameStream {
+impl ProductHostFrameStream {
     pub fn new() -> Arc<Self> {
         Arc::default()
     }
@@ -161,7 +161,7 @@ impl ProductDevFrameStream {
     }
 
     /// Numbers `frame`, makes it the latest, and returns its sequence.
-    pub fn publish(&self, frame: ProductDevFrame) -> u64 {
+    pub fn publish(&self, frame: ProductHostFrame) -> u64 {
         let mut state = self.state();
         state.sequence += 1;
         let sequence = state.sequence;
@@ -208,7 +208,7 @@ impl ProductDevFrameStream {
     }
 }
 
-fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
+fn encode_frame(sequence: u64, frame: &ProductHostFrame) -> Arc<[u8]> {
     let mut bytes = vec![0; header::LEN + frame.payload.len()];
     let mut put = |offset: usize, field: &[u8]| {
         bytes[offset..offset + field.len()].copy_from_slice(field);
@@ -233,33 +233,33 @@ fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
 /// A tool's capture request: the frame's size, or the output's when `None`,
 /// and its payload format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProductDevCaptureRequest {
+pub struct ProductHostCaptureRequest {
     pub size: Option<(u32, u32)>,
-    /// [`ProductDevFrameFormat::Png`] or [`ProductDevFrameFormat::Rgba8`].
-    pub format: ProductDevFrameFormat,
+    /// [`ProductHostFrameFormat::Png`] or [`ProductHostFrameFormat::Rgba8`].
+    pub format: ProductHostFrameFormat,
 }
 
 /// One captured frame, numbered by capture rather than by the stream, with
 /// the drawn cameras as the inspection commands report them.
-pub struct ProductDevCapture {
+pub struct ProductHostCapture {
     pub sequence: u64,
-    pub frame: ProductDevFrame,
+    pub frame: ProductHostFrame,
     pub cameras: serde_json::Value,
 }
 
 /// Draws a capture; the runtime supplies it for either render output.
-pub type ProductDevFrameCapture =
-    Arc<dyn Fn(ProductDevCaptureRequest) -> Result<ProductDevCapture, String> + Send + Sync>;
+pub type ProductHostFrameCapture =
+    Arc<dyn Fn(ProductHostCaptureRequest) -> Result<ProductHostCapture, String> + Send + Sync>;
 
 /// The capture's header and payload, in the streamed frame's layout.
-pub(crate) fn encode_capture(capture: &ProductDevCapture) -> Arc<[u8]> {
+pub(crate) fn encode_capture(capture: &ProductHostCapture) -> Arc<[u8]> {
     encode_frame(capture.sequence, &capture.frame)
 }
 
-pub(crate) fn capture_request(path: &str) -> Result<ProductDevCaptureRequest, &'static str> {
+pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &'static str> {
     let query = match path.split_once('?') {
-        Some((PRODUCT_DEV_FRAME_CAPTURE_PATH, query)) => query,
-        None if path == PRODUCT_DEV_FRAME_CAPTURE_PATH => "",
+        Some((PRODUCT_HOST_FRAME_CAPTURE_PATH, query)) => query,
+        None if path == PRODUCT_HOST_FRAME_CAPTURE_PATH => "",
         _ => return Err("unknown capture route"),
     };
     let (mut format, mut width, mut height) = (None, None, None);
@@ -268,8 +268,8 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductDevCaptureRequest, &'
         let repeated = match name {
             "format" => format
                 .replace(match value {
-                    "png" => ProductDevFrameFormat::Png,
-                    "rgba" => ProductDevFrameFormat::Rgba8,
+                    "png" => ProductHostFrameFormat::Png,
+                    "rgba" => ProductHostFrameFormat::Rgba8,
                     _ => return Err("capture format is png or rgba"),
                 })
                 .is_some(),
@@ -297,9 +297,9 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductDevCaptureRequest, &'
         (None, None) => None,
         _ => return Err("capture query needs both width and height"),
     };
-    Ok(ProductDevCaptureRequest {
+    Ok(ProductHostCaptureRequest {
         size,
-        format: format.unwrap_or(ProductDevFrameFormat::Png),
+        format: format.unwrap_or(ProductHostFrameFormat::Png),
     })
 }
 
@@ -314,8 +314,8 @@ pub(crate) struct FrameRequest {
 
 pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
     let query = match path.split_once('?') {
-        Some((PRODUCT_DEV_FRAMES_PATH, query)) => query,
-        None if path == PRODUCT_DEV_FRAMES_PATH => "",
+        Some((PRODUCT_HOST_FRAMES_PATH, query)) => query,
+        None if path == PRODUCT_HOST_FRAMES_PATH => "",
         _ => return Err("unknown frame route"),
     };
     let (mut after, mut width, mut height, mut css_width) = (None, None, None, None);
@@ -365,19 +365,19 @@ mod tests {
     #[test]
     fn a_capture_request_states_a_whole_size_and_png_or_rgba() {
         let parse =
-            |query: &str| capture_request(&format!("{PRODUCT_DEV_FRAME_CAPTURE_PATH}{query}"));
+            |query: &str| capture_request(&format!("{PRODUCT_HOST_FRAME_CAPTURE_PATH}{query}"));
         assert_eq!(
             parse(""),
-            Ok(ProductDevCaptureRequest {
+            Ok(ProductHostCaptureRequest {
                 size: None,
-                format: ProductDevFrameFormat::Png,
+                format: ProductHostFrameFormat::Png,
             })
         );
         assert_eq!(
             parse("?format=rgba&width=640&height=360"),
-            Ok(ProductDevCaptureRequest {
+            Ok(ProductHostCaptureRequest {
                 size: Some((640, 360)),
-                format: ProductDevFrameFormat::Rgba8,
+                format: ProductHostFrameFormat::Rgba8,
             })
         );
         assert!(parse("?format=jpeg").is_err());
@@ -388,11 +388,11 @@ mod tests {
         assert!(parse("?after=3").is_err());
     }
 
-    fn frame(step: u64) -> ProductDevFrame {
-        ProductDevFrame {
+    fn frame(step: u64) -> ProductHostFrame {
+        ProductHostFrame {
             width: 2,
             height: 1,
-            format: ProductDevFrameFormat::Rgba8,
+            format: ProductHostFrameFormat::Rgba8,
             held: step.is_multiple_of(2),
             video: step.is_multiple_of(3),
             step,
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_viewer_gets_the_latest_frame_then_only_newer_ones() {
-        let stream = ProductDevFrameStream::new();
+        let stream = ProductHostFrameStream::new();
         assert_eq!(stream.wanted_size(), None);
         stream.publish(frame(1));
         stream.publish(frame(2));
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn a_waiting_request_takes_the_next_frame_and_wakes_the_renderer() {
-        let stream = ProductDevFrameStream::new();
+        let stream = ProductHostFrameStream::new();
         let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = Arc::clone(&woken);
         let publisher = Arc::clone(&stream);
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn frame_query_takes_after_and_both_sides_or_neither() {
         assert_eq!(
-            frame_request(PRODUCT_DEV_FRAMES_PATH),
+            frame_request(PRODUCT_HOST_FRAMES_PATH),
             Ok(FrameRequest {
                 after: 0,
                 size: None,

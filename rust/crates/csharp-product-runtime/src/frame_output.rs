@@ -36,11 +36,12 @@ use csharp_engine_abi::{
 use csharp_engine_services::{
     AnimationRealizationFact, EngineServiceSet, GhostPlateRealizationFact, VideoRealizationFact,
 };
-use product_dev_host::{
-    ProductDevDrawingMode, ProductDevDrawnFrame, ProductDevFrameStream,
-    ProductDevRendererInspection, ProductDevRendererStatistics, ProductDevStreamMedians,
-    ProductDevStreamStatistics, ProductDevTimedStep, ProductDevWindowMedians,
-    ProductDevWindowStatistics,
+use product_host::RuntimePublication;
+use product_host::{
+    ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostFrameStream,
+    ProductHostRendererInspection, ProductHostRendererStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamFormat, StreamStats};
@@ -48,7 +49,6 @@ use render_wgpu::{
     AnimationFact, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState,
     VideoFact, VideoFailure,
 };
-use runtime_publication::RuntimePublication;
 use serde_json::{json, Value};
 
 use crate::{CsharpProductRuntimeError, RenderOutput};
@@ -94,7 +94,7 @@ pub(crate) fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeE
 pub(crate) struct FrameOutput {
     driver: Arc<SceneDriver>,
     /// The stream's render thread and frame route, when frames are streamed.
-    stream: Option<(Arc<FrameStreamer>, Arc<ProductDevFrameStream>)>,
+    stream: Option<(Arc<FrameStreamer>, Arc<ProductHostFrameStream>)>,
     next_fact_id: u64,
     next_video_fact_id: u64,
     /// When the renderer statistics C# reads (`Diagnostics.ReadRenderer`)
@@ -150,7 +150,7 @@ impl WindowTiming {
         record.inputs.push_back(at);
     }
 
-    fn statistics(&self) -> ProductDevWindowStatistics {
+    fn statistics(&self) -> ProductHostWindowStatistics {
         let record = self.record();
         let frames = &record.frames;
         let median = |stage: fn(&WindowFrame) -> Duration| {
@@ -165,14 +165,14 @@ impl WindowTiming {
                 .map_or(0.0, |span| span.as_secs_f64()),
             _ => 0.0,
         };
-        ProductDevWindowStatistics {
+        ProductHostWindowStatistics {
             recent_frames: frames.len(),
             frames_per_second: if span > 0.0 {
                 (frames.len() - 1) as f64 / span
             } else {
                 0.0
             },
-            median_ms: ProductDevWindowMedians {
+            median_ms: ProductHostWindowMedians {
                 acquire: median(|frame| frame.acquire),
                 lock: median(|frame| frame.lock),
                 draw: median(|frame| frame.draw),
@@ -220,7 +220,7 @@ impl FrameOutput {
                 };
                 let gpu = Gpu::headless().map_err(|gpu| error(gpu.to_string()))?;
                 let driver = SceneDriver::new(gpu, options);
-                let frames = ProductDevFrameStream::new();
+                let frames = ProductHostFrameStream::new();
                 let streamer =
                     FrameStreamer::start(Arc::clone(&driver), format, Arc::clone(&frames))
                         .map(Arc::new)
@@ -258,7 +258,7 @@ impl FrameOutput {
         Arc::clone(&self.driver)
     }
 
-    pub(crate) fn frames(&self) -> Option<Arc<ProductDevFrameStream>> {
+    pub(crate) fn frames(&self) -> Option<Arc<ProductHostFrameStream>> {
         self.stream.as_ref().map(|(_, frames)| Arc::clone(frames))
     }
 
@@ -266,20 +266,20 @@ impl FrameOutput {
     /// one frame at the requested size in a target of its own, so no viewer
     /// or window changes size. Window captures hold the world frame only;
     /// the product UI overlay is not in them.
-    pub(crate) fn capture(&self) -> product_dev_host::ProductDevFrameCapture {
+    pub(crate) fn capture(&self) -> product_host::ProductHostFrameCapture {
         let driver = Arc::clone(&self.driver);
         // Streamed, a capture without a size takes the stream's frame size.
         let streamer = self
             .stream
             .as_ref()
             .map(|(streamer, _)| Arc::downgrade(streamer));
-        Arc::new(move |request: product_dev_host::ProductDevCaptureRequest| {
+        Arc::new(move |request: product_host::ProductHostCaptureRequest| {
             let captured = match streamer.as_ref().and_then(std::sync::Weak::upgrade) {
                 Some(streamer) => streamer.capture(request.size),
                 None => driver.capture(request.size),
             };
             let payload = match request.format {
-                product_dev_host::ProductDevFrameFormat::Png => {
+                product_host::ProductHostFrameFormat::Png => {
                     render_wgpu::encode_png(captured.width, captured.height, &captured.rgba)?
                 }
                 _ => captured.rgba,
@@ -289,9 +289,9 @@ impl FrameOutput {
                 .as_deref()
                 .map(|composition| drawn_cameras(&composition.cameras, &captured.cameras))
                 .unwrap_or_default();
-            Ok(product_dev_host::ProductDevCapture {
+            Ok(product_host::ProductHostCapture {
                 sequence: captured.sequence,
-                frame: product_dev_host::ProductDevFrame {
+                frame: product_host::ProductHostFrame {
                     width: captured.width,
                     height: captured.height,
                     format: request.format,
@@ -405,7 +405,7 @@ impl FrameOutput {
     pub(crate) fn execute_inspection(
         &self,
         command: &str,
-    ) -> Result<ProductDevRendererInspection, String> {
+    ) -> Result<ProductHostRendererInspection, String> {
         let Some((streamer, _)) = &self.stream else {
             return self.execute_window_inspection(command);
         };
@@ -452,17 +452,17 @@ impl FrameOutput {
                 .and_then(primary_camera_pose)
         });
         let frame = drawn.or(inspection.last_drawn);
-        Ok(ProductDevRendererInspection {
+        Ok(ProductHostRendererInspection {
             drawing: if inspection.on_demand {
-                ProductDevDrawingMode::OnDemand
+                ProductHostDrawingMode::OnDemand
             } else {
-                ProductDevDrawingMode::Continuous
+                ProductHostDrawingMode::Continuous
             },
             output: RenderOutput::Stream,
             held: inspection.held,
             observer: inspection.observer.is_some(),
             camera: camera.map(Into::into),
-            frame: frame.map(|frame| ProductDevDrawnFrame {
+            frame: frame.map(|frame| ProductHostDrawnFrame {
                 sequence: frame.sequence,
                 step: frame.step,
             }),
@@ -474,7 +474,7 @@ impl FrameOutput {
     fn execute_window_inspection(
         &self,
         command: &str,
-    ) -> Result<ProductDevRendererInspection, String> {
+    ) -> Result<ProductHostRendererInspection, String> {
         let words: Vec<&str> = command.split_whitespace().collect();
         let pose = |values: &[&str]| -> Result<RendererCameraPose, String> {
             let number = |value: &str| {
@@ -503,8 +503,8 @@ impl FrameOutput {
             }
         }
         let scene = self.driver.view_state();
-        Ok(ProductDevRendererInspection {
-            drawing: ProductDevDrawingMode::Continuous,
+        Ok(ProductHostRendererInspection {
+            drawing: ProductHostDrawingMode::Continuous,
             output: RenderOutput::Window,
             held: scene.held,
             observer: scene.observer.is_some(),
@@ -603,11 +603,11 @@ impl FrameOutput {
 
     /// The renderer's adapter and what its recent frames cost, for
     /// `engine.renderer.*` and `Diagnostics.ReadRenderer`.
-    pub(crate) fn statistics(&self) -> ProductDevRendererStatistics {
+    pub(crate) fn statistics(&self) -> ProductHostRendererStatistics {
         let Some((streamer, route)) = &self.stream else {
             let (skipped_ops, last_skip) = self.driver.skipped_ops();
             let adapter = self.driver.gpu().adapter_summary();
-            return ProductDevRendererStatistics {
+            return ProductHostRendererStatistics {
                 adapter: format!("{} ({})", adapter.name, adapter.backend),
                 output: RenderOutput::Window,
                 stream: None,
@@ -630,14 +630,14 @@ impl FrameOutput {
             skipped_ops,
             last_skip,
         } = streamer.stats();
-        ProductDevRendererStatistics {
+        ProductHostRendererStatistics {
             adapter,
             output: RenderOutput::Stream,
-            stream: Some(ProductDevStreamStatistics {
+            stream: Some(ProductHostStreamStatistics {
                 viewer_size: route.wanted_size(),
                 recent_frames: frames,
                 frames_per_second,
-                median_ms: ProductDevStreamMedians {
+                median_ms: ProductHostStreamMedians {
                     render: render_ms,
                     readback: readback_ms,
                     encode: encode_ms,
@@ -656,7 +656,7 @@ impl FrameOutput {
         }
     }
 
-    fn input_steps(&self) -> Vec<ProductDevTimedStep> {
+    fn input_steps(&self) -> Vec<ProductHostTimedStep> {
         self.input_steps
             .iter()
             .map(|(at, step)| timed_step(*at, *step))
@@ -739,8 +739,8 @@ fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneStat
     }
 }
 
-fn timed_step(at: SystemTime, step: u64) -> ProductDevTimedStep {
-    ProductDevTimedStep {
+fn timed_step(at: SystemTime, step: u64) -> ProductHostTimedStep {
+    ProductHostTimedStep {
         at_unix_ms: unix_ms(at),
         step,
     }

@@ -1,11 +1,11 @@
 //! The runtime's frames streamed to the browser shell through the
-//! development host's frame route.
+//! product host's frame route.
 //!
 //! The runtime applies each product call's renderer changes to a
 //! [`SceneDriver`] (render-wgpu). The stream's render thread
 //! ([`FrameStreamer`]) draws the committed scene offscreen while a viewer is
 //! attached, reads it back, encodes it and hands it to
-//! [`ProductDevFrameStream`]. It draws as soon as a change is applied: every
+//! [`ProductHostFrameStream`]. It draws as soon as a change is applied: every
 //! step while the simulation runs, and once per change while it is held, so
 //! the last frame stays on screen and inspection can still redraw it.
 //!
@@ -24,7 +24,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use product_dev_host::{ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream};
+use product_host::{ProductHostFrame, ProductHostFrameFormat, ProductHostFrameStream};
 use render_host_contracts::{RendererCameraPose, RendererViewComposition};
 use render_wgpu::{Capture, DrawnCamera, OffscreenTarget, SceneDriver};
 
@@ -145,7 +145,7 @@ impl FrameStreamer {
     pub fn start(
         driver: Arc<SceneDriver>,
         format: StreamFormat,
-        frames: Arc<ProductDevFrameStream>,
+        frames: Arc<ProductHostFrameStream>,
     ) -> Result<Self, String> {
         let waker = Arc::downgrade(&driver);
         frames.set_demand_waker(move || {
@@ -298,7 +298,7 @@ enum Next {
 fn render_loop(
     driver: &SceneDriver,
     shared: &Shared,
-    frames: &ProductDevFrameStream,
+    frames: &ProductHostFrameStream,
     format: StreamFormat,
 ) {
     let mut target: Option<OffscreenTarget> = None;
@@ -347,10 +347,10 @@ fn render_loop(
         let (width, height) = target.size();
         let (format, payload) = match format {
             StreamFormat::Jpeg => (
-                ProductDevFrameFormat::Jpeg,
+                ProductHostFrameFormat::Jpeg,
                 encode_jpeg(&pixels, width, height),
             ),
-            StreamFormat::Rgba8 => (ProductDevFrameFormat::Rgba8, pixels.clone()),
+            StreamFormat::Rgba8 => (ProductHostFrameFormat::Rgba8, pixels.clone()),
         };
         let encoded = Instant::now();
         let mut cost = FrameCost {
@@ -362,7 +362,7 @@ fn render_loop(
             encode_ms: ms(encoded - read),
             bytes: payload.len(),
         };
-        let sequence = frames.publish(ProductDevFrame {
+        let sequence = frames.publish(ProductHostFrame {
             width,
             height,
             format,

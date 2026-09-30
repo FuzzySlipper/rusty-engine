@@ -13,26 +13,26 @@ use std::{
 use ts_rs::{TypeVisitor, TS};
 
 use crate::engine_debug::{
-    ProductDevRendererInspection, ProductDevRendererStatus, ProductDevTimeAnswer,
+    ProductHostRendererInspection, ProductHostRendererStatus, ProductHostTimeAnswer,
 };
 use crate::frames::{header, FLAG_HELD, FLAG_VIDEO, FRAME_MAGIC};
 use crate::host::{
-    ProductDevConnectionBaseline, ProductDevControlClaimRequest, ProductDevControlRequest,
-    ProductDevDiagnosticsReadRequest, ProductDevDiagnosticsReadResponse, ProductDevEmptyRequest,
-    ProductDevErrorResponse, ProductDevExternalRequest, ProductDevInputRequest,
-    ProductDevLifecycleRequest, ProductDevRealtimeRequest,
+    ProductHostConnectionBaseline, ProductHostControlClaimRequest, ProductHostControlRequest,
+    ProductHostDiagnosticsReadRequest, ProductHostDiagnosticsReadResponse, ProductHostEmptyRequest,
+    ProductHostErrorResponse, ProductHostExternalRequest, ProductHostInputRequest,
+    ProductHostLifecycleRequest, ProductHostRealtimeRequest,
 };
-use crate::model::{ProductDevRuntimeOutputWire, ProductDevTimelineCompletionWire};
+use crate::model::{ProductHostRuntimeOutputWire, ProductHostTimelineCompletionWire};
 use crate::{
-    ProductDevBrowserBootstrap, ProductDevBrowserDiagnosticsReport,
-    ProductDevBrowserDiagnosticsResult, ProductDevCursorMode, ProductDevDebugCatalog,
-    ProductDevFrameFormat, ProductDevInputResult, ProductDevOperationResult,
-    ProductDevRenderOutput, ProductDevTimelineCompletionResult, PRODUCT_DEV_BOOTSTRAP_PATH,
-    PRODUCT_DEV_FRAMES_PATH, PRODUCT_DEV_RUNTIME_BASE_PATH,
+    ProductHostBrowserBootstrap, ProductHostBrowserDiagnosticsReport,
+    ProductHostBrowserDiagnosticsResult, ProductHostCursorMode, ProductHostDebugCatalog,
+    ProductHostFrameFormat, ProductHostInputResult, ProductHostOperationResult,
+    ProductHostRenderOutput, ProductHostTimelineCompletionResult, PRODUCT_HOST_BOOTSTRAP_PATH,
+    PRODUCT_HOST_FRAMES_PATH, PRODUCT_HOST_RUNTIME_BASE_PATH,
 };
 
 const HEADER: &str = "\
-// Generated from the Rust wire types by product-dev-host's
+// Generated from the Rust wire types by product-host's
 // `typescript_contracts_are_current` test. Do not edit: change the Rust types
 // and run scripts/generate-typescript-contracts.sh.
 ";
@@ -93,7 +93,7 @@ export const FRAME_STREAM_HEADER = {{
   formats: {{ jpeg: {jpeg}, rgba8: {rgba8} }},
   flags: {{ held: {held}, video: {video} }},
 }} as const;",
-        path = PRODUCT_DEV_FRAMES_PATH,
+        path = PRODUCT_HOST_FRAMES_PATH,
         magic = u32::from_le_bytes(*FRAME_MAGIC),
         header_bytes = header::HEADER_BYTES,
         sequence = header::SEQUENCE,
@@ -104,8 +104,8 @@ export const FRAME_STREAM_HEADER = {{
         flags = header::FLAGS,
         payload_bytes = header::PAYLOAD_BYTES,
         len = header::LEN,
-        jpeg = ProductDevFrameFormat::Jpeg as u8,
-        rgba8 = ProductDevFrameFormat::Rgba8 as u8,
+        jpeg = ProductHostFrameFormat::Jpeg as u8,
+        rgba8 = ProductHostFrameFormat::Rgba8 as u8,
         held = FLAG_HELD,
         video = FLAG_VIDEO,
     )
@@ -119,46 +119,46 @@ fn packages() -> Vec<(&'static str, String)> {
                 .constant(frame_stream_constants())
                 .with::<runtime_input::RuntimeInputWireEvent>()
                 .with::<runtime_ui::RuntimeUiProjectionWire>()
-                .with::<ProductDevRenderOutput>()
-                .with::<ProductDevCursorMode>()
+                .with::<ProductHostRenderOutput>()
+                .with::<ProductHostCursorMode>()
                 .render(),
         ),
         (
             "product-browser-host",
             Contracts::default()
                 .constant(format!(
-                    "/** The runtime's route prefix. */\nexport const RUNTIME_BASE_PATH = {PRODUCT_DEV_RUNTIME_BASE_PATH:?};\n\n\
-                     /** Where the page reads its `ProductDevBrowserBootstrap`. */\nexport const BOOTSTRAP_PATH = {PRODUCT_DEV_BOOTSTRAP_PATH:?};"
+                    "/** The runtime's route prefix. */\nexport const RUNTIME_BASE_PATH = {PRODUCT_HOST_RUNTIME_BASE_PATH:?};\n\n\
+                     /** Where the page reads its `ProductHostBrowserBootstrap`. */\nexport const BOOTSTRAP_PATH = {PRODUCT_HOST_BOOTSTRAP_PATH:?};"
                 ))
-                .with::<ProductDevBrowserBootstrap>()
-                .with::<ProductDevRuntimeOutputWire>()
-                .with::<ProductDevConnectionBaseline>()
-                .with::<ProductDevOperationResult>()
-                .with::<ProductDevInputResult>()
-                .with::<ProductDevTimelineCompletionWire>()
-                .with::<ProductDevTimelineCompletionResult>()
-                .with::<ProductDevBrowserDiagnosticsReport>()
-                .with::<ProductDevBrowserDiagnosticsResult>()
-                .with::<ProductDevEmptyRequest>()
-                .with::<ProductDevLifecycleRequest>()
-                .with::<ProductDevControlRequest>()
-                .with::<ProductDevControlClaimRequest>()
-                .with::<ProductDevInputRequest>()
-                .with::<ProductDevRealtimeRequest>()
-                .with::<ProductDevExternalRequest>()
-                .with::<ProductDevDebugCatalog>()
-                .with::<ProductDevRendererInspection>()
-                .with::<ProductDevTimeAnswer>()
+                .with::<ProductHostBrowserBootstrap>()
+                .with::<ProductHostRuntimeOutputWire>()
+                .with::<ProductHostConnectionBaseline>()
+                .with::<ProductHostOperationResult>()
+                .with::<ProductHostInputResult>()
+                .with::<ProductHostTimelineCompletionWire>()
+                .with::<ProductHostTimelineCompletionResult>()
+                .with::<ProductHostBrowserDiagnosticsReport>()
+                .with::<ProductHostBrowserDiagnosticsResult>()
+                .with::<ProductHostEmptyRequest>()
+                .with::<ProductHostLifecycleRequest>()
+                .with::<ProductHostControlRequest>()
+                .with::<ProductHostControlClaimRequest>()
+                .with::<ProductHostInputRequest>()
+                .with::<ProductHostRealtimeRequest>()
+                .with::<ProductHostExternalRequest>()
+                .with::<ProductHostDebugCatalog>()
+                .with::<ProductHostRendererInspection>()
+                .with::<ProductHostTimeAnswer>()
                 .render(),
         ),
         (
             "live-debug-client",
             Contracts::default()
-                .with::<ProductDevDebugCatalog>()
-                .with::<ProductDevDiagnosticsReadRequest>()
-                .with::<ProductDevDiagnosticsReadResponse>()
-                .with::<ProductDevErrorResponse>()
-                .with::<ProductDevRendererStatus>()
+                .with::<ProductHostDebugCatalog>()
+                .with::<ProductHostDiagnosticsReadRequest>()
+                .with::<ProductHostDiagnosticsReadResponse>()
+                .with::<ProductHostErrorResponse>()
+                .with::<ProductHostRendererStatus>()
                 .render(),
         ),
     ]

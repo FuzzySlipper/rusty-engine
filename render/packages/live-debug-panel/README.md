@@ -16,7 +16,7 @@ import { mountLiveDebugPanel, mountRendererMetricsWidget } from '@rusty-engine/l
 const debugPanel = await mountLiveDebugPanel(debugElement, {
   enabled: true,
   presentation: 'dock', // 'inline' | 'dock' | 'overlay'
-  // Omit transport for the same-origin dev-host endpoints.
+  // Omit transport for the same-origin product-host endpoints.
 });
 const metrics = mountRendererMetricsWidget(metricsElement, { initiallyVisible: true });
 

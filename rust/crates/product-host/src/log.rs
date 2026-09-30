@@ -7,17 +7,17 @@ use std::{
 };
 
 pub use runtime_diagnostics::{
-    RuntimeDiagnosticDisposition as ProductDevLogDisposition,
-    RuntimeDiagnosticEvent as ProductDevLogEvent,
-    RuntimeDiagnosticSeverity as ProductDevLogSeverity,
-    RuntimeDiagnosticsBatch as ProductDevLogBatch, RuntimeDiagnosticsSink,
+    RuntimeDiagnosticDisposition as ProductHostLogDisposition,
+    RuntimeDiagnosticEvent as ProductHostLogEvent,
+    RuntimeDiagnosticSeverity as ProductHostLogSeverity,
+    RuntimeDiagnosticsBatch as ProductHostLogBatch, RuntimeDiagnosticsSink,
 };
 use runtime_diagnostics::{
     RuntimeDiagnosticEvent, RuntimeDiagnosticsConfig, RuntimeDiagnosticsError,
     RuntimeDiagnosticsSnapshot, RuntimeDiagnosticsWriter,
 };
 
-use crate::ProductDevHostError;
+use crate::ProductHostError;
 
 const MAX_LINE_BYTES: usize = 4 * 1024;
 const DEFAULT_ROTATE_BYTES: u64 = 6 * 1024 * 1024;
@@ -25,14 +25,14 @@ const MAX_RETENTION_FILES: u8 = 4;
 
 /// Host filesystem policy around the neutral retained diagnostic sink.
 #[derive(Debug, Clone)]
-pub struct ProductDevLogConfig {
+pub struct ProductHostLogConfig {
     path: Option<PathBuf>,
     ring_capacity: usize,
     rotate_bytes: u64,
     retention_files: u8,
 }
 
-impl Default for ProductDevLogConfig {
+impl Default for ProductHostLogConfig {
     fn default() -> Self {
         Self {
             path: diagnostic_path_from_environment(),
@@ -43,7 +43,7 @@ impl Default for ProductDevLogConfig {
     }
 }
 
-impl ProductDevLogConfig {
+impl ProductHostLogConfig {
     /// Keep retained diagnostics for relay without writing a second host file.
     pub fn without_file(mut self) -> Self {
         self.path = None;
@@ -70,38 +70,38 @@ impl ProductDevLogConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProductDevLogWriterState {
+pub enum ProductHostLogWriterState {
     Disabled,
     Ready,
     Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductDevLogSnapshot {
-    pub events: Vec<ProductDevLogEvent>,
+pub struct ProductHostLogSnapshot {
+    pub events: Vec<ProductHostLogEvent>,
     pub warning_count: u64,
     pub error_count: u64,
     pub dropped_count: u64,
     pub stderr_fallback_count: u64,
-    pub writer_state: ProductDevLogWriterState,
+    pub writer_state: ProductHostLogWriterState,
 }
 
 /// Host compatibility wrapper around the neutral sink. The handle given to
 /// Engine services is cloned from this object, so C#-originated diagnostics
 /// use the same ring and durable writer as host and worker diagnostics.
 #[derive(Clone)]
-pub struct ProductDevLog {
+pub struct ProductHostLog {
     sink: RuntimeDiagnosticsSink,
     writer: Arc<HostFileDiagnosticsWriter>,
 }
 
-impl ProductDevLog {
-    pub fn new(config: ProductDevLogConfig) -> Result<Self, ProductDevHostError> {
+impl ProductHostLog {
+    pub fn new(config: ProductHostLogConfig) -> Result<Self, ProductHostError> {
         if config.rotate_bytes < MAX_LINE_BYTES as u64
             || !(1..=MAX_RETENTION_FILES).contains(&config.retention_files)
         {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_LOG_CONFIG",
+            return Err(ProductHostError::new(
+                "PRODUCT_HOST_LOG_CONFIG",
                 "diagnostic log configuration is outside fixed bounds",
             ));
         }
@@ -114,7 +114,7 @@ impl ProductDevLog {
             RuntimeDiagnosticsConfig::default().with_ring_capacity(config.ring_capacity),
             Some(writer.clone()),
         )
-        .map_err(ProductDevHostError::from)?;
+        .map_err(ProductHostError::from)?;
         Ok(Self { sink, writer })
     }
 
@@ -122,7 +122,7 @@ impl ProductDevLog {
         self.sink.clone()
     }
 
-    pub fn publish(&self, event: ProductDevLogEvent) -> Result<(), RuntimeDiagnosticsError> {
+    pub fn publish(&self, event: ProductHostLogEvent) -> Result<(), RuntimeDiagnosticsError> {
         self.sink.publish(event)
     }
 
@@ -134,14 +134,14 @@ impl ProductDevLog {
         self.sink.now_monotonic_nanoseconds()
     }
 
-    pub fn snapshot(&self) -> ProductDevLogSnapshot {
+    pub fn snapshot(&self) -> ProductHostLogSnapshot {
         let RuntimeDiagnosticsSnapshot {
             events,
             warning_count,
             error_count,
             dropped_count,
         } = self.sink.snapshot();
-        ProductDevLogSnapshot {
+        ProductHostLogSnapshot {
             events,
             warning_count,
             error_count,
@@ -151,7 +151,7 @@ impl ProductDevLog {
         }
     }
 
-    pub fn read_after(&self, after: Option<u64>) -> ProductDevLogBatch {
+    pub fn read_after(&self, after: Option<u64>) -> ProductHostLogBatch {
         self.sink.read_after(after)
     }
 }
@@ -188,11 +188,11 @@ impl HostFileDiagnosticsWriter {
         }
     }
 
-    fn state(&self) -> ProductDevLogWriterState {
+    fn state(&self) -> ProductHostLogWriterState {
         match *self.state.lock().expect("diagnostic writer lock") {
-            HostFileWriterState::Disabled => ProductDevLogWriterState::Disabled,
-            HostFileWriterState::Ready { .. } => ProductDevLogWriterState::Ready,
-            HostFileWriterState::Failed => ProductDevLogWriterState::Failed,
+            HostFileWriterState::Disabled => ProductHostLogWriterState::Disabled,
+            HostFileWriterState::Ready { .. } => ProductHostLogWriterState::Ready,
+            HostFileWriterState::Failed => ProductHostLogWriterState::Failed,
         }
     }
 
@@ -243,7 +243,7 @@ impl RuntimeDiagnosticsWriter for HostFileDiagnosticsWriter {
             if matches!(*state, HostFileWriterState::Ready { .. }) {
                 *state = HostFileWriterState::Failed;
             }
-            self.fallback("DEV_HOST_LOG_FLUSH", detail);
+            self.fallback("PRODUCT_HOST_LOG_FLUSH", detail);
         }
         result
     }
@@ -368,16 +368,16 @@ mod tests {
 
     #[test]
     fn relay_only_log_retains_events_without_a_file_writer() {
-        let log = ProductDevLog::new(
-            ProductDevLogConfig::default()
+        let log = ProductHostLog::new(
+            ProductHostLogConfig::default()
                 .with_path("unused-relay-diagnostics.ndjson")
                 .without_file(),
         )
         .unwrap();
         log.publish(
-            ProductDevLogEvent::new(
-                ProductDevLogSeverity::Info,
-                ProductDevLogDisposition::Accepted,
+            ProductHostLogEvent::new(
+                ProductHostLogSeverity::Info,
+                ProductHostLogDisposition::Accepted,
                 "product",
                 "DISPOSED",
                 "disposed",
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(log.snapshot().events.len(), 1);
         assert_eq!(
             log.snapshot().writer_state,
-            ProductDevLogWriterState::Disabled
+            ProductHostLogWriterState::Disabled
         );
     }
 
@@ -398,8 +398,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rusty-engine-log-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let path = root.join("events.ndjson");
-        let log = ProductDevLog::new(
-            ProductDevLogConfig::default()
+        let log = ProductHostLog::new(
+            ProductHostLogConfig::default()
                 .with_path(&path)
                 .with_rotation(4096, 3)
                 .with_ring_capacity(2),
@@ -408,9 +408,9 @@ mod tests {
         for index in 0..6 {
             log.handle()
                 .publish(
-                    ProductDevLogEvent::new(
-                        ProductDevLogSeverity::Warning,
-                        ProductDevLogDisposition::RejectedRecoverable,
+                    ProductHostLogEvent::new(
+                        ProductHostLogSeverity::Warning,
+                        ProductHostLogDisposition::RejectedRecoverable,
                         "host",
                         format!("CODE_{index}"),
                         "x".repeat(1_000),

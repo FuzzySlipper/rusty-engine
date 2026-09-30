@@ -2,7 +2,7 @@
 //!
 //! The crate owns reusable asset definitions, validation, locks, material
 //! projections, contextual fallbacks, canonical authored JSON, and local
-//! change-impact analysis. It has no renderer, filesystem, runtime-session, or
+//! change-impact analysis. It has no renderer, filesystem, runtime session, or
 //! replay dependency.
 
 #![forbid(unsafe_code)]

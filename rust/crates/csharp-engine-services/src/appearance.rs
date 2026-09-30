@@ -9708,7 +9708,7 @@ fn animation_feedback_text(value: &str) -> NativeAnimationFeedbackText {
     let bytes = value.as_bytes();
     debug_assert!(
         bytes.len() <= 96,
-        "ProductDev ingress bounds inline animation text"
+        "ProductHost ingress bounds inline animation text"
     );
     let mut out = NativeAnimationFeedbackText::default();
     let length = bytes.len();

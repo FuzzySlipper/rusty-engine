@@ -1,14 +1,14 @@
 //! Forward-only inspection time, admitted by the ordinary lifecycle owner.
 use super::*;
 
-use product_dev_host::ProductDevTimeAnswer;
-pub(super) use product_dev_host::ProductDevTimeMode as TimeMode;
+use product_host::ProductHostTimeAnswer;
+pub(super) use product_host::ProductHostTimeMode as TimeMode;
 
 impl CsharpProductRuntime {
     pub(super) fn execute_time_debug(
         &mut self,
         command: &str,
-    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
         let words: Vec<_> = command.split_whitespace().collect();
         let mut outputs = Vec::new();
         let mut advanced = 0_u32;
@@ -58,7 +58,7 @@ impl CsharpProductRuntime {
                 )
             }
         }
-        let message = serde_json::to_string(&ProductDevTimeAnswer {
+        let message = serde_json::to_string(&ProductHostTimeAnswer {
             mode: self.playtest_time,
             simulation_step: CanonicalU64::new(
                 self.lifecycle.readout().admitted_simulation_steps(),
@@ -68,13 +68,13 @@ impl CsharpProductRuntime {
             world_held: self.playtest_time != TimeMode::Realtime,
         })
         .map_err(|error| {
-            ProductDevRuntimeError::new(
+            ProductHostRuntimeError::new(
                 "CSHARP_TIME_ENCODE",
                 format!("time answer could not be encoded: {error}"),
             )
         })?;
-        ProductDevRuntimeReceipt::new(
-            ProductDevDebugResult::new(true, message).with_readout(self.readout()),
+        ProductHostRuntimeReceipt::new(
+            ProductHostDebugResult::new(true, message).with_readout(self.readout()),
             outputs,
         )
         .map_err(host_runtime_error)
@@ -83,9 +83,9 @@ impl CsharpProductRuntime {
 
 fn time_error(
     message: &str,
-) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
-    ProductDevRuntimeReceipt::new(
-        ProductDevDebugResult::new(false, message.to_owned()),
+) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
+    ProductHostRuntimeReceipt::new(
+        ProductHostDebugResult::new(false, message.to_owned()),
         Vec::new(),
     )
     .map_err(host_runtime_error)

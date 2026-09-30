@@ -1100,7 +1100,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "netcorehost",
- "product-dev-host",
+ "product-host",
  "render-audio",
  "render-export",
  "render-host-contracts",
@@ -1108,12 +1108,8 @@ dependencies = [
  "render-presentation",
  "render-stream",
  "render-wgpu",
- "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
- "runtime-publication",
- "runtime-session",
- "runtime-timeline",
  "runtime-ui",
  "serde",
  "serde_json",
@@ -4067,7 +4063,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "product-dev-host"
+name = "product-host"
 version = "0.1.0"
 dependencies = [
  "render-host-contracts",
@@ -4076,9 +4072,6 @@ dependencies = [
  "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
- "runtime-publication",
- "runtime-session",
- "runtime-timeline",
  "runtime-ui",
  "serde",
  "serde_json",
@@ -4380,7 +4373,7 @@ name = "render-stream"
 version = "0.1.0"
 dependencies = [
  "jpeg-encoder",
- "product-dev-host",
+ "product-host",
  "render-host-contracts",
  "render-wgpu",
 ]
@@ -4483,32 +4476,6 @@ dependencies = [
 [[package]]
 name = "runtime-lifecycle"
 version = "0.1.0"
-
-[[package]]
-name = "runtime-publication"
-version = "0.1.0"
-dependencies = [
- "render-host-contracts",
- "render-model",
- "render-presentation",
- "runtime-input",
- "runtime-lifecycle",
- "runtime-session",
- "runtime-ui",
- "serde_json",
-]
-
-[[package]]
-name = "runtime-session"
-version = "0.1.0"
-
-[[package]]
-name = "runtime-timeline"
-version = "0.1.0"
-dependencies = [
- "runtime-lifecycle",
- "serde_json",
-]
 
 [[package]]
 name = "runtime-ui"

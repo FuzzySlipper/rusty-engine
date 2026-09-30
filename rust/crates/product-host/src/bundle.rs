@@ -3,58 +3,58 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::{ProductDevHostError, ProductDevRenderOutput, ProductDevRuntimeMode};
+use crate::{ProductHostError, ProductHostRenderOutput, ProductHostRuntimeMode};
 
 /// The generated Product Bundle entry point served at the local origin root.
-pub const PRODUCT_DEV_INDEX_PATH: &str = "index.html";
-/// Where the runtime pack's page reads [`ProductDevBrowserBootstrap`].
-pub const PRODUCT_DEV_BOOTSTRAP_PATH: &str = "product-bootstrap.json";
+pub const PRODUCT_HOST_INDEX_PATH: &str = "index.html";
+/// Where the runtime pack's page reads [`ProductHostBrowserBootstrap`].
+pub const PRODUCT_HOST_BOOTSTRAP_PATH: &str = "product-bootstrap.json";
 
 /// What the runtime pack's page needs to mount a product: the product host
 /// writes it from the product's manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBrowserBootstrap {
-    pub product: ProductDevBootstrapProduct,
-    pub ui: ProductDevBootstrapUi,
-    pub lifecycle: ProductDevBootstrapLifecycle,
-    pub input: ProductDevBootstrapInput,
+pub struct ProductHostBrowserBootstrap {
+    pub product: ProductHostBootstrapProduct,
+    pub ui: ProductHostBootstrapUi,
+    pub lifecycle: ProductHostBootstrapLifecycle,
+    pub input: ProductHostBootstrapInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub ui_projection: Option<ProductDevBootstrapUiProjection>,
-    pub renderer: ProductDevBootstrapRenderer,
+    pub ui_projection: Option<ProductHostBootstrapUiProjection>,
+    pub renderer: ProductHostBootstrapRenderer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBootstrapProduct {
+pub struct ProductHostBootstrapProduct {
     pub id: String,
     pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBootstrapUi {
+pub struct ProductHostBootstrapUi {
     /// The product UI module, relative to the page: `product-ui/...`.
     pub entry: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBootstrapLifecycle {
-    pub mode: ProductDevRuntimeMode,
+pub struct ProductHostBootstrapLifecycle {
+    pub mode: ProductHostRuntimeMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBootstrapInput {
-    pub cursor_mode: ProductDevCursorMode,
+pub struct ProductHostBootstrapInput {
+    pub cursor_mode: ProductHostCursorMode,
 }
 
 /// How gameplay holds the pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "kebab-case")]
-pub enum ProductDevCursorMode {
+pub enum ProductHostCursorMode {
     PointerLock,
     Unlocked,
 }
@@ -62,27 +62,27 @@ pub enum ProductDevCursorMode {
 /// The product UI projection stream and contract the page admits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBootstrapUiProjection {
+pub struct ProductHostBootstrapUiProjection {
     pub expected_stream: String,
     pub expected_contract: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ProductDevBootstrapRenderer {
+pub struct ProductHostBootstrapRenderer {
     /// The page shows the runtime's frames, or lets the desktop window show
     /// through.
-    pub output: ProductDevRenderOutput,
+    pub output: ProductHostRenderOutput,
 }
 
 fn validate_bundle_entry_metadata(
     path: &str,
     content_type: &str,
-) -> Result<String, ProductDevHostError> {
+) -> Result<String, ProductHostError> {
     let path = normalize_path(path)?;
     if !is_allowed_content_type(content_type) {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_BUNDLE_CONTENT_TYPE",
+        return Err(ProductHostError::new(
+            "PRODUCT_HOST_BUNDLE_CONTENT_TYPE",
             "bundle resource content type is not admitted",
         ));
     }
@@ -91,18 +91,18 @@ fn validate_bundle_entry_metadata(
 
 /// One pre-admitted immutable browser resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductDevBundleEntry {
+pub struct ProductHostBundleEntry {
     path: String,
     content_type: String,
     bytes: Arc<[u8]>,
 }
 
-impl ProductDevBundleEntry {
+impl ProductHostBundleEntry {
     pub fn new(
         path: impl Into<String>,
         content_type: impl Into<String>,
         bytes: impl Into<Arc<[u8]>>,
-    ) -> Result<Self, ProductDevHostError> {
+    ) -> Result<Self, ProductHostError> {
         let bytes = bytes.into();
         let content_type = content_type.into();
         let path = validate_bundle_entry_metadata(&path.into(), &content_type)?;
@@ -134,16 +134,16 @@ impl ProductDevBundleEntry {
 /// The server never reads product directories or generated artifacts after
 /// construction; this prevents runtime source reach-through after relocation.
 #[derive(Debug, Clone)]
-pub struct ProductDevBundle {
-    entries: BTreeMap<String, ProductDevBundleEntry>,
+pub struct ProductHostBundle {
+    entries: BTreeMap<String, ProductHostBundleEntry>,
     total_bytes: usize,
 }
 
-impl ProductDevBundle {
-    pub fn new(entries: Vec<ProductDevBundleEntry>) -> Result<Self, ProductDevHostError> {
+impl ProductHostBundle {
+    pub fn new(entries: Vec<ProductHostBundleEntry>) -> Result<Self, ProductHostError> {
         if entries.is_empty() {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_BUNDLE_ENTRY_BOUNDS",
+            return Err(ProductHostError::new(
+                "PRODUCT_HOST_BUNDLE_ENTRY_BOUNDS",
                 "bundle must contain at least one resource",
             ));
         }
@@ -151,18 +151,18 @@ impl ProductDevBundle {
         let mut total_bytes = 0_usize;
         for entry in entries {
             total_bytes = total_bytes.checked_add(entry.bytes.len()).ok_or_else(|| {
-                ProductDevHostError::new("DEV_HOST_BUNDLE_BOUNDS", "bundle byte total overflowed")
+                ProductHostError::new("PRODUCT_HOST_BUNDLE_BOUNDS", "bundle byte total overflowed")
             })?;
             if map.insert(entry.path.clone(), entry).is_some() {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_BUNDLE_DUPLICATE",
+                return Err(ProductHostError::new(
+                    "PRODUCT_HOST_BUNDLE_DUPLICATE",
                     "bundle contains duplicate normalized paths",
                 ));
             }
         }
-        if !map.contains_key(PRODUCT_DEV_INDEX_PATH) {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_BUNDLE_INDEX_REQUIRED",
+        if !map.contains_key(PRODUCT_HOST_INDEX_PATH) {
+            return Err(ProductHostError::new(
+                "PRODUCT_HOST_BUNDLE_INDEX_REQUIRED",
                 "bundle must contain index.html",
             ));
         }
@@ -172,9 +172,9 @@ impl ProductDevBundle {
         })
     }
 
-    pub(crate) fn get(&self, request_path: &str) -> Option<&ProductDevBundleEntry> {
+    pub(crate) fn get(&self, request_path: &str) -> Option<&ProductHostBundleEntry> {
         let path = if request_path == "/" {
-            PRODUCT_DEV_INDEX_PATH
+            PRODUCT_HOST_INDEX_PATH
         } else {
             request_path.strip_prefix('/')?
         };
@@ -185,12 +185,12 @@ impl ProductDevBundle {
         self.total_bytes
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &ProductDevBundleEntry> {
+    pub fn entries(&self) -> impl Iterator<Item = &ProductHostBundleEntry> {
         self.entries.values()
     }
 }
 
-fn normalize_path(value: &str) -> Result<String, ProductDevHostError> {
+fn normalize_path(value: &str) -> Result<String, ProductHostError> {
     if value.is_empty()
         || value.len() > 512
         || value.starts_with('/')
@@ -202,8 +202,8 @@ fn normalize_path(value: &str) -> Result<String, ProductDevHostError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
     {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_BUNDLE_PATH",
+        return Err(ProductHostError::new(
+            "PRODUCT_HOST_BUNDLE_PATH",
             "bundle path must be a bounded normalized relative ASCII path",
         ));
     }
@@ -234,12 +234,12 @@ fn is_allowed_content_type(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::ProductDevBundleEntry;
+    use super::ProductHostBundleEntry;
 
     #[test]
     fn admits_bounded_wav_bundle_bytes_without_opening_a_product_path() {
         let entry =
-            ProductDevBundleEntry::new("content/renderer/theme.wav", "audio/wav", vec![0_u8; 44])
+            ProductHostBundleEntry::new("content/renderer/theme.wav", "audio/wav", vec![0_u8; 44])
                 .expect("WAV content type is an admitted immutable bundle resource");
         assert_eq!(entry.path(), "content/renderer/theme.wav");
         assert_eq!(entry.content_type(), "audio/wav");
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn admits_bounded_packed_mesh_bundle_bytes_with_the_renderer_media_type() {
-        let entry = ProductDevBundleEntry::new(
+        let entry = ProductHostBundleEntry::new(
             "content/renderer/packed.rmesh",
             "application/octet-stream",
             vec![0_u8; 16],
@@ -259,9 +259,11 @@ mod tests {
 
     #[test]
     fn rejects_media_types_outside_the_fixed_bundle_allowlist() {
-        let error = ProductDevBundleEntry::new("content/renderer/theme.m4a", "audio/mp4", vec![1])
+        let error = ProductHostBundleEntry::new("content/renderer/theme.m4a", "audio/mp4", vec![1])
             .expect_err("unadmitted media type");
-        assert!(error.to_string().contains("DEV_HOST_BUNDLE_CONTENT_TYPE"));
+        assert!(error
+            .to_string()
+            .contains("PRODUCT_HOST_BUNDLE_CONTENT_TYPE"));
     }
 
     #[test]
@@ -269,12 +271,12 @@ mod tests {
         let body: std::sync::Arc<[u8]> = vec![7; 64 * 1024 * 1024 + 1].into();
         let mut entries =
             vec![
-                ProductDevBundleEntry::new("index.html", "text/html; charset=utf-8", vec![])
+                ProductHostBundleEntry::new("index.html", "text/html; charset=utf-8", vec![])
                     .unwrap(),
             ];
         for index in 0..4 {
             entries.push(
-                ProductDevBundleEntry::new(
+                ProductHostBundleEntry::new(
                     format!("content/large-{index}.bin"),
                     "application/octet-stream",
                     body.clone(),
@@ -284,7 +286,7 @@ mod tests {
         }
         for index in 0..4096 {
             entries.push(
-                ProductDevBundleEntry::new(
+                ProductHostBundleEntry::new(
                     format!("content/small-{index}.bin"),
                     "application/octet-stream",
                     vec![],
@@ -292,7 +294,7 @@ mod tests {
                 .unwrap(),
             );
         }
-        let bundle = super::ProductDevBundle::new(entries).unwrap();
+        let bundle = super::ProductHostBundle::new(entries).unwrap();
         assert_eq!(bundle.total_bytes(), 4 * body.len());
         let served = bundle.get("/content/large-3.bin").unwrap();
         assert!(std::sync::Arc::ptr_eq(&body, &served.shared_bytes()));

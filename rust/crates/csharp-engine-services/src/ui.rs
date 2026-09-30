@@ -203,7 +203,7 @@ unsafe extern "C" fn publish_ui_projection(
         return 0;
     }
     // SAFETY: `context` is a stable pointer to the Box retained by
-    // `CsharpProductRuntime`, and calls are serialized by the development host.
+    // `CsharpProductRuntime`, and calls are serialized by the product host.
     let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
     // SAFETY: all raw callback pointers are validated and copied by this helper.
     match unsafe { bridge.stage_projection(projection) } {

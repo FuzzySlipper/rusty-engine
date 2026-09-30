@@ -1,7 +1,0 @@
-[package]
-name = "runtime-session"
-version.workspace = true
-edition.workspace = true
-
-[lints]
-workspace = true

@@ -1,3 +1,8 @@
+//! Host-neutral completion data transported to the C# product callback.
+//!
+//! Scheduling and ticket ownership belong to the product. This module does not
+//! retain a queue, invoke work, or own a clock or product state.
+
 use std::fmt;
 
 use runtime_lifecycle::{

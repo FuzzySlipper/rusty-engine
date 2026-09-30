@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ProductDevRuntimeOutput, RuntimeInputWireEvent } from './generated/contracts.js';
+import type { ProductHostRuntimeOutput, RuntimeInputWireEvent } from './generated/contracts.js';
 import {
   bufferProductBrowserPreMountOutput,
   isDroppedClockRegression,
@@ -12,7 +12,7 @@ import {
 } from './product-browser-host.js';
 import { ProductBrowserLocalTransportError } from './local-transport.js';
 
-const ACCEPTED_FAULT = { code: 'DEV_HOST_ACCEPTED', disposition: 'accepted' } as const;
+const ACCEPTED_FAULT = { code: 'PRODUCT_HOST_ACCEPTED', disposition: 'accepted' } as const;
 const RUNNING = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
 
 const adapter: ProductBrowserRuntimeAdapter = {
@@ -77,7 +77,7 @@ function fakeApplication(input: Record<string, unknown>, projections: unknown[] 
 }
 
 test('pre-mount buffering keeps the newest readout and the newest projection per stream', () => {
-  const pending: ProductDevRuntimeOutput[] = [];
+  const pending: ProductHostRuntimeOutput[] = [];
   const readout = {
     artifact: 'rusty.product.runtime-readout' as const,
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
@@ -91,7 +91,7 @@ test('pre-mount buffering keeps the newest readout and the newest projection per
     lastObservedTimeNs: '1',
     fault: null,
   };
-  const projection = (stream: string, value: number): ProductDevRuntimeOutput => ({
+  const projection = (stream: string, value: number): ProductHostRuntimeOutput => ({
     kind: 'ui-projection',
     envelope: { runtime: readout.runtime, sequence: String(value), stream, contract: 'hud.v1', value } as never,
   });
@@ -327,7 +327,7 @@ test('after an output gap only the fresh baseline is applied', async () => {
       autoStart: false,
     }, async () => fakeApplication({ bindRuntime: () => undefined }, projections) as never);
     const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
-    const projection = (value: number): ProductDevRuntimeOutput => ({
+    const projection = (value: number): ProductHostRuntimeOutput => ({
       kind: 'ui-projection',
       envelope: { runtime: RUNNING, sequence: String(value), stream: 'hud', contract: 'hud.v1', value } as never,
     });

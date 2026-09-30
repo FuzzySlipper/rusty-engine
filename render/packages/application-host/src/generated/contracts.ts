@@ -1,4 +1,4 @@
-// Generated from the Rust wire types by product-dev-host's
+// Generated from the Rust wire types by product-host's
 // `typescript_contracts_are_current` test. Do not edit: change the Rust types
 // and run scripts/generate-typescript-contracts.sh.
 
@@ -27,12 +27,12 @@ export type PointerButton = "primary" | "secondary" | "middle";
 /**
  * How gameplay holds the pointer.
  */
-export type ProductDevCursorMode = "pointer-lock" | "unlocked";
+export type ProductHostCursorMode = "pointer-lock" | "unlocked";
 
 /**
  * Where the runtime presents the frames it renders.
  */
-export type ProductDevRenderOutput = "stream" | "window";
+export type ProductHostRenderOutput = "stream" | "window";
 
 /**
  * The runtime binding an envelope belongs to, as canonical decimal text.
