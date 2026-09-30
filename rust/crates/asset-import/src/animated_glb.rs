@@ -25,8 +25,9 @@ use crate::{
 };
 
 pub const SUPPORTED_ANIMATED_GLB_VERSION: u32 = 2;
-/// Texture references may select TEXCOORD_0 through TEXCOORD_3. (render-wgpu
-/// reads TEXCOORD_0 only, for the base colour texture.)
+/// Texture transforms may select TEXCOORD_0 through TEXCOORD_3. render-wgpu
+/// draws TEXCOORD_0 only, for the base colour texture, and does not apply
+/// texture transforms.
 pub const MAX_ANIMATED_GLB_TEXTURE_COORD_SET: u64 = 3;
 /// Keeps authored UV transforms finite and prevents extreme values from
 /// crossing the retained renderer boundary. Negative offset, rotation, and
@@ -1080,7 +1081,7 @@ fn validate_texture_transform(
                 ImportCode::UnsupportedFeature,
                 format!("{path}.texCoord"),
                 format!(
-                    "texture coordinate set {tex_coord} exceeds renderer support through TEXCOORD_{MAX_ANIMATED_GLB_TEXTURE_COORD_SET}"
+                    "texture coordinate set {tex_coord} exceeds the admitted TEXCOORD_0 through TEXCOORD_{MAX_ANIMATED_GLB_TEXTURE_COORD_SET}"
                 ),
                 "author the texture against TEXCOORD_0 through TEXCOORD_3",
             ));

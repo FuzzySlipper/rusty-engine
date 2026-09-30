@@ -123,7 +123,6 @@ pub fn product_host_runtime_identity() -> ProductHostRuntimeIdentity {
 enum RendererDebugCommand {
     Presentation,
     Read,
-    Detail,
     Show,
     Hide,
     Toggle,
@@ -136,7 +135,6 @@ fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
     match command.trim() {
         "engine.renderer" => Some(RendererDebugCommand::Read),
         "engine.renderer.presentation" => Some(RendererDebugCommand::Presentation),
-        "engine.renderer.detail" => Some(RendererDebugCommand::Detail),
         "engine.renderer.show" => Some(RendererDebugCommand::Show),
         "engine.renderer.hide" => Some(RendererDebugCommand::Hide),
         "engine.renderer.toggle" => Some(RendererDebugCommand::Toggle),
@@ -2465,7 +2463,6 @@ impl CsharpProductRuntime {
             }
             RendererDebugCommand::Presentation
             | RendererDebugCommand::Read
-            | RendererDebugCommand::Detail
             | RendererDebugCommand::Status => {}
         }
         if let (Some(frames), RendererDebugCommand::Presentation) = (&self.frame_output, action) {
@@ -2495,7 +2492,7 @@ impl CsharpProductRuntime {
         // Visibility operations succeed either way, so a mounted widget can
         // show its unavailable state.
         let succeeded = match action {
-            RendererDebugCommand::Read | RendererDebugCommand::Detail => status.available,
+            RendererDebugCommand::Read => status.available,
             RendererDebugCommand::Show
             | RendererDebugCommand::Hide
             | RendererDebugCommand::Toggle
@@ -4895,10 +4892,6 @@ mod tests {
             renderer_debug_command(" engine.renderer.toggle "),
             Some(RendererDebugCommand::Toggle)
         );
-        assert_eq!(
-            renderer_debug_command("engine.renderer.detail"),
-            Some(RendererDebugCommand::Detail)
-        );
         assert_eq!(renderer_debug_command("engine.renderer.product"), None);
     }
 
@@ -4967,11 +4960,6 @@ mod tests {
             .expect("catalog commands")
             .iter()
             .any(|command| command["name"] == "engine.renderer.status"));
-        assert!(catalog["commands"]
-            .as_array()
-            .expect("catalog commands")
-            .iter()
-            .any(|command| command["name"] == "engine.renderer.detail"));
         drop(runtime);
         fs::remove_dir_all(root).expect("remove renderer debug fixture content");
     }

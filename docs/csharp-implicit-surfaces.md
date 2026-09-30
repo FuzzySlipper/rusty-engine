@@ -519,6 +519,9 @@ that metadata as required is unsupported. Any other extension fails admission
 with an import diagnostic. The renderer draws the base color factor and
 texture, metallic and roughness factors, emissive color with its strength,
 alpha mode and unlit; specular and volume data are admitted but not drawn.
+Textures are drawn with `TEXCOORD_0`. A texture's `texCoord` selection and its
+`KHR_texture_transform` are admitted (a transform may name sets 0 through 3)
+but not applied.
 
 ### GLB inspection and displayed-pose bounds
 

@@ -115,8 +115,6 @@ export interface RustyApplicationInputQueue {
 export interface RustyApplicationManagedInputIngress extends RustyApplicationInputPort {
   /** Clear the old owner and adopt held controller state without replaying its press. */
   readonly interactionModeChanged: () => void;
-  /** Application-host lifecycle seam: adopt a replacement canvas, clearing held input as a pointer-lock loss. */
-  readonly rebindCanvas: (canvas: HTMLCanvasElement) => void;
   /** Application-host lifecycle seam; product callers use the owning host disposal instead. */
   readonly dispose: () => void;
 }
@@ -144,7 +142,6 @@ export function createRustyApplicationInputIngress(
   const controllerAxes = new Map<ControllerAxis, number>();
   const controllerButtonValues = new Map<ControllerButton, number>();
   const heldControllerButtons = new Set<ControllerButton>();
-  let attachedCanvas = environment.canvas();
   let disposed = false;
   let controllerEpoch = 0;
   let controllerSamplingBlocked = false;
@@ -417,11 +414,6 @@ export function createRustyApplicationInputIngress(
       }
     },
     sampleController,
-    rebindCanvas: (canvas: HTMLCanvasElement) => {
-      if (disposed || canvas === attachedCanvas) return;
-      attachedCanvas = canvas;
-      clear('pointer-lock-loss');
-    },
     dispose: () => {
       if (disposed) return;
       clear('dispose');

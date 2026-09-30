@@ -700,10 +700,6 @@ impl ProductDevDebugCatalog {
                 "Read the last drawn frame's sequence, step, cameras and viewport; GET frames/capture draws a tool capture that carries its own step",
             ),
             (
-                "engine.renderer.detail",
-                "Show the same renderer status as engine.renderer",
-            ),
-            (
                 "engine.renderer.show",
                 "Show every mounted Engine renderer metrics widget",
             ),
