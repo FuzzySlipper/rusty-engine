@@ -374,9 +374,9 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
     };
     /**
      * Bounded host-owned product-lane telemetry returned alongside the existing
-     * diagnostics batch. These are observations only; renderer cadence remains
-     * in the browser renderer diagnostics report and is intentionally not folded
-     * into this product-lane snapshot.
+     * diagnostics batch. These are observations only; renderer statistics are
+     * answered by `engine.renderer` and are not folded into this product-lane
+     * snapshot.
      */
     export type ProductDevTelemetrySnapshot = {
         inFlightOperation: ProductDevOperationKind | null;
@@ -515,8 +515,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/index" {
     export function completeLiveDebug(catalog: ProductDevDebugCatalog, prefix: string): readonly ProductDevDebugCommandDescriptor[];
     /**
      * Computes how old a diagnostic event is at the response read clock. This is
-     * distinct from any age fact carried by the event itself (for example the
-     * browser host's renderer observation age).
+     * distinct from any age fact carried in the event's own fields.
      */
     export function diagnosticEventAgeMilliseconds(batch: ProductDevDiagnosticsReadResponse, event: RuntimeDiagnosticEvent): number | null;
 }
