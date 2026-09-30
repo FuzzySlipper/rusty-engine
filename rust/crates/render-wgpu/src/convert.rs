@@ -1,7 +1,7 @@
 //! The only seam between Engine value types and glam.
 //!
 //! Engine descriptors and readouts carry plain arrays: f32 for presentation
-//! values and f64 for world-space camera and pick values. glam is this crate's
+//! values and f64 for world-space camera values. glam is this crate's
 //! private math (`EXTERNAL_DEPENDENCY_OWNERS`) and never crosses the crate
 //! boundary. Every conversion between the two goes through these functions.
 //! Packing glam values into GPU buffers is the owning pass's layout, not a
@@ -15,7 +15,7 @@ pub(crate) fn vec3(value: [f32; 3]) -> Vec3 {
     Vec3::from_array(value)
 }
 
-/// A world-space camera or pick value, narrowed to the renderer's f32.
+/// A world-space camera value, narrowed to the renderer's f32.
 pub(crate) fn world_vec3(value: [f64; 3]) -> Vec3 {
     DVec3::from_array(value).as_vec3()
 }

@@ -10067,7 +10067,6 @@ fn sprite_texture_descriptor(
 
 fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
-        schema_version: 1,
         id,
         color: native_color(color),
         texture: None,
@@ -10221,7 +10220,6 @@ fn material_descriptor(
         Some(resource.asset_identity().to_owned())
     };
     let descriptor = RenderMaterialDescriptor {
-        schema_version: 1,
         id,
         color: native_color(request.color),
         texture,

@@ -35,7 +35,6 @@ mod glb;
 mod gpu;
 mod labels;
 mod particles;
-mod pick;
 mod pipelines;
 mod primitives;
 mod resources;
@@ -317,7 +316,7 @@ impl Renderer {
     }
 }
 
-/// Mesh memory: the CPU geometry copies kept for picking and bounds, beside
+/// Mesh memory: the CPU geometry copies kept for bounds and wireframe, beside
 /// the GPU vertex and index bytes of the same meshes (#8849).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MeshMemory {

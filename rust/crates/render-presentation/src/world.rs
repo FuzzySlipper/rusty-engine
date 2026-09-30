@@ -262,7 +262,6 @@ impl PresentationWorld {
             })
         })?;
         let delta = RenderFrameDiff {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: Some(RenderFramePublication {
                 stream: PRESENTATION_WORLD_STREAM.to_owned(),
                 base_revision: self.revision,

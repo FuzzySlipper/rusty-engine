@@ -341,7 +341,7 @@ impl FrameOutput {
             output: RenderOutput::Stream,
             held: inspection.held,
             observer: inspection.observer.is_some(),
-            camera,
+            camera: camera.map(Into::into),
             frame: frame.map(|frame| ProductDevDrawnFrame {
                 sequence: frame.sequence,
                 step: frame.step,
@@ -388,7 +388,9 @@ impl FrameOutput {
             output: RenderOutput::Window,
             held,
             observer: observer.is_some(),
-            camera: observer.or_else(|| composition.as_deref().and_then(primary_camera_pose)),
+            camera: observer
+                .or_else(|| composition.as_deref().and_then(primary_camera_pose))
+                .map(Into::into),
             frame: None,
         })
     }

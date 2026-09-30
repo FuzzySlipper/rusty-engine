@@ -6,17 +6,14 @@ const LOCAL_HANDLE_BITS: u32 = 40;
 const LOCAL_HANDLE_MASK: u64 = (1_u64 << LOCAL_HANDLE_BITS) - 1;
 
 /// Compact namespaces let independent projection owners share one retained
-/// scene without an ambient/global allocator while every handle remains exact
-/// in the JSON/JavaScript number border.
+/// scene without an ambient/global allocator. Every handle stays within
+/// `JSON_SAFE_U64_MAX`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderHandleNamespace(u8);
 
 impl RenderHandleNamespace {
-    pub const ENTITY: Self = Self(1);
     pub const VOXEL: Self = Self(2);
     pub const AUTHORED: Self = Self(3);
-    pub const DEBUG: Self = Self(4);
-    pub const PRESENTATION: Self = Self(5);
     pub const VOXEL_OBJECT: Self = Self(6);
 
     pub const fn new(value: u8) -> Option<Self> {

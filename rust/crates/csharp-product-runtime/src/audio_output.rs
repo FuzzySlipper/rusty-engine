@@ -310,7 +310,6 @@ mod tests {
             })
         };
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 1,
             "cameras": [camera("side", 90.0, 0.0), camera("down", 0.0, -90.0)],
             "targets": [],
             "views": views,

@@ -181,7 +181,6 @@ fn character_composition() -> render_host_contracts::RendererViewComposition {
     let mut camera = character_view();
     camera.id = "character".to_owned();
     RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras: vec![camera],
         targets: vec![RendererCompositionTarget {
             id: "portrait".to_owned(),
@@ -356,70 +355,6 @@ fn an_output_capture_samples_the_requested_pose() {
         capture(&harness, 0.1),
         "a pose capture is deterministic"
     );
-}
-
-#[test]
-fn picking_hits_the_posed_character_and_filters_to_the_weapon() {
-    use render_host_contracts::{RendererPickFilter, RendererPickRay, RendererPickRequest};
-    let mut harness = Harness::new(RendererOptions::default());
-    character_scene(&mut harness);
-    let view = character_view();
-    let (_, pixels) = harness.render(&view);
-    // The body's pixel nearest the image centre, as viewport NDC.
-    let background = [pixels[0], pixels[1], pixels[2]];
-    let (x, y) = (0..HEIGHT)
-        .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
-        .filter(|(x, y)| {
-            let at = ((y * WIDTH + x) * 4) as usize;
-            pixels[at..at + 3] != background
-        })
-        .min_by_key(|(x, y)| {
-            let (dx, dy) = (*x as i64 - WIDTH as i64 / 2, *y as i64 - HEIGHT as i64 / 2);
-            dx * dx + dy * dy
-        })
-        .expect("the character is drawn");
-    let point = [
-        (f64::from(x) + 0.5) / f64::from(WIDTH) * 2.0 - 1.0,
-        1.0 - (f64::from(y) + 0.5) / f64::from(HEIGHT) * 2.0,
-    ];
-    let pick = |filter| {
-        harness.renderer.pick(
-            &RendererPickRequest {
-                filter,
-                max_distance: None,
-                ray: RendererPickRay::Viewport { point },
-            },
-            &view,
-            WIDTH,
-            HEIGHT,
-        )
-    };
-    let hit = pick(None).hint.expect("the ray through a body pixel hits");
-    assert_eq!(hit.handle, RenderHandle::new(BODY));
-    assert_eq!(hit.source_trace.map(|trace| trace.entity), Some(BODY));
-    assert!(hit.distance > 5.0 && hit.distance < 9.0, "{hit:?}");
-
-    // Filtering to the weapon misses along that ray, and a world ray through
-    // the weapon's posed position hits it.
-    let only_weapon = Some(RendererPickFilter {
-        handles: vec![RenderHandle::new(WEAPON)],
-        ..RendererPickFilter::default()
-    });
-    assert!(pick(only_weapon.clone()).hint.is_none());
-    let bounds = harness.renderer.pick(
-        &RendererPickRequest {
-            filter: only_weapon,
-            max_distance: None,
-            ray: RendererPickRay::WorldRay {
-                origin: [4.0, 3.0, 6.0],
-                direction: [-4.0, -1.5, -6.0],
-            },
-        },
-        &view,
-        WIDTH,
-        HEIGHT,
-    );
-    assert!(bounds.diagnostics.is_empty());
 }
 
 #[test]

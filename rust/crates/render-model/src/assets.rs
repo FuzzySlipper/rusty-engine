@@ -4,7 +4,7 @@ use crate::RenderLayer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{MeshProvenance, RenderHandle, RenderMetadata, Transform, JSON_SAFE_U64_MAX};
+use crate::{RenderMetadata, Transform, JSON_SAFE_U64_MAX};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -378,7 +378,6 @@ fn validate_voxel_region(
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderMaterialDescriptor {
-    pub schema_version: u32,
     pub id: String,
     pub color: [f32; 4],
     pub texture: Option<String>,
@@ -406,9 +405,6 @@ impl RenderMaterialDescriptor {
     pub fn validate(&self) -> Result<(), MaterialDescriptorError> {
         validate_asset_id(&self.id, RenderAssetKind::Material)
             .map_err(MaterialDescriptorError::Asset)?;
-        if self.schema_version == 0 {
-            return Err(MaterialDescriptorError::InvalidSchemaVersion);
-        }
         if self
             .texture
             .as_ref()
@@ -448,7 +444,6 @@ impl RenderMaterialDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaterialDescriptorError {
     Asset(RenderAssetError),
-    InvalidSchemaVersion,
     InvalidTextureReference,
     InvalidColor,
     InvalidRoughness,
@@ -1158,25 +1153,6 @@ pub enum SpriteError {
     UnsafeSourceIdentity,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SpritePickHit {
-    pub handle: RenderHandle,
-    pub source_entity: Option<u64>,
-    pub source_scene_node: Option<u64>,
-    pub asset: String,
-    pub attachment_point: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MeshPickHit {
-    pub handle: RenderHandle,
-    pub provenance: MeshProvenance,
-    pub source_entity: Option<u64>,
-    pub source_scene_node: Option<u64>,
-}
-
 fn valid_color<const N: usize>(values: [f32; N]) -> bool {
     values
         .iter()
@@ -1461,7 +1437,6 @@ mod tests {
         };
         assert_eq!(surface.validate(), Ok(()));
         let material = RenderMaterialDescriptor {
-            schema_version: 2,
             id: "material/stone".to_string(),
             color: [1.0; 4],
             texture: Some("texture/voxel-surfaces".to_string()),
@@ -1508,7 +1483,6 @@ mod tests {
     #[test]
     fn generic_material_alpha_and_sidedness_are_explicit_and_bounded() {
         let material = RenderMaterialDescriptor {
-            schema_version: 3,
             id: "material/generic-alpha-test".to_string(),
             color: [1.0; 4],
             texture: None,

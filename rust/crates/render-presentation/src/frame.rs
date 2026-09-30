@@ -168,20 +168,6 @@ impl PresentationFrameDiff {
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
-
-    pub fn encode_json(&self) -> Result<String, PresentationJsonError> {
-        self.validate()
-            .map_err(PresentationJsonError::InvalidFrame)?;
-        serde_json::to_string_pretty(self).map_err(PresentationJsonError::Encode)
-    }
-
-    pub fn decode_json(input: &str) -> Result<Self, PresentationJsonError> {
-        let frame: Self = serde_json::from_str(input).map_err(PresentationJsonError::Decode)?;
-        frame
-            .validate()
-            .map_err(PresentationJsonError::InvalidFrame)?;
-        Ok(frame)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -932,18 +918,3 @@ fn json_safe(value: u64, sequence: u32, field: &'static str) -> Result<(), Prese
         })
     }
 }
-
-#[derive(Debug)]
-pub enum PresentationJsonError {
-    Encode(serde_json::Error),
-    Decode(serde_json::Error),
-    InvalidFrame(PresentationFrameError),
-}
-
-impl core::fmt::Display for PresentationJsonError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(formatter, "{self:?}")
-    }
-}
-
-impl std::error::Error for PresentationJsonError {}

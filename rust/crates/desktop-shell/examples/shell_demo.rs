@@ -21,7 +21,6 @@ use desktop_shell::{
 use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
     RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
-    RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
 };
 use render_model::{
     Geometry, Material, RenderDiff, RenderFrameDiff, RenderHandle, RenderNode, Transform,
@@ -106,7 +105,6 @@ impl DesktopScene for SpinningCube {
 
 fn composition() -> RendererViewComposition {
     RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras: vec![RendererCompositionCamera {
             id: "demo".to_owned(),
             pose: RendererCameraPose {

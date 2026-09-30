@@ -85,6 +85,11 @@ export type ProductDevBrowserPageDiagnosticKind = "error" | "unhandled-rejection
 export type ProductDevBrowserTerminalDiagnostic = { code: string, message: string, };
 
 /**
+ * A camera pose as `engine.renderer.camera` reports it.
+ */
+export type ProductDevCameraPose = { position: [number, number, number], pitchDegrees: number, yawDegrees: number, };
+
+/**
  * The `rusty-output-baseline` event that ends a connection's baseline.
  */
 export type ProductDevConnectionBaseline = { 
@@ -221,7 +226,7 @@ observer: boolean,
 /**
  * The observer camera, else the primary camera, when known.
  */
-camera: RendererCameraPose | null, 
+camera: ProductDevCameraPose | null, 
 /**
  * The frame the command drew, else the last one drawn. The desktop
  * window does not number its frames.
@@ -283,8 +288,6 @@ export type ProductDevTimelineCompletionResult = { accepted: boolean, code: stri
 export type ProductDevTimelineOutcome = { "kind": "success", data?: JsonValue, } | { "kind": "failure", data?: JsonValue, };
 
 export type ProductDevTimelineProvenance = { correlation: string, detail?: JsonValue, };
-
-export type RendererCameraPose = { position: [number, number, number], pitchDegrees: number, yawDegrees: number, };
 
 /**
  * The runtime binding an envelope belongs to, as canonical decimal text.

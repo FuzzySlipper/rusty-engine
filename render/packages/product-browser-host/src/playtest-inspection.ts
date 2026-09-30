@@ -2,10 +2,10 @@ import type {
   ProductDevDebugCatalog,
   ProductDevRendererInspection,
   ProductDevTimeAnswer,
-  RendererCameraPose,
+  ProductDevCameraPose,
 } from './generated/contracts.js';
 
-type Camera = RendererCameraPose;
+type Camera = ProductDevCameraPose;
 const TIME_MODES = ['realtime', 'manual', 'action-driven'] as const satisfies readonly ProductDevTimeAnswer['mode'][];
 const DRAWING_MODES = ['continuous', 'on-demand'] as const satisfies readonly ProductDevRendererInspection['drawing'][];
 export interface PlaytestInspectionRequest {

@@ -358,7 +358,6 @@ impl VoxelRenderProjector {
                     .expect("a voxel frame holds fewer than 2^32 operations"),
             }),
             ops: operations,
-            ..RenderFrameDiff::default()
         };
         Ok(VoxelProjectionResult {
             readout: VoxelProjectionReadout {
@@ -734,7 +733,6 @@ mod tests {
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
-            schema_version: 2,
             id: voxel_material_id(slot),
             color: [0.4, 0.5, 0.6, 1.0],
             texture: None,

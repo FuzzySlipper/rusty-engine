@@ -112,55 +112,8 @@ fn animation_state(revision: u64) -> AnimationControllerProjectionState {
     }
 }
 
-fn fixture_frame() -> PresentationFrameDiff {
-    PresentationFrameDiff::try_from_ops(vec![
-        PresentationOp::Audio {
-            meta: PresentationOpMeta::new(0),
-            op: AudioProjectionOp::Emit {
-                signal_handle: AudioSignalHandle::new(1),
-                signal_id: "fixture:pulse".into(),
-                descriptor: audio(),
-            },
-        },
-        PresentationOp::Billboard {
-            meta: PresentationOpMeta::new(1),
-            op: BillboardProjectionOp::Create {
-                handle: BillboardHandle::new(1),
-                descriptor: billboard(),
-            },
-        },
-        PresentationOp::Particle {
-            meta: PresentationOpMeta::new(2),
-            op: ParticleProjectionOp::Emit {
-                signal_id: "fixture:sparks".into(),
-                descriptor: particle(),
-            },
-        },
-        PresentationOp::Particle {
-            meta: PresentationOpMeta::new(3),
-            op: ParticleProjectionOp::Destroy {
-                handle: ParticleEmitterHandle::new(1),
-            },
-        },
-        PresentationOp::Animation {
-            meta: PresentationOpMeta::new(4),
-            op: AnimationProjectionOp::Create {
-                handle: AnimationProjectionHandle::new(1),
-                descriptor: AnimationProjectionDescriptor {
-                    target: RenderHandle::new(42),
-                    asset: "animated-mesh/hero".into(),
-                    content_hash: "ff".into(),
-                    tick_duration_millis: 16,
-                    controller: animation_state(0),
-                },
-            },
-        },
-    ])
-    .unwrap()
-}
-
 #[test]
-fn every_presentation_operation_survives_the_json_border() {
+fn every_presentation_operation_validates_in_one_frame() {
     let animation_descriptor = AnimationProjectionDescriptor {
         target: RenderHandle::new(42),
         asset: "animated-mesh/hero".into(),
@@ -313,29 +266,7 @@ fn every_presentation_operation_survives_the_json_border() {
             },
         },
     ];
-    let frame = PresentationFrameDiff::try_from_ops(ops).unwrap();
-    let encoded = frame.encode_json().unwrap();
-    assert_eq!(PresentationFrameDiff::decode_json(&encoded).unwrap(), frame);
-    for marker in [
-        "emit",
-        "create",
-        "update",
-        "destroy",
-        "voiceControl",
-        "busControl",
-        "retrigger",
-        "setVolume",
-        "setMuted",
-        "audio",
-        "billboard",
-        "particle",
-        "animation",
-    ] {
-        assert!(
-            encoded.contains(marker),
-            "missing operation marker {marker}"
-        );
-    }
+    PresentationFrameDiff::try_from_ops(ops).unwrap();
 }
 
 #[test]
@@ -357,7 +288,7 @@ fn particle_patch_distinguishes_omitted_collision_from_explicit_clear() {
 }
 
 #[test]
-fn frame_rejects_sequence_gaps_and_unknown_fields() {
+fn frame_rejects_sequence_gaps() {
     let error = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
         meta: PresentationOpMeta::new(1),
         op: AudioProjectionOp::Emit {
@@ -374,17 +305,6 @@ fn frame_rejects_sequence_gaps_and_unknown_fields() {
             actual: 1
         }
     );
-
-    let json = fixture_frame().encode_json().unwrap();
-    let with_unknown = json.replacen(
-        "\"schemaVersion\": 1,",
-        "\"schemaVersion\": 1,\n  \"unexpected\": true,",
-        1,
-    );
-    assert!(matches!(
-        PresentationFrameDiff::decode_json(&with_unknown),
-        Err(PresentationJsonError::Decode(_))
-    ));
 }
 
 #[test]
@@ -409,20 +329,6 @@ fn frame_rejects_presentation_identities_outside_the_json_safe_range() {
             value: unsafe_value,
         })
     );
-    assert!(matches!(
-        frame.encode_json(),
-        Err(PresentationJsonError::InvalidFrame(
-            PresentationFrameError::UnsafeJsonInteger { .. }
-        ))
-    ));
-}
-
-#[test]
-fn checked_in_fixture_is_the_canonical_cross_language_frame() {
-    let fixture = include_str!("../../../../fixtures/render/presentation-frame-v1.json");
-    let decoded = PresentationFrameDiff::decode_json(fixture).unwrap();
-    assert_eq!(decoded, fixture_frame());
-    assert_eq!(decoded.encode_json().unwrap(), fixture.trim_end());
 }
 
 #[test]

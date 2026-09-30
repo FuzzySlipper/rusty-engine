@@ -501,7 +501,6 @@ mod tests {
                 id,
                 source: RenderHandle::new(1),
                 frame: render_model::RenderFrameDiff {
-                    schema_version: render_model::RENDER_FRAME_SCHEMA_VERSION,
                     publication: None,
                     ops: Vec::new(),
                 },

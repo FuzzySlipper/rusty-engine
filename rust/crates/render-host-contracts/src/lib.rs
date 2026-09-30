@@ -1,20 +1,18 @@
-//! Canonical facts crossing the private renderer host boundary.
+//! Canonical facts the runtime hands the renderer.
 //!
-//! These values describe presentation, physical input, bounded resources, and
-//! renderer observations. They do not assign gameplay meaning, choose storage
-//! policy, expose browser objects, or provide a generic command protocol.
+//! These values describe view composition (cameras, render targets, views and
+//! presentations) and render output jobs. They do not assign gameplay meaning,
+//! choose storage policy, or provide a generic command protocol.
 
 #![forbid(unsafe_code)]
 
-use render_model::{RenderHandle, RenderLayer, JSON_SAFE_U64_MAX};
+use render_model::JSON_SAFE_U64_MAX;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-pub const RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RENDERER_TARGET_DIMENSION: u32 = 2_048;
-pub const MAX_RENDERER_TARGET_PIXELS: u64 = 8_388_608;
+const MAX_RENDERER_TARGET_PIXELS: u64 = 8_388_608;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RendererCameraPose {
     pub position: [f64; 3],
@@ -168,7 +166,6 @@ pub enum RendererPrimaryDestinationKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RendererViewComposition {
-    pub schema_version: u32,
     pub cameras: Vec<RendererCompositionCamera>,
     pub targets: Vec<RendererCompositionTarget>,
     pub views: Vec<RendererCompositionView>,
@@ -177,9 +174,6 @@ pub struct RendererViewComposition {
 
 impl RendererViewComposition {
     pub fn validate(&self) -> Result<(), RendererHostContractError> {
-        if self.schema_version != RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION {
-            return Err(RendererHostContractError::UnsupportedSchemaVersion);
-        }
         for camera in &self.cameras {
             validate_identifier(&camera.id)?;
             validate_pose(camera.pose)?;
@@ -234,111 +228,8 @@ impl RendererViewComposition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RendererPickRay {
-    Viewport {
-        point: [f64; 2],
-    },
-    WorldRay {
-        direction: [f64; 3],
-        origin: [f64; 3],
-    },
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RendererPickFilter {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub handles: Vec<RenderHandle>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub labels: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub layers: Vec<RenderLayer>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RendererPickRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<RendererPickFilter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_distance: Option<f64>,
-    pub ray: RendererPickRay,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RendererPickHint {
-    pub distance: f64,
-    pub handle: RenderHandle,
-    pub label: Option<String>,
-    pub layer: RenderLayer,
-    pub normal: [f64; 3],
-    pub position: [f64; 3],
-    pub source_trace: Option<RendererPickSourceTrace>,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RendererPickSourceTrace {
-    pub entity: u64,
-    pub kind: RendererPickSourceTraceKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RendererPickSourceTraceKind {
-    RenderMetadataEntity,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RendererHostDiagnostic {
-    pub code: String,
-    pub message: String,
-    #[serde(default)]
-    pub sequence: Option<u64>,
-    #[serde(default)]
-    pub handle: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RendererPickReceipt {
-    pub diagnostics: Vec<RendererHostDiagnostic>,
-    pub hint: Option<RendererPickHint>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RendererPhysicalInputReadout {
-    pub pressed_codes: Vec<String>,
-    pub pointer: RendererPointerReadout,
-    pub wheel: RendererWheelReadout,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RendererPointerReadout {
-    pub x_pixels: f64,
-    pub y_pixels: f64,
-    pub buttons: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RendererWheelReadout {
-    pub delta_x: f64,
-    pub delta_y: f64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RendererHostContractError {
-    UnsupportedSchemaVersion,
     LimitExceeded,
     InvalidIdentifier,
     InvalidNumber,

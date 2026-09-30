@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::{
     RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
-    RendererViewTarget, RendererViewport, RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
+    RendererViewTarget, RendererViewport,
 };
 use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
 use render_stream::{
@@ -171,7 +171,6 @@ fn frames_follow_viewers_and_simulation_time() {
         motion: None,
     };
     let composition = RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras: vec![product],
         targets: Vec::new(),
         views: vec![RendererCompositionView {

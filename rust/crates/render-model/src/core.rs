@@ -39,7 +39,6 @@ impl SkyBackgroundDescriptor {
     }
 }
 
-pub const RENDER_FRAME_SCHEMA_VERSION: u32 = 1;
 pub const JSON_SAFE_U64_MAX: u64 = (1_u64 << 53) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -591,10 +590,9 @@ pub enum RenderOperationError {
     InvalidSpriteTint,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderFrameDiff {
-    pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publication: Option<RenderFramePublication>,
     pub ops: Vec<RenderDiff>,
@@ -612,16 +610,6 @@ pub struct RenderFramePublication {
     pub operation_count: u32,
 }
 
-impl Default for RenderFrameDiff {
-    fn default() -> Self {
-        Self {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
-            publication: None,
-            ops: Vec::new(),
-        }
-    }
-}
-
 impl RenderFrameDiff {
     pub fn new() -> Self {
         Self::default()
@@ -629,7 +617,6 @@ impl RenderFrameDiff {
 
     pub fn try_from_ops(ops: Vec<RenderDiff>) -> Result<Self, RenderFrameError> {
         let frame = Self {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: None,
             ops,
         };
@@ -649,7 +636,6 @@ impl RenderFrameDiff {
                 actual: ops.len(),
             })?;
         let frame = Self {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: Some(RenderFramePublication {
                 stream: stream.into(),
                 base_revision,
@@ -663,12 +649,6 @@ impl RenderFrameDiff {
     }
 
     pub fn validate(&self) -> Result<(), RenderFrameError> {
-        if self.schema_version != RENDER_FRAME_SCHEMA_VERSION {
-            return Err(RenderFrameError::UnsupportedSchemaVersion {
-                expected: RENDER_FRAME_SCHEMA_VERSION,
-                actual: self.schema_version,
-            });
-        }
         if let Some(publication) = &self.publication {
             if publication.stream.trim().is_empty() || publication.stream.len() > 256 {
                 return Err(RenderFrameError::InvalidPublicationStream);
@@ -715,25 +695,10 @@ impl RenderFrameDiff {
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
-
-    pub fn encode_json(&self) -> Result<String, RenderJsonError> {
-        self.validate().map_err(RenderJsonError::InvalidFrame)?;
-        serde_json::to_string_pretty(self).map_err(RenderJsonError::Encode)
-    }
-
-    pub fn decode_json(input: &str) -> Result<Self, RenderJsonError> {
-        let frame: Self = serde_json::from_str(input).map_err(RenderJsonError::Decode)?;
-        frame.validate().map_err(RenderJsonError::InvalidFrame)?;
-        Ok(frame)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderFrameError {
-    UnsupportedSchemaVersion {
-        expected: u32,
-        actual: u32,
-    },
     Operation {
         index: usize,
         source: RenderOperationError,
@@ -752,37 +717,9 @@ pub enum RenderFrameError {
     },
 }
 
-#[derive(Debug)]
-pub enum RenderJsonError {
-    Decode(serde_json::Error),
-    InvalidFrame(RenderFrameError),
-    Encode(serde_json::Error),
-}
-
-impl std::fmt::Display for RenderJsonError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{self:?}")
-    }
-}
-
-impl std::error::Error for RenderJsonError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn versioned_json_round_trips_the_retained_core() {
-        let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
-            handle: RenderHandle::new(7),
-            parent: None,
-            node: RenderNode::new(Geometry::Cube),
-        }])
-        .unwrap();
-        let json = frame.encode_json().unwrap();
-        assert!(json.contains("\"schemaVersion\": 1"));
-        assert_eq!(RenderFrameDiff::decode_json(&json).unwrap(), frame);
-    }
 
     #[test]
     fn published_frame_requires_one_exact_revision_step() {
@@ -809,15 +746,17 @@ mod tests {
         }])
         .unwrap();
 
-        let json = frame.encode_json().unwrap();
-        assert!(json.contains("\"layer\": \"viewmodel\""));
-        assert_eq!(RenderFrameDiff::decode_json(&json).unwrap(), frame);
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"layer\":\"viewmodel\""));
+        assert_eq!(
+            serde_json::from_str::<RenderFrameDiff>(&json).unwrap(),
+            frame
+        );
     }
 
     #[test]
     fn invalid_operation_rejects_the_whole_frame() {
         let invalid = RenderFrameDiff {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: None,
             ops: vec![RenderDiff::Create {
                 handle: RenderHandle::new(1),
@@ -840,7 +779,6 @@ mod tests {
     #[test]
     fn frame_rejects_handles_that_javascript_cannot_represent_exactly() {
         let invalid = RenderFrameDiff {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: None,
             ops: vec![RenderDiff::Create {
                 handle: RenderHandle::new(JSON_SAFE_U64_MAX + 1),

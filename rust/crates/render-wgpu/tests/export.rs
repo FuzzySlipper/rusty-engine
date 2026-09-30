@@ -25,7 +25,6 @@ fn world(ops: Vec<RenderDiff>) -> PresentationWorld {
     let mut world = PresentationWorld::default();
     world
         .apply(RenderFrameDiff {
-            schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: None,
             ops,
         })

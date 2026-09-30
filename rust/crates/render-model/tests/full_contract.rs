@@ -1,9 +1,7 @@
 use render_model::*;
-use std::path::Path;
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
-        schema_version: 2,
         id: "material/plain".to_string(),
         color: [0.5, 0.6, 0.7, 1.0],
         texture: Some("texture/checker".to_string()),
@@ -286,61 +284,16 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
 }
 
 #[test]
-fn every_retained_operation_survives_the_versioned_json_border() {
-    let frame = every_retained_operation_frame();
-    let json = frame.encode_json().unwrap();
-    let decoded = RenderFrameDiff::decode_json(&json).unwrap();
-    assert_eq!(decoded, frame);
-    for operation in [
-        "defineTexture",
-        "setSkyBackground",
-        "defineMaterial",
-        "defineSpriteAtlas",
-        "defineStaticMesh",
-        "defineAnimatedMesh",
-        "create",
-        "update",
-        "replaceMeshPayload",
-        "createLight",
-        "updateLight",
-        "createStaticMeshInstance",
-        "setMaterialInstanceParameters",
-        "createAnimatedMeshInstance",
-        "setAnimatedMeshPlayback",
-        "createSprite",
-        "updateSprite",
-        "destroy",
-    ] {
-        assert!(json.contains(&format!("\"op\": \"{operation}\"")));
-    }
-    assert!(
-        json.contains("\"normalStrength\": 1.0"),
-        "new Rust writers emit explicit sprite material facts"
-    );
+fn every_retained_operation_validates_in_one_frame() {
+    assert_eq!(every_retained_operation_frame().len(), 18);
 }
 
 #[test]
-fn static_mesh_release_survives_the_versioned_json_border() {
-    let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::ReleaseStaticMesh {
-        asset: "mesh/triangle".to_string(),
-    }])
-    .unwrap();
-    assert_eq!(
-        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
-        frame
-    );
-}
-
-#[test]
-fn opaque_background_color_survives_the_json_border_and_rejects_alpha() {
-    let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
+fn opaque_background_color_is_admitted_and_alpha_is_refused() {
+    RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
         color: [0.0, 0.0, 0.0, 1.0],
     }])
     .unwrap();
-    assert_eq!(
-        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
-        frame
-    );
     assert!(
         RenderFrameDiff::try_from_ops(vec![RenderDiff::SetBackgroundColor {
             color: [0.0, 0.0, 0.0, 0.5],
@@ -350,36 +303,7 @@ fn opaque_background_color_survives_the_json_border_and_rejects_alpha() {
 }
 
 #[test]
-fn committed_cross_language_fixture_is_a_valid_canonical_frame() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("repository root");
-    let input = std::fs::read_to_string(root.join("fixtures/render/retained-frame-v1.json"))
-        .expect("read cross-language render fixture");
-    let frame = RenderFrameDiff::decode_json(&input).unwrap();
-    assert_eq!(frame, every_retained_operation_frame());
-    assert_eq!(input.trim_end(), frame.encode_json().unwrap());
-}
-
-#[test]
-fn unknown_contract_fields_fail_closed() {
-    let input = r#"{
-      "schemaVersion": 1,
-      "ops": [{
-        "op": "destroy",
-        "handle": 1,
-        "unexpectedAuthority": true
-      }]
-    }"#;
-    assert!(matches!(
-        RenderFrameDiff::decode_json(input),
-        Err(RenderJsonError::Decode(_))
-    ));
-}
-
-#[test]
-fn voxel_object_resource_and_frame_swap_survive_the_json_border() {
+fn voxel_object_resource_and_frame_swap_validate() {
     let asset = VoxelObjectRenderAsset {
         asset: "voxel-object/runner".to_string(),
         content_hash: "sha256:runner".to_string(),
@@ -395,7 +319,7 @@ fn voxel_object_resource_and_frame_swap_survive_the_json_border() {
             material: "material/plain".to_string(),
         }],
     };
-    let frame = RenderFrameDiff::try_from_ops(vec![
+    RenderFrameDiff::try_from_ops(vec![
         RenderDiff::DefineVoxelObject {
             asset: asset.clone(),
         },
@@ -423,8 +347,4 @@ fn voxel_object_resource_and_frame_swap_survive_the_json_border() {
         },
     ])
     .unwrap();
-    assert_eq!(
-        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
-        frame
-    );
 }

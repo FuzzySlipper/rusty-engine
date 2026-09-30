@@ -293,7 +293,6 @@ fn materials(
                 1.0,
             ];
             let material = RenderMaterialDescriptor {
-                schema_version: if texture.is_some() { 2 } else { 1 },
                 id: binding.material_asset_id.clone(),
                 color,
                 texture: texture.map(|descriptor| descriptor.id.clone()),

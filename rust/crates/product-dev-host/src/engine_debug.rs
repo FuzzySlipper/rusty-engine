@@ -81,10 +81,29 @@ pub struct ProductDevRendererInspection {
     /// An observer camera replaces the product's primary camera.
     pub observer: bool,
     /// The observer camera, else the primary camera, when known.
-    pub camera: Option<RendererCameraPose>,
+    pub camera: Option<ProductDevCameraPose>,
     /// The frame the command drew, else the last one drawn. The desktop
     /// window does not number its frames.
     pub frame: Option<ProductDevDrawnFrame>,
+}
+
+/// A camera pose as `engine.renderer.camera` reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevCameraPose {
+    pub position: [f64; 3],
+    pub pitch_degrees: f64,
+    pub yaw_degrees: f64,
+}
+
+impl From<RendererCameraPose> for ProductDevCameraPose {
+    fn from(pose: RendererCameraPose) -> Self {
+        Self {
+            position: pose.position,
+            pitch_degrees: pose.pitch_degrees,
+            yaw_degrees: pose.yaw_degrees,
+        }
+    }
 }
 
 /// Where the runtime presents the frames it renders.

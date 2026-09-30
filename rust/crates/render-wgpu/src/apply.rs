@@ -53,7 +53,6 @@ impl Renderer {
             self.scene_generation += 1;
         }
         for op in &frame.ops {
-            self.record_metadata(op);
             if let Err(detail) = self.apply_op(op, resources) {
                 issues.push(ApplyIssue {
                     op: op_name(op),
@@ -377,30 +376,6 @@ impl Renderer {
         Ok(())
     }
 
-    /// Keep each node's metadata (label, tags, source entity) for picking.
-    fn record_metadata(&mut self, op: &RenderDiff) {
-        let (handle, metadata) = match op {
-            RenderDiff::Create { handle, node, .. } => (handle, &node.metadata),
-            RenderDiff::CreateStaticMeshInstance {
-                handle, instance, ..
-            } => (handle, &instance.metadata),
-            RenderDiff::CreateAnimatedMeshInstance {
-                handle, instance, ..
-            } => (handle, &instance.metadata),
-            RenderDiff::CreateVoxelObjectInstance {
-                handle, instance, ..
-            } => (handle, &instance.metadata),
-            RenderDiff::CreateSprite { handle, sprite, .. } => (handle, &sprite.metadata),
-            RenderDiff::Update {
-                handle,
-                metadata: Some(metadata),
-                ..
-            } => (handle, metadata),
-            _ => return,
-        };
-        self.tables.metadata.insert(*handle, metadata.clone());
-    }
-
     fn node_mut(&mut self, handle: RenderHandle) -> Result<&mut NodeRow, String> {
         self.tables
             .nodes
@@ -494,7 +469,6 @@ impl Renderer {
         }
         for handle in removed {
             self.remove_animated_instance(handle);
-            self.tables.metadata.remove(&handle);
             self.tables.payload_meshes.remove(&handle);
             self.tables.lights.remove(&handle);
             self.tables.sprites.remove(&handle);

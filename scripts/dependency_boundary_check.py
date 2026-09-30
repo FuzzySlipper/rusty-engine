@@ -41,29 +41,34 @@ RENDER_PRESENTATION_FORBIDDEN = (
     | RENDER_BACKEND_PACKAGES
     | {"render-projection"}
 )
-# External crates that exactly one workspace crate may depend on, so a
-# device or backend library stays behind that crate's own API.
+# External crates that only the named workspace crates may depend on, so a
+# device or backend library stays behind its owner's API.
 EXTERNAL_DEPENDENCY_OWNERS = {
-    "cpal": "render-audio",
-    "jpeg-encoder": "render-stream",
-    "kira": "render-audio",
-    "opus-decoder": "render-audio",
-    "symphonia": "render-audio",
-    "fontdue": "render-wgpu",
-    "glam": "render-wgpu",
-    "naga": "render-wgpu",
-    "wgpu": "render-wgpu",
-    "wgpu-core": "render-wgpu",
-    "wgpu-hal": "render-wgpu",
-    "wgpu-types": "render-wgpu",
-    "wuff": "render-wgpu",
+    "cpal": frozenset({"render-audio"}),
+    "jpeg-encoder": frozenset({"render-stream"}),
+    "kira": frozenset({"render-audio"}),
+    "opus-decoder": frozenset({"render-audio"}),
+    "symphonia": frozenset({"render-audio"}),
+    "fontdue": frozenset({"render-wgpu"}),
+    "glam": frozenset({"render-wgpu"}),
+    "naga": frozenset({"render-wgpu"}),
+    "wgpu": frozenset({"render-wgpu"}),
+    "wgpu-core": frozenset({"render-wgpu"}),
+    "wgpu-hal": frozenset({"render-wgpu"}),
+    "wgpu-types": frozenset({"render-wgpu"}),
+    "wuff": frozenset({"render-wgpu"}),
     # The desktop shell's UI overlay (Chromium off-screen rendering).
-    "cef": "render-wgpu",
-    "welding": "render-wgpu",
-    "winit": "desktop-shell",
+    "cef": frozenset({"render-wgpu"}),
+    "welding": frozenset({"render-wgpu"}),
+    "winit": frozenset({"desktop-shell"}),
     # Video clips: WebM demux and VP9 decode (#8791).
-    "matroska-demuxer": "render-video",
-    "rusty_vp9": "render-video",
+    "matroska-demuxer": frozenset({"render-video"}),
+    "rusty_vp9": frozenset({"render-video"}),
+    # TypeScript declarations are generated only for the host's wire; the
+    # render crates' types never reach the page.
+    "ts-rs": frozenset(
+        {"product-dev-host", "runtime-diagnostics", "runtime-input", "runtime-ui"}
+    ),
 }
 
 
@@ -219,11 +224,11 @@ def add_external_owner_violations(metadata: dict[str, Any], violations: set[str]
         for dependency in package.get("dependencies", []):
             if dependency.get("kind") == "dev":
                 continue
-            owner = EXTERNAL_DEPENDENCY_OWNERS.get(dependency["name"])
-            if owner is not None and package["name"] != owner:
+            owners = EXTERNAL_DEPENDENCY_OWNERS.get(dependency["name"])
+            if owners is not None and package["name"] not in owners:
                 violations.add(
                     f"{package['name']} depends on {dependency['name']}, "
-                    f"which only {owner} may depend on"
+                    f"which only {', '.join(sorted(owners))} may depend on"
                 )
 
 

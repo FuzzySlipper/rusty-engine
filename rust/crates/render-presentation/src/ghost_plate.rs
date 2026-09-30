@@ -103,7 +103,7 @@ pub struct GhostPlatePlacement {
 pub struct GhostPlateDescriptor {
     /// Engine-owned retained render identity. Backend resources never cross this boundary.
     pub source: RenderHandle,
-    /// Immutable Engine capture input; browser/GPU resources are reconstructed from it.
+    /// Immutable Engine capture input; the renderer rebuilds its GPU resources from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captured_scene: Option<std::sync::Arc<render_model::RenderFrameDiff>>,
     pub placement: GhostPlatePlacement,

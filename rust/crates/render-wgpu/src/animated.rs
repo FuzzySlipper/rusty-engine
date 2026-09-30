@@ -410,7 +410,6 @@ impl Renderer {
                 .base_color_texture
                 .map(|index| textures[index].clone());
             let descriptor = RenderMaterialDescriptor {
-                schema_version: 1,
                 id: id.clone(),
                 color: material.base_color,
                 texture,

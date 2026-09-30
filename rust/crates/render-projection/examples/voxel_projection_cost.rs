@@ -127,7 +127,6 @@ fn project(
 
 fn material() -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
-        schema_version: 2,
         id: voxel_material_id(1),
         color: [0.45, 0.7, 0.35, 1.0],
         texture: None,

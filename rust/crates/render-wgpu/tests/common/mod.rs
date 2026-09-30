@@ -10,7 +10,6 @@ use std::{borrow::Cow, collections::HashMap, path::PathBuf};
 use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
     RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
-    RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
 };
 use render_model::*;
 use render_presentation::PresentationWorld;
@@ -96,7 +95,6 @@ impl Harness {
         let delta = self
             .world
             .apply(RenderFrameDiff {
-                schema_version: RENDER_FRAME_SCHEMA_VERSION,
                 publication: None,
                 ops,
             })
@@ -166,7 +164,6 @@ pub fn composition(
     views: Vec<RendererCompositionView>,
 ) -> RendererViewComposition {
     RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras,
         targets: Vec::new(),
         views,
@@ -266,7 +263,6 @@ pub fn coloured_mesh(
     vec![
         RenderDiff::DefineMaterial {
             material: RenderMaterialDescriptor {
-                schema_version: 1,
                 id: material.clone(),
                 color,
                 texture: None,

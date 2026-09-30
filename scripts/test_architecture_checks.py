@@ -190,6 +190,22 @@ class DependencyBoundaryTests(unittest.TestCase):
             ["render-presentation depends on wgpu-types, which only render-wgpu may depend on"],
         )
 
+    def test_only_host_facing_crates_may_generate_typescript(self) -> None:
+        metadata = metadata_fixture(["runtime-ui", "product-dev-host", "render-host-contracts"], [])
+        packages = {package["name"]: package for package in metadata["packages"]}
+        packages["runtime-ui"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
+        packages["product-dev-host"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
+        self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
+
+        packages["render-host-contracts"]["dependencies"] = [{"name": "ts-rs", "kind": None}]
+        self.assertEqual(
+            dependency_boundary_check.find_violations(metadata),
+            [
+                "render-host-contracts depends on ts-rs, which only product-dev-host, "
+                "runtime-diagnostics, runtime-input, runtime-ui may depend on"
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

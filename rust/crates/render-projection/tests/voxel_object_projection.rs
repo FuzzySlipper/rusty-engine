@@ -424,7 +424,6 @@ fn materials() -> BTreeMap<String, RenderMaterialDescriptor> {
 
 fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
-        schema_version: 1,
         id: id.to_string(),
         color,
         texture: None,

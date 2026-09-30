@@ -1,9 +1,12 @@
-//! Bounded, disposable animation, audio, billboard, particle, and telemetry
-//! presentation mechanisms.
+//! The retained world and the presentation effects the renderer realizes.
 //!
-//! This crate validates typed presentation intent and retains only the state a
-//! host needs to realize it. It owns no renderer objects, gameplay authority,
-//! project catalog, filesystem access, or persistence.
+//! `world` owns the canonical retained graphics graph: projectors apply typed
+//! render changes to it and the renderer reads its deltas. The effect
+//! projectors (animation, audio, billboard, particle, ghost plate and video)
+//! validate typed presentation intent, retain only the state realization
+//! needs, and emit `PresentationFrameDiff` (`frame`); `asset_view` resolves
+//! the assets they name. The crate owns no renderer objects, gameplay
+//! authority, project catalog, filesystem access, or persistence.
 
 #![forbid(unsafe_code)]
 

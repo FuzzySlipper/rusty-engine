@@ -637,7 +637,6 @@ impl GhostPlate {
 
 fn unpublished(ops: Vec<RenderDiff>) -> RenderFrameDiff {
     RenderFrameDiff {
-        schema_version: render_model::RENDER_FRAME_SCHEMA_VERSION,
         publication: None,
         ops,
     }

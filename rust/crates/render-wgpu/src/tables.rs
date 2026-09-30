@@ -35,7 +35,7 @@ use glam::{Mat4, Vec3};
 use render_model::{
     AnimatedMeshInstanceDescriptor, Geometry, LightDescriptor, Material,
     MaterialInstanceParameters, RenderHandle, RenderLayer, RenderMaterialDescriptor,
-    RenderMetadata, SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
+    SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
     VoxelObjectInstanceDescriptor,
 };
 
@@ -70,7 +70,7 @@ pub(crate) struct GpuMesh {
     pub slots: BTreeMap<u16, String>,
     /// Local bounds of every vertex, for culling.
     pub bounds: Aabb,
-    /// Positions and indices kept for picking.
+    /// Positions and indices kept for bounds and wireframe edges.
     pub cpu: std::sync::Arc<CpuGeometry>,
     /// Line-list indices for wireframe parts, built on first use: every
     /// triangle's three edges.
@@ -179,11 +179,11 @@ pub(crate) enum NodeKind {
 
 /// One node's GPU-side row: a derived twin of `PresentationWorld`'s node,
 /// rebuilt from deltas, never an authority. It holds only what encoding a
-/// view and picking need: hierarchy links (parent, joint parent, children),
+/// view needs: hierarchy links (parent, joint parent, children),
 /// local and propagated world matrices, visibility and layer, the realized
 /// kind, and the node's parts. Gameplay-facing facts, entity or product
 /// identities and anything read back by another crate do not belong here and
-/// are refused at review; metadata that picking reports lives in `metadata`.
+/// are refused at review.
 /// World matrices are propagated here each frame (dirty subtrees only)
 /// because joint attachments follow poses only this crate evaluates; other
 /// consumers ask `PresentationWorld` for positions instead (#8848).
@@ -516,8 +516,6 @@ pub(crate) struct Tables {
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
     /// Animation controllers by projection handle.
     pub controllers: HashMap<u64, ControllerRow>,
-    /// Retained node metadata (label, tags, source entity), for picking.
-    pub metadata: HashMap<RenderHandle, RenderMetadata>,
     pub environment: Environment,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
@@ -543,7 +541,6 @@ impl Tables {
             animated_assets: Slots::default(),
             animated: HashMap::new(),
             controllers: HashMap::new(),
-            metadata: HashMap::new(),
             environment: Environment::Default,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),

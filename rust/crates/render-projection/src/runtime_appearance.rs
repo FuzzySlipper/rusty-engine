@@ -927,7 +927,6 @@ mod tests {
 
     fn material() -> RenderMaterialDescriptor {
         RenderMaterialDescriptor {
-            schema_version: 2,
             id: "material/plain".to_string(),
             color: [0.4, 0.5, 0.6, 1.0],
             texture: None,

@@ -5,7 +5,6 @@ use render_host_contracts::{
     RendererCameraBasis, RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
     RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
     RendererViewComposition, RendererViewTarget, RendererViewport,
-    RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
 };
 use render_model::{RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor};
 
@@ -607,7 +606,6 @@ fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEng
         });
     }
     let composition = RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras: cameras.into_values().collect(),
         targets: targets.into_values().collect(),
         views,
@@ -736,7 +734,6 @@ fn validate_descriptor(
     descriptor: NativeCameraDescriptor,
 ) -> Result<(), CsharpEngineServicesError> {
     let composition = RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras: vec![composition_camera(
             "validate".to_owned(),
             CameraEntry {
@@ -767,7 +764,6 @@ fn validate_target_descriptor(
     descriptor: NativeCameraTargetDescriptor,
 ) -> Result<(), CsharpEngineServicesError> {
     let composition = RendererViewComposition {
-        schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
         cameras: Vec::new(),
         targets: vec![composition_target(
             "validate-target".to_owned(),

@@ -1,4 +1,4 @@
-//! Shared recorded-audio container admission. Decoding belongs to the browser sink.
+//! Shared recorded-audio container admission. Decoding belongs to render-audio.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioContainer {

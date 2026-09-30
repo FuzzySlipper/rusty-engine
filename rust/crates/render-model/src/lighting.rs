@@ -167,13 +167,6 @@ pub enum LightDescriptorError {
     InvalidPenumbra,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LightProjectionDiagnostic {
-    ShadowUnsupported { handle: crate::RenderHandle },
-    ShadowBudgetExceeded { handle: crate::RenderHandle },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

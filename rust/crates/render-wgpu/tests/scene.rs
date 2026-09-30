@@ -36,7 +36,6 @@ fn voxel_material(
         color,
         texture.map(|texture| texture.id.as_str()),
     );
-    descriptor.schema_version = 2;
     descriptor.roughness = 1.0;
     descriptor.voxel_surface = mapping.map(|mapping| VoxelSurfaceDescriptor {
         schema_version: 1,

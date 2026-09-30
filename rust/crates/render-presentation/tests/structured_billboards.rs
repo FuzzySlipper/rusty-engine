@@ -3,9 +3,6 @@ use std::collections::BTreeMap;
 use render_model::{RenderAssetKind, ResolvedRenderAsset};
 use render_presentation::*;
 
-const WORLD_INDICATOR_FIXTURE: &str =
-    include_str!("../../../../fixtures/render/world-indicator-frame-v1.json");
-
 fn asset(id: &str, kind: RenderAssetKind, hash: &str) -> ResolvedRenderAsset {
     ResolvedRenderAsset {
         id: id.into(),
@@ -158,25 +155,6 @@ fn project(
             },
         )
         .map(|_| ())
-}
-
-#[test]
-fn structured_world_indicator_fixture_decodes_at_the_rust_border() {
-    let frame: PresentationFrameDiff = serde_json::from_str(WORLD_INDICATOR_FIXTURE).unwrap();
-    frame.validate().unwrap();
-    let PresentationOp::Billboard {
-        op: BillboardProjectionOp::Create { descriptor, .. },
-        ..
-    } = &frame.ops[0]
-    else {
-        panic!("fixture must contain one structured billboard create");
-    };
-    let BillboardContent::Structured { indicator } = &descriptor.content else {
-        panic!("fixture billboard must use structured content");
-    };
-    assert_eq!(indicator.meters[0].id, "health");
-    assert_eq!(indicator.status_cues[0].id, "interact");
-    assert_eq!(indicator.meters[0].current_fraction(), Some(0.72));
 }
 
 #[test]
@@ -545,7 +523,7 @@ fn structured_create_update_destroy_duplicate_unknown_and_refused_update_are_ato
 }
 
 #[test]
-fn frame_rejects_nonfinite_structured_numbers_before_json_encoding() {
+fn frame_rejects_nonfinite_structured_numbers() {
     let mut invalid = structured_descriptor();
     if let BillboardContent::Structured { indicator } = &mut invalid.content {
         indicator.meters[0].preview = Some(f32::NAN);
@@ -568,10 +546,4 @@ fn frame_rejects_nonfinite_structured_numbers_before_json_encoding() {
             field: "billboard.meter.preview",
         })
     );
-    assert!(matches!(
-        frame.encode_json(),
-        Err(PresentationJsonError::InvalidFrame(
-            PresentationFrameError::NonFiniteNumber { .. }
-        ))
-    ));
 }

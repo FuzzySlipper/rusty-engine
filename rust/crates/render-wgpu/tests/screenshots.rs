@@ -101,7 +101,6 @@ impl Harness {
         let delta = self
             .world
             .apply(RenderFrameDiff {
-                schema_version: RENDER_FRAME_SCHEMA_VERSION,
                 publication: None,
                 ops,
             })
@@ -114,7 +113,6 @@ impl Harness {
         let delta = self
             .world
             .apply(RenderFrameDiff {
-                schema_version: RENDER_FRAME_SCHEMA_VERSION,
                 publication: None,
                 ops,
             })
@@ -256,7 +254,6 @@ fn cube() -> MeshPayloadDescriptor {
 
 fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
-        schema_version: 1,
         id: id.to_owned(),
         color,
         texture: texture.map(str::to_owned),
