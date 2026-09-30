@@ -3,9 +3,9 @@
 //! [`RenderOutputWork`], and their results arrive between calls, never
 //! through a callback.
 use crate::{
-    appearance::CsharpRenderResource,
     camera_view::RuntimeCameraViewCall,
     composition::{borrowed_utf8, ABI_OK},
+    render_resources::CsharpRenderResource,
     CsharpEngineServicesError,
 };
 use csharp_engine_abi::*;

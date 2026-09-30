@@ -18,6 +18,7 @@ mod perception;
 mod persistence;
 mod presentation;
 mod render_output;
+mod render_resources;
 mod rng;
 mod spatial;
 mod ui;
@@ -27,16 +28,14 @@ mod voxel_content;
 mod voxel_scene_presentation;
 mod world_origin;
 
-pub use appearance::{
-    AnimationRealizationFact, CsharpRenderResource, CsharpRenderResourceKind,
-    GhostPlateRealizationFact,
-};
+pub use appearance::{AnimationRealizationFact, GhostPlateRealizationFact};
 pub use audio::AudioRealizationFact;
 pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
     CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,
 };
 pub use render_output::RenderOutputWork;
+pub use render_resources::{CsharpRenderResource, CsharpRenderResourceKind};
 pub use video::VideoRealizationFact;
 
 pub use content::ProductContentBundles;

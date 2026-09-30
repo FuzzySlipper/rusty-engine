@@ -1,7 +1,6 @@
 use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesError, ABI_OK};
-use asset_import::{
-    admit_glb_source, glb_relative_resource_uris, import_animated_glb_asset, GlbSourceClosure,
-    GltfResource, ImportContext, SourceUri,
+use crate::render_resources::{
+    CsharpRenderResource, CsharpRenderResourceKind, RenderResourceImports, RenderResourceRegistry,
 };
 use csharp_engine_abi::*;
 use render_model::*;
@@ -102,310 +101,6 @@ pub enum AnimationRealizationFact {
         sequence: u32,
         reason: String,
     },
-}
-
-/// Immutable renderer content selected through the Engine appearance API.
-/// Host bundle realization remains the runtime's responsibility.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CsharpRenderResource {
-    kind: CsharpRenderResourceKind,
-    identity: String,
-    content_hash: String,
-    path: String,
-    bytes: Arc<[u8]>,
-    texture: Option<TextureDescriptor>,
-    animated_mesh: Option<AnimatedMeshAsset>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CsharpRenderResourceKind {
-    Texture,
-    Mesh,
-    Font,
-    Audio,
-    Video,
-    AnimatedMesh,
-    AnimationClipPack,
-}
-
-impl CsharpRenderResource {
-    fn admit_texture(
-        path: String,
-        bytes: Arc<[u8]>,
-        filter: NativeTextureFilter,
-        wrap: NativeTextureWrap,
-    ) -> Result<Self, CsharpEngineServicesError> {
-        let path = renderer_path(path, ".png")?;
-        let mut descriptor = TextureDescriptor::admit_png_rgba8_resource(
-            "texture/csharp-product".to_owned(),
-            &bytes,
-            match filter {
-                NativeTextureFilter::Nearest => TextureFilter::Nearest,
-                NativeTextureFilter::Linear => TextureFilter::Linear,
-            },
-            match wrap {
-                NativeTextureWrap::Clamp => TextureWrap::Clamp,
-                NativeTextureWrap::Repeat => TextureWrap::Repeat,
-            },
-            1,
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_TEXTURE",
-                format!("renderer resource is not an admitted PNG: {error:?}"),
-            )
-        })?;
-        let content_hash = descriptor
-            .content_hash
-            .clone()
-            .expect("resource-backed texture has a content hash");
-        let mut identity = format!(
-            "texture/csharp-product-{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("Engine texture hash uses SHA-256")
-        );
-        if filter != NativeTextureFilter::Nearest || wrap != NativeTextureWrap::Clamp {
-            identity.push_str(&format!("-f{}-w{}", filter as u32, wrap as u32));
-        }
-        descriptor.id = identity.clone();
-        descriptor.validate().map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_TEXTURE",
-                format!("renderer texture identity is invalid: {error:?}"),
-            )
-        })?;
-        let resource_identity = match descriptor.payload.as_ref().map(|payload| &payload.source) {
-            Some(TexturePayloadSource::Resource { resource }) => resource.clone(),
-            _ => {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_TEXTURE",
-                    "renderer texture payload did not retain its content resource identity",
-                ));
-            }
-        };
-        Ok(Self {
-            kind: CsharpRenderResourceKind::Texture,
-            identity: resource_identity,
-            content_hash,
-            path,
-            bytes,
-            texture: Some(descriptor),
-            animated_mesh: None,
-        })
-    }
-
-    fn admit_mesh(
-        path: String,
-        bytes: Arc<[u8]>,
-        content_hash: String,
-    ) -> Result<Self, CsharpEngineServicesError> {
-        let path = renderer_path(path, ".rmesh")?;
-        validate_mesh_resource_header(&bytes).map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_RENDER_RESOURCE_MESH", format!("{error:?}"))
-        })?;
-        Ok(Self {
-            kind: CsharpRenderResourceKind::Mesh,
-            identity: format!("mesh-resource/{}", &content_hash["sha256:".len()..]),
-            content_hash,
-            path,
-            bytes,
-            texture: None,
-            animated_mesh: None,
-        })
-    }
-
-    fn from_packed_mesh(path: String, packed: PackedMeshResource) -> Self {
-        Self {
-            kind: CsharpRenderResourceKind::Mesh,
-            identity: packed.resource,
-            content_hash: packed.content_hash,
-            path,
-            bytes: Arc::from(packed.bytes),
-            texture: None,
-            animated_mesh: None,
-        }
-    }
-
-    fn admit_font(path: String, bytes: Vec<u8>) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-
-        let path = renderer_path(path, ".woff2")?;
-        if bytes.len() < 4 || bytes.get(..4) != Some(b"wOF2") {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_FONT",
-                "font resource is not an admitted WOFF2 body",
-            ));
-        }
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-        let identity = format!(
-            "font/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
-        Ok(Self {
-            kind: CsharpRenderResourceKind::Font,
-            identity,
-            content_hash,
-            path,
-            bytes: Arc::from(bytes),
-            texture: None,
-            animated_mesh: None,
-        })
-    }
-
-    pub(crate) fn admit_audio(
-        path: String,
-        bytes: Vec<u8>,
-    ) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-
-        let container = render_model::AudioContainer::identify(&bytes).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_CONTAINER",
-                render_model::AUDIO_CONTAINER_POLICY,
-            )
-        })?;
-        let path = renderer_path(path, container.extension())?;
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-        let identity = format!(
-            "audio-resource/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
-        Ok(Self {
-            kind: CsharpRenderResourceKind::Audio,
-            identity,
-            content_hash,
-            path,
-            bytes: Arc::from(bytes),
-            texture: None,
-            animated_mesh: None,
-        })
-    }
-
-    pub(crate) fn admit_video(
-        path: String,
-        bytes: Vec<u8>,
-    ) -> Result<Self, CsharpEngineServicesError> {
-        use sha2::{Digest, Sha256};
-        let path = renderer_path(path, ".webm")?;
-        if bytes.get(..4) != Some(&[0x1a, 0x45, 0xdf, 0xa3])
-            || !bytes[..bytes.len().min(1024)]
-                .windows(4)
-                .any(|window| window == b"webm")
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_VIDEO_RESOURCE_WEBM",
-                "video resource must be an admitted WebM EBML body",
-            ));
-        }
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-        let identity = format!(
-            "video-resource/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
-        Ok(Self {
-            kind: CsharpRenderResourceKind::Video,
-            identity,
-            content_hash,
-            path,
-            bytes: Arc::from(bytes),
-            texture: None,
-            animated_mesh: None,
-        })
-    }
-
-    pub(crate) fn admit_animated_mesh(
-        path: String,
-        bytes: Vec<u8>,
-    ) -> Result<Self, CsharpEngineServicesError> {
-        let path = renderer_path(path, ".glb")?;
-        let relative_path = path
-            .strip_prefix("content/")
-            .expect("renderer path retains content prefix");
-        let outcome = import_animated_glb_asset(
-            &SourceUri::RelativePath(relative_path.to_owned()),
-            &bytes,
-            &ImportContext::default(),
-        );
-        let imported = outcome.assets.ok_or_else(|| {
-            let detail = outcome
-                .diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ");
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_GLB_ADMISSION",
-                if detail.is_empty() {
-                    "animated GLB admission produced no asset".to_owned()
-                } else {
-                    detail
-                },
-            )
-        })?;
-        let content_hash = imported
-            .animated_mesh
-            .content_hash
-            .clone()
-            .expect("animated import assigns the content digest");
-        let identity = format!(
-            "animated-mesh-resource/{}",
-            content_hash
-                .strip_prefix("sha256:")
-                .expect("SHA-256 prefix")
-        );
-        Ok(Self {
-            kind: CsharpRenderResourceKind::AnimatedMesh,
-            identity,
-            content_hash,
-            path,
-            bytes: Arc::from(imported.runtime_resource_bytes),
-            texture: None,
-            animated_mesh: Some(imported.animated_mesh),
-        })
-    }
-
-    pub const fn kind(&self) -> CsharpRenderResourceKind {
-        self.kind
-    }
-    pub fn identity(&self) -> &str {
-        &self.identity
-    }
-    pub(crate) fn asset_identity(&self) -> &str {
-        self.texture
-            .as_ref()
-            .map(|texture| texture.id.as_str())
-            .unwrap_or(&self.identity)
-    }
-    pub fn content_hash(&self) -> &str {
-        &self.content_hash
-    }
-    pub fn path(&self) -> &str {
-        &self.path
-    }
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-    /// Shares the immutable body with Engine host delivery without copying it.
-    pub fn shared_bytes(&self) -> Arc<[u8]> {
-        Arc::clone(&self.bytes)
-    }
-    pub(crate) fn texture(&self) -> Option<&TextureDescriptor> {
-        self.texture.as_ref()
-    }
-    pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
-        self.animated_mesh.as_ref()
-    }
-
-    fn animated_mesh_mut(&mut self) -> Option<&mut AnimatedMeshAsset> {
-        self.animated_mesh.as_mut()
-    }
 }
 
 impl RuntimeAppearanceState {
@@ -522,35 +217,6 @@ fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteApp
         },
         material: NativeSpriteMaterialDescriptor::default(),
     }
-}
-
-#[cfg(test)]
-#[test]
-fn a_released_body_stays_servable_through_the_next_call() {
-    // #8771: output of the releasing call can still name the body; the
-    // renderer reads it after the call, so it stays until the call after next.
-    let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
-    let mut bridge =
-        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
-    bridge.begin_call();
-    let texture = bridge
-        .open_resource(&tests::resource_request("atlas.png"))
-        .expect("texture")
-        .handle;
-    bridge
-        .destroy_resource(texture)
-        .expect("release in the same call");
-    bridge.end_call();
-    let released =
-        |bridge: &RuntimeAppearanceBridge| bridge.state.recently_released_resources().count();
-    assert_eq!(released(&bridge), 1, "after the releasing call");
-    bridge.begin_call();
-    bridge.end_call();
-    assert_eq!(released(&bridge), 1, "through the next call");
-    bridge.begin_call();
-    bridge.end_call();
-    assert_eq!(released(&bridge), 0, "gone after that");
 }
 
 #[cfg(test)]
@@ -1402,159 +1068,11 @@ fn sprite_playback_frame_selection_updates_cursor_and_renderer_atomically() {
     );
 }
 
-fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineServicesError> {
-    if !path.starts_with("content/") || !path.ends_with(extension) {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_RENDER_RESOURCE_PATH",
-            "renderer resource must use its fixed content path and media extension",
-        ));
-    }
-    normalize_bundle_path(&path)
-}
-
-struct PackedAnimatedSource {
-    bytes: Vec<u8>,
-    dependencies: Vec<(String, Arc<[u8]>)>,
-}
-
-fn pack_animated_glb_closure(
-    root_path: &str,
-    root_bytes: &[u8],
-    content_resources: &BTreeMap<String, Arc<[u8]>>,
-) -> Result<PackedAnimatedSource, CsharpEngineServicesError> {
-    let resource_uris = glb_relative_resource_uris(root_bytes).map_err(|diagnostic| {
-        CsharpEngineServicesError::new(
-            "CSHARP_ANIMATION_GLB_CLOSURE",
-            format!(
-                "{}: {} ({:?})",
-                diagnostic.locus, diagnostic.message, diagnostic.code
-            ),
-        )
-    })?;
-    let directory = root_path
-        .rsplit_once('/')
-        .map_or("", |(directory, _)| directory);
-    let mut dependencies = Vec::new();
-    let resources = resource_uris
-        .into_iter()
-        .map(|uri| {
-            let content_path = if directory.is_empty() {
-                uri.clone()
-            } else {
-                format!("{directory}/{uri}")
-            };
-            let bytes = content_resources.get(&content_path).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_GLB_CLOSURE",
-                    format!("animated GLB dependency `{content_path}` is missing"),
-                )
-            })?;
-            dependencies.push((content_path, Arc::clone(bytes)));
-            Ok(GltfResource {
-                uri,
-                bytes: bytes.to_vec(),
-            })
-        })
-        .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
-    admit_glb_source(&GlbSourceClosure {
-        root_glb: root_bytes.to_vec(),
-        resources,
-    })
-    .map(|packed| PackedAnimatedSource {
-        bytes: packed.glb_bytes,
-        dependencies,
-    })
-    .map_err(|diagnostic| {
-        CsharpEngineServicesError::new(
-            "CSHARP_ANIMATION_GLB_CLOSURE",
-            format!(
-                "{}: {} ({:?})",
-                diagnostic.locus, diagnostic.message, diagnostic.code
-            ),
-        )
-    })
-}
-
-fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesError> {
-    if value.is_empty()
-        || value.len() > 512
-        || value.starts_with('/')
-        || value.contains('\\')
-        || value
-            .split('/')
-            .any(|part| part.is_empty() || matches!(part, "." | ".."))
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'-' | b'_' | b'/')
-        })
-    {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_RENDER_RESOURCE_PATH",
-            "renderer resource path must be a bounded normalized relative ASCII path",
-        ));
-    }
-    Ok(value.to_owned())
-}
-
 #[cfg(test)]
 thread_local! {
     pub(crate) static GRAPHICS_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static MEDIA_SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static RESOURCE_INVENTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Monotonic slots keep stale handles invalid while released payloads leave memory.
-impl RuntimeAppearanceData {
-    /// Released bodies the renderer may still read for recent output.
-    pub(crate) fn recently_released_resources(
-        &self,
-    ) -> impl Iterator<Item = &CsharpRenderResource> {
-        self.released_this_call
-            .iter()
-            .chain(&self.released_last_call)
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct RenderResourceSlots {
-    entries: BTreeMap<usize, CsharpRenderResource>,
-    next: usize,
-}
-impl RenderResourceSlots {
-    fn get(&self, index: usize) -> Option<&CsharpRenderResource> {
-        self.entries.get(&index)
-    }
-    fn get_mut(&mut self, index: usize) -> Option<&mut CsharpRenderResource> {
-        self.entries.get_mut(&index)
-    }
-    fn remove(&mut self, index: usize) -> Option<CsharpRenderResource> {
-        self.entries.remove(&index)
-    }
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &CsharpRenderResource> {
-        #[cfg(test)]
-        RESOURCE_INVENTORY_READS.with(|count| count.set(count.get() + 1));
-        self.entries.values()
-    }
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-    #[cfg(test)]
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-    #[cfg(test)]
-    pub(crate) fn first(&self) -> Option<&CsharpRenderResource> {
-        self.entries.values().next()
-    }
-    fn push(&mut self, resource: CsharpRenderResource) {
-        self.entries.insert(self.next, resource);
-        self.next += 1;
-    }
-}
-impl std::ops::Index<usize> for RenderResourceSlots {
-    type Output = CsharpRenderResource;
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.entries[&index]
-    }
 }
 
 /// Graphics state. A product call owns it for the call's duration, so the
@@ -1593,17 +1111,7 @@ pub(crate) struct RuntimeAppearanceData {
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
     next_material: u64,
-    pub(crate) render_resources: RenderResourceSlots,
-    /// Bodies released during the current call, and during the call before
-    /// it. The renderer reads a body after it receives the call's output, so
-    /// a texture defined and released within one call (#8771) stays servable
-    /// for one more call instead of forcing a renderer rebaseline.
-    released_this_call: Vec<CsharpRenderResource>,
-    released_last_call: Vec<CsharpRenderResource>,
-    resource_paths: BTreeMap<(String, NativeTextureFilter, NativeTextureWrap), u64>,
-    resource_identities: BTreeMap<String, u64>,
-    /// Each explicit resource admission gives the caller one releasable owner.
-    resource_open_counts: BTreeMap<u64, u32>,
+    pub(crate) render_resources: RenderResourceRegistry,
     /// Direct users hold exact resource handles, never projector catalog entries.
     appearance_resources: BTreeMap<u64, BTreeSet<u64>>,
     material_resources: BTreeMap<u64, BTreeSet<u64>>,
@@ -1799,18 +1307,7 @@ impl RuntimeAppearanceCall {
         &self,
         handle: u64,
     ) -> Result<TextureDescriptor, CsharpEngineServicesError> {
-        let index = usize::try_from(handle.saturating_sub(1)).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "invalid resource handle",
-            )
-        })?;
-        let resource = self.state.render_resources.get(index).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "unknown resource handle",
-            )
-        })?;
+        let resource = self.state.render_resources.resource(handle)?;
         if resource.kind() != CsharpRenderResourceKind::Texture {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SKY_TEXTURE",
@@ -1828,19 +1325,6 @@ impl RuntimeAppearanceCall {
 
 pub(crate) type CollisionMeshGeometry = (Vec<[f64; 3]>, Vec<[u32; 3]>);
 
-struct ImportedStaticContent {
-    source: Arc<[u8]>,
-    payload: MeshPayloadDescriptor,
-    material_slots: Vec<MeshMaterialSlot>,
-    resource: CsharpRenderResource,
-}
-
-struct ImportedAnimatedContent {
-    source: Arc<[u8]>,
-    dependencies: Vec<(String, Arc<[u8]>)>,
-    resource: CsharpRenderResource,
-}
-
 /// Engine-owned appearance admission and retained projection for trusted C# products.
 /// `Create` selects the immutable resources the renderer reads; calls stage resource
 /// selection, newly admitted appearances, and snapshots so a failure cannot partly advance
@@ -1850,11 +1334,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     /// Held in `state` while a product call owns the real state.
     idle_state: RuntimeAppearanceState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
-    // Reuse derived assets for the immutable admitted source lifetime. Separate
-    // from staged state: importing does not mutate product-visible ownership.
-    imported_static: BTreeMap<String, ImportedStaticContent>,
-    imported_mesh: BTreeMap<String, CsharpRenderResource>,
-    imported_animated: BTreeMap<String, ImportedAnimatedContent>,
+    imports: RenderResourceImports,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     /// Backing of the latest borrowed appearance result.
     borrowed: crate::operation_diagnostics::BorrowedResult,
@@ -1890,12 +1370,7 @@ impl RuntimeAppearanceBridge {
             materials: BTreeMap::new(),
             appearance_materials: BTreeMap::new(),
             next_material: 1,
-            render_resources: RenderResourceSlots::default(),
-            released_this_call: Vec::new(),
-            released_last_call: Vec::new(),
-            resource_paths: BTreeMap::new(),
-            resource_identities: BTreeMap::new(),
-            resource_open_counts: BTreeMap::new(),
+            render_resources: RenderResourceRegistry::default(),
             appearance_resources: BTreeMap::new(),
             material_resources: BTreeMap::new(),
             sprite_atlas_resources: BTreeMap::new(),
@@ -1932,9 +1407,7 @@ impl RuntimeAppearanceBridge {
             idle_state: state.clone(),
             state,
             content_resources,
-            imported_static: BTreeMap::new(),
-            imported_mesh: BTreeMap::new(),
-            imported_animated: BTreeMap::new(),
+            imports: RenderResourceImports::default(),
             operation_diagnostics: Default::default(),
             borrowed: Default::default(),
             content: None,
@@ -2027,9 +1500,9 @@ impl RuntimeAppearanceBridge {
         // Move the state into the call and leave the idle placeholder behind,
         // so the call's first write does not copy the whole graphics state.
         let mut state = std::mem::replace(&mut self.state, self.idle_state.clone());
-        if !state.released_this_call.is_empty() || !state.released_last_call.is_empty() {
-            let released = std::mem::take(&mut state.released_this_call);
-            state.released_last_call = released;
+        // Checked first so that a call with nothing released does not write.
+        if state.render_resources.recently_released().next().is_some() {
+            state.render_resources.begin_call();
         }
         self.staged = Some(RuntimeAppearanceCall {
             state,
@@ -3386,75 +2859,11 @@ impl RuntimeAppearanceBridge {
         filter: NativeTextureFilter,
         wrap: NativeTextureWrap,
     ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
-        let relative_path = content.path;
-        let requested_path = relative_path.clone();
-        let bytes = content.bytes;
-        let browser_path = format!("content/{relative_path}");
-        let resource = match () {
-            _ if relative_path.ends_with(".png") => {
-                CsharpRenderResource::admit_texture(browser_path.clone(), bytes, filter, wrap)
-            }
-            _ if relative_path.ends_with(".rmesh") => {
-                let resource = match self.imported_mesh.get(&relative_path) {
-                    Some(resource) if Arc::ptr_eq(&resource.bytes, &bytes) => resource.clone(),
-                    _ => {
-                        let hash = if self.content.is_some() {
-                            let digest = content.identity.of(&bytes);
-                            format!(
-                                "sha256:{:016x}{:016x}{:016x}{:016x}",
-                                digest.word0, digest.word1, digest.word2, digest.word3
-                            )
-                        } else {
-                            // Standalone source construction has no Content admission.
-                            mesh_resource_content_hash(&bytes)
-                        };
-                        let resource =
-                            CsharpRenderResource::admit_mesh(browser_path.clone(), bytes, hash)?;
-                        self.imported_mesh
-                            .insert(relative_path.clone(), resource.clone());
-                        resource
-                    }
-                };
-                Ok(resource)
-            }
-            _ if relative_path.ends_with(".woff2") => {
-                CsharpRenderResource::admit_font(browser_path.clone(), bytes.to_vec())
-            }
-            _ => {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_KIND",
-                    format!(
-                        "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, or WOFF2 file"
-                    ),
-                ));
-            }
-        }?;
-        let handle = self.stage_resource(resource, [])?;
-        self.acquire_resource_owner(handle)?;
-        self.resource_info(handle)
-    }
-
-    fn acquire_resource_owner(&mut self, handle: u64) -> Result<(), CsharpEngineServicesError> {
-        let staged = self.staged_mut()?;
-        if staged
-            .state
-            .render_resources
-            .get(resource_slot(handle)?)
-            .is_none()
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "unknown resource handle",
-            ));
-        }
-        let count = staged.state.resource_open_counts.entry(handle).or_default();
-        *count = count.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_OWNER",
-                "renderer resource owner count overflowed",
-            )
-        })?;
-        Ok(())
+        let content_admitted = self.content.is_some();
+        let resource = self.imports.file(content, filter, wrap, content_admitted)?;
+        let resources = &mut self.staged_mut()?.state.render_resources;
+        let handle = resources.admit(resource)?;
+        resources.info(handle)
     }
 
     fn destroy_resource(
@@ -3466,30 +2875,7 @@ impl RuntimeAppearanceBridge {
             .camera_view
             .is_some_and(|camera_view| unsafe { (&*camera_view).uses_sky_texture(handle) });
         let staged = self.staged_mut()?;
-        if staged
-            .state
-            .render_resources
-            .get(resource_slot(handle)?)
-            .is_none()
-        {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "renderer resource is not live",
-            ));
-        }
-        let count = staged
-            .state
-            .resource_open_counts
-            .get(&handle)
-            .copied()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_OWNER",
-                    "renderer resource has no caller-owned admission",
-                )
-            })?;
-        if count > 1 {
-            staged.state.resource_open_counts.insert(handle, count - 1);
+        if !staged.state.render_resources.release_owner(handle)? {
             return Ok(());
         }
         if let Some(owner) = resource_live_owner(&staged.state, handle) {
@@ -3504,132 +2890,18 @@ impl RuntimeAppearanceBridge {
                 "clear the active sky background before releasing its texture resource",
             ));
         }
-        staged.state.resource_open_counts.remove(&handle);
         remove_resource(&mut staged.state, handle)?;
         staged.resource_releases_pending = true;
         Ok(())
     }
 
-    fn stage_resource(
-        &mut self,
-        resource: CsharpRenderResource,
-        paths: impl IntoIterator<Item = String>,
-    ) -> Result<u64, CsharpEngineServicesError> {
-        let (filter, wrap) = resource.texture().map_or(
-            (NativeTextureFilter::Nearest, NativeTextureWrap::Clamp),
-            |texture| {
-                (
-                    match texture.filter {
-                        TextureFilter::Nearest => NativeTextureFilter::Nearest,
-                        TextureFilter::Linear => NativeTextureFilter::Linear,
-                    },
-                    match texture.wrap {
-                        TextureWrap::Clamp => NativeTextureWrap::Clamp,
-                        TextureWrap::Repeat => NativeTextureWrap::Repeat,
-                    },
-                )
-            },
-        );
-        let staged = self.staged_mut()?;
-        let handle = if let Some(handle) = staged
-            .state
-            .resource_identities
-            .get(resource.asset_identity())
-            .copied()
-        {
-            handle
-        } else {
-            let handle = u64::try_from(staged.state.render_resources.next)
-                .map_err(|_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_HANDLE",
-                        "renderer resource handle overflowed",
-                    )
-                })?
-                .checked_add(1)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_HANDLE",
-                        "renderer resource handle overflowed",
-                    )
-                })?;
-            let identity = resource.asset_identity().to_owned();
-            staged.state.render_resources.push(resource);
-            staged.state.resource_identities.insert(identity, handle);
-            handle
-        };
-        for path in paths {
-            staged
-                .state
-                .resource_paths
-                .insert((path, filter, wrap), handle);
-        }
-        Ok(handle)
-    }
-
-    fn resource_info(
-        &self,
-        handle: u64,
-    ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
-        let resource = self.resource(handle)?;
-        Ok(NativeRenderResourceInfo {
-            handle: NativeRenderResourceHandle { value: handle },
-            kind: match resource.kind() {
-                CsharpRenderResourceKind::Texture => NativeRenderResourceKind::Texture,
-                CsharpRenderResourceKind::Mesh => NativeRenderResourceKind::StaticMesh,
-                CsharpRenderResourceKind::Font => NativeRenderResourceKind::Font,
-                CsharpRenderResourceKind::Audio => {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_KIND",
-                        "audio resources are exposed by the Audio service, not Appearance",
-                    ));
-                }
-                CsharpRenderResourceKind::Video => {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_KIND",
-                        "video resources are exposed by the Video service, not Appearance",
-                    ));
-                }
-                CsharpRenderResourceKind::AnimatedMesh => {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_KIND",
-                        "animated GLB resources are exposed by the Animation service, not Appearance",
-                    ));
-                }
-                CsharpRenderResourceKind::AnimationClipPack => {
-                    return Err(CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_KIND",
-                        "animation clip-pack GLB resources are exposed by the Animation service, not Appearance",
-                    ));
-                }
-            },
-            byte_length: u32::try_from(resource.bytes().len()).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_SIZE",
-                    "renderer resource byte length exceeded u32",
-                )
-            })?,
-        })
-    }
-
     fn resource(&self, handle: u64) -> Result<&CsharpRenderResource, CsharpEngineServicesError> {
-        let index = usize::try_from(handle.saturating_sub(1)).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "invalid resource handle",
-            )
-        })?;
         let state = self
             .staged
             .as_ref()
             .map(|staged| &staged.state)
             .unwrap_or(&self.state);
-        state.render_resources.get(index).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "unknown resource handle",
-            )
-        })
+        state.render_resources.resource(handle)
     }
 
     fn allocate_appearance(
@@ -3661,12 +2933,7 @@ impl RuntimeAppearanceBridge {
             .collect::<BTreeSet<_>>();
         let staged = self.staged_mut()?;
         for resource in &resources {
-            if staged
-                .state
-                .render_resources
-                .get(resource_slot(*resource)?)
-                .is_none()
-            {
+            if staged.state.render_resources.get(*resource).is_none() {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_RENDER_RESOURCE_HANDLE",
                     "appearance selected an unavailable resource",
@@ -3860,25 +3127,22 @@ impl RuntimeAppearanceBridge {
                 None
             }
             Some(_) => {
-                let index =
-                    usize::try_from(request.texture.value.checked_sub(1).ok_or_else(|| {
+                if request.texture.value == 0 {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                        "textured authored material requires a selected texture resource",
+                    ));
+                }
+                let resource = staged
+                    .state
+                    .render_resources
+                    .get(request.texture.value)
+                    .ok_or_else(|| {
                         CsharpEngineServicesError::new(
                             "CSHARP_AUTHORED_MATERIAL_TEXTURE",
-                            "textured authored material requires a selected texture resource",
-                        )
-                    })?)
-                    .map_err(|_| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_AUTHORED_MATERIAL_TEXTURE",
-                            "authored material texture handle is invalid",
+                            "authored material texture handle is not live",
                         )
                     })?;
-                let resource = staged.state.render_resources.get(index).ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
-                        "authored material texture handle is not live",
-                    )
-                })?;
                 if resource.kind() != CsharpRenderResourceKind::Texture {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_AUTHORED_MATERIAL_TEXTURE",
@@ -4266,14 +3530,7 @@ impl RuntimeAppearanceBridge {
         let embedded_slots = staged
             .state
             .render_resources
-            .get(
-                usize::try_from(resource_handle.saturating_sub(1)).map_err(|_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_HANDLE",
-                        "invalid animated mesh resource handle",
-                    )
-                })?,
-            )
+            .get(resource_handle)
             .and_then(CsharpRenderResource::animated_mesh)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
@@ -4948,40 +4205,13 @@ impl RuntimeAppearanceBridge {
         content: crate::content::RetainedContent,
         color: NativeColor,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-        if !self
-            .imported_static
-            .get(&content.path)
-            .is_some_and(|imported| Arc::ptr_eq(&imported.source, &content.bytes))
-        {
-            let bytes = content.bytes.as_ref();
-            let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_STATIC_MESH_CONTENT_JSON", error.to_string())
-            })?;
-            let mut packed = pack_mesh_resources(&[asset.payload], MAX_MESH_RESOURCE_BYTES)
-                .map_err(|error| {
-                    CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
-                })?;
-            let payload = packed.payloads.pop().expect("one packed inline payload");
-            let packed_resource = packed.resources.pop().expect("one packed inline resource");
-            let content_hash = &packed_resource.content_hash["sha256:".len()..];
-            let browser_path = format!("content/engine-mesh/{content_hash}.rmesh");
-            let resource = CsharpRenderResource::from_packed_mesh(browser_path, packed_resource);
-            self.imported_static.insert(
-                content.path.clone(),
-                ImportedStaticContent {
-                    source: Arc::clone(&content.bytes),
-                    payload,
-                    material_slots: asset.material_slots,
-                    resource,
-                },
-            );
-        }
-        let imported = &self.imported_static[&content.path];
-        let payload = imported.payload.clone();
-        let slots = imported.material_slots.clone();
-        let resource = imported.resource.clone();
+        let (payload, slots, resource) = self.imports.static_mesh(content)?;
         let browser_path = resource.path().to_owned();
-        let resource = self.stage_resource(resource, [browser_path])?;
+        let resource = self
+            .staged_mut()?
+            .state
+            .render_resources
+            .stage(resource, [browser_path])?;
         let appearance = self.create_retained_static_mesh(payload, slots, color)?;
         self.set_appearance_resources(appearance.value, [resource])?;
         Ok(appearance)
@@ -6083,64 +5313,8 @@ impl RuntimeAppearanceBridge {
         content: crate::content::RetainedContent,
         clip_pack: bool,
     ) -> Result<NativeRenderResourceHandle, CsharpEngineServicesError> {
-        // Live imports belong only to reference/resource owners. Immutable
-        // startup sources retain the existing import cache across opens.
-        let mut resource = if content.transient {
-            let packed = pack_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
-            CsharpRenderResource::admit_animated_mesh(
-                format!("content/{}", content.path),
-                packed.bytes,
-            )?
-        } else {
-            let key = content.path.clone();
-            let matches_source = self.imported_animated.get(&key).is_some_and(|imported| {
-                Arc::ptr_eq(&imported.source, &content.bytes)
-                    && imported.dependencies.iter().all(|(path, bytes)| {
-                        content
-                            .files
-                            .get(path)
-                            .is_some_and(|current| Arc::ptr_eq(current, bytes))
-                    })
-            });
-            if !matches_source {
-                let packed =
-                    pack_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
-                let resource = CsharpRenderResource::admit_animated_mesh(
-                    format!("content/{}", content.path),
-                    packed.bytes,
-                )?;
-                self.imported_animated.insert(
-                    key.clone(),
-                    ImportedAnimatedContent {
-                        source: content.bytes,
-                        dependencies: packed.dependencies,
-                        resource,
-                    },
-                );
-            }
-            self.imported_animated[&key].resource.clone()
-        };
-        if clip_pack {
-            if resource
-                .animated_mesh
-                .as_ref()
-                .expect("imported GLB descriptor")
-                .clips
-                .is_empty()
-            {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_CLIP_PACK_ADMISSION",
-                    "animation clip-pack GLB must contain clips",
-                ));
-            }
-            resource.kind = CsharpRenderResourceKind::AnimationClipPack;
-            resource.identity = format!(
-                "clip-pack-resource/{}",
-                &resource.content_hash["sha256:".len()..]
-            );
-        }
-        let handle = self.stage_resource(resource, [])?;
-        self.acquire_resource_owner(handle)?;
+        let resource = self.imports.animated(content, clip_pack)?;
+        let handle = self.staged_mut()?.state.render_resources.admit(resource)?;
         Ok(NativeRenderResourceHandle { value: handle })
     }
 
@@ -6240,26 +5414,16 @@ impl RuntimeAppearanceBridge {
                 "associate clip packs before creating an animated appearance or graph for the primary mesh",
             ));
         }
-        let primary_resource = staged
+        *staged
             .state
             .render_resources
-            .get_mut(
-                usize::try_from(request.primary_mesh.value.saturating_sub(1)).map_err(|_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_HANDLE",
-                        "invalid primary animated mesh resource handle",
-                    )
-                })?,
-            )
+            .animated_mesh_mut(request.primary_mesh.value)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_RENDER_RESOURCE_HANDLE",
                     "unknown primary animated mesh resource handle",
                 )
-            })?;
-        *primary_resource
-            .animated_mesh_mut()
-            .expect("validated primary descriptor") = assembled;
+            })? = assembled;
         staged
             .state
             .animation_clip_pack_resources
@@ -6393,12 +5557,7 @@ impl RuntimeAppearanceBridge {
         }
         let mesh = state
             .render_resources
-            .get(usize::try_from(resource.saturating_sub(1)).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_RESOURCE",
-                    "animated resource handle overflow",
-                )
-            })?)
+            .get(resource)
             .and_then(CsharpRenderResource::animated_mesh)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
@@ -6860,14 +6019,7 @@ impl RuntimeAppearanceBridge {
         let resource = staged
             .state
             .render_resources
-            .get(
-                usize::try_from(graph.resource.saturating_sub(1)).map_err(|_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_ANIMATION_RESOURCE",
-                        "animation resource handle overflow",
-                    )
-                })?,
-            )
+            .get(graph.resource)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_ANIMATION_RESOURCE",
@@ -7753,7 +6905,7 @@ impl RuntimeAppearanceBridge {
     }
 }
 
-fn animation_assets(resources: &RenderResourceSlots) -> BTreeMap<String, ResolvedRenderAsset> {
+fn animation_assets(resources: &RenderResourceRegistry) -> BTreeMap<String, ResolvedRenderAsset> {
     resources
         .iter()
         .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
@@ -7772,7 +6924,9 @@ fn animation_assets(resources: &RenderResourceSlots) -> BTreeMap<String, Resolve
         .collect()
 }
 
-fn presentation_assets(resources: &RenderResourceSlots) -> BTreeMap<String, ResolvedRenderAsset> {
+fn presentation_assets(
+    resources: &RenderResourceRegistry,
+) -> BTreeMap<String, ResolvedRenderAsset> {
     resources
         .iter()
         .filter(|resource| {
@@ -7988,7 +7142,7 @@ fn native_particle_diagnostic_code(
     }
 }
 
-fn animation_asset_clips(resources: &RenderResourceSlots, asset: &str) -> Vec<String> {
+fn animation_asset_clips(resources: &RenderResourceRegistry, asset: &str) -> Vec<String> {
     resources
         .iter()
         .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
@@ -8008,7 +7162,7 @@ fn animation_asset_clips(resources: &RenderResourceSlots, asset: &str) -> Vec<St
         .unwrap_or_default()
 }
 
-fn animation_asset_has_clip(resources: &RenderResourceSlots, asset: &str, clip: &str) -> bool {
+fn animation_asset_has_clip(resources: &RenderResourceRegistry, asset: &str, clip: &str) -> bool {
     animation_asset_clips(resources, asset)
         .iter()
         .any(|candidate| candidate == clip)
@@ -10081,18 +9235,6 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     }
 }
 
-fn resource_slot(handle: u64) -> Result<usize, CsharpEngineServicesError> {
-    usize::try_from(handle.checked_sub(1).ok_or_else(|| {
-        CsharpEngineServicesError::new("CSHARP_RENDER_RESOURCE_HANDLE", "invalid resource handle")
-    })?)
-    .map_err(|_| {
-        CsharpEngineServicesError::new(
-            "CSHARP_RENDER_RESOURCE_HANDLE",
-            "renderer resource handle overflowed",
-        )
-    })
-}
-
 fn resource_set(handles: impl IntoIterator<Item = u64>) -> BTreeSet<u64> {
     handles.into_iter().filter(|handle| *handle != 0).collect()
 }
@@ -10154,13 +9296,7 @@ fn remove_resource(
     state: &mut RuntimeAppearanceState,
     handle: u64,
 ) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
-    let index = resource_slot(handle)?;
-    let resource = state.render_resources.remove(index).ok_or_else(|| {
-        CsharpEngineServicesError::new(
-            "CSHARP_RENDER_RESOURCE_HANDLE",
-            "renderer resource is not live",
-        )
-    })?;
+    let resource = state.render_resources.remove(handle)?;
     if let Some(texture) = resource.texture() {
         state
             .projector
@@ -10175,20 +9311,15 @@ fn remove_resource(
             .animated_meshes
             .retain(|entry| entry.asset != animated.asset);
     }
-    state.resource_identities.remove(resource.asset_identity());
-    state.resource_paths.retain(|_, mapped| *mapped != handle);
-    state.resource_open_counts.remove(&handle);
     state.animation_clip_pack_resources.remove(&handle);
-    state.released_this_call.push(resource.clone());
     Ok(resource)
 }
 
 fn release_unowned_internal_resources(state: &mut RuntimeAppearanceState) {
     loop {
-        let orphan = state.resource_identities.values().copied().find(|handle| {
-            !state.resource_open_counts.contains_key(handle)
-                && resource_live_owner(state, *handle).is_none()
-        });
+        let orphan = state
+            .render_resources
+            .unowned(|handle| resource_live_owner(state, handle).is_some());
         let Some(handle) = orphan else { break };
         // The handle came from a monotonic internal slot and has no exposed
         // owner. `resource_live_owner` establishes that no retained fact can
@@ -10200,15 +9331,12 @@ fn release_unowned_internal_resources(state: &mut RuntimeAppearanceState) {
 fn material_descriptor(
     id: String,
     request: NativeMaterialRequest,
-    resources: &RenderResourceSlots,
+    resources: &RenderResourceRegistry,
 ) -> Result<RenderMaterialDescriptor, CsharpEngineServicesError> {
     let texture = if request.texture.value == 0 {
         None
     } else {
-        let index = usize::try_from(request.texture.value - 1).map_err(|_| {
-            CsharpEngineServicesError::new("CSHARP_MATERIAL_TEXTURE", "invalid texture handle")
-        })?;
-        let resource = resources.get(index).ok_or_else(|| {
+        let resource = resources.get(request.texture.value).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_MATERIAL_TEXTURE", "unknown texture handle")
         })?;
         if resource.kind() != CsharpRenderResourceKind::Texture {
@@ -10282,7 +9410,7 @@ fn retarget_voxel_surface(surface: &mut VoxelSurfaceDescriptor, texture_id: &str
 
 fn texture_descriptor_for_material(
     material: &RenderMaterialDescriptor,
-    resources: &RenderResourceSlots,
+    resources: &RenderResourceRegistry,
 ) -> Result<Option<TextureDescriptor>, CsharpEngineServicesError> {
     let Some(identity) = material.texture.as_deref() else {
         return Ok(None);
@@ -10374,8 +9502,7 @@ pub(crate) unsafe extern "C" fn read_animated_mesh_info(
         animation_result(context, result, |bridge| {
             let mesh = bridge
                 .resource(resource.value)?
-                .animated_mesh
-                .as_ref()
+                .animated_mesh()
                 .ok_or_else(|| {
                     CsharpEngineServicesError::new(
                         "CSHARP_ANIMATION_RESOURCE",
@@ -10408,8 +9535,7 @@ pub(crate) unsafe extern "C" fn read_animation_clips(
         animation_result(context, result, |bridge| {
             let clips = bridge
                 .resource(resource.value)?
-                .animated_mesh
-                .as_ref()
+                .animated_mesh()
                 .ok_or_else(|| {
                     CsharpEngineServicesError::new(
                         "CSHARP_ANIMATION_RESOURCE",
@@ -10611,33 +9737,8 @@ pub(crate) fn appearance_operation(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::render_resources::tests::external_image_glb;
     use sha2::Digest;
-
-    fn external_image_glb(source: &[u8], uri: &str) -> Vec<u8> {
-        assert_eq!(&source[..4], b"glTF");
-        let json_length = u32::from_le_bytes(source[12..16].try_into().unwrap()) as usize;
-        let old_json_end = 20 + json_length;
-        let mut root: serde_json::Value =
-            serde_json::from_slice(&source[20..old_json_end]).unwrap();
-        let image = root["images"][0].as_object_mut().unwrap();
-        image.remove("bufferView");
-        image.remove("mimeType");
-        image.insert("uri".to_owned(), serde_json::Value::String(uri.to_owned()));
-        let mut json = serde_json::to_vec(&root).unwrap();
-        while !json.len().is_multiple_of(4) {
-            json.push(b' ');
-        }
-        let total = 12 + 8 + json.len() + source.len() - old_json_end;
-        let mut rewritten = Vec::with_capacity(total);
-        rewritten.extend_from_slice(b"glTF");
-        rewritten.extend_from_slice(&2u32.to_le_bytes());
-        rewritten.extend_from_slice(&(total as u32).to_le_bytes());
-        rewritten.extend_from_slice(&(json.len() as u32).to_le_bytes());
-        rewritten.extend_from_slice(&0x4e4f_534au32.to_le_bytes());
-        rewritten.extend_from_slice(&json);
-        rewritten.extend_from_slice(&source[old_json_end..]);
-        rewritten
-    }
 
     fn inert_particle_collision() -> NativePresentationParticleCollision {
         NativePresentationParticleCollision {
@@ -10792,23 +9893,17 @@ pub(super) mod tests {
         let pointer = bytes.as_ptr();
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-        bridge.state.render_resources.push(CsharpRenderResource {
-            kind: CsharpRenderResourceKind::Mesh,
-            identity: "mesh-resource/performance-probe".to_owned(),
-            content_hash: format!("sha256:{}", "ab".repeat(32)),
-            path: "content/performance-probe.rmesh".to_owned(),
-            bytes,
-            texture: None,
-            animated_mesh: None,
-        });
+        bridge
+            .state
+            .render_resources
+            .stage(CsharpRenderResource::test_mesh(bytes), [])
+            .unwrap();
 
         bridge.begin_call();
         let staged = bridge.staged_ref().expect("product call stage");
-        assert_eq!(staged.state.render_resources[0].bytes.as_ptr(), pointer);
-        assert_eq!(
-            staged.state.render_resources[0].bytes.len(),
-            8 * 1024 * 1024
-        );
+        let resource = staged.state.render_resources.get(1).unwrap();
+        assert_eq!(resource.bytes().as_ptr(), pointer);
+        assert_eq!(resource.bytes().len(), 8 * 1024 * 1024);
     }
 
     #[test]
@@ -10817,27 +9912,38 @@ pub(super) mod tests {
         const ITERATIONS: usize = 10_000;
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
-        bridge.state.render_resources.push(CsharpRenderResource {
-            kind: CsharpRenderResourceKind::Mesh,
-            identity: "mesh-resource/performance-probe".to_owned(),
-            content_hash: format!("sha256:{}", "ab".repeat(32)),
-            path: "content/performance-probe.rmesh".to_owned(),
-            bytes: Arc::from(vec![0x5a; 8 * 1024 * 1024]),
-            texture: None,
-            animated_mesh: None,
-        });
+        bridge
+            .state
+            .render_resources
+            .stage(
+                CsharpRenderResource::test_mesh(Arc::from(vec![0x5a; 8 * 1024 * 1024])),
+                [],
+            )
+            .unwrap();
         for _ in 0..100 {
             bridge.begin_call();
             bridge.end_call();
         }
-        let allocated_pointer = bridge.state.render_resources[0].bytes.as_ptr();
+        let allocated_pointer = bridge
+            .state
+            .render_resources
+            .get(1)
+            .unwrap()
+            .bytes()
+            .as_ptr();
         let mut durations = Vec::with_capacity(ITERATIONS);
         for _ in 0..ITERATIONS {
             let started = std::time::Instant::now();
             bridge.begin_call();
             assert_eq!(
-                bridge.staged_ref().unwrap().state.render_resources[0]
-                    .bytes
+                bridge
+                    .staged_ref()
+                    .unwrap()
+                    .state
+                    .render_resources
+                    .get(1)
+                    .unwrap()
+                    .bytes()
                     .as_ptr(),
                 allocated_pointer,
             );
@@ -12270,13 +11376,13 @@ pub(super) mod tests {
         let first = bridge
             .create_static_mesh_from_content(&request)
             .expect("first retained appearance");
-        let imported_bytes = bridge.imported_static["mesh.json"].resource.shared_bytes();
+        let imported_bytes = bridge.imports.cached("mesh.json").unwrap().shared_bytes();
         let second = bridge
             .create_static_mesh_from_content(&request)
             .expect("second retained appearance");
         assert!(Arc::ptr_eq(
             &imported_bytes,
-            &bridge.imported_static["mesh.json"].resource.shared_bytes()
+            &bridge.imports.cached("mesh.json").unwrap().shared_bytes()
         ));
         let fact = appearance_fact(first);
         unsafe { bridge.stage_snapshot(&fact, 1) }.expect("publish the first mesh");
@@ -12525,28 +11631,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn animated_embedded_image_is_packed_without_external_dependencies() {
-        const CHARACTER_GLB: &[u8] = include_bytes!(
-            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
-        );
-        let embedded = external_image_glb(CHARACTER_GLB,
-            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
-        let packed = pack_animated_glb_closure("character.glb", &embedded, &BTreeMap::new())
-            .expect("embedded image is packed without companion files");
-        assert!(packed.dependencies.is_empty());
-        assert_ne!(packed.bytes, embedded);
-        let imported = asset_import::import_animated_glb_asset(
-            &asset_import::SourceUri::RelativePath("character.glb".to_owned()),
-            &packed.bytes,
-            &asset_import::ImportContext::default(),
-        );
-        assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
-        let unchanged =
-            pack_animated_glb_closure("character.glb", CHARACTER_GLB, &BTreeMap::new()).unwrap();
-        assert_eq!(unchanged.bytes, CHARACTER_GLB);
-    }
-
-    #[test]
     fn animated_external_image_closure_is_packed_before_direct_playback() {
         const CHARACTER_GLB: &[u8] = include_bytes!(
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
@@ -12583,10 +11667,10 @@ pub(super) mod tests {
             .render_resources
             .first()
             .unwrap();
-        assert!(glb_relative_resource_uris(&packed.bytes)
+        assert!(asset_import::glb_relative_resource_uris(packed.bytes())
             .unwrap()
             .is_empty());
-        assert_ne!(packed.bytes.as_ref(), external.as_slice());
+        assert_ne!(packed.bytes(), external.as_slice());
         let appearance = bridge
             .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
             .expect("animated appearance");
@@ -12678,7 +11762,7 @@ pub(super) mod tests {
         let resource = bridge
             .admit_animated_mesh(content.retained_content(reference).unwrap())
             .unwrap();
-        assert!(bridge.imported_animated.is_empty());
+        assert!(bridge.imports.cached("live.glb").is_none());
         let appearance = bridge
             .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
             .unwrap();
@@ -12711,74 +11795,17 @@ pub(super) mod tests {
         Arc::make_mut(&mut external_content.files)
             .insert("texture.png".into(), Arc::from(RGBA_PNG));
         let external_resource = bridge.admit_animated_mesh(external_content).unwrap();
-        assert!(glb_relative_resource_uris(
-            &bridge.resource(external_resource.value).unwrap().bytes
+        assert!(asset_import::glb_relative_resource_uris(
+            bridge.resource(external_resource.value).unwrap().bytes()
         )
         .unwrap()
         .is_empty());
-        assert!(bridge.imported_animated.is_empty());
+        assert!(bridge.imports.cached("live.glb").is_none());
         bridge.destroy_resource(external_resource).unwrap();
         bridge.destroy_appearance(appearance).unwrap();
         bridge.destroy_resource(resource).unwrap();
         assert!(bridge.resource(resource.value).is_err());
         bridge.end_call();
-    }
-
-    #[test]
-    fn repeated_animated_opens_reuse_import_but_changed_dependency_reimports() {
-        const CHARACTER: &[u8] = include_bytes!(
-            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
-        );
-        let root: Arc<[u8]> = Arc::from(external_image_glb(CHARACTER, "texture.png"));
-        let mut bridge = RuntimeAppearanceBridge::new(
-            RuntimeAppearanceCatalog::default(),
-            BTreeMap::from([
-                ("character.glb".to_owned(), root),
-                ("texture.png".to_owned(), Arc::from(RGBA_PNG)),
-            ]),
-        );
-        bridge.begin_call();
-        for clip_pack in [false, true] {
-            let content = bridge.content_path("character.glb").unwrap();
-            let first = bridge
-                .admit_animated_content(content.clone(), clip_pack)
-                .unwrap();
-            let key = "character.glb";
-            let bytes = bridge.imported_animated[key].resource.shared_bytes();
-            let second = bridge.admit_animated_content(content, clip_pack).unwrap();
-            assert_eq!(first, second);
-            assert!(Arc::ptr_eq(
-                &bytes,
-                &bridge.imported_animated[key].resource.shared_bytes()
-            ));
-            assert_eq!(
-                bridge.staged.as_ref().unwrap().state.resource_open_counts[&first.value],
-                2
-            );
-            bridge.destroy_resource(first).unwrap();
-            assert!(bridge.resource(second.value).is_ok());
-            bridge.destroy_resource(second).unwrap();
-            assert!(bridge.resource(second.value).is_err());
-        }
-        let old = bridge.imported_animated["character.glb"]
-            .resource
-            .shared_bytes();
-        // A new admitted dependency must not match by root path alone. Even an
-        // identical replacement buffer requires fresh closure admission.
-        bridge
-            .content_resources
-            .insert("texture.png".to_owned(), Arc::from(RGBA_PNG));
-        let changed = bridge.content_path("character.glb").unwrap();
-        bridge.admit_animated_content(changed, false).unwrap();
-        assert!(!Arc::ptr_eq(
-            &old,
-            &bridge.imported_animated["character.glb"]
-                .resource
-                .shared_bytes()
-        ));
-        bridge.content_resources.remove("texture.png");
-        let missing = bridge.content_path("character.glb").unwrap();
-        assert!(bridge.admit_animated_content(missing, false).is_err());
     }
 
     #[test]
@@ -12868,7 +11895,6 @@ pub(super) mod tests {
         assert_eq!(error.code(), "CSHARP_ANIMATION_GLB_CLOSURE");
         let staged = bridge.staged.as_ref().unwrap();
         assert!(staged.state.render_resources.is_empty());
-        assert!(staged.state.resource_paths.is_empty());
         assert!(staged.outputs.is_empty());
     }
 
@@ -13041,9 +12067,7 @@ pub(super) mod tests {
             .expect("staged state")
             .state
             .render_resources
-            .get_mut(usize::try_from(pack.value - 1).expect("small handle"))
-            .expect("clip-pack resource")
-            .animated_mesh_mut()
+            .animated_mesh_mut(pack.value)
             .expect("clip-pack descriptor")
             .clips
             .iter_mut()

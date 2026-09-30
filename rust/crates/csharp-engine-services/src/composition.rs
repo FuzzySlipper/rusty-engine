@@ -40,9 +40,10 @@ use crate::appearance::{
     replace_sprite_from_atlas, replace_static_mesh_appearance,
     replace_static_mesh_from_content_appearance, sample_sprite_playback,
     select_sprite_playback_frame, set_sprite_frame, set_sprite_viewport, take_mesh_partition_part,
-    update_light, update_material, update_static_mesh_materials, CsharpRenderResource,
-    RuntimeAppearanceBridge, RuntimeAppearanceCall,
+    update_light, update_material, update_static_mesh_materials, RuntimeAppearanceBridge,
+    RuntimeAppearanceCall,
 };
+use crate::render_resources::CsharpRenderResource;
 
 #[allow(
     clippy::too_many_arguments,
@@ -744,15 +745,12 @@ impl EngineServiceSet {
 
     /// A retained renderer resource by identity, borrowed for an in-process
     /// renderer that reads the bytes while it holds the services.
-    pub fn borrowed_renderer_resource(
-        &self,
-        identity: &str,
-    ) -> Option<&crate::appearance::CsharpRenderResource> {
+    pub fn borrowed_renderer_resource(&self, identity: &str) -> Option<&CsharpRenderResource> {
         self.appearance
             .state
             .render_resources
             .iter()
-            .chain(self.appearance.state.recently_released_resources())
+            .chain(self.appearance.state.render_resources.recently_released())
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
             .find(|resource| resource.identity() == identity)

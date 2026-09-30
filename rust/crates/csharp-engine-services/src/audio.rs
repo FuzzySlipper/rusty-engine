@@ -17,9 +17,9 @@ use render_presentation::{
 use render_presentation::MAX_AUDIO_DIAGNOSTICS;
 
 use crate::{
-    appearance::CsharpRenderResource,
     composition::{borrowed_utf8, ABI_OK},
     content::{RetainedContent, RuntimeContentBridge},
+    render_resources::CsharpRenderResource,
     CsharpEngineServicesError,
 };
 

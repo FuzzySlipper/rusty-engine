@@ -8,9 +8,9 @@ use csharp_engine_abi::*;
 use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjector};
 
 use crate::{
-    appearance::CsharpRenderResource,
     composition::{borrowed_utf8, ABI_OK},
     content::RuntimeContentBridge,
+    render_resources::CsharpRenderResource,
     CsharpEngineServicesError,
 };
 
