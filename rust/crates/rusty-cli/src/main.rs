@@ -98,11 +98,7 @@ fn install_termination_signal_hook() -> Result<Arc<AtomicBool>, String> {
 
 fn dev(mut options: DevOptions) -> Result<(), String> {
     use_dotnet_root_for_host();
-    // The pinned pair's pack, as `rusty dev` selects it: no --runtime, or the
-    // delegated run of that pack's own `rusty`. Any other --runtime (and an
-    // --engine-source) is the caller's explicit choice.
-    let pinned_selection =
-        options.engine_source.is_none() && options.runtime.as_deref().is_none_or(runs_from_pack);
+    let pinned_selection = pinned_selection(&options);
     if options.engine_source.is_none() {
         let pinned = if options.runtime.is_none() {
             pinned_pair(&options.project)?
@@ -1135,11 +1131,12 @@ fn window_output(staged: &Path) -> Result<bool, String> {
     Ok(manifest["renderer"]["output"] == "window")
 }
 
-/// Whether this process is `runtime`'s own `rusty`: the run the pinned pair's
-/// selection delegates to.
-fn runs_from_pack(runtime: &Path) -> bool {
-    let current = env::current_exe().and_then(fs::canonicalize).ok();
-    current.is_some() && current == fs::canonicalize(runtime.join("bin/rusty")).ok()
+/// Whether `rusty dev` selects the pinned pair's pack itself: neither
+/// --runtime nor --engine-source was given. Delegation to the pair's own
+/// `rusty` passes no --runtime either, so every --runtime is the caller's
+/// explicit choice.
+fn pinned_selection(options: &DevOptions) -> bool {
+    options.runtime.is_none() && options.engine_source.is_none()
 }
 
 /// Window output runs a desktop pack: the same host with the desktop shell
@@ -1213,18 +1210,48 @@ fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), Stri
     if current.is_some() && current == fs::canonicalize(&pair_cli).ok() {
         return Ok(());
     }
-    let mut command = Command::new(&pair_cli);
-    command
-        .arg("dev")
-        .arg("--project")
-        .arg(&options.project)
-        .arg("--runtime")
-        .arg(runtime);
+    let error = Command::new(&pair_cli)
+        .args(delegated_arguments(options))
+        .exec();
+    Err(format!(
+        "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
+        pair_cli.display()
+    ))
+}
+
+/// The pinned pair's own `rusty dev` arguments: the caller's options without
+/// --runtime, so that run resolves the pin itself (a pack's own `rusty` uses
+/// its pack) and still counts as the pinned selection.
+fn delegated_arguments(options: &DevOptions) -> Vec<std::ffi::OsString> {
+    let mut arguments: Vec<std::ffi::OsString> = vec![
+        "dev".into(),
+        "--project".into(),
+        options.project.clone().into(),
+    ];
+    let mut push = |flag: &str, value: std::ffi::OsString| {
+        arguments.push(flag.into());
+        arguments.push(value);
+    };
     if let Some(bind_host) = &options.bind_host {
-        command.args(["--bind-host", bind_host]);
+        push("--bind-host", bind_host.into());
     }
     if let Some(port) = options.port {
-        command.args(["--port", &port.to_string()]);
+        push("--port", port.to_string().into());
+    }
+    if let Some(output) = &options.output {
+        push("--output", output.into());
+    }
+    if let Some(audio_output) = &options.audio_output {
+        push("--audio-output", audio_output.into());
+    }
+    for switch in &options.cef_switches {
+        push("--cef-switch", switch.into());
+    }
+    if let Some(chromium) = &options.chromium {
+        push("--chromium", chromium.clone().into());
+    }
+    if let Some(log) = &options.diagnostics_log {
+        push("--diagnostics-log", log.clone().into());
     }
     for (enabled, flag) in [
         (options.live_debug, "--live-debug"),
@@ -1232,29 +1259,10 @@ fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), Stri
         (options.headless, "--headless"),
     ] {
         if enabled {
-            command.arg(flag);
+            arguments.push(flag.into());
         }
     }
-    if let Some(output) = &options.output {
-        command.args(["--output", output]);
-    }
-    if let Some(audio_output) = &options.audio_output {
-        command.args(["--audio-output", audio_output]);
-    }
-    for switch in &options.cef_switches {
-        command.args(["--cef-switch", switch]);
-    }
-    if let Some(chromium) = &options.chromium {
-        command.arg("--chromium").arg(chromium);
-    }
-    if let Some(log) = &options.diagnostics_log {
-        command.arg("--diagnostics-log").arg(log);
-    }
-    let error = command.exec();
-    Err(format!(
-        "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
-        pair_cli.display()
-    ))
+    arguments
 }
 
 #[cfg(not(unix))]
@@ -2325,6 +2333,44 @@ mod tests {
             ["dev", "--project", "P.csproj", "--chromium", "/c"].map(str::to_owned)
         )
         .is_err());
+    }
+
+    #[test]
+    fn every_runtime_argument_is_explicit_and_delegation_passes_none() {
+        assert!(pinned_selection(&dev_options(&[])));
+        for explicit in [
+            &[
+                "--runtime",
+                "/cache/pairs/0.1.0-dev.abc123def456/runtime-pack",
+            ][..],
+            &["--engine-source", "/engine"][..],
+        ] {
+            assert!(!pinned_selection(&dev_options(explicit)), "{explicit:?}");
+        }
+        let delegated = delegated_arguments(&dev_options(&[
+            "--output",
+            "window",
+            "--live-debug",
+            "--cef-switch",
+            "remote-debugging-port=9333",
+        ]));
+        assert!(!delegated.iter().any(|argument| argument == "--runtime"));
+        let delegated = Arguments::parse(
+            delegated
+                .iter()
+                .map(|argument| argument.to_str().unwrap().to_owned()),
+        )
+        .expect("the pair's rusty accepts the delegated arguments");
+        let CommandName::Dev(delegated) = delegated.command else {
+            panic!("dev command");
+        };
+        assert!(
+            pinned_selection(&delegated),
+            "the delegated run is the pinned selection"
+        );
+        assert_eq!(delegated.output.as_deref(), Some("window"));
+        assert!(delegated.live_debug);
+        assert_eq!(delegated.cef_switches, ["remote-debugging-port=9333"]);
     }
 
     #[test]

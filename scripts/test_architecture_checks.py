@@ -272,28 +272,35 @@ ALLOWED_ENVIRONMENT_READS = {
     # Temporary: den-serve passes --diagnostics-log instead (crew-services #8955).
     "DEN_SERVE_SESSION_DIR": "den-serve's session directory until #8955 lands",
 }
-ENVIRONMENT_READ = re.compile(r"env::var(?:_os)?\(\s*([^)]*)\)")
-ENVIRONMENT_SCAN = re.compile(r"env::vars(?:_os)?\(")
+# The one admitted form of an environment read: `env::var("NAME")` or
+# `env::var_os("NAME")` with an allowed literal name. Every other mention of
+# std::env's readers is refused, so no import, alias, glob, function value or
+# FFI call can read the environment out of the check's sight.
+ALLOWED_READ = re.compile(r'env\s*::\s*var(?:_os)?\s*\(\s*"([A-Z_0-9]+)"\s*\)')
+READER_MENTION = re.compile(r"env\s*::\s*(?:\{[^}]*\}|vars?(?:_os)?\b)")
 USE_STATEMENT = re.compile(r"\buse\s+[^;]*;", re.DOTALL)
-# An import that would let a read escape the literal `env::var("NAME")` form:
-# `var`/`var_os`/`vars` brought in from std::env, or std::env renamed.
-ENVIRONMENT_IMPORT = re.compile(
-    r"env::(?:\{[^}]*\bvars?(?:_os)?\b|vars?(?:_os)?\b)|\benv\s+as\b"
-)
+GETENV = re.compile(r"\bgetenv\b")
 
 
 def environment_violations(text: str) -> list[str]:
     """Environment reads in Rust source that could select behaviour."""
     violations = []
-    for match in ENVIRONMENT_READ.finditer(text):
-        argument = match.group(1).strip()
-        if not argument.startswith('"') or argument.strip('"') not in ALLOWED_ENVIRONMENT_READS:
-            violations.append(f"env::var({argument})")
-    violations.extend(match.group(0) for match in ENVIRONMENT_SCAN.finditer(text))
+    admitted = set()
+    for match in ALLOWED_READ.finditer(text):
+        if match.group(1) in ALLOWED_ENVIRONMENT_READS:
+            admitted.add(match.start())
+        else:
+            violations.append(match.group(0))
+    for match in READER_MENTION.finditer(text):
+        if match.start() not in admitted and not ALLOWED_READ.match(text, match.start()):
+            violations.append(match.group(0))
     for statement in USE_STATEMENT.finditer(text):
         normalized = " ".join(statement.group(0).split())
-        if "env" in normalized and ENVIRONMENT_IMPORT.search(normalized):
+        # A `use` that reaches std::env may import the module itself, nothing
+        # from it, and may neither glob nor rename.
+        if re.search(r"\benv\b", normalized) and re.search(r"\*|\bas\b|env\s*::", normalized):
             violations.append(normalized)
+    violations.extend(match.group(0) for match in GETENV.finditer(text))
     return violations
 
 
@@ -316,10 +323,15 @@ class EnvironmentReadTests(unittest.TestCase):
         for text in [
             'let output = std::env::var_os("RUSTY_RENDER_OUTPUT");',
             "let output = env::var(OUTPUT_VARIABLE);",
+            'let path = std::env::var_os("PATH").or(env::var_os(FALLBACK));',
             'use std::env::var;\nlet output = var("RUSTY_RENDER_OUTPUT");',
             'use std::env::{self, var_os};\nlet output = var_os("RUSTY_RENDER_OUTPUT");',
             'use std::{\n    env::var_os as read,\n    fs,\n};\nlet output = read("RUSTY_RENDER_OUTPUT");',
             'use std::env as environment;\nlet output = environment::var("RUSTY_RENDER_OUTPUT");',
+            'use std::env::*;\nlet output = var("RUSTY_RENDER_OUTPUT");',
+            'use std::env;\nlet read = env::var;\nlet output = read("RUSTY_RENDER_OUTPUT");',
+            'use std::env::{self as environment};\nlet output = environment::var("RUSTY_RENDER_OUTPUT");',
+            'let output = unsafe { libc::getenv(name.as_ptr()) };',
             "for (name, value) in std::env::vars() {}",
         ]:
             self.assertNotEqual(environment_violations(text), [], text)
