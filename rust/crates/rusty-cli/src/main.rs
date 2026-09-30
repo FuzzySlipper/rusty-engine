@@ -73,6 +73,13 @@ fn run() -> Result<ExitCode, String> {
             println!("{text}");
             Ok(ExitCode::SUCCESS)
         }
+        CommandName::DevHelp(project) => {
+            if let Some(pair_cli) = pinned_pair_cli(project.as_deref()) {
+                delegate_help_to_pair_cli(&pair_cli)?;
+            }
+            println!("{}", dev_usage());
+            Ok(ExitCode::SUCCESS)
+        }
         CommandName::Dev(options) => dev(options).map(|()| ExitCode::SUCCESS),
         CommandName::Build(options) => build(&options),
         CommandName::Install(options) => install(&options),
@@ -459,6 +466,8 @@ struct Arguments {
 #[derive(Debug)]
 enum CommandName {
     Help(String),
+    /// `rusty dev --help`, with the `--project` it names, if any.
+    DevHelp(Option<PathBuf>),
     Dev(DevOptions),
     Build(BuildOptions),
     Install(InstallOptions),
@@ -529,7 +538,12 @@ impl Arguments {
         let command = match command.as_str() {
             "help" | "--help" | "-h" => return Ok(Self::help(usage())),
             "dev" => match help(dev_usage) {
-                Some(help) => return Ok(help),
+                Some(_) => CommandName::DevHelp(
+                    rest.iter()
+                        .position(|value| value == "--project")
+                        .and_then(|index| rest.get(index + 1))
+                        .map(PathBuf::from),
+                ),
                 None => CommandName::Dev(parse_dev(rest)?),
             },
             "build" => match help(build_usage) {
@@ -814,7 +828,8 @@ C#, UI or content inputs change. UI and content-bundle edits reload into the run
 edits replace the runtime.
 
 The runtime is the pair pinned in the product's Directory.Build.props, installed by `rusty install`.
-`rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host.
+`rusty dev` runs that pair's own copy of this command, so the supervisor always matches its host;
+in a pinned product, `rusty dev --help` shows that copy's help, whose options are the ones that apply.
 A product whose project sets RustyEngineProductRenderOutput=window (or a run with --output window)
 opens in a native window; the first such run downloads the pair's desktop runtime pack (Chromium's
 runtime for the UI) into the cache beside the pair.
@@ -1206,8 +1221,7 @@ fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), Stri
     use std::os::unix::process::CommandExt;
 
     let pair_cli = runtime.join("bin/rusty");
-    let current = env::current_exe().and_then(fs::canonicalize).ok();
-    if current.is_some() && current == fs::canonicalize(&pair_cli).ok() {
+    if is_current_exe(&pair_cli) {
         return Ok(());
     }
     let error = Command::new(&pair_cli)
@@ -1217,6 +1231,42 @@ fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), Stri
         "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
         pair_cli.display()
     ))
+}
+
+/// The pinned pair's own `rusty`, when the product at `project` (or the
+/// current directory) pins an installed pair. Help that cannot find one is
+/// this command's own.
+fn pinned_pair_cli(project: Option<&Path>) -> Option<PathBuf> {
+    let pin = Pin::find(&product_start(project).ok()?).ok()??;
+    let pair = pair::installed(&pin.version).ok()??;
+    Some(pair.runtime_pack().join("bin/rusty"))
+}
+
+/// Shows the pinned pair's `rusty dev --help`: that copy runs `rusty dev`, so
+/// an older pair's options, not this command's, are the ones that apply.
+/// Returns when this process is already that command.
+#[cfg(unix)]
+fn delegate_help_to_pair_cli(pair_cli: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+
+    if is_current_exe(pair_cli) {
+        return Ok(());
+    }
+    let error = Command::new(pair_cli).args(["dev", "--help"]).exec();
+    Err(format!(
+        "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
+        pair_cli.display()
+    ))
+}
+
+#[cfg(not(unix))]
+fn delegate_help_to_pair_cli(_pair_cli: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn is_current_exe(path: &Path) -> bool {
+    let current = env::current_exe().and_then(fs::canonicalize).ok();
+    current.is_some() && current == fs::canonicalize(path).ok()
 }
 
 /// The pinned pair's own `rusty dev` arguments: the caller's options without
@@ -2333,6 +2383,31 @@ mod tests {
             ["dev", "--project", "P.csproj", "--chromium", "/c"].map(str::to_owned)
         )
         .is_err());
+    }
+
+    #[test]
+    fn dev_help_carries_the_project_whose_pin_answers_it() {
+        let help = |arguments: &[&str]| match Arguments::parse(
+            arguments.iter().map(|value| (*value).to_owned()),
+        )
+        .expect("help parses")
+        .command
+        {
+            CommandName::DevHelp(project) => project,
+            _ => panic!("dev --help is dev help"),
+        };
+        assert_eq!(help(&["dev", "--help"]), None);
+        assert_eq!(
+            help(&[
+                "dev",
+                "--project",
+                "src/P.csproj",
+                "--output",
+                "window",
+                "-h"
+            ]),
+            Some(PathBuf::from("src/P.csproj"))
+        );
     }
 
     #[test]
