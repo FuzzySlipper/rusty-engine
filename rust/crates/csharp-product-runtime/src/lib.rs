@@ -1719,9 +1719,14 @@ impl CsharpProductRuntime {
         let mut outputs = finished.outputs;
         let input_mapping_replacement = finished.input_mapping_replacement;
         if let Some(failure) = finished.failure {
-            self.fault_after_call(Some(&failure), input_mapping_replacement, &mut outputs)?;
+            self.fault_after_call(
+                "update",
+                Some(&failure),
+                input_mapping_replacement,
+                &mut outputs,
+            )?;
         } else if matches!(callback_result, Ok(NativeProductUpdateResult::ReportFault)) {
-            self.fault_after_call(None, input_mapping_replacement, &mut outputs)?;
+            self.fault_after_call("update", None, input_mapping_replacement, &mut outputs)?;
         } else if let Some(replacement) = input_mapping_replacement {
             self.settle_input_mapping_replacement(replacement)?;
             outputs = self.rebind_outputs_in_place(outputs)?;
@@ -1826,11 +1831,15 @@ impl CsharpProductRuntime {
     /// the call's renderer work.
     fn fault_after_call(
         &mut self,
+        operation: &str,
         failure: Option<&CsharpProductRuntimeError>,
         input_mapping_replacement: Option<runtime_input::CompiledInputMappings>,
         outputs: &mut Vec<RuntimePublication>,
     ) -> Result<(), CsharpProductRuntimeError> {
         if let Some(failure) = failure {
+            // The diagnostics log keeps the full record; the process stream
+            // names the fault so it is visible without one.
+            eprintln!("{}", fault_line(operation, failure));
             let _ = self.diagnostics.publish(
                 ProductHostLogEvent::new(
                     ProductHostLogSeverity::Error,
@@ -1982,6 +1991,7 @@ impl CsharpProductRuntime {
         self.follow_lifecycle_with_audio();
         if let Some(failure) = finished.failure {
             self.fault_after_call(
+                operation_name(operation),
                 Some(&failure),
                 finished.input_mapping_replacement,
                 &mut call_outputs,
@@ -3112,6 +3122,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
         let mut outputs = finished.outputs;
         let result = if let Some(failure) = finished.failure {
             self.fault_after_call(
+                "complete_timeline",
                 Some(&failure),
                 finished.input_mapping_replacement,
                 &mut outputs,
@@ -3903,6 +3914,22 @@ fn checked_status(status: i32, operation: &str) -> Result<(), CsharpProductRunti
         ));
     }
     Ok(())
+}
+
+/// One bounded line for a faulted product call: the operation, the error
+/// code and the first line of its detail. A product exception's first line is
+/// the SDK's summary of its type, message and first product frame.
+fn fault_line(operation: &str, failure: &CsharpProductRuntimeError) -> String {
+    const MAXIMUM_DETAIL_CHARS: usize = 800;
+    let first = failure.detail().lines().next().unwrap_or_default();
+    let mut detail: String = first.chars().take(MAXIMUM_DETAIL_CHARS).collect();
+    if detail.len() < first.len() {
+        detail.push_str("...");
+    }
+    format!(
+        "rusty: product {operation} faulted: {}: {detail}",
+        failure.code()
+    )
 }
 
 fn operation_name(operation: ProductHostOperationKind) -> &'static str {
@@ -6104,6 +6131,26 @@ mod tests {
             };
         }
         ABI_OK
+    }
+
+    #[test]
+    fn a_fault_line_is_the_first_detail_line_bounded() {
+        let failure = CsharpProductRuntimeError::new(
+            "CSHARP_PRODUCT_CALL",
+            format!(
+                "product callback returned status 99: {}",
+                long_product_error()
+            ),
+        );
+        assert_eq!(
+            fault_line("update", &failure),
+            "rusty: product update faulted: CSHARP_PRODUCT_CALL: product callback returned status 99: System.InvalidOperationException: fixture failure"
+        );
+        let long = CsharpProductRuntimeError::new("CSHARP_PRODUCT_CALL", "é".repeat(2_000));
+        let line = fault_line("start", &long);
+        assert!(line.ends_with("..."));
+        assert!(!line.contains('\n'));
+        assert!(line.chars().count() < 900);
     }
 
     #[test]

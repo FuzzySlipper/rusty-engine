@@ -60,7 +60,17 @@ into managed values before throwing, so the exception holds no native memory.
 For example, an unadmitted audio clip reports
 `CSHARP_AUDIO_CLIP_HANDLE`, and a stale sprite atlas reports
 `CSHARP_SPRITE_ATLAS_HANDLE`. An exception escaping a product callback is
-reported to runtime diagnostics with its complete text and managed stack trace.
+reported to runtime diagnostics with its complete text and managed stack trace,
+and the host prints one line to stderr naming the callback, the exception type,
+its message and the first product stack frame:
+
+```text
+rusty: product update faulted: CSHARP_PRODUCT_CALL: Spatial.ProposeCharacterStep returned status 0: EngineCallException: Rusty Engine Spatial.ProposeCharacterStep returned status 0. … (at Game.Movement.Step(…) in …/Movement.cs:line 42)
+```
+
+Pass `--diagnostics-log <file>` to `rusty dev` for the full record. An exception
+thrown by the product's `Dispose` is printed the same way
+(`rusty: product Dispose threw …`).
 
 A refusal is operation-local: the refused operation leaves Engine state as it
 was, and its exception is the only consequence. A product that catches

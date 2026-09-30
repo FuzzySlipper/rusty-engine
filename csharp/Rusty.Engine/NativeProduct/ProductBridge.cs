@@ -82,7 +82,50 @@ internal sealed class ProductLifetime
     internal void Dispose()
     {
         _lastCallError = null;
-        System.Threading.Interlocked.Exchange(ref _product, null)?.Dispose();
+        try
+        {
+            System.Threading.Interlocked.Exchange(ref _product, null)?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            // Destroy has no error result, so the process stream is the only record.
+            Console.Error.WriteLine($"rusty: product Dispose threw {ProductFault.Summary(exception)}");
+        }
+    }
+}
+
+/// <summary>One bounded line naming a product exception: its type, the first line of
+/// its message and the first stack frame outside the SDK and the runtime libraries.</summary>
+internal static class ProductFault
+{
+    private const int MaximumLength = 600;
+
+    internal static string Summary(Exception exception)
+    {
+        string message = exception.Message;
+        int end = message.IndexOfAny(['\r', '\n']);
+        if (end >= 0) message = message[..end];
+        string? frame = ProductFrame(exception.StackTrace);
+        string line = frame is null
+            ? $"{exception.GetType().Name}: {message}"
+            : $"{exception.GetType().Name}: {message} (at {frame})";
+        return line.Length <= MaximumLength ? line : string.Concat(line.AsSpan(0, MaximumLength - 3), "...");
+    }
+
+    private static string? ProductFrame(string? stackTrace)
+    {
+        if (stackTrace is null) return null;
+        foreach (string entry in stackTrace.Split('\n'))
+        {
+            string frame = entry.Trim();
+            if (!frame.StartsWith("at ", StringComparison.Ordinal)) continue;
+            frame = frame[3..];
+            if (frame.StartsWith("Rusty.Engine.", StringComparison.Ordinal)
+                || frame.StartsWith("System.", StringComparison.Ordinal)
+                || frame.StartsWith("Microsoft.", StringComparison.Ordinal)) continue;
+            return frame;
+        }
+        return null;
     }
 }
 
@@ -417,14 +460,15 @@ public static unsafe class ProductBridge
         string service = "CSharpProduct";
         string operation = "Callback";
         int status = 99;
-        // Keep the complete exception text, including its stack trace.
-        string message = exception.ToString();
+        // The first line is the bounded summary the host prints; the rest keeps
+        // the complete exception text, including its stack trace.
+        string message = ProductFault.Summary(exception) + Environment.NewLine + exception;
         if (exception is EngineCallException engineError)
         {
             service = engineError.Service;
             operation = engineError.Operation;
             status = engineError.Status;
-            message = DescribeEngineError(engineError) + Environment.NewLine + engineError.StackTrace;
+            message = ProductFault.Summary(exception) + Environment.NewLine + DescribeEngineError(engineError) + Environment.NewLine + engineError.StackTrace;
         }
         byte* serviceBytes = null;
         byte* operationBytes = null;
