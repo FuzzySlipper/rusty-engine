@@ -515,3 +515,26 @@ fn floor_snap_does_not_launch_a_reeling_character() {
         "a loaded pendulum should not repeatedly lose taut state"
     );
 }
+
+#[test]
+fn a_long_step_moves_a_moving_anchor_for_the_whole_interval() {
+    // A step longer than the solver's interval is solved as sub-steps; the
+    // anchor keeps moving through all of them, not just the first.
+    let mut entities = character(Vec3::new(0.0, -3.0, 0.0), Vec3::ZERO);
+    let mut config = config();
+    config.vertical.gravity = 0.0;
+    let mut rope = CharacterTetherRequest::fixed(1, Vec3::ZERO, 100.0);
+    rope.anchor_id = 7;
+    rope.anchor_velocity = Vec3::new(1.0, 0.0, 0.0);
+    let mut input = command(1, Some(rope));
+    input.step_seconds = 1.0;
+    let result = CharacterControllerService::default()
+        .step(&mut entities, &scene(), EntityId::new(1), &config, input)
+        .unwrap();
+    assert!(
+        (result.tether.anchor_point.x - 1.0).abs() < 0.0001,
+        "1 m/s for 1 s moves the anchor 1 m: {:?}",
+        result.tether
+    );
+    assert!(result.tether.attached);
+}

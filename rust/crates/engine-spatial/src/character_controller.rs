@@ -1076,13 +1076,26 @@ impl CharacterControllerService {
             external_impulse: Vec3::ZERO,
             ..first
         };
+        let mut rest = rest;
+        let mut last_tether = solution.tether;
         for _ in 1..count {
+            // A moving anchor keeps moving through the sub-steps: each starts
+            // where the last left it, at the velocity the tether's reaction
+            // has given it.
+            if let Some(request) = rest.tether.as_mut().filter(|_| last_tether.attached) {
+                request.anchor_point = last_tether.anchor_point;
+                request.anchor_velocity = request.anchor_velocity
+                    + request.anchor_response[0] * last_tether.reaction_impulse.x
+                    + request.anchor_response[1] * last_tether.reaction_impulse.y
+                    + request.anchor_response[2] * last_tether.reaction_impulse.z;
+            }
             let subject = CharacterStepSubject {
                 entity: subject.entity,
                 transform: solution.transform_after,
                 motion: solution.motion_after,
             };
             let next = self.solve_step(entities, scene, subject, config, rest, None, colliders)?;
+            last_tether = next.tether;
             solution = solution.then(next, config);
         }
         Ok(solution)
