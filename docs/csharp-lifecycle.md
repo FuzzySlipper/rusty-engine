@@ -466,6 +466,18 @@ remain the authority for physical movement. Product door and hazard state
 belongs in the planar traversal overlay; read-only evaluation honors that
 overlay.
 
+Republishing is incremental. The session keeps the previous collision-derived
+publication's columns and connections, and a new one derives only the X/Z
+columns that are new to the box or lie within one cell of collision that
+changed since: voxel edits and voxel chunk residency record where they
+changed, and a world-origin rebase by a whole number of cells moves the kept
+columns with the grid. Any other collision change (static-mesh residency,
+collidable materials, content artifacts), a different policy, or a different
+`WorldMin.Y`/`WorldMax.Y` derives the whole box. So keep the vertical range
+fixed, or snap it to a coarse step, when the box follows a moving point. The
+receipt's `DerivedColumnCount` and `ReusedColumnCount` show which path ran;
+the result is the same as a full derivation.
+
 ### Collision navigation coordinates
 
 `ReplaceCollisionNavigation` uses a **world-aligned grid with origin (0, 0, 0)**

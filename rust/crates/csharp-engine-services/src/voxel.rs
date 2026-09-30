@@ -100,20 +100,32 @@ impl RuntimeSpatialBridge {
             .map(native_edit)
             .collect::<Result<Vec<_>, _>>()?;
         self.edit_scene(request.session, |session| {
-            let scene = Arc::make_mut(&mut session.scene);
-            match engine_spatial::VoxelEditService::apply(scene, &edits) {
-                Ok(receipt) => Ok(native_edit_receipt(&receipt)),
-                Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
-                    let revision = scene.source_revision().raw();
-                    Ok(NativeVoxelEditReceipt {
-                        status: NativeVoxelEditStatus::NoChanges,
-                        revision_before: revision,
-                        accepted_revision: revision,
-                        ..Default::default()
-                    })
+            session.change_collision(|scene| {
+                match engine_spatial::VoxelEditService::apply(scene, &edits) {
+                    Ok(receipt) => {
+                        let changed = voxel_box(
+                            scene,
+                            receipt.fact.changed_min,
+                            receipt.fact.changed_max_inclusive,
+                        );
+                        (Ok(native_edit_receipt(&receipt)), vec![changed])
+                    }
+                    Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
+                        let revision = scene.source_revision().raw();
+                        let receipt = NativeVoxelEditReceipt {
+                            status: NativeVoxelEditStatus::NoChanges,
+                            revision_before: revision,
+                            accepted_revision: revision,
+                            ..Default::default()
+                        };
+                        (Ok(receipt), Vec::new())
+                    }
+                    Err(error) => (
+                        Err(voxel_error("CSHARP_VOXEL_EDIT", error.to_string())),
+                        Vec::new(),
+                    ),
                 }
-                Err(error) => Err(voxel_error("CSHARP_VOXEL_EDIT", error.to_string())),
-            }
+            })
         })?
     }
 
@@ -124,31 +136,71 @@ impl RuntimeSpatialBridge {
         let chunk_size = self.session_mut(request.session)?.scene.chunk_size();
         let operations = translate_residency(request, chunk_size)?;
         self.edit_scene(request.session, |session| {
-            let scene = Arc::make_mut(&mut session.scene);
-            match VoxelChunkResidencyService::apply(scene, &operations) {
-                Ok(receipt) => Ok(native_residency_receipt(&receipt)),
-                // A batch that changes nothing is an ordinary outcome.
-                Err(VoxelChunkResidencyApplyError::Rejected(
-                    VoxelChunkResidencyRejection::NoChanges { retained },
-                )) => {
-                    let revision = scene.source_revision().raw();
-                    Ok(NativeVoxelResidencyReceipt {
-                        revision_before: revision,
-                        accepted_revision: revision,
-                        retained_count: narrow(retained.len()),
-                        resident_chunk_count: scene.resident_chunk_count() as u64,
-                        resident_solid_voxel_count: scene.solid_voxel_count() as u64,
-                        authority_hash: scene.authority_hash(),
-                        collision_revision: revision,
-                        navigation_revision: revision,
-                        mesh_revision: revision,
-                        ..Default::default()
-                    })
+            session.change_collision(|scene| {
+                match VoxelChunkResidencyService::apply(scene, &operations) {
+                    Ok(receipt) => {
+                        let changed = receipt
+                            .admitted
+                            .iter()
+                            .chain(&receipt.replaced)
+                            .chain(&receipt.evicted)
+                            .map(|chunk| chunk_box(scene, *chunk))
+                            .collect();
+                        (Ok(native_residency_receipt(&receipt)), changed)
+                    }
+                    // A batch that changes nothing is an ordinary outcome.
+                    Err(VoxelChunkResidencyApplyError::Rejected(
+                        VoxelChunkResidencyRejection::NoChanges { retained },
+                    )) => {
+                        let revision = scene.source_revision().raw();
+                        let receipt = NativeVoxelResidencyReceipt {
+                            revision_before: revision,
+                            accepted_revision: revision,
+                            retained_count: narrow(retained.len()),
+                            resident_chunk_count: scene.resident_chunk_count() as u64,
+                            resident_solid_voxel_count: scene.solid_voxel_count() as u64,
+                            authority_hash: scene.authority_hash(),
+                            collision_revision: revision,
+                            navigation_revision: revision,
+                            mesh_revision: revision,
+                            ..Default::default()
+                        };
+                        (Ok(receipt), Vec::new())
+                    }
+                    Err(error) => (
+                        Err(voxel_error("CSHARP_VOXEL_RESIDENCY", error.to_string())),
+                        Vec::new(),
+                    ),
                 }
-                Err(error) => Err(voxel_error("CSHARP_VOXEL_RESIDENCY", error.to_string())),
-            }
+            })
         })?
     }
+}
+
+/// World bounds of an inclusive voxel address range.
+fn voxel_box(
+    scene: &engine_spatial::VoxelCollisionScene,
+    min: [i64; 3],
+    max_inclusive: [i64; 3],
+) -> ([f64; 3], [f64; 3]) {
+    let grid = scene.voxel_world().grid();
+    let min = grid.voxel_min_world(core_space::VoxelCoord::new(min[0], min[1], min[2]));
+    let (_, max) = grid.voxel_bounds_world(core_space::VoxelCoord::new(
+        max_inclusive[0],
+        max_inclusive[1],
+        max_inclusive[2],
+    ));
+    ([min.x, min.y, min.z], [max.x, max.y, max.z])
+}
+
+/// World bounds of one voxel chunk.
+fn chunk_box(
+    scene: &engine_spatial::VoxelCollisionScene,
+    chunk: engine_spatial::VoxelChunkIdentity,
+) -> ([f64; 3], [f64; 3]) {
+    let size = i64::from(scene.chunk_size());
+    let min = [chunk.x * size, chunk.y * size, chunk.z * size];
+    voxel_box(scene, min, min.map(|value| value + size - 1))
 }
 
 fn native_edit(value: NativeVoxelEdit) -> Result<VoxelEdit, CsharpEngineServicesError> {

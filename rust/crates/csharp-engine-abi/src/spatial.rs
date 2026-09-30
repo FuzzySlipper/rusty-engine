@@ -675,6 +675,19 @@ pub struct NativeCollisionNavigationReplaceRequest {
     pub config: NativeCollisionNavigationConfig,
 }
 
+/// A collision-derived publication keeps the previous one's columns wherever
+/// neither the box, the policy, the vertical range nor the collision there
+/// changed; the counts show how many columns were derived and how many kept.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCollisionNavigationReplaceReceipt {
+    pub walkable_cell_count: u64,
+    pub projection_hash: u64,
+    pub navigation_revision: u64,
+    pub derived_column_count: u64,
+    pub reused_column_count: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeNavigationProjectionReadRequest {

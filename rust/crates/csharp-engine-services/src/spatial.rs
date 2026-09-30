@@ -1,3 +1,4 @@
+mod collision_navigation;
 mod inspection;
 
 use std::{
@@ -10,6 +11,10 @@ use std::{
 };
 
 use crate::operation_diagnostics::{clear_receipt, refuse};
+use collision_navigation::{
+    collision_navigation_projection, CollisionNavigationCache, CollisionNavigationDerivation,
+    SceneRevisions,
+};
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use core_space::{ChunkDims, Face, GridId, VoxelCoord, VoxelGridSpec};
@@ -149,6 +154,9 @@ pub(crate) struct SpatialSession {
     pub(crate) world_origin: engine_spatial::WorldOriginState,
     navigation: Option<NavigationState>,
     navigation_revision: u64,
+    /// The last collision-derived publication's columns and edges, kept so
+    /// the next one derives only what moved or changed.
+    collision_navigation: Option<CollisionNavigationCache>,
     content_artifact: Option<SpatialContentIdentity>,
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
@@ -156,6 +164,41 @@ pub(crate) struct SpatialSession {
     last_character_content_authority_hash: Option<u64>,
     last_character_mesh_entities: BTreeMap<u64, u64>,
     triggers: TriggerVolumeSystem,
+}
+
+impl SpatialSession {
+    /// Applies a collision change confined to the world boxes `change`
+    /// returns, so the next collision-derived navigation publication
+    /// re-derives only the columns near them.
+    pub(crate) fn change_collision<R>(
+        &mut self,
+        change: impl FnOnce(&mut VoxelCollisionScene) -> (R, Vec<([f64; 3], [f64; 3])>),
+    ) -> R {
+        let before = SceneRevisions::of(&self.scene);
+        let (result, regions) = change(Arc::make_mut(&mut self.scene));
+        if let Some(cache) = &mut self.collision_navigation {
+            cache.record_change(before, SceneRevisions::of(&self.scene), regions);
+        }
+        result
+    }
+
+    /// Installs the scene a world-origin rebase produced. Local coordinates
+    /// moved by `origin_before - origin_after` whole units; the navigation
+    /// cache moves with them when that is a whole number of cells.
+    pub(crate) fn rebase_collision(
+        &mut self,
+        scene: Arc<VoxelCollisionScene>,
+        origin_before: [i64; 3],
+        origin_after: [i64; 3],
+    ) {
+        let before = SceneRevisions::of(&self.scene);
+        self.scene = scene;
+        if let Some(cache) = &mut self.collision_navigation {
+            let shift =
+                [0, 1, 2].map(|axis| origin_before[axis].saturating_sub(origin_after[axis]) as f64);
+            cache.rebase(before, SceneRevisions::of(&self.scene), shift);
+        }
+    }
 }
 
 /// Facts returned after an admitted asset becomes the canonical scene for a
@@ -556,6 +599,7 @@ impl RuntimeSpatialBridge {
                 world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,
                 navigation_revision: 0,
+                collision_navigation: None,
                 content_artifact: None,
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
@@ -1138,7 +1182,7 @@ impl RuntimeSpatialBridge {
     fn replace_collision_navigation(
         &mut self,
         request: &NativeCollisionNavigationReplaceRequest,
-    ) -> Result<NativeNavigationReplaceReceipt, CsharpEngineServicesError> {
+    ) -> Result<NativeCollisionNavigationReplaceReceipt, CsharpEngineServicesError> {
         let world_min = native_vec3_value(request.world_min);
         let world_max = native_vec3_value(request.world_max);
         if !finite_vec3(world_min)
@@ -1235,8 +1279,17 @@ impl RuntimeSpatialBridge {
                 "collision navigation region exceeds its maximum cell budget",
             ));
         }
-        let scene = self.session_mut(request.session)?.scene.clone();
-        let (projection, support_heights, edge_admission) = collision_navigation_projection(
+        let session = self.session_mut(request.session)?;
+        let scene = session.scene.clone();
+        let previous = session.collision_navigation.take();
+        let CollisionNavigationDerivation {
+            projection,
+            supports: support_heights,
+            edge_admission,
+            derived_columns,
+            reused_columns,
+            cache,
+        } = collision_navigation_projection(
             &scene,
             grid,
             [
@@ -1252,6 +1305,7 @@ impl RuntimeSpatialBridge {
             request.config,
             min_cell.x..=max_cell.x,
             min_cell.z..=max_cell.z,
+            previous,
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
@@ -1261,11 +1315,14 @@ impl RuntimeSpatialBridge {
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         let navigation_revision = session.navigation_revision;
         let projection_hash = collision_navigation_projection_hash(&projection, &edge_admission);
-        let receipt = NativeNavigationReplaceReceipt {
+        let receipt = NativeCollisionNavigationReplaceReceipt {
             walkable_cell_count: projection.walkable_len() as u64,
             projection_hash,
             navigation_revision,
+            derived_column_count: derived_columns,
+            reused_column_count: reused_columns,
         };
+        session.collision_navigation = Some(cache);
         session.navigation = Some(NavigationState {
             source: NavigationSource::CollisionDerived,
             projection,
@@ -3814,7 +3871,7 @@ unsafe extern "C" fn replace_spatial_voxel_navigation(
 unsafe extern "C" fn replace_spatial_collision_navigation(
     context: *mut c_void,
     request: *const NativeCollisionNavigationReplaceRequest,
-    receipt: *mut NativeNavigationReplaceReceipt,
+    receipt: *mut NativeCollisionNavigationReplaceReceipt,
     error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     clear_receipt(error);
@@ -4713,130 +4770,6 @@ fn navigation_grid(
     })
 }
 
-/// Derive a conservative, finite planar projection from the session's coherent
-/// collision authority. A candidate owns no geometry: support, slope, and
-/// headroom are all tested by the same voxel/static-mesh projection used by
-/// ordinary spatial queries. Cells prove only that a capsule can stand at
-/// their center; directed edges then use the character step solver to prove a
-/// wall cannot be crossed and a bounded step can be climbed.
-fn collision_navigation_projection(
-    scene: &VoxelCollisionScene,
-    grid: VoxelGridSpec,
-    world_min: [f64; 3],
-    world_max: [f64; 3],
-    config: NativeCollisionNavigationConfig,
-    columns: std::ops::RangeInclusive<i64>,
-    rows: std::ops::RangeInclusive<i64>,
-) -> Result<(NavProjection, BTreeMap<VoxelCoord, f64>, NavEdgeAdmission), CharacterControllerError>
-{
-    let minimum_upward_normal = config.maximum_slope_degrees.to_radians().cos();
-    let mut supports = BTreeMap::new();
-    for x in columns {
-        for z in rows.clone() {
-            let center = grid.voxel_center_world(VoxelCoord::new(x, 0, z));
-            let mut origin_y = world_max[1] + COLLISION_NAVIGATION_EPSILON;
-            for _ in 0..MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN {
-                let maximum_distance = origin_y - world_min[1] + COLLISION_NAVIGATION_EPSILON;
-                let Some(hit) = scene.raycast_world(
-                    [center.x, origin_y, center.z],
-                    [0.0, -1.0, 0.0],
-                    maximum_distance,
-                ) else {
-                    break;
-                };
-                let (support_y, normal_y) = collision_navigation_support(hit);
-                if support_y < world_min[1] - COLLISION_NAVIGATION_EPSILON {
-                    break;
-                }
-                origin_y = support_y - COLLISION_NAVIGATION_EPSILON;
-                if normal_y < minimum_upward_normal {
-                    continue;
-                }
-                let standing = collision_navigation_character_config(config);
-                let capsule = collision_navigation_capsule(center, support_y, &standing);
-                if scene.character_capsule_overlap(capsule)?.is_some() {
-                    continue;
-                }
-                let cell =
-                    grid.world_to_voxel(core_space::WorldPos::new(center.x, support_y, center.z));
-                supports.entry(cell).or_insert(support_y);
-            }
-        }
-    }
-    let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
-    let character = collision_navigation_character_config(config);
-    let mut edges = Vec::new();
-    for (&from, &from_y) in &supports {
-        let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
-        for to in collision_navigation_neighbors(from, config.max_step_cells) {
-            let Some(&to_y) = supports.get(&to) else {
-                continue;
-            };
-            let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
-            if character_edge_is_traversable(
-                scene,
-                &character,
-                core_space::WorldPos::new(from_center.x, from_y, from_center.z),
-                core_space::WorldPos::new(to_center.x, to_y, to_center.z),
-            )? {
-                edges.push((from, to));
-            }
-        }
-    }
-    Ok((
-        projection,
-        supports,
-        NavEdgeAdmission::from_allowed_edges(edges),
-    ))
-}
-
-fn collision_navigation_character_config(
-    config: NativeCollisionNavigationConfig,
-) -> CharacterControllerConfig {
-    let mut character = CharacterControllerConfig::default();
-    character.shape.radius = config.agent_radius as f32;
-    character.shape.standing_height = config.agent_height as f32;
-    character.shape.contact_skin = COLLISION_NAVIGATION_CLEARANCE_EPSILON as f32;
-    character.surface.maximum_step_height =
-        (config.cell_size * f64::from(config.max_step_cells)) as f32;
-    character.surface.maximum_slope_radians = config.maximum_slope_degrees.to_radians() as f32;
-    character
-}
-
-fn collision_navigation_capsule(
-    center: core_space::WorldPos,
-    support_y: f64,
-    config: &CharacterControllerConfig,
-) -> CharacterCapsule {
-    let radius = f64::from(config.shape.radius);
-    let half_height =
-        f64::from((config.shape.standing_height * 0.5 - config.shape.radius).max(0.0));
-    CharacterCapsule {
-        center: core_space::WorldPos::new(
-            center.x,
-            support_y + half_height + radius + f64::from(config.shape.contact_skin),
-            center.z,
-        ),
-        half_height,
-        radius,
-    }
-}
-
-fn collision_navigation_neighbors(
-    coord: VoxelCoord,
-    max_step_cells: u32,
-) -> impl Iterator<Item = VoxelCoord> {
-    let mut neighbors = Vec::with_capacity(4 * (1 + max_step_cells as usize * 2));
-    for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
-        neighbors.push(VoxelCoord::new(coord.x + dx, coord.y, coord.z + dz));
-        for step in 1..=i64::from(max_step_cells) {
-            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y + step, coord.z + dz));
-            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y - step, coord.z + dz));
-        }
-    }
-    neighbors.into_iter()
-}
-
 fn collision_navigation_projection_hash(
     projection: &NavProjection,
     edges: &NavEdgeAdmission,
@@ -4846,15 +4779,6 @@ fn collision_navigation_projection_hash(
     // wall or a climbable lip, so fold the retained edge policy into that
     // identity rather than reporting a stale cell-only hash.
     projection.projection_hash().rotate_left(17) ^ edges.admission_hash().rotate_right(11)
-}
-
-fn collision_navigation_support(hit: engine_spatial::SpatialCollisionHit) -> (f64, f64) {
-    match hit {
-        engine_spatial::SpatialCollisionHit::Voxel(hit) => {
-            (hit.point[1], f64::from((hit.face == Face::PosY) as u8))
-        }
-        engine_spatial::SpatialCollisionHit::StaticMesh(hit) => (hit.point.y, hit.normal.y),
-    }
 }
 
 fn next_navigation_revision(current: u64) -> Result<u64, CsharpEngineServicesError> {
@@ -5899,7 +5823,7 @@ mod tests {
             VoxelCollisionScene::from_solid_voxels(1.0, 8, [[0, 0, 0], [1, 0, 0], [2, 0, 0]])
                 .unwrap(),
         );
-        let mut receipt = NativeNavigationReplaceReceipt::default();
+        let mut receipt = NativeCollisionNavigationReplaceReceipt::default();
         assert_eq!(
             unsafe {
                 (api.replace_collision_navigation)(
@@ -6115,7 +6039,7 @@ mod tests {
         );
         let mut navigation = collision_navigation_request(session);
         navigation.config.max_step_cells = 1;
-        let mut receipt = NativeNavigationReplaceReceipt::default();
+        let mut receipt = NativeCollisionNavigationReplaceReceipt::default();
         assert_eq!(
             unsafe {
                 (api.replace_collision_navigation)(
@@ -6264,7 +6188,7 @@ mod tests {
             },
             ABI_OK
         );
-        let mut receipt = NativeNavigationReplaceReceipt::default();
+        let mut receipt = NativeCollisionNavigationReplaceReceipt::default();
         assert_eq!(
             unsafe {
                 (api.replace_collision_navigation)(

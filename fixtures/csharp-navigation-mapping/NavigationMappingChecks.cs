@@ -36,8 +36,12 @@ internal static class NavigationMappingChecks
         Vector3 worldMin = firstSupport - new Vector3(0.35f, 1, 0.35f);
         Vector3 worldMax = lastSupport + new Vector3(0.35f, 2, 0.35f);
         CollisionNavigationConfig config = new(GridId, CellSize, ChunkSize, 1, 0.1, 0.4, 45, MaximumCells);
-        NavigationReplaceReceipt projection = engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
+        CollisionNavigationReplaceReceipt projection = engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
         Require(projection.WalkableCellCount == FloorCells, "unexpected reported walkable count");
+        CollisionNavigationReplaceReceipt republished = engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
+        Require(republished.DerivedColumnCount == 0 && republished.ReusedColumnCount == projection.DerivedColumnCount
+                && republished.ProjectionHash == projection.ProjectionHash,
+            "an unchanged republication derived columns again");
 
         ulong accepted = 0;
         for (int index = 0; index < FloorCells; index++)

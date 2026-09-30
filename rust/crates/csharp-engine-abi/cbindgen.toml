@@ -193,6 +193,7 @@ include = [
     "NativePlanarNavCell",
     "NativeNavigationReplaceRequest",
     "NativeNavigationReplaceReceipt",
+    "NativeCollisionNavigationReplaceReceipt",
     "NativeNavigationTraversalCell",
     "NativeNavigationTraversalReplaceRequest",
     "NativeNavigationTraversalReplaceReceipt",

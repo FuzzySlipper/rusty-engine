@@ -666,7 +666,7 @@ sealed class SpatialServiceFake : ISpatialService
     public SpatialContentArtifactReadout ReadContentArtifact(SpatialContentArtifactReadRequest arg0) => throw new NotSupportedException();
     public NavigationReplaceReceipt ReplaceNavigation(NavigationReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationReplaceReceipt ReplaceVoxelNavigation(NavigationVoxelReplaceRequest arg0) => throw new NotSupportedException();
-    public NavigationReplaceReceipt ReplaceCollisionNavigation(CollisionNavigationReplaceRequest arg0) => throw new NotSupportedException();
+    public CollisionNavigationReplaceReceipt ReplaceCollisionNavigation(CollisionNavigationReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ReplaceNavigationTraversal(NavigationTraversalReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ClearNavigationTraversal(NavigationTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationVolumetricTraversalReplaceReceipt ReplaceVolumetricNavigationTraversal(NavigationVolumetricTraversalReplaceRequest arg0) => throw new NotSupportedException();

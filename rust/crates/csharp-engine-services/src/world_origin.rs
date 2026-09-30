@@ -147,7 +147,11 @@ impl RuntimeSpatialBridge {
                 .commit(&mut session.world_origin, &session.scene, &owner.candidate)
                 .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_COMMIT", error))?;
             let scene = Arc::new(scene);
-            session.scene = Arc::clone(&scene);
+            session.rebase_collision(
+                Arc::clone(&scene),
+                receipt.origin_before.cell(),
+                receipt.origin_after.cell(),
+            );
             (scene, receipt)
         };
         self.publish_scene(handle, scene);

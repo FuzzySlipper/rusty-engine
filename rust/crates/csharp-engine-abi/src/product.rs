@@ -194,7 +194,7 @@ pub type NativeReplaceVoxelNavigation = unsafe extern "C" fn(
 pub type NativeReplaceCollisionNavigation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCollisionNavigationReplaceRequest,
-    *mut NativeNavigationReplaceReceipt,
+    *mut NativeCollisionNavigationReplaceReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceNavigationTraversal = unsafe extern "C" fn(
