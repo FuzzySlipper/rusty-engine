@@ -112,6 +112,33 @@ four `PLAYWRIGHT_REQUEST_FAILED net::ERR_ABORTED` items on
 That earlier run also logged `CSHARP_INPUT_STALE_DROPPED`, which is input a
 fence made stale and is dropped by design. This run happened to post none.
 
+### Rerun on pair `0.1.0-dev.57b98aa18c47` (#8872, #8873)
+
+The same exercise ran on the published pair with Dagger `bcc9f92` and the
+pair move after it. Results:
+[stream-fences-result-57b98aa18c47.json](stream-fences-result-57b98aa18c47.json)
+and [stream-warning-capture-57b98aa18c47.json](stream-warning-capture-57b98aa18c47.json).
+
+- **The fences behaved as before.**
+  - W walked 5.12 m.
+  - Held W moved 5.04 m, then 0 m across the menu and 0 m across
+    `control/replace`.
+  - After the remap, W moved 0 m and K 5.13 m.
+  - Pause held the world (0 steps, the menu opened, and the observer frame
+    had `held: true`).
+  - After resume K walked 5.06 m, and the restored W walked 5.13 m.
+- **Nothing was replaced.** There was one stream, the same canvas, and
+  `runtime-stream-2` throughout. Projections arrived under revisions 1 to 6.
+- **No `CSHARP_INPUT_STATE` (#8872).** The runtime now admits and drops input
+  posted while paused.
+- **The capture had two findings.**
+  - Dagger's product art warning.
+  - One `CSHARP_INPUT_STALE_DROPPED`: a batch in flight when a fence
+    advanced the binding. It is dropped by design, and the first run showed
+    the same.
+- **The HUD (#8873).** "Facing east · looking up" sits under the title with
+  no overlap ([stream-walked-w-57b98aa18c47.jpg](stream-walked-w-57b98aa18c47.jpg)).
+
 ### A product fault found on the way
 
 The first attempt on this pair faulted Dagger on its first pointer look. The

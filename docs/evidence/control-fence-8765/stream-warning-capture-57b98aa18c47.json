@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 1,
+  "captureProtocol": "rusty-engine.playtest-warning-delta/v1",
+  "compatibility": {
+    "exerciseId": "8765-fences",
+    "pageOrigin": "http://127.0.0.1:4394",
+    "engineOrigin": "http://127.0.0.1:4394"
+  },
+  "run": {
+    "startedAt": "2026-09-29T23:57:45.958Z",
+    "completedAt": "2026-09-30T00:01:29.797Z",
+    "url": "http://127.0.0.1:4394/",
+    "exerciseId": "8765-fences",
+    "nodeVersion": "v22.22.1",
+    "gitRevision": "57b98aa18c47518e45faa191ea053d492cf68ae1",
+    "gitDirty": true,
+    "browserVersion": "149.0.7827.55",
+    "exercise": "docs/evidence/control-fence-8765/exercise-fences-stream.mjs"
+  },
+  "capture": {
+    "browser": {
+      "status": "complete"
+    },
+    "engine": {
+      "status": "complete",
+      "origin": "http://127.0.0.1:4394",
+      "checkpointCursor": "0",
+      "finalCursor": "4",
+      "reads": 2,
+      "lagged": false,
+      "droppedCount": "0",
+      "checkpoint": {
+        "status": "complete",
+        "initialCursor": "0",
+        "checkpointCursor": "0",
+        "reads": 1
+      },
+      "events": [
+        {
+          "sequence": "1",
+          "monotonicNanoseconds": "13979622394",
+          "severity": "info",
+          "disposition": "accepted",
+          "source": "browser-host",
+          "code": "BROWSER_HOST_STATUS",
+          "message": "Product Browser Host transition snapshot",
+          "fields": [
+            {
+              "key": "host-state",
+              "value": "loading"
+            },
+            {
+              "key": "runtime-progress",
+              "value": "0"
+            },
+            {
+              "key": "transport",
+              "value": "open"
+            },
+            {
+              "key": "output",
+              "value": "open"
+            },
+            {
+              "key": "attachment-id",
+              "value": "browser-0173ae8909fd1b64c1953bd11ca312e5"
+            },
+            {
+              "key": "replaces-attachment-id",
+              "value": "none"
+            },
+            {
+              "key": "baseline-established",
+              "value": "false"
+            },
+            {
+              "key": "baseline-facts",
+              "value": "none"
+            }
+          ]
+        },
+        {
+          "sequence": "2",
+          "monotonicNanoseconds": "13993900734",
+          "severity": "info",
+          "disposition": "accepted",
+          "source": "browser-host",
+          "code": "BROWSER_HOST_STATUS",
+          "message": "Product Browser Host transition snapshot",
+          "fields": [
+            {
+              "key": "host-state",
+              "value": "ready"
+            },
+            {
+              "key": "runtime-progress",
+              "value": "0"
+            },
+            {
+              "key": "transport",
+              "value": "open"
+            },
+            {
+              "key": "output",
+              "value": "open"
+            },
+            {
+              "key": "attachment-id",
+              "value": "browser-0173ae8909fd1b64c1953bd11ca312e5"
+            },
+            {
+              "key": "replaces-attachment-id",
+              "value": "none"
+            },
+            {
+              "key": "baseline-established",
+              "value": "true"
+            },
+            {
+              "key": "baseline-facts",
+              "value": "runtime=350778/1/1;next-input=1"
+            }
+          ]
+        },
+        {
+          "sequence": "3",
+          "monotonicNanoseconds": "193582992786",
+          "severity": "info",
+          "disposition": "accepted",
+          "source": "daggerfall.music",
+          "code": "cue.started",
+          "message": "Music cue 'song_dungeon' started for context 'Dungeon'."
+        },
+        {
+          "sequence": "4",
+          "monotonicNanoseconds": "215890883797",
+          "severity": "warning",
+          "disposition": "rejected-recoverable",
+          "source": "csharp-runtime",
+          "code": "CSHARP_INPUT_STALE_DROPPED",
+          "message": "dropped 1 stale or duplicate input event(s); the current input cursor remains authoritative",
+          "runtime": {
+            "instanceId": "350778",
+            "generation": "1",
+            "controlRevision": "3"
+          }
+        }
+      ]
+    }
+  },
+  "findings": [
+    {
+      "source": "engine",
+      "kind": "structured",
+      "severity": "warning",
+      "code": "CSHARP_INPUT_STALE_DROPPED",
+      "disposition": "rejected-recoverable",
+      "message": "dropped <n> stale or duplicate input event(s); the current input cursor remains authoritative",
+      "sequence": "4",
+      "fingerprint": "1513c28410a9bbfe348e29636cbc2e9fda3a8e08c715408134a92161d1e20cba",
+      "occurrenceCount": 1
+    },
+    {
+      "source": "playwright",
+      "kind": "console",
+      "severity": "warning",
+      "message": "inventory frame art is not published by this session: inventory.skin.grid-slot-slate.v1, inventory.skin.panel-slate.v1, inventory.skin.titlebar-slate.v1",
+      "url": "http://127.0.0.1:4394/product-ui/art.js",
+      "fingerprint": "ac541b0cf5b6391e934a645c445ef29a5d16043a8811962f31db03e466408cd1",
+      "occurrenceCount": 1
+    }
+  ],
+  "comparison": {
+    "status": "unavailable",
+    "reason": "no baseline was supplied"
+  },
+  "cleanClaimEligible": false,
+  "blockers": [
+    "baseline comparison is unavailable"
+  ]
+}
