@@ -265,6 +265,13 @@ impl RuntimeInputLane {
         )))
     }
 
+    /// Drops every held, pending and transient fact but keeps the binding
+    /// and cursor: what a paused runtime admits is consumed, not kept for a
+    /// later step.
+    pub fn discard_admitted(&mut self) {
+        self.clear_state();
+    }
+
     /// Terminally disposes this instance-owned lane. No queued, held, edge,
     /// pointer, wheel, or controller fact survives, and later ingest/snapshot
     /// attempts fail instead of accidentally reviving a discarded instance.

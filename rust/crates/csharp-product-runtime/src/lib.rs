@@ -2795,6 +2795,11 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 .with_runtime(self.binding()),
             );
         }
+        if paused {
+            // Consume the cursor only: no mapped intent or held key from the
+            // paused interval is kept for a later step.
+            self.input_lane.discard_admitted();
+        }
         let native = if paused {
             Vec::new()
         } else {
@@ -7502,6 +7507,52 @@ mod tests {
             "nothing queued"
         );
         // Resume rebinds: the product's next update sees only the clear.
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .unwrap();
+        assert_eq!(runtime.pending_inputs.len(), 1);
+        assert_eq!(
+            runtime.pending_inputs[0].clear_reason,
+            NativeInputClearReason::ControlRevisionChange
+        );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn paused_mapped_input_is_consumed_without_accumulating() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = remapping_fixture_runtime("paused-mapped-input");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Pause)
+            .unwrap();
+        let binding = input_binding(&runtime.lifecycle);
+        // W maps to an intent; more presses than the pending-intent capacity.
+        for sequence in 1..=2050_u64 {
+            let event = RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                binding,
+                sequence,
+                standard_input_context(),
+                RuntimeInputFact::Key {
+                    code: runtime_input_model::KeyboardControl::KeyW,
+                    edge: if sequence % 2 == 1 {
+                        runtime_input::PhysicalEdge::Pressed
+                    } else {
+                        runtime_input::PhysicalEdge::Released
+                    },
+                },
+            ));
+            let receipt = runtime
+                .input(ProductDevInputBatch::new(vec![event]))
+                .unwrap_or_else(|error| panic!("paused input {sequence} is consumed: {error:?}"));
+            assert!(receipt.result().is_accepted(), "paused input {sequence}");
+        }
+        // Resume: the product's next update sees only the clear.
         runtime
             .lifecycle(ProductDevLifecycleOperation::Resume)
             .unwrap();
