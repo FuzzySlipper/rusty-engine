@@ -162,6 +162,8 @@ look Y to positive-up pitch. Apply one-shot presses once, and character movement
 once per admitted fixed step. Clear input/focus when disabling gameplay.
 
 Host sampling, disconnect/focus/context cleanup stay in Engine. Remote device
-injection, sessions, holds, cancellation and screenshots stay in crew-services.
+injection, sessions, holds, cancellation and screenshots stay in crew-services;
+the Engine side of injection is a claimed input binding
+([harness input](playtest-inspection.md#harness-input)).
 The managed helpers retain no native pointers, renderer or spatial world, need
 no ABI extension, and are shipped in the ordinary matched SDK/runtime pair.

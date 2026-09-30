@@ -315,6 +315,36 @@ export async function mountProductBrowserHostWithApplication(
   let recoveryFailure: ProductBrowserHostError | null = null;
   let recoveryDiagnosticReported = false;
   let currentInputBinding: RustyApplicationRuntimeIdentity | null = options.runtimeInput?.binding ?? null;
+  // A harness holding input (`control/claim`): the page sends none and shows
+  // who holds it until a binding without a claim arrives.
+  let inputClaim: string | null = null;
+  let claimBadge: HTMLElement | null = null;
+  const showInputClaim = (label: string | null): void => {
+    inputClaim = label;
+    const document = options.root.ownerDocument;
+    for (const root of [options.root, document.body]) {
+      if (root === null) continue;
+      if (label === null) delete root.dataset['rustyInputClaim'];
+      else root.dataset['rustyInputClaim'] = label;
+    }
+    if (label === null) {
+      claimBadge?.remove();
+      claimBadge = null;
+      return;
+    }
+    if (claimBadge === null) {
+      claimBadge = document.createElement('div');
+      claimBadge.className = 'rusty-input-claim';
+      claimBadge.setAttribute('role', 'status');
+      Object.assign(claimBadge.style, {
+        position: 'fixed', top: '8px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647',
+        padding: '4px 10px', borderRadius: '4px', pointerEvents: 'none',
+        font: '12px system-ui, sans-serif', color: '#fff', background: 'rgba(20, 20, 20, 0.8)',
+      });
+      document.body?.append(claimBadge);
+    }
+    claimBadge.textContent = `Input held by ${label}`;
+  };
   let inputRecovery: {
     readonly uncertainBinding: RustyApplicationRuntimeIdentity;
     inFlight: boolean;
@@ -675,6 +705,7 @@ export async function mountProductBrowserHostWithApplication(
             return;
           }
           currentInputBinding = output.runtime;
+          showInputClaim(output.inputClaim ?? null);
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -750,6 +781,10 @@ export async function mountProductBrowserHostWithApplication(
         kind: 'binding',
         runtime: result.binding,
         nextInputSequence: result.nextInputSequence,
+        // A result does not say who holds input (a harness's input results
+        // reach every page), so it keeps the claim the last binding
+        // publication set; only a publication changes it.
+        ...(inputClaim === null ? {} : { inputClaim }),
       });
     }
     if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
@@ -813,6 +848,9 @@ export async function mountProductBrowserHostWithApplication(
   }
 
   const sendInput = async (batch: readonly RuntimeInputWireEvent[]): Promise<void> => {
+    // While a harness holds input, the page's own input is dropped here, so
+    // focus changes and page blur cannot clear what the harness holds.
+    if (inputClaim !== null) return;
     try {
       applyInputResult(await transport.input(batch));
     } catch (cause) {

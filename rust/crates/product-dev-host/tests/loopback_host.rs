@@ -1044,6 +1044,30 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
 }
 
 #[test]
+fn a_control_claim_reaches_the_runtime_or_is_refused_as_unsupported() {
+    let host = start();
+    let origin = host.origin();
+    let body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"1"},"label":"crew-agent","leaseMs":"30000"}"#;
+    let claim = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/control/claim HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    // The fixture runtime has no claim path: the route decodes the request
+    // and answers the runtime's typed refusal.
+    assert!(claim.contains("\"operation\":\"claim-control\""), "{claim}");
+    assert!(claim.contains("DEV_HOST_CONTROL_UNSUPPORTED"), "{claim}");
+    let malformed = request(
+        &origin,
+        "POST /__rusty/product/runtime/control/claim HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    assert!(malformed.starts_with("HTTP/1.1 400 "), "{malformed}");
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
     let (host, recovery_calls) = start_debug_with_recovery_calls();
     let origin = host.origin();

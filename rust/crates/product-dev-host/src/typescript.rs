@@ -17,10 +17,10 @@ use crate::engine_debug::{
 };
 use crate::frames::{header, FLAG_HELD, FLAG_VIDEO, FRAME_MAGIC};
 use crate::host::{
-    ProductDevConnectionBaseline, ProductDevControlRequest, ProductDevDiagnosticsReadRequest,
-    ProductDevDiagnosticsReadResponse, ProductDevEmptyRequest, ProductDevErrorResponse,
-    ProductDevExternalRequest, ProductDevInputRequest, ProductDevLifecycleRequest,
-    ProductDevRealtimeRequest,
+    ProductDevConnectionBaseline, ProductDevControlClaimRequest, ProductDevControlRequest,
+    ProductDevDiagnosticsReadRequest, ProductDevDiagnosticsReadResponse, ProductDevEmptyRequest,
+    ProductDevErrorResponse, ProductDevExternalRequest, ProductDevInputRequest,
+    ProductDevLifecycleRequest, ProductDevRealtimeRequest,
 };
 use crate::model::{ProductDevRuntimeOutputWire, ProductDevTimelineCompletionWire};
 use crate::{
@@ -142,6 +142,7 @@ fn packages() -> Vec<(&'static str, String)> {
                 .with::<ProductDevEmptyRequest>()
                 .with::<ProductDevLifecycleRequest>()
                 .with::<ProductDevControlRequest>()
+                .with::<ProductDevControlClaimRequest>()
                 .with::<ProductDevInputRequest>()
                 .with::<ProductDevRealtimeRequest>()
                 .with::<ProductDevExternalRequest>()

@@ -23,6 +23,32 @@ observed that command's outputs, and, for a command that draws, until the
 canvas shows the drawn frame. A client without a page can call the same debug
 commands directly.
 
+## Harness input
+
+A harness can drive a product without a page, or while a page or window
+watches, by claiming input:
+1. `POST /__rusty/product/runtime/control/claim` with
+   `{"runtime": <current binding>, "label": "crew-agent-2", "leaseMs": "30000"}`.
+   The claim moves the binding (clearing held input) and publishes it with
+   `inputClaim`. An attached page stops sending input and shows "Input held
+   by crew-agent-2".
+2. `POST /__rusty/product/runtime/input` with batches under the claimed
+   binding, with sequences from the claim's `nextInputSequence`. Each batch renews the lease. The receipt
+   distinguishes queued, admitted and product-observed input as for a page.
+3. `POST /__rusty/product/runtime/control/release` with the claimed binding,
+   or let the lease lapse on realtime ticks. Either moves the binding again,
+   clears what the harness held, and the page takes input back.
+
+While claimed, window focus and page blur change nothing the harness holds,
+because the page sends no input: several windows on one machine can each be
+driven while another has OS focus.
+
+Claimed input reaches the runtime's input lane directly, so it tests binding
+admission and the product's mappings, but not the page's input capture: DOM
+focus, text entry, menus and the pointer-lock shim. Test those through a
+page. The runtime's current binding for a first claim comes from any runtime
+answer that carries one, such as `engine.renderer.presentation`'s `runtime`.
+
 ## Product adapter
 
 Register `Rusty.Engine.Debugging.PlaytestDebugModule` in the existing generated

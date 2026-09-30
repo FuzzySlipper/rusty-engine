@@ -668,7 +668,19 @@ pub struct CsharpProductRuntime {
     frame_output: Option<frame_output::FrameOutput>,
     /// Runs the product's RenderOutput jobs.
     render_outputs: render_output::OutputExecutor,
+    /// A harness holding input (`control/claim`), until it releases or its
+    /// lease passes without input.
+    input_claim: Option<InputClaim>,
 }
+
+struct InputClaim {
+    label: String,
+    lease: std::time::Duration,
+    renewed: std::time::Instant,
+}
+
+/// The longest input lease a harness may hold between inputs.
+const MAX_INPUT_CLAIM_LEASE: std::time::Duration = std::time::Duration::from_secs(3600);
 
 // The development host serializes every call with one mutex. The native handle
 // has no ambient access from Rust and is destroyed before the retained product
@@ -910,6 +922,7 @@ impl CsharpProductRuntime {
             audio_output,
             frame_output,
             render_outputs,
+            input_claim: None,
         })
     }
 
@@ -1843,10 +1856,7 @@ impl CsharpProductRuntime {
         // The browser clears UI when the binding changes, so each stream's
         // latest projection follows the fault binding, as in an in-place rebind.
         outputs.retain(|output| !matches!(output, RuntimePublication::UiProjection(_)));
-        outputs.push(RuntimePublication::binding(
-            input_binding(&self.lifecycle),
-            self.next_input_sequence().get(),
-        ));
+        outputs.push(self.binding_output());
         outputs.extend(
             self.services
                 .snapshot_ui_projections(ui_binding(&self.lifecycle))
@@ -2157,6 +2167,35 @@ impl CsharpProductRuntime {
         self.require_current_control_binding(binding)
     }
 
+    /// The binding publication, carrying any harness's input claim.
+    fn binding_output(&self) -> RuntimePublication {
+        RuntimePublication::claimed_binding(
+            input_binding(&self.lifecycle),
+            self.next_input_sequence().get(),
+            self.input_claim.as_ref().map(|claim| claim.label.clone()),
+        )
+    }
+
+    /// Ends a harness's claim whose lease passed without input: a fresh
+    /// binding clears what it held and hands input back to the page.
+    fn expire_input_claim(&mut self) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+        if !self
+            .input_claim
+            .as_ref()
+            .is_some_and(|claim| claim.renewed.elapsed() >= claim.lease)
+        {
+            return Ok(Vec::new());
+        }
+        self.input_claim = None;
+        self.lifecycle
+            .change_control(RuntimeControlOperation::Release)
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
+            .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        self.rebind_in_place(Vec::new())
+    }
+
     fn require_current_control_binding(
         &self,
         binding: Option<ProductDevRuntimeBinding>,
@@ -2216,10 +2255,7 @@ impl CsharpProductRuntime {
             }
         }
         let mut tagged = Vec::with_capacity(snapshot.len() + 2);
-        tagged.push(RuntimePublication::binding(
-            input_binding(&self.lifecycle),
-            self.next_input_sequence().get(),
-        ));
+        tagged.push(self.binding_output());
         tagged.append(&mut snapshot);
         tagged.push(self.complete_baseline_output(binding)?);
         Ok(tagged)
@@ -2246,10 +2282,7 @@ impl CsharpProductRuntime {
     ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         let binding = self.binding();
         let mut tagged = Vec::with_capacity(outputs.len() + 2);
-        tagged.push(RuntimePublication::binding(
-            input_binding(&self.lifecycle),
-            self.next_input_sequence().get(),
-        ));
+        tagged.push(self.binding_output());
         tagged.extend(
             outputs
                 .into_iter()
@@ -2663,7 +2696,11 @@ impl ProductDevRuntime for CsharpProductRuntime {
         self.require_current_control_binding(Some(binding))?;
         let lifecycle_operation = match operation {
             ProductDevControlOperation::Replace => RuntimeControlOperation::Replace,
-            ProductDevControlOperation::Release => RuntimeControlOperation::Release,
+            ProductDevControlOperation::Release => {
+                // Release ends a harness's claim; the page takes input back.
+                self.input_claim = None;
+                RuntimeControlOperation::Release
+            }
         };
         self.lifecycle
             .change_control(lifecycle_operation)
@@ -2677,10 +2714,50 @@ impl ProductDevRuntime for CsharpProductRuntime {
         )
     }
 
+    fn claim_control(
+        &mut self,
+        binding: ProductDevRuntimeBinding,
+        label: String,
+        lease: std::time::Duration,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.require_current_control_binding(Some(binding))?;
+        if label.trim().is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
+            return Err(ProductDevRuntimeError::new_not_applied(
+                "CSHARP_CONTROL_CLAIM",
+                "a claim label is 1..=64 bytes of visible text",
+            ));
+        }
+        if lease.is_zero() || lease > MAX_INPUT_CLAIM_LEASE {
+            return Err(ProductDevRuntimeError::new_not_applied(
+                "CSHARP_CONTROL_CLAIM",
+                "a claim lease is 1 ms to one hour",
+            ));
+        }
+        self.lifecycle
+            .change_control(RuntimeControlOperation::Replace)
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        self.input_claim = Some(InputClaim {
+            label,
+            lease,
+            renewed: std::time::Instant::now(),
+        });
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
+            .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        self.receipt(
+            ProductDevOperationKind::ClaimControl,
+            self.rebind_in_place(Vec::new())?,
+        )
+    }
+
     fn input(
         &mut self,
         batch: ProductDevInputBatch,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError> {
+        // Input under a claim is the harness's: it keeps the lease alive.
+        if let Some(claim) = &mut self.input_claim {
+            claim.renewed = std::time::Instant::now();
+        }
         // A page keeps sending input while the product is paused (a menu's
         // clears, say). It is admitted for the page's cursor and dropped:
         // resume rebinds input, so the product never sees the paused interval.
@@ -2850,8 +2927,11 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         observed_time_ns: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        if self.playtest_time != playtest::TimeMode::Realtime {
-            return self.receipt(ProductDevOperationKind::AdvanceRealtime, Vec::new());
+        // An expired claim's release is this observation's whole output; the
+        // next observation simulates.
+        let released = self.expire_input_claim()?;
+        if !released.is_empty() || self.playtest_time != playtest::TimeMode::Realtime {
+            return self.receipt(ProductDevOperationKind::AdvanceRealtime, released);
         }
         let admission = self
             .lifecycle
@@ -7308,6 +7388,88 @@ mod tests {
             "complete-baseline"
         );
         runtime.admit_demand_step().expect("owner remains usable");
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_harness_claim_holds_input_until_release_or_its_lease_lapses() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = realtime_drop_fixture_runtime("input-claim");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        let page = runtime.binding();
+        let claim_of = |outputs: &[RuntimePublication]| match outputs.first() {
+            Some(RuntimePublication::Binding { input_claim, .. }) => input_claim.clone(),
+            other => panic!("a control change publishes a binding first, not {other:?}"),
+        };
+
+        let refused = |result: Result<_, ProductDevRuntimeError>| match result {
+            Err(error) => error.code().to_owned(),
+            Ok(_) => panic!("refused"),
+        };
+        let lease = std::time::Duration::from_secs(60);
+        assert_eq!(
+            refused(runtime.claim_control(page, " ".to_owned(), lease)),
+            "CSHARP_CONTROL_CLAIM"
+        );
+        assert_eq!(
+            refused(runtime.claim_control(page, "agent".to_owned(), std::time::Duration::ZERO)),
+            "CSHARP_CONTROL_CLAIM"
+        );
+
+        // A claim moves the binding, clears held input, and names its holder.
+        let (_, outputs) = runtime
+            .claim_control(page, "crew-agent-2".to_owned(), lease)
+            .expect("claim")
+            .into_parts();
+        assert_ne!(runtime.binding(), page, "a claim moves the binding");
+        assert_eq!(claim_of(&outputs).as_deref(), Some("crew-agent-2"));
+        assert_eq!(runtime.pending_inputs.len(), 1);
+        assert_eq!(
+            runtime.pending_inputs[0].clear_reason,
+            NativeInputClearReason::ControlRevisionChange
+        );
+        // The page's binding is stale now; a page attaching sees the claim.
+        assert!(runtime
+            .claim_control(page, "other".to_owned(), lease)
+            .is_err());
+        let (_, attached) = runtime.connect().unwrap().into_parts();
+        assert!(attached.iter().any(|output| matches!(
+            output,
+            RuntimePublication::Binding { input_claim: Some(label), .. } if label == "crew-agent-2"
+        )));
+
+        // Release hands input back to the page.
+        let (_, released) = runtime
+            .control(ProductDevControlOperation::Release, runtime.binding())
+            .unwrap()
+            .into_parts();
+        assert_eq!(claim_of(&released), None);
+
+        // A lease that lapses without input is released on the next tick.
+        runtime
+            .claim_control(
+                runtime.binding(),
+                "crew-agent-3".to_owned(),
+                std::time::Duration::from_millis(1),
+            )
+            .unwrap();
+        let held = runtime.binding();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let (_, expired) = runtime
+            .advance_realtime(CanonicalU64::new(1_000_000))
+            .unwrap()
+            .into_parts();
+        assert_eq!(claim_of(&expired), None);
+        assert_ne!(runtime.binding(), held, "the release moves the binding");
+        assert_eq!(
+            runtime.pending_inputs.last().unwrap().clear_reason,
+            NativeInputClearReason::ControlRevisionChange
+        );
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }

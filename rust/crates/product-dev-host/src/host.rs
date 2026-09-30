@@ -1302,6 +1302,7 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/control/release" => {
             invoke_control(state, &request.body, ProductDevControlOperation::Release)
         }
+        "/__rusty/product/runtime/control/claim" => invoke_claim(state, &request.body),
         "/__rusty/product/runtime/input" => invoke_input(state, &request.body),
         "/__rusty/product/runtime/advance-realtime" => invoke_realtime(state, &request.body),
         "/__rusty/product/runtime/admit-demand-step" => invoke_demand(state, &request.body),
@@ -1488,6 +1489,33 @@ fn invoke_control<R: ProductDevRuntime>(
             Ok(receipt)
         },
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
+    );
+    state.scheduler_wake.notify();
+    response
+}
+
+fn invoke_claim<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    let request: ProductDevControlClaimRequest = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let lease = std::time::Duration::from_millis(request.lease_ms.get());
+    let response = call_runtime(
+        state,
+        ProductDevOperationKind::ClaimControl,
+        |runtime| {
+            let receipt = runtime.claim_control(request.runtime, request.label.clone(), lease)?;
+            if receipt.result().is_accepted() {
+                state.input_mailbox.clear();
+            }
+            Ok(receipt)
+        },
+        |error| {
+            ProductDevOperationResult::rejected_runtime(
+                ProductDevOperationKind::ClaimControl,
+                error,
+            )
+        },
     );
     state.scheduler_wake.notify();
     response
@@ -3735,6 +3763,17 @@ pub(crate) struct ProductDevLifecycleRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProductDevControlRequest {
     runtime: crate::ProductDevRuntimeBinding,
+}
+
+/// `control/claim`: a harness takes input from `runtime`'s owner under a
+/// fresh binding, labelled for any attached page, for `leaseMs` after its
+/// last input.
+#[derive(Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProductDevControlClaimRequest {
+    runtime: crate::ProductDevRuntimeBinding,
+    label: String,
+    lease_ms: CanonicalU64,
 }
 
 /// `input`: one ordered input batch.

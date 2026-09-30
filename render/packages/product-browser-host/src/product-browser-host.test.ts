@@ -40,10 +40,20 @@ async function withFakeRoot<T>(run: (root: HTMLElement) => Promise<T>): Promise<
   class FakeElement {
     readonly childNodes: unknown[] = [];
     readonly dataset: Record<string, string> = {};
+    readonly appended: { textContent: string; removed: boolean }[] = [];
     readonly ownerDocument = {
       body: this,
       defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+      createElement: () => {
+        const element = {
+          textContent: '', removed: false, style: {},
+          setAttribute: () => undefined,
+          remove: () => { element.removed = true; },
+        };
+        return element;
+      },
     };
+    append(child: { textContent: string; removed: boolean }): void { this.appended.push(child); }
   }
   Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
   try {
@@ -167,6 +177,72 @@ test('a rebinding output rebinds input and the host stays ready', async () => {
       runtime: paused, context: 'gameplay.default', nextSequence: '5',
     });
     assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  });
+});
+
+test('while a harness holds input the page sends none and shows the claim', async () => {
+  await withFakeRoot(async (root) => {
+    const claimed = { ...RUNNING, controlRevision: '3' } as const;
+    const released = { ...RUNNING, controlRevision: '4' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    const sent: (readonly RuntimeInputWireEvent[])[] = [];
+    const key = (runtime: typeof RUNNING | typeof claimed | typeof released): RuntimeInputWireEvent => ({
+      runtime, sequence: '1', context: 'gameplay.default', fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+    });
+    let pending: RuntimeInputWireEvent[] = [];
+    const host = await mountProductBrowserHostWithApplication({
+      root,
+      transport: {
+        ...adapter,
+        input: async (batch: readonly RuntimeInputWireEvent[]) => {
+          sent.push(batch);
+          return adapter.input(batch);
+        },
+        subscribeOutputBatches: (listener) => {
+          emit = listener;
+          return () => { emit = null; };
+        },
+      },
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication({
+      drain: () => { const drained = pending; pending = []; return drained; },
+      bindRuntime: () => undefined,
+    }) as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    const fake = root as unknown as { appended: { textContent: string; removed: boolean }[] };
+
+    publish([{ kind: 'binding', runtime: claimed, nextInputSequence: '1', inputClaim: 'crew-agent-2' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(root.dataset['rustyInputClaim'], 'crew-agent-2');
+    assert.equal(fake.appended[0]?.textContent, 'Input held by crew-agent-2');
+    pending = [key(claimed)];
+    await host.admitDemandStep();
+    assert.deepEqual(sent, [], 'no page input while claimed');
+    // The harness's input results reach the page too; they keep the claim.
+    publish([{
+      kind: 'runtime-input-result',
+      result: {
+        accepted: true, ...ACCEPTED_FAULT, count: 1, acceptedCount: 1, droppedCount: 0,
+        binding: claimed, nextInputSequence: '2',
+      },
+    }], { epoch: 1, baseline: false, recovery: 'none' });
+    assert.equal(root.dataset['rustyInputClaim'], 'crew-agent-2');
+    pending = [key(claimed)];
+    await host.admitDemandStep();
+    assert.deepEqual(sent, [], 'an input result does not end the claim');
+
+    publish([{ kind: 'binding', runtime: released, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(root.dataset['rustyInputClaim'], undefined);
+    assert.equal(fake.appended[0]?.removed, true);
+    pending = [key(released)];
+    await host.admitDemandStep();
+    assert.equal(sent.length, 1, 'input resumes once the claim is released');
     await host.dispose();
   });
 });

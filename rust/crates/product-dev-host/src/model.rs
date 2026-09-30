@@ -120,6 +120,7 @@ pub enum ProductDevOperationKind {
     ReportFault,
     ReplaceControl,
     ReleaseControl,
+    ClaimControl,
     Input,
     AdvanceRealtime,
     AdmitDemandStep,
@@ -1502,6 +1503,15 @@ pub(crate) enum ProductDevRuntimeOutputWire {
         runtime: ProductDevRuntimeBinding,
         #[serde(rename = "nextInputSequence")]
         next_input_sequence: CanonicalU64,
+        /// The harness holding input, when one has claimed it: the page shows
+        /// it and sends no input until a binding without a claim arrives.
+        #[serde(
+            rename = "inputClaim",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[ts(optional)]
+        input_claim: Option<String>,
     },
     /// Ends the outputs that together make one binding's complete baseline.
     /// The host consumes it; the browser sees the `rusty-output-baseline`
@@ -1546,10 +1556,12 @@ impl ProductDevRuntimeOutput {
             RuntimePublication::Binding {
                 runtime,
                 next_input_sequence,
+                input_claim,
                 ..
             } => ProductDevRuntimeOutputWire::Binding {
                 runtime: host_runtime_binding(runtime),
                 next_input_sequence: CanonicalU64::new(next_input_sequence),
+                input_claim,
             },
             RuntimePublication::CompleteBaseline { runtime, .. } => {
                 ProductDevRuntimeOutputWire::CompleteBaseline {
@@ -1586,6 +1598,7 @@ impl ProductDevRuntimeOutput {
             wire: ProductDevRuntimeOutputWire::Binding {
                 runtime,
                 next_input_sequence,
+                input_claim: None,
             },
         }
     }
@@ -1825,6 +1838,22 @@ pub trait ProductDevRuntime: Send + 'static {
                 "{} control is not supported by this runtime",
                 operation.as_wire()
             ),
+        ))
+    }
+
+    /// A harness claims input under a fresh binding, labelled `label`, until
+    /// `control/release` or until `lease` passes without its input. The
+    /// published binding carries the claim, so an attached page sends no
+    /// input and shows who holds it.
+    fn claim_control(
+        &mut self,
+        _binding: ProductDevRuntimeBinding,
+        _label: String,
+        _lease: std::time::Duration,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        Err(ProductDevRuntimeError::new_not_applied(
+            "DEV_HOST_CONTROL_UNSUPPORTED",
+            "claim control is not supported by this runtime",
         ))
     }
 

@@ -68,6 +68,9 @@ pub enum RuntimePublication {
     Binding {
         runtime: RuntimeInputBinding,
         next_input_sequence: u64,
+        /// The label of a harness that holds input under this binding. While
+        /// one does, an attached page shows the claim and sends no input.
+        input_claim: Option<String>,
         publication_frontiers: Option<Vec<RuntimePublicationFrontier>>,
     },
     CompleteBaseline {
@@ -82,9 +85,19 @@ pub enum RuntimePublication {
 
 impl RuntimePublication {
     pub fn binding(runtime: RuntimeInputBinding, next_input_sequence: u64) -> Self {
+        Self::claimed_binding(runtime, next_input_sequence, None)
+    }
+
+    /// A binding that a harness's input claim may hold.
+    pub fn claimed_binding(
+        runtime: RuntimeInputBinding,
+        next_input_sequence: u64,
+        input_claim: Option<String>,
+    ) -> Self {
         Self::Binding {
             runtime,
             next_input_sequence,
+            input_claim,
             publication_frontiers: None,
         }
     }

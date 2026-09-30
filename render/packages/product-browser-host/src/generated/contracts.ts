@@ -101,6 +101,13 @@ outputThrough: CanonicalU64, accepted: boolean, code: string, disposition: Produ
 admittedThrough?: CanonicalU64, readout?: ProductDevRuntimeReadout, diagnostic?: string, };
 
 /**
+ * `control/claim`: a harness takes input from `runtime`'s owner under a
+ * fresh binding, labelled for any attached page, for `leaseMs` after its
+ * last input.
+ */
+export type ProductDevControlClaimRequest = { runtime: ProductDevRuntimeBinding, label: string, leaseMs: CanonicalU64, };
+
+/**
  * `control/replace`: advance the input control fence of `runtime`.
  */
 export type ProductDevControlRequest = { runtime: ProductDevRuntimeBinding, };
@@ -176,7 +183,7 @@ export type ProductDevLifecycleRequest = { runtime?: ProductDevRuntimeBinding, }
 /**
  * Closed operation identities returned by direct runtime calls.
  */
-export type ProductDevOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "input" | "advance-realtime" | "admit-demand-step" | "admit-external-step" | "complete-timeline" | "execute-debug";
+export type ProductDevOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "admit-demand-step" | "admit-external-step" | "complete-timeline" | "execute-debug";
 
 /**
  * Direct operation result supplied by the generated runtime.
@@ -230,7 +237,12 @@ export type ProductDevRuntimeFault = "owner-reported" | "counter-exhausted";
 
 export type ProductDevRuntimeMode = "realtime" | "demand" | "external";
 
-export type ProductDevRuntimeOutput = { "kind": "binding", runtime: ProductDevRuntimeBinding, nextInputSequence: CanonicalU64, } | { "kind": "ui-projection", envelope: RuntimeUiProjectionEnvelope, } | { "kind": "runtime-readout", readout: ProductDevRuntimeReadout, } | { "kind": "runtime-input-result", result: ProductDevInputResult, };
+export type ProductDevRuntimeOutput = { "kind": "binding", runtime: ProductDevRuntimeBinding, nextInputSequence: CanonicalU64, 
+/**
+ * The harness holding input, when one has claimed it: the page shows
+ * it and sends no input until a binding without a claim arrives.
+ */
+inputClaim?: string, } | { "kind": "ui-projection", envelope: RuntimeUiProjectionEnvelope, } | { "kind": "runtime-readout", readout: ProductDevRuntimeReadout, } | { "kind": "runtime-input-result", result: ProductDevInputResult, };
 
 /**
  * Minimal local readout passed through from the generated runtime owner.
