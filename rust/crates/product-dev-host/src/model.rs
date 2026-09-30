@@ -696,7 +696,7 @@ impl ProductDevDebugCatalog {
             ),
             (
                 "engine.renderer.presentation",
-                "Read submitted presentation revisions, camera and viewport; remote capture correlation remains unavailable",
+                "Read the last drawn frame's sequence, step, cameras and viewport; GET frames/capture draws a tool capture that carries its own step",
             ),
             (
                 "engine.renderer.detail",

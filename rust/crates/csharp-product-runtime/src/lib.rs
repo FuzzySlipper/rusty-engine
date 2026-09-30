@@ -2364,6 +2364,13 @@ impl CsharpProductRuntime {
             .and_then(frame_output::FrameOutput::frames)
     }
 
+    /// Tool captures of the rendered world, in stream or window output.
+    pub fn frame_capture(&self) -> Option<product_dev_host::ProductDevFrameCapture> {
+        self.frame_output
+            .as_ref()
+            .map(frame_output::FrameOutput::capture)
+    }
+
     /// The renderer the desktop shell draws, with `RUSTY_RENDER_OUTPUT=window`.
     pub fn scene_driver(&self) -> Option<Arc<SceneDriver>> {
         self.frame_output

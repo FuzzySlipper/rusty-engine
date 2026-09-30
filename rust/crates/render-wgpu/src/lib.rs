@@ -154,6 +154,8 @@ pub struct Renderer {
     particles: particles::Particles,
     labels: labels::Labels,
     video: video::Video,
+    /// The size of the window surface last presented, if any.
+    surface_size: Option<(u32, u32)>,
 }
 
 /// Initial storage sizes; both grow by doubling.
@@ -216,6 +218,7 @@ impl Renderer {
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
+            surface_size: None,
             animation_time: 0.0,
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),

@@ -81,6 +81,10 @@ struct Scene {
     elapsed_seconds: f64,
     /// Engine presentation time the renderer last advanced to, drawn or not.
     realized_seconds: f64,
+    /// The size the stream last drew at, for a capture that states none.
+    output_size: Option<(u32, u32)>,
+    /// Counts captures; a capture's sequence.
+    captures: u64,
     animation_facts: Vec<AnimationFact>,
     video_facts: Vec<VideoFact>,
     skipped_ops: BTreeMap<&'static str, u64>,
@@ -141,6 +145,24 @@ pub struct DrawnFrame {
     pub video: bool,
 }
 
+/// One frame drawn for a tool ([`SceneDriver::capture`]): its RGBA pixels
+/// and what a streamed frame's header says about it.
+#[derive(Debug, Clone)]
+pub struct Capture {
+    /// Counts captures, apart from the stream's frame sequence.
+    pub sequence: u64,
+    pub step: u64,
+    pub held: bool,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    /// A playing video clip covered the frame.
+    pub video: bool,
+    pub composition: Option<Arc<RendererViewComposition>>,
+    /// How each of `composition`'s cameras drew.
+    pub cameras: Vec<render_wgpu::DrawnCamera>,
+}
+
 /// The inspection state and the last drawn frame.
 #[derive(Debug, Clone)]
 pub struct StreamInspection {
@@ -188,6 +210,8 @@ impl SceneDriver {
                 step: 0,
                 elapsed_seconds: 0.0,
                 realized_seconds: 0.0,
+                output_size: None,
+                captures: 0,
                 animation_facts: Vec::new(),
                 video_facts: Vec::new(),
                 skipped_ops: BTreeMap::new(),
@@ -324,6 +348,41 @@ impl SceneDriver {
         scene.realized_seconds = scene.elapsed_seconds;
         scene.collect_facts();
         result
+    }
+
+    /// Draws the committed scene once into a target of its own and reads it
+    /// back, at `size` or else the output's size: the stream's last frame
+    /// or the window's surface. A capture changes no viewer's frame size and
+    /// publishes nothing to the stream; its facts are reported like a
+    /// drawn frame's.
+    pub fn capture(&self, size: Option<(u32, u32)>) -> Capture {
+        let now = self.now();
+        let mut scene = self.scene();
+        let (width, height) = size
+            .or(scene.output_size)
+            .or(scene.renderer.surface_size())
+            .unwrap_or(UNWATCHED_SIZE);
+        let target = OffscreenTarget::new(&self.gpu, width, height);
+        let video = scene.renderer.render_view_composition(&target, now).video;
+        let cameras = scene.renderer.drawn_cameras();
+        scene.realized_seconds = scene.elapsed_seconds;
+        scene.collect_facts();
+        scene.captures += 1;
+        let capture = Capture {
+            sequence: scene.captures,
+            step: scene.step,
+            held: scene.held,
+            width,
+            height,
+            rgba: Vec::new(),
+            video,
+            composition: scene.composition.clone(),
+            cameras,
+        };
+        drop(scene);
+        let mut rgba = Vec::new();
+        target.read_rgba_into(&self.gpu, &mut rgba);
+        Capture { rgba, ..capture }
     }
 
     /// Ops the renderer could not realize, by op, and the last one's detail.
@@ -591,6 +650,7 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
             .video;
         drawn.cameras = scene.renderer.drawn_cameras();
         scene.realized_seconds = scene.elapsed_seconds;
+        scene.output_size = Some(size);
         scene.collect_facts();
         let (held, step) = (scene.held, scene.step);
         drop(scene);

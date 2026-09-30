@@ -216,6 +216,35 @@ fn frames_follow_viewers_and_simulation_time() {
     assert!(near(observed.cameras[0].pose.position, observer.position));
     assert!((observed.cameras[0].pose.yaw_degrees - 45.0).abs() < 1e-3);
     assert!(observed.cameras[0].offscreen.is_none(), "no offscreen view");
+
+    // A tool's capture draws at its own size and publishes nothing to the
+    // stream; without a size it takes the stream's last frame size.
+    let latest = streamer.inspection().last_drawn.unwrap().sequence;
+    let capture = scene.capture(Some((40, 20)));
+    assert_eq!(
+        (capture.width, capture.height, capture.rgba.len()),
+        (40, 20, 40 * 20 * 4)
+    );
+    assert_eq!(
+        (capture.step, capture.held, capture.sequence),
+        (11, true, 1)
+    );
+    assert!(
+        capture.cameras[0].observer,
+        "it draws what the stream draws"
+    );
+    let default = scene.capture(None);
+    assert_eq!(
+        (default.width, default.height),
+        (observed.width, observed.height)
+    );
+    assert_eq!(default.sequence, 2);
+    assert!(
+        frames
+            .next_after(latest, None, Duration::from_millis(300))
+            .is_none(),
+        "a capture publishes no frame"
+    );
     drop(streamer);
 
     // Unwatched, nothing draws, but a clip still ends on Engine time and its

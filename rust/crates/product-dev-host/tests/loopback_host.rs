@@ -952,6 +952,98 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
 }
 
 #[test]
+fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&requests);
+    let capture: product_dev_host::ProductDevFrameCapture = Arc::new(move |request| {
+        seen.lock().unwrap().push(request);
+        Ok(product_dev_host::ProductDevCapture {
+            sequence: 3,
+            frame: product_dev_host::ProductDevFrame {
+                width: 2,
+                height: 1,
+                format: request.format,
+                held: true,
+                video: false,
+                step: 41,
+                payload: b"rgbargba".to_vec(),
+            },
+            cameras: serde_json::json!([{ "id": "main", "observer": false }]),
+        })
+    });
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let host = ProductDevHost::start(
+        FixtureRuntime::default(),
+        ProductDevHostConfig::new(0, bundle).with_frame_capture(capture),
+    )
+    .unwrap();
+    let origin = host.origin();
+    let captured = request(
+        &origin,
+        "GET /__rusty/product/runtime/frames/capture?format=rgba&width=2&height=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(captured.starts_with("HTTP/1.1 200 OK\r\n"), "{captured}");
+    assert!(captured.contains("Content-Type: application/x-rusty-frame\r\n"));
+    assert!(captured.contains("X-Rusty-Frame-Cameras: [{\"id\":\"main\",\"observer\":false}]\r\n"));
+    let body = captured.split_once("\r\n\r\n").unwrap().1.as_bytes();
+    assert_eq!(&body[..4], b"RSF1");
+    assert_eq!(
+        u64::from_le_bytes(body[8..16].try_into().unwrap()),
+        3,
+        "the capture's sequence"
+    );
+    assert_eq!(
+        u64::from_le_bytes(body[16..24].try_into().unwrap()),
+        41,
+        "the step it drew"
+    );
+    assert_eq!(body[32], 2, "raw RGBA");
+    assert_eq!(body[33] & 1, 1, "held");
+    assert_eq!(&body[40..], b"rgbargba");
+
+    // PNG is the default format; no size asks for the output's.
+    request(
+        &origin,
+        "GET /__rusty/product/runtime/frames/capture HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    let malformed = request(
+        &origin,
+        "GET /__rusty/product/runtime/frames/capture?width=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(malformed.starts_with("HTTP/1.1 400 "), "{malformed}");
+    let seen = requests.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        [
+            product_dev_host::ProductDevCaptureRequest {
+                size: Some((2, 1)),
+                format: product_dev_host::ProductDevFrameFormat::Rgba8,
+            },
+            product_dev_host::ProductDevCaptureRequest {
+                size: None,
+                format: product_dev_host::ProductDevFrameFormat::Png,
+            },
+        ]
+    );
+    host.shutdown().unwrap();
+
+    // A runtime that renders nothing has no capture route.
+    let host = start();
+    let missing = request(
+        &host.origin(),
+        "GET /__rusty/product/runtime/frames/capture HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
     let (host, recovery_calls) = start_debug_with_recovery_calls();
     let origin = host.origin();

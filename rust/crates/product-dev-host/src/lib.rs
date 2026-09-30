@@ -41,8 +41,9 @@ pub use engine_debug::{
 };
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use frames::{
-    ProductDevFrame, ProductDevFrameFormat, ProductDevFrameStream, FRAME_REQUEST_WAIT,
-    PRODUCT_DEV_FRAMES_PATH,
+    ProductDevCapture, ProductDevCaptureRequest, ProductDevFrame, ProductDevFrameCapture,
+    ProductDevFrameFormat, ProductDevFrameStream, FRAME_REQUEST_WAIT, PRODUCT_DEV_FRAMES_PATH,
+    PRODUCT_DEV_FRAME_CAPTURE_PATH,
 };
 pub use host::{
     ProductDevAssetReload, ProductDevHost, ProductDevHostConfig, RunningProductDevHost,

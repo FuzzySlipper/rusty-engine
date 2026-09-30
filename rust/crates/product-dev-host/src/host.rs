@@ -56,6 +56,7 @@ pub struct ProductDevHostConfig {
     accept_decision_hook: Option<AcceptDecisionHook>,
     listener: Option<Arc<TcpListener>>,
     frames: Option<Arc<ProductDevFrameStream>>,
+    capture: Option<crate::ProductDevFrameCapture>,
 }
 
 impl ProductDevHostConfig {
@@ -69,6 +70,7 @@ impl ProductDevHostConfig {
             accept_decision_hook: None,
             listener: None,
             frames: None,
+            capture: None,
         }
     }
 
@@ -85,6 +87,13 @@ impl ProductDevHostConfig {
     /// Serve the runtime's rendered frames at `/__rusty/product/runtime/frames`.
     pub fn with_frame_stream(mut self, frames: Arc<ProductDevFrameStream>) -> Self {
         self.frames = Some(frames);
+        self
+    }
+
+    /// Serve tool captures at `/__rusty/product/runtime/frames/capture`, in
+    /// either render output.
+    pub fn with_frame_capture(mut self, capture: crate::ProductDevFrameCapture) -> Self {
+        self.capture = Some(capture);
         self
     }
 
@@ -165,6 +174,7 @@ impl ProductDevHost {
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
             frames: config.frames,
+            capture: config.capture,
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let listener_state = Arc::clone(&state);
@@ -354,6 +364,7 @@ struct HostState<R> {
     /// only when they change what a browser shows, not every tick.
     published_readout: Mutex<Option<crate::ProductDevRuntimeReadout>>,
     frames: Option<Arc<ProductDevFrameStream>>,
+    capture: Option<crate::ProductDevFrameCapture>,
 }
 
 /// Small process-local observation state. It intentionally has no runtime
@@ -1147,6 +1158,17 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
             .is_some_and(|route| route == crate::frames::PRODUCT_DEV_FRAMES_PATH)
     {
         handle_frames(stream, &state, &request);
+        return;
+    }
+    if request.method == "GET"
+        && request
+            .path
+            .split('?')
+            .next()
+            .is_some_and(|route| route == crate::frames::PRODUCT_DEV_FRAME_CAPTURE_PATH)
+    {
+        let response = capture_response(&state, &request);
+        let _ = write_response(&mut stream, response);
         return;
     }
     // Preserve the browser attachment correlation before dispatch consumes the
@@ -2068,6 +2090,37 @@ fn handle_frames<R: ProductDevRuntime>(
     };
     let _ = stream.set_nodelay(true);
     let _ = write_response(&mut stream, response);
+}
+
+/// A tool's capture: one frame drawn at its own size, never a viewer. The
+/// drawn cameras ride in `X-Rusty-Frame-Cameras`.
+fn capture_response<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    request: &HttpRequest,
+) -> HttpResponse {
+    let Some(capture) = &state.capture else {
+        return HttpResponse::error(
+            404,
+            "DEV_HOST_FRAMES",
+            "this runtime does not render frames",
+        );
+    };
+    let request = match crate::frames::capture_request(&request.path) {
+        Ok(request) => request,
+        Err(detail) => return HttpResponse::error(400, "DEV_HOST_CAPTURE_REQUEST", detail),
+    };
+    match capture(request) {
+        Ok(captured) => {
+            let mut response = HttpResponse::bytes(
+                200,
+                "application/x-rusty-frame",
+                crate::frames::encode_capture(&captured),
+            );
+            response.cameras = Some(captured.cameras.to_string());
+            response
+        }
+        Err(detail) => HttpResponse::error(500, "DEV_HOST_CAPTURE", &detail),
+    }
 }
 
 fn handle_sse<R: ProductDevRuntime>(
@@ -3119,6 +3172,7 @@ mod tests {
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
             frames: None,
+            capture: None,
         };
         // Held time: nothing ticks, so the key waits in the mailbox.
         let queued = invoke_input(&state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"14","context":"gameplay.default","fact":{"kind":"key","code":"key-w","edge":"pressed"}}]}"#);
@@ -3163,6 +3217,7 @@ mod tests {
             subscribers: AtomicUsize::new(0),
             published_readout: Mutex::new(None),
             frames: None,
+            capture: None,
         });
         let (held, held_ready) = std::sync::mpsc::channel();
         let (release, release_owner) = std::sync::mpsc::channel();
@@ -3458,6 +3513,8 @@ struct HttpResponse {
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
     delivery_certainty: Option<ResponseDeliveryCertainty>,
+    /// A capture's drawn cameras, as JSON.
+    cameras: Option<String>,
 }
 
 /// Preserve the runtime's mutation certainty even on a typed rejection.
@@ -3512,6 +3569,7 @@ impl HttpResponse {
             output_through: None,
             commit_disposition: None,
             delivery_certainty: None,
+            cameras: None,
         }
     }
 
@@ -3597,6 +3655,9 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     write!(stream, "Content-Length: {}\r\n", response.body.len())?;
     if let Some(output_through) = response.output_through {
         write!(stream, "X-Rusty-Output-Through: {output_through}\r\n")?;
+    }
+    if let Some(cameras) = &response.cameras {
+        write!(stream, "X-Rusty-Frame-Cameras: {cameras}\r\n")?;
     }
     if let Some(disposition) = response.commit_disposition {
         write!(

@@ -247,8 +247,11 @@ the [desktop shell](desktop-shell.md)'s native window
   primary view's camera, marked `observer`, with `offscreenPose` for that
   camera's offscreen views); `views.sourceCameras` are the product's
   descriptors. The observer and drawing mode belong to the runtime, so every
-  attached page sees them. Held simulation time is the runtime's own. Nothing
-  asks for a renderer pick.
+  attached page sees them. A tool captures lossless frames at its own size,
+  in either output and without resizing any viewer, through
+  `GET frames/capture` ([presentation capture](presentation-capture.md)).
+  Held simulation time is the runtime's own. Nothing asks for a renderer
+  pick.
 
 The public C# service is `Graphics`; `Appearance` remains a resource/fact name.
 Facts can form a hierarchy, so equipment and layered visuals compose with

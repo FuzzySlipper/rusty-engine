@@ -336,6 +336,7 @@ impl Renderer {
     ) -> Result<FrameStats, PresentSkip> {
         overlay.acquire();
         let uploaded = self.prepare();
+        self.surface_size = Some(surface.size());
         let gpu = self.gpu.clone();
         let mut stats = FrameStats::default();
         surface.present_layers(&gpu, |view, finished| {

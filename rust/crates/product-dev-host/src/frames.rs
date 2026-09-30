@@ -36,6 +36,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 pub const PRODUCT_DEV_FRAMES_PATH: &str = "/__rusty/product/runtime/frames";
+/// A tool's capture: `?format=png|rgba[&width=W&height=H]`. It draws one
+/// frame at its own size and never counts as a viewer.
+pub const PRODUCT_DEV_FRAME_CAPTURE_PATH: &str = "/__rusty/product/runtime/frames/capture";
 /// How long one request waits for a newer frame before answering 204.
 pub const FRAME_REQUEST_WAIT: Duration = Duration::from_secs(1);
 pub(crate) const FRAME_MAGIC: &[u8; 4] = b"RSF1";
@@ -77,6 +80,8 @@ const VIEWER_GRACE: Duration = Duration::from_secs(2);
 pub enum ProductDevFrameFormat {
     Jpeg = 1,
     Rgba8 = 2,
+    /// Lossless; captures only.
+    Png = 3,
 }
 
 /// One rendered frame, before the stream numbers it.
@@ -226,6 +231,79 @@ fn encode_frame(sequence: u64, frame: &ProductDevFrame) -> Arc<[u8]> {
     bytes.into()
 }
 
+/// A tool's capture request: the frame's size, or the output's when `None`,
+/// and its payload format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductDevCaptureRequest {
+    pub size: Option<(u32, u32)>,
+    /// [`ProductDevFrameFormat::Png`] or [`ProductDevFrameFormat::Rgba8`].
+    pub format: ProductDevFrameFormat,
+}
+
+/// One captured frame, numbered by capture rather than by the stream, with
+/// the drawn cameras as the inspection commands report them.
+pub struct ProductDevCapture {
+    pub sequence: u64,
+    pub frame: ProductDevFrame,
+    pub cameras: serde_json::Value,
+}
+
+/// Draws a capture; the runtime supplies it for either render output.
+pub type ProductDevFrameCapture =
+    Arc<dyn Fn(ProductDevCaptureRequest) -> Result<ProductDevCapture, String> + Send + Sync>;
+
+/// The capture's header and payload, in the streamed frame's layout.
+pub(crate) fn encode_capture(capture: &ProductDevCapture) -> Arc<[u8]> {
+    encode_frame(capture.sequence, &capture.frame)
+}
+
+pub(crate) fn capture_request(path: &str) -> Result<ProductDevCaptureRequest, &'static str> {
+    let query = match path.split_once('?') {
+        Some((PRODUCT_DEV_FRAME_CAPTURE_PATH, query)) => query,
+        None if path == PRODUCT_DEV_FRAME_CAPTURE_PATH => "",
+        _ => return Err("unknown capture route"),
+    };
+    let (mut format, mut width, mut height) = (None, None, None);
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').ok_or("malformed capture query")?;
+        let repeated = match name {
+            "format" => format
+                .replace(match value {
+                    "png" => ProductDevFrameFormat::Png,
+                    "rgba" => ProductDevFrameFormat::Rgba8,
+                    _ => return Err("capture format is png or rgba"),
+                })
+                .is_some(),
+            "width" | "height" => {
+                let side = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|value| (1..=MAX_FRAME_SIDE).contains(value))
+                    .ok_or("frame size must be 1..=4096 pixels per side")?;
+                let slot = if name == "width" {
+                    &mut width
+                } else {
+                    &mut height
+                };
+                slot.replace(side).is_some()
+            }
+            _ => return Err("unknown capture query parameter"),
+        };
+        if repeated {
+            return Err("repeated capture query parameter");
+        }
+    }
+    let size = match (width, height) {
+        (Some(width), Some(height)) => Some((width, height)),
+        (None, None) => None,
+        _ => return Err("capture query needs both width and height"),
+    };
+    Ok(ProductDevCaptureRequest {
+        size,
+        format: format.unwrap_or(ProductDevFrameFormat::Png),
+    })
+}
+
 /// A viewer's frame request: `?after=N[&width=W&height=H[&cssWidth=C]]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FrameRequest {
@@ -284,6 +362,32 @@ pub(crate) fn frame_request(path: &str) -> Result<FrameRequest, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_request_states_a_whole_size_and_png_or_rgba() {
+        let parse =
+            |query: &str| capture_request(&format!("{PRODUCT_DEV_FRAME_CAPTURE_PATH}{query}"));
+        assert_eq!(
+            parse(""),
+            Ok(ProductDevCaptureRequest {
+                size: None,
+                format: ProductDevFrameFormat::Png,
+            })
+        );
+        assert_eq!(
+            parse("?format=rgba&width=640&height=360"),
+            Ok(ProductDevCaptureRequest {
+                size: Some((640, 360)),
+                format: ProductDevFrameFormat::Rgba8,
+            })
+        );
+        assert!(parse("?format=jpeg").is_err());
+        assert!(parse("?width=640").is_err());
+        assert!(parse("?width=0&height=1").is_err());
+        assert!(parse("?width=5000&height=1").is_err());
+        assert!(parse("?format=png&format=png").is_err());
+        assert!(parse("?after=3").is_err());
+    }
 
     fn frame(step: u64) -> ProductDevFrame {
         ProductDevFrame {

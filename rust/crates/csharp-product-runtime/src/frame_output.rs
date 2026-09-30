@@ -150,6 +150,41 @@ impl FrameOutput {
         self.stream.as_ref().map(|(_, frames)| Arc::clone(frames))
     }
 
+    /// Draws tool captures for the host's capture route, in either output:
+    /// one frame at the requested size in a target of its own, so no viewer
+    /// or window changes size. Window captures hold the world frame only;
+    /// the product UI overlay is not in them.
+    pub(crate) fn capture(&self) -> product_dev_host::ProductDevFrameCapture {
+        let driver = Arc::clone(&self.driver);
+        Arc::new(move |request: product_dev_host::ProductDevCaptureRequest| {
+            let captured = driver.capture(request.size);
+            let payload = match request.format {
+                product_dev_host::ProductDevFrameFormat::Png => {
+                    render_wgpu::encode_png(captured.width, captured.height, &captured.rgba)?
+                }
+                _ => captured.rgba,
+            };
+            let cameras = captured
+                .composition
+                .as_deref()
+                .map(|composition| drawn_cameras(&composition.cameras, &captured.cameras))
+                .unwrap_or_default();
+            Ok(product_dev_host::ProductDevCapture {
+                sequence: captured.sequence,
+                frame: product_dev_host::ProductDevFrame {
+                    width: captured.width,
+                    height: captured.height,
+                    format: request.format,
+                    held: captured.held,
+                    video: captured.video,
+                    step: captured.step,
+                    payload,
+                },
+                cameras: Value::Array(cameras),
+            })
+        })
+    }
+
     /// Applies a committed call's renderer publications, with the simulation
     /// step and held state the call left.
     pub(crate) fn realize(

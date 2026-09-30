@@ -160,6 +160,9 @@ fn main() -> Result<(), String> {
     if let Some(frames) = runtime.frame_stream() {
         config = config.with_frame_stream(frames);
     }
+    if let Some(capture) = runtime.frame_capture() {
+        config = config.with_frame_capture(capture);
+    }
     #[cfg(unix)]
     if let Some(fd) = args.serve_listener_fd {
         use std::os::fd::FromRawFd;

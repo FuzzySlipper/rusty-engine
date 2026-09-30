@@ -326,6 +326,7 @@ impl Renderer {
         time_seconds: f64,
     ) -> Result<FrameStats, PresentSkip> {
         let uploaded = self.prepare();
+        self.surface_size = Some(surface.size());
         let gpu = self.gpu.clone();
         let mut stats = FrameStats::default();
         surface.present_with(&gpu, |view| {
@@ -583,6 +584,12 @@ impl Renderer {
     /// How each camera of the installed composition drew in the last
     /// composition frame, aligned with its cameras: the observer where it
     /// replaced a camera in primary views, otherwise the sampled pose.
+    /// The size of the window surface last presented: a window renderer's
+    /// output size. `None` for a renderer that only draws offscreen.
+    pub fn surface_size(&self) -> Option<(u32, u32)> {
+        self.surface_size
+    }
+
     pub fn drawn_cameras(&self) -> Vec<DrawnCamera> {
         let state = &self.composition;
         state
