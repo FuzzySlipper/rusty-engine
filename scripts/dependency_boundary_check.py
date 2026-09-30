@@ -41,6 +41,11 @@ RENDER_PRESENTATION_FORBIDDEN = (
     | RENDER_BACKEND_PACKAGES
     | {"render-projection"}
 )
+# The only workspace crates the renderer may depend on, so the runtime, its
+# host and its publications never enter it.
+RENDER_WGPU_WORKSPACE_DEPENDENCIES = frozenset(
+    {"render-host-contracts", "render-model", "render-presentation", "render-video"}
+)
 # External crates that only the named workspace crates may depend on, so a
 # device or backend library stays behind its owner's API.
 EXTERNAL_DEPENDENCY_OWNERS = {
@@ -198,6 +203,14 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                     violations.add(
                         "authoritative owner reverse-depends on render-projection: "
                         + render_path(source, target, parents, names)
+                    )
+
+        if source_name == "render-wgpu":
+            for target in sorted(graph[source], key=lambda package_id: names[package_id]):
+                if names[target] not in RENDER_WGPU_WORKSPACE_DEPENDENCIES:
+                    violations.add(
+                        f"render-wgpu depends on {names[target]}, outside the renderer's "
+                        "workspace dependencies"
                     )
 
         if source_name == "render-model":

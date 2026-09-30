@@ -40,10 +40,10 @@ use product_dev_host::{
     ProductDevRendererInspection, ProductDevRendererStatistics, ProductDevStreamMedians,
     ProductDevStreamStatistics,
 };
-use render_host_contracts::RendererViewTarget;
-use render_stream::{
-    AnimationFact, DrawnFrame, FrameStreamer, Gpu, RendererCameraPose, RendererOptions,
-    RendererViewComposition, ResourceSource, SceneDriver, SceneState, StreamFormat, StreamStats,
+use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
+use render_stream::{DrawnFrame, FrameStreamer, StreamFormat, StreamStats};
+use render_wgpu::{
+    AnimationFact, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState,
     VideoFact, VideoFailure,
 };
 use runtime_publication::RuntimePublication;
@@ -88,7 +88,7 @@ pub(crate) fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeE
 pub(crate) struct FrameOutput {
     driver: Arc<SceneDriver>,
     /// The stream's render thread and frame route, when frames are streamed.
-    stream: Option<(FrameStreamer, Arc<ProductDevFrameStream>)>,
+    stream: Option<(Arc<FrameStreamer>, Arc<ProductDevFrameStream>)>,
     next_fact_id: u64,
     next_video_fact_id: u64,
     /// When the renderer statistics C# reads (`Diagnostics.ReadRenderer`)
@@ -128,6 +128,7 @@ impl FrameOutput {
                 let frames = ProductDevFrameStream::new();
                 let streamer =
                     FrameStreamer::start(Arc::clone(&driver), format, Arc::clone(&frames))
+                        .map(Arc::new)
                         .map_err(error)?;
                 (driver, Some((streamer, frames)))
             }
@@ -156,8 +157,16 @@ impl FrameOutput {
     /// the product UI overlay is not in them.
     pub(crate) fn capture(&self) -> product_dev_host::ProductDevFrameCapture {
         let driver = Arc::clone(&self.driver);
+        // Streamed, a capture without a size takes the stream's frame size.
+        let streamer = self
+            .stream
+            .as_ref()
+            .map(|(streamer, _)| Arc::downgrade(streamer));
         Arc::new(move |request: product_dev_host::ProductDevCaptureRequest| {
-            let captured = driver.capture(request.size);
+            let captured = match streamer.as_ref().and_then(std::sync::Weak::upgrade) {
+                Some(streamer) => streamer.capture(request.size),
+                None => driver.capture(request.size),
+            };
             let payload = match request.format {
                 product_dev_host::ProductDevFrameFormat::Png => {
                     render_wgpu::encode_png(captured.width, captured.height, &captured.rgba)?
@@ -194,7 +203,7 @@ impl FrameOutput {
         simulation: Simulation,
     ) {
         self.driver.apply(
-            outputs,
+            scene_changes(outputs),
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
             scene_state(services, simulation),
@@ -210,7 +219,7 @@ impl FrameOutput {
         simulation: Simulation,
     ) {
         self.driver.rebaseline(
-            baseline,
+            scene_changes(baseline),
             &EngineResources(services),
             &|entity| services.entity_world_position(entity),
             scene_state(services, simulation),
@@ -382,14 +391,15 @@ impl FrameOutput {
                     .to_owned())
             }
         }
-        let (held, observer, composition) = self.driver.view_state();
+        let scene = self.driver.view_state();
         Ok(ProductDevRendererInspection {
             drawing: ProductDevDrawingMode::Continuous,
             output: RenderOutput::Window,
-            held,
-            observer: observer.is_some(),
-            camera: observer
-                .or_else(|| composition.as_deref().and_then(primary_camera_pose))
+            held: scene.held,
+            observer: scene.observer.is_some(),
+            camera: scene
+                .observer
+                .or_else(|| scene.composition.as_deref().and_then(primary_camera_pose))
                 .map(Into::into),
             frame: None,
         })
@@ -574,6 +584,20 @@ impl ResourceSource for EngineResources<'_> {
 pub(crate) struct Simulation {
     pub held: bool,
     pub step: u64,
+}
+
+/// The renderer's changes among a call's publications, in call order.
+fn scene_changes(publications: &[RuntimePublication]) -> impl Iterator<Item = SceneChange<'_>> {
+    publications
+        .iter()
+        .filter_map(|publication| match publication {
+            RuntimePublication::Frame(frame) => Some(SceneChange::Frame(frame)),
+            RuntimePublication::Presentation(frame) => Some(SceneChange::Presentation(frame)),
+            RuntimePublication::ViewComposition(composition) => {
+                Some(SceneChange::ViewComposition(composition))
+            }
+            _ => None,
+        })
 }
 
 fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneState {

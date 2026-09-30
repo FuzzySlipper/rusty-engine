@@ -1,23 +1,19 @@
 //! The render thread against a real headless device: frames reach an
-//! attached viewer, follow applied steps, and stop once a held scene has
-//! been drawn, and an unwatched scene still reports clip ends. One test, so
-//! the binary opens one device (parallel devices can crash the Vulkan
-//! loader).
+//! attached viewer, follow applied steps, stop once a held scene has been
+//! drawn, and answer on-demand requests. render-wgpu's `tests/driver.rs`
+//! covers the driver itself. One test, so the binary opens one device
+//! (parallel devices can crash the Vulkan loader).
 
 use std::borrow::Cow;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::{
-    RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
-    RendererViewTarget, RendererViewport,
+    RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
+    RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
-use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
-use render_stream::{
-    FrameStreamer, Gpu, RendererCameraPose, RendererOptions, RendererViewComposition,
-    ResourceSource, SceneDriver, SceneState, StreamFormat, VideoFact,
-};
-use runtime_publication::RuntimePublication;
+use render_stream::{FrameStreamer, StreamFormat};
+use render_wgpu::{Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState};
 
 fn state(step: u64, held: bool) -> SceneState {
     SceneState {
@@ -33,18 +29,6 @@ struct NoResources;
 impl ResourceSource for NoResources {
     fn bytes(&self, _identity: &str) -> Option<Cow<'_, [u8]>> {
         None
-    }
-}
-
-/// `render-video`'s synthetic fixture: 1.5 s of VP9 at 10 fps.
-const CLIP: &[u8] = include_bytes!("../../render-video/tests/fixtures/testsrc.webm");
-const CLIP_RESOURCE: &str = "content/video/testsrc.webm";
-
-struct Clip;
-
-impl ResourceSource for Clip {
-    fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
-        (identity == CLIP_RESOURCE).then_some(Cow::Borrowed(CLIP))
     }
 }
 
@@ -91,7 +75,7 @@ fn frames_follow_viewers_and_simulation_time() {
     // Running: each applied step draws a frame that shows that step.
     let mut running = Vec::new();
     for step in 1..=10 {
-        scene.apply(&[], &NoResources, &|_| None, state(step, false));
+        scene.apply([], &NoResources, &|_| None, state(step, false));
         let after = running
             .last()
             .map_or(head.sequence, |last: &Header| last.sequence);
@@ -130,7 +114,7 @@ fn frames_follow_viewers_and_simulation_time() {
 
     // A held call's step lands with its changes: one frame, at the new
     // step, and no second frame for the same change.
-    scene.apply(&[], &NoResources, &|_| None, state(9, true));
+    scene.apply([], &NoResources, &|_| None, state(9, true));
     let stepped = header(&frames.next_after(held.sequence, None, wait).unwrap());
     assert_eq!((stepped.step, stepped.held), (9, true));
     assert!(frames
@@ -140,7 +124,7 @@ fn frames_follow_viewers_and_simulation_time() {
 
     // On demand: a change waits for a request, which draws exactly one frame.
     streamer.set_on_demand(true);
-    scene.apply(&[], &NoResources, &|_| None, state(10, true));
+    scene.apply([], &NoResources, &|_| None, state(10, true));
     assert!(frames
         .next_after(held.sequence, None, Duration::from_millis(300))
         .is_none());
@@ -188,7 +172,7 @@ fn frames_follow_viewers_and_simulation_time() {
         presentations: Vec::new(),
     };
     scene.apply(
-        &[RuntimePublication::ViewComposition(composition)],
+        [SceneChange::ViewComposition(&composition)],
         &NoResources,
         &|_| None,
         state(11, true),
@@ -216,28 +200,18 @@ fn frames_follow_viewers_and_simulation_time() {
     assert!((observed.cameras[0].pose.yaw_degrees - 45.0).abs() < 1e-3);
     assert!(observed.cameras[0].offscreen.is_none(), "no offscreen view");
 
-    // A tool's capture draws at its own size and publishes nothing to the
-    // stream; without a size it takes the stream's last frame size.
+    // A tool's capture publishes nothing to the stream; without a size it
+    // takes the stream's last frame size.
     let latest = streamer.inspection().last_drawn.unwrap().sequence;
-    let capture = scene.capture(Some((40, 20)));
-    assert_eq!(
-        (capture.width, capture.height, capture.rgba.len()),
-        (40, 20, 40 * 20 * 4)
-    );
-    assert_eq!(
-        (capture.step, capture.held, capture.sequence),
-        (11, true, 1)
-    );
-    assert!(
-        capture.cameras[0].observer,
-        "it draws what the stream draws"
-    );
-    let default = scene.capture(None);
+    let default = streamer.capture(None);
     assert_eq!(
         (default.width, default.height),
         (observed.width, observed.height)
     );
-    assert_eq!(default.sequence, 2);
+    assert!(
+        default.cameras[0].observer,
+        "it draws what the stream draws"
+    );
     assert!(
         frames
             .next_after(latest, None, Duration::from_millis(300))
@@ -245,48 +219,4 @@ fn frames_follow_viewers_and_simulation_time() {
         "a capture publishes no frame"
     );
     drop(streamer);
-
-    // Unwatched, nothing draws, but a clip still ends on Engine time and its
-    // completion reaches the Engine (#8871).
-    let unwatched_frames = ProductDevFrameStream::new();
-    let unwatched = SceneDriver::new(gpu, RendererOptions::default());
-    let unwatched_streamer = FrameStreamer::start(
-        unwatched.clone(),
-        StreamFormat::Rgba8,
-        unwatched_frames.clone(),
-    )
-    .expect("the render thread starts");
-    let handle = VideoPlaybackHandle::new(7);
-    let play = video_frame([VideoProjectionOp::Play {
-        handle,
-        clip: VideoClipRef {
-            asset: CLIP_RESOURCE.to_owned(),
-            content_hash: "sha256:fixture".to_owned(),
-            media_type: "video/webm".to_owned(),
-        },
-    }]);
-    unwatched.apply(
-        &[RuntimePublication::Presentation(play)],
-        &Clip,
-        &|_| None,
-        state(1, false),
-    );
-    assert!(unwatched.take_video_facts().is_empty());
-    for step in 2..=120 {
-        unwatched.apply(&[], &Clip, &|_| None, state(step, false));
-    }
-    let deadline = Instant::now() + wait;
-    let facts = loop {
-        let facts = unwatched.take_video_facts();
-        if !facts.is_empty() || Instant::now() > deadline {
-            break facts;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert_eq!(facts, [VideoFact::Completed { handle }]);
-    assert!(
-        unwatched_streamer.inspection().last_drawn.is_none(),
-        "no frame was drawn"
-    );
-    drop(unwatched_streamer);
 }

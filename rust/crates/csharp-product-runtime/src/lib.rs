@@ -175,11 +175,11 @@ pub struct CsharpProductRuntimeConfig {
     /// Products choose only relative scopes beneath this root.
     persistence_root: Option<PathBuf>,
     diagnostics: ProductDevLog,
-    renderer_options: render_stream::RendererOptions,
+    renderer_options: render_wgpu::RendererOptions,
     /// Where the runtime's renderer draws; `None` builds no renderer.
     render_output: Option<RenderOutput>,
     /// The desktop shell's device, for `RUSTY_RENDER_OUTPUT=window`.
-    window_gpu: Option<render_stream::Gpu>,
+    window_gpu: Option<render_wgpu::Gpu>,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -196,7 +196,7 @@ impl CsharpProductRuntimeConfig {
             input_cursor_mode: NativeInputCursorMode::PointerLock,
             persistence_root: None,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
-            renderer_options: render_stream::RendererOptions::default(),
+            renderer_options: render_wgpu::RendererOptions::default(),
             render_output: None,
             window_gpu: None,
         }
@@ -211,7 +211,7 @@ impl CsharpProductRuntimeConfig {
 
     /// The desktop shell's device: with `RUSTY_RENDER_OUTPUT=window` the
     /// runtime's renderer is built on it and the shell draws it.
-    pub fn with_window_gpu(mut self, gpu: render_stream::Gpu) -> Self {
+    pub fn with_window_gpu(mut self, gpu: render_wgpu::Gpu) -> Self {
         self.window_gpu = Some(gpu);
         self
     }
@@ -625,7 +625,7 @@ pub fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
     frame_output::render_output_mode()
 }
 
-pub use render_stream::{Gpu, Renderer, SceneDriver};
+pub use render_wgpu::{Gpu, Renderer, SceneDriver};
 
 mod playtest;
 

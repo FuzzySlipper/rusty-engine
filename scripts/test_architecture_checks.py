@@ -219,6 +219,33 @@ class DependencyBoundaryTests(unittest.TestCase):
             ["render-wgpu may not depend on serde_json"],
         )
 
+    def test_render_wgpu_depends_only_on_the_render_vocabulary(self) -> None:
+        metadata = metadata_fixture(
+            ["render-wgpu", "render-model", "render-video", "runtime-publication", "render-stream"],
+            [
+                ("render-wgpu", "render-model", None, "render_model"),
+                ("render-wgpu", "render-video", None, "render_video"),
+                ("render-wgpu", "render-stream", "dev", "render_stream"),
+                ("render-stream", "render-wgpu", None, "render_wgpu"),
+            ],
+        )
+        self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
+
+        metadata = metadata_fixture(
+            ["render-wgpu", "render-model", "runtime-publication"],
+            [
+                ("render-wgpu", "render-model", None, "render_model"),
+                ("render-wgpu", "runtime-publication", None, "publication"),
+            ],
+        )
+        self.assertEqual(
+            dependency_boundary_check.find_violations(metadata),
+            [
+                "render-wgpu depends on runtime-publication, outside the renderer's "
+                "workspace dependencies"
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

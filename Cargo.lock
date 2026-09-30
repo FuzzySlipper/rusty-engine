@@ -4382,9 +4382,7 @@ dependencies = [
  "jpeg-encoder",
  "product-dev-host",
  "render-host-contracts",
- "render-presentation",
  "render-wgpu",
- "runtime-publication",
 ]
 
 [[package]]

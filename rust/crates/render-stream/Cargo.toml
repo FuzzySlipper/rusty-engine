@@ -9,8 +9,6 @@ workspace = true
 [dependencies]
 render-wgpu.workspace = true
 render-host-contracts.workspace = true
-render-presentation.workspace = true
-runtime-publication.workspace = true
 product-dev-host.workspace = true
 # Only this crate may depend on the frame encoder
 # (scripts/dependency_boundary_check.py).
