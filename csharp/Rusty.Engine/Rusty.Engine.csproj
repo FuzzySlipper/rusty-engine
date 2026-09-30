@@ -30,6 +30,7 @@
     <None Include="$(RustyEnginePackageMetadataDir)/Rusty.Engine.props" Pack="true" PackagePath="buildTransitive" />
     <None Include="buildTransitive/Rusty.Engine.targets" Pack="true" PackagePath="buildTransitive" />
     <None Include="buildTransitive/Rusty.Engine.NativeAotRestore.props" Pack="true" PackagePath="buildTransitive" />
+    <None Include="buildTransitive/rusty-engine-product-ui.d.ts" Pack="true" PackagePath="buildTransitive" />
     <None Include="buildTransitive/Tasks/RustyEngineContentBundleManifestTask.cs" Pack="true" PackagePath="buildTransitive/Tasks" />
   </ItemGroup>
   <Target Name="GenerateEngineContracts" BeforeTargets="CoreCompile" Condition="'$(RustyEngineGenerateBindings)' == 'true'">

@@ -21,6 +21,10 @@
          its UI sources (RustyEngineProductUiSourceRoot, defaulted in the
          targets once the product's UI root is known). -->
     <RustyEngineProductUiBuildCommand Condition="'$(RustyEngineProductUiBuildCommand)' == ''"></RustyEngineProductUiBuildCommand>
+    <!-- Declarations a TypeScript product UI passes to its tsc:
+         `@rusty-engine/product-ui` (the mount signature and context ports)
+         and `@rusty-engine/live-debug`. Generated from this pair's shell. -->
+    <RustyEngineProductUiTypes>$(MSBuildThisFileDirectory)rusty-engine-product-ui.d.ts</RustyEngineProductUiTypes>
     <RustyEngineProductBindHost Condition="'$(RustyEngineProductBindHost)' == ''">127.0.0.1</RustyEngineProductBindHost>
     <RustyEngineProductPort Condition="'$(RustyEngineProductPort)' == ''">0</RustyEngineProductPort>
     <RustyEngineProductLiveDebug Condition="'$(RustyEngineProductLiveDebug)' == ''">false</RustyEngineProductLiveDebug>

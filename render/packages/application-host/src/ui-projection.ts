@@ -22,14 +22,8 @@ export interface RustyApplicationUiProjectionReadout {
   readonly state: 'ready' | 'disposed';
 }
 
-export interface RustyApplicationUiProjectionView {
-  /** Returns the current immutable envelope, or null before the first value. */
-  readonly current: () => RuntimeUiProjectionEnvelope | null;
-  /** Subscribe to the current value. Rebinding publishes null before later values. */
-  readonly subscribe: (
-    listener: (value: RuntimeUiProjectionEnvelope | null) => void,
-  ) => () => void;
-}
+import type { RustyApplicationUiProjectionView } from './product-ui.js';
+export type { RustyApplicationUiProjectionView } from './product-ui.js';
 
 export interface RustyApplicationUiProjectionPort extends RustyApplicationUiProjectionView {
   /** Rebind the projection epoch and clear the current snapshot. */

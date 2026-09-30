@@ -38,13 +38,8 @@ export interface RustyApplicationRuntimeInputBinding {
   readonly nextSequence?: string;
 }
 
-/** UI-owned observations from the existing selected-controller sampler. */
-export interface RustyApplicationInterfaceInputObservation {
-  readonly context: 'interface';
-  readonly fact: Extract<RuntimeInputWireFact, {
-    readonly kind: 'controller-button' | 'controller-axis' | 'controller-button-value';
-  }>;
-}
+import type { RustyApplicationInterfaceInputObservation } from './product-ui.js';
+export type { RustyApplicationInterfaceInputObservation } from './product-ui.js';
 
 export interface RustyApplicationSelectedControllerOptions {
   /** Browser gamepad index. Only one explicitly selected controller is observed. */

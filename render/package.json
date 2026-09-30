@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "build": "pnpm -r build && vite build --config vite.product-browser-host.config.ts && vite build --config vite.live-debug-panel.config.ts && node scripts/publish-live-debug-panel-artifact.mjs && node scripts/check-bundles.mjs",
+    "build": "pnpm -r build && vite build --config vite.product-browser-host.config.ts && vite build --config vite.live-debug-panel.config.ts && node scripts/publish-live-debug-panel-artifact.mjs && node scripts/check-bundles.mjs && node scripts/generate-product-ui-types.mjs --check",
     "typecheck": "tsc --build packages/*/tsconfig.json",
     "test": "pnpm -r test",
     "verify": "pnpm run build && pnpm run test"

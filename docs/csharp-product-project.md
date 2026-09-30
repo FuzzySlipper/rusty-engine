@@ -364,6 +364,25 @@ the UI compiler:
 </ItemGroup>
 ```
 
+A TypeScript UI types what the Engine passes it against the pair's own
+declarations. Pass `$(RustyEngineProductUiTypes)` to `tsc` as one more input
+(or list it in the UI tsconfig's `files`), then import from the two modules it
+declares:
+
+```ts
+import type { RustyApplicationUiMount } from '@rusty-engine/product-ui';
+import { mountLiveDebugPanel } from '@rusty-engine/live-debug';
+
+export const mountProductUi: RustyApplicationUiMount = (root, context) => { /* ... */ };
+```
+
+`@rusty-engine/product-ui` holds the mount signature, the context ports
+(`RustyApplicationUiContext`: `ui`, `projection`, `intents`, `input`) and the
+projection envelope. A claim's product payload takes the product's own typed
+data. `@rusty-engine/live-debug` is resolved at run time by the shell's import
+map. Add the file to `RustyEngineProductUiInput` so a pair move rebuilds the
+UI.
+
 Do not hook a UI compiler onto the SDK's staging or validation targets
 yourself; that reruns it on every C# edit. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development

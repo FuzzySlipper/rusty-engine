@@ -27,67 +27,31 @@ import {
   type RustyApplicationUiProjectionView,
 } from './ui-projection.js';
 
+import type {
+  RustyApplicationUiIntentValue,
+  RustyApplicationInteractionMode,
+  RustyApplicationUiPort,
+  RustyApplicationUiIntentsPort,
+  RustyApplicationUiContext,
+  RustyApplicationUiInputPort,
+  RustyApplicationUiOwner,
+  RustyApplicationUiMount,
+} from './product-ui.js';
+export type {
+  RustyApplicationUiIntentValue,
+  RustyApplicationInteractionMode,
+  RustyApplicationUiPort,
+  RustyApplicationUiIntentsPort,
+  RustyApplicationUiContext,
+  RustyApplicationUiInputPort,
+  RustyApplicationUiOwner,
+  RustyApplicationUiMount,
+} from './product-ui.js';
+
 export const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION =
   'rusty_application_host.v1';
 const RUSTY_APPLICATION_INTERACTIVE_UI_SELECTOR =
   'a,button,input,select,textarea,summary,dialog,[contenteditable="true"],[data-rusty-ui-interactive],[role="dialog"],[aria-modal="true"]';
-
-export type RustyApplicationInteractionMode =
-  | 'gameplay'
-  | 'interface'
-  | 'modal';
-
-export interface RustyApplicationUiPort {
-  readonly active: () => boolean;
-  /**
-   * Classify one original host event before a downstream adapter gives it
-   * gameplay meaning. Interactive UI is rejected synchronously even before a
-   * later click handler changes the coarse interaction mode.
-   */
-  readonly allowsGameplayInput: (event: Event) => boolean;
-  readonly focusGameplay: () => void;
-  readonly interactionMode: () => RustyApplicationInteractionMode;
-  readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
-}
-
-/** Mounted DOM UI can emit a claim, but cannot drain or bind the input lane. */
-export interface RustyApplicationUiIntentsPort {
-  readonly claim: (
-    intent: string,
-    value: RuntimeInputWireIntentValue,
-  ) => void;
-}
-
-export interface RustyApplicationUiContext {
-  readonly ui: RustyApplicationUiPort;
-  /** Read-only current Product UI projection and subscription view. */
-  readonly projection?: RustyApplicationUiProjectionView;
-  /** Claim-only adapter for the shared ordered Engine input lane. */
-  readonly intents?: RustyApplicationUiIntentsPort;
-  /** Read-only controller observations owned exclusively by interface mode. */
-  readonly input?: RustyApplicationUiInputPort;
-}
-
-export interface RustyApplicationUiInputPort {
-  /** Synchronous observation on the host cadence; returns an unsubscribe function. */
-  readonly subscribe: (observer: (input: RustyApplicationInterfaceInputObservation) => void) => () => void;
-}
-
-export interface RustyApplicationUiOwner {
-  readonly dispose: () => void | Promise<void>;
-}
-
-/**
- * Mount trusted downstream product UI into the Engine-owned composition root.
- * This is an application composition seam, not an untrusted plugin boundary.
- * The root is hit-test transparent: native interactive controls and descendants
- * marked `data-rusty-ui-interactive` receive pointer events, while other overlay
- * regions pass through to the Engine canvas and its input arbitration.
- */
-export type RustyApplicationUiMount = (
-  root: HTMLElement,
-  context: RustyApplicationUiContext,
-) => void | RustyApplicationUiOwner | Promise<void | RustyApplicationUiOwner>;
 
 export interface RustyApplicationHostOptions {
   readonly root: HTMLElement;
@@ -273,8 +237,10 @@ export async function mountRustyApplication(
         },
       });
       intents = Object.freeze({
-        claim: (intent: string, value: RuntimeInputWireIntentValue): void => {
-          input?.claim(intent, value);
+        claim: (intent: string, value: RustyApplicationUiIntentValue): void => {
+          // A product payload's data is the product's JSON value; the lane
+          // copies it and sends it as the wire's JSON.
+          input?.claim(intent, value as RuntimeInputWireIntentValue);
         },
       });
     }

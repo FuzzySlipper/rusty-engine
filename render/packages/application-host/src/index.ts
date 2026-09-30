@@ -9,6 +9,7 @@ export type {
   RustyApplicationHostReadout,
   RustyApplicationInteractionMode,
   RustyApplicationUiContext,
+  RustyApplicationUiIntentValue,
   RustyApplicationUiIntentsPort,
   RustyApplicationUiInputPort,
   RustyApplicationUiMount,
