@@ -71,10 +71,9 @@ pub(crate) fn run(args: Arguments) -> Result<(), String> {
     let mut launch = RuntimeLaunch {
         executable: env::current_exe().map_err(|error| error.to_string())?,
         listener_fd: listener.as_raw_fd(),
-        product_directory: args
-            .product_path
-            .clone()
-            .ok_or("PRODUCT_HOST_SUPERVISOR: a packaged --product directory is required")?,
+        product_directory: args.product_path.clone().ok_or(
+            "PRODUCT_HOST_SUPERVISOR: a packaged --product directory or container is required",
+        )?,
         loader: args.loader,
         next_runtime_instance_id: args
             .runtime_instance_id

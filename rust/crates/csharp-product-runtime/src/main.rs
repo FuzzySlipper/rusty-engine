@@ -118,8 +118,7 @@ fn main() -> Result<(), String> {
         &args.cef_switches,
     )?;
     let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
-    let content =
-        CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
+    let content = args.content().map_err(|error| error.to_string())?;
     let (library, runtimeconfig) = args.selected_artifacts()?;
     #[allow(unused_mut)]
     let mut runtime_config = args.runtime_config().with_diagnostics(diagnostics.clone());
@@ -785,7 +784,8 @@ impl Arguments {
             config = config
                 .with_input_cursor_mode(product.input_cursor_mode.native())
                 .with_default_lights(world_lights, viewmodel_lights)
-                .with_audio_device_required(product.audio_device_required);
+                .with_audio_device_required(product.audio_device_required)
+                .with_product(&product.id, &product.title);
         }
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
@@ -841,15 +841,19 @@ impl Arguments {
         }
     }
 
-    fn content_root(&self) -> &Path {
-        self.product
-            .as_ref()
-            .map(|product| product.content_root.as_path())
-            .unwrap_or_else(|| {
+    fn content(
+        &self,
+    ) -> Result<CsharpProductContent, csharp_product_runtime::CsharpProductRuntimeError> {
+        match &self.product {
+            Some(product) => {
+                CsharpProductContent::admit_from(&product.source, &product.content_root)
+            }
+            None => CsharpProductContent::admit(
                 self.content_dir
                     .as_deref()
-                    .expect("legacy content required")
-            })
+                    .expect("legacy content required"),
+            ),
+        }
     }
     fn port(&self) -> u16 {
         self.product
@@ -1021,7 +1025,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -1035,7 +1039,13 @@ impl Arguments {
             return Err("--loader and --staged-launch are mutually exclusive".to_owned());
         }
         let product_path = product.clone();
-        let product = product.map(|root| ProductBundle::read(&root)).transpose()?;
+        let product = product
+            .map(|path| {
+                let source = csharp_product_runtime::ProductSource::open(&path)
+                    .map_err(|error| format!("--product: {error}"))?;
+                ProductBundle::read(&source)
+            })
+            .transpose()?;
         if product.is_some()
             && (library.is_some()
                 || runtime_config_path.is_some()

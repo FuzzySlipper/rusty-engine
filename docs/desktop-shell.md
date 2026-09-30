@@ -109,14 +109,16 @@ rusty dev --project <product.csproj> --output window
 A product release that opens a window ships:
 - `bin/rusty-product-host` from the desktop pack, with `lib/cef` beside it
   (the host finds it at `../lib/cef`);
-- the staged product bundle;
+- the Product as `rusty build --pack <release>` writes it: `product.rpak`
+  (manifest, UI and content in one file) with `coreclr/` or `native/` loose
+  beside it, launched with `--product <release>/product.rpak`;
 - the licences in `share/third-party/`:
   - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others);
   - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,
     which must stay available to recipients;
   - the rest of the pack's notices.
 
-An installer or archive format is chosen when a product asks for one.
+An installer is chosen when a product asks for one.
 
 ## Platforms
 

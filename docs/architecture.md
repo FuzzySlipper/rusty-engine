@@ -258,6 +258,8 @@ renderer, shell and CLI crates beyond the platform's own (`PATH`, `HOME`,
   attached page sees them. A tool captures lossless frames at its own size,
   in either output and without resizing any viewer, through
   `GET frames/capture` ([presentation capture](presentation-capture.md)).
+  `engine.renderer.snapshot <path>` writes the committed scene and its
+  resources to a file that `rusty-scene-render` draws without the product.
   Held simulation time is the runtime's own. The renderer has no picking.
 
 The public C# service is `Graphics`; `Appearance` remains a resource/fact name.
@@ -281,6 +283,12 @@ window host and Chromium's runtime; `rusty` fetches it on first use of window
 output ([distribution](csharp-distribution.md)). The package makes the product project build its
 own bind export and stages a loose Product directory from that build. `rusty dev` asks the package to stage that
 directory, launches CoreCLR, and watches only the declared Product inputs.
+A release packs the staged manifest, UI and content into one container file,
+`product.rpak`, with the managed or native artifacts loose beside it
+(`rusty build --pack`, [release container](csharp-product-project.md#release-container)).
+The runtime reads a loose directory and a container through one reader
+(`product_container::ProductSource`). `rusty dev` keeps loose files, so an
+asset-only restage reloads in place without re-packing.
 
 Packaged CoreCLR launches (`rusty dev` and a direct `rusty-product-host
 --product … --loader coreclr`) and any `--supervised` or `--headless` launch run

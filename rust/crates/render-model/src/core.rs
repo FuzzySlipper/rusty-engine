@@ -615,6 +615,51 @@ impl RenderFrameDiff {
         Self::default()
     }
 
+    /// Every mesh payload the frame carries, to move inline streams into
+    /// resources (`pack_mesh_resources`).
+    pub fn mesh_payloads_mut(&mut self) -> impl Iterator<Item = &mut crate::MeshPayloadDescriptor> {
+        self.ops.iter_mut().flat_map(|op| {
+            let payloads: Vec<&mut crate::MeshPayloadDescriptor> = match op {
+                RenderDiff::ReplaceMeshPayload { payload, .. } => vec![payload],
+                RenderDiff::DefineStaticMesh { asset } => vec![&mut asset.payload],
+                RenderDiff::DefineVoxelObject { asset } => asset
+                    .meshes
+                    .iter_mut()
+                    .map(|mesh| &mut mesh.payload)
+                    .collect(),
+                // Listed so that a new op carrying a payload is added here.
+                RenderDiff::SetParentJoint { .. }
+                | RenderDiff::Create { .. }
+                | RenderDiff::Update { .. }
+                | RenderDiff::Destroy { .. }
+                | RenderDiff::CreateLight { .. }
+                | RenderDiff::UpdateLight { .. }
+                | RenderDiff::DefineMaterial { .. }
+                | RenderDiff::ReleaseMaterial { .. }
+                | RenderDiff::SetMaterialInstanceParameters { .. }
+                | RenderDiff::DefineTexture { .. }
+                | RenderDiff::ReleaseTexture { .. }
+                | RenderDiff::SetSkyBackground { .. }
+                | RenderDiff::SetBackgroundColor { .. }
+                | RenderDiff::DefineSpriteAtlas { .. }
+                | RenderDiff::ReleaseSpriteAtlas { .. }
+                | RenderDiff::ReleaseStaticMesh { .. }
+                | RenderDiff::DefineAnimatedMesh { .. }
+                | RenderDiff::ReleaseAnimatedMesh { .. }
+                | RenderDiff::ReleaseVoxelObject { .. }
+                | RenderDiff::CreateStaticMeshInstance { .. }
+                | RenderDiff::CreateAnimatedMeshInstance { .. }
+                | RenderDiff::SetAnimatedMeshInspection { .. }
+                | RenderDiff::SetAnimatedMeshPlayback { .. }
+                | RenderDiff::CreateVoxelObjectInstance { .. }
+                | RenderDiff::SetVoxelObjectFrame { .. }
+                | RenderDiff::CreateSprite { .. }
+                | RenderDiff::UpdateSprite { .. } => Vec::new(),
+            };
+            payloads
+        })
+    }
+
     pub fn try_from_ops(ops: Vec<RenderDiff>) -> Result<Self, RenderFrameError> {
         let frame = Self {
             publication: None,

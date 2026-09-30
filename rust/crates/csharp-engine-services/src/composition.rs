@@ -747,6 +747,12 @@ impl EngineServiceSet {
     /// A retained renderer resource by identity, borrowed for an in-process
     /// renderer that reads the bytes while it holds the services.
     pub fn borrowed_renderer_resource(&self, identity: &str) -> Option<&CsharpRenderResource> {
+        self.renderer_resources()
+            .find(|resource| resource.identity() == identity)
+    }
+
+    /// Every resource a renderer of the committed scene may ask for.
+    pub fn renderer_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.appearance
             .state
             .render_resources
@@ -754,7 +760,6 @@ impl EngineServiceSet {
             .chain(self.appearance.state.render_resources.recently_released())
             .chain(self.audio.render_resources())
             .chain(self.video.render_resources())
-            .find(|resource| resource.identity() == identity)
     }
 
     /// Latest projection of every UI stream, bound to `binding`. A browser

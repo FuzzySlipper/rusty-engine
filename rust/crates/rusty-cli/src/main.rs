@@ -502,6 +502,8 @@ struct BuildOptions {
     project: PathBuf,
     engine_source: Option<PathBuf>,
     aot: bool,
+    /// Release directory for the packed Product.
+    pack: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -684,6 +686,7 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
     let mut project = None;
     let mut engine_source = None;
     let mut aot = false;
+    let mut pack = None;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
@@ -694,6 +697,7 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
                 )?))
             }
             "--aot" => aot = true,
+            "--pack" => pack = Some(PathBuf::from(required_value(&mut values, "--pack")?)),
             _ => return Err(unknown_argument("build", &value, build_usage)),
         }
     }
@@ -701,6 +705,7 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
         project: project.ok_or("RUSTY_ARGUMENT: rusty build needs --project <product.csproj>")?,
         engine_source,
         aot,
+        pack,
     })
 }
 
@@ -856,18 +861,23 @@ Examples:
 }
 
 fn build_usage() -> String {
-    "usage: rusty build --project <product.csproj> [--aot] [--engine-source <rusty-engine-source>]
+    "usage: rusty build --project <product.csproj> [--aot] [--pack <release-dir>] [--engine-source <rusty-engine-source>]
 
 Restores against the pinned SDK in the shared cache, builds, and stages the CoreCLR product bundle
 (the SDK target StageRustyEngineCoreClrProduct). --aot runs VerifyRustyEngineAot, which also
 publishes the NativeAOT product. Compiler output and dotnet's exit code are passed through.
+
+--pack then writes the staged Product as a release: <release-dir>/product.rpak holds product.json,
+the UI and the content; the CoreCLR assemblies or NativeAOT module are copied loose beside it.
+Run it with `rusty-product-host --product <release-dir>/product.rpak --loader <coreclr|nativeaot>`.
 
 Plain `dotnet build`, `dotnet test` and `dotnet run` resolve the same SDK: the product's
 Directory.Build.props declares the pinned pair's feed (`rusty status` checks it).
 
 Examples:
   rusty build --project src/Game/Game.csproj
-  rusty build --project src/Game/Game.csproj --aot"
+  rusty build --project src/Game/Game.csproj --aot
+  rusty build --project src/Game/Game.csproj --pack release"
         .to_owned()
 }
 
@@ -1353,11 +1363,43 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
         ),
     ];
     arguments.extend(source_properties(options.engine_source.as_deref())?);
+    let result_file =
+        env::temp_dir().join(format!("rusty-build-stage-{}.json", std::process::id()));
+    if options.pack.is_some() {
+        arguments.push(format!("-getProperty:{STAGED_PRODUCT_PROPERTY}"));
+        arguments.push(format!(
+            "-getResultOutputFile:{}",
+            result_file
+                .to_str()
+                .ok_or("RUSTY_BUILD: temporary result path must be UTF-8")?
+        ));
+    }
     let status = Command::new("dotnet")
         .args(&arguments)
         .status()
         .map_err(|error| format!("RUSTY_PREREQUISITE: could not start dotnet: {error}; install the .NET {REQUIRED_DOTNET_MAJOR} SDK"))?;
     if status.success() {
+        if let Some(release) = &options.pack {
+            // With one -getProperty, MSBuild writes the bare value.
+            let result = fs::read_to_string(&result_file);
+            let _ = fs::remove_file(&result_file);
+            let result = result.map_err(|error| {
+                format!("RUSTY_BUILD_PACK: staging produced no property result: {error}")
+            })?;
+            let staged = Some(result.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or("RUSTY_BUILD_PACK: staging reported no product directory")?;
+            let release = absolute(release)?;
+            let report = product_container::pack_product(Path::new(staged), &release)
+                .map_err(|error| format!("RUSTY_BUILD_PACK: {error}"))?;
+            println!(
+                "Packed {} files ({} bytes) into {}; {} native files beside it",
+                report.packed_files,
+                report.container_bytes,
+                report.container.display(),
+                report.loose_files.len()
+            );
+        }
         return Ok(ExitCode::SUCCESS);
     }
     eprintln!(

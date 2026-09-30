@@ -5,7 +5,9 @@ A portable descriptor is readable JSON over ordinary files. Load it through
 ordinary `ContentReference`, including one opened by `ProductContentBundle`.
 Rust parses and resolves the selected dependency closure; C# receives typed,
 copied facts and independently retained file references. Assets live in
-ordinary directory bundles; there is no archive format or virtual filesystem.
+ordinary bundles: directories in a staged Product, entries of the one
+[Product container](csharp-product-project.md#release-container) in a release.
+There is no virtual filesystem.
 
 ## Version 1
 

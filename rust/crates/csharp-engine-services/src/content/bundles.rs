@@ -1,18 +1,23 @@
-//! Directory-backed build content. Discovery retains metadata only; each open
-//! owns an immutable collection, and references own independent Arc clones.
+//! Build content bundles, loose or packed. Discovery retains metadata only;
+//! each open owns an immutable collection, and references own independent Arc
+//! clones.
 use super::*;
+use product_container::{join, ProductSource};
 use serde::Deserialize;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 
 pub const INDEX: &str = ".rusty-bundles.json";
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default)]
 pub struct ProductContentBundles {
-    #[serde(skip)]
-    content_root: PathBuf,
+    /// Absent only for a Product with no content source (tests).
+    source: Option<ProductSource>,
+    /// The content root within `source`.
+    content_root: String,
+    bundles: Vec<BundleDefinition>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Index {
     bundles: Vec<BundleDefinition>,
 }
 
@@ -31,24 +36,32 @@ struct FileDefinition {
     sha256: String,
 }
 
-pub(super) fn relative(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains(['\\', ':', '\0'])
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
-}
+pub(super) use product_container::is_relative_path as relative;
 
 impl ProductContentBundles {
-    /// Read only the SDK-generated inventory; no bundle payload is read here.
-    pub fn admit(root: &Path) -> Result<Self, String> {
-        let index = root.join(INDEX);
-        if !index.exists() {
-            return Ok(Self::default());
-        }
-        let mut source: Self = serde_json::from_slice(&fs::read(index).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("invalid ProductContent bundle inventory: {e}"))?;
-        source.content_root = root.to_path_buf();
+    /// Read only the bundle inventory; no bundle payload is read here. A loose
+    /// Product carries the SDK-generated `.rusty-bundles.json` in its content
+    /// root; a container carries the same facts in its own inventory.
+    pub fn admit(source: &ProductSource, content_root: &str) -> Result<Self, String> {
+        let bundles = match source.container() {
+            Some(container) => packed_definitions(container, content_root)?,
+            None => {
+                let index = join(content_root, INDEX);
+                if !source.is_file(&index) {
+                    Vec::new()
+                } else {
+                    let bytes = source.read(&index).map_err(|e| e.to_string())?;
+                    serde_json::from_slice::<Index>(&bytes)
+                        .map_err(|e| format!("invalid ProductContent bundle inventory: {e}"))?
+                        .bundles
+                }
+            }
+        };
+        let mut source = Self {
+            source: Some(source.clone()),
+            content_root: content_root.to_owned(),
+            bundles,
+        };
         source.bundles.sort_by(|a, b| a.id.cmp(&b.id));
         for (i, bundle) in source.bundles.iter().enumerate() {
             if !relative(&bundle.id)
@@ -107,9 +120,13 @@ impl ProductContentBundles {
         let bundle = self.bundles.iter().find(|b| b.id == id)?;
         let mut bodies = BTreeMap::new();
         let mut hashes = BTreeMap::new();
+        let source = self.source.as_ref()?;
         for file in &bundle.files {
-            let path = self.content_root.join(&bundle.root).join(&file.path);
-            let bytes = fs::read(path).ok()?;
+            let path = join(
+                &self.content_root,
+                &format!("{}/{}", bundle.root, file.path),
+            );
+            let bytes = source.read(&path).ok()?;
             // Staging wrote the manifest's SHA-256 from these same bytes, so
             // its identity is trusted rather than recomputed on every open. A
             // body changed after staging gets a new identity on the next
@@ -121,7 +138,7 @@ impl ProductContentBundles {
             hashes.insert(file.path.as_str(), sha256_words(&hex_digest(&file.sha256)?));
             bodies.insert(
                 format!("{}/{}", bundle.root, file.path),
-                Arc::<[u8]>::from(bytes),
+                Arc::<[u8]>::from(bytes.as_ref()),
             );
         }
         let bodies = Arc::new(bodies);
@@ -146,6 +163,44 @@ impl ProductContentBundles {
                 .collect(),
         )
     }
+}
+
+/// A container's bundles under `content_root`, with content-relative roots and
+/// bundle-relative file paths, as the loose inventory records them.
+fn packed_definitions(
+    container: &product_container::Container,
+    content_root: &str,
+) -> Result<Vec<BundleDefinition>, String> {
+    container
+        .bundles()
+        .iter()
+        .map(|bundle| {
+            let root = match content_root {
+                "" => Some(bundle.root.as_str()),
+                prefix => bundle
+                    .root
+                    .strip_prefix(prefix)
+                    .and_then(|root| root.strip_prefix('/')),
+            }
+            .ok_or_else(|| format!("bundle {} lies outside the content root", bundle.id))?;
+            let under = format!("{}/", bundle.root);
+            let files = container
+                .entries()
+                .iter()
+                .filter(|entry| entry.bundle.as_deref() == Some(bundle.id.as_str()))
+                .map(|entry| FileDefinition {
+                    path: entry.path[under.len()..].to_owned(),
+                    byte_length: entry.byte_length,
+                    sha256: entry.sha256.clone(),
+                })
+                .collect();
+            Ok(BundleDefinition {
+                id: bundle.id.clone(),
+                root: root.to_owned(),
+                files,
+            })
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -317,6 +372,11 @@ fn hex_digest(hex: &str) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, path::Path};
+
+    fn loose(root: &Path) -> ProductSource {
+        ProductSource::open(root).unwrap()
+    }
 
     fn text(value: &str) -> NativeUtf8Slice {
         NativeUtf8Slice {
@@ -345,7 +405,7 @@ mod tests {
     fn discovery_is_metadata_only_and_reference_ownership_survives_bundle_close() {
         let directory = tempfile::tempdir().unwrap();
         fixture(directory.path());
-        let source = ProductContentBundles::admit(directory.path()).unwrap();
+        let source = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
         assert!(source.owns_path("rules/a.json"));
         assert!(!source.owns_path("rules-other/a.json"));
         let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
@@ -465,7 +525,7 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({"bundles": definitions})).unwrap(),
         )
         .unwrap();
-        let source = ProductContentBundles::admit(directory.path()).unwrap();
+        let source = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
         let actors = source.load("actors").unwrap();
         let other = source.load("other").unwrap();
         let retained = actors["model.glb"].clone();
@@ -480,6 +540,42 @@ mod tests {
     }
 
     #[test]
+    fn packed_bundles_open_with_the_loose_identity() {
+        use product_container::{write, Body, Bundle, NewEntry};
+        let directory = tempfile::tempdir().unwrap();
+        fixture(directory.path());
+        let out = directory.path().join("product.rpak");
+        let entries = vec![
+            NewEntry {
+                path: "content/rules/a.json".into(),
+                bundle: Some("rules".into()),
+                body: Body::Bytes(b"{\"id\":1}"),
+            },
+            NewEntry {
+                path: "content/loose.txt".into(),
+                bundle: None,
+                body: Body::Bytes(b"loose"),
+            },
+        ];
+        let bundles = vec![Bundle {
+            id: "rules".into(),
+            root: "content/rules".into(),
+        }];
+        write(&out, entries, bundles).unwrap();
+        let packed =
+            ProductContentBundles::admit(&ProductSource::open(&out).unwrap(), "content").unwrap();
+        let loose = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
+        assert!(packed.owns_path("rules/a.json") && !packed.owns_path("loose.txt"));
+        let (packed, loose) = (packed.load("rules").unwrap(), loose.load("rules").unwrap());
+        assert_eq!(packed["a.json"].path, "rules/a.json");
+        assert_eq!(
+            packed["a.json"].bytes.as_ref(),
+            loose["a.json"].bytes.as_ref()
+        );
+        assert_eq!(packed["a.json"].sha256(), loose["a.json"].sha256());
+    }
+
+    #[test]
     fn overlapping_roots_are_rejected_before_loading() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(
@@ -487,7 +583,7 @@ mod tests {
             br#"{"bundles":[{"id":"a","root":"a","files":[]},{"id":"b","root":"a/b","files":[]}]}"#,
         )
         .unwrap();
-        assert!(ProductContentBundles::admit(directory.path())
+        assert!(ProductContentBundles::admit(&loose(directory.path()), "")
             .unwrap_err()
             .contains("overlapping"));
     }

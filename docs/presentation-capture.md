@@ -71,3 +71,26 @@ The stream draws at the most recent viewer's size, so a harness pulling
 `frames` and an attached page change each other's resolution; a harness
 uses `frames/capture` instead. Record the viewport with a page screenshot. Keep product overlays and diagnostics unless the
 capture says otherwise; `engine.renderer.hide` hides only the Engine metrics.
+
+## Scene snapshots
+
+`engine.renderer.snapshot <path>` writes the committed scene to one file: the
+baseline a fresh renderer is built from (the retained world frame, the
+presentation frames with ghost-plate captures, and the view composition), the
+Engine state it reaches (presentation time, world revision, step, held), the
+product and host identity, the manifest's renderer options, and every renderer
+resource the Engine holds. A relative path resolves against the host's working
+directory. It works in stream, window and headless runs and while time is
+held; the answer reports the file's size, entry count and write time.
+
+The file is a [Product container](csharp-product-project.md#release-container):
+`scene.json` holds the metadata, `changes.json` the baseline as the renderer's
+own JSON types, and `resources/<identity>` each resource. Inline mesh streams
+are stored as packed binary mesh resources.
+
+`rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames
+N]` (in the runtime pack's `bin/`) applies the snapshot to a fresh renderer on
+a headless device and writes a PNG, drawn as a tool capture is. Effects run on
+the renderer's own clock, so particles and other time-driven presentation can
+differ from a live capture of the same held step; retained geometry, lights and
+ghost plates match on the same adapter.

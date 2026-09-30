@@ -698,7 +698,7 @@ fn scene_changes(publications: &[RuntimePublication]) -> impl Iterator<Item = Sc
         })
 }
 
-fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneState {
+pub(crate) fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneState {
     SceneState {
         elapsed_seconds: services.presentation_elapsed_seconds(),
         world_revision: services

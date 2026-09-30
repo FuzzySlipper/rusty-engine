@@ -8,10 +8,9 @@
 pub use csharp_engine_abi::*;
 
 use std::{
-    collections::BTreeSet,
     ffi::c_void,
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     ptr,
     sync::Arc,
     time::Instant,
@@ -27,6 +26,7 @@ use netcorehost::{
     nethost,
     pdcstring::PdCString,
 };
+pub use product_container::ProductSource;
 use product_host::{
     runtime_fault_disposition, CanonicalU64, ProductHostControlOperation, ProductHostDebugResult,
     ProductHostFaultDisposition, ProductHostInputBatch, ProductHostInputResult,
@@ -127,6 +127,9 @@ enum RendererDebugCommand {
     Status,
 }
 
+/// `engine.renderer.snapshot <path>`: the one renderer command with an argument.
+const SCENE_SNAPSHOT_COMMAND: &str = "engine.renderer.snapshot";
+
 /// Keeps the Engine's renderer-debug vocabulary exact. Product-owned command
 /// prefixes continue through the generated callback untouched.
 fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
@@ -181,6 +184,8 @@ pub struct CsharpProductRuntimeConfig {
     audio_device_required: bool,
     /// The desktop shell's device, for window output.
     window_gpu: Option<render_wgpu::Gpu>,
+    /// The Product a scene snapshot names.
+    product: Option<scene_snapshot::SceneSnapshotProduct>,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -202,7 +207,17 @@ impl CsharpProductRuntimeConfig {
             render_output: None,
             audio_device_required: false,
             window_gpu: None,
+            product: None,
         }
+    }
+
+    /// The Product's manifest identity, which a scene snapshot records.
+    pub fn with_product(mut self, id: impl Into<String>, title: impl Into<String>) -> Self {
+        self.product = Some(scene_snapshot::SceneSnapshotProduct {
+            id: id.into(),
+            title: title.into(),
+        });
+        self
     }
 
     /// Renders the world in this process, to `output`, and plays its audio
@@ -626,6 +641,7 @@ fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProd
 mod audio_output;
 mod frame_output;
 mod render_output;
+pub mod scene_snapshot;
 
 pub use product_host::ProductHostRenderOutput as RenderOutput;
 
@@ -656,8 +672,10 @@ pub struct CsharpProductRuntime {
     /// publish it.
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
-    /// Root whose bundle inventory `reload_content` re-admits.
-    content_root: PathBuf,
+    /// The Product and content root whose bundle inventory `reload_content`
+    /// re-admits.
+    content_source: ProductSource,
+    content_root: String,
     initial_output: Option<Vec<RuntimePublication>>,
     renderer_metrics_visible: bool,
     shutdown_called: bool,
@@ -670,6 +688,9 @@ pub struct CsharpProductRuntime {
     frame_output: Option<frame_output::FrameOutput>,
     /// Runs the product's RenderOutput jobs.
     render_outputs: render_output::OutputExecutor,
+    /// What a scene snapshot records about the renderer and the Product.
+    renderer_options: render_wgpu::RendererOptions,
+    product: Option<scene_snapshot::SceneSnapshotProduct>,
     /// A harness holding input (`control/claim`), until it releases or its
     /// lease passes without input.
     input_claim: Option<InputClaim>,
@@ -814,6 +835,7 @@ impl CsharpProductRuntime {
         };
         let api = load_api()?;
         let CsharpProductContent {
+            source: content_source,
             root: content_root,
             files: content,
             appearance_catalog,
@@ -915,6 +937,7 @@ impl CsharpProductRuntime {
             pending_inputs: Vec::new(),
             pending_recovery_outputs: Vec::new(),
             services,
+            content_source,
             content_root,
             initial_output,
             renderer_metrics_visible: false,
@@ -924,6 +947,8 @@ impl CsharpProductRuntime {
             audio_output,
             frame_output,
             render_outputs,
+            renderer_options: config.renderer_options,
+            product: config.product,
             input_claim: None,
         })
     }
@@ -2375,6 +2400,46 @@ impl CsharpProductRuntime {
         }
     }
 
+    /// Writes the committed scene, as a fresh renderer would be built from
+    /// it, with every renderer resource the Engine holds
+    /// (`engine.renderer.snapshot <path>`). A relative path resolves against
+    /// the host's working directory.
+    fn write_scene_snapshot(
+        &self,
+        path: &str,
+    ) -> Result<scene_snapshot::SceneSnapshotReport, String> {
+        if path.is_empty() {
+            return Err(format!("usage: {SCENE_SNAPSHOT_COMMAND} <path>"));
+        }
+        let baseline = self
+            .services
+            .snapshot_outputs(ui_binding(&self.lifecycle))
+            .map_err(CsharpProductRuntimeError::from)
+            .and_then(service_outputs)
+            .map_err(|error| format!("{}: {}", error.code(), error.detail()))?;
+        let metadata = scene_snapshot::SceneSnapshotMetadata {
+            product: self.product.clone(),
+            host: scene_snapshot::SceneSnapshotHost {
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                abi_fingerprint: product_host_runtime_identity().fingerprint_hex(),
+            },
+            adapter: self.frame_output.as_ref().map(|frames| {
+                let adapter = frames.driver().gpu().adapter_summary();
+                format!("{} ({})", adapter.name, adapter.backend)
+            }),
+            written_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_millis() as u64),
+            state: frame_output::scene_state(&self.services, self.frame_simulation()).into(),
+            options: self.renderer_options.into(),
+        };
+        let resources = self
+            .services
+            .renderer_resources()
+            .map(|resource| (resource.identity(), resource.bytes()));
+        scene_snapshot::write_scene_snapshot(Path::new(path), &metadata, &baseline, resources)
+    }
+
     fn frame_simulation(&self) -> frame_output::Simulation {
         frame_output::Simulation {
             held: self.lifecycle.state() != RuntimeState::Running
@@ -2543,8 +2608,11 @@ impl ProductHostRuntime for CsharpProductRuntime {
     /// snapshot the product received at create is not reloaded; `rusty dev`
     /// replaces the runtime for loose content edits.
     fn reload_content(&mut self) -> Result<(), ProductHostRuntimeError> {
-        let bundles = csharp_engine_services::ProductContentBundles::admit(&self.content_root)
-            .map_err(|error| ProductHostRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
+        let bundles = csharp_engine_services::ProductContentBundles::admit(
+            &self.content_source,
+            &self.content_root,
+        )
+        .map_err(|error| ProductHostRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
         self.services.bind_content_bundles(bundles);
         Ok(())
     }
@@ -2906,6 +2974,17 @@ impl ProductHostRuntime for CsharpProductRuntime {
         {
             let result = match frames.execute_inspection(command) {
                 Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
+                Err(detail) => ProductHostDebugResult::new(false, detail),
+            };
+            return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
+        if let Some(path) = command
+            .trim()
+            .strip_prefix(SCENE_SNAPSHOT_COMMAND)
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let result = match self.write_scene_snapshot(path.trim()) {
+                Ok(report) => ProductHostDebugResult::new(true, pretty_json(&report)?),
                 Err(detail) => ProductHostDebugResult::new(false, detail),
             };
             return ProductHostRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
@@ -3950,23 +4029,20 @@ struct ContentFile {
     bytes: Arc<[u8]>,
 }
 
-#[derive(Debug)]
-struct ContentCandidate {
-    host_path: PathBuf,
-    product_path: Vec<u8>,
-}
-
 /// Exact product content collected once before the native runtime and immutable
 /// browser bundle are constructed. Renderer bytes stay inert until C# selects a
 /// supported resource through the generated appearance API during `Create`.
 pub struct CsharpProductContent {
-    root: PathBuf,
+    source: ProductSource,
+    /// The content root within `source`.
+    root: String,
     files: Vec<ContentFile>,
     appearance_catalog: CsharpAppearanceCatalog,
     bundles: csharp_engine_services::ProductContentBundles,
 }
 
 impl CsharpProductContent {
+    /// Admits a loose content directory.
     pub fn admit(root: impl AsRef<Path>) -> Result<Self, CsharpProductRuntimeError> {
         let root = root.as_ref();
         let root_metadata = fs::symlink_metadata(root).map_err(|error| {
@@ -3981,22 +4057,31 @@ impl CsharpProductContent {
                 ),
             ));
         }
-        let bundles = csharp_engine_services::ProductContentBundles::admit(root)
+        let source = ProductSource::open(root).map_err(content_error)?;
+        Self::admit_from(&source, "")
+    }
+
+    /// Admits the content under `root` in a staged Product, loose or packed.
+    /// Bundle members are left for `OpenBundle`; every other file is read now.
+    pub fn admit_from(
+        source: &ProductSource,
+        root: &str,
+    ) -> Result<Self, CsharpProductRuntimeError> {
+        let bundles = csharp_engine_services::ProductContentBundles::admit(source, root)
             .map_err(|error| CsharpProductRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
-        let candidates = discover_content(root)?;
-        let mut files = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            if bundles.owns_path(
-                std::str::from_utf8(&candidate.product_path).expect("UTF-8 content path"),
-            ) {
+        let mut files = Vec::new();
+        for path in source.files(root).map_err(content_error)? {
+            let relative = match root {
+                "" => path.as_str(),
+                root => &path[root.len() + 1..],
+            };
+            if bundles.owns_path(relative) {
                 continue;
             }
-            let bytes = fs::read(&candidate.host_path).map_err(|error| {
-                CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
-            })?;
+            let bytes = source.read(&path).map_err(content_error)?;
             files.push(ContentFile {
-                path: candidate.product_path,
-                bytes: Arc::from(bytes),
+                path: relative.as_bytes().to_vec(),
+                bytes: Arc::from(bytes.as_ref()),
             });
         }
         let appearance_catalog = files
@@ -4006,7 +4091,8 @@ impl CsharpProductContent {
         let appearance_catalog =
             csharp_engine_services::parse_runtime_appearance_catalog(appearance_catalog)?;
         Ok(Self {
-            root: root.to_path_buf(),
+            source: source.clone(),
+            root: root.to_owned(),
             files,
             appearance_catalog,
             bundles,
@@ -4014,114 +4100,13 @@ impl CsharpProductContent {
     }
 }
 
-fn discover_content(root: &Path) -> Result<Vec<ContentCandidate>, CsharpProductRuntimeError> {
-    let mut candidates = Vec::new();
-    discover_content_inner(root, root, &mut candidates)?;
-    candidates.sort_by(|left, right| left.product_path.cmp(&right.product_path));
-
-    let mut paths = BTreeSet::new();
-    for candidate in &candidates {
-        if !paths.insert(candidate.product_path.as_slice()) {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_PATH",
-                format!(
-                    "multiple host entries normalize to the product content path {}",
-                    display_content_path(&candidate.product_path)
-                ),
-            ));
-        }
-    }
-    Ok(candidates)
-}
-
-fn discover_content_inner(
-    root: &Path,
-    directory: &Path,
-    candidates: &mut Vec<ContentCandidate>,
-) -> Result<(), CsharpProductRuntimeError> {
-    for entry in fs::read_dir(directory)
-        .map_err(|error| CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string()))?
-    {
-        let entry = entry.map_err(|error| {
-            CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
-        })?;
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
-        })?;
-        let file_type = metadata.file_type();
-        if file_type.is_symlink() {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_ENTRY",
-                format!("content traversal rejects symlink: {}", path.display()),
-            ));
-        }
-        if file_type.is_dir() {
-            discover_content_inner(root, &path, candidates)?;
-        } else if file_type.is_file() {
-            candidates.push(ContentCandidate {
-                product_path: canonical_content_path(root, &path)?,
-                host_path: path,
-            });
-        } else {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_ENTRY",
-                format!(
-                    "content traversal requires regular files: {}",
-                    path.display()
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn canonical_content_path(root: &Path, path: &Path) -> Result<Vec<u8>, CsharpProductRuntimeError> {
-    let relative = path.strip_prefix(root).map_err(|_| {
-        CsharpProductRuntimeError::new(
-            "CSHARP_CONTENT_PATH",
-            format!("content path escaped its root: {}", path.display()),
-        )
-    })?;
-    let mut parts = Vec::new();
-    for component in relative.components() {
-        let Component::Normal(part) = component else {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_PATH",
-                format!(
-                    "content path must be product-relative and normalized: {}",
-                    path.display()
-                ),
-            ));
-        };
-        let part = part.to_str().ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_PATH",
-                format!("content path must be valid UTF-8: {}", path.display()),
-            )
-        })?;
-        if part.is_empty() || part.contains('\\') {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_PATH",
-                format!(
-                    "content path must use canonical forward-slash components: {}",
-                    path.display()
-                ),
-            ));
-        }
-        parts.push(part);
-    }
-    if parts.is_empty() {
-        return Err(CsharpProductRuntimeError::new(
-            "CSHARP_CONTENT_PATH",
-            format!("content path must be product-relative: {}", path.display()),
-        ));
-    }
-    Ok(parts.join("/").into_bytes())
-}
-
-fn display_content_path(path: &[u8]) -> String {
-    String::from_utf8_lossy(path).into_owned()
+fn content_error(error: product_container::Error) -> CsharpProductRuntimeError {
+    let code = match error {
+        product_container::Error::InvalidPath(_) => "CSHARP_CONTENT_PATH",
+        product_container::Error::NotRegular(_) => "CSHARP_CONTENT_ENTRY",
+        _ => "CSHARP_CONTENT_READ",
+    };
+    CsharpProductRuntimeError::new(code, error.to_string())
 }
 
 struct NativeInputOwned {
@@ -5023,6 +5008,49 @@ mod tests {
             .any(|command| command["name"] == "engine.renderer.status"));
         drop(runtime);
         fs::remove_dir_all(root).expect("remove renderer debug fixture content");
+    }
+
+    #[test]
+    fn the_scene_snapshot_command_writes_the_committed_scene_without_a_renderer() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = drop_fixture_runtime("scene-snapshot");
+        let (usage, _) = runtime
+            .execute_debug("engine.renderer.snapshot")
+            .expect("a snapshot without a path completes")
+            .into_parts();
+        assert!(!usage.succeeded() && usage.message().contains("<path>"));
+        let path = root.join("scene.rscene");
+        let (written, _) = runtime
+            .execute_debug(&format!("engine.renderer.snapshot {}", path.display()))
+            .expect("snapshot completes")
+            .into_parts();
+        assert!(written.succeeded(), "{}", written.message());
+        let report: serde_json::Value = serde_json::from_str(written.message()).unwrap();
+        assert_eq!(report["path"], path.display().to_string());
+        let snapshot = scene_snapshot::SceneSnapshot::open(&path).expect("snapshot reads back");
+        assert_eq!(
+            snapshot.metadata.host.abi_fingerprint,
+            product_host_runtime_identity().fingerprint_hex()
+        );
+        assert!(snapshot
+            .changes
+            .iter()
+            .any(|change| matches!(change, scene_snapshot::SceneSnapshotChange::Frame(_))));
+        assert!(snapshot.changes.iter().any(|change| matches!(
+            change,
+            scene_snapshot::SceneSnapshotChange::ViewComposition(_)
+        )));
+        let (catalog, _) = runtime.describe_debug().expect("catalog").into_parts();
+        let catalog = serde_json::to_value(catalog).unwrap();
+        assert!(catalog["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command["name"] == "engine.renderer.snapshot"));
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove snapshot fixture content");
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]

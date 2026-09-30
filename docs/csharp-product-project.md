@@ -250,8 +250,10 @@ using ContentReference source = bundle.OpenReference("rooms/entrance.json");
 
 Declared bundle files are excluded from the `ProductContent.Files` snapshot
 and its named reads. Discovery
-reads only the inventory. Opening a bundle reads and verifies that collection's
-files into an immutable Rust snapshot; it does not load other bundles or copy
+reads only the inventory. Opening a bundle reads that collection's files into
+an immutable Rust snapshot, checking each length against the inventory; the
+inventory's SHA-256 is each file's identity and is not recomputed. It does not
+load other bundles or copy
 all its bodies into C#. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
 `ReadText` and `ReadDirectory` copy the requested bodies. A read borrows the Rust
 source for the call and copies it once into managed storage, with no
@@ -339,9 +341,10 @@ supported. The Engine hands admitted resource bytes to its renderer, audio and
 video, including assets first loaded after startup. Products do not extract
 bundle files or build renderer URLs.
 
-Missing bundles/files report their logical names. A bundle whose files do not
-match its staged inventory fails to open; rebuild/restage it. Bundles are
-directories in the staged Product, not archives. Closing a collection does not
+Missing bundles/files report their logical names. A bundle whose file lengths
+do not match its staged inventory fails to open; rebuild/restage it. Bundles
+are directories in a staged Product and inventory entries in a [release
+container](#release-container); both open the same way. Closing a collection does not
 free independent GPU resources or force managed garbage collection. Bundle
 discovery does not produce URLs for DOM images.
 
@@ -448,6 +451,29 @@ supervisor replaces it. Engine JavaScript and host binaries stay in
 the runtime pack. Product UI is DOM UI and accessibility only; the Engine
 renderer owns non-UI presentation.
 
+### Release container
+
+A release ships the Product as one container file instead of the loose
+directory:
+
+```bash
+rusty build --project /path/to/Example.Game.csproj --pack release
+rusty-product-host --product release/product.rpak --loader coreclr
+```
+
+`--pack` (with or without `--aot`) stages as usual, then writes
+`release/product.rpak` holding `product.json`, `ui/` and `content/`, and copies
+`coreclr/` or `native/` loose beside it: hostfxr and the dynamic loader take
+file paths. The container is a header, each file's bytes at a 64-byte-aligned
+offset, and an inventory of path, length, SHA-256 and bundle membership; the
+host maps it read-only and reads the manifest, UI, content and bundles from it
+as it reads a loose directory. The inventory's SHA-256 is each file's identity;
+there is no second checksum, compression or version field (a pair reads its
+own output). A missing magic, a truncated file or an inconsistent inventory
+stops the host at start with `PRODUCT_CONTAINER_NOT_A_CONTAINER`,
+`PRODUCT_CONTAINER_TRUNCATED` or `PRODUCT_CONTAINER_CORRUPT`. `rusty dev`
+keeps the loose directory, so a UI or bundle restage still reloads in place.
+
 The package and runtime pack carry exact generated ABI identities. A mismatch
 is rejected before product construction. Use a package and runtime pack built
 from the same Engine release; do not add version negotiation, copy a host into
@@ -522,6 +548,6 @@ a fixture expectation, not a universal shape for valid graphics.
 A product with static meshes, sprites, or no mesh content should not add dummy
 voxels or fixture callbacks to pass this check. Launch normally with
 `rusty dev --project <product.csproj>`, or run the matched host with
-`rusty-product-host --product <staged-Product-directory> --loader coreclr`
+`rusty-product-host --product <staged-Product-directory|product.rpak> --loader coreclr`
 without `--exercise`. Verify the product's actual startup and interactions
 through that host; fixture success is not evidence of gameplay correctness.

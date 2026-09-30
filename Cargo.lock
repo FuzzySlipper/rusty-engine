@@ -1069,6 +1069,7 @@ dependencies = [
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
+ "product-container",
  "render-host-contracts",
  "render-model",
  "render-presentation",
@@ -1112,6 +1113,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "netcorehost",
+ "product-container",
  "product-host",
  "render-audio",
  "render-export",
@@ -1126,6 +1128,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "tempfile",
 ]
 
 [[package]]
@@ -4075,6 +4078,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "product-container"
+version = "0.1.0"
+dependencies = [
+ "memmap2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
 name = "product-host"
 version = "0.1.0"
 dependencies = [
@@ -4591,6 +4605,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "rusty-cli"
 version = "0.1.0"
 dependencies = [
+ "product-container",
  "serde",
  "serde_json",
  "sha2 0.10.9",

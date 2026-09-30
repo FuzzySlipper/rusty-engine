@@ -58,6 +58,20 @@ operations skipped by kind, and, for streamed frames, the recent frame rate,
 median render, readback and encode milliseconds, and bytes per frame and per
 second. The desktop window streams nothing, so it reports no frame timing.
 
+To measure the renderer's frame cost without the product, take a scene
+snapshot on the running product (`engine.renderer.snapshot <path>`, see
+[presentation capture](presentation-capture.md#scene-snapshots)) and draw it
+again on a fresh renderer:
+
+```sh
+rusty-scene-render scene.rscene out.png --width 1280 --height 720 --frames 600
+```
+
+It prints the adapter, the time to open and apply the snapshot, and the mean
+and median milliseconds of the extra frames, each with readback. Compare
+snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
+wgpu program.
+
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through
 `IEngineContext.Diagnostics.ReadRenderer()`. The runtime refreshes them once a

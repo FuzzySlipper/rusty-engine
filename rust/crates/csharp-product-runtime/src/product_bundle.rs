@@ -1,4 +1,5 @@
-//! V1 loose Product directory admission for the packaged Rusty host.
+//! V1 staged Product admission for the packaged Rusty host, from a loose
+//! directory or a container (`product_container::ProductSource`).
 //!
 //! This is deployment metadata, not a product callback protocol.  It selects
 //! exact staged files before the trusted product is loaded and makes the
@@ -9,6 +10,9 @@ use std::{
     net::Ipv4Addr,
     path::{Component, Path, PathBuf},
 };
+
+use csharp_product_runtime::ProductSource;
+use product_container::{is_relative_path, join};
 
 use csharp_engine_abi::NativeInputCursorMode;
 use product_host::{
@@ -36,8 +40,11 @@ pub(super) struct ProductBundle {
     pub(super) native_module: Option<PathBuf>,
     pub(super) coreclr_assembly: Option<PathBuf>,
     pub(super) coreclr_runtimeconfig: Option<PathBuf>,
-    pub(super) content_root: PathBuf,
-    ui_root: PathBuf,
+    pub(super) source: ProductSource,
+    /// The content root within `source`.
+    pub(super) content_root: String,
+    /// The UI root within `source`.
+    ui_root: String,
     ui_entry: String,
     ui_projection: Option<ProductUiProjection>,
     renderer_lighting: ProductRendererLighting,
@@ -56,10 +63,11 @@ pub(super) struct ProductBundle {
 }
 
 impl ProductBundle {
-    pub(super) fn read(root: &Path) -> Result<Self, String> {
-        let root = canonical_directory(root, "product")?;
-        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
-        let bytes = read_regular_file(&root, &manifest_path, "manifest")?;
+    pub(super) fn read(source: &ProductSource) -> Result<Self, String> {
+        let root = source.native_root();
+        let bytes = source
+            .read(PRODUCT_MANIFEST_NAME)
+            .map_err(|error| field_error("manifest", error))?;
         let manifest: Manifest = serde_json::from_slice(&bytes)
             .map_err(|error| field_error("manifest", format!("invalid JSON: {error}")))?;
         if manifest.artifact != PRODUCT_ARTIFACT {
@@ -83,17 +91,17 @@ impl ProductBundle {
 
         let native_module = manifest
             .native_aot
-            .map(|native| resolve_regular_file(&root, &native.module, "nativeAot.module"))
+            .map(|native| resolve_regular_file(root, &native.module, "nativeAot.module"))
             .transpose()?;
         let (coreclr_assembly, coreclr_runtimeconfig) = match manifest.coreclr {
             Some(coreclr) => (
                 Some(resolve_regular_file(
-                    &root,
+                    root,
                     &coreclr.assembly,
                     "coreclr.assembly",
                 )?),
                 Some(resolve_regular_file(
-                    &root,
+                    root,
                     &coreclr.runtimeconfig,
                     "coreclr.runtimeconfig",
                 )?),
@@ -107,15 +115,13 @@ impl ProductBundle {
             ));
         }
 
-        let ui_root = resolve_directory(&root, &manifest.ui.root, "ui.root")?;
-        let ui_entry_path = resolve_regular_file(&ui_root, &manifest.ui.entry, "ui.entry")?;
-        let ui_entry = normalized_relative(&ui_root, &ui_entry_path, "ui.entry")?;
-        let assets = resolve_directory(&ui_root, &manifest.ui.assets, "ui.assets")?;
+        let ui_root = product_directory(source, "", &manifest.ui.root, "ui.root")?;
+        let ui_entry = product_file(source, &ui_root, &manifest.ui.entry, "ui.entry")?;
         // Validate the declared assets path even though the complete UI root is
         // staged.  Modules can import adjacent assets without a second UI file
         // vocabulary, while this retains an explicit assets declaration.
-        let _ = assets;
-        let content_root = resolve_directory(&root, &manifest.content.root, "content.root")?;
+        product_directory(source, &ui_root, &manifest.ui.assets, "ui.assets")?;
+        let content_root = product_directory(source, "", &manifest.content.root, "content.root")?;
         let ui_projection = manifest
             .ui_projection
             .map(ProductUiProjection::from_manifest)
@@ -151,6 +157,7 @@ impl ProductBundle {
             native_module,
             coreclr_assembly,
             coreclr_runtimeconfig,
+            source: source.clone(),
             content_root,
             ui_root,
             ui_entry,
@@ -201,7 +208,7 @@ impl ProductBundle {
 
     pub(super) fn browser_entries(&self) -> Result<Vec<ProductHostBundleEntry>, String> {
         let mut entries = Vec::new();
-        collect_ui(&self.ui_root, &self.ui_root, &mut entries)?;
+        self.collect_ui(&mut entries)?;
         let bootstrap = ProductHostBrowserBootstrap {
             product: ProductHostBootstrapProduct {
                 id: self.id.clone(),
@@ -322,19 +329,6 @@ fn input(
     ))
 }
 
-fn canonical_directory(path: &Path, field: &str) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        field_error(
-            field,
-            format!("could not read `{}`: {error}", path.display()),
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(field_error(field, "must be a directory, not a symlink"));
-    }
-    fs::canonicalize(path).map_err(|error| field_error(field, error.to_string()))
-}
-
 fn relative_path(value: &str, field: &str) -> Result<PathBuf, String> {
     let path = Path::new(value);
     if value.is_empty()
@@ -351,18 +345,10 @@ fn relative_path(value: &str, field: &str) -> Result<PathBuf, String> {
     Ok(path.to_owned())
 }
 
+/// A native artifact: a regular file on disk under `root`, loaded by path.
 fn resolve_regular_file(root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
     let path = root.join(relative_path(value, field)?);
-    canonical_regular_file(root, &path, field)
-}
-
-fn read_regular_file(root: &Path, path: &Path, field: &str) -> Result<Vec<u8>, String> {
-    let path = canonical_regular_file(root, path, field)?;
-    fs::read(path).map_err(|error| field_error(field, error.to_string()))
-}
-
-fn canonical_regular_file(root: &Path, path: &Path, field: &str) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
         field_error(
             field,
             format!("could not read `{}`: {error}", path.display()),
@@ -379,74 +365,66 @@ fn canonical_regular_file(root: &Path, path: &Path, field: &str) -> Result<PathB
     Ok(canonical)
 }
 
-fn resolve_directory(root: &Path, value: &str, field: &str) -> Result<PathBuf, String> {
-    let path = root.join(relative_path(value, field)?);
-    let metadata = fs::symlink_metadata(&path).map_err(|error| {
-        field_error(
-            field,
-            format!("could not read `{}`: {error}", path.display()),
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+/// `parent/value` in the staged Product, when it names a directory.
+fn product_directory(
+    source: &ProductSource,
+    parent: &str,
+    value: &str,
+    field: &str,
+) -> Result<String, String> {
+    let path = product_path(parent, value, field)?;
+    if !source.is_dir(&path) {
         return Err(field_error(field, "must be a directory, not a symlink"));
     }
-    let canonical =
-        fs::canonicalize(&path).map_err(|error| field_error(field, error.to_string()))?;
-    if !canonical.starts_with(root) {
-        return Err(field_error(field, "resolved outside Product root"));
+    Ok(path)
+}
+
+/// `value` relative to `parent`, when `parent/value` names a regular file.
+fn product_file(
+    source: &ProductSource,
+    parent: &str,
+    value: &str,
+    field: &str,
+) -> Result<String, String> {
+    if !source.is_file(&product_path(parent, value, field)?) {
+        return Err(field_error(field, "must be a regular file, not a symlink"));
     }
-    Ok(canonical)
+    Ok(value.to_owned())
 }
 
-fn normalized_relative(root: &Path, path: &Path, field: &str) -> Result<String, String> {
-    path.strip_prefix(root)
-        .map_err(|_| field_error(field, "resolved outside its declared root"))?
-        .to_str()
-        .ok_or_else(|| field_error(field, "must be valid UTF-8"))
-        .map(|value| value.replace('\\', "/"))
+fn product_path(parent: &str, value: &str, field: &str) -> Result<String, String> {
+    if !is_relative_path(value) {
+        return Err(field_error(
+            field,
+            "must be a non-empty relative non-escaping path",
+        ));
+    }
+    Ok(join(parent, value))
 }
 
-fn collect_ui(
-    root: &Path,
-    directory: &Path,
-    entries: &mut Vec<ProductHostBundleEntry>,
-) -> Result<(), String> {
-    for item in
-        fs::read_dir(directory).map_err(|error| field_error("ui.root", error.to_string()))?
-    {
-        let item = item.map_err(|error| field_error("ui.root", error.to_string()))?;
-        let path = item.path();
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| field_error("ui.root", error.to_string()))?;
-        if metadata.file_type().is_symlink() {
-            return Err(field_error(
-                "ui.root",
-                format!("contains a symlink: {}", path.display()),
-            ));
-        }
-        if metadata.is_dir() {
-            collect_ui(root, &path, entries)?;
-        } else if metadata.is_file() {
-            let relative = normalized_relative(root, &path, "ui.root")?;
-            let media_type = content_type(&relative).ok_or_else(|| {
+impl ProductBundle {
+    fn collect_ui(&self, entries: &mut Vec<ProductHostBundleEntry>) -> Result<(), String> {
+        let ui_error = |error| field_error("ui.root", error);
+        for path in self.source.files(&self.ui_root).map_err(ui_error)? {
+            let relative = &path[self.ui_root.len() + 1..];
+            let media_type = content_type(relative).ok_or_else(|| {
                 field_error(
                     "ui.root",
                     format!("file `{relative}` has no admitted content type"),
                 )
             })?;
+            let bytes = self.source.read(&path).map_err(ui_error)?;
             entries.push(
                 ProductHostBundleEntry::new(
                     format!("{PRODUCT_UI_PREFIX}/{relative}"),
                     media_type,
-                    fs::read(path).map_err(|error| field_error("ui.root", error.to_string()))?,
+                    bytes.into_owned(),
                 )
                 .map_err(|error| field_error("ui.root", error.to_string()))?,
             );
-        } else {
-            return Err(field_error("ui.root", "contains a non-regular entry"));
         }
+        Ok(())
     }
-    Ok(())
 }
 
 fn field_error(field: &str, detail: impl std::fmt::Display) -> String {
@@ -728,6 +706,10 @@ mod tests {
         root
     }
 
+    fn read(root: &Path) -> Result<ProductBundle, String> {
+        ProductBundle::read(&ProductSource::open(root).map_err(|error| error.to_string())?)
+    }
+
     fn write_manifest(root: &Path, native_path: &str) {
         fs::write(root.join(PRODUCT_MANIFEST_NAME), format!(r#"{{
           "artifact":"rusty.product.bundle","schemaVersion":1,
@@ -748,7 +730,7 @@ mod tests {
     fn admits_one_product_root_and_stages_only_prefixed_ui_bytes() {
         let root = fixture_root("staging");
         write_manifest(&root, "native/product.so");
-        let product = ProductBundle::read(&root).expect("V1 Product bundle admits");
+        let product = read(&root).expect("V1 Product bundle admits");
         assert_eq!(
             product
                 .selected_artifacts(ProductLoader::NativeAot)
@@ -797,10 +779,45 @@ mod tests {
     }
 
     #[test]
+    fn a_packed_product_reads_like_the_loose_one_with_native_code_beside_it() {
+        let root = fixture_root("packed");
+        write_manifest(&root, "native/product.so");
+        let release = root.with_extension("release");
+        let report = product_container::pack_product(&root, &release).unwrap();
+        assert_eq!(
+            report.loose_files,
+            [
+                "coreclr/product.dll",
+                "coreclr/product.runtimeconfig.json",
+                "native/product.so"
+            ]
+        );
+        let loose = read(&root).unwrap();
+        let packed = read(&report.container).unwrap();
+        assert!(packed.source.container().is_some());
+        assert_eq!(
+            packed.selected_artifacts(ProductLoader::CoreClr).unwrap().0,
+            release.join("coreclr/product.dll").canonicalize().unwrap()
+        );
+        let entries = |product: &ProductBundle| {
+            product
+                .browser_entries()
+                .unwrap()
+                .into_iter()
+                .map(|entry| (entry.path().to_owned(), entry.bytes().to_vec()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(entries(&loose), entries(&packed));
+        assert_eq!(packed.content_root, "content");
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(release).unwrap();
+    }
+
+    #[test]
     fn reports_the_exact_manifest_path_field_that_escapes() {
         let root = fixture_root("escape");
         write_manifest(&root, "../product.so");
-        let error = ProductBundle::read(&root).expect_err("escaping module is rejected");
+        let error = read(&root).expect_err("escaping module is rejected");
         assert!(error.contains("product.json:nativeAot.module"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -815,7 +832,7 @@ mod tests {
             .replace("\"input\":{", "\"input\":{\"cursorMode\":\"unlocked\",");
         fs::write(&manifest_path, manifest).unwrap();
 
-        let bootstrap = ProductBundle::read(&root)
+        let bootstrap = read(&root)
             .expect("unlocked cursor mode admits")
             .browser_entries()
             .expect("browser bootstrap stages")
@@ -837,7 +854,7 @@ mod tests {
             .replace("\"input\":{", "\"input\":{\"cursorMode\":\"freeform\",");
         fs::write(&manifest_path, manifest).unwrap();
 
-        let error = ProductBundle::read(&root).expect_err("invalid cursor mode rejects");
+        let error = read(&root).expect_err("invalid cursor mode rejects");
         assert!(error.contains("product.json:input.cursorMode"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -846,7 +863,7 @@ mod tests {
     fn the_manifest_selects_render_and_audio_output() {
         let root = fixture_root("output-selection");
         write_manifest(&root, "native/product.so");
-        let bundle = ProductBundle::read(&root).expect("default outputs admit");
+        let bundle = read(&root).expect("default outputs admit");
         assert_eq!(
             bundle.render_output,
             csharp_product_runtime::RenderOutput::Stream
@@ -862,7 +879,7 @@ mod tests {
             )
         };
         fs::write(&manifest_path, with("window", "device-required")).unwrap();
-        let bundle = ProductBundle::read(&root).expect("window output admits");
+        let bundle = read(&root).expect("window output admits");
         assert_eq!(
             bundle.render_output,
             csharp_product_runtime::RenderOutput::Window
@@ -870,10 +887,10 @@ mod tests {
         assert!(bundle.audio_device_required);
 
         fs::write(&manifest_path, with("tv", "device-required")).unwrap();
-        let error = ProductBundle::read(&root).expect_err("unknown output rejects");
+        let error = read(&root).expect_err("unknown output rejects");
         assert!(error.contains("product.json:renderer.output"));
         fs::write(&manifest_path, with("stream", "speakers")).unwrap();
-        let error = ProductBundle::read(&root).expect_err("unknown audio output rejects");
+        let error = read(&root).expect_err("unknown audio output rejects");
         assert!(error.contains("product.json:audio.output"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -889,7 +906,7 @@ mod tests {
         );
         fs::write(&manifest_path, manifest).unwrap();
 
-        let error = ProductBundle::read(&root).expect_err("invalid world lights reject admission");
+        let error = read(&root).expect_err("invalid world lights reject admission");
         assert!(error.contains("product.json:renderer.lighting.defaultLights.world"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -905,7 +922,7 @@ mod tests {
         );
         fs::write(&manifest_path, manifest).unwrap();
 
-        let product = ProductBundle::read(&root).expect("independent light modes admit");
+        let product = read(&root).expect("independent light modes admit");
         assert_eq!(product.default_lights(), (false, true));
         fs::remove_dir_all(root).unwrap();
     }
