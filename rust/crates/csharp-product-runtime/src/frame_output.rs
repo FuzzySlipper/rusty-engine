@@ -13,7 +13,8 @@
 //! the product UI. Video plays in these frames, above the UI.
 //!
 //! Animation, video and ghost plate facts reach the Engine from this
-//! renderer. `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of
+//! renderer, drawn or not: an unwatched stream advances clips and video on
+//! Engine time without drawing (#8871). `RUSTY_RENDER_STREAM_FORMAT=rgba` sends raw frames instead of
 //! JPEG, to measure what the encoder saves.
 //!
 //! Playtest inspection reaches the streamed renderer through Engine debug
@@ -187,8 +188,8 @@ impl FrameOutput {
         self.driver.set_simulation(simulation.held, simulation.step);
     }
 
-    /// Reports what the drawn frames observed since the last call. Call
-    /// between product calls.
+    /// Reports what the renderer observed since the last call, drawn or not.
+    /// Call between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
         let facts = self.driver.take_animation_facts();
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {

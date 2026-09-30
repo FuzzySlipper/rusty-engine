@@ -1,19 +1,21 @@
 //! The render thread against a real headless device: frames reach an
 //! attached viewer, follow applied steps, and stop once a held scene has
-//! been drawn. One test, so the binary opens one
-//! device (parallel devices can crash the Vulkan loader).
+//! been drawn, and an unwatched scene still reports clip ends. One test, so
+//! the binary opens one device (parallel devices can crash the Vulkan
+//! loader).
 
 use std::borrow::Cow;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use product_dev_host::ProductDevFrameStream;
 use render_host_contracts::{
     RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
     RendererViewTarget, RendererViewport, RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
 };
+use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
 use render_stream::{
     FrameStreamer, Gpu, RendererCameraPose, RendererOptions, RendererViewComposition,
-    ResourceSource, SceneDriver, SceneState, StreamFormat,
+    ResourceSource, SceneDriver, SceneState, StreamFormat, VideoFact,
 };
 use runtime_publication::RuntimePublication;
 
@@ -31,6 +33,18 @@ struct NoResources;
 impl ResourceSource for NoResources {
     fn bytes(&self, _identity: &str) -> Option<Cow<'_, [u8]>> {
         None
+    }
+}
+
+/// `render-video`'s synthetic fixture: 1.5 s of VP9 at 10 fps.
+const CLIP: &[u8] = include_bytes!("../../render-video/tests/fixtures/testsrc.webm");
+const CLIP_RESOURCE: &str = "content/video/testsrc.webm";
+
+struct Clip;
+
+impl ResourceSource for Clip {
+    fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
+        (identity == CLIP_RESOURCE).then_some(Cow::Borrowed(CLIP))
     }
 }
 
@@ -62,7 +76,7 @@ fn header(frame: &[u8]) -> Header {
 fn frames_follow_viewers_and_simulation_time() {
     let frames = ProductDevFrameStream::new();
     let gpu = Gpu::headless().expect("a headless adapter");
-    let scene = SceneDriver::new(gpu, RendererOptions::default());
+    let scene = SceneDriver::new(gpu.clone(), RendererOptions::default());
     let streamer = FrameStreamer::start(scene.clone(), StreamFormat::Rgba8, frames.clone())
         .expect("the render thread starts");
     let wait = Duration::from_secs(5);
@@ -203,4 +217,48 @@ fn frames_follow_viewers_and_simulation_time() {
     assert!((observed.cameras[0].pose.yaw_degrees - 45.0).abs() < 1e-3);
     assert!(observed.cameras[0].offscreen.is_none(), "no offscreen view");
     drop(streamer);
+
+    // Unwatched, nothing draws, but a clip still ends on Engine time and its
+    // completion reaches the Engine (#8871).
+    let unwatched_frames = ProductDevFrameStream::new();
+    let unwatched = SceneDriver::new(gpu, RendererOptions::default());
+    let unwatched_streamer = FrameStreamer::start(
+        unwatched.clone(),
+        StreamFormat::Rgba8,
+        unwatched_frames.clone(),
+    )
+    .expect("the render thread starts");
+    let handle = VideoPlaybackHandle::new(7);
+    let play = video_frame([VideoProjectionOp::Play {
+        handle,
+        clip: VideoClipRef {
+            asset: CLIP_RESOURCE.to_owned(),
+            content_hash: "sha256:fixture".to_owned(),
+            media_type: "video/webm".to_owned(),
+        },
+    }]);
+    unwatched.apply(
+        &[RuntimePublication::Presentation(play)],
+        &Clip,
+        &|_| None,
+        state(1, false),
+    );
+    assert!(unwatched.take_video_facts().is_empty());
+    for step in 2..=120 {
+        unwatched.apply(&[], &Clip, &|_| None, state(step, false));
+    }
+    let deadline = Instant::now() + wait;
+    let facts = loop {
+        let facts = unwatched.take_video_facts();
+        if !facts.is_empty() || Instant::now() > deadline {
+            break facts;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(facts, [VideoFact::Completed { handle }]);
+    assert!(
+        unwatched_streamer.inspection().last_drawn.is_none(),
+        "no frame was drawn"
+    );
+    drop(unwatched_streamer);
 }

@@ -79,6 +79,8 @@ struct Scene {
     step: u64,
     /// Engine presentation time the last applied call reached.
     elapsed_seconds: f64,
+    /// Engine presentation time the renderer last advanced to, drawn or not.
+    realized_seconds: f64,
     animation_facts: Vec<AnimationFact>,
     video_facts: Vec<VideoFact>,
     skipped_ops: BTreeMap<&'static str, u64>,
@@ -185,6 +187,7 @@ impl SceneDriver {
                 held: true,
                 step: 0,
                 elapsed_seconds: 0.0,
+                realized_seconds: 0.0,
                 animation_facts: Vec::new(),
                 video_facts: Vec::new(),
                 skipped_ops: BTreeMap::new(),
@@ -318,6 +321,7 @@ impl SceneDriver {
         let mut scene = self.scene();
         scene.dirty = false;
         let result = draw(&mut scene.renderer, now);
+        scene.realized_seconds = scene.elapsed_seconds;
         scene.collect_facts();
         result
     }
@@ -541,6 +545,14 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
             if let Some(size) = wanted.filter(|_| scene.dirty && !scene.on_demand) {
                 break size;
             }
+            // Nothing will draw this change, but clips and video still end on
+            // Engine time: advance them undrawn so their facts reach the
+            // Engine without a viewer.
+            if scene.realized_seconds != scene.elapsed_seconds {
+                scene.realized_seconds = scene.elapsed_seconds;
+                scene.renderer.advance_undrawn();
+                scene.collect_facts();
+            }
             scene = driver
                 .wake
                 .wait_timeout(scene, IDLE_WAIT)
@@ -578,6 +590,7 @@ fn render_loop(driver: &SceneDriver, frames: &ProductDevFrameStream, format: Str
             .render_view_composition(target, driver.now())
             .video;
         drawn.cameras = scene.renderer.drawn_cameras();
+        scene.realized_seconds = scene.elapsed_seconds;
         scene.collect_facts();
         let (held, step) = (scene.held, scene.step);
         drop(scene);

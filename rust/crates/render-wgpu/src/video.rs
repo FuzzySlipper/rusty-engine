@@ -199,6 +199,19 @@ impl Renderer {
         std::mem::take(&mut self.video.facts)
     }
 
+    /// End the playing clip if Engine time has passed its end, without
+    /// decoding anything.
+    pub(crate) fn end_finished_video(&mut self) {
+        let Some(active) = &self.video.active else {
+            return;
+        };
+        let position = (self.animation_time - active.started_at).max(0.0);
+        if active.playback.finished(position) {
+            let handle = active.handle;
+            self.video.end(Some(VideoFact::Completed { handle }));
+        }
+    }
+
     /// Decode up to the current Engine time and upload the frame shown then.
     pub(crate) fn advance_video(&mut self) {
         let Some(active) = &mut self.video.active else {

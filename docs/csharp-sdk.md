@@ -56,11 +56,11 @@ declared inputs. UI and content-bundle edits reload into the running product;
 C#, project and loose-content edits rebuild and replace the runtime. Useful
 flags: `--live-debug`, `--debugger` (managed breakpoints, see
 [CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`. The product
-runs from load either way, but the runtime draws only while a page watches its
-stream, and animation and video completions come from drawn frames.
-`--headless` opens that page in headless Chromium (`RUSTY_CHROMIUM_PATH`
-selects it) so an unattended run keeps drawing, with the product UI
-mounted.
+runs from load either way. The runtime draws only while a page watches its
+stream, but animation and video completions do not wait for one: unwatched,
+they advance on Engine time without drawing. `--headless` opens a page in
+headless Chromium (`RUSTY_CHROMIUM_PATH` selects it) for an unattended run
+that wants frames drawn or the product UI mounted.
 
 `rusty build --project …` stages without running; `--aot` also publishes the
 NativeAOT product, an explicit fidelity/release check rather than the edit

@@ -228,10 +228,12 @@ the [desktop shell](desktop-shell.md)'s native window
   composition publications are applied to the renderer as they are committed,
   under one lock with the simulation step and held state the call left, so a
   frame never shows a call's changes under the previous step. Animation,
-  video and ghost plate facts from drawn frames reach the Engine through the
-  ordinary realization feedback. The renderer draws when a change is applied:
-  every step while the simulation runs, once per change while it is paused or
-  inspection time is held. It takes the product manifest's default light rigs.
+  video and ghost plate facts reach the Engine through the ordinary
+  realization feedback. In stream output the renderer draws when a change is
+  applied and a viewer watches: every step while the simulation runs, once
+  per change while it is paused or inspection time is held. With no viewer it
+  still advances animation and video on Engine time without drawing, so
+  completions do not wait for a page (#8871). It takes the product manifest's default light rigs.
   Once a second it refreshes the renderer statistics C# reads with
   `Diagnostics.ReadRenderer`; `engine.renderer.status` shows the same.
 - **Transport.** A viewer pulls frames one at a time:

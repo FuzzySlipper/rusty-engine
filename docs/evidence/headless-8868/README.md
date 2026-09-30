@@ -57,3 +57,5 @@ rebuilt with `scripts/build-runtime-pack.sh`, and with `--headless`.
 - #8871: an unwatched runtime draws nothing, so animation and video
   completions stall until a viewer attaches. It decides whether completions
   should need a viewer at all.
+  - **Resolved.** They no longer do: an unwatched renderer advances on Engine
+    time without drawing. See `docs/evidence/unwatched-completions-8871/`.

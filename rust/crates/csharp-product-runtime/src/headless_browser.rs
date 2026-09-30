@@ -1,9 +1,9 @@
 //! Owns an optional headless Chromium process for a foreground product host.
 //!
-//! The runtime draws only while a page watches its stream, and the Engine
-//! learns of animation and video completions from drawn frames. An unattended
-//! run (`rusty dev --headless`) opens this page so the world keeps drawing and
-//! the product UI stays mounted while nobody watches.
+//! The runtime draws only while a page watches its stream. Animation and
+//! video completions do not need one: unwatched, the renderer advances them
+//! on Engine time without drawing. An unattended run that wants frames drawn
+//! or the product UI mounted (`rusty dev --headless`) opens this page.
 
 use std::{
     env, fs,
