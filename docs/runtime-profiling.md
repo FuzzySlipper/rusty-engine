@@ -49,25 +49,28 @@ Callback, output conversion and delivery time consume the tick budget instead
 of adding another full interval after each operation. After a missed deadline
 the next observation is one interval after the late one finishes; lifecycle
 admission still owns the fixed-step catch-up cap and dropped-step accounting.
-Pausing resets the host schedule phase. Observation intervals round up to avoid waking before an exact
-fixed-step boundary.
+Pausing resets the host schedule phase. Observation intervals round up to
+avoid waking before an exact fixed-step boundary.
 
-Browser RAF and GPU submission run independently. Configured product cameras
-hold the latest published pose by default. The opt-in `CameraView.UpdateCameraSample`
-path samples translation or full camera pose at render time; see [camera
-composition](csharp-lifecycle.md#retained-camera-composition). This does not introduce
-a variable-rate C# callback or move simulation into RAF. Rust work invoked
-synchronously from an update still consumes that update's budget, even if it
-uses worker threads internally. Work that should finish later needs an explicit
-asynchronous job/result boundary; waiting for it inside a fixed update keeps it
-on the critical path. Fast GPU timing does not establish smooth camera delivery.
-Compare fresh `engine.renderer.detail` product-frame receipt/applied intervals
-with runtime progress and callback cost. Do not infer a fixed simulation rate
-from either the RAF rate or the number of batched C# callbacks.
+The runtime renderer draws independently of the C# callback: streamed frames
+come from a render thread, and the desktop window draws every frame itself.
+Configured product cameras hold the latest published pose by default. The
+opt-in `CameraView.UpdateCameraSample` path samples translation or full camera
+pose at render time; see [camera
+composition](csharp-lifecycle.md#retained-camera-composition). This does not
+introduce a variable-rate C# callback. Rust work invoked synchronously from an
+update still consumes that update's budget, even if it uses worker threads
+internally. Work that should finish later needs an explicit asynchronous
+job/result boundary; waiting for it inside a fixed update keeps it on the
+critical path. Fast GPU timing does not establish smooth camera delivery.
+Compare the `engine.renderer` frame rate and render/readback/encode medians
+(see [renderer statistics](performance.md#renderer-statistics)) with runtime
+progress and callback cost. Do not infer a fixed simulation rate from the
+frame rate or the number of batched C# callbacks.
 
 ## Optimized Linux native capture
 
-Runtime packs now build Rust with release optimization and `line-tables-only`
+Runtime packs build Rust with release optimization and `line-tables-only`
 debug information. The executable contains unwind information and file/line
 mappings; `symbols/` retains the matching debug companions and `build-info.txt`
 with source revision, dirty-state indication, compiler and profile information.
@@ -80,8 +83,8 @@ with `CARGO_PROFILE_RELEASE_DEBUG=2 ./scripts/build-runtime-pack.sh --output NEW
 This preserves optimization; some variables can still be optimized away.
 See [Cargo debug profiles](https://doc.rust-lang.org/cargo/reference/profiles.html#debug).
 
-Use a standard Linux `perf` installation. On the tested host,
-`perf_event_paranoid=2` permits sampling this user's process in user mode:
+Use a standard Linux `perf` installation. `perf_event_paranoid=2` permits
+sampling this user's process in user mode:
 
 ```bash
 # Start a disposable investigation session. Enable JIT symbol export only here.
@@ -113,13 +116,11 @@ and [kernel perf permissions](https://docs.kernel.org/admin-guide/perf-security.
 CoreCLR's [perf map export](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling#export-perf-maps-and-jit-dumps)
 records managed code address ranges and names. Keep `/tmp/perf-PID.map` with the
 raw data and rendered report. Export has overhead while code is compiled, so
-keep it opt-in. In the tested attach workflow, `perf report` resolved Rust but
-left managed `memfd:doublemapper` addresses unnamed. Exported maps identified
-those leaf PCs as product/generated managed code; the ordinary EventPipe trace
-provided a directly named managed report. Use both views rather than attributing
-unresolved JIT samples to Rust. `perf inject --jit` was also tried with JIT dump
-export enabled and did not improve this attach capture, so it is not required
-by this recipe. Complete automatic mixed-stack symbolization is not claimed.
+keep it opt-in. `perf report` resolves Rust but can leave managed
+`memfd:doublemapper` addresses unnamed; match those leaf PCs against the
+exported map, and use an EventPipe trace for a directly named managed report.
+Do not attribute unresolved JIT samples to Rust. Complete automatic mixed-stack
+symbolization is not provided.
 
 Record diagnostics immediately before and after sampling. `runtime.json` includes
 `runtimeInstanceId`; compare it to the callback sample binding. Also retain the matching pack's `runtime-manifest.json`,
@@ -130,11 +131,9 @@ CPU samples distinguish scheduled native/managed work from waits. Pair them with
 `System.Runtime` CPU-time counters and the elapsed callback durations to
 identify time that needs further investigation. Ordinary EventPipe sampled
 thread time includes waits and does not provide Rust CPU stacks. This user-mode
-recipe does not claim kernel stacks or off-CPU wait-stack attribution.
+recipe does not capture kernel stacks or off-CPU wait stacks.
 
-On the tested host, .NET `collect-linux` could find a process but could not access
-tracefs; samply's recording mode also declined the current perf policy. The
-explicit user-mode `perf` capture worked without changing host permissions.
 [Native-aware .NET collection](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace)
-is an alternative where its platform requirements are met, not a dependency of
-this workflow. NativeAOT remains a separate native-debugging lane.
+(`dotnet-trace collect-linux`) is an alternative where its tracefs access and
+other platform requirements are met, not a dependency of this workflow.
+NativeAOT remains a separate native-debugging lane.

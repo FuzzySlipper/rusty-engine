@@ -2,59 +2,74 @@
 
 This is the small, current documentation set for Rusty Engine's packaged C#
 downstream lane. CoreCLR is the normal development loader and NativeAOT is an
-explicit fidelity/release path. The documentation describes demonstrated
-owners and source paths, not a promise that every proposal or Rust API is
-already exposed to C#.
-
-**Current direction: campaign #8723 (architecture reset).** The campaign section
-of [AGENTS.md](../AGENTS.md) and the Den charter
-`rusty-engine/architecture-reset-2026-09` override preservation language in any
-page here, in older task contracts, comments and tests. Existing mechanisms
-such as validation layers, policy caps, receipts, leases, replay rules and
-revision guards are candidates for removal, not requirements. Where a page
-describes one, it describes what the code does today, not a reason to keep it.
-
-- [Architecture overview](architecture.md) explains the Rust, generated C#,
-  C# product, and TypeScript lanes.
-- [Rope physics contract](rope-physics.md) records campaign #6992's bounded
-  solver design and probes; the proposed services are not yet SDK capabilities.
-- [C# SDK guide](csharp-sdk.md) is the downstream entry page: start, run,
-  update and troubleshoot a product with the `rusty` CLI, then its capability
-  references: [product project, build and staging](csharp-product-project.md),
-  [lifecycle and services](csharp-lifecycle.md),
-  [managed helpers](csharp-helpers.md) (`EntityStore` and Engine adapters,
-  class components, `Stat`/`Track`, optional `InventoryEdit`, explicit
-  save/debug), [offline images](csharp-offline-images.md) and
-  [runtime implicit surfaces](csharp-implicit-surfaces.md).
-- [World interaction and controller aim assistance](controller-interaction.md)
-  is the green path for containers/doors, sticky targeting, controller aiming,
-  and agent testing without repeated pixel hunting. Start with `interaction.inspect`.
-- [C# SDK/runtime distribution](csharp-distribution.md) explains the exact
-  Linux-x64 release pair, the pin, the shared cache and release information.
-- [C# product style](csharp-product-style.md) gives a recommended, product-side
-  organization that does not require a hidden Engine framework.
-- [C# capability map](csharp-capabilities.md) inventories the current generated
-  service families, managed helpers, and retained native runtime mechanisms.
-  Managed-helper rows name the owning SDK guide sections; the generated
-  contracts and their Rust ABI sources remain authoritative over this summary.
-- [CoreCLR diagnostics](coreclr-diagnostics.md) covers runtime process discovery, standard
-  managed profiling, callback breakpoints over SSH, and dumps.
-- [World streaming and state contract](world-streaming-contract.md) covers movement
-  support, sparse block state, Engine call affinity and voxel budget measurements.
-- [Runtime profiling](runtime-profiling.md) explains callback timing, runtime
-  correlation, and optimized Rust CPU captures.
-- [Desktop shell](desktop-shell.md) is the native window: `render-wgpu` on a
-  window surface with the product UI composited through Chromium.
-- [Verification notes](verification.md) describe the report-only Playwright
-  warning-delta capture and compatible-baseline comparison.
+explicit fidelity/release path. The pages describe what the source does now,
+not a promise that every Rust API is exposed to C#. History stays in Git and
+Den, not here.
 
 The root [README](../README.md) is the repository landing page and
-[AGENTS.md](../AGENTS.md) is the compact task-time guidance. Historical
-documentation remains in Git history as donor material only; do not restore it
-wholesale or use it to reintroduce superseded authoring or downstream-language
-assumptions. The pre-reset validation and limit audit ledgers are in
-[history](history/README.md), for provenance only.
+[AGENTS.md](../AGENTS.md) is the compact task-time guidance.
 
-- [Lighting and skies](lighting-and-sky.md) covers retained torch lighting, voxel irradiance queries, persistence and product-clock panorama blending.
+## Architecture
 
-See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/model semantics over loose files and bundles.
+- [Architecture overview](architecture.md): the Rust, generated C#, C# product
+  and TypeScript layers, source owners, runtime-rendered output, packaging.
+- [Desktop shell](desktop-shell.md): the native window, `render-wgpu` on a
+  window surface with the product UI composited through Chromium.
+
+## C# SDK
+
+- [C# SDK guide](csharp-sdk.md) is the downstream entry page: start, run,
+  update and troubleshoot a product with the `rusty` CLI. Its references:
+  - [product project, build and staging](csharp-product-project.md);
+  - [lifecycle and services](csharp-lifecycle.md);
+  - [managed helpers](csharp-helpers.md) (`EntityStore` and Engine adapters,
+    class components, `Stat`/`Track`, optional `InventoryEdit`, explicit
+    save/debug);
+  - [offline images and GLB export](csharp-offline-images.md);
+  - [implicit surfaces and other runtime services](csharp-implicit-surfaces.md).
+- [C# capability map](csharp-capabilities.md) inventories the generated
+  service families, managed helpers and native runtime mechanisms. The
+  generated contracts and their Rust ABI sources are authoritative over it.
+- [C# SDK/runtime distribution](csharp-distribution.md): the Linux-x64 release
+  pair, the desktop pack, the pin, the shared cache, release notes and
+  migration notes.
+- [C# product style](csharp-product-style.md): a recommended product-side
+  organization that needs no hidden Engine framework.
+
+## Engine services
+
+- [World interaction and controller aim assistance](controller-interaction.md):
+  containers/doors, sticky targeting, controller aiming, and agent testing
+  without pixel hunting. Start with `interaction.inspect`.
+- [World streaming and state contract](world-streaming-contract.md): movement
+  support, sparse block state and Engine call affinity.
+- [Voxel residency and edit costs](voxel-budgets.md): how voxel changes apply,
+  limits and measured costs.
+- [Lighting and skies](lighting-and-sky.md): retained torch lighting, voxel
+  irradiance queries, persistence and product-clock panorama blending.
+- [Portable assets](portable-assets.md): Engine-owned sprite/model semantics
+  over loose files and bundles.
+- [Recorded audio](recorded-audio.md): clip containers and device playback.
+- [Rope physics](rope-physics.md): Dynamics tethers and character coupling.
+- [Implicit topology on ambiguous faces](implicit-topology-diagnosis.md): how
+  implicit meshing resolves ambiguous faces.
+
+## Inspection, diagnostics and verification
+
+- [Playtest inspection](playtest-inspection.md): held time, the observer
+  camera, drawing mode and the product playtest modules.
+- [Viewpoints and presentation observations](presentation-capture.md): frame
+  identity and captures.
+- [Performance diagnostics](performance.md) and
+  [runtime profiling](runtime-profiling.md): regression lanes, renderer
+  statistics, callback timing and native profiles.
+- [CoreCLR diagnostics](coreclr-diagnostics.md): runtime process discovery,
+  managed profiling, callback breakpoints over SSH, and dumps.
+- [Verification notes](verification.md): CI lanes and the report-only
+  playtest warning-delta capture.
+
+## Working on the Engine
+
+- [Parallel lanes](handoffs/README.md): the worktree and landing protocol for
+  agents working at the same time.
+- [Agent review](agent-review/README.md): reviewer lanes and packets.

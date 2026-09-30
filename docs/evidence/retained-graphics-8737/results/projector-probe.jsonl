@@ -1,9 +1,0 @@
-{"side":"before","path":"snapshot","objects":1000,"moving":50,"usP50":653,"usP95":677,"operations":50}
-{"side":"before","path":"snapshot","objects":5000,"moving":50,"usP50":3861,"usP95":4721,"operations":50}
-{"side":"before","path":"snapshot","objects":20000,"moving":50,"usP50":19672,"usP95":21949,"operations":50}
-{"side":"after","path":"snapshot","objects":1000,"moving":50,"usP50":59,"usP95":74,"operations":50}
-{"side":"after","path":"changes","objects":1000,"moving":50,"usP50":10,"usP95":13,"operations":50}
-{"side":"after","path":"snapshot","objects":5000,"moving":50,"usP50":327,"usP95":358,"operations":50}
-{"side":"after","path":"changes","objects":5000,"moving":50,"usP50":11,"usP95":12,"operations":50}
-{"side":"after","path":"snapshot","objects":20000,"moving":50,"usP50":1611,"usP95":2064,"operations":50}
-{"side":"after","path":"changes","objects":20000,"moving":50,"usP50":11,"usP95":14,"operations":50}

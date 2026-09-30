@@ -1,11 +1,10 @@
-# Forward-only playtest inspection
+# Playtest inspection
 
-The existing native lifecycle owns simulation steps. Inspection mode gates its
-realtime scheduler; manual admission keeps the product's fixed-step cadence and
-uses the ordinary C# update/input path. Admitted updates retain `Realtime` mode
-and the configured nonzero fixed delta; manual clock control is not a demand
-product update. Switching back to realtime clears the
-wall-time baseline. Holding does not stop input admission or renderer inspection.
+The runtime owns simulation steps. Inspection time modes gate its realtime
+scheduler; a manual advance keeps the product's fixed-step cadence and uses the
+ordinary C# update/input path. Admitted updates keep `Realtime` mode and the
+configured fixed delta. Switching back to realtime clears the wall-time
+baseline. Holding does not stop input admission or renderer inspection.
 While held, the host still queues posted input; each live-debug command hands
 the queued input to the runtime before it runs. So a key pressed before
 `engine.time.advance` is held during the steps it admits.
@@ -17,11 +16,12 @@ Native live-debug commands (require the ordinary live-debug opt-in):
 - `engine.time.advance MS`: positive duration up to 2000 ms, rounded up to fixed
   steps, returning actual advancement. Both held modes allow explicit advances.
 
-The Engine browser host exposes `window.__rustyPlaytest(request)` for the local
-crew-services driver. It waits for the existing output boundary before capturing
-new projection state. This uses the existing ordered transport and renderer;
-there is no replay or second simulation scheduler. Connection baselines carry
-an observed output boundary so a held host can accept feedback before another tick.
+The browser shell exposes `window.__rustyPlaytest(request)` for crew-services'
+browser driver. Each operation runs Engine or product debug commands through
+`/__rusty/product/runtime/debug/execute`. The hook waits until the page has
+observed that command's outputs, and, for a command that draws, until the
+canvas shows the drawn frame. A client without a page can call the same debug
+commands directly.
 
 ## Product adapter
 
@@ -39,33 +39,39 @@ The fixed module commands are `playtest.help`, `playtest.observe`,
 look updates the owning product camera without advancing gameplay.
 Doom is the first provider. No ABI or handwritten product bridge is required.
 
-## Browser time, drawing and camera
+## Time, drawing and camera
 
-Operations: discover, observe, action, look, time, advance, drawing, frame,
-camera, targets, route, focus and flush. crew-services adds ordinary keyboard
-action orchestration, captures, surveys and recordings on top.
+Page operations: discover, observe, action, look, time, advance, drawing,
+frame, camera, targets, route, focus and flush, plus interaction, grid, probe,
+clearance and jump-plan when the product registers those modules.
+crew-services adds keyboard action orchestration, captures, surveys and
+recordings on top.
 
-`drawing` accepts continuous or on-demand. Continuous explicitly requests actual
-full-rate draws, even with held simulation. On-demand preserves the existing
-cadence for input sampling and world presentation updates, but skips automatic
-draw calls. Frame requests and camera inspection can still draw. Resources remain
-resident; this is not a GPU-memory eviction feature.
+The world is drawn by the runtime's renderer, so the observer camera, drawing
+mode and held time are runtime state that every attached page shares
+([architecture](architecture.md#runtime-rendered-output)):
 
-Held simulation anchors presentation time to native step progress. Animation and
-particle deltas stop while held and advance with requested simulation time.
-Camera interpolation uses the current pose while held, so inspection never waits
-for a paused interpolation clock. Performance metrics still use wall time.
-Media/UI playback has its existing separate ownership; these controls concern
-world simulation and retained world presentation.
+- `drawing` (`engine.renderer.drawing`) is `continuous` (draw every change) or
+  `on-demand` (draw only when asked). Frame requests, look and camera changes
+  still draw one frame. Resources stay resident.
+- `frame` (`engine.renderer.frame`) draws one frame now and answers with
+  `engine.renderer.presentation` for it.
+- `camera` (`engine.renderer.camera`) reads the observer status or sets an
+  observer pose that replaces every primary view's camera. The page also
+  accepts a relative move, yaw/pitch, lookAt, or orbit around a target, and
+  turns each into an absolute pose. `camera:null` restores the product's
+  cameras. The observer never enters player pose, collision or aim. Poses are
+  Y-up; positive yaw turns right.
 
-`camera` reads pose/observer status, accepts an absolute pose, relative move,
-yaw/pitch, lookAt, or orbit around a target. `camera:null` restores the current
-product camera. The renderer override never enters player pose, collision or aim.
-Camera coordinates use the renderer's Y-up convention; positive yaw turns right.
+Animation, particles and camera motion run on the Engine's presentation time,
+which advances only with admitted steps. Held time freezes them, and `advance`
+moves them with the steps it admits. Performance metrics still use wall time.
+Media and UI playback have their own ownership; these controls concern world
+simulation and presentation.
 
 See crew-services `docs/playtest.md` for CLI examples, evidence handling and
-shared-host/reset semantics. Raw keyboard input is unchanged; `assist act` is the
-bounded action that pairs physical input with manual advancement automatically.
+shared-host/reset semantics. Raw keyboard input is unchanged; `assist act` is
+the bounded action that pairs physical input with manual advancement.
 
 ## Triggered spatial diagnostics
 

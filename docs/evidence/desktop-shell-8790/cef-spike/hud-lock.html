@@ -1,9 +1,0 @@
-<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:transparent}
-#c{position:absolute;inset:0}</style></head><body><canvas id="c" tabindex="0"></canvas><script>
-const c = document.getElementById('c');
-let sum = 0, moves = 0;
-c.addEventListener('pointerdown', () => { const p = c.requestPointerLock(); if (p && p.catch) p.catch(e => { document.title = 'lockerr:' + e.name + ':' + e.message; }); });
-document.addEventListener('pointerlockchange', () => { document.title = 'lockchange:' + (document.pointerLockElement === c ? 'locked' : 'none'); });
-document.addEventListener('pointerlockerror', () => { document.title = 'pointerlockerror'; });
-document.addEventListener('pointermove', e => { moves++; sum += e.movementX; if (moves % 3 === 0) document.title = 'move:' + moves + ':sumX=' + sum + ':locked=' + (document.pointerLockElement === c); });
-</script></body></html>

@@ -1,10 +1,10 @@
 # C# product style
 
-This is a recommended product coding lane for C# products on Rusty
-Engine. It is not an Engine-enforced module framework and it does not claim
-that `IProductModule`, `ProductBuilder`, typed projection, typed content, or
-analyzer packages already exist. A product can use these practices with
-ordinary C# composition today.
+This is the recommended coding style for C# products on Rusty Engine. It is
+a set of conventions, not an Engine module framework: the SDK has no
+`IProductModule`, `ProductBuilder`, typed projection, typed content, or
+analyzer packages. A product applies these practices with ordinary C#
+composition.
 
 ## Start with domain ownership
 
@@ -41,10 +41,10 @@ is the same object the product constructed. Use domain methods where they preser
 useful invariants. Add a shaped view or request when an ownership boundary benefits
 from it, and an explicit capture/rebuild representation when persistence is needed.
 Sharing references is deliberate C# aliasing, not an Engine permission boundary.
-For the current Engine mechanics vocabulary (`EntityStore`, `EntityTypeId`, `Actor`,
+For the Engine mechanics vocabulary (`EntityStore`, `EntityTypeId`, `Actor`,
 `Stat`/`Track`, `StatsComponent`/`EffectsComponent`, inventory facades, explicit
-save/capture/debug), see the [C# SDK guide](csharp-sdk.md)'s entity/mechanics sections
-rather than a second copy here.
+save/capture/debug), see [managed helpers](csharp-helpers.md) and the
+[capability map](csharp-capabilities.md#managed-helpers-in-the-default-assembly).
 
 ## Keep coordination thin
 
@@ -91,8 +91,8 @@ advance product state.
 
 Keep no retained native pointers or borrowed callback data in product state.
 Follow disposable handle ownership from the generated SDK. Ordinary
-product projects should contain neither handwritten P/Invoke nor unsafe native
-code; generated bootstrap and bindings own that boundary.
+product projects contain neither handwritten P/Invoke nor unsafe native code;
+the generated bind export and the SDK own that boundary.
 
 Engine owns renderer resources, canvas/backend lifecycle, and game rendering.
 C# publishes supported product facts. TypeScript is the DOM UI and explicit
@@ -102,7 +102,7 @@ state.
 Keep implementation topology in developer documentation. Do not add static
 "runtime connected" or "product host active" banners to product UI: they do
 not establish that gameplay is running. Show actionable failures and requested
-diagnostics through the Engine's existing surfaces.
+diagnostics through the Engine's diagnostics and UI surfaces.
 
 ## C# baseline
 

@@ -32,8 +32,10 @@ facts. A realtime product has a shape like:
 </PropertyGroup>
 ```
 
-Input intents/mappings and optional UI-projection identity are declared with
-the corresponding `RustyEngineProduct*` MSBuild items/properties. Declaring
+Input intents and mappings are `RustyEngineProductInputIntent` and
+`RustyEngineProductInputMapping` items. An optional UI-projection identity is
+the `RustyEngineProductUiProjectionStream` and
+`RustyEngineProductUiProjectionContract` pair of properties. Declaring
 `RustyEngineProductEntryType` makes that project the product root: the SDK's
 generator adds its bind export and debug catalog to the project's own
 compilation, and the project builds as a CoreCLR component (runtimeconfig and
@@ -53,12 +55,9 @@ product project needs no `AllowUnsafeBlocks`.
 
 Catch `EngineCallException` at the product boundary and inspect `Service`,
 `Operation`, `Status`, and `Diagnostics.Span`. Its message includes each returned
-Engine code and explanation. Generated wrappers copy and release the native
-operation receipt before throwing, including owned-resource disposal and
-borrowed/span request shapes; products retain only managed diagnostic values.
-Audio, Graphics, Animation, Presentation, CameraView, Dynamics, Video, UI
-stream lifetime, and implicit-field operations preserve their recorded native
-refusal reasons. For example, an unadmitted audio clip reports
+Engine code and explanation. Generated wrappers copy the native diagnostics
+into managed values before throwing, so the exception holds no native memory.
+For example, an unadmitted audio clip reports
 `CSHARP_AUDIO_CLIP_HANDLE`, and a stale sprite atlas reports
 `CSHARP_SPRITE_ATLAS_HANDLE`. An exception escaping a product callback is
 reported to runtime diagnostics with its complete text and managed stack trace.
@@ -75,8 +74,7 @@ The
 [caught-refusal fixture](../fixtures/csharp-caught-refusals/CaughtRefusalChecks.cs)
 catches Graphics, Audio, CameraView, Dynamics and UI refusals, then performs
 ordinary work in the same callback. Resource release still uses the exact
-owning service. Adopt the matching SDK **and** runtime: these receipts change
-the native function table.
+owning service.
 
 ### Runtime input remapping
 
@@ -85,13 +83,14 @@ Keyboard mappings use `key-a`–`key-z`, `digit-0`–`digit-9`, `space`, `enter`
 `shift-left/right`, `control-left/right`, `alt-left/right` pairs. In C#, use
 `KeyboardControl.ArrowUp` (and the other directions) or `KeyboardControl.Enter`.
 The manifest name for Enter is `enter`, not `key-enter`; arrow names use
-`arrow-`, not `key-`. Browser `ArrowUp/Down/Left/Right` events use the same
-Engine input path as other keys. Consume a matching SDK/runtime pair.
+`arrow-`, not `key-`. Arrow keys use the same Engine input path as other
+keys.
 
 Use `context.Engine.Input.ReplacePhysicalMappings(mappings)` to replace the
 whole physical mapping set during product creation, Start, Pause, Resume,
-Restart, or an admitted Update callback. The mappings use the existing
-`ProductInputMapping` values and must target the product's declared semantic intents; remapping does not add intents
+Restart, or an admitted Update callback. The mappings are
+`ProductInputMapping` values and must target the product's declared semantic
+intents; remapping does not add intents
 or change their value kinds or payload contracts. An empty set disables
 physical mappings while leaving direct intents available.
 
@@ -105,13 +104,14 @@ and unsupported controls are invalid. Distinct mapping IDs may deliberately shar
 
 At runtime, a successful replacement uses the lifecycle transition or advances
 the input control revision and clears held and pending input through the
-existing input lane. During creation it instead selects the initial map before
-the lane admits input. Old bindings stop firing, and queued events from the previous binding cannot trigger stale actions.
-Products receive the normal clear fact and must release their derived held
-state. Focus and text-entry suppression continue through the same lane.
-A mapping replacement, pause, resume, or control replace/release keeps the
-browser renderer and its retained world: only the input, UI and feedback
-binding moves, and each UI stream's latest projection is republished under it.
+input lane. During creation it instead selects the initial map before the
+lane admits input. Old bindings stop firing, and queued events from the
+previous binding cannot trigger stale actions. Products receive the normal
+clear fact and must release their derived held state. Focus and text-entry
+suppression continue through the same lane. A mapping replacement, pause,
+resume, or control replace/release keeps the renderer and its retained world:
+only the input, UI and feedback binding moves, and each UI stream's latest
+projection is republished under it.
 `ProductCreateContext.Input` remains the initial composition snapshot; products
 own their chosen settings, UI and persistence.
 
@@ -123,18 +123,18 @@ Keyboard-driven products without mouselook can opt into a free cursor:
 <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
 ```
 
-The default is `pointer-lock`, preserving FPS behavior. In `unlocked` mode,
-clicking the canvas focuses gameplay keyboard input without requesting pointer
-lock; pointer movement does not supply camera-look deltas. Marked DOM controls
-remain usable, and Engine input still owns focus loss, clearing, and rebinding.
-The setting is available as `context.Input.CursorMode` and is carried through
-the packaged Product and browser bootstrap. Invalid values reject staging.
+The default is `pointer-lock`, for FPS-style mouselook. In `unlocked` mode,
+clicking the world view focuses gameplay keyboard input without requesting
+pointer lock; pointer movement does not supply camera-look deltas. Marked DOM
+controls remain usable, and Engine input still owns focus loss, clearing, and
+rebinding. The setting is available as `context.Input.CursorMode` and is
+carried in `product.json`. Invalid values reject staging.
 
-### Default browser lighting
+### Default lighting
 
-The packaged browser shell keeps its neutral world and viewmodel light rigs by
-default. A product can disable either rig independently through ordinary build
-properties; retained lights created through `Graphics` continue to be realized.
+The Engine renderer lights the world and the viewmodel with neutral default
+light rigs. A product can disable either rig independently through ordinary
+build properties; retained lights created through `Graphics` are unaffected.
 
 ```xml
 <PropertyGroup>
@@ -182,14 +182,12 @@ special Engine meaning: a product may find that conventional filename, read
 authored ordering/IDs and build its own dictionary without embedding each
 definition's filename in code. Do not depend on an index occupying element zero.
 
-The existing `Files`, UTF-8 `Path` and `Bytes` members remain available. Content
+`Files` exposes the whole snapshot as UTF-8 `Path` and `Bytes` pairs. Content
 is an eagerly admitted memory snapshot copied across the generated boundary;
 these helpers add no filesystem reads, streaming, parsing framework or writable
 store. Treat retained path/payload memory as read-only. A loose content edit
 under `rusty dev` replaces the runtime to supply a new snapshot; bundle content
-(below) reloads without one. Tauri and sealed-container host
-flavors remain packaging investigations; these logical names do not promise an
-implemented standalone browser/WASM or Tauri runtime.
+(below) reloads without one.
 
 ### Independently loaded content bundles
 
@@ -220,8 +218,8 @@ ProductContentFile[] definitions = bundle.ReadDirectory("rooms", recursive: true
 using ContentReference source = bundle.OpenReference("rooms/entrance.json");
 ```
 
-Declared bundle files are excluded from the legacy `ProductContent.Files`
-snapshot, global named reads and browser initial-content payload. Discovery
+Declared bundle files are excluded from the `ProductContent.Files` snapshot
+and its named reads. Discovery
 reads only the inventory. Opening a bundle reads and verifies that collection's
 files into an immutable Rust snapshot; it does not load other bundles or copy
 all its bodies into C#. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
@@ -244,8 +242,8 @@ explicit product composition: open the required bundles and pass their content
 references to the typed services. A reference also retains its source
 collection's immutable dependency context: GLB companion images/buffers resolve
 relative to that GLB inside the same bundle. Opening an unrelated bundle cannot
-change resolution. After admission, the Engine resource retains its own payload;
-it no longer needs the source reference or bundle. Appearance keeps imported
+change resolution. After admission, the Engine resource retains its own payload
+and does not need the source reference or bundle. Appearance keeps imported
 results for the current service lifetime so repeated opens of the same admitted
 source avoid decoding, packing and hashing again. Reuse checks immutable buffer
 identity, including each GLB dependency. A newly admitted source snapshot is
@@ -275,23 +273,23 @@ companions once into Engine ownership and never changes the startup catalog or
 other references. `ResolveReference` does not reopen a transient snapshot;
 re-admit current bytes when restoring an editor selection.
 
-The existing animation renderer preserves materials, textures, skins and clips;
-`Animation.ReadMeshInfo(resource)` exposes admitted bounds and material/joint/clip
-counts; `ReadClips(resource)` copies each
-clip ID, name and duration. Use its ordinary instance/playback APIs for animation.
-Dispose instances, publish the snapshot without their appearances, then dispose
+The animated-mesh path preserves materials, textures, skins and clips;
+`Animation.ReadMeshInfo(resource)` exposes admitted bounds and
+material/joint/clip counts; `ReadClips(resource)` copies each clip ID, name and
+duration. Use the ordinary instance/playback APIs for animation. Dispose
+instances, publish the snapshot without their appearances, then dispose
 appearances and resources. Direct-instance teardown also accepts an already
-published removal snapshot and avoids sending a stop to that retired target. The source reference can be disposed immediately
-after resource admission. Transient animation imports do not enter the
-startup-source import cache, so closing the reference and resource releases
-these snapshots. A malformed or incomplete GLB throws `EngineCallException`
+published removal snapshot and sends no stop to that removed target. The source
+reference can be disposed immediately after resource admission. Transient
+animation imports do not enter the startup-source import cache, so closing the
+reference and resource releases these snapshots. A malformed or incomplete GLB throws `EngineCallException`
 with operation diagnostics without failing the surrounding product callback.
 Admit the replacement before releasing the previous selection to keep it visible
 when an import fails.
 
 Use the same asset admissions during Create or a later product update:
 
-| Asset | Bundle consumer | Existing format |
+| Asset | Bundle consumer | Format |
 | --- | --- | --- |
 | Images and textures | `Graphics.OpenResourceFromContent` | RGBA PNG |
 | Packed static geometry | `Graphics.OpenResourceFromContent` | `.rmesh` |
@@ -300,24 +298,22 @@ Use the same asset admissions during Create or a later product update:
 | Fonts | `Graphics.OpenResourceFromContent` | WOFF2 |
 | Audio clips | `Audio.OpenClipFromContent` | WAV, Ogg Vorbis, Ogg Opus, MP3, FLAC ([memory policy](recorded-audio.md)) |
 | Full-viewport video | `Video.Play`, `Video.Stop`, `Video.Skip` | WebM (`video/webm`; VP9+Opus or video-only VP9) |
-| Voxel assets, objects and annotations | `VoxelContent.LoadAssetFromContent`, `LoadObjectFromContent`, `LoadAnnotationFromContent` | Existing typed JSON formats |
+| Voxel assets, objects and annotations | `VoxelContent.LoadAssetFromContent`, `LoadObjectFromContent`, `LoadAnnotationFromContent` | Typed JSON formats |
 | Imported voxel models | `VoxelContent.LoadMagicaVoxelFromContent` | MagicaVoxel `.vox` |
-| Authored catalogs/prefabs/scenes and spatial artifacts | Existing typed ContentReference consumers | Their existing Engine document formats |
+| Authored catalogs/prefabs/scenes and spatial artifacts | Typed `ContentReference` consumers | Their Engine document formats |
 | Text and arbitrary bytes | Bundle `ReadText`, `ReadBytes`, `ReadDirectory`, or Content reference reads | No asset decoder required |
 
 The bundle is a source container; an admission still applies the relevant
 Engine format rules. It does not make arbitrary image, model or audio formats
-supported. The Engine supplies admitted resource bytes to its renderer/audio/video
-host, including assets first loaded after startup and fresh client attachments.
-Products do not extract bundle files or build renderer URLs.
+supported. The Engine hands admitted resource bytes to its renderer, audio and
+video, including assets first loaded after startup. Products do not extract
+bundle files or build renderer URLs.
 
-Missing bundles/files report their logical names. A bundle whose files no
-longer match its staged inventory fails to open; rebuild/restage it. This is a
-directory-backed build-content capability for the current CoreCLR/NativeAOT
-hosts. It adds neither archive extraction nor a standalone browser runtime, and
-does not promise that closing a collection frees independent GPU resources or
-forces managed garbage collection. Browser DOM image delivery remains a
-separate consumer concern; bundle discovery alone does not produce image URLs.
+Missing bundles/files report their logical names. A bundle whose files do not
+match its staged inventory fails to open; rebuild/restage it. Bundles are
+directories in the staged Product, not archives. Closing a collection does not
+free independent GPU resources or force managed garbage collection. Bundle
+discovery does not produce URLs for DOM images.
 
 ## Run and package
 
@@ -390,7 +386,7 @@ and `content/`. Each stage copies the build output into a fresh `coreclr/`
 directory, because a running worker keeps the previous files mapped until the
 supervisor replaces it. Engine JavaScript and host binaries stay in
 the runtime pack. Product UI is DOM UI and accessibility only; the Engine
-renderer remains the owner of non-UI presentation.
+renderer owns non-UI presentation.
 
 The package and runtime pack carry exact generated ABI identities. A mismatch
 is rejected before product construction. Use a package and runtime pack built
@@ -414,20 +410,22 @@ run both loaders against one bundle (for example, to compare them), use
 
 Engine contributors may run `rusty dev --engine-source
 /absolute/rusty-engine`. That explicit option selects the source checkout's
-runtime pack and supplies `RustyEngineUseSourceDevelopment` plus the absolute
-`RustyEngineSourceDevelopmentPath` to MSBuild. The product project must
-conditionally exclude the package's compile/runtime assets when that flag is
-true, as the SDK directs. Never make this override, an adjacent checkout, or
-downstream binding generation the normal product setup.
+runtime pack and passes `RustyEngineUseSourceDevelopment=true` plus the
+absolute `RustyEngineSourceDevelopmentPath` to MSBuild; the SDK then references
+the checkout's `Rusty.Engine` and product generator projects. The
+`Rusty.Engine` package reference must set
+`<ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>`,
+or the build stops with an error naming it. Never make this override, an
+adjacent checkout, or downstream binding generation the normal product setup.
 
-The fixtures in this repository remain broad provider proof scaffolding. They
-are useful when changing the ABI/generator/runtime, but they are not a template
+The fixtures in this repository are provider proof scaffolding. They are
+useful when changing the ABI/generator/runtime, but they are not a template
 for a downstream repository's launch topology.
 
 ### Controller input in product menus
 
 With selected-controller input enabled, `mountUi` receives an optional
-`context.input.subscribe(observer)` port. The existing host controller cadence
+`context.input.subscribe(observer)` port. The host controller cadence
 delivers immutable `{ context: 'interface', fact }` observations while
 `context.ui.setInteractionMode('interface')` owns input. Facts use the Engine's
 normalized `controller-button` pressed/released edges, `controller-axis`
@@ -436,7 +434,7 @@ meaning; these are not Rust-mapped gameplay intents. Unsubscribe on UI disposal.
 
 Interface observations never enter the gameplay queue or consume its sequence
 numbers. Use `context.intents.claim` for actions that need product processing;
-it remains the sole ordered command lane. No downstream gamepad polling or
+it is the sole ordered command lane. No downstream gamepad polling or
 animation loop is needed. Gameplay mode keeps ordinary Engine input delivery;
 modal mode and loss of browser focus suppress controller observation. Mode
 changes adopt already-held controller state without replaying its press, so a
@@ -452,20 +450,14 @@ fault/restart behavior. See `fixtures/csharp-nativeaot-trial/Product.cs` for
 the fixture used by the Engine's package checks. Ordinary products do not need
 to implement these assertions.
 
-The fresh-attachment assertion requires `defineMaterial`, `create`, and
+The attachment assertion requires `defineMaterial`, `create`, and
 `replaceMeshPayload` together in one retained frame, then checks that a second
-attachment preserves the baseline and runtime readout. Its failure reports
-observed operation kinds and missing kinds separately for each frame (or that
-no frame was published). This is a fixture expectation, not a universal shape
-for valid graphics.
-
-The fixture uses the existing safe services: create a `Spatial` session, apply
-nonempty `Voxel` edits, bind the used material slots, and retain a
-`VoxelScenePresentation.ProjectSceneDirectional` projection. These facts must
-be committed during construction/Start before attachment; call `RefreshScene`
-after subsequent edits. The Engine builds and retains the renderer operations.
-Product metadata alone does not create voxel geometry, and initialization in
-`Attach` is not invoked on browser connection.
+attachment preserves the voxel baseline and runtime readout. Its failure
+reports observed and missing operation kinds for each frame (or that no frame
+was published). The fixture builds that baseline during construction/Start
+with a `Spatial` session, nonempty `Voxel` edits, bound material slots and a
+retained `VoxelScenePresentation.ProjectSceneDirectional` projection. This is
+a fixture expectation, not a universal shape for valid graphics.
 
 A product with static meshes, sprites, or no mesh content should not add dummy
 voxels or fixture callbacks to pass this check. Launch normally with

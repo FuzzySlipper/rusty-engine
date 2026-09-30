@@ -12,7 +12,7 @@ to extract disposable audit meshes and print its `allComplete` report. The
 product owns its sampling budget and acceptance policy, while the Engine
 performs mesh extraction and analysis.
 The door is product state (`E` / controller `X`); input, camera, retained mesh
-resources, and browser rendering are Engine-owned. The DOM module only labels
+resources, and rendering are Engine-owned. The DOM module only labels
 the controls.
 
 Use a current matching SDK/runtime pair:
@@ -24,11 +24,3 @@ dotnet restore CsharpArchitecturalRoom.csproj --source /path/to/pair/sdk-feed
   --project CsharpArchitecturalRoom.csproj \
   --runtime /path/to/pair/runtime-pack --port 40178 --live-debug
 ```
-
-Donor consultation
-
-- Corpus and snapshot: local `csharp-controller-interaction` and `csharp-mesh-composition` fixtures.
-- Files inspected: their product project files, C# products, DOM modules, and launch README files.
-- Outcome: adapted the ordinary package-only product, physical-input, and DOM-UI conventions.
-- Deliberate deviations: this example uses implicit architectural extraction and continuity audits; it has no donor gameplay rules or assets.
-- Primary-data/spec verification: current Engine C# SDK and architecture guidance.

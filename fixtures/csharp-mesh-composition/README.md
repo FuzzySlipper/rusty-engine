@@ -4,10 +4,10 @@ Ordinary package-only C# fixture for generated mesh admission. C# builds a
 two-material shockwave ring and publishes two appearances sharing one immutable
 mesh. **Pulse shape** alternates its geometry; **Clear and recreate** releases
 both appearances and their resource before admitting the next mesh. Counts and
-shape are published through the ordinary UI projection. Reload the browser to
+shape are published through the ordinary UI projection. Reload the page to
 check that the current shape and counters reconstruct without a product restart.
 
-Use a current matching SDK/runtime pair (the mesh API first lands with #7787):
+Use a current matching SDK/runtime pair:
 
 ```bash
 export RustyEngineFixtureSdkVersion=<pair-version>

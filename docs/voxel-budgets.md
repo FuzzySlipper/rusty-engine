@@ -1,10 +1,10 @@
 # Voxel residency and edit costs
 
-Measured for #8739 on 2026-09-28 with the
+These are CPU scene costs from the
 [`voxel_budget`](../rust/crates/engine-spatial/examples/voxel_budget.rs) and
 [`voxel_edit_scaling`](../rust/crates/engine-spatial/examples/voxel_edit_scaling.rs)
-probes. These are CPU scene costs, not browser/GPU or whole-product figures.
-[Raw before/after output](evidence/incremental-voxels-8739/README.md) is kept.
+probes, measured on 2026-09-28. They exclude GPU
+and whole-product costs.
 
 ## How a change is applied
 
@@ -23,7 +23,7 @@ A failed edit changes nothing:
 - invalid coordinates, material slots or states are refused before any write;
 - if a touched chunk's mesh cannot be built, the written voxels are reverted.
 
-## Remaining limits
+## Limits
 
 | Boundary | Limit | Owner |
 | --- | ---: | --- |
@@ -31,9 +31,7 @@ A failed edit changes nothing:
 | Solid material slot | 1–4,095 | same |
 | Chunk edge | 1–64 cells | `engine-spatial/src/lib.rs` |
 
-Edit, residency, scene-building and primitive calls have no count caps; #8742
-removed the fresh-scene solid-cell cap and the primitive expansion and radius
-caps.
+Edit, residency, scene-building and primitive calls have no count caps.
 
 ## Reproduction
 
@@ -59,31 +57,23 @@ time, with no CPU pinning.
 
 ## Observed costs
 
-Milliseconds, as median / maximum of seven calls. "Before" is `c3100825`, where
-every change rebuilt the whole scene.
+Milliseconds, as median / maximum of seven calls.
 
-| Shape / chunks | Cell edit before | Cell edit after | Chunk replace before | Chunk replace after | Peak RSS before / after |
-| --- | --- | --- | --- | --- | --- |
-| Solid / 16 | 25.5 / 31.3 | 1.31 / 1.50 | 19.5 / 19.6 | 1.72 / 1.84 | 109 / 28 MiB |
-| Solid / 64 | 104.0 / 132.0 | 1.18 / 1.24 | 77.1 / 80.7 | 1.60 / 1.63 | 413 / 98 MiB |
-| Checker / 16 | 22.9 / 33.3 | 3.99 / 4.76 | 21.2 / 21.5 | 4.64 / 4.83 | 173 / 49 MiB |
-| Sparse / 256 | 145.7 / 167.4 | 0.02 / 0.05 | 156.3 / 159.5 | 0.56 / 0.63 | 183 / 76 MiB |
-| Stateful / 1 | 2.25 / 2.95 | 1.65 / 2.04 | 1.98 / 2.11 | 2.04 / 2.12 | 12 / 8 MiB |
+| Shape / chunks | Cell edit | Chunk replace | Peak RSS |
+| --- | --- | --- | --- |
+| Solid / 16 | 1.31 / 1.50 | 1.72 / 1.84 | 28 MiB |
+| Solid / 64 | 1.18 / 1.24 | 1.60 / 1.63 | 98 MiB |
+| Checker / 16 | 3.99 / 4.76 | 4.64 / 4.83 | 49 MiB |
+| Sparse / 256 | 0.02 / 0.05 | 0.56 / 0.63 | 76 MiB |
+| Stateful / 1 | 1.65 / 2.04 | 2.04 / 2.12 | 8 MiB |
 
-Cost now follows the chunk that changed, not the resident world. What remains
-is that chunk's work: a solid 16³ chunk's mesh and collider, or a checker
-chunk's 12,288-quad mesh. A single-chunk scene costs the same as before.
+Cost follows the chunk that changed, not the resident world. What remains is
+that chunk's work: a solid 16³ chunk's mesh and collider, or a checker chunk's
+12,288-quad mesh.
 
 `voxel_edit_scaling` clears 1–123 cells inside one chunk of a 16- or 64-chunk
-world:
-
-| Resident chunks | Before | After |
-| --- | --- | --- |
-| 16 | 12.6–13.1 ms | 0.35–0.39 ms |
-| 64 | 50.6–52.2 ms | 0.38–0.42 ms |
-
-Before also needed a whole-scene clone per call (0.4–1.9 ms). The number of
-cells changed inside one chunk barely matters.
+world. Each call takes 0.35–0.39 ms with 16 resident chunks and 0.38–0.42 ms
+with 64. The number of cells changed inside one chunk barely matters.
 
 ## Memory
 

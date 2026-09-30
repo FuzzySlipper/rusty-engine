@@ -2,8 +2,7 @@
 
 The desktop shell is the primary deployment shape: the runtime process owns a
 native window, `render-wgpu` presents the world to it, and the product's
-TypeScript UI is composited over it. Decision and measurements:
-[evidence #8790](evidence/desktop-shell-8790/README.md).
+TypeScript UI is composited over it.
 
 ## Shape
 
@@ -28,16 +27,14 @@ TypeScript UI is composited over it. Decision and measurements:
   page a `blur` and makes `document.hasFocus()` false, and the input capture
   clears its held input on that `blur`, as in a browser, locked or not.
 - **Video.** `render-wgpu` plays video clips (WebM, VP9 profile 0, decoded
-  in pure Rust by `render-video`) over the whole window, above the UI, as
-  the browser's video element covered the page
-  ([evidence #8791](evidence/video-8791/README.md)). The streaming mode
+  in pure Rust by `render-video`) over the whole window, above the UI. The streaming mode
   draws video into its frames and shows those frames above the page
-  ([architecture](architecture.md#streaming-browser-mode)).
+  ([architecture](architecture.md#runtime-rendered-output)).
 - **Audio.** The runtime plays audio on the output device, video
   soundtracks included, as it does for streamed frames (see
   [recorded audio](recorded-audio.md#device-realization)).
-- **Live debug.** Unchanged: `rusty-live-debug --origin http://127.0.0.1:<port>`
-  reaches the runtime's HTTP host over loopback. `RUSTY_CEF_SWITCHES`
+- **Live debug.** `rusty-live-debug --origin http://127.0.0.1:<port>`
+  reaches the runtime's HTTP host over loopback, as in streaming mode. `RUSTY_CEF_SWITCHES`
   passes Chromium switches (comma-separated `name[=value]`); with
   `remote-debugging-port=<port>` a CDP client such as Playwright attaches
   to the page.
@@ -46,14 +43,13 @@ TypeScript UI is composited over it. Decision and measurements:
 - **Window placement.** The window reopens at its last size, position (where
   the platform reports one; Wayland does not) and maximized state, kept in
   `desktop-window` under the persistence root. A position that no longer falls
-  on a connected monitor is dropped. There is no fullscreen yet; no product
-  has asked for it.
+  on a connected monitor is dropped. There is no fullscreen mode.
   - The saved position is the client area's. A new window's frame goes where
     it is asked to, so once the client area has landed the shell moves the
-    window back by the frame's offset. winit's frame position can't be used:
-    KWin's Xwayland does not reparent windows, and winit then reports the
-    client area as the frame, so the window crept down by its title bar on
-    every run ([evidence #8860](evidence/desktop-pack-8860/README.md)).
+    window back by the frame's offset. winit's frame position is not used:
+    KWin's Xwayland does not reparent windows, so winit reports the client
+    area as the frame and the window would move down by its title bar on
+    every run.
 
 ## Running
 
@@ -69,8 +65,8 @@ RUSTY_RENDER_OUTPUT=window rusty dev --project <product.csproj>
   pair's host built with the `desktop` feature, plus Chromium's runtime.
   - `rusty` checks the pack's checksum, and that its ABI is the pair's.
   - `rusty status` shows whether it is installed.
-  - Pairs published before the desktop pack have none. `rusty update` moves
-    to one that has.
+  - A pair published without a desktop pack fails the window run with
+    `RUSTY_DESKTOP_NOT_PUBLISHED`; `rusty update` moves to a pair that has one.
 - **Publication.** The pair workflow builds the pack from the pair's revision
   (`scripts/build-desktop-runtime-pack-archive.sh`) and publishes
   `rusty-engine-desktop-pack-<version>-linux-x64.tar.xz` with the pair,
@@ -111,7 +107,7 @@ An installer or archive format is chosen when a product asks for one.
 
 - **Linux:** X11 and Wayland, measured. The device is created with the
   DMA-BUF extensions Chromium's frames need. Pointer lock turns at the
-  browser's rate on both ([evidence #8859](evidence/desktop-input-8859/README.md)).
+  browser's rate on both.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than
   grabbing it, because during a grab XInput delivers every raw motion twice.
 - **Windows:** the device prefers DX12, which Chromium's shared textures

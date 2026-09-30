@@ -1,9 +1,0 @@
-> audio.proof.play
-AudioReadout { ActiveVoices = 5, PausedVoices = 0, AdmittedClips = 5, EmittedSignals = 5, RetainedDiagnosticCount = 0, EvictedDiagnosticCount = 0 };realization=AudioRealizationReadout { RetainedFactCount = 0, EvictedFactCount = 0 };facts=
-
-> audio.proof.inspect
-AudioReadout { ActiveVoices = 5, PausedVoices = 0, AdmittedClips = 5, EmittedSignals = 5, RetainedDiagnosticCount = 0, EvictedDiagnosticCount = 0 };realization=AudioRealizationReadout { RetainedFactCount = 6, EvictedFactCount = 0 };facts=AudioRealizationFactAtReceipt { Present = True, Kind = Diagnostic, FactId = 1, Sequence = 4, SignalHandle = 0, VoiceValue = 3, Code = DecodeFailed };AudioRealizationFactAtReceipt { Present = True, Kind = Diagnostic, FactId = 2, Sequence = 5, SignalHandle = 3, VoiceValue = 0, Code = DecodeFailed };AudioRealizationFactAtReceipt { Present = True, Kind = NaturalCompletionOneShot, FactId = 3, Sequence = 1, SignalHandle = 1, VoiceValue = 0, Code = None };AudioRealizationFactAtReceipt { Present = True, Kind = NaturalCompletionOneShot, FactId = 4, Sequence = 3, SignalHandle = 2, VoiceValue = 0, Code = None };AudioRealizationFactAtReceipt { Present = True, Kind = NaturalCompletionOneShot, FactId = 5, Sequence = 7, SignalHandle = 4, VoiceValue = 0, Code = None };AudioRealizationFactAtReceipt { Present = True, Kind = NaturalCompletionOneShot, FactId = 6, Sequence = 9, SignalHandle = 5, VoiceValue = 0, Code = None }
-
-> audio.proof.stop
-audio.proof.stop executed.
-

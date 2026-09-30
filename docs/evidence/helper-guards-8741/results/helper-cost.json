@@ -1,5 +1,0 @@
-{"before":[
-{"inventoryGrantUs":3494.4,"inventoryEditUs":3492.3,"entityBatchUs":758.1,"owners":2000,"stacksPerOwner":10,"entities":5000},
-{"inventoryGrantUs":3529.9,"inventoryEditUs":3617.1,"entityBatchUs":787.3,"owners":2000,"stacksPerOwner":10,"entities":5000}],"after":[
-{"inventoryGrantUs":6.9,"inventoryEditUs":52.9,"entityBatchUs":2.3,"owners":2000,"stacksPerOwner":10,"entities":5000},
-{"inventoryGrantUs":6.8,"inventoryEditUs":54.9,"entityBatchUs":2.2,"owners":2000,"stacksPerOwner":10,"entities":5000}]}

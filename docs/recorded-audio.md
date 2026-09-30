@@ -1,7 +1,8 @@
 # Recorded audio containers
 
-`Audio.OpenClip`, `OpenClipFromContent`, and `PreloadOptional` use the same
-Engine container admission. No new C# request or playback handle is needed.
+`Audio.OpenClip`, `OpenClipFromContent`, and `PreloadOptional` share one
+Engine container admission. Every container uses the same C# requests and
+playback handles.
 
 | Bytes / identification | Extension | MIME | Device decoding |
 | --- | --- | --- | --- |
@@ -13,10 +14,11 @@ Engine container admission. No new C# request or playback handle is needed.
 
 Bytes select the container; the resource path must use its matching extension.
 Ogg video and AAC/M4A are not admitted. This is container identification, not a
-second codec validator: a corrupt payload produces a host `decodeFailed`
-diagnostic. Unknown container bytes fail at admission with
-`CSHARP_AUDIO_RESOURCE_CONTAINER`, naming the admitted policy. Both Rust
-compositions share `render_model::AudioContainer`.
+second codec validator: a corrupt payload produces a `DecodeFailed` realization
+diagnostic from the device. Unknown container bytes fail at admission with
+`CSHARP_AUDIO_RESOURCE_CONTAINER`, naming the admitted containers. Admission
+(`csharp-engine-services`) and the device (`render-audio`) share
+`render_model::AudioContainer`.
 
 ## Memory and execution
 
@@ -59,8 +61,8 @@ output gain. Its output matches libopus for the fixtures, and seeks decode
 primary view in the committed view composition, and an entity-attached voice
 follows the committed graphics node published for its entity
 (`source_entity`, as `EntityGraphicsProjection` publishes it) plus its offset.
-An entity with no published node reports `hostFailure`. Spatial voices use
-kira's linear distance falloff between 1 and `attenuation`.
+An entity with no published node reports `HostFailure`. Spatial voices use
+kira's linear distance falloff from `min(1, attenuation / 2)` to `attenuation`.
 
 See [fixture provenance](../fixtures/audio-containers/README.md). Product code
 chooses tracks, loops, crossfades and music policy.

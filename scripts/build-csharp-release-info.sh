@@ -7,8 +7,9 @@ set -euo pipefail
 #   release-notes.md  pair identities, authored migration notes, API changes
 #   release-info.json the fields publish-csharp-release-pair.sh adds to
 #                     pair-release.json
-# Authored notes are the "## Migration" sections of docs/evidence/*/README.md
-# that changed between the previous pair's revision and this one.
+# Authored notes are the "Migration:" sections of the commit messages between
+# the previous pair's revision and this one: everything after a line that is
+# exactly "Migration:" to the end of the message.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
@@ -87,23 +88,24 @@ fi
     printf 'Authored notes cover behaviour, lifecycle and default changes that a\nsignature diff cannot show.\n\n'
     found=0
     if [[ -n "$previous" ]]; then
-        if git -C "$repo_root" cat-file -e "$previous_revision^{commit}" 2>/dev/null \
-            || git -C "$repo_root" fetch --quiet --depth=1 origin "$previous_revision" 2>/dev/null; then
-            section() { awk '/^## Migration[[:space:]]*$/{p=1;next} /^## /{p=0} p'; }
-            while IFS= read -r readme; do
-                current=$(git -C "$repo_root" show "$revision:$readme" 2>/dev/null | section || true)
-                before=$(git -C "$repo_root" show "$previous_revision:$readme" 2>/dev/null | section || true)
-                [[ -n "${current//[[:space:]]/}" && "$current" != "$before" ]] || continue
+        if git -C "$repo_root" merge-base --is-ancestor "$previous_revision" "$revision" 2>/dev/null; then
+            while IFS= read -r -d $'\x1e' entry; do
+                entry=${entry#$'\n'}
+                commit=${entry%%$'\x1f'*}
+                entry=${entry#*$'\x1f'}
+                subject=${entry%%$'\x1f'*}
+                note=$(awk '/^Migration:[[:space:]]*$/{p=1;next} p' <<<"${entry#*$'\x1f'}")
+                [[ -n "${note//[[:space:]]/}" ]] || continue
                 found=1
-                printf '### %s\n\nFrom [`%s`](https://github.com/FuzzySlipper/rusty-engine/blob/%s/%s).\n%s\n\n' \
-                    "$(basename -- "$(dirname -- "$readme")")" "$readme" "$revision" "$readme" "$current"
-            done < <(git -C "$repo_root" diff --name-only "$previous_revision" "$revision" -- 'docs/evidence/*/README.md')
+                printf '### %s\n\nFrom [`%s`](https://github.com/FuzzySlipper/rusty-engine/commit/%s).\n\n%s\n\n' \
+                    "$subject" "${commit:0:12}" "$commit" "$note"
+            done < <(git -C "$repo_root" log --reverse --format='%H%x1f%s%x1f%b%x1e' "$previous_revision..$revision")
             ((found)) || printf 'None were added since the previous pair.\n\n'
         else
-            printf 'The previous pair'"'"'s revision is not in this repository'"'"'s history, so\nnotes since it cannot be collected. Check `docs/evidence/*/README.md`.\n\n'
+            printf 'The previous pair'"'"'s revision is not an ancestor of this one in this\ncheckout, so notes since it cannot be collected. Read the `Migration:`\nsections of the commit messages between the two revisions.\n\n'
         fi
     else
-        printf 'No baseline pair; see the `## Migration` sections in `docs/evidence/*/README.md`.\n\n'
+        printf 'No baseline pair, so there are no migration notes.\n\n'
     fi
     printf '## Public API changes\n\n'
     printf 'Generated from the public `Rusty.Engine` assembly surface. It shows signatures\nonly, not behaviour.\n\n'

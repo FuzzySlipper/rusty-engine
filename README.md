@@ -45,9 +45,12 @@ the normal development command is:
 
 `rusty dev` builds and incrementally stages a loose Product bundle, starts it
 through CoreCLR, and restarts it when declared C#, UI, or content inputs change.
-The runtime pack supplies the Engine host and browser assets; a Product bundle
+The runtime pack supplies the Engine host and browser shell; a Product bundle
 contains only managed Product output, Product UI, Product content, and
-`product.json`.
+`product.json`. The runtime renders the world with `render-wgpu` and streams
+frames to the browser shell; `RUSTY_RENDER_OUTPUT=window` presents to a native
+[desktop window](docs/desktop-shell.md) instead. Audio plays on the runtime's
+output device.
 
 The SDK package and runtime pack must describe the same generated ABI identity.
 The bind rejects a mismatch with a rebuild/select-the-matching-pack diagnostic;

@@ -1,1 +1,0 @@
-{"mode":"canvas","seconds":10.0,"rendered_fps":25.0,"render_ms_avg":5.51,"readback_ms_avg":5.77,"raf_per_s":[21, 28, 53, 51, 47, 38, 35, 55],"shown_per_s":[5, 11, 12, 10, 10, 13, 11, 16],"latency_ms_p50":136.3,"latency_ms_p95":224.8,"page_loaded_ms":Some(1485.563081),"events":[]}

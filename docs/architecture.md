@@ -3,27 +3,6 @@
 Rusty Engine hosts an ordinary C# product. The product decides game
 meaning; the Engine guarantees reusable mechanisms and integration.
 
-## Campaign #8723: authority and reading this document
-
-The September architecture reset authorizes removal of the validation, replay,
-transaction, and recovery framework within its child tasks. The owner's current
-direction and task scope take precedence over preservation language in this
-document and linked guides. See [AGENTS.md](../AGENTS.md#architecture-reset--campaign-8723)
-and Den document `rusty-engine/architecture-reset-2026-09`.
-
-Descriptions below identify current source owners and behavior.
-Exact-revision preconditions, replay restrictions, receipts, and fresh-baseline
-recovery are all subject to removal.
-They are not acceptance requirements for their replacements. The same applies
-to existing validators, caps, leases, copies, and generation tools.
-
-Start with a runnable removal experiment where the task is exploratory. Add
-back only the smallest mechanism justified by an observed failure or concrete
-required behavior. Old tests and contracts alone do not justify preservation;
-change them with the behavior. Product/Engine ownership and actual ABI/layout/
-lifetime correctness still apply. Keep this document truthful about what has
-landed, and distinguish experimental results from production behavior.
-
 ## Ownership flow
 
 ```text
@@ -40,7 +19,8 @@ Rusty.Engine native bridge and C ABI function table
 Rust Engine services and runtime host
   │  lifecycle, input, renderer, spatial mechanisms, content, persistence
   ▼
-browser/host implementation and DOM UI
+render-wgpu frames: a native desktop window, or streamed to a browser page,
+with the product's TypeScript DOM UI over them
 ```
 
 The arrows describe a cooperation boundary, not a hierarchy of game authority.
@@ -58,8 +38,9 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | wgpu realization | Rust | [`render-wgpu`](../rust/crates/render-wgpu) applies `PresentationWorld` deltas to typed GPU tables and renders offscreen (with readback) or to a window surface. It is the only crate that may depend on wgpu. Its node table is a derived GPU-side twin, not a second retained world. It holds only what encoding a view and picking need, it is crate-private, and no other crate reads it. It propagates world matrices itself because joint attachments follow poses only it evaluates; other consumers take positions from `PresentationWorld::entity_world_position` (#8848). The runtime drives it for the streamed frames and the desktop window (below); it is the only renderer (#8792). |
 | Animated mesh glTF | Rust | The retained model keeps admitted GLB bytes (`animated-mesh-resource/…`, `clip-pack-resource/…`). [`asset-import`](../rust/crates/asset-import), run by the services at open, owns admission and every Engine-visible fact: clip ids, names and declared durations; the rig signature (joint identity is a skin joint's unique node name) and clip-pack compatibility; material slots; bounds. [`render-wgpu`](../rust/crates/render-wgpu) `glb.rs` reads the admitted bytes only to realize them: streams, skins, keyframes, materials, textures. Playback timing and completion come from its decoded keyframes, and nothing else reads the declared durations. It adds no admission rule, and it binds clips and clip-pack channels by the identities `asset-import` defined (#8847). |
 | Math vocabulary | Rust | Engine value types are plain arrays and the small f32 [`core-math`](../rust/crates/core-math) types. World-space spatial work is f64 and uses nalgebra through parry and rapier inside `svc-collision` and `svc-implicit`. glam is private to `render-wgpu`, which needs f32 column-major matrices for GPU rows, and `scripts/dependency_boundary_check.py` refuses it anywhere else. Conversions between Engine arrays and glam go only through `render-wgpu/src/convert.rs` (#8846). |
+| Desktop window | Rust | [`desktop-shell`](../rust/crates/desktop-shell) opens the native window, presents `render-wgpu` to its surface, and composites the product UI rendered by Chromium (CEF) over it. See [desktop shell](desktop-shell.md). |
 | Streamed frames | Rust | [`render-stream`](../rust/crates/render-stream) owns the runtime's `render-wgpu` renderer: it applies each committed call's publications, draws offscreen on its own thread, and JPEG-encodes frames (the only crate that may depend on the encoder). `product-dev-host` serves them at `/__rusty/product/runtime/frames`. |
-| Session serialization and recovery facts | Rust | `runtime-session` currently owns the runtime guard, receipts, prepared replacement, and recovery vocabulary; `product-dev-host` adapts them to transport. Campaign #8723 may collapse or remove these layers. |
+| Runtime serialization | Rust | `runtime-session` is a mutex around one runtime instance. `product-dev-host` holds it so a runtime call and its output handover happen in one ordered scope. |
 | Runtime publications | Rust | `runtime-publication` carries typed graphics, presentation, UI, and baseline facts. The runtime's renderer and audio output apply them in process; the host sends the browser shell only its binding, baseline markers and UI projections. Input acknowledgements and the runtime readout remain host observations. |
 | Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
@@ -145,10 +126,6 @@ The Engine fixtures exercise provider generation, ABI, lifecycle, and both
 loaders. They are not downstream product architecture or launch templates.
 
 ## Reconstructible presentation
-
-This section describes the current implementation. Its transport ordering,
-revision checks, and recovery paths are starting points for campaign
-experiments, not requirements to reproduce in a simpler design.
 
 C# selects presentation facts through named services. Rust commits the
 resulting graphics intent into `PresentationWorld`, and `render-wgpu` realizes
@@ -273,8 +250,6 @@ the [desktop shell](desktop-shell.md)'s native window
   attached page sees them. Held simulation time is the runtime's own. Nothing
   asks for a renderer pick.
 
-Measured costs and the encoding decision: `docs/evidence/streaming-8786/`.
-
 The public C# service is `Graphics`; `Appearance` remains a resource/fact name.
 Facts can form a hierarchy, so equipment and layered visuals compose with
 ordinary resources rather than feature-specific ABI calls.
@@ -291,7 +266,9 @@ resource release removes its canonical definition and GPU realization.
 
 The Engine publishes two matched artifacts: an immutable `Rusty.Engine` SDK
 package and a runtime pack containing `rusty`, `rusty-product-host`, and the
-Engine-owned browser shell. The package makes the product project build its
+Engine-owned browser shell. A desktop runtime pack with the same ABI adds the
+window host and Chromium's runtime; `rusty` fetches it on first use of window
+output ([distribution](csharp-distribution.md)). The package makes the product project build its
 own bind export and stages a loose Product directory from that build. `rusty dev` asks the package to stage that
 directory, launches CoreCLR, and watches only the declared Product inputs.
 

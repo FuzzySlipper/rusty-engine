@@ -5,7 +5,7 @@
 Rusty Engine's current downstream lane is ordinary C#. CoreCLR through the
 packaged SDK and `rusty dev` is the normal development path; NativeAOT is a
 separate fidelity/release path. The paired
-proving product is `/home/dev/rusty-dagger`.
+proving product is `/home/agent/dev/rusty-dagger`.
 
 > The product decides. The Engine guarantees.
 
@@ -25,32 +25,18 @@ proving product is `/home/dev/rusty-dagger`.
 Read [the architecture overview](docs/architecture.md) and
 [the C# SDK guide](docs/csharp-sdk.md) before changing this boundary.
 
-## Architecture reset — campaign #8723
+## Keeping mechanisms small
 
-For campaign #8723 and its children, the owner's removal-first direction and
-the current task take precedence over preservation language in this file,
-architecture/SDK guides, historical task contracts, comments, and tests. Read
-Den document `rusty-engine/architecture-reset-2026-09` for the campaign charter.
-
-- Start by removing the mechanism under investigation. The owner explicitly
-  accepts over-removal in bounded experiments, followed by the smallest
-  additions that observed failures require.
-- Callback candidates/discard, taint and respawn, exact-revision guards,
-  replay prohibitions and receipts, fresh-baseline recovery, validation layers,
-  policy caps, leases, and the current generation pipeline are eligible for
-  replacement or deletion within the owning task. They are current mechanisms,
-  not architectural requirements to preserve.
-- A retained or restored mechanism needs a concrete failure or required
-  behavior, its smallest remedy, and a reason for its cost at that frequency.
-  Existing code, documentation, or tests alone do not supply that reason.
-  Remove or rewrite tests whose purpose disappears with the mechanism.
-- Keep product/Engine ownership and actual ABI layout, pointer lifetime, and
-  resource ownership correct. These do not require a particular transaction,
-  copying, lease, validation, or recovery design.
-- Implementation children deliver their named changes. Exploration children
-  deliver runnable removal experiments and supported decisions, including
-  honest failed experiments. Update descriptions of the implementation as
-  changes land; do not claim a proposed replacement already exists.
+- A mechanism earns its place with a concrete failure or required behavior,
+  the smallest remedy for it, and a reason its cost fits how often it runs.
+  Existing code, documentation or tests alone are not that reason. Remove or
+  rewrite tests whose purpose goes with a mechanism.
+- To find out whether a mechanism is needed, start by removing it.
+  Over-removal in a bounded experiment is acceptable; add back the smallest
+  thing an observed failure requires.
+- Keep product/Engine ownership, ABI layout, pointer lifetime and resource
+  ownership correct. These do not require a particular transaction, copying,
+  lease, validation or recovery design.
 
 ## Den and missing capabilities
 
@@ -93,9 +79,11 @@ Den document `rusty-engine/architecture-reset-2026-09` for the campaign charter.
   consume the immutable SDK package and must not handwrite P/Invoke, exported
   entrypoints, unsafe native calls, parallel declarations, or checked
   composition projects.
-- A matching runtime pack owns the Rust host and browser shell. `rusty dev`
-  stages the loose Product bundle and uses CoreCLR. Products do not copy Engine
-  browser assets or invoke Cargo to host themselves.
+- A matching runtime pack owns the Rust host, its renderer and the browser
+  shell; the matching desktop pack adds the native window host and Chromium's
+  runtime. `rusty dev` stages the loose Product bundle and uses CoreCLR.
+  Products do not copy Engine browser assets or invoke Cargo to host
+  themselves.
 - Engine source use must be an explicit contributor override. Never teach
   adjacent-checkout discovery as ordinary downstream setup.
 - Add coherent named Engine capabilities to the Rust function table and the
@@ -104,8 +92,7 @@ Den document `rusty-engine/architecture-reset-2026-09` for the campaign charter.
 - The boundary handles actual ABI/lifetime concerns only: layout,
   pointer/length coherence, valid ownership of retained data, no unwind across
   ABI, and exact release of owned resources. Copy only when the chosen lifetime
-  requires it. Service checks need a concrete behavior or representation reason
-  under the campaign's removal-first direction.
+  requires it. Service checks need a concrete behavior or representation reason.
 
 ## Rendering and TypeScript
 
@@ -202,3 +189,9 @@ not evidence that physical picking works. Keep product action rules downstream.
 The intentionally small documentation set is rooted in current source, not in
 the superseded corpus preserved in Git history. Keep it concise and truthful;
 use history as donor material only. Start at [docs/README.md](docs/README.md).
+
+The repository describes current state only. Task evidence, reviews,
+measurements and campaign history do not stay in the repo: delete a page once
+it only records history, and move anything worth keeping to a Den document or
+board post. Pair migration notes go in the commit message
+([how](docs/csharp-distribution.md)).

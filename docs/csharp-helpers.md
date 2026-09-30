@@ -1,27 +1,26 @@
 # C# managed helpers
 
-Optional managed helper packages, ordinary numeric stats and resource tracks. Entry page: [C# SDK guide](csharp-sdk.md).
+Optional managed helpers, entity and inventory stores, ordinary numeric stats and resource tracks. Entry page: [C# SDK guide](csharp-sdk.md).
 
-## Optional managed helper packages
+## Optional managed helpers
 
-These packages are current reusable helpers, not required product framework
-pieces:
+These namespaces are reusable helpers compiled into `Rusty.Engine`, not
+required product framework pieces:
 
-| Package | Current role |
+| Namespace | Role |
 | --- | --- |
-| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, scoped value edits, and managed adapters around Engine mechanisms, compiled into `Rusty.Engine`. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product-state codecs and stores for the current shape, compiled into `Rusty.Engine`. No product schema versions or migrations: breaking the shape breaks old saves by product choice. |
+| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Ordinary class/value component storage, `EntityBatch` grouped writes, and managed adapters around Engine mechanisms. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product-state codecs and stores for the current shape. There are no product schema versions or migrations: changing the shape breaks old saves, by product choice. |
 
 Use a helper when it fits the product's real domain. A product may compose its
-own ordinary C# architecture instead. None of these packages implies a hidden
-`ProductApplication`, `ProductBuilder`, `IProductModule`, analyzer suite,
-typed-content framework, or projection framework: those names are not current
-SDK APIs.
+own ordinary C# architecture instead. The SDK has no `ProductApplication`,
+`ProductBuilder`, `IProductModule`, analyzer suite, typed-content framework,
+or projection framework.
 
 Product- and Kit-owned typed services with meaningful rule-resolution extension points
 are ordinary C# composition, not Engine framework extension: the Engine ships no gameplay
-bus, plugin registry, or RPG rules, and Read → Decide → Apply → Publish remains a
+bus, plugin registry, or RPG rules, and Read → Decide → Apply → Publish is a
 product-style option (see [C# product style](csharp-product-style.md)), never an Engine
 protocol.
 
@@ -33,34 +32,16 @@ to their owning stores. The entity adapters read those facts and call named
 Engine mechanisms; they do not create another entity world or own native
 resources supplied by the caller.
 
-The completed naming migration is source-breaking (the left column is historical):
-
-| Previous name | Current name / responsibility |
-| --- | --- |
-| `EntityWorld` | `EntityStore` — managed entity/component storage |
-| `InventoryWorld` | `InventoryStore` — inventory/item/equipment storage |
-| `InventoryWorldCandidate` | `InventoryEdit` — grouped inventory edit |
-| `AppearanceEntityWorld` | `EntityGraphicsProjection` |
-| `SpatialEntityWorld` | `EntityTriggerProjection` |
-| `MotionEntityWorld` | `EntityMotionResolver` |
-| `KinematicEntityWorld` | `EntityKinematicMotion` |
-| `CharacterEntityWorld` | `EntityCharacterController` |
-| `DynamicsEntityWorld` | `EntityDynamicsAdapter` |
-| `WorldOriginEntityWorld` | `EntityOriginRebaser` |
-| `EntityWorldDebug*` | `EntityStoreDebug*` — module, selector, projection and debug snapshot types |
-| `EntityWorldDiagnostics` | `EntityStoreDiagnostics` |
-| `PhysicsWorld` (C# configuration) | `PhysicsSettings` |
-
-Adapter receipts follow their owning adapter name; adapters take no guards.
+Adapter receipts follow their owning adapter name.
 `InventoryView.StoreRevision` identifies the whole inventory
-store revision; its existing `InventoryRevision` identifies the individual owner
+store revision; its `InventoryRevision` identifies the individual owner
 inventory revision. Item receipts use `InventoryRevisionBefore` and
 `InventoryRevisionAfter`. Debug registration uses
 `RegisterStore`, `ReplaceStore` and `UnregisterStore`; `entity.stores` lists
 registrations and debug output identifies them with `store=` / `stores=`.
 
-`DynamicsWorld` remains a disposable native simulation owner. `WorldOrigin`
-continues to mean the spatial coordinate origin. Neither is a managed entity
+`DynamicsWorld` is a disposable native simulation owner. `WorldOrigin` is the
+spatial coordinate origin. Neither is a managed entity
 store. `EntityOriginRebaser.Prepare` computes each root's local transform in
 the target frame from its global position; `Commit` moves the origin and
 rebases the live collision scene. Voxel or collision edits made between the
@@ -72,14 +53,7 @@ values. A product that holds character motion itself applies
 on a support carries the character back by the whole origin delta, a fixed
 tether re-attaches at full length, and a landing measures its fall from the old
 peak. Local-frame values the product passes in each step (a fixed tether
-anchor, support and obstacle transforms) move by the same `LocalDelta`. The Rust spatial implementation's internal physics type is unchanged.
-
-`EntityStore` now accepts ordinary classes and value components in the same
-store. Unused whole-store snapshot/restore, callback mutation batches, component
-copy codecs and entity-persistence wrappers have been retired.
-Use one exact SDK/runtime pair per [distribution](csharp-distribution.md);
-do not combine a renamed SDK with a previously published runtime merely
-because layouts look similar.
+anchor, support and obstacle transforms) move by the same `LocalDelta`.
 
 ### Ordinary component attachment
 
@@ -121,10 +95,10 @@ unless `includeDisabled: true`; two-family `Query<TFirst, TSecond>` joins use th
 same rules. Use the store at the product's normal execution boundary, not as a
 concurrent object database.
 
-Useful value facts remain structs. `Set(entity, value)` explicitly inserts or
+Useful value facts are structs. `Set(entity, value)` explicitly inserts or
 replaces a struct; `Add`/`Replace` also work for them. Value reads are ordinary C#
 copies, so nested references are shared unless the product explicitly copies
-them. Prefer a class for mutable reference-bearing state. Existing registered
+them. Prefer a class for mutable reference-bearing state. Registered
 `ComponentType<T>` descriptors and generic access address the same family, not
 parallel storage. A descriptor can be registered after generic attachment; a
 second explicit descriptor for that same `T` is rejected. Descriptor keys used
@@ -163,11 +137,9 @@ actors compose their own small wrappers holding an `Actor` rather than inheritin
 ### Explicit edits and persistence
 
 Ordinary access never deep-copies components. Direct gameplay methods need no
-transaction session or receipt graph. The unused `Rusty.Engine.Resolution`
-module has been removed; optional Application and StateMachine helpers remain.
+transaction session or receipt graph.
 
-Every `EntityStore` write applies directly; there are no expected-revision
-guards. `EntityStore.Revision` and the entity and component revisions are change
+Every `EntityStore` write applies directly. `EntityStore.Revision` and the entity and component revisions are change
 counters you may read to skip work. `EntityBatch.Set` and `EntityBatch.Create`
 list several writes, and `EntityStore.Commit(batch)` applies them in order and
 returns the store revision before and after. A failing write leaves the earlier
@@ -185,7 +157,7 @@ changed directly after the edit began, so that change is never lost.
 
 Explicit saves use `ProductStateStore<T>` with a product-defined codec and data.
 The product decides what to capture, validates/rebuilds a candidate when needed,
-and adopts it. Bounded debug snapshots remain observations, not live state owners.
+and adopts it. Bounded debug snapshots are observations, not live state owners.
 
 ## Ordinary numeric stats
 
@@ -231,9 +203,8 @@ ordinary `AddModifier` needs no source identities or operation records. Local
 modifiers keep insertion order and precede authored contributions within each
 operation phase. Modifier handles are local to their creating stat.
 
-Inventory quantities, capacity and entity identities remain checked integers and
-do not pass through floating-point stats. The old Exact/Continuous stat and track
-families have been retired.
+Inventory quantities, capacity and entity identities are checked integers and
+do not pass through floating-point stats.
 
 ## Resource tracks
 
@@ -268,8 +239,8 @@ abandoned tracks do not keep imposing their minimum or require disposal.
 Track quantization/rounding and integer conversion are constructor policies,
 independent of its maximum's policies. Use `quantum: 1` and explicit rounding for
 whole-number rules. Endpoints remain reachable even off the grid. Changing Minimum
-validates first and clamps current as needed. Direct operations need no revision,
-receipt object, candidate or publish step.
+validates first and clamps current as needed. Direct operations apply
+immediately.
 
 For an actual preview, `Stat.Copy()` creates independent numeric state without
 copying dependent tracks. A product can construct a new Track around that copy,

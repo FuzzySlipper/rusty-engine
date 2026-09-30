@@ -2,8 +2,6 @@
 
 Entry page: [C# SDK guide](csharp-sdk.md).
 
-## Offline images and GLB export
-
 `engine.RenderOutput` owns asynchronous output from the current retained
 appearance snapshot. `CaptureImage` and `ExportSceneGlb` select a product
 `AppearanceFact.ObjectId`, including its descendants and ancestor transforms.
@@ -32,10 +30,11 @@ if (engine.RenderOutput.Read(image).State == RenderOutputState.Completed)
 Image dimensions are independent of the window. The result is a top-to-bottom
 8-bit sRGB RGBA PNG with straight alpha. Clear colors use linear RGB;
 `UseCameraBackground` instead selects the current `CameraView` sky/color.
-Existing retained lights, material assignments, camera framing and projection
-remain Engine inputs. Exposure, no tone mapping/ACES, and multisample count are
+Retained lights, material assignments, camera framing and projection are
+Engine inputs. Exposure, no tone mapping/ACES, and multisample count are
 explicit capture choices; a sample count above 1 supersamples. Dimensions
-beyond the device's texture limit fail with a diagnostic. A zero `PoseObjectId` keeps the frozen pose; a nonzero object
+beyond the device's texture limit fail with a diagnostic. A zero
+`PoseObjectId` keeps the frozen pose; a nonzero object
 selects an exact normalized clip time in `[0,1]`, including the final pose,
 without advancing the live animation or wall clock.
 

@@ -42,6 +42,10 @@ jobs:
     steps:
       - name: Check out Rusty Engine
         uses: actions/checkout@v4
+        with:
+          # Release notes read commit messages back to the previous pair.
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Skip an already published revision
         id: published

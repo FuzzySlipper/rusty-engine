@@ -1,5 +1,0 @@
-binding {"controlRevision":"1","generation":"1","instanceId":"460531"}
-{"accepted":true,"code":"DEV_HOST_INPUT_QUEUED","disposition":"accepted","count":1,"acceptedCount":1,"droppedCount":0}
-t=0s mode=Title step=303
-timeout
-drawn: {"available":false,"presentation":null}

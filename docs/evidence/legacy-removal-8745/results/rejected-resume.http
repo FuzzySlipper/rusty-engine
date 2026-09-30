@@ -1,9 +1,0 @@
-HTTP/1.1 200 OK
-Content-Type: application/json
-Content-Length: 183
-X-Rusty-Commit-Disposition: not-applied
-Cache-Control: no-store
-X-Content-Type-Options: nosniff
-Connection: close
-
-{"accepted":false,"code":"CSHARP_CONTROL_BINDING","disposition":"rejected-recoverable","operation":"resume","diagnostic":"lifecycle control does not name the current runtime binding"}

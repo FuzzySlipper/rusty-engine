@@ -3,8 +3,8 @@
 The packaged Rust host loads ordinary CoreCLR. Standard .NET diagnostics attach
 to its **runtime process**, whose executable is named `rusty-product-host`, not
 `dotnet`. The `rusty dev` process and the supervisor that starts the runtime do
-not run product C#. A browser on another LAN machine does not change this: run the
-managed tools on the Linux runtime machine, as the user running the product.
+not run product C#. Run the managed tools on the machine that runs the runtime,
+as the user running the product.
 
 ## Find the current runtime process
 
@@ -22,10 +22,10 @@ The Linux helper checks the live runtime arguments, loaded CoreCLR, and default
 Unix diagnostic socket. It returns `pid`, `parentPid`, `productDirectory`, and
 `diagnosticPort`. Use `--product /exact/staged/Product` for custom staging, or
 add `--pid N` to select among multiple matching sessions. No match or ambiguity
-is an error. It reads live processes, not persisted den-serve records.
+is an error. It reads live processes through `/proc`, not saved records.
 
-Rediscover after every source restage, runtime restart, `rusty dev` restart,
-or den-serve restart. Both PID and socket can change. The helper is optional
+Rediscover after every source restage, runtime restart, or `rusty dev`
+restart. Both PID and socket can change. The helper is optional
 contributor tooling, not a Python dependency of the SDK/runtime pack.
 `dotnet-trace ps` is also useful, but may fail while enumerating unrelated
 processes; explicit runtime selection avoids that enumeration path.
@@ -61,7 +61,7 @@ thread time includes waits; its percentages are **not CPU utilization**. Use
 `dotnet.process.cpu.time` counters alongside allocation, collection, heap, and
 GC pause counters. Rates and per-generation collection counts must be interpreted
 with their reported units. These captures help separate expensive C# callbacks
-from allocation pressure; they do not attribute native Rust or browser GPU time.
+from allocation pressure; they do not attribute native Rust or GPU time.
 For actual native/kernel CPU stacks, use a native profiler or the separately
 supported `dotnet-trace collect-linux` route and its OS requirements.
 
@@ -84,7 +84,7 @@ the session. Source restaging still replaces the runtime, and stopping the
 session still stops it, even while it is loading at a breakpoint. A runtime
 that does not stop within ten seconds is killed, so avoid editing while
 inspecting a paused callback, and rediscover before attaching again. `--live-debug`
-controls the Engine browser diagnostic console; it does not enable managed
+enables the Engine live-debug command surface; it does not enable managed
 breakpoints.
 
 Build the product in Debug with portable PDBs and matching source. For reliable
@@ -116,10 +116,9 @@ remote editor and run its managed debugger adapter there. A C# extension's
 [CoreCLR attach configuration](https://code.visualstudio.com/docs/csharp/debugging)
 uses `"type": "coreclr"`, `"request": "attach"`, and the discovered runtime PID
 as `"processId"`. Select the native-named runtime process explicitly. Source paths must
-match its PDB, or be mapped by the debugger. The editor UI can be on Windows;
-there is no need to expose a debugger port through the LAN browser host. The
-Engine proof used netcoredbg's DAP adapter over local stdio, not a VS Code UI
-certification.
+match its PDB, or be mapped by the debugger. The debugger adapter runs beside
+the runtime, so no debugger port needs to be exposed. netcoredbg's DAP adapter
+over local stdio is the tested path; editor UIs are not individually tested.
 
 ### Suspend before managed startup
 
@@ -135,7 +134,7 @@ DOTNET_DefaultDiagnosticPortSuspend=1 /path/to/runtime-pack/bin/rusty-product-ho
   --runtime-instance-id 1 --debugger
 ```
 
-Keep that terminal's stdin open. In another SSH terminal, discover the runtime
+Keep that terminal's stdin open. In another terminal, discover the runtime
 and start `dotnet-trace collect --process-id "$managed_pid" ...`; its normal
 resume behavior releases diagnostic startup suspension. Until managed startup
 finishes, the listener answers 503. Diagnostic startup suspension

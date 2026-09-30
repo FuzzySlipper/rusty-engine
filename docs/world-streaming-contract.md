@@ -1,13 +1,13 @@
 # World streaming and state contract
 
-These capabilities are implemented through the ordinary generated C# SDK.
-Authorized Engine work does not require an identified or already-running
-consumer; Engine fixtures can prove capabilities while a product is in development.
+These capabilities are part of the ordinary generated C# SDK. The packaged
+[`csharp-world-streaming`](../fixtures/csharp-world-streaming/README.md)
+fixture exercises them.
 
 ## Movement modes (#8609)
 
 Set `CharacterControllerCommand.Movement` when calling
-`Spatial.ProposeCharacterStep`. Walking (the default) retains the existing
+`Spatial.ProposeCharacterStep`. Walking (the default) is the ordinary
 walking/airborne, jump, stance, step, slope, platform and tether behavior.
 Swimming, climbing and flying use that same collision sweep and contact solver;
 products publish the returned transform and motion through their ordinary state.
@@ -34,8 +34,8 @@ products publish the returned transform and motion through their ordinary state.
 `HeadSubmerged`, climb attachment and endpoint facts at the accepted position.
 Products own breath timers, drowning consequences, stamina, animations and
 selection among overlapping volumes/rails. These facts are not a breathing timer.
-The request is copied for the call and must be supplied on each step; no second
-simulation clock or retained environment registry is introduced.
+The request is read during the call and must be supplied on each step; the
+Engine keeps no environment registry and no second simulation clock.
 See [movement source](../rust/crates/engine-spatial/src/character_modes.rs) and
 [solver tests](../rust/crates/engine-spatial/tests/character_modes.rs).
 
@@ -69,8 +69,8 @@ Dense C# state input costs four extra bytes per cell when provided; it is option
 for default-state chunks. Rust in-memory layout and full scene/mesh costs are
 reported by the [budget probe](voxel-budgets.md). Varying states can prevent greedy
 merging, so state diversity affects geometry cost even for a solid volume.
-Rich inventories, articulated doors and behavior still belong to product objects;
-ordinary blocks no longer require an entity merely to retain orientation/stage.
+Rich inventories, articulated doors and behavior belong to product objects;
+an ordinary block keeps its orientation and stage without an entity.
 
 ## Engine call affinity (#8611)
 
@@ -88,9 +88,9 @@ thread ID or an installed `SynchronizationContext`. Host operations share the
 lock does not protect arbitrary product worker calls into native function
 pointers. The [spatial bridge](../rust/crates/csharp-engine-services/src/spatial.rs)
 contains mutable native state and `Rc<RefCell<...>>`; generated wrappers do not
-marshal worker calls. Both CoreCLR and NativeAOT use this contract. No extra
-locking, thread negotiation or defensive dispatch has been added for trusted
-product code.
+marshal worker calls. Both CoreCLR and NativeAOT use this contract. Product
+code is trusted, so there is no extra locking, thread negotiation or defensive
+dispatch.
 
 `SimulationScheduler.Advance` executes callbacks synchronously on the caller's
 admitted update path. It does not start workers, preempt expensive work or make
@@ -98,8 +98,8 @@ an Engine call asynchronous. Split work into bounded pieces before scheduling
 it. ApplyResidency blocks until it returns; it rebuilds only the changed chunks.
 
 Pure product computation may run on product-owned workers using **copied,
-product-owned values only**, without Engine services, retained leases, mutable
-product authority or `EntityStore` access. Transfer results through a bounded
+product-owned values only**, without Engine services, mutable product authority
+or `EntityStore` access. Transfer results through a bounded
 mailbox and admit them in a later Update. Tag results with product generation
 and chunk revision, discard stale work, and cancel/drain on restart/disposal.
 Do not await a worker that needs a callback-held Engine operation. This is
@@ -111,12 +111,12 @@ clock. Content/persistence service calls still belong on the callback lane.
 `Voxel.ApplyResidency` admits, replaces and evicts whole chunks, and
 `Voxel.ApplyEdits` changes cells. Both write into the live scene and rebuild
 only the changed chunks' meshes and colliders and the affected navigation cells.
-Neither takes an expected revision or content hash. Admitting an identical chunk
+Admitting an identical chunk
 or evicting a non-resident one is a no-op; a batch that changes nothing returns
 a receipt with zero changes, and an edit batch returns `NoChanges`.
 
-There is no Engine undo history or chunk lease. The product owns undo: it
-applies inverse edits. It also owns which chunks stay resident. The costs are in
+The Engine keeps no undo history. The product owns undo: it applies inverse
+edits. It also owns which chunks stay resident. The costs are in
 [the voxel budgets](voxel-budgets.md); admitting a chunk costs about what
 building that one chunk costs.
 See [the local change tests](../rust/crates/engine-spatial/tests/voxel_local_changes.rs)
@@ -124,5 +124,5 @@ and the packaged streaming fixture for executable usage.
 
 ## Residency and remesh budgets (#8612)
 
-See [voxel budget measurements](voxel-budgets.md) for limits, CPU/memory evidence
-and geometry diversity.
+See [voxel residency and edit costs](voxel-budgets.md) for limits, CPU and
+memory measurements, and geometry diversity.

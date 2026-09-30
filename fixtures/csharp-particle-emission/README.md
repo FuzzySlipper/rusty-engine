@@ -8,4 +8,4 @@ missing curves/frame count and an out-of-range seed. It then admits cube,
 billboard and AABB-colliding debris bursts, and a repeated signal label. The host exercise must
 observe the same update's UI publication and complete subsequent callbacks.
 This checks generated marshalling, native admission and callback settlement;
-it does not claim browser appearance or diagnose an unrelated shutdown signal.
+it does not check rendered appearance or diagnose an unrelated shutdown signal.

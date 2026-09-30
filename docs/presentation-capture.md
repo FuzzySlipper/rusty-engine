@@ -15,7 +15,7 @@ name and pose are product facts; they are not proof that a frame has appeared.
 ## Engine observation
 
 The built-in `engine.renderer.presentation` debug command describes the last
-frame the runtime's renderer drew:
+frame the runtime's streamed renderer drew:
 
 - `runtime` is the Rust-owned instance/generation/control identity.
 - `frameSequence` names the frame on the frame route, and the streamed canvas
@@ -26,27 +26,31 @@ frame the runtime's renderer drew:
 - `views.cameras` are the poses the frame drew from: motion sampled, or the
   observer camera's where it replaced a primary view's camera (`observer`).
   `views.sourceCameras` are the product's descriptors.
-- With no renderer in the process (a runtime built without one, as in tests),
-  the answer is `available: false`.
+- Without a streamed renderer (window output, or a runtime built without a
+  renderer, as in tests) the answer is `available: false`.
 
 A requested viewpoint can be compared against the camera the frame drew from,
 rather than the latest live camera readout. Record the requested name/pose
 separately. `engine.renderer.frame` draws one frame now and names it, and
 `engine.renderer.drawing on-demand` keeps the renderer from drawing until
-asked. GPU completion and whole-world readiness remain unavailable.
+asked. GPU completion and whole-world readiness are reported as unavailable.
 
-## crew-services GPU captures
+## Captures
 
-Use the configured native GPU session and existing capture facility. Record
-`engine.renderer.presentation` responses and their request/response times next
-to the original capture and its sidecar. Revisit the product viewpoint and
-compare the submitted camera and viewport before visual comparison. Keep
-product overlays and diagnostics preserved unless an explicitly supported
-capture policy says otherwise; `engine.renderer.hide` only hides Engine metrics.
+Two captures are available, and they show different things:
 
-A Moonlight/X11 PNG and a separately requested Engine observation are separate
-evidence. Neither a successful input receipt, a delay, nor a submitted revision
-identifies the frame in the PNG. Preserve `frame_correlation: unavailable` in
-crew-services until a real capture handshake or image marker supplies that
-identity. The current Engine facts improve diagnosis and repeatability without
-claiming remote stream freshness.
+- **World frames.** `GET /__rusty/product/runtime/frames?after=N` returns the
+  next frame the runtime drew, with its `RSF1` header: sequence, simulation
+  step, size, format, held and video flags (see
+  [architecture](architecture.md#runtime-rendered-output)). The frame holds
+  the world only, not the product's DOM UI. The step in the header is the
+  frame's own, so no separate observation is needed to correlate it.
+- **Composite page screenshots.** A screenshot of the page shows the world
+  frame under the product UI and HUD. Read the canvas's
+  `data-rusty-frame-sequence` (and `-step`, `-held`) at capture time, or
+  record an `engine.renderer.presentation` answer next to the image.
+
+The renderer draws at the most recent viewer's size, so a harness pulling
+frames and an attached page change each other's resolution. Record the
+viewport with the capture. Keep product overlays and diagnostics unless the
+capture says otherwise; `engine.renderer.hide` hides only the Engine metrics.

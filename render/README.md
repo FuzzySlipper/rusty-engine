@@ -1,6 +1,6 @@
 # Rusty Engine browser shell workspace
 
-This pnpm workspace owns the TypeScript the Engine still ships to a browser:
+This pnpm workspace owns the TypeScript the Engine ships to the browser shell:
 
 - `application-host`: the Engine canvas, input capture and arbitration, the
   product UI mount and its UI projection, and the view of the world the runtime

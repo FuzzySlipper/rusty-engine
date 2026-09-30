@@ -8,8 +8,8 @@ capability references.
 
 ## Start
 
-Prerequisites: Linux x64, the .NET 10 SDK, `curl` and `tar`. Get `rusty`
-once (rerun to refresh it):
+Prerequisites: Linux x64, the .NET 10 SDK, `curl` and `tar` (with `xz` for
+window mode). Get `rusty` once (rerun to refresh it):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/install-rusty.sh | bash
@@ -38,7 +38,8 @@ declaration in `Directory.Build.props` and exact package references:
 <PackageReference Include="Rusty.Engine" Version="[$(RustyEnginePackageVersion)]" />
 ```
 
-The project also declares its entry type, product facts, UI and content
+Plain `dotnet build`, `dotnet test` and `dotnet run` resolve the same pinned
+SDK. The project also declares its entry type, product facts, UI and content
 roots; see [product project, build and staging](csharp-product-project.md).
 
 ## Run
@@ -55,12 +56,17 @@ rusty dev --project src/Game/Game.csproj --port 8787
 declared inputs. UI and content-bundle edits reload into the running product;
 C#, project and loose-content edits rebuild and replace the runtime. Useful
 flags: `--live-debug`, `--debugger` (managed breakpoints, see
-[CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`. The product
-runs from load either way. The runtime draws only while a page watches its
-stream, but animation and video completions do not wait for one: unwatched,
-they advance on Engine time without drawing. `--headless` opens a page in
-headless Chromium (`RUSTY_CHROMIUM_PATH` selects it) for an unattended run
-that wants frames drawn or the product UI mounted.
+[CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`.
+
+The runtime renders the world itself with `render-wgpu`. By default it streams
+frames to the browser shell page that `rusty dev` serves. The product runs
+from load either way. The runtime draws only while a page watches that stream,
+but animation and video completions do not wait for one: unwatched, they
+advance on Engine time without drawing. `--headless` opens a page in headless
+Chromium (`RUSTY_CHROMIUM_PATH` selects it) for an unattended run that wants
+frames drawn or the product UI mounted. `RUSTY_RENDER_OUTPUT=window rusty dev …`
+presents to a native window instead; the first such run downloads the pair's
+desktop runtime pack into the cache (see [desktop shell](desktop-shell.md)).
 
 `rusty build --project …` stages without running; `--aot` also publishes the
 NativeAOT product, an explicit fidelity/release check rather than the edit
@@ -89,8 +95,9 @@ release information.
 | `RUSTY_PIN_MISSING` | Run from the product repository (or pass `--project`); add the pin above. |
 | `Rusty Engine pair … is not installed` from a restore | Run `rusty install`. |
 | `NU1101`/`NU1603` for Rusty.Engine, or types missing after `rusty update` | The project files let NuGet pick another SDK. `rusty status` names the missing feed declaration or loose reference and prints the fix. |
-| `RUSTY_NETWORK` | Only install and update need the network; everything else uses the cache. |
+| `RUSTY_NETWORK` | Only install, update and the first window-mode run need the network; everything else uses the cache. |
 | `RUSTY_DEV_RUNTIME_IDENTITY` or an ABI identity mismatch | The package and runtime are from different pairs. Reinstall the pinned pair; never add version negotiation or handwritten interop. |
+| `RUSTY_DESKTOP_NOT_PUBLISHED` | The pinned pair has no desktop runtime pack. Move to a newer pair with `rusty update`. |
 | hostfxr or CoreCLR fails to load | `rusty dev` sets `DOTNET_ROOT` from `dotnet` on `PATH`; set it yourself when running the host another way. |
 | `rusty: not found` under a service manager or Den broker | The bootstrap installs into `~/.local/bin`, which such environments may leave off `PATH`. Launch with `PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`. |
 | A compiler error | `rusty build` and `rusty dev` pass compiler output and exit codes through unchanged. |
@@ -110,30 +117,21 @@ For runtime inspection use [playtest inspection](playtest-inspection.md) and
 - [Managed helpers](csharp-helpers.md): entity and mechanics stores, stats,
   resource tracks.
 - [Offline images and GLB export](csharp-offline-images.md).
-- [Runtime implicit surfaces](csharp-implicit-surfaces.md): what the host
-  provides without product code.
+- [Implicit surfaces](csharp-implicit-surfaces.md): generated implicit-surface
+  geometry, plus stats and inventory components, capture/restore, spatial
+  debug maps and GLB inspection.
 - [World interaction](controller-interaction.md) for containers, doors and
   controller aim assistance; [world streaming contract](world-streaming-contract.md)
   before designing a streaming worker.
-- [Product style](csharp-product-style.md).
+- [Product style](csharp-product-style.md): domain layout and thin
+  Read → Decide → Apply → Publish coordination. These are conventions, not an
+  Engine framework.
 
 ## Engine contributors
 
 `rusty dev --engine-source /absolute/rusty-engine` builds against a source
 checkout, and `--runtime <runtime-pack>` selects a locally built pack. Both
 are explicit; ordinary products never use them or an adjacent checkout.
-
-## Recommended product architecture, not a framework contract
-
-[C# product style](csharp-product-style.md) recommends organizing product code
-by domain modules, keeping state ownership explicit, and using thin
-Read/Decide/Apply/Publish coordinators. These are conventions a product can
-adopt directly; they do not require registration APIs or runtime discovery.
-
-For gameplay that needs Engine infrastructure, combine the ordinary managed
-helpers with named generated service calls rather than reimplementing native
-mechanisms downstream. Product rules, state transitions, and orchestration are
-ordinary C# concerns.
 
 ## Missing capability workflow
 

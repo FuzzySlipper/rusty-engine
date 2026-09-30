@@ -1,7 +1,0 @@
-== after-worker SSE bytes by batch kind, 10 s idle, one subscriber
-  600 events    210000 bytes  runtime-output-batch:frame,ui-projection
-    1 events     15555 bytes  runtime-output-batch:binding,frame,animation-cue-definitions,view-composition,ui-projection,presentation,presentation,render-output
-    1 events       629 bytes  rusty-output-baseline
-    1 events       459 bytes  runtime-output-batch:runtime-readout
-== after-worker CPU
-{"processes":2,"cpuPercentOfOneCore":2.2}

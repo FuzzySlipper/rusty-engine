@@ -1,6 +1,6 @@
 # Generated spatial artifact fixture
 
-`valid.json` is a three-cell floor in the Engine's existing spatial content
+`valid.json` is a three-cell floor in the Engine's spatial content
 format. It contains a two-triangle collision mesh and precomputed navigation.
 `bad-bounds.json` differs only in bounds whose minimum exceeds their maximum,
 producing `CSHARP_SPATIAL_CONTENT_BOUNDS`.

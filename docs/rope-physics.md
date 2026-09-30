@@ -1,8 +1,8 @@
 # Rope physics
 
-Campaign #6992 introduced ropes; #8738 moved them into the retained Dynamics
-world. This describes the current source. See
-[SDK use](csharp-lifecycle.md#bounded-dynamics-ropes) for the generated API.
+Ropes are maximum-distance tethers and bead chains in a retained Dynamics
+world. See [SDK use](csharp-lifecycle.md#bounded-dynamics-ropes) for the
+generated API.
 
 ## Owners
 
@@ -10,7 +10,7 @@ world. This describes the current source. See
 keeps one live Rapier world holding its bodies, its static collision
 environment and a maximum-distance `RopeJoint` per tether. These persist between
 steps, so contacts, sleeping and solver warm starts carry over. Changes apply
-directly to that world; nothing is prepared, revision-checked or rolled back.
+directly to that world.
 The Dynamics bridge in `csharp-engine-services` maps generated handles onto
 solver bodies, owns chains, and binds the Spatial collision scene.
 
@@ -56,7 +56,7 @@ takes the maximum over a step's substeps. It matches a hanging mass's weight but
 can miss catch peaks, so it is not a breaking tension. A catch is a
 slack-to-taut transition that the solver tracks between steps.
 
-## Character coupling
+## Kinematic character coupling
 
 One optional tether participates in the character step. For a dynamic anchor,
 the product calls `Dynamics.ObserveAnchor`. It reads the live body's anchor point,
@@ -67,16 +67,18 @@ The character integrates after controlled/external velocity, gravity and
 platform departure, and before `move_and_slide`, relative to the anchor's point
 velocity. When displacement exhausts slack it removes the outward radial
 component and keeps the tangent. Corrections are collision-swept, never
-teleported, within the existing query and recovery budgets. Terrain can leave
-the constraint unresolved; the receipt reports that instead of corrupting motion.
+teleported, within the character controller's query and recovery budgets. Terrain can leave
+the constraint unresolved; the step receipt's tether fact reports that
+instead of corrupting motion.
 
-The receipt carries a reaction impulse at the observed anchor point. The
+The tether fact carries a reaction impulse at the observed anchor point. The
 character's effective mass and the anchor response share the correction, capped
-on both sides by the maximum dynamic impulse; saturation is reported. The product
+on both sides by the controller's maximum dynamic impulse (500 N·s by default);
+saturation is reported. The product
 applies the reaction through `Dynamics.StepWithReactions` at its chosen update
 order. The reaction is an ordinary impulse plus torque about the observed centre
-of mass. It carries no revision or generation, and applying it twice applies it
-twice. The character step never steps Dynamics itself.
+of mass; applying it twice applies it twice. The character step never steps
+Dynamics itself.
 
 ## Evidence
 
@@ -94,8 +96,6 @@ twice. The character step never steps Dynamics itself.
   - translation.
 - The bridge tests cover chains, terrain contact, contact suppression,
   character reactions, light-anchor catch energy and world-origin rebasing.
-- [#8738 evidence](evidence/retained-dynamics-8738/README.md) compares the
-  retained world with the old per-step rebuild.
 
-Rope meshes, cloth, general constraint graphs, climbing and animation remain
-out of scope.
+Rope meshes, cloth, general constraint graphs, climbing and animation are not
+part of this service.

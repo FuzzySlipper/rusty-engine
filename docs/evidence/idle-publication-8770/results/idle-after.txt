@@ -1,7 +1,0 @@
-== SSE bytes by batch kind, 10 s idle, one subscriber
-    1 events     15552 bytes  runtime-output-batch:binding,frame,animation-cue-definitions,view-composition,ui-projection,presentation,presentation,render-output
-    1 events       627 bytes  rusty-output-baseline
-    1 events       460 bytes  runtime-output-batch:runtime-readout
-    9 events       180 bytes  data
-== CPU
-{"processes":2,"cpuPercentOfOneCore":2.2}

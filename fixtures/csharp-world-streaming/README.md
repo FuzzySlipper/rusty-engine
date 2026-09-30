@@ -13,5 +13,6 @@ ordinary VoxelScenePresentation renders default and variant-specific faces.
 animate 120 admitted updates through the Engine solver. Inspect reports accepted
 position and movement facts; the yellow character uses that same accepted pose.
 The debug commands explicitly select/reset fixture scenarios, not ordinary-input
-playability proof. Disposal releases the retained presentation/session owners. Rust tests cover collision ceilings,
-water surface equilibrium, invalid requests, rebase/stale commits and teardown.
+playability proof. Disposal releases the retained presentation/session owners.
+The Rust tests in `engine-spatial/tests/character_modes.rs` cover collision
+sweeps, water surface equilibrium, water-boundary crossing and invalid requests.

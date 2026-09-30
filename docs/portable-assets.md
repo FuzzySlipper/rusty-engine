@@ -4,8 +4,8 @@ A portable descriptor is readable JSON over ordinary files. Load it through
 `Content.LoadPortableAsset` (or the `PortableAssetContent` SDK helper) from an
 ordinary `ContentReference`, including one opened by `ProductContentBundle`.
 Rust parses and resolves the selected dependency closure; C# receives typed,
-copied facts and independently retained file references. Existing directory
-bundles are sufficient: there is no new archive or virtual filesystem.
+copied facts and independently retained file references. Assets live in
+ordinary directory bundles; there is no archive format or virtual filesystem.
 
 ## Version 1
 
@@ -27,7 +27,7 @@ Each asset has `id` and one `kind`:
   glTF animation names; optional `materials` maps glTF material slot names to
   local material IDs. No geometry, hierarchy, tracks or bind poses are copied.
 - `material`: optional `textures` maps named material roles to local texture IDs.
-  These are relationships, not replacements for the existing material API.
+  These are relationships; materials are still created through `Graphics`.
 - `sprite`: `frames`, named `animations`, optional `directions`, as below.
 
 Paths use forward slashes relative to the descriptor's directory. Absolute,
@@ -75,11 +75,11 @@ var playback = hero.CreatePlayback(engine.Graphics, appearance, atlas,
     hero.FindAnimation("walk", "front")!);
 ```
 
-`CreateAtlas` uses Engine-decoded texture dimensions and the existing atlas API.
+`CreateAtlas` uses Engine-decoded texture dimensions and the `Graphics` atlas API.
 Its lower-level `AtlasFrames` helper accepts explicit dimensions;
 it checks rectangle containment against the supplied decoded image extent.
 Separate-image facts retain distinct texture identities for ordinary sprite
-resource composition. `CreatePlayback` uses Engine's existing playback owner
+resource composition. `CreatePlayback` uses the Engine's sprite playback owner
 and clock. Dispose playback, appearance, atlas and texture through their normal
 owners. Opened member references survive descriptor or bundle disposal.
 
@@ -104,8 +104,8 @@ attachment already expressed by that hierarchy. Use it for a separate mesh.
 
 Loading this selection retains both file dependencies and exposes a typed
 `PortableMeshAttachment` in `Facts.Attachments`. Load the target through
-`Animation.OpenAnimatedMeshFromContent`, and the child through the existing
-static or animated mesh admission. Publish ordinary body and child
+`Animation.OpenAnimatedMeshFromContent`, and the child through ordinary static
+or animated mesh admission. Publish ordinary body and child
 `AppearanceFact` values with the child's `parentObjectId` naming the body and
 its transform taken from the descriptor. Then use:
 
@@ -121,7 +121,7 @@ with the requested name and object, and changes nothing on rejection. Joint name
 unnamed or duplicate source joints are diagnosed by normal glTF admission.
 Arbitrary non-skin node/socket lookup is not implied by the joint API.
 
-The retained presentation baseline includes the binding. The renderer attaches
+The binding is part of the retained presentation. The renderer attaches
 the child to its instance's animated bone once; ordinary playback and exact
 pose sampling drive it. There is no product bone-transform polling or follow
 loop. Remove the appearance facts before disposing their appearances/resources;

@@ -1,15 +1,15 @@
 # Voxel lighting and product-driven skies
 
-Use retained `Graphics` lights for cave and torch illumination. They already
-support point/spot attenuation and directional light. `ShadowIntent.Requested`
-draws shadow maps only when the renderer host enables shadows
-(`render-wgpu` `RendererOptions::shadows`); C# product hosts do not enable them
-today, so requested shadows currently affect only the CPU sample below. Set
+Use retained `Graphics` lights for cave and torch illumination. They support
+point/spot attenuation and directional light. `ShadowIntent.Requested` draws
+shadow maps only when the renderer enables shadows (`render-wgpu`
+`RendererOptions::shadows`). The C# product runtime leaves them off, so
+requested shadows affect only the CPU sample below. Set
 `RustyEngineProductDefaultWorldLights` to `disabled` for a dark unlit world;
-the default neutral rig otherwise continues to illuminate it. Emissive material
+otherwise the default neutral rig lights it. Emissive material
 color makes a surface visible but does not emit light onto other surfaces. Pair
 a torch's emissive appearance with a retained point light when it should light
-its surroundings. Updating or disabling that light updates the existing owner.
+its surroundings. Updating or disabling that light changes the same retained light.
 
 ## Read light at a voxel location
 
@@ -40,10 +40,10 @@ visual occluders, active entities, translucent shadow transmission, indirect
 bounce, tone mapping and material response are not included. Keep the relevant
 opaque cave geometry collision-resident. Unloaded geometry cannot occlude.
 
-This direct-light alternative provides dark enclosed rooms, local gradients,
-and product-readable light at addresses. It does not store or propagate a
+This direct-light sample gives dark enclosed rooms, local gradients, and
+product-readable light at addresses. It does not store or propagate a
 Minecraft-style sky/block-light lattice, or supply indirect light around corners.
-The visual path remains the existing renderer's ordinary lights and shadows.
+The visual path is the renderer's ordinary lights and shadows.
 
 ### Persistence and cost
 
@@ -83,10 +83,10 @@ should change too; sky presentation does not create environment lighting.
 The Engine retains both texture dependencies and one sky shader/geometry.
 Changing the amount updates uniforms only, with no texture upload, mesh rebuild,
 or new renderer resource. Cost is two panorama samples per visible sky pixel.
-Different panorama resolutions are supported. The blend survives a fresh host
-attachment through the ordinary retained presentation baseline.
+Different panorama resolutions are supported. The blend is retained
+presentation state like the rest of the camera view.
 
-`SetSkyBackground(texture)` still selects the original single-panorama path;
+`SetSkyBackground(texture)` selects a single panorama;
 `SetBackgroundColor` selects an opaque clear color; `ClearSkyBackground` returns
 to the Engine default. Selecting one replaces the other. Both selected blend
 textures stay live until the selection changes; clear the sky before releasing

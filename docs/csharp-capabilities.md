@@ -1,6 +1,6 @@
 # C# capability map
 
-This is the present-tense inventory of Rusty Engine's downstream C# surface.
+This is the inventory of Rusty Engine's downstream C# surface.
 It is a discovery aid, not a promise that every public Rust function is
 available across the generated boundary.
 
@@ -9,12 +9,12 @@ available across the generated boundary.
 The product owns application state, gameplay meaning, policy, orchestration,
 and its ordinary entity/component model. Engine services provide reusable
 host, rendering, spatial, content, persistence, and platform mechanisms. The
-boundary is trusted first-party interop; its ceremony is limited to real ABI,
-memory, lifetime, and Engine-invariant concerns.
+boundary is trusted first-party interop; it handles only real ABI, memory
+and lifetime concerns.
 
 `Look.Integrate`, `Look.Reset`, `Look.Rebase`, and `Look.Diagnose` are
 ordinary managed helpers. Their radian-based state/configuration and copied
-receipts require no native context service. `Motion` remains native collision
+receipts require no native context service. `Motion` is native collision
 resolution over a call-local `MotionSpatialEntity` view; it does not construct
 a second product entity world.
 
@@ -42,10 +42,12 @@ to force a rerun.
 | `Voxel` | Read and mutate Engine-owned voxel state. |
 | `VoxelContent` | Admit and inspect reusable voxel content resources, including bounded MagicaVoxel objects and retained object presentations. |
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection. |
-| `Content` | Read product content admitted by the host. |
+| `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and retained appearance state. |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
+| `RenderOutput` | Capture offline images and export GLB from the retained appearance snapshot ([offline images](csharp-offline-images.md)). |
+| `ImplicitSurfaces` | Build scalar fields and generate retained meshes from them ([implicit surfaces](csharp-implicit-surfaces.md)). |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |
 | `Video` | Own one content-backed full-viewport WebM presentation and terminal realization facts. |
@@ -53,8 +55,10 @@ to force a rerun.
 | `Random` | Provide Engine-owned deterministic streams, keyed draws, and explicit-state compatibility draws. `DrawLcg15` advances a caller-held wrapping 32-bit LCG state, exposes its 15-bit sample, and reduces it with modulo arithmetic; it is intentionally compatibility behavior, so it has modulo bias and is not a general uniform random API. |
 | `Persistence` | Read and write bounded Engine persistence blobs and stores. |
 | `Ui` | Publish bounded product UI projections through the Engine host. |
+| `Input` | Replace the product's physical input mappings at runtime. |
+| `Diagnostics` | Publish product diagnostics and read renderer statistics. |
 
-The generated contracts are authoritative when this table and source ever
+The generated contracts are authoritative when this table and source
 disagree. Add a missing coherent family at the ABI and generator edge; do not
 handwrite a parallel C# declaration or generic dispatch protocol.
 
@@ -83,8 +87,8 @@ and playback changes refit without product-side geometry work. A placement
 owns the sprite's final screen geometry; authored transforms cannot offset it.
 The normal viewport clips overscan and offscreen rectangles, without a custom
 target-rectangle clipping surface. CSS dimensions determine layout while DPR
-only changes the backing buffer. Existing depth policy, render order, layer,
-and playback remain unchanged.
+only changes the backing buffer. Depth policy, render order, layer, and
+playback are unaffected.
 
 `SpriteSizeMode.Pixel` uses CSS-pixel size at the sprite's authored
 position/depth. Its authored orientation and scale still apply, and the
@@ -120,7 +124,7 @@ For a small standalone voxel object, use
 then `ProjectObject` with one ordinary `Appearance` material binding per
 admitted palette slot. `VoxelObjectPresentation` retains the Engine-owned
 object projection; update its frame/transform/visibility through the generated
-service and dispose it when finished. The current MagicaVoxel path admits
+service and dispose it when finished. The MagicaVoxel path admits
 bounded v150 model data and its default greedy surface emits axis-aligned face
 normals. A roughness-1 ordinary material is sufficient for a matte microvoxel
 presentation; no voxel-specific shader or downstream renderer is involved.
@@ -149,26 +153,29 @@ and motion policy, while clip-specific pose channels may differ.
 
 ## Managed helpers in the default assembly
 
-The default runtime dependency remains one `Rusty.Engine` assembly. These
+The runtime dependency is one `Rusty.Engine` assembly. These
 namespaces are ordinary safe C# compiled into that assembly, not additional
 native services or mandatory framework layers:
 
-| Namespace | Current role |
+| Namespace | Role |
 | --- | --- |
 | [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | Optional update-pipeline and admitted-step scheduling helpers. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | `EntityStore` class/value component storage, `EntityTypeId` kind metadata, the optional `Actor` facade, `EntityBatch` grouped writes, the seven responsibility adapters, and `EntityStoreDebugModule` live inspection. See the SDK guide's [entity stores](csharp-helpers.md#entity-stores-mechanics-stores-and-engine-adapters), [component attachment](csharp-helpers.md#ordinary-component-attachment), [metadata and Actor](csharp-helpers.md#entity-metadata-and-the-optional-actor-facade), and [explicit edits](csharp-helpers.md#explicit-edits-and-persistence) sections. |
-| [`Rusty.Engine.Mechanics`](../csharp/Rusty.Engine/Mechanics) | Double-backed `Stat`, referenced-maximum `Track`, `StatsComponent`/`EffectsComponent` mechanics owners, and `InventoryStore` with optional `InventoryEdit` plus live `InventoryComponent`/`EquipmentComponent` facades. See the SDK guide's [stats](csharp-helpers.md#ordinary-numeric-stats), [tracks](csharp-helpers.md#resource-tracks), [stats collections](csharp-implicit-surfaces.md#entity-stats-collections), [effects/inventory](csharp-implicit-surfaces.md#effects-and-owner-scoped-inventory-components), and [capture/restore/inspection](csharp-implicit-surfaces.md#explicit-capture-restore-and-live-inspection) sections. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product codecs (`JsonProductStateCodec`, custom binary) and stores for the current shape (`ProductStateStore` save/load, `StatsComponentCapture` rebuild). See the SDK guide's [explicit capture, restore and live inspection](csharp-implicit-surfaces.md#explicit-capture-restore-and-live-inspection). |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | `EntityStore` class/value component storage, `EntityTypeId` kind metadata, the optional `Actor` facade, `EntityBatch` grouped writes, the seven responsibility adapters, and `EntityStoreDebugModule` live inspection. See [entity stores](csharp-helpers.md#entity-stores-mechanics-stores-and-engine-adapters), [component attachment](csharp-helpers.md#ordinary-component-attachment), [metadata and Actor](csharp-helpers.md#entity-metadata-and-the-optional-actor-facade), and [explicit edits](csharp-helpers.md#explicit-edits-and-persistence) sections. |
+| [`Rusty.Engine.Mechanics`](../csharp/Rusty.Engine/Mechanics) | Double-backed `Stat`, referenced-maximum `Track`, `StatsComponent`/`EffectsComponent` mechanics owners, and `InventoryStore` with optional `InventoryEdit` plus live `InventoryComponent`/`EquipmentComponent` facades. See [stats](csharp-helpers.md#ordinary-numeric-stats), [tracks](csharp-helpers.md#resource-tracks), [stats collections](csharp-implicit-surfaces.md#entity-stats-collections), [effects/inventory](csharp-implicit-surfaces.md#effects-and-owner-scoped-inventory-components), and [capture/restore/inspection](csharp-implicit-surfaces.md#explicit-capture-restore-and-live-inspection) sections. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Explicit product codecs (`JsonProductStateCodec`, custom binary) and stores for the current shape (`ProductStateStore` save/load, `StatsComponentCapture` rebuild). See [explicit capture, restore and live inspection](csharp-implicit-surfaces.md#explicit-capture-restore-and-live-inspection). |
 | [`Rusty.Engine.StateMachine`](../csharp/Rusty.Engine/StateMachine) | Product-owned managed state-machine definitions and instances. |
+| [`Rusty.Engine.Input`](../csharp/Rusty.Engine/Input) | `PhysicalInputState`, analog deadzones and the `FpsInput` baseline ([FPS input](controller-interaction.md#fps-input-baseline)). |
+| [`Rusty.Engine.Implicit`](../csharp/Rusty.Engine/Implicit) | Managed room, wall and architectural recipes over `ImplicitSurfaces`. |
 
 Using one of these namespaces is optional. A product may organize its own
 ordinary C# architecture, and a `using` declaration is enough to ignore a
 helper that is irrelevant. The separate BindingGenerator and ProductGenerator
 projects are build-time tools, not runtime assembly partitions.
 
+Mechanics and state machines are managed helpers, not native services.
 Damage, healing, combat meaning, AI policy, rules, state transitions, content
-meaning, and gameplay orchestration remain downstream application concepts
-even when they are implemented using reusable Engine mechanisms.
+meaning, and gameplay orchestration are downstream application concepts even
+when they are implemented using reusable Engine mechanisms.
 
 ## Shared world interaction and aim assistance
 
@@ -179,31 +186,34 @@ and `AimAssist` (bounded stick tracking/slowdown and shot-direction correction).
 `InteractionDebugModule` exposes `interaction.help`, `interaction.inspect` and
 explicit assisted `interaction.use <id> <revision>` in the ordinary debug catalog.
 See [the implementation and agent green path](controller-interaction.md).
-These helpers use existing input/look/spatial services; they add no native state
+These helpers use the input, look and spatial services; they add no native state
 or alternate gameplay authority. Products supply targets, eligibility and actions.
 
-## Retained native runtime and host mechanisms
+## Native runtime and host mechanisms
 
-The following Rust owners remain upstream because they hold reusable native or
-host state rather than gameplay meaning:
+These Rust owners hold reusable native or host state rather than gameplay
+meaning:
 
 - [`runtime-lifecycle`](../rust/crates/runtime-lifecycle) admits lifecycle and
   update steps without owning a product scheduler or clock.
 - [`runtime-input`](../rust/crates/runtime-input) normalizes physical/direct
   input, held state, ordering, and lifecycle fences.
 - [`runtime-timeline`](../rust/crates/runtime-timeline) carries completion binding,
-  ticket and outcome data to product callbacks. The legacy native queue/catalog
-  is removed; C# owns scheduling and ticket meaning.
+  ticket and outcome data to product callbacks; C# owns scheduling and ticket
+  meaning.
 - [`runtime-ui`](../rust/crates/runtime-ui) transports bounded copied UI
   projections and owns no DOM or gameplay state.
-- [`product-dev-host`](../rust/crates/product-dev-host) supplies the local
-  browser development transport around a staged CoreCLR or NativeAOT product.
+- [`product-dev-host`](../rust/crates/product-dev-host) is the runtime's HTTP
+  host: it serves the browser shell, the frame stream and the live-debug routes
+  around a staged CoreCLR or NativeAOT product.
+- [`desktop-shell`](../rust/crates/desktop-shell) owns the native window when
+  the runtime presents to it ([desktop shell](desktop-shell.md)).
 - [`csharp-product-runtime`](../rust/crates/csharp-product-runtime) loads the
   product library, binds generated tables, and integrates lifecycle with the
   host.
 
 Renderer, spatial, asset, content, voxel, persistence, and diagnostic crates
-remain named Engine owners behind the generated service families. Their Rust
+are named Engine owners behind the generated service families. Their Rust
 source APIs are not automatically C# APIs; expose product-useful operations as
 coherent generated services rather than mirroring crate internals one method
 at a time.
@@ -214,30 +224,14 @@ Downstream TypeScript owns DOM UI and accessibility, never gameplay state or
 non-UI rendering. Engine TypeScript is the browser shell: it shows the frames
 the runtime renders, carries input, and mounts the product UI. Rendering
 (`render-wgpu`), audio (`render-audio`) and video are Rust mechanisms in the
-runtime process; canonical presentation intent remains in Rust, and gameplay
-decisions remain in C#.
-
-## Retired lanes
-
-The supported downstream path does not include compiled TypeScript gameplay,
-JSON-authored gameplay packages, a downstream Rust SDK facade, or native
-Rules, Mechanics, and State Machine service families. Git history
-retains their implementation and migration rationale when historical evidence
-is needed; current products should not carry compatibility adapters for them.
+runtime process; presentation intent is Rust-owned, and gameplay decisions
+are C#.
 
 ## Missing capabilities
 
 When a product cannot express a needed Engine mechanism through the generated
-surface:
-
-1. name the missing mechanism and the lifecycle point where it is needed;
-2. record the concrete product facts, request, and result shape;
-3. file or link the narrow upstream task when authorized; and
-4. stop the downstream substitution.
-
-An upstream gap is a valid task result. Do not bypass it with handwritten
-interop, a browser renderer, TypeScript gameplay, a JSON command bus, or a
-parallel native implementation in the product repository.
+surface, follow the [missing capability workflow](csharp-sdk.md#missing-capability-workflow).
+An upstream gap is a valid task result.
 
 ## Keeping this map current
 

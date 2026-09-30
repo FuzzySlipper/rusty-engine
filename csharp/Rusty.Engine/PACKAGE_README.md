@@ -7,10 +7,12 @@ managed helpers, and the product generator. The project that sets
 export and debug catalog; no second project is generated.
 
 Reference one immutable `Rusty.Engine` package built from the same Engine
-revision as the runtime pack that hosts the product. The normal development
-path is the runtime pack's `rusty dev` command; NativeAOT is an explicit
-fidelity and release path. Product code should use the public service APIs and
-must not add handwritten P/Invoke, ABI declarations, or a second host.
+revision as the runtime pack that hosts the product; `rusty install` and
+`rusty update` keep the two together. The normal development path is
+`rusty dev`; NativeAOT is an explicit fidelity and release path. Product code
+uses the public service APIs and must not add handwritten P/Invoke, ABI
+declarations, or a second host. The repository's `docs/csharp-sdk.md` is the
+entry guide.
 
 Engine services and native handles are callback-confined: call them synchronously
 from an Engine-invoked product callback that permits the operation. This includes
@@ -21,6 +23,8 @@ is serialized but does not promise a permanent managed thread ID.
 worker scheduler. Pure product computation can use copied data off-thread, with
 bounded results admitted later from Update. See the repository's
 `docs/world-streaming-contract.md` for the supported pattern and ownership rules.
+Returned values and exception diagnostics are managed copies; request spans and
+`ProductUpdate.Input` are valid only for their call.
 
 The package carries its generated ABI identity in build metadata. Select a
 matching runtime pack rather than attempting compatibility negotiation or
@@ -40,12 +44,12 @@ The source guide is `docs/controller-interaction.md` in the Engine repository.
 ## Generated level artifacts
 
 `Spatial.ReplaceContentArtifact` admits an Engine-format collision/navigation
-artifact from a `ContentReference` into an existing `SpatialSession`. Engine
-validation and preparation finish before static-mesh collision and planar
-navigation are replaced together. Voxel content and residency remain intact.
-A refused operation leaves the previous spatial state intact and throws
-`EngineCallException` with service `Spatial`, operation `ReplaceContentArtifact`
-and a named diagnostic (for example `CSHARP_SPATIAL_CONTENT_BOUNDS`).
+artifact from a `ContentReference` into an existing `SpatialSession`, replacing
+static-mesh collision and planar navigation together. Voxel content and
+residency are kept. A refused operation leaves the previous spatial state
+intact and throws `EngineCallException` with service `Spatial`, operation
+`ReplaceContentArtifact` and a named diagnostic (for example
+`CSHARP_SPATIAL_CONTENT_BOUNDS`).
 
 Generation recipes, required connectivity, portal/socket pairing, gameplay
 meaning and Procgen provenance checks belong to the generator/importer or
@@ -87,8 +91,9 @@ open an image with `Graphics.OpenResource`, pass its handle as `Sprite`, and set
 frame rate. Cubes need no sprite and use zero flipbook rate.
 
 Invalid descriptors raise `EngineCallException` with a named diagnostic.
-A caught emission refusal preserves staged presentation; an exception escaping
-the product callback still faults that callback. A valid optional burst may
-return `Admitted`, `Clamped` or `Dropped` according to presentation capacity.
-See the source SDK guide and `fixtures/csharp-particle-emission` for a complete
-executable example, including collision.
+Catching an emission refusal lets the callback continue and publish its other
+output; an exception that escapes the product callback faults the lifecycle.
+A valid burst returns `Admitted`, `Clamped` or `Dropped` according to
+presentation capacity. See `docs/csharp-lifecycle.md#particle-bursts` and
+`fixtures/csharp-particle-emission` for a complete executable example,
+including collision.

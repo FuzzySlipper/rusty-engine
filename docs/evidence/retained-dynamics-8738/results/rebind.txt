@@ -1,2 +1,0 @@
-dig rebind: DynamicsEnvironmentReceipt { retained: 0, inserted: 16, removed: 16 } in 44.6 us
-dig rebind: DynamicsEnvironmentReceipt { retained: 0, inserted: 16, removed: 16 } in 50.8 us

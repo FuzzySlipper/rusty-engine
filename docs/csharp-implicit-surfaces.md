@@ -5,7 +5,7 @@ Entry page: [C# SDK guide](csharp-sdk.md).
 ## Runtime implicit surfaces
 
 `engine.ImplicitSurfaces` constructs general-purpose scalar fields and generates
-ordinary retained `MeshResource` objects. This is independent of the existing
+ordinary retained `MeshResource` objects. This is independent of the
 voxel residency service and its cubic surface modes. C# owns the shape recipe,
 material selection, and regeneration intent; Rust owns evaluation, dual
 contouring, mesh attributes, and renderer admission. No retro style is built
@@ -15,8 +15,9 @@ Create an `ImplicitField`, add boxes, spheres, ellipsoids, capsules or planes,
 and compose their returned `ImplicitNode` values with union, intersection,
 difference, smooth union, offset and affine TRS placement. Nodes belong to that
 field: their opaque tokens are valid only with the field that produced them, and
-discarded or disposed-field tokens are rejected. Values are negative inside; these constructive fields preserve a zero
-surface but are not necessarily Euclidean distances. Smooth-union radii and
+tokens of another or a disposed field are rejected. Values are negative inside;
+these constructive fields preserve a zero surface but are not necessarily
+Euclidean distances. Smooth-union radii and
 level-set offsets are in field-value units, especially after nonuniform scale.
 
 `DisplaceWaves(ImplicitWaveRequest)` adds smooth seeded spectral noise to a
@@ -37,7 +38,7 @@ angle, UV scale, default material, and optional ordered material regions:
   preserving uniform world-space samples. To clip to a rectangular volume,
   explicitly intersect a box. Domain boundaries are not automatic caps.
 - `MaxExtractionVertices` and `MaxExtractionTriangles` select raw extraction
-  output budgets. Zero retains the default 262,144 each; positive values select
+  output budgets. Zero selects the default 262,144 each; positive values select
   the caller's budget. These are not peak-memory limits or limits on subsequent
   attribute/material splitting. Material-refinement budgets remain separate.
 - Cell size is a maximum leaf sample spacing, not a minimum-feature guarantee.
@@ -56,8 +57,8 @@ angle, UV scale, default material, and optional ordered material regions:
   `Basis(uAxis, vAxis, scale, offset)` for an orthonormal U/V orientation in
   the field's extraction coordinates. Its scale is repeats per projected world
   unit and its offset is added after scaling. `RecipeSurface.Placement` is
-  applied after extraction and does not reproject UVs. Leaving the mapping at
-  its default preserves the legacy major-axis UV output exactly.
+  applied after extraction and does not reproject UVs. The default mapping is
+  the major-axis chart scaled by the request's UV scale.
 - The short request constructor keeps `ImplicitMaterialBoundaryMode.Centroid`:
   each triangle uses the first region containing its centroid, or the default
   material. Select `MaterialBoundaryMode: ImplicitMaterialBoundaryMode.Interpolated`
@@ -67,25 +68,24 @@ angle, UV scale, default material, and optional ordered material regions:
   polygonal approximations; regions hidden between vertices can be missed.
   Set `MaterialSampleSpacing` to a positive world-space edge length to subdivide
   the attributed surface before sampling material fields, independently of DC
-  simplification. Zero retains the existing behavior. This option requires
+  simplification. Zero disables this refinement. This option requires
   `Interpolated`; it does not change geometry extraction or recover missing
   grooves. Shared edges subdivide consistently and new normals/UVs interpolate
   the original attributes. Choose spacing below the narrowest desired motif;
   arbitrarily small, tangent or undersampled regions can still disappear.
   Refinement and subsequent clipping enforce the ordinary 262,144 vertex and
   triangle budgets per mesh, returning an error rather than silently dropping
-  detail. `Generate` rejections include copied diagnostics on `EngineCallException`;
-  catching that operation error allows the product callback to continue and keep
-  its prior scene. Backend panics still fail the callback.
-  Smaller spacing increases surface sampling and triangle cost; use
+  detail. A `Generate` failure, including a backend panic, throws
+  `EngineCallException` with copied diagnostics; catching it lets the product
+  callback continue with its prior scene. Smaller spacing increases surface sampling and triangle cost; use
   bounded authored pieces. Cuts preserve the source
   surface and interpolate its existing normals/UVs instead of creating shading
-  creases. First-region precedence remains unchanged. Added triangles count
+  creases. First-region precedence still applies. Added triangles count
   toward the ordinary mesh admission limits. Texture filtering/wrapping comes
   from ordinary materials; material groups remain indexed ranges.
 
 Create an appearance with `engine.Graphics.CreateMeshAppearance(mesh)` and
-include it in the product's complete appearance snapshot. A mesh may have
+publish it as an ordinary appearance fact. A mesh may have
 multiple appearances. Dispose appearances before their mesh, and materials
 only after meshes using them have been released. The field may be disposed as
 soon as generation completes: the mesh owns its copied result. Generate a new
@@ -96,8 +96,8 @@ its `MeshResource` field. Pass that asset and its instances to the existing
 `Spatial.ReplaceCollision`, with empty raw vertex/triangle arrays when every
 asset uses a reference. Spatial copies the geometry during admission; its
 collider remains valid after the source graphics resource is released. Visual
-and collision replacement are explicit independent product actions. A zero
-reference retains the existing borrowed-array collision path.
+and collision replacement are explicit independent product actions. An asset
+with a zero reference uses its raw vertex/triangle arrays.
 
 For streaming authored collision cells, use `Spatial.ApplyCollisionResidency`
 with stable asset and instance IDs. Its arrays are upserts; `RemovedAssets` and
@@ -122,17 +122,14 @@ after extraction and do not bound peak memory or guarantee a latency deadline.
 The backend uses Fidget 0.5 evaluation and dual-cell connectivity. Engine
 triangulates its ordered cell-vertex polygons, avoiding folded fans around
 sampled edge intersections at adaptive transitions. Shared-edge winding is
-preserved; the retained reorientation counter is zero because individual faces
-are no longer flipped against centroid gradients. Zero-area triangles are
-omitted. The vendored `fidget-mesh` patch recovers finest-cell QEF vertices
-that escape their cell to the mean of that cell's Hermite crossings, and prevents
-those invalid solutions from driving collapse. `BoundedLeafVertices` counts these
+preserved, and no face is flipped against centroid gradients, so the
+reorientation counter is zero. Zero-area triangles are omitted. The vendored
+`fidget-mesh` patch recovers finest-cell QEF vertices that escape their cell
+to the mean of that cell's Hermite crossings, and prevents those invalid
+solutions from driving collapse. `BoundedLeafVertices` counts these
 adaptive recoveries. This bounds placement; it does not guarantee thin-feature
 survival or self-intersection-free output. The patch and its source/license ship
 in the runtime pack's `share/third-party/fidget-mesh` directory.
-Large retained replacements remain ordinary deltas, sent as one output batch.
-Complete committed snapshots serve every browser connection and recovery;
-size alone does not replay/reconstruct the scene or re-enter product callbacks.
 
 Implicit generation readouts also report boundary, non-manifold, and inconsistent
 winding edges on extracted geometry before normal, UV, and material splitting.
@@ -192,8 +189,8 @@ order: `((z * height) + y) * width + x`. The last sample lies at
 `origin + spacing * (dimensions - 1)`. The retained limit is eight million points.
 
 `WriteSampledVolume` replaces a bounded contiguous sample range;
-`ReadSampledVolume` returns a managed copy and descriptor/revision. The generated
-lease is released before returning. `SampleSampledVolume` trilinearly samples
+`ReadSampledVolume` returns a managed copy and descriptor/revision.
+`SampleSampledVolume` trilinearly samples
 inside the explicit domain and rejects outside positions. `RasterizeSampledVolume`
 evaluates an analytic field onto the lattice in native batches, committing only
 when all samples succeed. Successful writes and rasterization advance the
@@ -207,8 +204,8 @@ regions, independently of geometry. It reuses analytic generation's attribute,
 material, resource, and collision paths. `SampledRecipeSurface` is an optional
 synchronous description for this extraction. `ReadSampledVolumeGeneration`
 reports actual lattice spacing and topology; octree depth and adaptive leaf
-recoveries are zero because this path is uniform. Expected operation errors
-return copied diagnostics without poisoning an otherwise handled product call.
+recoveries are zero because this path is uniform. Operation failures throw
+`EngineCallException` with copied diagnostics.
 
 Sampling resolution remains a real limit: crossings hidden between lattice
 points are lost, and one vertex per active cell cannot represent arbitrary
@@ -217,14 +214,6 @@ include exterior samples around closed solids. Dense extraction has explicit
 cell, temporary-memory, and mesh budgets, so not every retained volume can be
 meshed in one request. Partition large products deliberately. This foundation
 does not implement erosion, world streaming, or efficient sparse edits.
-
-
-
-An interrupted development-host output subscription reattaches through a fresh
-retained baseline, even after receiving numbered output. SSE cursors are local
-to a host process; they are never reused after interruption against a potentially
-replaced process. Input and product mutations are not replayed during this
-recovery. The browser remains gated until the replacement projection is applied.
 
 ### Opt-in authored surface audit
 
@@ -347,13 +336,12 @@ operations, with stacking and provenance checks. It works standalone or attached
 through `entities.Add(entity, effects)`. Product code owns duration and timing.
 Use `effects.Copy()` only when a detached preview is useful: the copy has its own
 collection and shares immutable effect entries/definitions, without replaying
-mutations. D20 uses this for action planning; Rifles keeps its own effect clock.
+mutations.
 
 `InventoryStore` owns item quantities, containment and equipment records.
 Use its direct Grant/Consume/TransferFungible, MaterializeUnique/TransferUnique/
-DestroyUnique, and Equip/Unequip/Swap methods for ordinary operations. Redundant
-static InventoryService/ItemService/EquipmentService forwarding APIs are removed.
-`InventoryEdit` remains optional for grouped changes such as unequip → transfer →
+DestroyUnique, and Equip/Unequip/Swap methods for ordinary operations.
+`InventoryEdit` is optional for grouped changes such as unequip → transfer →
 equip. A failed edit leaves the store unchanged; `Publish` refuses if the store
 changed directly after the edit began.
 
@@ -386,11 +374,9 @@ merging retires the source ID. A full transfer can preserve its ID in an owner
 where that ID is unused. Partial transfers require an explicit destination ID,
 either new or selected for a compatible merge. `MaximumQuantity` limits each
 stack; inventory capacity accounts for every stack and unique item together.
-Every inventory mutation selects an explicit stack ID. Definition-only Grant,
-Consume and TransferFungible overloads and the implicit-ID InventoryStack
-constructor have been removed. Existing callers must choose stack IDs; the
-Engine never derives one from definition text. Definition-level quantity reads
-still aggregate all stacks of that definition.
+Every inventory mutation selects an explicit stack ID; the store never derives
+one from definition text. Definition-level quantity reads aggregate all stacks
+of that definition.
 `InventoryState.CaptureStacks()` and `InventoryState.Restore(...)` retain stack
 IDs, definitions and quantities; restore and registration validate capacity.
 Persist product metadata keyed by those owner/stack IDs, or map them to save-local
@@ -401,16 +387,16 @@ definition ID is needed.
 
 Capture selected durable values into product-owned records on request. Save those
 records through `ProductStateStore<T>.Save`; they should not contain live component
-references, native leases, input state or presentation resources. `Load` reads and
+references, native handles, input state or presentation resources. `Load` reads and
 decodes the current shape and returns a value; it never changes the live graph.
 Build and validate replacement owners from that value, then install them at the
-product boundary. A failed decode or candidate build leaves the old owners in place.
-This does not promise rollback of independent native work already committed.
+product boundary. A failed decode or replacement build leaves the old owners in
+place; Engine calls made while building have already taken effect.
 
 Rebuild shared references deliberately. For example, construct one maximum `Stat`,
 put it in `StatsComponent.Stats`, and pass that same object to the restored `Track`.
-D20 restores this graph through participant admission; its save contains numeric
-values and product identities rather than a serialized component graph.
+Save numeric values and product identities rather than a serialized component
+graph.
 
 `JsonProductStateCodec<T>` is the ordinary JSON path over `ProductStateStore<T>`: supply
 the save type plus a `JsonTypeInfo<T>` (source-generated contexts work under NativeAOT
@@ -423,8 +409,6 @@ to a missing value. Custom binary codecs stay available through the same small
 The direct Persistence requests, receipts and blobs also carry no product schema
 version. Storage owns only its file layout marker and revision; specialized codecs
 (such as voxel edit history) identify their own payload format during decoding.
-The current layout replaces the old schema-bearing envelope without migration;
-old development save files must be discarded or explicitly converted by their owner.
 
 `ProductStateStore<T>.Delete(key, guard, expectedRevision)` and the direct
 `Persistence.Delete(PersistenceDeleteRequest)` durably remove one scoped key.
@@ -486,10 +470,9 @@ without a numeric descriptor. Descriptor-specific projections remain available
 and take precedence for that descriptor. `entity.get` reports component types and
 keys for `entity.component`. Every command reads the currently registered store
 and current component fields, even when in-place edits leave structural revisions
-unchanged. Mechanics projections limit entries and all projection output remains
-bounded to 4096 characters. Returned debug metadata is an observation, not a save
-or replay checkpoint. Registration is local and explicit; no mechanics discovery
-or structural-version value cache is involved.
+unchanged. Mechanics projections limit entries and all projection output is
+bounded to 4096 characters. Returned debug metadata is an observation, not a
+save. Registration is local and explicit; there is no mechanics discovery.
 
 ### Spatial debugging maps
 
@@ -506,7 +489,7 @@ retained navigation projection, preserving support counts/heights and traversal
 allowance. No navigation sample means unknown, not walkable. A collision miss
 means no hit in the supplied/retained sources, not proof of loaded empty space
 or character clearance. These are different observations, not a merged occupancy
-truth. Multiple support heights remain explicit; this first view is not a full
+truth. Multiple support heights stay explicit; this view is not a
 stacked-floor visualizer.
 
 `Rusty.Engine.Debugging.SpatialMapSnapshot.Capture` combines that read with
@@ -523,30 +506,32 @@ Expose a product command through the ordinary generated debug catalog and use
 `runtime-pack/bin/rusty-live-debug --origin http://127.0.0.1:PORT --command
 "spatial.map ascii 12 1"` when the product implements that command (as
 `rusty-doom` does). The CLI transports the command; the product supplies semantic
-annotations and the Engine owns the spatial read. Rendering and fast-controller
-experiments are independent of this capability.
+annotations and the Engine owns the spatial read.
 
 ### Source GLB material extensions
 
-Live GLB admission preserves `KHR_materials_specular` and `KHR_materials_volume`
-through the existing Engine loader, including required declarations. Optional
+GLB admission accepts the `EXT_texture_webp`, `KHR_materials_unlit`,
+`KHR_materials_emissive_strength`, `KHR_materials_specular`,
+`KHR_materials_volume`, `KHR_materials_ior` and `KHR_texture_transform`
+extensions, including when they are declared required. Optional
 `FB_ngon_encoding` exporter hints over core triangles are accepted; declaring
-that metadata as required is still unsupported. Material textures/factors stay
-in the source resource and are realized by the Engine renderer. Unknown required
-extensions still produce an import diagnostic without replacing the current view.
+that metadata as required is unsupported. Any other extension fails admission
+with an import diagnostic. The renderer draws the base color factor and
+texture, metallic and roughness factors, emissive color with its strength,
+alpha mode and unlit; specular and volume data are admitted but not drawn.
 
 ### GLB inspection and displayed-pose bounds
 
 `Animation.SetMeshInspection(new(appearance, wireframe, matte, wholeVoxelNormals,
 boundsRequest))` selects retained inspection for an animated-mesh appearance,
-including GLBs without clips. Publish the appearance in the normal Graphics
-snapshot. This appearance-level setting applies to every instance selecting that
+including GLBs without clips. Publish the appearance as an ordinary Graphics
+fact. This appearance-level setting applies to every instance selecting that
 appearance; use separate appearances for independent inspection. Inspection
-updates preserve playback and target identity. Renderer
-instances own temporary material/geometry clones; admitted source resources and
-textures remain shared and unchanged. Matte keeps textures and sets PBR roughness
-1, metalness 0 and environment intensity 0.35. Whole-voxel normals affect only
-predominantly integer unit-face meshes; skinned/morph geometry stays authored.
+updates preserve playback and target identity. Wireframe draws the mesh as
+edges. Matte draws each bound material as a roughness 1, metalness 0 variant
+that keeps its textures; admitted source resources are unchanged. The renderer
+does not realize whole-voxel normals: it reports the setting as unrealized and
+`VoxelNormalMeshes` is zero.
 
 A changed nonzero `boundsRequest` asks for the displayed pose's world-space bounds
 once after the next renderer animation update. `Animation.ReadRealization().Facts`
@@ -554,7 +539,7 @@ then contains a `MeshInspection` fact with the logical object, renderer generati
 `BoundsRequest`, `HasBounds`, `BoundsMin`, `BoundsMax`, and `VoxelNormalMeshes`.
 No bounds means an empty/unmeasurable mesh, not a zero-sized box. Match the object
 and request before consuming; cancel pending camera actions when the user moves
-it. A replacement renderer replays the retained request once. Zero disables the
+it. A rebuilt renderer reports the retained request once more. Zero disables the
 request. This is observation, not a second animation clock or automatic camera.
 
 See [portable asset descriptors](portable-assets.md) for Engine-owned sprite/model semantics over loose files and bundles.
@@ -582,6 +567,7 @@ telemetry, and the next source restage replaces it. `--debugger` disables the
 30-second runtime startup deadline for managed breakpoints; shutdown remains
 bounded.
 
-NativeAOT hosting stays in process. Explicit finite `--exercise` and
-`--performance-probe` runs, and contributor-only legacy raw-artifact launches,
-retain their in-process path; they are not the ordinary packaged server lane.
+A direct NativeAOT launch without `--supervised` or `--headless` runs in
+process, as do finite `--exercise` and `--performance-probe` runs and
+contributor-only raw-artifact launches (`--library`/`--bundle-dir`); they are
+not the ordinary packaged server lane.

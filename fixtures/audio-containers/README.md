@@ -3,7 +3,7 @@
 These five one-second, mono 48 kHz 440 Hz sine tones were synthesized for Engine
 regressions. No third-party recording or music is included. They were encoded
 once with libsndfile (PCM16 WAV, Vorbis Ogg, Opus Ogg, MP3, FLAC). The Engine
-has no dependency on that encoder, Python, ffmpeg, or a Rust decoder.
+does not depend on that encoder.
 
 Rust admission tests consume these exact bodies, and `render-audio`'s tests
 play them through its realizer on kira's mock backend: a one-shot completes for

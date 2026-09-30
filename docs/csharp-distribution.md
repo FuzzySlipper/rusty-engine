@@ -5,8 +5,9 @@ archive containing a local `Rusty.Engine` NuGet feed, its matching runtime
 pack, and a pairing manifest. Every pair has a version derived from one Engine
 commit, for example `0.1.0-dev.abc123def456`. The archive name, package
 version, SDK-generated ABI metadata, and runtime manifest all name that same
-revision. Do not combine artifacts from different pairs or add compatibility
-negotiation.
+revision. A published pair also carries a desktop runtime pack: the same host
+built with the desktop shell and Chromium's runtime, for window mode. Do not combine
+artifacts from different pairs or add compatibility negotiation.
 
 ## Use a pair from a product
 
@@ -72,6 +73,9 @@ rusty update
   fails with "run `rusty install`". `rusty dev` runs the
   pinned pair's own `runtime-pack/bin/rusty`, whose supervisor matches its
   host, and sets `DOTNET_ROOT` from `dotnet` on `PATH` when it is unset.
+  With `RUSTY_RENDER_OUTPUT=window`, the first run downloads the pair's
+  desktop pack into `pairs/<version>/desktop-pack` and checks its SHA-256 and
+  ABI identity.
 - `rusty update` is the only thing that moves the pin. It installs the target
   pair (the newest, or `--to <version>`), rewrites the pin, and lists the
   release notes between the old pin and the new one. Commit the changed
@@ -105,9 +109,10 @@ replace the entire pair with one unmodified matching release artifact.
 ## Find a published pair
 
 CI publishes every pair as GitHub release `csharp-sdk-v<version>` with the
-archive, its checksum, and a small `pair-release.json` that names the version,
-source revision, archive URL and SHA-256, and ABI identity. The newest
-published pair is GitHub's Latest release, so these two URLs are stable:
+archive, the desktop pack
+(`rusty-engine-desktop-pack-<version>-linux-x64.tar.xz`), their checksums, and
+a small `pair-release.json` that names the version, source revision, archive
+URL and SHA-256, ABI identity and `desktopPack`. The newest published pair is GitHub's Latest release, so these two URLs are stable:
 
 ```text
 https://github.com/FuzzySlipper/rusty-engine/releases/latest/download/pair-release.json
@@ -131,16 +136,18 @@ Each release also carries release information, linked from
 - `api-surface.txt`: this pair's full public surface.
 
 The notes cover one step. `rusty update` follows `releaseInfo.previous` back to
-the pinned version and lists each release's notes; pairs published before
-release information existed end the chain with a source comparison link. The
+the pinned version and lists each release's notes; a pair published without
+release information ends the chain with a source comparison link. The
 API diff shows signatures only. The authored notes carry behaviour, lifecycle
 and default changes.
 
-**Writing a note (Engine contributors).** Put a `## Migration` section in the
-task's `docs/evidence/<topic>-<task>/README.md`. The next pair includes every
-such section that was added or changed since the previous pair. Say what
-product code changes, with before/after code where it helps. Name the affected
-downstream products when you know them.
+**Writing a note (Engine contributors).** End the commit message with a line
+that is exactly `Migration:` followed by the note; everything after that line
+is the note. The next pair includes the note of every commit since the
+previous pair, oldest first, under the commit's subject. Say what product code
+changes, with before/after code where it helps. Name the affected downstream
+products when you know them. Commit with `-m` or `-F`, not an editor, if the
+note has lines starting with `#`: an editor's default cleanup strips them.
 
 To compare any two pairs locally:
 
@@ -153,9 +160,11 @@ To compare any two pairs locally:
 The `pair` workflow (`.github/workflows/pair.yml`) owns publication. For each
 `main` push that changes Rust, C#, the browser shell, fixtures, or the pair
 scripts, it builds the pair with `scripts/build-csharp-release-pair.sh`,
-exercises that archive with `scripts/test-csharp-release-pair.sh`, builds
-release information against the current Latest pair, and publishes the same
-archive with `scripts/publish-csharp-release-pair.sh`.
+exercises that archive with `scripts/test-csharp-release-pair.sh`, builds the
+desktop pack with `scripts/build-desktop-runtime-pack-archive.sh` and checks
+that its ABI matches the pair's, builds release information against the
+current Latest pair, and publishes the same archive and desktop pack with
+`scripts/publish-csharp-release-pair.sh`.
 Documentation-only changes do not produce a pair. Run the workflow by hand
 (`gh workflow run pair.yml`) to retry a failed publication.
 
@@ -174,7 +183,7 @@ from a clean checkout into a new directory and exercise it:
 ./scripts/test-csharp-release-pair.sh /tmp/rusty-engine-release/*.tar.gz
 ```
 
-Ordinary C# CI still exercises the generated SDK/CoreCLR path. When NativeAOT
+Ordinary C# CI exercises the generated SDK/CoreCLR path. When NativeAOT
 fidelity needs verification, run `./scripts/verify-csharp.sh --aot` or dispatch
 the C# workflow with its `nativeaot` input, or pass `--aot` to
 `test-csharp-release-pair.sh`.
