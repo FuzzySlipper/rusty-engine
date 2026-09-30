@@ -18,7 +18,7 @@ pub use welding::{
     NavigationEvent,
 };
 
-use crate::{FrameStats, Gpu, PresentSkip, Renderer, WindowSurface};
+use crate::{FrameStats, Gpu, Renderer, SurfaceFrame, WindowSurface};
 
 const SANDBOX: welding::CefSandboxMode = welding::CefSandboxMode::UnsandboxedTrustedContent;
 
@@ -219,8 +219,9 @@ impl WebOverlay {
         self.last_error.as_deref()
     }
 
-    /// Import the page's latest repaint, if it repainted.
-    fn acquire(&mut self) {
+    /// Import the page's latest repaint, if it repainted. It touches no
+    /// scene state, so do it before drawing.
+    pub fn import_repaint(&mut self) {
         let started = Instant::now();
         match self.producer.acquire_frame(&self.host) {
             Ok(Some(frame)) => {
@@ -325,26 +326,24 @@ impl WebOverlay {
 }
 
 impl Renderer {
-    /// As [`Renderer::render_view_composition_to_surface`], with `overlay`'s
-    /// latest page composited over the frame. A playing video covers both.
-    pub fn render_view_composition_to_surface_with_overlay(
+    /// As [`Renderer::render_view_composition_to_frame`], with `overlay`'s
+    /// last imported page composited over the frame
+    /// ([`WebOverlay::import_repaint`]). A playing video covers both.
+    pub fn render_view_composition_to_frame_with_overlay(
         &mut self,
-        surface: &mut WindowSurface,
+        surface: &WindowSurface,
+        frame: &SurfaceFrame,
         time_seconds: f64,
         overlay: &mut WebOverlay,
-    ) -> Result<FrameStats, PresentSkip> {
-        overlay.acquire();
+    ) -> FrameStats {
         let uploaded = self.prepare();
         self.surface_size = Some(surface.size());
-        let gpu = self.gpu.clone();
-        let mut stats = FrameStats::default();
-        surface.present_layers(&gpu, |view, finished| {
-            stats = self.render_composition(view, time_seconds);
-            overlay.draw(finished.color, finished.format);
-            stats.video = self.draw_video(&finished);
-        })?;
+        let (view, finished) = surface.views(frame);
+        let mut stats = self.render_composition(view, time_seconds);
+        overlay.draw(finished.color, finished.format);
+        stats.video = self.draw_video(&finished);
         stats.parts_uploaded = uploaded;
-        Ok(stats)
+        stats
     }
 }
 

@@ -43,13 +43,26 @@ use winit::{
 #[cfg(feature = "web-overlay")]
 pub use render_wgpu::web::WebRuntimeConfig;
 
+/// The frame interval when the monitor states no refresh rate.
+const DEFAULT_REFRESH: Duration = Duration::from_micros(16_667);
+/// How long before the display should free the next swapchain image the
+/// shell wakes to acquire it. Until then it waits for window events, not in
+/// the acquire, so input reaches the page as it arrives.
+const ACQUIRE_MARGIN: Duration = Duration::from_millis(2);
+/// How often Chromium is pumped between frames. Without its schedule
+/// callback (welding does not expose it) the page's own work, such as the
+/// request carrying its input to the runtime, waits for the next pump.
+#[cfg(feature = "web-overlay")]
+const UI_PUMP_INTERVAL: Duration = Duration::from_millis(2);
+
 /// The retained scene the window presents: a renderer built on
 /// [`DesktopShell::gpu`].
 pub trait DesktopScene: Send + Sync {
     /// Run `draw` with the renderer, the committed scene applied, and the
     /// presentation time to render at (the clock camera samples arrived on).
-    /// The shell renders and presents inside it. Returns the simulation step
-    /// the frame showed.
+    /// The shell only encodes and submits inside it: it acquires the
+    /// swapchain image before and presents after, so the scene is never held
+    /// across a vsync wait. Returns the simulation step the frame showed.
     fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) -> u64;
     /// The window presented a frame.
     fn presented(&self, frame: PresentedFrame);
@@ -172,8 +185,14 @@ struct Open {
     window: Arc<Window>,
     surface: WindowSurface,
     settle: placement::Settle,
+    /// The monitor's frame interval.
+    refresh: Duration,
+    /// When to wake for the next frame.
+    next_frame: Instant,
     #[cfg(feature = "web-overlay")]
     ui: Option<overlay::UiOverlay>,
+    #[cfg(feature = "web-overlay")]
+    last_pump: Instant,
 }
 
 impl Shell {
@@ -213,12 +232,22 @@ impl Shell {
             )?),
             None => None,
         };
+        let refresh = window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .map_or(DEFAULT_REFRESH, |millihertz| {
+                Duration::from_secs_f64(1000.0 / f64::from(millihertz))
+            });
         self.window = Some(Open {
             window,
             surface,
             settle,
+            refresh,
+            next_frame: Instant::now(),
             #[cfg(feature = "web-overlay")]
             ui,
+            #[cfg(feature = "web-overlay")]
+            last_pump: Instant::now(),
         });
         Ok(())
     }
@@ -228,46 +257,64 @@ impl Shell {
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.pump(&open.window);
+            ui.flush_motion();
+            open.last_pump = Instant::now();
         }
-        let mut result: Result<(), PresentSkip> = Ok(());
-        let surface = &mut open.surface;
+        // The vsync wait happens here, before the scene is taken, so a product
+        // call applying its changes never waits for the display.
+        let acquiring = Instant::now();
+        let frame = match open.surface.acquire(&self.gpu) {
+            Ok(frame) => frame,
+            Err(PresentSkip::Reconfigured | PresentSkip::Unavailable) => {
+                self.report.frames_skipped += 1;
+                open.next_frame = Instant::now() + open.refresh;
+                return;
+            }
+        };
+        let acquired = Instant::now();
+        // Under vsync the display frees the next image about one interval
+        // after this one.
+        open.next_frame = acquired + open.refresh.saturating_sub(ACQUIRE_MARGIN);
+        #[cfg(feature = "web-overlay")]
+        if let Some(ui) = &mut open.ui {
+            ui.page().import_repaint();
+        }
+        let surface = &open.surface;
         // The window's scale factor is the page's device pixel ratio too.
         let pixel_ratio = open.window.scale_factor() as f32;
         #[cfg(feature = "web-overlay")]
         let mut ui = open.ui.as_mut();
-        let called = Instant::now();
-        let mut drawn = (called, called);
+        let locking = Instant::now();
+        let mut drawn = (locking, locking);
         let step = self.scene.draw(&mut |renderer, now| {
             drawn.0 = Instant::now();
             renderer.set_pixel_ratio(pixel_ratio);
             #[cfg(feature = "web-overlay")]
             if let Some(ui) = ui.as_deref_mut() {
-                result = renderer
-                    .render_view_composition_to_surface_with_overlay(surface, now, ui.page())
-                    .map(|_| ());
+                renderer.render_view_composition_to_frame_with_overlay(
+                    surface,
+                    &frame,
+                    now,
+                    ui.page(),
+                );
                 drawn.1 = Instant::now();
                 return;
             }
-            result = renderer
-                .render_view_composition_to_surface(surface, now)
-                .map(|_| ());
+            renderer.render_view_composition_to_frame(surface, &frame, now);
             drawn.1 = Instant::now();
         });
-        match result {
-            Ok(()) => {
-                self.report.frames_presented += 1;
-                // Acquire and present happen inside the draw.
-                self.scene.presented(PresentedFrame {
-                    step,
-                    presented_at: SystemTime::now() - drawn.1.elapsed(),
-                    acquire: Duration::ZERO,
-                    lock: drawn.0 - called,
-                    draw: drawn.1 - drawn.0,
-                    present: Duration::ZERO,
-                });
-            }
-            Err(_) => self.report.frames_skipped += 1,
-        }
+        let presenting = Instant::now();
+        open.surface.present(&self.gpu, frame);
+        let presented = Instant::now();
+        self.report.frames_presented += 1;
+        self.scene.presented(PresentedFrame {
+            step,
+            presented_at: SystemTime::now(),
+            acquire: acquired - acquiring,
+            lock: drawn.0 - locking,
+            draw: drawn.1 - drawn.0,
+            present: presented - presenting,
+        });
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &open.ui {
             let stats = ui.stats();
@@ -327,6 +374,17 @@ impl ApplicationHandler for Shell {
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.window_event(&open.window, &event);
+            // Chromium's work runs only when pumped: do it now rather than
+            // at the next frame, so the page sees the input at once.
+            if matches!(
+                event,
+                WindowEvent::KeyboardInput { .. }
+                    | WindowEvent::MouseInput { .. }
+                    | WindowEvent::MouseWheel { .. }
+            ) {
+                ui.pump(&open.window);
+                open.last_pump = Instant::now();
+            }
         }
     }
 
@@ -345,12 +403,28 @@ impl ApplicationHandler for Shell {
             self.shut(event_loop);
             return;
         }
-        let started = Instant::now();
-        self.frame();
-        // Presentation waits for vsync; a skipped frame (an occluded window)
-        // would otherwise spin.
-        if started.elapsed() < Duration::from_millis(1) {
-            std::thread::sleep(Duration::from_millis(4));
+        let Some(open) = &mut self.window else { return };
+        if Instant::now() >= open.next_frame {
+            self.frame();
+        } else {
+            #[cfg(feature = "web-overlay")]
+            if let Some(ui) = &mut open.ui {
+                if open.last_pump.elapsed() >= UI_PUMP_INTERVAL {
+                    ui.pump(&open.window);
+                    open.last_pump = Instant::now();
+                }
+            }
         }
+        // Wait for window events until the next frame (or Chromium pump) is
+        // due, rather than blocking in the swapchain acquire.
+        let Some(open) = &self.window else { return };
+        #[cfg(feature = "web-overlay")]
+        let wake = match &open.ui {
+            Some(_) => open.next_frame.min(open.last_pump + UI_PUMP_INTERVAL),
+            None => open.next_frame,
+        };
+        #[cfg(not(feature = "web-overlay"))]
+        let wake = open.next_frame;
+        event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 }

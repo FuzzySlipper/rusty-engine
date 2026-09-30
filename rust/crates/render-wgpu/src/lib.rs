@@ -78,7 +78,7 @@ pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, Gpu, GpuError};
 pub use particles::EntityPositions;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
-pub use surface::{PresentSkip, WindowSurface};
+pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
 pub use video::{VideoFact, VideoFailure};
 

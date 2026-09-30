@@ -139,7 +139,7 @@ impl UiOverlay {
         self.page.last_error().map(str::to_owned)
     }
 
-    /// Chromium's work, the page's requests, and this frame's locked motion.
+    /// Chromium's work and the page's requests.
     pub(crate) fn pump(&mut self, window: &Window) {
         self.runtime.pump();
         while let Some(event) = self.page.poll_event() {
@@ -169,6 +169,10 @@ impl UiOverlay {
                 window.set_cursor(cursor_icon(&shape));
             }
         }
+    }
+
+    /// Hand the page this frame's locked mouse motion, once per frame.
+    pub(crate) fn flush_motion(&mut self) {
         let (x, y) = std::mem::take(&mut self.motion);
         if self.grabbed && (x != 0.0 || y != 0.0) {
             let _ = self

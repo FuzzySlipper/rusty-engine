@@ -15,6 +15,16 @@ pub struct WindowSurface {
     depth_view: wgpu::TextureView,
 }
 
+/// A swapchain image acquired for one frame: acquire it, draw into it
+/// ([`crate::Renderer::render_view_composition_to_frame`]), then present it.
+pub struct SurfaceFrame {
+    texture: wgpu::SurfaceTexture,
+    view: wgpu::TextureView,
+    /// The same image as a non-sRGB view, for overlays blended in gamma
+    /// space.
+    gamma_view: wgpu::TextureView,
+}
+
 /// Why a frame was not presented. The caller renders again next tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentSkip {
@@ -113,45 +123,50 @@ impl WindowSurface {
         self.depth_view = target::multisampled_depth(gpu, width, height, target::PRIMARY_SAMPLES);
     }
 
-    /// Acquire the next swapchain image, let `draw` encode into it, and
-    /// present it.
-    pub(crate) fn present_with(
-        &mut self,
-        gpu: &Gpu,
-        draw: impl FnOnce(target::TargetView<'_>),
-    ) -> Result<(), PresentSkip> {
-        self.present_layers(gpu, |view, _| draw(view))
-    }
-
-    /// As [`Self::present_with`], and `draw` also gets the finished image as
-    /// a single-sample, non-sRGB view, to encode overlays over it in gamma
-    /// space after the scene is resolved.
-    pub(crate) fn present_layers(
-        &mut self,
-        gpu: &Gpu,
-        draw: impl FnOnce(target::TargetView<'_>, target::TargetView<'_>),
-    ) -> Result<(), PresentSkip> {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+    /// Acquire the next swapchain image. Under vsync this waits until the
+    /// display frees one, so take it before anything a frame shares with
+    /// other threads.
+    pub fn acquire(&mut self, gpu: &Gpu) -> Result<SurfaceFrame, PresentSkip> {
+        let texture = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.reconfigure(gpu);
                 return Err(PresentSkip::Reconfigured);
             }
             _ => return Err(PresentSkip::Unavailable),
         };
-        let view = frame.texture.create_view(&Default::default());
-        let (color, resolve) = if target::PRIMARY_SAMPLES > 1 {
-            (&self.multisampled, Some(&view))
-        } else {
-            (&view, None)
-        };
-        let gamma = self.config.format.remove_srgb_suffix();
-        let gamma_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(gamma),
+        let view = texture.texture.create_view(&Default::default());
+        let gamma_view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
         });
-        draw(
+        Ok(SurfaceFrame {
+            texture,
+            view,
+            gamma_view,
+        })
+    }
+
+    /// Present a frame drawn into `frame`.
+    pub fn present(&self, gpu: &Gpu, frame: SurfaceFrame) {
+        gpu.queue.present(frame.texture);
+    }
+
+    /// The views to draw `frame` through: the scene's (multisampled and
+    /// resolved into the image), and the finished image as a single-sample,
+    /// non-sRGB view, to encode overlays over it in gamma space after the
+    /// scene is resolved.
+    pub(crate) fn views<'a>(
+        &'a self,
+        frame: &'a SurfaceFrame,
+    ) -> (target::TargetView<'a>, target::TargetView<'a>) {
+        let (color, resolve) = if target::PRIMARY_SAMPLES > 1 {
+            (&self.multisampled, Some(&frame.view))
+        } else {
+            (&frame.view, None)
+        };
+        (
             target::TargetView {
                 color,
                 resolve,
@@ -162,16 +177,27 @@ impl WindowSurface {
                 height: self.config.height,
             },
             target::TargetView {
-                color: &gamma_view,
+                color: &frame.gamma_view,
                 resolve: None,
                 depth: &self.depth_view,
-                format: gamma,
+                format: self.config.format.remove_srgb_suffix(),
                 samples: 1,
                 width: self.config.width,
                 height: self.config.height,
             },
-        );
-        gpu.queue.present(frame);
+        )
+    }
+
+    /// Acquire the next swapchain image, let `draw` encode into it, and
+    /// present it.
+    pub(crate) fn present_with(
+        &mut self,
+        gpu: &Gpu,
+        draw: impl FnOnce(target::TargetView<'_>),
+    ) -> Result<(), PresentSkip> {
+        let frame = self.acquire(gpu)?;
+        draw(self.views(&frame).0);
+        self.present(gpu, frame);
         Ok(())
     }
 }

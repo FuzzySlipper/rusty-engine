@@ -32,7 +32,7 @@ use crate::camera::{self, CameraMatrices, CameraMotion, CameraPose, CameraSample
 use crate::frame::{PassStart, PixelRect, ViewLayer, ViewPass, ViewStats};
 use crate::labels::LabelPass;
 use crate::target::{self, TargetView, OFFSCREEN_FORMAT};
-use crate::{FrameStats, OffscreenTarget, PresentSkip, Renderer, WindowSurface};
+use crate::{FrameStats, OffscreenTarget, Renderer, SurfaceFrame, WindowSurface};
 
 struct CompositionTarget {
     descriptor: RendererCompositionTarget,
@@ -319,22 +319,21 @@ impl Renderer {
         stats
     }
 
-    /// Render the installed composition into the window and present it.
-    pub fn render_view_composition_to_surface(
+    /// Render the installed composition into an acquired window frame.
+    /// Present it with [`WindowSurface::present`].
+    pub fn render_view_composition_to_frame(
         &mut self,
-        surface: &mut WindowSurface,
+        surface: &WindowSurface,
+        frame: &SurfaceFrame,
         time_seconds: f64,
-    ) -> Result<FrameStats, PresentSkip> {
+    ) -> FrameStats {
         let uploaded = self.prepare();
         self.surface_size = Some(surface.size());
-        let gpu = self.gpu.clone();
-        let mut stats = FrameStats::default();
-        surface.present_with(&gpu, |view| {
-            stats = self.render_composition(view, time_seconds);
-            stats.video = self.draw_video(&view);
-        })?;
+        let (view, _) = surface.views(frame);
+        let mut stats = self.render_composition(view, time_seconds);
+        stats.video = self.draw_video(&view);
         stats.parts_uploaded = uploaded;
-        Ok(stats)
+        stats
     }
 
     pub fn view_composition_readout(&self) -> ViewCompositionReadout {

@@ -10,7 +10,17 @@ TypeScript UI is composited over it.
   thread. `DesktopShell::open()` creates the event loop and the `Gpu` first;
   the runtime builds its `Renderer` on that device and applies publications
   before the window exists. Each frame presents the installed view
-  composition to the window surface.
+  composition to the window surface. The shell acquires the swapchain image
+  before taking the scene and presents after releasing it, so a product call
+  applying its changes never waits for vsync; only encoding and submitting
+  the frame hold the scene. Between frames the shell waits for window events
+  rather than in the acquire, waking about 2 ms before the display frees the
+  next image, and pumps Chromium on each key, button or wheel event and every
+  2 ms, so input reaches the page and the page's request reaches the runtime
+  without waiting for a frame. `engine.renderer` reports the window's
+  presented frames (time and step), its median acquire, lock, draw and
+  present times, when input reached the window, and which step consumed
+  recent input.
 - **UI.** The window shows the same browser shell page `rusty dev` serves,
   from the runtime's own HTTP host (`http://127.0.0.1:<port>/`). Chromium
   (CEF) renders it off-screen and `render-wgpu`'s `web` module imports each
