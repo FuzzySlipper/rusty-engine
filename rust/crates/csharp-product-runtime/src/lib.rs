@@ -2691,11 +2691,15 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .input_lane
             .ingest_batch(batch.events())
             .map_err(input_runtime_error)?;
+        // A safe drop is a batch a fence made stale or a replay behind the
+        // cursor: expected, and answered in the receipt, so it is recorded as
+        // information. (The sink raises any rejected-recoverable event to a
+        // warning.)
         if receipt.dropped_count() > 0 {
             let _ = self.diagnostics.publish(
                 ProductDevLogEvent::new(
-                    ProductDevLogSeverity::Warning,
-                    ProductDevLogDisposition::RejectedRecoverable,
+                    ProductDevLogSeverity::Info,
+                    ProductDevLogDisposition::Accepted,
                     "csharp-runtime",
                     "CSHARP_INPUT_STALE_DROPPED",
                     format!(
@@ -6522,9 +6526,15 @@ mod tests {
         runtime
             .input(ProductDevInputBatch::new(vec![first.clone()]))
             .expect("admit first input");
+        let warnings = runtime.diagnostics.snapshot().warning_count;
         let duplicate = runtime
             .input(ProductDevInputBatch::new(vec![first]))
             .expect("safe duplicate returns a typed receipt");
+        assert_eq!(
+            runtime.diagnostics.snapshot().warning_count,
+            warnings,
+            "a safe drop is not a warning"
+        );
         let result = duplicate.result();
         assert!(!result.is_accepted());
         let encoded = serde_json::to_value(result).expect("duplicate receipt serializes");
