@@ -247,6 +247,65 @@ test('while a harness holds input the page sends none and shows the claim', asyn
   });
 });
 
+
+test('a claimed binding that completes input recovery keeps the page from sending', async () => {
+  await withFakeRoot(async (root) => {
+    const claimed = { ...RUNNING, controlRevision: '3' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let calls = 0;
+    let binding: typeof RUNNING | typeof claimed = RUNNING;
+    let pending = true;
+    const unknown = () => new ProductBrowserLocalTransportError('request_failed', 'lost input response', {
+      route: 'input', mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null },
+    });
+    const host = await mountProductBrowserHostWithApplication({
+      root, lifecycleMode: 'demand', autoStart: false, mountUi: async () => undefined,
+      transport: {
+        ...adapter,
+        input: async (batch) => { calls++; if (calls === 1) throw unknown(); return adapter.input(batch); },
+        replaceControl: async () => { throw unknown(); },
+        subscribeOutputBatches: listener => { emit = listener; return () => { emit = null; }; },
+      },
+    }, async () => fakeApplication({
+      bindRuntime: () => undefined,
+      rebaselineRuntime: (value: { runtime: typeof claimed }) => { binding = value.runtime; },
+      drain: () => {
+        if (!pending) return [];
+        pending = false;
+        return [{ runtime: binding, sequence: '1', context: 'gameplay.default',
+          fact: { kind: 'key', code: 'key-w', edge: 'pressed' } }];
+      },
+    }) as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([{ kind: 'binding', runtime: RUNNING, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    await assert.rejects(host.admitDemandStep());
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(host.readout().state, 'degraded');
+    publish([{ kind: 'binding', runtime: claimed, nextInputSequence: '1', inputClaim: 'review-harness' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(host.readout().state, 'ready');
+    pending = true;
+    await host.admitDemandStep();
+    const badge = root.dataset['rustyInputClaim'];
+    assert.deepEqual({ calls, badge }, { calls: 1, badge: 'review-harness' },
+      'fresh harness binding must show its claim and keep the page from sending into it');
+    // A later release hands input back to the page.
+    const released = { ...RUNNING, controlRevision: '4' } as const;
+    binding = released as never;
+    publish([{ kind: 'binding', runtime: released, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(root.dataset['rustyInputClaim'], undefined);
+    pending = true;
+    await host.admitDemandStep();
+    assert.equal(calls, 2, 'page input resumes after the release');
+    await host.dispose();
+  });
+});
+
 test('after an output gap only the fresh baseline is applied', async () => {
   await withFakeRoot(async (root) => {
     let emit: ProductBrowserRuntimeOutputBatchListener | null = null;

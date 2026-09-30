@@ -700,6 +700,8 @@ export async function mountProductBrowserHostWithApplication(
             // binding publication is authoritative even if the corresponding
             // control-replace HTTP response was lost after commit.
             if (hasFreshRecoveryBinding(output.runtime, inputRecovery.uncertainBinding)) {
+              // Its claim applies before page input resumes under it.
+              showInputClaim(output.inputClaim ?? null);
               completeInputRecovery(output.runtime, output.nextInputSequence);
             }
             return;
