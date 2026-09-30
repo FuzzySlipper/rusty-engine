@@ -221,13 +221,19 @@ pub type NativeReadVoxelScene = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelSceneReadRequest,
     *mut NativeVoxelSceneReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeReadVoxel =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelReadRequest, *mut NativeVoxelReadout) -> i32;
+pub type NativeReadVoxel = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelReadRequest,
+    *mut NativeVoxelReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadVoxelChunk = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelChunkReadRequest,
     *mut NativeVoxelChunkReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeApplyVoxelEdits = unsafe extern "C" fn(
     *mut c_void,

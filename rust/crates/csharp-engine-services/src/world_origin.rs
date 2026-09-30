@@ -1,5 +1,6 @@
 use std::{ffi::c_void, sync::Arc};
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use core_ids::EntityId;
 use core_space::{GlobalPosition, WorldOrigin};
 use csharp_engine_abi::*;
@@ -231,7 +232,9 @@ unsafe extern "C" fn prepare(
     context: *mut c_void,
     request: *const NativeWorldOriginPrepareRequest,
     handle: *mut NativeWorldOriginPreparedHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || handle.is_null() {
         return 0;
     }
@@ -242,7 +245,7 @@ unsafe extern "C" fn prepare(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -250,7 +253,9 @@ unsafe extern "C" fn read(
     context: *mut c_void,
     request: NativeWorldOriginReadRequest,
     readout: *mut NativeWorldOriginReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -259,7 +264,7 @@ unsafe extern "C" fn read(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -267,7 +272,9 @@ unsafe extern "C" fn read_prepared(
     context: *mut c_void,
     request: NativeWorldOriginPreparedReadRequest,
     result: *mut NativeWorldOriginPreparedResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -278,7 +285,7 @@ unsafe extern "C" fn read_prepared(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -286,7 +293,9 @@ unsafe extern "C" fn commit(
     context: *mut c_void,
     request: NativeWorldOriginCommitRequest,
     receipt: *mut NativeWorldOriginCommitReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -295,7 +304,7 @@ unsafe extern "C" fn commit(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -345,6 +354,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -408,7 +418,12 @@ mod tests {
         let mut prepared = NativeWorldOriginPreparedHandle::default();
         assert_eq!(
             unsafe {
-                (world_origin_api.prepare)(world_origin_api.context, &request, &mut prepared)
+                (world_origin_api.prepare)(
+                    world_origin_api.context,
+                    &request,
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -420,6 +435,7 @@ mod tests {
                     world_origin_api.context,
                     NativeWorldOriginPreparedReadRequest { prepared },
                     &mut summary,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -444,6 +460,7 @@ mod tests {
                     world_origin_api.context,
                     NativeWorldOriginCommitRequest { prepared },
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -472,6 +489,7 @@ mod tests {
                         world_origin_api.context,
                         &prepare_request(session, target_x, rows),
                         &mut prepared,
+                        std::ptr::null_mut(),
                     )
                 },
                 ABI_OK
@@ -486,6 +504,7 @@ mod tests {
                         world_origin_api.context,
                         NativeWorldOriginCommitRequest { prepared },
                         &mut receipt,
+                        std::ptr::null_mut(),
                     )
                 },
                 ABI_OK

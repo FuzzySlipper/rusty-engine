@@ -1302,6 +1302,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1314,6 +1315,7 @@ mod tests {
                     api.spatial.context,
                     &navigation_request(session, &cells, 8),
                     &mut first,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1327,6 +1329,7 @@ mod tests {
                     api.spatial.context,
                     &navigation_request(session, &cells, 0),
                     &mut rejected,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -1342,6 +1345,7 @@ mod tests {
                     api.spatial.context,
                     NativeNavigationProjectionReadRequest { session },
                     &mut after_discard,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1359,6 +1363,7 @@ mod tests {
                     api.spatial.context,
                     &navigation_request(session, &cells, 8),
                     &mut retry,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1411,6 +1416,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1424,7 +1430,12 @@ mod tests {
         };
         assert_eq!(
             unsafe {
-                (api.content.open_reference)(api.content.context, &valid_open, &mut valid_reference)
+                (api.content.open_reference)(
+                    api.content.context,
+                    &valid_open,
+                    &mut valid_reference,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -1474,6 +1485,7 @@ mod tests {
                         max_visited: 32,
                     },
                     &mut step,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1489,6 +1501,7 @@ mod tests {
                     api.spatial.context,
                     NativeSpatialContentArtifactReadRequest { session },
                     &mut readout,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1517,6 +1530,7 @@ mod tests {
                     api.content.context,
                     &invalid_open,
                     &mut invalid_reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1546,6 +1560,7 @@ mod tests {
                     api.spatial.context,
                     NativeSpatialContentArtifactReadRequest { session },
                     &mut after_rejection,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

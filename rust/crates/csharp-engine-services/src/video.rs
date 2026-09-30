@@ -436,6 +436,7 @@ mod tests {
                         },
                     },
                     &mut reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

@@ -2,6 +2,7 @@
 //! call's settled jobs go to the runtime's executor once, as
 //! [`RenderOutputWork`], and their results arrive between calls, never
 //! through a callback.
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use crate::{
     camera_view::RuntimeCameraViewCall,
     composition::{borrowed_utf8, ABI_OK},
@@ -409,7 +410,9 @@ unsafe extern "C" fn read(
     context: *mut c_void,
     h: NativeRenderOutputHandle,
     out: *mut NativeRenderOutputReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || out.is_null() {
         return 0;
     }
@@ -418,7 +421,7 @@ unsafe extern "C" fn read(
             unsafe { *out = v };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 unsafe fn bytes(

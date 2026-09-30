@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use core_ids::EntityId;
 use csharp_engine_abi::*;
 use engine_spatial::{
@@ -102,7 +103,9 @@ unsafe extern "C" fn resolve(
     _context: *mut c_void,
     request: *const NativeMotionResolveRequest,
     receipt: *mut NativeMotionResolveReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -111,7 +114,7 @@ unsafe extern "C" fn resolve(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 

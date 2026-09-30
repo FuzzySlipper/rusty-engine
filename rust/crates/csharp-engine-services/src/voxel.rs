@@ -6,6 +6,7 @@
 
 use std::{ffi::c_void, sync::Arc, time::Instant};
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use engine_spatial::{
     VoxelChunkIdentity, VoxelChunkPayload, VoxelChunkResidencyApplyError,
@@ -296,7 +297,9 @@ unsafe extern "C" fn read_scene(
     context: *mut c_void,
     request: NativeVoxelSceneReadRequest,
     output: *mut NativeVoxelSceneReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -305,7 +308,7 @@ unsafe extern "C" fn read_scene(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -313,7 +316,9 @@ unsafe extern "C" fn read(
     context: *mut c_void,
     request: NativeVoxelReadRequest,
     output: *mut NativeVoxelReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -322,7 +327,7 @@ unsafe extern "C" fn read(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -330,7 +335,9 @@ unsafe extern "C" fn read_chunk(
     context: *mut c_void,
     request: NativeVoxelChunkReadRequest,
     output: *mut NativeVoxelChunkReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -339,7 +346,7 @@ unsafe extern "C" fn read_chunk(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -613,6 +620,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

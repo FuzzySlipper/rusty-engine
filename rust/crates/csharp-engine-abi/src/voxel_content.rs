@@ -596,29 +596,38 @@ pub type NativeAdmitVoxelAsset = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelAssetRequest,
     *mut NativeVoxelAssetHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeLoadVoxelAssetFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeLoadVoxelAssetFromContentRequest,
     *mut NativeVoxelAssetHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyVoxelAsset = unsafe extern "C" fn(*mut c_void, NativeVoxelAssetHandle) -> i32;
-pub type NativeReadVoxelAsset =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelAssetHandle, *mut NativeVoxelAssetReadout) -> i32;
+pub type NativeReadVoxelAsset = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelAssetHandle,
+    *mut NativeVoxelAssetReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativePublishVoxelAssetToSpatial = unsafe extern "C" fn(
     *mut c_void,
     *const NativePublishVoxelAssetToSpatialRequest,
     *mut NativeVoxelAssetSpatialPublishResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeAdmitVoxelObject = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelObjectRequest,
     *mut NativeVoxelObjectHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeLoadVoxelObjectFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeLoadVoxelObjectFromContentRequest,
     *mut NativeVoxelObjectHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeAdmitMagicaVoxelObject = unsafe extern "C" fn(
     *mut c_void,
@@ -639,11 +648,13 @@ pub type NativeAdmitVoxelAnnotation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelAnnotationRequest,
     *mut NativeVoxelAnnotationHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeLoadVoxelAnnotationFromContent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeLoadVoxelAnnotationFromContentRequest,
     *mut NativeVoxelAnnotationHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyVoxelAnnotation =
     unsafe extern "C" fn(*mut c_void, NativeVoxelAnnotationHandle) -> i32;
@@ -651,31 +662,37 @@ pub type NativeQueryVoxelAnnotation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelAnnotationQueryRequest,
     *mut NativeVoxelAnnotationRegionResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSetVoxelAnnotationLabel = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSetVoxelAnnotationLabelRequest,
     *mut NativeVoxelAnnotationEditResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSetVoxelAnnotationKind = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSetVoxelAnnotationKindRequest,
     *mut NativeVoxelAnnotationEditResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSetVoxelAnnotationParent = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSetVoxelAnnotationParentRequest,
     *mut NativeVoxelAnnotationEditResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSetVoxelAnnotationBounds = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSetVoxelAnnotationBoundsRequest,
     *mut NativeVoxelAnnotationEditResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSetVoxelAnnotationTags = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSetVoxelAnnotationTagsRequest,
     *mut NativeVoxelAnnotationEditResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyVoxelObject =
     unsafe extern "C" fn(*mut c_void, NativeVoxelObjectHandle) -> i32;
@@ -683,53 +700,76 @@ pub type NativeReadVoxelObject = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelObjectHandle,
     *mut NativeVoxelObjectReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSelectDefaultVoxelObjectFrame = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelObjectHandle,
     *mut NativeVoxelObjectFrameReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSelectVoxelObjectClipFrame = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSelectVoxelObjectClipFrameRequest,
     *mut NativeVoxelObjectFrameReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadSelectedVoxelObjectFrame = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelObjectHandle,
     *mut NativeVoxelObjectFrameReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCreateVoxelObjectPlayer = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelObjectHandle,
     *mut NativeVoxelObjectPlayerHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyVoxelObjectPlayer =
     unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerHandle) -> i32;
-pub type NativePlayVoxelObjectPlayer =
-    unsafe extern "C" fn(*mut c_void, *const NativePlayVoxelObjectPlayerRequest) -> i32;
-pub type NativeScrubVoxelObjectPlayer =
-    unsafe extern "C" fn(*mut c_void, *const NativeScrubVoxelObjectPlayerRequest) -> i32;
-pub type NativePauseVoxelObjectPlayer =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerTimeRequest) -> i32;
-pub type NativeResumeVoxelObjectPlayer =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerTimeRequest) -> i32;
-pub type NativeStopVoxelObjectPlayer =
-    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerHandle) -> i32;
+pub type NativePlayVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePlayVoxelObjectPlayerRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeScrubVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeScrubVoxelObjectPlayerRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativePauseVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectPlayerTimeRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeResumeVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectPlayerTimeRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeStopVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectPlayerHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadVoxelObjectPlayer = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelObjectPlayerTimeRequest,
     *mut NativeVoxelObjectPlayerReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSampleVoxelObjectPlayer = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelObjectPlayerTimeRequest,
     *mut NativeVoxelObjectPlayerSampleReadout,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeProjectVoxelObject = unsafe extern "C" fn(
     *mut c_void,
     *const NativeProjectVoxelObjectRequest,
     *mut NativeVoxelObjectPresentationHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUpdateVoxelObjectPresentation =
     unsafe extern "C" fn(*mut c_void, *const NativeUpdateVoxelObjectPresentationRequest) -> i32;

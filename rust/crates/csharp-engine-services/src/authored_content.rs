@@ -115,6 +115,7 @@ fn admits_prefab_registry_content_inside_the_owner() {
                     path: slice(b"prefabs.json"),
                 },
                 &mut reference,
+                std::ptr::null_mut(),
             )
         },
         ABI_OK
@@ -3700,6 +3701,7 @@ mod tests {
                         path: slice(b"catalog.json"),
                     },
                     &mut reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -4760,6 +4762,7 @@ mod tests {
                         path: slice(b"scene.json"),
                     },
                     &mut content_reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

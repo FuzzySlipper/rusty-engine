@@ -165,11 +165,15 @@ pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
     *mut NativeVoxelSceneMaterialMappingResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyVoxelScenePresentation =
     unsafe extern "C" fn(*mut c_void, NativeVoxelScenePresentationHandle) -> i32;
-pub type NativeClearVoxelScenePresentations =
-    unsafe extern "C" fn(*mut c_void, *mut NativeVoxelScenePresentationClearReceipt) -> i32;
+pub type NativeClearVoxelScenePresentations = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeVoxelScenePresentationClearReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 
 /// Named generated Engine service family for projecting canonical Spatial
 /// voxel scenes through the Engine renderer.

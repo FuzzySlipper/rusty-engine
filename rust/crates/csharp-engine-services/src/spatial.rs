@@ -9,6 +9,7 @@ use std::{
     time::Instant,
 };
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use core_space::{ChunkDims, Face, GridId, VoxelCoord, VoxelGridSpec};
@@ -3632,7 +3633,9 @@ unsafe extern "C" fn create_spatial_session(
     context: *mut c_void,
     config: NativeSpatialSessionConfig,
     handle: *mut NativeSpatialSessionHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || handle.is_null() {
         return 0;
     }
@@ -3642,7 +3645,7 @@ unsafe extern "C" fn create_spatial_session(
             unsafe { *handle = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3751,7 +3754,9 @@ unsafe extern "C" fn read_spatial_content_artifact(
     context: *mut c_void,
     request: NativeSpatialContentArtifactReadRequest,
     readout: *mut NativeSpatialContentArtifactReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -3761,7 +3766,7 @@ unsafe extern "C" fn read_spatial_content_artifact(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3769,7 +3774,9 @@ unsafe extern "C" fn replace_spatial_navigation(
     context: *mut c_void,
     request: *const NativeNavigationReplaceRequest,
     receipt: *mut NativeNavigationReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3779,7 +3786,7 @@ unsafe extern "C" fn replace_spatial_navigation(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3787,7 +3794,9 @@ unsafe extern "C" fn replace_spatial_voxel_navigation(
     context: *mut c_void,
     request: *const NativeNavigationVoxelReplaceRequest,
     receipt: *mut NativeNavigationReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3798,7 +3807,7 @@ unsafe extern "C" fn replace_spatial_voxel_navigation(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3806,7 +3815,9 @@ unsafe extern "C" fn replace_spatial_collision_navigation(
     context: *mut c_void,
     request: *const NativeCollisionNavigationReplaceRequest,
     receipt: *mut NativeNavigationReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3817,7 +3828,7 @@ unsafe extern "C" fn replace_spatial_collision_navigation(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3825,7 +3836,9 @@ unsafe extern "C" fn replace_spatial_navigation_traversal(
     context: *mut c_void,
     request: *const NativeNavigationTraversalReplaceRequest,
     receipt: *mut NativeNavigationTraversalReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3836,7 +3849,7 @@ unsafe extern "C" fn replace_spatial_navigation_traversal(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3844,7 +3857,9 @@ unsafe extern "C" fn clear_spatial_navigation_traversal(
     context: *mut c_void,
     request: NativeNavigationTraversalClearRequest,
     receipt: *mut NativeNavigationTraversalReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3855,7 +3870,7 @@ unsafe extern "C" fn clear_spatial_navigation_traversal(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3863,7 +3878,9 @@ unsafe extern "C" fn replace_spatial_volumetric_navigation_traversal(
     context: *mut c_void,
     request: *const NativeNavigationVolumetricTraversalReplaceRequest,
     receipt: *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3874,7 +3891,7 @@ unsafe extern "C" fn replace_spatial_volumetric_navigation_traversal(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3882,7 +3899,9 @@ unsafe extern "C" fn clear_spatial_volumetric_navigation_traversal(
     context: *mut c_void,
     request: NativeNavigationVolumetricTraversalClearRequest,
     receipt: *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3893,7 +3912,7 @@ unsafe extern "C" fn clear_spatial_volumetric_navigation_traversal(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3901,7 +3920,9 @@ unsafe extern "C" fn read_navigation_projection(
     context: *mut c_void,
     request: NativeNavigationProjectionReadRequest,
     readout: *mut NativeNavigationProjectionReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -3912,7 +3933,7 @@ unsafe extern "C" fn read_navigation_projection(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3920,7 +3941,9 @@ unsafe extern "C" fn request_navigation_path(
     context: *mut c_void,
     request: NativeNavigationPathRequest,
     readout: *mut NativeNavigationPathResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -3929,7 +3952,7 @@ unsafe extern "C" fn request_navigation_path(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3937,7 +3960,9 @@ unsafe extern "C" fn request_weighted_navigation_path(
     context: *mut c_void,
     request: NativeNavigationWeightedPathRequest,
     readout: *mut NativeNavigationWeightedPathResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -3948,7 +3973,7 @@ unsafe extern "C" fn request_weighted_navigation_path(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3956,7 +3981,9 @@ unsafe extern "C" fn request_volumetric_navigation_path(
     context: *mut c_void,
     request: NativeNavigationVolumetricPathRequest,
     readout: *mut NativeNavigationPathResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -3967,7 +3994,7 @@ unsafe extern "C" fn request_volumetric_navigation_path(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -3975,7 +4002,9 @@ unsafe extern "C" fn request_weighted_volumetric_navigation_path(
     context: *mut c_void,
     request: NativeNavigationVolumetricWeightedPathRequest,
     readout: *mut NativeNavigationVolumetricWeightedPathResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -3986,20 +4015,22 @@ unsafe extern "C" fn request_weighted_volumetric_navigation_path(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
 unsafe extern "C" fn clear_navigation(
     context: *mut c_void,
     request: NativeNavigationClearRequest,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() {
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.clear_navigation(request) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4046,7 +4077,9 @@ unsafe extern "C" fn capture_character_continuation(
     context: *mut c_void,
     request: NativeCharacterContinuationCaptureRequest,
     checkpoint: *mut NativeCharacterContinuationCheckpoint,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || checkpoint.is_null() {
         return 0;
     }
@@ -4057,7 +4090,7 @@ unsafe extern "C" fn capture_character_continuation(
             unsafe { *checkpoint = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4065,7 +4098,9 @@ unsafe extern "C" fn restore_character_continuation(
     context: *mut c_void,
     request: NativeCharacterContinuationRestoreRequest,
     receipt: *mut NativeCharacterContinuationRestoreReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -4076,7 +4111,7 @@ unsafe extern "C" fn restore_character_continuation(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4154,7 +4189,9 @@ unsafe extern "C" fn read_character_controller(
     context: *mut c_void,
     request: NativeCharacterControllerReadRequest,
     result: *mut NativeCharacterControllerResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -4164,7 +4201,7 @@ unsafe extern "C" fn read_character_controller(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4172,7 +4209,9 @@ unsafe extern "C" fn evaluate_navigation_step(
     context: *mut c_void,
     request: NativeNavigationStepRequest,
     receipt: *mut NativeNavigationStepResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -4182,7 +4221,7 @@ unsafe extern "C" fn evaluate_navigation_step(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4190,7 +4229,9 @@ unsafe extern "C" fn read_projection(
     context: *mut c_void,
     request: NativeSpatialProjectionReadRequest,
     readout: *mut NativeSpatialProjectionReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || readout.is_null() {
         return 0;
     }
@@ -4199,7 +4240,7 @@ unsafe extern "C" fn read_projection(
             unsafe { *readout = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4207,7 +4248,9 @@ unsafe extern "C" fn contains_point(
     context: *mut c_void,
     request: NativeSpatialContainsPointRequest,
     receipt: *mut NativeSpatialQueryReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || receipt.is_null() {
         return 0;
     }
@@ -4216,7 +4259,7 @@ unsafe extern "C" fn contains_point(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4283,7 +4326,9 @@ unsafe extern "C" fn pick_voxel(
     context: *mut c_void,
     request: NativeSpatialPickRequest,
     hit: *mut NativeSpatialHit,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || hit.is_null() {
         return 0;
     }
@@ -4292,7 +4337,7 @@ unsafe extern "C" fn pick_voxel(
             unsafe { *hit = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -4414,7 +4459,9 @@ unsafe extern "C" fn read_trigger(
     context: *mut c_void,
     request: NativeSpatialTriggerReadRequest,
     result: *mut NativeSpatialTriggerReadResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -4423,7 +4470,7 @@ unsafe extern "C" fn read_trigger(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -5552,6 +5599,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -5581,6 +5629,7 @@ mod tests {
                         cells_len: cells.len(),
                     },
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -5857,6 +5906,7 @@ mod tests {
                     api.context,
                     &collision_navigation_request(session),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -5883,7 +5933,14 @@ mod tests {
         step.target.y = 1.02;
         let mut evaluated = NativeNavigationStepResult::default();
         assert_eq!(
-            unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    step,
+                    &mut evaluated,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(evaluated.outcome, NativeNavigationPathOutcome::Reached);
@@ -5894,7 +5951,14 @@ mod tests {
             invalid.world_min.x = minimum;
             invalid.world_max.x = maximum;
             assert_ne!(
-                unsafe { (api.replace_collision_navigation)(api.context, &invalid, &mut receipt) },
+                unsafe {
+                    (api.replace_collision_navigation)(
+                        api.context,
+                        &invalid,
+                        &mut receipt,
+                        std::ptr::null_mut(),
+                    )
+                },
                 ABI_OK
             );
             assert_eq!(navigation_state_fingerprint(&bridge, session), before);
@@ -5916,12 +5980,20 @@ mod tests {
                         cells_len: blocked.len(),
                     },
                     &mut overlay,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
         );
         assert_eq!(
-            unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    step,
+                    &mut evaluated,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(evaluated.outcome, NativeNavigationPathOutcome::NoPath);
@@ -6045,7 +6117,14 @@ mod tests {
         navigation.config.max_step_cells = 1;
         let mut receipt = NativeNavigationReplaceReceipt::default();
         assert_eq!(
-            unsafe { (api.replace_collision_navigation)(api.context, &navigation, &mut receipt) },
+            unsafe {
+                (api.replace_collision_navigation)(
+                    api.context,
+                    &navigation,
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(receipt.walkable_cell_count, 3);
@@ -6192,6 +6271,7 @@ mod tests {
                     api.context,
                     &collision_navigation_request(session),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6288,6 +6368,7 @@ mod tests {
                     api.context,
                     &collision_navigation_request(session),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6297,7 +6378,14 @@ mod tests {
         low_step.target.y = 0.02;
         let mut low_receipt = NativeNavigationStepResult::default();
         assert_eq!(
-            unsafe { (api.evaluate_navigation_step)(api.context, low_step, &mut low_receipt) },
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    low_step,
+                    &mut low_receipt,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(
@@ -6336,6 +6424,7 @@ mod tests {
                     api.context,
                     &collision_navigation_request(session),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6349,7 +6438,14 @@ mod tests {
         step.target.y = 0.02;
         let mut evaluated = NativeNavigationStepResult::default();
         assert_eq!(
-            unsafe { (api.evaluate_navigation_step)(api.context, step, &mut evaluated) },
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    step,
+                    &mut evaluated,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(
@@ -6413,6 +6509,7 @@ mod tests {
                     api.context,
                     navigation_step_request(session, 32),
                     &mut step,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6439,6 +6536,7 @@ mod tests {
                     api.context,
                     navigation_step_request(session, 32),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6448,7 +6546,14 @@ mod tests {
         let mut non_finite = navigation_step_request(session, 32);
         non_finite.from.x = f32::NAN;
         assert_eq!(
-            unsafe { (api.evaluate_navigation_step)(api.context, non_finite, &mut receipt) },
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    non_finite,
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_unchanged(receipt, NativeNavigationPathOutcome::NonFinitePosition);
@@ -6456,7 +6561,14 @@ mod tests {
         let mut invalid_step = navigation_step_request(session, 32);
         invalid_step.max_step_units = 0.0;
         assert_eq!(
-            unsafe { (api.evaluate_navigation_step)(api.context, invalid_step, &mut receipt) },
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    invalid_step,
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_unchanged(receipt, NativeNavigationPathOutcome::InvalidStep);
@@ -6467,6 +6579,7 @@ mod tests {
                     api.context,
                     navigation_step_request(session, 0),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6479,6 +6592,7 @@ mod tests {
                     api.context,
                     navigation_step_request(session, 2),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6491,6 +6605,7 @@ mod tests {
                     api.context,
                     navigation_step_request(session, 1),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6504,6 +6619,7 @@ mod tests {
                     api.context,
                     navigation_step_request(invalid_session, 32),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             0
@@ -6530,6 +6646,7 @@ mod tests {
                     api.context,
                     navigation_step_request(session, 32),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6549,6 +6666,7 @@ mod tests {
                     api.context,
                     navigation_step_request(no_navigation, 32),
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6687,6 +6805,7 @@ mod tests {
                         solid_cells_len: solids.len(),
                     },
                     &mut navigation_receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6708,6 +6827,7 @@ mod tests {
                         cells_len: overlay_cells.len(),
                     },
                     &mut overlay_receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6737,6 +6857,7 @@ mod tests {
                         },
                     },
                     &mut readout,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6760,6 +6881,7 @@ mod tests {
                     api.context,
                     NativeNavigationVolumetricTraversalClearRequest { session },
                     &mut clear_receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6907,6 +7029,7 @@ mod tests {
                         claimed_face: cast.face,
                     },
                     &mut picked,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6930,6 +7053,7 @@ mod tests {
                         },
                     },
                     &mut before_clear,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6980,6 +7104,7 @@ mod tests {
                         address: before_clear.address,
                     },
                     &mut after_clear,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -7674,7 +7799,14 @@ mod tests {
             };
             let mut prepared = NativeWorldOriginPreparedHandle::default();
             assert_eq!(
-                unsafe { (world_origin.prepare)(world_origin.context, &request, &mut prepared) },
+                unsafe {
+                    (world_origin.prepare)(
+                        world_origin.context,
+                        &request,
+                        &mut prepared,
+                        std::ptr::null_mut(),
+                    )
+                },
                 ABI_OK
             );
             let mut receipt = NativeWorldOriginCommitReceipt::default();
@@ -7684,6 +7816,7 @@ mod tests {
                         world_origin.context,
                         NativeWorldOriginCommitRequest { prepared },
                         &mut receipt,
+                        std::ptr::null_mut(),
                     )
                 },
                 ABI_OK
@@ -8251,6 +8384,7 @@ mod tests {
                         trigger: 41,
                     },
                     &mut read,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -8291,6 +8425,7 @@ mod tests {
                         trigger: 41,
                     },
                     &mut unchanged,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -8522,6 +8657,7 @@ mod tests {
                         trigger: 41,
                     },
                     &mut read,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -8606,6 +8742,7 @@ mod tests {
                         trigger: 42,
                     },
                     &mut read,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -8650,6 +8787,7 @@ mod tests {
                         trigger: 42,
                     },
                     &mut read,
+                    std::ptr::null_mut(),
                 )
             },
             0

@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, ffi::c_void};
 
+use crate::operation_diagnostics::{clear_receipt, refuse, refuse_as};
 use csharp_engine_abi::*;
 use svc_rng::{KeyedRngV1, RngSeed, ScopedRng};
 
@@ -48,7 +49,9 @@ unsafe extern "C" fn draw_keyed_rng(
     _context: *mut c_void,
     request: *const NativeKeyedRngRequest,
     receipt: *mut NativeKeyedRngReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -56,11 +59,11 @@ unsafe extern "C" fn draw_keyed_rng(
     let scope = match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "RNG scope") }
     {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let key = match unsafe { borrowed_utf8(request.key.bytes, request.key.len, "RNG key") } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match KeyedRngV1::draw_i64_inclusive(
         RngSeed::new(request.seed),
@@ -73,7 +76,7 @@ unsafe extern "C" fn draw_keyed_rng(
             unsafe { *receipt = NativeKeyedRngReceipt { value } };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse_as("CSHARP_RNG_RANGE", refusal, error),
     }
 }
 
@@ -104,7 +107,9 @@ unsafe extern "C" fn create_scoped_rng(
     context: *mut c_void,
     request: *const NativeScopedRngCreateRequest,
     result: *mut NativeRngHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -112,7 +117,7 @@ unsafe extern "C" fn create_scoped_rng(
     let scope = match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "RNG scope") }
     {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
     match bridge.insert(ScopedRng::new(RngSeed::new(request.seed), scope)) {
@@ -128,7 +133,9 @@ unsafe extern "C" fn fork_scoped_rng(
     context: *mut c_void,
     request: *const NativeScopedRngForkRequest,
     result: *mut NativeRngHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -136,7 +143,7 @@ unsafe extern "C" fn fork_scoped_rng(
     let scope = match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "RNG scope") }
     {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
     let Some(child) = bridge

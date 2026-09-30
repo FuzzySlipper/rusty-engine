@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use sha2::{Digest, Sha256};
 
@@ -296,7 +297,9 @@ unsafe extern "C" fn open_reference(
     context: *mut c_void,
     request: *const NativeContentOpenRequest,
     result: *mut NativeContentReferenceHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -304,7 +307,7 @@ unsafe extern "C" fn open_reference(
     let path = match unsafe { borrowed_utf8(request.path.bytes, request.path.len, "content path") }
     {
         Ok(path) => path,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
     let Some(content) = bridge.catalog.get(path).cloned() else {
@@ -321,7 +324,9 @@ unsafe extern "C" fn resolve_reference(
     context: *mut c_void,
     request: *const NativeContentResolveRequest,
     result: *mut NativeContentReferenceHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -329,7 +334,7 @@ unsafe extern "C" fn resolve_reference(
     let path = match unsafe { borrowed_utf8(request.path.bytes, request.path.len, "content path") }
     {
         Ok(path) => path,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
     let Some(content) = bridge
@@ -561,6 +566,7 @@ mod tests {
                         },
                     },
                     &mut reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -588,6 +594,7 @@ mod tests {
                         sha256: identity,
                     },
                     &mut reopened,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -606,6 +613,7 @@ mod tests {
                         sha256: wrong,
                     },
                     &mut NativeContentReferenceHandle::default(),
+                    std::ptr::null_mut(),
                 )
             },
             0

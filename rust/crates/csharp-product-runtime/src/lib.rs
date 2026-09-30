@@ -5132,6 +5132,7 @@ mod tests {
                     &mapping,
                     1,
                     &mut outcome,
+                    std::ptr::null_mut(),
                 )
             };
             REMAPPING_CALLBACK_STATUS.store(status, Ordering::SeqCst);
@@ -5703,6 +5704,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

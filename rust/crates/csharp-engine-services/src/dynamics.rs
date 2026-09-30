@@ -2675,6 +2675,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2852,6 +2853,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2981,7 +2983,12 @@ mod tests {
         let mut prepared = NativeWorldOriginPreparedHandle::default();
         assert_eq!(
             unsafe {
-                (world_origin_api.prepare)(world_origin_api.context, &prepare, &mut prepared)
+                (world_origin_api.prepare)(
+                    world_origin_api.context,
+                    &prepare,
+                    &mut prepared,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -2992,6 +2999,7 @@ mod tests {
                     world_origin_api.context,
                     NativeWorldOriginCommitRequest { prepared },
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

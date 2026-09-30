@@ -6,6 +6,7 @@
 
 use std::{collections::BTreeSet, ffi::c_void};
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use core_ids::EntityId;
 use core_time::TickDelta;
 use csharp_engine_abi::*;
@@ -255,7 +256,9 @@ unsafe extern "C" fn integrate_spatial(
     context: *mut c_void,
     request: NativeKinematicSpatialIntegrationRequest,
     result: *mut NativeIntegrationResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || result.is_null() {
         return 0;
     }
@@ -263,7 +266,7 @@ unsafe extern "C" fn integrate_spatial(
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     let scene = match bridge.collision_source().scene(request.session) {
         Ok(scene) => scene,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let value = native_step(request.step).and_then(|step| {
         native_shape(request.shape).and_then(|shape| {
@@ -290,7 +293,9 @@ unsafe extern "C" fn run_motion(
     context: *mut c_void,
     request: *const NativeKinematicMotionRequest,
     result: *mut NativeKinematicMotionResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -319,7 +324,7 @@ unsafe extern "C" fn run_motion(
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     let scene = match bridge.collision_source().scene(request.session) {
         Ok(scene) => scene,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match build_motion_result(bridge, rows, scene.as_ref(), request, &selected) {
         Ok(value) => {
@@ -357,6 +362,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -540,6 +546,7 @@ mod tests {
                         },
                     },
                     &mut result,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -637,7 +644,14 @@ mod tests {
             },
         };
         assert_eq!(
-            unsafe { (api.integrate_spatial)(api.context, invalid_shape, &mut result) },
+            unsafe {
+                (api.integrate_spatial)(
+                    api.context,
+                    invalid_shape,
+                    &mut result,
+                    std::ptr::null_mut(),
+                )
+            },
             NativeKinematicErrorStatus::InvalidShape as i32
         );
     }
@@ -700,7 +714,7 @@ mod tests {
             blocked_axes: 0,
         };
         assert_eq!(
-            unsafe { (api.run_motion)(api.context, &request, &mut first) },
+            unsafe { (api.run_motion)(api.context, &request, &mut first, std::ptr::null_mut()) },
             ABI_OK
         );
         assert_eq!(first.bodies_considered, 2);
@@ -737,7 +751,7 @@ mod tests {
 
         let mut second = first;
         assert_eq!(
-            unsafe { (api.run_motion)(api.context, &request, &mut second) },
+            unsafe { (api.run_motion)(api.context, &request, &mut second, std::ptr::null_mut()) },
             ABI_OK
         );
         let second_facts = unsafe { std::slice::from_raw_parts(second.facts, second.facts_len) };

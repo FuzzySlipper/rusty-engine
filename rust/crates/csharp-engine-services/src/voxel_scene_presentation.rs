@@ -12,6 +12,7 @@ use std::{
     time::Instant,
 };
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use core_space::Direction6;
 use csharp_engine_abi::*;
 use engine_spatial::{SurfaceMode, VoxelCollisionScene};
@@ -1054,7 +1055,9 @@ unsafe extern "C" fn read_material_mapping(
     context: *mut c_void,
     handle: NativeVoxelScenePresentationHandle,
     output: *mut NativeVoxelSceneMaterialMappingResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -1064,7 +1067,7 @@ unsafe extern "C" fn read_material_mapping(
             unsafe { *output = backing };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1082,7 +1085,9 @@ unsafe extern "C" fn destroy_scene(
 unsafe extern "C" fn clear(
     context: *mut c_void,
     output: *mut NativeVoxelScenePresentationClearReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -1092,7 +1097,7 @@ unsafe extern "C" fn clear(
             unsafe { *output = receipt };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1124,6 +1129,7 @@ mod tests {
                         voxel_surface_mode: surface_mode,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -1533,7 +1539,14 @@ mod tests {
             mesh_revision: 0,
         };
         assert_eq!(
-            unsafe { (api.read_material_mapping)(api.context, presentation, &mut mapping) },
+            unsafe {
+                (api.read_material_mapping)(
+                    api.context,
+                    presentation,
+                    &mut mapping,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let rows = unsafe { std::slice::from_raw_parts(mapping.mappings, mapping.mappings_len) };
@@ -1624,7 +1637,14 @@ mod tests {
             mesh_revision: 0,
         };
         assert_eq!(
-            unsafe { (api.read_material_mapping)(api.context, presentation, &mut updated_mapping) },
+            unsafe {
+                (api.read_material_mapping)(
+                    api.context,
+                    presentation,
+                    &mut updated_mapping,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let updated_rows = unsafe {
@@ -1730,7 +1750,14 @@ mod tests {
             mesh_revision: 0,
         };
         assert_eq!(
-            unsafe { (api.read_material_mapping)(api.context, presentation, &mut after) },
+            unsafe {
+                (api.read_material_mapping)(
+                    api.context,
+                    presentation,
+                    &mut after,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let after_rows = unsafe { std::slice::from_raw_parts(after.mappings, after.mappings_len) };

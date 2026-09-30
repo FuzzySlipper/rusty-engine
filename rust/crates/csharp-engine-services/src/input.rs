@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -49,13 +50,15 @@ unsafe extern "C" fn replace_physical_mappings(
     mappings: *const NativeInputMapping,
     mappings_len: usize,
     outcome: *mut NativeInputMappingReplacementOutcome,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || outcome.is_null() {
         return 0;
     }
     let mappings = match unsafe { borrowed_slice(mappings, mappings_len, "input mappings") } {
         Ok(mappings) => mappings,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeInputBridge>() };
     if !bridge.accepts_replacement {
@@ -329,6 +332,7 @@ mod tests {
                     valid.as_ptr(),
                     valid.len(),
                     &mut outcome,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -346,6 +350,7 @@ mod tests {
                     duplicate.as_ptr(),
                     duplicate.len(),
                     &mut outcome,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -375,7 +380,13 @@ mod tests {
         let mut outcome = NativeInputMappingReplacementOutcome::Staged;
         assert_eq!(
             unsafe {
-                (api.replace_physical_mappings)(api.context, std::ptr::null(), 0, &mut outcome)
+                (api.replace_physical_mappings)(
+                    api.context,
+                    std::ptr::null(),
+                    0,
+                    &mut outcome,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );

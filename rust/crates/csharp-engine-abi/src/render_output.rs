@@ -75,6 +75,7 @@ pub type NativeReadRenderOutput = unsafe extern "C" fn(
     *mut c_void,
     NativeRenderOutputHandle,
     *mut NativeRenderOutputReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadRenderOutputBytes =
     unsafe extern "C" fn(*mut c_void, NativeRenderOutputHandle, *mut NativeByteResult) -> i32;

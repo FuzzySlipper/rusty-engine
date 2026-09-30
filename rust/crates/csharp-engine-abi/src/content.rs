@@ -71,11 +71,13 @@ pub type NativeOpenContentReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentOpenRequest,
     *mut NativeContentReferenceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeResolveContentReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentResolveRequest,
     *mut NativeContentReferenceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyContentReference =
     unsafe extern "C" fn(*mut c_void, NativeContentReferenceHandle) -> i32;

@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use engine_spatial::{
     SpatialOcclusionCollider, SpatialPerceptionObserver, SpatialPerceptionPairKind,
@@ -160,7 +161,9 @@ unsafe extern "C" fn query_perception(
     context: *mut c_void,
     request: *const NativePerceptionQueryRequest,
     result: *mut NativePerceptionReadoutResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -170,7 +173,7 @@ unsafe extern "C" fn query_perception(
             unsafe { *result = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -225,6 +228,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -267,7 +271,12 @@ mod tests {
         let mut result = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
-                (perception_api.query_visibility)(perception_api.context, &request, &mut result)
+                (perception_api.query_visibility)(
+                    perception_api.context,
+                    &request,
+                    &mut result,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -305,6 +314,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -361,7 +371,12 @@ mod tests {
             let mut result = NativePerceptionReadoutResult::default();
             assert_eq!(
                 unsafe {
-                    (perception_api.query_visibility)(perception_api.context, &request, &mut result)
+                    (perception_api.query_visibility)(
+                        perception_api.context,
+                        &request,
+                        &mut result,
+                        std::ptr::null_mut(),
+                    )
                 },
                 ABI_OK
             );
@@ -403,6 +418,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -467,6 +483,7 @@ mod tests {
                         page_size: 1,
                     },
                     &mut result,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -498,6 +515,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -548,7 +566,12 @@ mod tests {
         let mut first = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
-                (perception_api.query_visibility)(perception_api.context, &request, &mut first)
+                (perception_api.query_visibility)(
+                    perception_api.context,
+                    &request,
+                    &mut first,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -578,7 +601,12 @@ mod tests {
         let mut continued = NativePerceptionReadoutResult::default();
         assert_eq!(
             unsafe {
-                (perception_api.query_visibility)(perception_api.context, &request, &mut continued)
+                (perception_api.query_visibility)(
+                    perception_api.context,
+                    &request,
+                    &mut continued,
+                    std::ptr::null_mut(),
+                )
             },
             0,
             "publication identity must reject a cursor from the replaced scene",

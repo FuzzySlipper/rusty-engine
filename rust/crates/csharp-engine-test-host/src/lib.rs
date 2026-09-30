@@ -332,4 +332,89 @@ mod tests {
         assert!(root.path().join("first").is_dir() && root.path().join("second").is_dir());
         unsafe { (api.destroy)(api.context) };
     }
+
+    #[test]
+    fn refusals_carry_their_engine_codes() {
+        let mut api = std::mem::MaybeUninit::<NativeEngineTestHostApi>::uninit();
+        let mut receipt = NativeOperationErrorReceipt {
+            diagnostics: ptr::null(),
+            diagnostics_len: 0,
+        };
+        let status = unsafe {
+            rusty_engine_test_host_create(
+                &request(PRODUCT_ABI_FINGERPRINT, ""),
+                api.as_mut_ptr(),
+                &mut receipt,
+            )
+        };
+        assert_eq!(status, ABI_OK);
+        let api = unsafe { api.assume_init() };
+        assert_eq!(unsafe { (api.begin_call)(api.context) }, ABI_OK);
+        let utf8 = |value: &'static str| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let rng = api.engine.rng;
+        let mut drawn = NativeKeyedRngReceipt::default();
+        let inverted = NativeKeyedRngRequest {
+            seed: 1,
+            scope: utf8("scope"),
+            key: utf8("key"),
+            minimum: 5,
+            maximum: 1,
+        };
+        assert_eq!(
+            unsafe { (rng.draw_keyed)(rng.context, &inverted, &mut drawn, &mut receipt) },
+            0
+        );
+        assert_eq!(codes(&receipt), ["CSHARP_RNG_RANGE"]);
+
+        let spatial = api.engine.spatial;
+        let mut replaced = NativeNavigationReplaceReceipt::default();
+        let unknown_session = NativeNavigationReplaceRequest {
+            session: NativeSpatialSessionHandle { value: 99 },
+            config: NativePlanarNavConfig {
+                grid_id: 1,
+                cell_size: 1.0,
+                chunk_size: 16,
+                max_step_cells: 1,
+            },
+            cells: ptr::null(),
+            cells_len: 0,
+        };
+        assert_eq!(
+            unsafe {
+                (spatial.replace_navigation)(
+                    spatial.context,
+                    &unknown_session,
+                    &mut replaced,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_eq!(codes(&receipt), ["CSHARP_SPATIAL_SESSION"]);
+
+        let voxel_content = api.engine.voxel_content;
+        let mut asset = NativeVoxelAssetHandle::default();
+        let malformed = b"{not an asset";
+        let admit = NativeAdmitVoxelAssetRequest {
+            bytes: NativeByteSlice {
+                bytes: malformed.as_ptr(),
+                len: malformed.len(),
+            },
+        };
+        assert_eq!(
+            unsafe {
+                (voxel_content.admit_asset)(voxel_content.context, &admit, &mut asset, &mut receipt)
+            },
+            0
+        );
+        assert_eq!(codes(&receipt), ["CSHARP_VOXEL_ASSET"]);
+        assert_eq!(
+            unsafe { (api.finish_call)(api.context, &mut receipt) },
+            ABI_OK
+        );
+        unsafe { (api.destroy)(api.context) };
+    }
 }

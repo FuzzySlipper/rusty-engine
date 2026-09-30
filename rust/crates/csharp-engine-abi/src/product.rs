@@ -145,6 +145,7 @@ pub type NativeCreateSpatialSession = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialSessionConfig,
     *mut NativeSpatialSessionHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroySpatialSession =
     unsafe extern "C" fn(*mut c_void, NativeSpatialSessionHandle) -> i32;
@@ -152,6 +153,7 @@ pub type NativeMotionResolve = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMotionResolveRequest,
     *mut NativeMotionResolveReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceCollision = unsafe extern "C" fn(
     *mut c_void,
@@ -175,41 +177,49 @@ pub type NativeReadSpatialContentArtifact = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialContentArtifactReadRequest,
     *mut NativeSpatialContentArtifactReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceNavigation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationReplaceRequest,
     *mut NativeNavigationReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceVoxelNavigation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationVoxelReplaceRequest,
     *mut NativeNavigationReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceCollisionNavigation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCollisionNavigationReplaceRequest,
     *mut NativeNavigationReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceNavigationTraversal = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationTraversalReplaceRequest,
     *mut NativeNavigationTraversalReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeClearNavigationTraversal = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationTraversalClearRequest,
     *mut NativeNavigationTraversalReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceVolumetricNavigationTraversal = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationVolumetricTraversalReplaceRequest,
     *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeClearVolumetricNavigationTraversal = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationVolumetricTraversalClearRequest,
     *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadSpatialMap = unsafe extern "C" fn(
     *mut c_void,
@@ -220,29 +230,37 @@ pub type NativeReadNavigationProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationProjectionReadRequest,
     *mut NativeNavigationProjectionReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRequestNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationPathRequest,
     *mut NativeNavigationPathResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRequestWeightedNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationWeightedPathRequest,
     *mut NativeNavigationWeightedPathResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRequestWeightedVolumetricNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationVolumetricWeightedPathRequest,
     *mut NativeNavigationVolumetricWeightedPathResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRequestVolumetricNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationVolumetricPathRequest,
     *mut NativeNavigationPathResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeClearNavigation =
-    unsafe extern "C" fn(*mut c_void, NativeNavigationClearRequest) -> i32;
+pub type NativeClearNavigation = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationClearRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeDefaultCharacterControllerConfig =
     unsafe extern "C" fn(*mut c_void, *mut NativeCharacterControllerConfig) -> i32;
 pub type NativeValidateCharacterControllerConfig = unsafe extern "C" fn(
@@ -265,31 +283,37 @@ pub type NativeCaptureCharacterContinuation = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterContinuationCaptureRequest,
     *mut NativeCharacterContinuationCheckpoint,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRestoreCharacterContinuation = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterContinuationRestoreRequest,
     *mut NativeCharacterContinuationRestoreReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadCharacterController = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterControllerReadRequest,
     *mut NativeCharacterControllerResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeEvaluateNavigationStep = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationStepRequest,
     *mut NativeNavigationStepResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadSpatialProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialProjectionReadRequest,
     *mut NativeSpatialProjectionReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSpatialContainsPoint = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialContainsPointRequest,
     *mut NativeSpatialQueryReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSpatialRaycast = unsafe extern "C" fn(
     *mut c_void,
@@ -300,6 +324,7 @@ pub type NativeQueryPerception = unsafe extern "C" fn(
     *mut c_void,
     *const NativePerceptionQueryRequest,
     *mut NativePerceptionReadoutResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSpatialSegmentCast = unsafe extern "C" fn(
     *mut c_void,
@@ -326,8 +351,12 @@ pub type NativeSpatialOverlapCapsule = unsafe extern "C" fn(
     *const NativeSpatialCapsuleQueryRequest,
     *mut NativeSpatialHit,
 ) -> i32;
-pub type NativeSpatialPickVoxel =
-    unsafe extern "C" fn(*mut c_void, NativeSpatialPickRequest, *mut NativeSpatialHit) -> i32;
+pub type NativeSpatialPickVoxel = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpatialPickRequest,
+    *mut NativeSpatialHit,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSpatialRegisterTrigger = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialTriggerRegisterRequest,
@@ -355,26 +384,31 @@ pub type NativeSpatialReadTrigger = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerReadRequest,
     *mut NativeSpatialTriggerReadResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeWorldOriginPrepare = unsafe extern "C" fn(
     *mut c_void,
     *const NativeWorldOriginPrepareRequest,
     *mut NativeWorldOriginPreparedHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeWorldOriginRead = unsafe extern "C" fn(
     *mut c_void,
     NativeWorldOriginReadRequest,
     *mut NativeWorldOriginReadout,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeWorldOriginReadPrepared = unsafe extern "C" fn(
     *mut c_void,
     NativeWorldOriginPreparedReadRequest,
     *mut NativeWorldOriginPreparedResult,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeWorldOriginCommit = unsafe extern "C" fn(
     *mut c_void,
     NativeWorldOriginCommitRequest,
     *mut NativeWorldOriginCommitReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyWorldOriginPrepared =
     unsafe extern "C" fn(*mut c_void, NativeWorldOriginPreparedHandle) -> i32;
@@ -1055,6 +1089,7 @@ pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
     *mut NativeKeyedRngReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDrawLcg15 =
     unsafe extern "C" fn(*mut c_void, NativeLcg15Request, *mut NativeLcg15Receipt) -> i32;
@@ -1062,11 +1097,13 @@ pub type NativeCreateScopedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeScopedRngCreateRequest,
     *mut NativeRngHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeForkScopedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeScopedRngForkRequest,
     *mut NativeRngHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyScopedRng = unsafe extern "C" fn(*mut c_void, NativeRngHandle) -> i32;
 pub type NativeNextScopedRng =
@@ -1503,6 +1540,7 @@ pub type NativeReplaceInputMappings = unsafe extern "C" fn(
     *const NativeInputMapping,
     usize,
     *mut NativeInputMappingReplacementOutcome,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 
 /// Runtime replacement of physical mappings. The product supplies a complete

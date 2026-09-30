@@ -75,6 +75,34 @@ impl OperationDiagnostics {
     }
 }
 
+thread_local! {
+    /// Refusals reported by operations that keep no diagnostics of their own.
+    static REFUSALS: std::cell::RefCell<OperationDiagnostics> = std::cell::RefCell::default();
+}
+
+/// Reports `error` through `receipt` and returns the refused ABI status. The
+/// diagnostic stays valid until the next refusal on this thread; the generated
+/// caller copies it before making another Engine call.
+pub(crate) fn refuse(
+    error: &CsharpEngineServicesError,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    REFUSALS.with(|refusals| refusals.borrow_mut().retain(error, receipt));
+    0
+}
+
+/// Reports a refusal from a domain error that carries no Engine code.
+pub(crate) fn refuse_as(
+    code: &'static str,
+    detail: impl std::fmt::Debug,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    refuse(
+        &CsharpEngineServicesError::new(code, format!("{detail:?}")),
+        receipt,
+    )
+}
+
 /// Zeroes an operation receipt before a call writes it.
 pub(crate) fn clear_receipt(receipt: *mut NativeOperationErrorReceipt) {
     if !receipt.is_null() {

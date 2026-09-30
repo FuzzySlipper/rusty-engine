@@ -196,11 +196,13 @@ pub type NativeKinematicIntegrateSpatial = unsafe extern "C" fn(
     *mut c_void,
     NativeKinematicSpatialIntegrationRequest,
     *mut NativeIntegrationResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRunKinematicMotion = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKinematicMotionRequest,
     *mut NativeKinematicMotionResult,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
 /// Purpose-neutral, caller-owned kinematic integration. It owns no bodies,

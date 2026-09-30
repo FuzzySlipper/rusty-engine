@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::operation_diagnostics::{clear_receipt, refuse, refuse_as};
 use csharp_engine_abi::*;
 use render_model::{RenderFrameDiff, RenderMaterialDescriptor, RenderMetadata, Transform};
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
@@ -1074,18 +1075,20 @@ unsafe extern "C" fn admit_asset(
     context: *mut c_void,
     request: *const NativeAdmitVoxelAssetRequest,
     output: *mut NativeVoxelAssetHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let request = unsafe { &*request };
     let body = match unsafe { borrowed_json(request.bytes) } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_BYTES", refusal, error),
     };
     let asset = match decode_voxel_asset(body) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_ASSET", refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.insert_asset(asset) {
@@ -1101,7 +1104,9 @@ unsafe extern "C" fn load_asset_from_content(
     context: *mut c_void,
     request: *const NativeLoadVoxelAssetFromContentRequest,
     output: *mut NativeVoxelAssetHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1112,11 +1117,11 @@ unsafe extern "C" fn load_asset_from_content(
     };
     let body = match std::str::from_utf8(&content.bytes) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_UTF8", refusal, error),
     };
     let asset = match decode_voxel_asset(body) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_ASSET", refusal, error),
     };
     match bridge.insert_asset(asset) {
         Some(handle) => {
@@ -1143,21 +1148,23 @@ unsafe extern "C" fn read_asset(
     context: *mut c_void,
     handle: NativeVoxelAssetHandle,
     output: *mut NativeVoxelAssetReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let asset = match bridge.resolve_asset(handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match native_asset_readout(asset) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1165,7 +1172,9 @@ unsafe extern "C" fn publish_asset_to_spatial(
     context: *mut c_void,
     request: *const NativePublishVoxelAssetToSpatialRequest,
     output: *mut NativeVoxelAssetSpatialPublishResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1173,15 +1182,15 @@ unsafe extern "C" fn publish_asset_to_spatial(
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let voxel_data_hash = match hash(&asset.voxel_data_hash) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let content_hash = match hash(&asset.content_hash) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let spatial = match bridge.spatial {
         Some(value) if !value.is_null() => unsafe { &mut *value },
@@ -1189,7 +1198,7 @@ unsafe extern "C" fn publish_asset_to_spatial(
     };
     let prepared = match spatial.prepare_voxel_asset(request.session, &asset) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let facts = prepared.facts();
     let (result, backing) =
@@ -1206,18 +1215,20 @@ unsafe extern "C" fn admit_object(
     context: *mut c_void,
     request: *const NativeAdmitVoxelObjectRequest,
     output: *mut NativeVoxelObjectHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let request = unsafe { &*request };
     let body = match unsafe { borrowed_json(request.bytes) } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_BYTES", refusal, error),
     };
     let object = match admit_voxel_object_json(body, Default::default()) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_OBJECT", refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.insert_object(object) {
@@ -1233,7 +1244,9 @@ unsafe extern "C" fn load_object_from_content(
     context: *mut c_void,
     request: *const NativeLoadVoxelObjectFromContentRequest,
     output: *mut NativeVoxelObjectHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1244,11 +1257,11 @@ unsafe extern "C" fn load_object_from_content(
     };
     let body = match std::str::from_utf8(&content.bytes) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_UTF8", refusal, error),
     };
     let object = match admit_voxel_object_json(body, Default::default()) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_OBJECT", refusal, error),
     };
     match bridge.insert_object(object) {
         Some(handle) => {
@@ -1436,23 +1449,25 @@ unsafe extern "C" fn admit_annotation(
     context: *mut c_void,
     request: *const NativeAdmitVoxelAnnotationRequest,
     output: *mut NativeVoxelAnnotationHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
     let request = unsafe { &*request };
     let body = match unsafe { borrowed_json(request.bytes) } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_BYTES", refusal, error),
     };
     let layer = match decode_annotation_layer(body) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     if validate_annotation_layer(&layer, Some(&asset), Default::default()).is_err() {
         return 0;
@@ -1470,7 +1485,9 @@ unsafe extern "C" fn load_annotation_from_content(
     context: *mut c_void,
     request: *const NativeLoadVoxelAnnotationFromContentRequest,
     output: *mut NativeVoxelAnnotationHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1481,15 +1498,15 @@ unsafe extern "C" fn load_annotation_from_content(
     };
     let body = match std::str::from_utf8(&content.bytes) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_UTF8", refusal, error),
     };
     let layer = match decode_annotation_layer(body) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
     };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     if validate_annotation_layer(&layer, Some(&asset), Default::default()).is_err() {
         return 0;
@@ -1522,7 +1539,9 @@ unsafe extern "C" fn query_annotation(
     context: *mut c_void,
     request: *const NativeVoxelAnnotationQueryRequest,
     output: *mut NativeVoxelAnnotationRegionResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1534,13 +1553,13 @@ unsafe extern "C" fn query_annotation(
     };
     let mode = match annotation_query_mode(request) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let (readout, revision) = {
         let annotation = match bridge.annotation(request.annotation) {
             Ok(value) => value,
-            Err(_) => return 0,
+            Err(refusal) => return refuse(&refusal, error),
         };
         let readout = match query_annotation_layer(
             &annotation.layer,
@@ -1551,13 +1570,13 @@ unsafe extern "C" fn query_annotation(
             },
         ) {
             Ok(value) => value,
-            Err(_) => return 0,
+            Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
         };
         (readout, annotation.revision)
     };
     let layer_hash = match hash(&readout.layer_hash) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match bridge.hold_region_result(
         readout.matched_regions,
@@ -1570,7 +1589,7 @@ unsafe extern "C" fn query_annotation(
             unsafe { *output = result };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1578,7 +1597,9 @@ unsafe extern "C" fn set_annotation_label(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationLabelRequest,
     output: *mut NativeVoxelAnnotationEditResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1592,13 +1613,13 @@ unsafe extern "C" fn set_annotation_label(
         )
     } {
         Ok(value) => value.to_owned(),
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let label = match unsafe {
         borrowed_utf8(request.label.bytes, request.label.len, "annotation label")
     } {
         Ok(value) => value.to_owned(),
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.apply_annotation_edit(
@@ -1610,7 +1631,7 @@ unsafe extern "C" fn set_annotation_label(
             unsafe { *output = result };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1618,7 +1639,9 @@ unsafe extern "C" fn set_annotation_kind(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationKindRequest,
     output: *mut NativeVoxelAnnotationEditResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1632,11 +1655,11 @@ unsafe extern "C" fn set_annotation_kind(
         )
     } {
         Ok(value) => value.to_owned(),
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let kind = match annotation_kind(request.kind) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.apply_annotation_edit(
@@ -1651,7 +1674,7 @@ unsafe extern "C" fn set_annotation_kind(
             unsafe { *output = result };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1659,7 +1682,9 @@ unsafe extern "C" fn set_annotation_parent(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationParentRequest,
     output: *mut NativeVoxelAnnotationEditResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1673,7 +1698,7 @@ unsafe extern "C" fn set_annotation_parent(
         )
     } {
         Ok(value) => value.to_owned(),
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let parent_region_id = if request.has_parent_region_id {
         match unsafe {
@@ -1684,7 +1709,7 @@ unsafe extern "C" fn set_annotation_parent(
             )
         } {
             Ok(value) => Some(value.to_owned()),
-            Err(_) => return 0,
+            Err(refusal) => return refuse(&refusal, error),
         }
     } else {
         None
@@ -1702,7 +1727,7 @@ unsafe extern "C" fn set_annotation_parent(
             unsafe { *output = result };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1710,7 +1735,9 @@ unsafe extern "C" fn set_annotation_bounds(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationBoundsRequest,
     output: *mut NativeVoxelAnnotationEditResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1724,7 +1751,7 @@ unsafe extern "C" fn set_annotation_bounds(
         )
     } {
         Ok(value) => value.to_owned(),
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.apply_annotation_edit(
@@ -1739,7 +1766,7 @@ unsafe extern "C" fn set_annotation_bounds(
             unsafe { *output = result };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1747,7 +1774,9 @@ unsafe extern "C" fn set_annotation_tags(
     context: *mut c_void,
     request: *const NativeSetVoxelAnnotationTagsRequest,
     output: *mut NativeVoxelAnnotationEditResult,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1761,11 +1790,11 @@ unsafe extern "C" fn set_annotation_tags(
         )
     } {
         Ok(value) => value.to_owned(),
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let tags = match unsafe { borrowed_annotation_tags(request.tags, request.tags_len) } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.apply_annotation_edit(
@@ -1777,7 +1806,7 @@ unsafe extern "C" fn set_annotation_tags(
             unsafe { *output = result };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1797,21 +1826,23 @@ unsafe extern "C" fn read_object(
     context: *mut c_void,
     handle: NativeVoxelObjectHandle,
     output: *mut NativeVoxelObjectReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.object(handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match native_object_readout(retained) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1819,7 +1850,9 @@ unsafe extern "C" fn select_default_object_frame(
     context: *mut c_void,
     handle: NativeVoxelObjectHandle,
     output: *mut NativeVoxelObjectFrameReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -1829,7 +1862,7 @@ unsafe extern "C" fn select_default_object_frame(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1837,7 +1870,9 @@ unsafe extern "C" fn select_object_clip_frame(
     context: *mut c_void,
     request: *const NativeSelectVoxelObjectClipFrameRequest,
     output: *mut NativeVoxelObjectFrameReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -1845,7 +1880,7 @@ unsafe extern "C" fn select_object_clip_frame(
     let clip =
         match unsafe { borrowed_utf8(request.clip.bytes, request.clip.len, "voxel object clip") } {
             Ok(value) => value,
-            Err(_) => return 0,
+            Err(refusal) => return refuse(&refusal, error),
         };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.select_clip_frame(request.object_handle, clip, request.frame_index) {
@@ -1853,7 +1888,7 @@ unsafe extern "C" fn select_object_clip_frame(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1861,21 +1896,23 @@ unsafe extern "C" fn read_selected_object_frame(
     context: *mut c_void,
     handle: NativeVoxelObjectHandle,
     output: *mut NativeVoxelObjectFrameReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.object(handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match native_frame_readout(&retained.object, retained.selected) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1883,7 +1920,9 @@ unsafe extern "C" fn create_object_player(
     context: *mut c_void,
     object_handle: NativeVoxelObjectHandle,
     output: *mut NativeVoxelObjectPlayerHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
@@ -1893,7 +1932,7 @@ unsafe extern "C" fn create_object_player(
             unsafe { *output = handle };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -1915,7 +1954,9 @@ unsafe extern "C" fn destroy_object_player(
 unsafe extern "C" fn play_object_player(
     context: *mut c_void,
     request: *const NativePlayVoxelObjectPlayerRequest,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1928,18 +1969,18 @@ unsafe extern "C" fn play_object_player(
         )
     } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let loop_mode = loop_mode(request.loop_mode);
     let rate = match VoxelObjectPlaybackRate::new(request.rate_numerator, request.rate_denominator)
     {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse_as("CSHARP_VOXEL_OBJECT_PLAYER", refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.player_mut(request.player_handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     if retained
         .player
@@ -1955,7 +1996,9 @@ unsafe extern "C" fn play_object_player(
 unsafe extern "C" fn scrub_object_player(
     context: *mut c_void,
     request: *const NativeScrubVoxelObjectPlayerRequest,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() {
         return 0;
     }
@@ -1968,13 +2011,13 @@ unsafe extern "C" fn scrub_object_player(
         )
     } {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let loop_mode = loop_mode(request.loop_mode);
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.player_mut(request.player_handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     if retained
         .player
@@ -1990,7 +2033,9 @@ unsafe extern "C" fn scrub_object_player(
 unsafe extern "C" fn pause_object_player(
     context: *mut c_void,
     request: NativeVoxelObjectPlayerTimeRequest,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() {
         return 0;
     }
@@ -2003,14 +2048,16 @@ unsafe extern "C" fn pause_object_player(
                 0
             }
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
 unsafe extern "C" fn resume_object_player(
     context: *mut c_void,
     request: NativeVoxelObjectPlayerTimeRequest,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() {
         return 0;
     }
@@ -2023,14 +2070,16 @@ unsafe extern "C" fn resume_object_player(
                 0
             }
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
 unsafe extern "C" fn stop_object_player(
     context: *mut c_void,
     handle: NativeVoxelObjectPlayerHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() {
         return 0;
     }
@@ -2040,7 +2089,7 @@ unsafe extern "C" fn stop_object_player(
             retained.player.stop();
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -2048,21 +2097,23 @@ unsafe extern "C" fn read_object_player(
     context: *mut c_void,
     request: NativeVoxelObjectPlayerTimeRequest,
     output: *mut NativeVoxelObjectPlayerReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.player(request.player_handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match retained.player.posture_at(request.now_micros) {
         Ok(posture) => {
             unsafe { *output = native_player_readout(&posture) };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse_as("CSHARP_VOXEL_OBJECT_PLAYER", refusal, error),
     }
 }
 
@@ -2070,14 +2121,16 @@ unsafe extern "C" fn sample_object_player(
     context: *mut c_void,
     request: NativeVoxelObjectPlayerTimeRequest,
     output: *mut NativeVoxelObjectPlayerSampleReadout,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || output.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.player(request.player_handle) {
         Ok(value) => value,
-        Err(_) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     match retained
         .player
@@ -2087,7 +2140,7 @@ unsafe extern "C" fn sample_object_player(
             unsafe { *output = native_player_sample_readout(sample) };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse_as("CSHARP_VOXEL_OBJECT_PLAYER", refusal, error),
     }
 }
 
@@ -2095,7 +2148,9 @@ unsafe extern "C" fn project_object(
     context: *mut c_void,
     request: *const NativeProjectVoxelObjectRequest,
     output: *mut NativeVoxelObjectPresentationHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -2105,7 +2160,7 @@ unsafe extern "C" fn project_object(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => refuse(&refusal, error),
     }
 }
 
@@ -2480,6 +2535,7 @@ mod tests {
                         content: asset_reference,
                     },
                     &mut asset_handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2493,6 +2549,7 @@ mod tests {
                         content: object_reference,
                     },
                     &mut object_handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2507,6 +2564,7 @@ mod tests {
                         content: annotation_reference,
                     },
                     &mut annotation_handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2520,12 +2578,26 @@ mod tests {
 
         let mut asset_readout = NativeVoxelAssetReadout::default();
         assert_eq!(
-            unsafe { (api.read_asset)(api.context, asset_handle, &mut asset_readout) },
+            unsafe {
+                (api.read_asset)(
+                    api.context,
+                    asset_handle,
+                    &mut asset_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         let mut object_readout = NativeVoxelObjectReadout::default();
         assert_eq!(
-            unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
+            unsafe {
+                (api.read_object)(
+                    api.context,
+                    object_handle,
+                    &mut object_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(
@@ -2551,6 +2623,7 @@ mod tests {
                         },
                     },
                     &mut reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2573,6 +2646,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2585,6 +2659,7 @@ mod tests {
                     voxel_api.context,
                     NativeVoxelSceneReadRequest { session },
                     &mut before,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2605,13 +2680,27 @@ mod tests {
         };
         let mut asset_handle = NativeVoxelAssetHandle::default();
         assert_eq!(
-            unsafe { (api.admit_asset)(api.context, &asset_request, &mut asset_handle) },
+            unsafe {
+                (api.admit_asset)(
+                    api.context,
+                    &asset_request,
+                    &mut asset_handle,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         asset_body.fill(0);
         let mut asset_readout = NativeVoxelAssetReadout::default();
         assert_eq!(
-            unsafe { (api.read_asset)(api.context, asset_handle, &mut asset_readout) },
+            unsafe {
+                (api.read_asset)(
+                    api.context,
+                    asset_handle,
+                    &mut asset_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(asset_readout.represented_voxel_count, 1);
@@ -2629,7 +2718,14 @@ mod tests {
         };
         let mut invalid_handle = NativeVoxelAssetHandle::default();
         assert_eq!(
-            unsafe { (api.admit_asset)(api.context, &invalid_request, &mut invalid_handle) },
+            unsafe {
+                (api.admit_asset)(
+                    api.context,
+                    &invalid_request,
+                    &mut invalid_handle,
+                    std::ptr::null_mut(),
+                )
+            },
             0
         );
 
@@ -2644,13 +2740,27 @@ mod tests {
         };
         let mut object_handle = NativeVoxelObjectHandle::default();
         assert_eq!(
-            unsafe { (api.admit_object)(api.context, &object_request, &mut object_handle) },
+            unsafe {
+                (api.admit_object)(
+                    api.context,
+                    &object_request,
+                    &mut object_handle,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         object_body.fill(0);
         let mut object_readout = NativeVoxelObjectReadout::default();
         assert_eq!(
-            unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
+            unsafe {
+                (api.read_object)(
+                    api.context,
+                    object_handle,
+                    &mut object_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(object_readout.frame_count, 2);
@@ -2668,7 +2778,12 @@ mod tests {
         let mut selected = NativeVoxelObjectFrameReadout::default();
         assert_eq!(
             unsafe {
-                (api.select_object_clip_frame)(api.context, &selection_request, &mut selected)
+                (api.select_object_clip_frame)(
+                    api.context,
+                    &selection_request,
+                    &mut selected,
+                    std::ptr::null_mut(),
+                )
             },
             ABI_OK
         );
@@ -2683,6 +2798,7 @@ mod tests {
                     voxel_api.context,
                     NativeVoxelSceneReadRequest { session },
                     &mut after,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2696,7 +2812,14 @@ mod tests {
             ABI_OK
         );
         assert_eq!(
-            unsafe { (api.read_asset)(api.context, asset_handle, &mut asset_readout) },
+            unsafe {
+                (api.read_asset)(
+                    api.context,
+                    asset_handle,
+                    &mut asset_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             0
         );
         assert_eq!(
@@ -2704,7 +2827,14 @@ mod tests {
             ABI_OK
         );
         assert_eq!(
-            unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
+            unsafe {
+                (api.read_object)(
+                    api.context,
+                    object_handle,
+                    &mut object_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             0
         );
     }
@@ -2724,6 +2854,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2748,6 +2879,7 @@ mod tests {
                         },
                     },
                     &mut asset_handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2763,6 +2895,7 @@ mod tests {
                         session,
                     },
                     &mut result,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2794,6 +2927,7 @@ mod tests {
                     voxel_api.context,
                     NativeVoxelSceneReadRequest { session },
                     &mut scene,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2814,6 +2948,7 @@ mod tests {
                         session,
                     },
                     &mut rejected,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -2826,6 +2961,7 @@ mod tests {
                     voxel_api.context,
                     NativeVoxelSceneReadRequest { session },
                     &mut after_rejected,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2843,6 +2979,7 @@ mod tests {
                         voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut navigation_used_session,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2865,6 +3002,7 @@ mod tests {
                         cells_len: walkable.len(),
                     },
                     &mut navigation_receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2876,6 +3014,7 @@ mod tests {
                     NativeNavigationClearRequest {
                         session: navigation_used_session,
                     },
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2889,6 +3028,7 @@ mod tests {
                         session: navigation_used_session,
                     },
                     &mut navigation_scene_before,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2904,6 +3044,7 @@ mod tests {
                         session: navigation_used_session,
                     },
                     &mut navigation_rejected,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -2918,6 +3059,7 @@ mod tests {
                         session: navigation_used_session,
                     },
                     &mut navigation_scene_after,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -2942,18 +3084,39 @@ mod tests {
         };
         let mut object_handle = NativeVoxelObjectHandle::default();
         assert_eq!(
-            unsafe { (api.admit_object)(api.context, &request, &mut object_handle) },
+            unsafe {
+                (api.admit_object)(
+                    api.context,
+                    &request,
+                    &mut object_handle,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
 
         let mut player = NativeVoxelObjectPlayerHandle::default();
         let mut overflow_player = NativeVoxelObjectPlayerHandle::default();
         assert_eq!(
-            unsafe { (api.create_object_player)(api.context, object_handle, &mut player) },
+            unsafe {
+                (api.create_object_player)(
+                    api.context,
+                    object_handle,
+                    &mut player,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(
-            unsafe { (api.create_object_player)(api.context, object_handle, &mut overflow_player) },
+            unsafe {
+                (api.create_object_player)(
+                    api.context,
+                    object_handle,
+                    &mut overflow_player,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(
@@ -2962,7 +3125,14 @@ mod tests {
         );
         let mut object_readout = NativeVoxelObjectReadout::default();
         assert_eq!(
-            unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
+            unsafe {
+                (api.read_object)(
+                    api.context,
+                    object_handle,
+                    &mut object_readout,
+                    std::ptr::null_mut(),
+                )
+            },
             0
         );
 
@@ -2979,7 +3149,7 @@ mod tests {
             now_micros: 10,
         };
         assert_eq!(
-            unsafe { (api.play_object_player)(api.context, &play) },
+            unsafe { (api.play_object_player)(api.context, &play, std::ptr::null_mut()) },
             ABI_OK
         );
 
@@ -2993,6 +3163,7 @@ mod tests {
                         now_micros: 10,
                     },
                     &mut sample,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3012,6 +3183,7 @@ mod tests {
                         now_micros: 9,
                     },
                     &mut sample,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -3025,6 +3197,7 @@ mod tests {
                         player_handle: player,
                         now_micros: 50,
                     },
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3039,6 +3212,7 @@ mod tests {
                         now_micros: 500,
                     },
                     &mut readout,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3053,6 +3227,7 @@ mod tests {
                         player_handle: player,
                         now_micros: 100,
                     },
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3066,6 +3241,7 @@ mod tests {
                         now_micros: 83_393,
                     },
                     &mut sample,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3082,11 +3258,11 @@ mod tests {
             loop_mode: NativeVoxelObjectLoopMode::Repeat,
         };
         assert_eq!(
-            unsafe { (api.scrub_object_player)(api.context, &scrub) },
+            unsafe { (api.scrub_object_player)(api.context, &scrub, std::ptr::null_mut()) },
             ABI_OK
         );
         assert_eq!(
-            unsafe { (api.stop_object_player)(api.context, player) },
+            unsafe { (api.stop_object_player)(api.context, player, std::ptr::null_mut()) },
             ABI_OK
         );
         assert_eq!(
@@ -3098,6 +3274,7 @@ mod tests {
                         now_micros: 0,
                     },
                     &mut sample,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3118,7 +3295,7 @@ mod tests {
             now_micros: 0,
         };
         assert_eq!(
-            unsafe { (api.play_object_player)(api.context, &overflow_play) },
+            unsafe { (api.play_object_player)(api.context, &overflow_play, std::ptr::null_mut()) },
             ABI_OK
         );
         assert_eq!(
@@ -3129,6 +3306,7 @@ mod tests {
                         player_handle: overflow_player,
                         now_micros: u64::MAX,
                     },
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3142,6 +3320,7 @@ mod tests {
                         now_micros: u64::MAX,
                     },
                     &mut sample,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -3155,7 +3334,10 @@ mod tests {
             unsafe { (api.destroy_object_player)(api.context, overflow_player) },
             ABI_OK
         );
-        assert_eq!(unsafe { (api.stop_object_player)(api.context, player) }, 0);
+        assert_eq!(
+            unsafe { (api.stop_object_player)(api.context, player, std::ptr::null_mut()) },
+            0
+        );
     }
 
     #[test]
@@ -3180,6 +3362,7 @@ mod tests {
                         },
                     },
                     &mut asset_handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3202,6 +3385,7 @@ mod tests {
                         },
                     },
                     &mut annotation_handle,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3254,6 +3438,7 @@ mod tests {
                             max_results,
                         },
                         &mut result,
+                        std::ptr::null_mut(),
                     )
                 },
                 ABI_OK
@@ -3298,6 +3483,7 @@ mod tests {
                         },
                     },
                     &mut label_edit,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3331,6 +3517,7 @@ mod tests {
                         kind: NativeVoxelAnnotationKind::Room,
                     },
                     &mut stale_kind,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -3352,6 +3539,7 @@ mod tests {
                         kind: NativeVoxelAnnotationKind::Room,
                     },
                     &mut kind_edit,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3379,6 +3567,7 @@ mod tests {
                         },
                     },
                     &mut parent_edit,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3401,6 +3590,7 @@ mod tests {
                         bounds: NativeVoxelAnnotationBounds { max_x: 1, ..bounds },
                     },
                     &mut bounds_edit,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3440,6 +3630,7 @@ mod tests {
                         tags_len: tags.len(),
                     },
                     &mut tags_edit,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -3484,6 +3675,7 @@ mod tests {
                         tags_len: stale_tags.len(),
                     },
                     &mut stale_tags_edit,
+                    std::ptr::null_mut(),
                 )
             },
             0,
@@ -3523,6 +3715,7 @@ mod tests {
                         max_results: 1,
                     },
                     &mut after,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
