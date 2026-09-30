@@ -1,5 +1,5 @@
 //! Ghost plates: a frozen source appearance shown from 1, 4, 8 or 16
-//! captured directions, as the Three lane's `ghost-plate*.ts` did.
+//! captured directions.
 //!
 //! Each plate keeps an isolated renderer over its `captured_scene` (the
 //! Engine's immutable capture-time subtree, lights and pose) and one capture
@@ -35,15 +35,15 @@ use crate::tables::Aabb;
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{Renderer, RendererOptions, ResourceSource};
 
-/// Capture colour: sRGB like the Three lane's capture target.
+/// Capture colour: 8-bit sRGB.
 const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// Studio rig light handles inside a plate's isolated renderer.
 const STUDIO_HANDLES: [u64; 3] = [u64::MAX - 2, u64::MAX - 1, u64::MAX];
 /// `GhostUniform` size (ghost.wgsl): three matrices and two vectors.
 const UNIFORM_BYTES: u64 = (16 * 3 + 8) * 4;
 
-/// What the host reads back per plate (the Three lane's ghost plate
-/// readout), for the runtime's ghost plate feedback.
+/// What the host reads back per plate, for the runtime's ghost plate
+/// feedback.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GhostPlateReadout {
     pub handle: GhostPlateHandle,
@@ -330,7 +330,7 @@ impl Renderer {
         source.set_animation_time(self.animation_time);
         let mut issues = source.apply(&frame, resources);
         // The source appears even if the product hides it (CraftSurvive
-        // publishes its source invisible); Three forced the clone visible.
+        // publishes its source invisible).
         let mut ops = vec![RenderDiff::Update {
             handle: descriptor.source,
             transform: None,
@@ -597,7 +597,8 @@ impl GhostPlate {
         let capture = &self.descriptor.capture;
         let plate_world = convert::transform_matrix(&placement.transform);
         let (near, far) = (capture.near, capture.far);
-        // Three's 8-bit linear depth quantization, kept for shell parity.
+        // The shell tolerance is widened by half of one 8-bit step of linear
+        // depth over [near, far].
         let half_step = (far - near) / 510.0;
         for sector in &self.sectors {
             let scale = (placement.width / sector.extent[0].max(1e-6))
@@ -644,7 +645,7 @@ fn unpublished(ops: Vec<RenderDiff>) -> RenderFrameDiff {
 
 /// The isolated-lighting studio rig for one sector: an ambient light and key
 /// and fill directional lights whose "toward light" directions are in the
-/// capture camera's frame (`orientation`), as the Three lane placed them.
+/// capture camera's frame (`orientation`).
 fn studio_rig(settings: &GhostPlateCaptureSettings, orientation: Quat) -> [LightDescriptor; 3] {
     let lighting = &settings.lighting;
     let travel =
@@ -736,8 +737,8 @@ fn signed_angular_difference(value: f32, reference: f32) -> f32 {
     (value - reference + 540.0).rem_euclid(360.0) - 180.0
 }
 
-/// Three's `selectGhostPlateSector`: keep the current sector within half a
-/// sector plus the hysteresis, otherwise snap to the nearest.
+/// Keep the current sector within half a sector plus the hysteresis,
+/// otherwise snap to the nearest.
 fn select_sector(local: f32, base: f32, count: usize, current: usize, hysteresis: f32) -> usize {
     if count <= 1 {
         return 0;
@@ -756,8 +757,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sector_selection_matches_the_three_lane_vectors() {
-        // ghost-plate.test.ts: (local, base, count, current, hysteresis).
+    fn sector_selection_keeps_the_current_sector_within_hysteresis() {
+        // (local, base, count, current, hysteresis).
         assert_eq!(select_sector(24.0, 0.0, 8, 0, 3.0), 0);
         assert_eq!(select_sector(26.0, 0.0, 8, 0, 3.0), 1);
         assert_eq!(select_sector(339.0, 0.0, 8, 0, 3.0), 0);

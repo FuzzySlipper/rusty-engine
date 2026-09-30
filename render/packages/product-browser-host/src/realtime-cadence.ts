@@ -3,9 +3,9 @@ import type { ProductBrowserRealtimeAdvanceOwner } from './product-browser-host.
 
 /**
  * The small dependency surface used by the Product Browser Host's one
- * renderer-cadence callback. Keeping the owner decision here lets the
- * package test the actual input/advance behavior without manufacturing a
- * second DOM or renderer host.
+ * page-cadence callback (the frame view's animation frame). Keeping the owner
+ * decision here lets the package test the actual input/advance behavior
+ * without manufacturing a second DOM host.
  */
 export interface ProductBrowserCadenceDependencies {
   readonly lifecycleMode: ProductDevRuntimeMode;
@@ -24,7 +24,7 @@ export interface ProductBrowserCadenceDependencies {
 export interface ProductBrowserCadence {
   readonly enqueue: (timeMs: number) => void;
   /**
-   * Wakes the same serialized admission lane when input arrives between renderer frames.
+   * Wakes the same serialized admission lane when input arrives between page frames.
    * Browser-owned realtime advances once, demand admits one step, and externally owned
    * modes only deliver the input because their scheduling authority remains external.
    */
@@ -73,9 +73,9 @@ export function createProductBrowserCadence(
         ? dependencies.sampleInput()
         : [];
       if (batch.length > 0) await dependencies.sendInput(batch);
-      // A wake can become redundant when an earlier renderer cadence drains
-      // ingress. Preserve the old availability contract by not advancing or
-      // admitting demand work solely for that empty wake.
+      // A wake can become redundant when an earlier page cadence drains
+      // ingress. Do not advance or admit demand work solely for that empty
+      // wake.
       if (inputWake && batch.length === 0) return;
       if (dependencies.lifecycleMode === 'realtime'
         && dependencies.realtimeAdvanceOwner === 'browser') {
@@ -103,7 +103,7 @@ export function createProductBrowserCadence(
     const monotonicTimeMs = Math.max(maximumObservedTimeMs, orderingTime(timeMs));
     maximumObservedTimeMs = monotonicTimeMs;
     if (cadenceInFlight) {
-      // Keep only the newest renderer time while the Rust operation is
+      // Keep only the newest cadence time while the Rust operation is
       // outstanding. This is intentionally separate from the input wake,
       // whose earlier timestamp determines when ingress next gets sampled.
       pendingCadenceTimeMs = monotonicTimeMs;
@@ -142,7 +142,7 @@ export function createProductBrowserCadence(
     pendingCadenceTimeMs = null;
     pendingDemandAdmission = false;
     if (nextTimeMs !== null && !disposed && dependencies.isReady()) {
-      // A renderer cadence that predates a queued input wake may still advance
+      // A page cadence that predates a queued input wake may still advance
       // its clock, but it must not drain input that became available later.
       // The following wake samples the one ingress queue at its own time.
       const cadencePrecedesInputWake = pendingInputWakeTimeMs !== null

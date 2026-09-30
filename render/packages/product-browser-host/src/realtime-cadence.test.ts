@@ -137,7 +137,7 @@ test('slow cadence coalesces an input wake while ingress preserves ordered edges
   assert.deepEqual(advances, ['10000000', '20000000', '100000000']);
 });
 
-test('a renderer cadence before a pending input wake does not drain later input early', async () => {
+test('a page cadence before a pending input wake does not drain later input early', async () => {
   const pressed: RuntimeInputWireEvent = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',

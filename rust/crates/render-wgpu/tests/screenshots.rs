@@ -748,9 +748,8 @@ fn transparent_parts_sort_by_distance_whatever_their_face_culling() {
     );
 }
 
-/// The primary target is multisampled, as Three's `antialias: true` canvas:
-/// a black unlit cube on white leaves partially covered pixels along its
-/// edges. Single-sampled, every pixel would be exactly black or white.
+/// The primary target is multisampled: a black unlit cube on white leaves
+/// partially covered pixels along its edges. Single-sampled, every pixel would be exactly black or white.
 #[test]
 fn primary_targets_antialias_triangle_edges() {
     let mut harness = Harness::new(RendererOptions::default());
@@ -778,8 +777,8 @@ fn primary_targets_antialias_triangle_edges() {
     );
 }
 
-/// `Material.wireframe` draws a primitive's triangle edges, as Three's
-/// wireframe basic material did: the cube is outlined, not filled.
+/// `Material.wireframe` draws a primitive's triangle edges: the cube is
+/// outlined, not filled.
 #[test]
 fn wireframe_primitives_draw_their_triangle_edges() {
     let lit_pixels = |wireframe: bool| {
@@ -819,8 +818,8 @@ fn wireframe_primitives_draw_their_triangle_edges() {
 }
 
 /// A view material on a static mesh is reported: no Engine producer sends
-/// one (appearance changes recreate the instance), and Three replaced such
-/// a node's materials with one flat colour. The rest of the update applies.
+/// one (appearance changes recreate the instance). The rest of the update
+/// applies.
 #[test]
 fn view_materials_on_static_meshes_are_reported_and_the_rest_applies() {
     let mut harness = Harness::new(RendererOptions::default());

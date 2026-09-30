@@ -93,9 +93,9 @@ viewerSize: [number, number] | null, recentFrames: number, framesPerSecond: numb
 
 /**
  * Bounded host-owned product-lane telemetry returned alongside the existing
- * diagnostics batch. These are observations only; renderer cadence remains
- * in the browser renderer diagnostics report and is intentionally not folded
- * into this product-lane snapshot.
+ * diagnostics batch. These are observations only; renderer statistics are
+ * answered by `engine.renderer` and are not folded into this product-lane
+ * snapshot.
  */
 export type ProductDevTelemetrySnapshot = { inFlightOperation: ProductDevOperationKind | null, inFlightAgeMs: CanonicalU64 | null, lastProductAdmissionLatencyMs: CanonicalU64 | null, lastInputAdmissionLatencyMs: CanonicalU64 | null, queuedInputBatches: number, queuedInputEvents: number, inputBatchCapacity: number, oldestInputAgeMs: CanonicalU64 | null, inputOverflowPending: boolean, 
 /**

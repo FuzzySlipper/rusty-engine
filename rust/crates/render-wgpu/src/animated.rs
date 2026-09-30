@@ -20,7 +20,7 @@
 //! the Engine time since the update. A controller replaces direct playback on
 //! its target until destroyed.
 //!
-//! **Blending** follows Three's mixer: each property takes its first
+//! **Blending**: each property takes its first
 //! contributing clip, later clips mix in by `w / (Σw + w)` (slerp for
 //! rotations), and a total weight below 1 mixes toward the rest pose.
 
@@ -43,8 +43,8 @@ use crate::resources::ResourceSource;
 use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, Topology};
 use crate::Renderer;
 
-/// What the runtime reads back from animated meshes (the Three lane's
-/// animation feedback facts), keyed by the instance's source entity and its
+/// What the runtime reads back from animated meshes (animation feedback
+/// facts), keyed by the instance's source entity and its
 /// per-entity realization generation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnimationFact {
@@ -1188,7 +1188,7 @@ impl Renderer {
             instance.part_nodes = part_nodes;
         }
         // Matte inspection: roughness 1, metalness 0 variants of the bound
-        // materials, as Three's inspection material did.
+        // materials.
         for id in mattes {
             let matte_id = format!("{id}#matte");
             if crate::tables::named(&self.tables.names, &self.tables.materials, &matte_id).is_some()

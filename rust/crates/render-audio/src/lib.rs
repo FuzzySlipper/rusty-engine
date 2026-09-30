@@ -5,8 +5,7 @@
 //! sound on one output device through kira. It owns no Engine clock: retained
 //! cursors reach it only through `Restore` ops in a baseline, and the device
 //! plays in real time between baselines. Realized positions never flow back
-//! into Engine state; only natural completions and diagnostics are reported,
-//! as the browser realization reports them.
+//! into Engine state; only natural completions and diagnostics are reported.
 //!
 //! Only this crate depends on kira and cpal.
 
@@ -73,8 +72,7 @@ pub trait AudioEntityPositions {
 }
 
 /// No entity positions. Entity-attached voices then fail with a host
-/// diagnostic, as they do in the browser realization, which is also given
-/// no resolver today.
+/// diagnostic.
 pub struct NoEntityPositions;
 
 impl AudioEntityPositions for NoEntityPositions {

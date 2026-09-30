@@ -28,8 +28,8 @@ pub(crate) struct RuntimeVideoCall {
     pub(crate) frame: Option<render_presentation::PresentationFrameDiff>,
 }
 
-/// Browser realization observations are copied into this Engine owner between
-/// admitted product calls. Browser timing never mutates product policy.
+/// Renderer realization observations are copied into this Engine owner between
+/// admitted product calls. Renderer timing never mutates product policy.
 #[derive(Clone, Copy)]
 pub enum VideoRealizationFact {
     Completed {

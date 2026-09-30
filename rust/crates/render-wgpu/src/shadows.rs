@@ -1,15 +1,13 @@
 //! Shadow maps for lights that request them, when the host enables shadows
-//! (`RendererOptions::shadows`, Three's `lighting.shadows.enabled`; C#
-//! products do not enable it).
+//! (`RendererOptions::shadows`; C# products do not enable it).
 //!
 //! Each shadowed light takes layers of one depth texture array: one for a
 //! directional or spot light, six for a point light. There is no light quota:
 //! the array grows with the lights that ask. Every shown scene part casts and
 //! every lit part receives, so a new object needs no shadow setup and nothing
-//! sweeps the scene; the Three lane had to flag each new mesh.
+//! sweeps the scene.
 //!
-//! The shadow cameras are Three's defaults, which the Three lane never
-//! changed: 512² maps, no bias, back faces of single-sided parts rendered;
+//! The shadow cameras are fixed: 512² maps, no bias, back faces of single-sided parts rendered;
 //! directional lights cast from their object position (`(0, 1, 0)` in the
 //! light node's frame) over a ±5 orthographic box with near 0.5 and far 500;
 //! spot lights over twice the cone angle; point lights over six 90° faces;
@@ -28,7 +26,7 @@ pub(crate) const SHADOW_MAP_SIZE: u32 = 512;
 const SHADOW_NEAR: f32 = 0.5;
 const SHADOW_FAR: f32 = 500.0;
 const DIRECTIONAL_HALF_EXTENT: f32 = 5.0;
-/// Three places a directional light at `Object3D.DEFAULT_UP`.
+/// A directional light sits at its node's +Y, one unit up.
 const DIRECTIONAL_POSITION: Vec3 = Vec3::Y;
 /// Dynamic uniform offsets must be 256-byte aligned.
 const LAYER_UNIFORM_STRIDE: u64 = 256;
@@ -103,8 +101,8 @@ const CUBE_FACES: [(Vec3, Vec3); 6] = [
     (Vec3::NEG_Z, Vec3::NEG_Y),
 ];
 
-/// Three's `Object3D.lookAt` for cameras, with its up vector (+Y), falling
-/// back to +Z when the view is vertical.
+/// A camera look-at with up +Y, falling back to +Z when the view is
+/// vertical.
 fn look_at(eye: Vec3, target: Vec3) -> Mat4 {
     let forward = (target - eye).normalize_or(Vec3::NEG_Z);
     let up = if forward.y.abs() > 0.999 {

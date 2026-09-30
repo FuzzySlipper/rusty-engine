@@ -609,9 +609,9 @@ fn primary_camera_pose(composition: &RendererViewComposition) -> Option<Renderer
         .map(|camera| camera.pose)
 }
 
-/// One realized ghost plate as the Engine's realization fact. render-wgpu
-/// ports the Three lane's capture bank, so the retained-profile limits apply
-/// unchanged (single capture view with one sector). The plate is built from
+/// One realized ghost plate as the Engine's realization fact. The limitation
+/// profile follows the plate's capture bank: a single capture view with one
+/// sector, otherwise a directional capture bank. The plate is built from
 /// its own descriptor's captured source, so the source always matches. A plate
 /// whose capture failed is not realized and has no fact; no realized plate
 /// draws a stand-in, so there is no fallback. The whole CPU build (the plate's

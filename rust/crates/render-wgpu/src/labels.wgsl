@@ -1,4 +1,4 @@
-// Billboard labels (#8827): one screen-space quad per label, placed in NDC
+// Billboard labels: one screen-space quad per label, placed in NDC
 // on the CPU. `SCENE_DEPTH` is substituted per sample count.
 
 struct LabelInstance {

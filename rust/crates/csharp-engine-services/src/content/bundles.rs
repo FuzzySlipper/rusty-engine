@@ -91,8 +91,10 @@ impl ProductContentBundles {
         Ok(source)
     }
 
-    /// Reserved inventory and declared bundle roots are excluded from legacy
-    /// eager ProductContent and browser initial-content publication.
+    /// Whether `path` is the reserved bundle inventory or under a declared
+    /// bundle root. The product runtime leaves such paths out of the eager
+    /// content it reads at admission (the `Create` content and the renderer
+    /// resources); bundles load them on demand.
     pub fn owns_path(&self, path: &str) -> bool {
         path == INDEX
             || self

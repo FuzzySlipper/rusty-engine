@@ -3,8 +3,8 @@
 //! transforms and (for skinned meshes) current pose. Answers the existing
 //! `RendererPickRequest` contract; the host supplies the camera it displays.
 //!
-//! Single-sided parts are hit from their front only, as Three's raycaster
-//! respected `FrontSide`. Lines are not picked; sprites belong to #8787.
+//! Single-sided parts are hit from their front only. Lines and sprites are
+//! not picked.
 
 use glam::{Mat4, Vec3};
 use render_host_contracts::{

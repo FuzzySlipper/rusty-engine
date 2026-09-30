@@ -53,8 +53,8 @@ pub enum AnimationParameterKind {
     Trigger,
 }
 
-/// Float parameters use signed thousandths so graph selection is identical in
-/// Rust and browser hosts.
+/// Float parameters use signed thousandths so graph selection compares exact
+/// integers and is deterministic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum AnimationParameterValue {

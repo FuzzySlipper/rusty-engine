@@ -135,7 +135,7 @@ pub(crate) fn camera_matrices(
 
 /// The viewmodel camera: camera-relative content is authored in camera-local
 /// coordinates, so it sits at the origin looking down -Z with the world
-/// camera's projection (Three's `synchronizeCameraRelativeViewmodelCamera`).
+/// camera's projection.
 pub(crate) fn viewmodel_matrices(
     projection: &RendererCameraProjection,
     aspect: f32,

@@ -49,7 +49,7 @@ impl Pipelines {
 }
 
 /// Depth-only caster pipelines, by face culling: single-sided parts render
-/// their back faces (Three's default shadow side), mirrored parts wind the
+/// their back faces, mirrored parts wind the
 /// other way, double-sided parts render both.
 pub(crate) struct ShadowPipelines {
     pub back_faces: wgpu::RenderPipeline,

@@ -89,8 +89,7 @@ async function requireSuccess(response: Response): Promise<unknown> {
 
 /**
  * Computes how old a diagnostic event is at the response read clock. This is
- * distinct from any age fact carried by the event itself (for example the
- * browser host's renderer observation age).
+ * distinct from any age fact carried in the event's own fields.
  */
 export function diagnosticEventAgeMilliseconds(
   batch: ProductDevDiagnosticsReadResponse,

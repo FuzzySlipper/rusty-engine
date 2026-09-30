@@ -25,7 +25,8 @@ use crate::{
 };
 
 pub const SUPPORTED_ANIMATED_GLB_VERSION: u32 = 2;
-/// Three's admitted animated-mesh path realizes TEXCOORD_0 through TEXCOORD_3.
+/// Texture references may select TEXCOORD_0 through TEXCOORD_3. (render-wgpu
+/// reads TEXCOORD_0 only, for the base colour texture.)
 pub const MAX_ANIMATED_GLB_TEXTURE_COORD_SET: u64 = 3;
 /// Keeps authored UV transforms finite and prevents extreme values from
 /// crossing the retained renderer boundary. Negative offset, rotation, and
@@ -558,13 +559,14 @@ fn derive_animation_rig_signature(
     Ok(Some(signature))
 }
 
-/// Reproduce the local matrix that Three's GLTFLoader exposes before the rig
-/// fingerprint quantizes it. For authored TRS, `GLTFLoader.loadNode` preserves
-/// the raw JSON components and `Bone.updateMatrix` runs `Matrix4.compose`.
-/// For an authored matrix, `loadNode` calls `Object3D.applyMatrix4`, which runs
-/// `Matrix4.decompose`; the later `Bone.updateMatrix` composes that TRS again.
-/// Rust's glTF reader eagerly produces an f32 matrix, so hashing it directly
-/// can cross a six-decimal boundary even for the same GLB.
+/// A joint node's local rest matrix, in the canonical form the rig fingerprint
+/// quantizes. Authored TRS is composed from the raw JSON components in f64.
+/// An authored matrix is decomposed to TRS and composed again, so both forms
+/// go through the same compose. The glTF reader's eager f32 matrix is not
+/// used: hashing it directly can cross a six-decimal boundary even for the
+/// same GLB. The rig signature (`bind_rest_hash`) depends on this exact
+/// derivation, including the order of floating-point operations, so it must
+/// not change.
 fn three_local_rest_matrix(node: &serde_json::Value) -> Result<[f64; 16], String> {
     let node = node
         .as_object()
@@ -613,6 +615,8 @@ fn json_number_array<const N: usize>(
         .map_err(|_| format!("GLB node {field} must contain {N} numeric values"))
 }
 
+/// Column-major TRS compose: scale, then rotation by the quaternion
+/// `[x, y, z, w]`, then translation.
 fn three_compose_matrix(translation: [f64; 3], rotation: [f64; 4], scale: [f64; 3]) -> [f64; 16] {
     let [x, y, z, w] = rotation;
     let x2 = x + x;
@@ -648,8 +652,10 @@ fn three_compose_matrix(translation: [f64; 3], rotation: [f64; 4], scale: [f64; 
     ]
 }
 
-/// Equivalent to Three's `Matrix4.decompose` followed by `Matrix4.compose`,
-/// which is how GLTFLoader realizes authored matrix-form nodes.
+/// Decompose a column-major affine matrix to TRS: translation from the last
+/// column, scale from the basis column lengths (X negated when the determinant
+/// is negative), and rotation from the basis divided by that scale. A singular
+/// matrix decomposes to identity rotation and unit scale.
 fn three_decompose_matrix(matrix: [f64; 16]) -> ([f64; 3], [f64; 4], [f64; 3]) {
     let translation = [matrix[12], matrix[13], matrix[14]];
     let determinant = three_matrix_determinant(matrix);
@@ -752,8 +758,8 @@ fn three_quaternion_from_rotation_matrix(matrix: [f64; 16]) -> [f64; 4] {
 
 /// Derive dense Engine-facing slots from the admitted source parser's used
 /// material slots. Only explicit GLB material indices participate: primitives
-/// without a `material` property use Three's default material and have no
-/// source material index suitable for an Engine override slot.
+/// without a `material` property draw with the renderer's default material and
+/// have no source material index suitable for an Engine override slot.
 fn embedded_material_slots(
     source_material_slots: Vec<u32>,
     glb_material_count: usize,
@@ -814,7 +820,7 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
     }
     let document = &parsed.document;
     // Blender polygon hints are optional exporter metadata over core triangles.
-    // Preserve the bytes for GLTFLoader, but never accept this as required.
+    // The bytes are kept as authored, but it is never accepted as required.
     for extension in document.extensions_used() {
         if !is_admitted_extension(extension) && extension != "FB_ngon_encoding" {
             return Err(ImportDiagnostic::error(
@@ -1276,10 +1282,9 @@ mod tests {
     }
 
     #[test]
-    fn matrix_form_rig_rest_uses_three_singular_decompose_fallback() {
-        // GLTFLoader applies an authored matrix to an Object3D, whose
-        // `Matrix4.decompose` uses identity scale/quaternion when det == 0;
-        // the later Bone.updateMatrix composes that exact fallback.
+    fn matrix_form_rig_rest_uses_the_singular_decompose_fallback() {
+        // A singular authored matrix (det == 0) decomposes to identity scale
+        // and rotation, and composing that keeps only its translation.
         let node = serde_json::json!({
             "matrix": [
                 0.0, 0.0, 0.0, 0.0,

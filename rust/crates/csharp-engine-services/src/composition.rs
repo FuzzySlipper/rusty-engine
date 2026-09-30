@@ -539,7 +539,7 @@ impl EngineServiceSet {
         self.implicit.begin_call();
     }
 
-    /// Copies browser-host realization facts while C# is not executing. The
+    /// Copies audio output realization facts while C# is not executing. The
     /// next normal product call snapshots this store for generated reads.
     pub fn ingest_audio_realization_feedback(
         &mut self,
@@ -574,7 +574,7 @@ impl EngineServiceSet {
         );
     }
 
-    /// Replaces the bound browser host's latest ghost-plate realization
+    /// Replaces the renderer's latest ghost-plate realization
     /// snapshot. Generated C# reads it during the next ordinary product call.
     pub fn ingest_ghost_plate_realization_feedback(
         &mut self,

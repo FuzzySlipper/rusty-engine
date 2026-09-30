@@ -73,7 +73,7 @@ pub enum NativeAudioDiagnosticCode {
     InvalidControl = 12,
 }
 
-/// The concrete browser-host realization fact kind, distinct from the audio
+/// The concrete audio output realization fact kind, distinct from the audio
 /// projector's admission/readout state.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,7 +220,7 @@ impl Default for NativeAudioVoiceReadout {
     }
 }
 
-/// Fixed Engine-bus state. This is not browser realization feedback.
+/// Fixed Engine-bus state. This is not realization feedback.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NativeAudioBusReadout {

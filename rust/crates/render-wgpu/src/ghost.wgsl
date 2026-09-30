@@ -1,7 +1,7 @@
 // Ghost plates: the frozen source's parts re-drawn at the plate with a relief
 // warp toward an anchor depth along each capture ray, textured from the
-// selected sector's capture by their original capture-space position
-// (ghost-plate.ts's shader patch). Unlit and opaque.
+// selected sector's capture by their original capture-space position.
+// Unlit and opaque.
 
 struct Frame {
     view_proj: mat4x4<f32>,

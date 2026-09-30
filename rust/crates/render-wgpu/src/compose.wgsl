@@ -40,7 +40,7 @@ fn fs_blit(in: FullscreenOut) -> @location(0) vec4<f32> {
     return textureSample(source, source_sampler, in.uv);
 }
 
-// Three's ACESFilmicToneMapping (tonemapping_pars_fragment).
+// ACES filmic tone mapping (Stephen Hill's RRT and ODT fit).
 fn aces_filmic(input: vec3<f32>, exposure: f32) -> vec3<f32> {
     let aces_in = mat3x3<f32>(
         vec3<f32>(0.59719, 0.07600, 0.02840),

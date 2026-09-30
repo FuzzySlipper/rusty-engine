@@ -1,12 +1,12 @@
 //! Video playback: the one active clip, decoded by `render-video` on the
 //! Engine presentation timeline and drawn over the primary target, letterboxed
-//! on black, as the browser's video element covered the view.
+//! on black, covering the view.
 //!
 //! A clip starts at the timeline position its play op was applied at, drawn
 //! or not, so a held simulation holds the picture, a viewer that attaches
 //! mid-clip sees it where the Engine (and its soundtrack) is, and a rebuilt
 //! renderer, whose baseline applies at the current time, plays an active clip
-//! from its start. Playback ends as the browser host reported it: `Completed`
+//! from its start. Playback reports how it ends: `Completed`
 //! at the clip's end, `Skipped` for a skip op, `Failed` when the clip cannot
 //! be read or decoded. A stop ends it silently.
 
@@ -144,8 +144,7 @@ impl Renderer {
     ) {
         match op {
             VideoProjectionOp::Play { handle, clip } => {
-                // A new play replaces the active playback without a fact, as
-                // the browser host disposed its element.
+                // A new play replaces the active playback without a fact.
                 self.video.active = None;
                 let Some(bytes) = resources.bytes(&clip.asset) else {
                     self.video.end(Some(VideoFact::Failed {
@@ -179,8 +178,8 @@ impl Renderer {
                     self.video.end(Some(VideoFact::Skipped { handle: *handle }));
                 }
                 Some(_) => {}
-                // As the browser host, a skip with nothing playing (it
-                // failed or ended first) is still reported.
+                // A skip with nothing playing (it failed or ended first) is
+                // still reported.
                 None => self
                     .video
                     .facts

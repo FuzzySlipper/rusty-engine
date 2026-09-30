@@ -22,7 +22,7 @@
 //!
 //! # Conventions (voxel-capability-01 §"Current accepted guidance")
 //!
-//! - **Y-up**, right-handed (matches Three.js defaults).
+//! - **Y-up**, right-handed.
 //! - Voxel `(0,0,0)` occupies `[0,1)³` in *grid units*; its center is
 //!   `(0.5,0.5,0.5)` grid units. World size of a cell is `voxel_size`.
 //! - **Floor division** for negative coordinates (not truncation), so the grid is

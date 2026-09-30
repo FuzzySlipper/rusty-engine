@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Emit one RUSTY_PERF JSON record per independently attributable layer. These
-# are local regression baselines, not universal pass/fail thresholds across
-# different CPUs, browsers, GPUs, or software rasterizers.
+# Emit one RUSTY_PERF JSON record per independently attributable layer: the
+# Rust appearance call stage, the managed C# update loop, and, for each loader
+# (CoreCLR and NativeAOT), the C#/Rust crossover and the product dev host's
+# HTTP step admission. These are local regression baselines, not universal
+# pass/fail thresholds across different CPUs, operating systems, or .NET
+# runtimes.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROBE_ROOT="$(mktemp -d -t rusty-engine-performance.XXXXXX)"
 ITERATIONS="${RUSTY_PERF_ITERATIONS:-50}"

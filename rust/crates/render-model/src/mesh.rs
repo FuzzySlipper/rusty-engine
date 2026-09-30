@@ -858,10 +858,11 @@ pub struct AnimationRigFingerprintJoint {
     pub inverse_bind_matrix: [f64; 16],
 }
 
-/// Canonical SHA-256 used by the Three renderer for rig admission. This is
-/// deliberately the same sorted JSON shape as `animationRigFingerprint` in
-/// `renderer-three`; accepting a merely similar hash would bypass the
-/// renderer's decoded-skeleton check.
+/// Canonical SHA-256 of a rig's joints, the `bind_rest_hash` that decides
+/// clip compatibility. The canonical form is a JSON array of
+/// `[id, parent, local rest…, inverse bind…]` rows sorted by joint id, with
+/// every matrix value rounded to six decimals. Stored signatures and golden
+/// data depend on this exact form, so it must not change.
 pub fn animation_rig_fingerprint(
     joints: &[AnimationRigFingerprintJoint],
 ) -> Result<String, AnimationRigSignatureError> {
@@ -918,10 +919,10 @@ fn push_renderer_rounded_number(
     output: &mut String,
     value: f64,
 ) -> Result<(), AnimationRigSignatureError> {
-    // Three computes Number(value.toFixed(6)) before JSON.stringify. The GLB
-    // import surface is finite f32-derived affine data, so this fixed decimal
-    // form is byte-for-byte equivalent in the admitted range and avoids a
-    // platform-dependent generic float serializer.
+    // Six decimals in shortest form (no trailing zeros or point). The GLB import surface is
+    // finite f32-derived affine data, so this fixed decimal form is exact in
+    // the admitted range and avoids a platform-dependent generic float
+    // serializer.
     let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
     if !rounded.is_finite() || rounded.abs() >= 1e21 {
         return Err(AnimationRigSignatureError::Invalid);
@@ -1133,8 +1134,8 @@ impl AnimatedMeshAsset {
 /// A deterministic Engine-facing material slot for an admitted GLB resource.
 ///
 /// `slot` is dense and stable for the exact admitted source. The renderer
-/// resolves `source_material_slot` through GLTFLoader's material association,
-/// never by Three scene traversal order. A separate future appearance override
+/// resolves `source_material_slot` as the glTF material index a primitive
+/// references, never by scene traversal order. A separate future appearance override
 /// may target `slot`; this mapping does not create an Engine material asset or
 /// override behavior by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1386,7 +1387,7 @@ pub enum AnimatedMeshPlaybackError {
 
 /// Canonical retained state for direct animated-mesh playback. It turns
 /// commands into a reconstructible position on an Engine-owned timeline;
-/// browser hosts receive one current command and do not replay history.
+/// renderers receive one current command and do not replay history.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum AnimatedMeshPlaybackTimeline {
     #[default]
@@ -1717,7 +1718,7 @@ mod tests {
     }
 
     #[test]
-    fn animation_rig_fingerprint_matches_the_renderer_canonical_golden() {
+    fn animation_rig_fingerprint_matches_the_canonical_golden() {
         let identity = [
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ];
@@ -1895,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn animation_clip_pack_rejects_reserved_three_binding_characters() {
+    fn animation_clip_pack_rejects_joint_ids_with_path_characters() {
         let hash = format!("sha256:{}", "a".repeat(64));
         let mut pack = AnimationClipPack {
             asset: "animation-clip-pack/test".to_owned(),

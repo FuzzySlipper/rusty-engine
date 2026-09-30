@@ -8,9 +8,8 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 pub(crate) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// Samples per pixel of the primary destination (the offscreen primary
-/// target and the window surface). Three created its canvas with
-/// `antialias: true`; its render targets and captures stayed single-sample,
-/// and so do ours.
+/// target and the window surface). Offscreen render targets and captures
+/// are single-sample.
 pub(crate) const PRIMARY_SAMPLES: u32 = 4;
 
 /// What a pipeline must match to draw into a target: colour format and

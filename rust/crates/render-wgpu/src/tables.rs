@@ -73,7 +73,7 @@ pub(crate) struct GpuMesh {
     /// Positions and indices kept for picking.
     pub cpu: std::sync::Arc<CpuGeometry>,
     /// Line-list indices for wireframe parts, built on first use: every
-    /// triangle's three edges, as Three's wireframe attribute has them.
+    /// triangle's three edges.
     pub edges: std::sync::OnceLock<wgpu::Buffer>,
 }
 
@@ -153,7 +153,7 @@ pub(crate) enum Builtin {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum MaterialRef {
     Retained(u32),
-    /// Primitive nodes: flat colour, no lighting (Three `MeshBasicMaterial`).
+    /// Primitive nodes: flat colour, no lighting (a basic material).
     Unlit,
     /// Payload groups with no `voxel-material/<slot>` descriptor: lit, untextured.
     LitFallback,

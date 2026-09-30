@@ -42,7 +42,7 @@ struct AudioState {
     voices: BTreeMap<u64, AudioHandle>,
     voice_clips: BTreeMap<u64, u64>,
     one_shot_clips: BTreeMap<u64, u64>,
-    /// A browser feedback overflow loses one or more terminal identities.
+    /// A realization feedback overflow loses one or more terminal identities.
     /// Pending one-shots remain protected until an owner reset cancels them.
     one_shot_feedback_lost: bool,
     next_clip: u64,
@@ -50,9 +50,9 @@ struct AudioState {
     next_signal: u64,
 }
 
-/// Copied Engine browser-host realization feedback. Kept separate from the
-/// projector state so C# can distinguish desired presentation from what Web
-/// Audio actually completed or diagnosed.
+/// Copied audio output realization feedback. Kept separate from the
+/// projector state so C# can distinguish desired presentation from what the
+/// audio device actually completed or diagnosed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRealizationFact {
     NaturalCompletionOneShot {
@@ -133,8 +133,8 @@ pub(crate) struct RuntimeAudioCall {
 }
 
 /// Engine-owned audio admission and projector bridge. WAV resources are
-/// admitted from immutable Engine content and realized only by the browser
-/// host; post-Create admission retains the selected body in this owner.
+/// admitted from immutable Engine content and realized only by the product
+/// runtime's audio output; post-Create admission retains the selected body in this owner.
 pub(crate) struct RuntimeAudioBridge {
     state: AudioState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
@@ -186,9 +186,10 @@ impl RuntimeAudioBridge {
         self.content = Some(content as *const RuntimeContentBridge);
     }
 
-    /// Replaces or incrementally admits a browser-owned snapshot between C#
-    /// calls. Monotonic fact ids make retries harmless; the copied FIFO stays
-    /// bounded independently of the browser host's own eviction count.
+    /// Replaces or incrementally admits the audio output's realization facts
+    /// (the product runtime's `render-audio` device) between C# calls.
+    /// Monotonic fact ids make retries harmless; the copied FIFO stays bounded
+    /// independently of the reporter's own eviction count.
     pub(crate) fn ingest_realized_feedback(
         &mut self,
         replace_owner: bool,
@@ -252,7 +253,7 @@ impl RuntimeAudioBridge {
         self.renderer_evicted_fact_count = 0;
         self.local_evicted_fact_count = 0;
         self.accepted_through_fact_id = None;
-        // An exact runtime binding reset also resets the browser audio owner,
+        // An exact runtime binding reset also resets the audio feedback owner,
         // cancelling active one-shots before the next feedback owner starts.
         self.state.one_shot_clips.clear();
         self.state.one_shot_feedback_lost = false;
@@ -311,7 +312,7 @@ impl RuntimeAudioBridge {
     /// and realization feedback intentionally never cross a baseline.
     ///
     /// A baseline uses the Engine cursor and desired state. Historical
-    /// one-shots and browser realization feedback remain outside it.
+    /// one-shots and realization feedback remain outside it.
     pub(crate) fn snapshot_frame(
         &self,
     ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
@@ -2166,7 +2167,7 @@ mod tests {
             }
         );
         bridge.end_call();
-        // A retry is deduplicated, while a newer browser cumulative eviction
+        // A retry is deduplicated, while a newer reported cumulative eviction
         // count remains visible independently of local store evictions.
         bridge
             .ingest_realized_feedback(
@@ -2420,6 +2421,6 @@ mod tests {
         bridge.begin_call();
         bridge
             .destroy_clip(clip)
-            .expect("owner reset cancels outstanding browser one-shots");
+            .expect("owner reset cancels outstanding one-shots");
     }
 }

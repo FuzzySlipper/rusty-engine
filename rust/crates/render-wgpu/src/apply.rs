@@ -35,7 +35,7 @@ const FLAG_VOXEL_SURFACE: u32 = 4;
 /// `MaterialUniform` size: roughness, cutoff, flags, metalness, then the
 /// voxel surface's tile scale, tile origin, and sample rect.
 const MATERIAL_UNIFORM_BYTES: usize = 48;
-/// Payload groups without a voxel material use Three's fallback roughness.
+/// Payload groups without a voxel material are fully rough.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
 /// Prefix of the retained materials payload mesh groups bind by slot.
 const PAYLOAD_SLOT_MATERIAL_PREFIX: &str = "voxel-material/";
@@ -240,8 +240,7 @@ impl Renderer {
                 // A view material applies to primitive nodes, including their
                 // replaced payloads. No Engine producer sends one for another
                 // kind (the appearance projector recreates on material
-                // changes), and Three swapped such a node's materials for one
-                // flat colour, so it is reported rather than guessed at.
+                // changes), so it is reported rather than guessed at.
                 let mut rebuild = false;
                 let mut unrealized_material = false;
                 match (material, &mut node.kind) {
@@ -294,7 +293,7 @@ impl Renderer {
             }
             RenderDiff::ReplaceMeshPayload { handle, payload } => {
                 let mut streams = resources::mesh_streams(payload, resources)?;
-                // Uploaded payloads draw without vertex colours, as in Three.
+                // Uploaded payloads draw without vertex colours.
                 streams.colors = None;
                 let mesh = self.upload_mesh(
                     &format!("payload {}", handle.raw()),
@@ -528,8 +527,8 @@ impl Renderer {
                 material,
                 has_payload,
             } => {
-                // Three drew `wireframe` primitives with a wireframe basic
-                // material; lines and points ignore it.
+                // `wireframe` draws a primitive's triangle edges, unlit;
+                // lines and points ignore it.
                 let unlit = |mesh, first_index, index_count, wireframe| {
                     (
                         Part {
@@ -572,8 +571,8 @@ impl Renderer {
                                     first_index: *start,
                                     index_count: *count,
                                     material: material_ref,
-                                    // Three applied the node's view material,
-                                    // wireframe included, to uploaded meshes.
+                                    // The node's view material, wireframe
+                                    // included, applies to uploaded meshes.
                                     wireframe: material.wireframe,
                                 },
                                 PartRow {
@@ -693,8 +692,7 @@ impl Renderer {
                 }
             }
             NodeKind::AnimatedMesh(_) => {
-                // Inspection draws the instance as a wireframe, as Three's
-                // mesh inspection cloned its materials with `wireframe`.
+                // Inspection draws the instance as a wireframe.
                 let wireframe = self
                     .tables
                     .animated
@@ -1087,7 +1085,7 @@ pub(crate) struct MaterialParams {
 
 impl MaterialParams {
     /// A retained material's uniform. A voxel surface's own alpha policy
-    /// applies to it, as the Three lane's voxel surface specialization did.
+    /// applies to it.
     pub(crate) fn of(
         descriptor: &RenderMaterialDescriptor,
         texture_size: Option<(u32, u32)>,
@@ -1341,7 +1339,7 @@ fn emission(color: [f32; 3], intensity: f32) -> [f32; 3] {
     color.map(|component| component * intensity)
 }
 
-/// Three's deterministic fallback hue for an unbound slot (golden angle,
+/// The deterministic fallback hue for an unbound slot (golden angle,
 /// HSL saturation 0.7, lightness 0.5), in linear RGB.
 pub(crate) fn slot_color(slot: u16) -> [f32; 4] {
     let hue = (f32::from(slot) * 0.618_034) % 1.0;

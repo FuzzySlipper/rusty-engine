@@ -10,15 +10,12 @@ import { capturePerformanceResults, comparePerformanceResults } from './performa
 const SCRIPT = resolve('scripts/performance-results.mjs');
 
 function perfRecord({
-  lane = 'renderer-cpu-submission',
+  lane = 'voxel-dc-meshing',
   workload = { id: 'terrain', version: 1, seed: 7 },
   run = 0,
   median = 10,
   p95 = 15,
-  renderer = 'Mesa GPU',
-  vendor = 'Mesa',
-  browser = 'Chromium 149',
-  canvas = { cssWidth: 640, cssHeight: 360, backingWidth: 640, backingHeight: 360 },
+  runtime = '10.0.0',
 } = {}) {
   return {
     lane,
@@ -27,11 +24,7 @@ function perfRecord({
     iterations: 200,
     samples: [median],
     metrics: { minimum: median - 1, median, p95, maximum: p95 + 1, mean: median },
-    renderer,
-    vendor,
-    browser,
-    canvas,
-    pacing: { classification: 'timer-query' },
+    runtime,
   };
 }
 
@@ -54,11 +47,11 @@ test('capture writes versioned provenance and retains every raw run record', asy
   const directory = await fixtureDirectory();
   const log = resolve(directory, 'runs.log');
   const output = resolve(directory, 'results.json');
-  const legacy = { lane: 'software-legacy', median: 2, p95: 3, iterations: 10 };
+  const flat = { lane: 'rust-appearance-call-stage', median: 2, p95: 3, iterations: 10 };
   await writeFile(log, [
     'ordinary runner output',
     `RUSTY_PERF ${JSON.stringify(perfRecord({ run: 1 }))}`,
-    `RUSTY_PERF ${JSON.stringify(legacy)}`,
+    `RUSTY_PERF ${JSON.stringify(flat)}`,
   ].join('\n'), 'utf8');
 
   const artifact = await capturePerformanceResults({
@@ -77,29 +70,29 @@ test('capture writes versioned provenance and retains every raw run record', asy
   assert.equal(saved.host.node, process.version);
   assert.equal(saved.records.length, 2);
   assert.deepEqual(saved.records[0].record, perfRecord({ run: 1 }));
-  assert.deepEqual(saved.records[1].record, legacy);
+  assert.deepEqual(saved.records[1].record, flat);
 });
 
-test('legacy records without a workload object compare as the empty workload configuration', async () => {
+test('records without a workload object compare as the empty workload configuration', async () => {
   const directory = await fixtureDirectory();
-  const baseline = await capture(directory, 'baseline', 'local-software', [
-    { lane: 'software-legacy', median: 2, p95: 3, iterations: 10 },
+  const baseline = await capture(directory, 'baseline', 'local', [
+    { lane: 'rust-appearance-call-stage', median: 2, p95: 3, iterations: 10 },
   ]);
-  const candidate = await capture(directory, 'candidate', 'local-software', [
-    { lane: 'software-legacy', median: 2, p95: 3, iterations: 20 },
+  const candidate = await capture(directory, 'candidate', 'local', [
+    { lane: 'rust-appearance-call-stage', median: 2, p95: 3, iterations: 20 },
   ]);
   const report = comparePerformanceResults(baseline, candidate);
   assert.equal(report.status, 'compatible');
-  assert.deepEqual(report.matching[0].group, { lane: 'software-legacy', workload: {} });
+  assert.deepEqual(report.matching[0].group, { lane: 'rust-appearance-call-stage', workload: {} });
 });
 
 test('compare reports per-run variability and a known increase without a default gate', async () => {
   const directory = await fixtureDirectory();
-  const baseline = await capture(directory, 'baseline', 'local-gpu', [
+  const baseline = await capture(directory, 'baseline', 'local', [
     perfRecord({ run: 1, median: 10, p95: 15 }),
     perfRecord({ run: 2, median: 14, p95: 21 }),
   ]);
-  const candidate = await capture(directory, 'candidate', 'local-gpu', [
+  const candidate = await capture(directory, 'candidate', 'local', [
     perfRecord({ run: 1, median: 15, p95: 22 }),
     perfRecord({ run: 2, median: 18, p95: 27 }),
   ]);
@@ -123,24 +116,24 @@ test('compare reports per-run variability and a known increase without a default
   assert.equal(JSON.parse(gatedResult.stdout).status, 'policy-failed');
 });
 
-test('compare refuses to pool different host and browser configurations', async () => {
+test('compare refuses to pool different host and runtime configurations', async () => {
   const directory = await fixtureDirectory();
-  const baseline = await capture(directory, 'baseline', 'local-gpu', [perfRecord()]);
-  const candidate = await capture(directory, 'candidate', 'local-gpu', [perfRecord({ renderer: 'Different GPU' })]);
+  const baseline = await capture(directory, 'baseline', 'local', [perfRecord()]);
+  const candidate = await capture(directory, 'candidate', 'local', [perfRecord({ runtime: '10.0.1' })]);
   candidate.host = { ...candidate.host, cpu: { ...candidate.host.cpu, models: ['Different CPU'] } };
 
   const report = comparePerformanceResults(baseline, candidate);
   assert.equal(report.status, 'incompatible');
   assert.deepEqual(report.environmentMismatches, ['host CPU/OS/Node metadata differs']);
-  assert.equal(report.incompatibilities[0].mismatches.includes('renderer/vendor/browser/canvas configuration differs'), true);
+  assert.equal(report.incompatibilities[0].mismatches.includes('runtime/unit configuration differs'), true);
 });
 
 test('compare reports missing and differently configured workloads instead of treating them as green', async () => {
   const directory = await fixtureDirectory();
-  const baseline = await capture(directory, 'baseline', 'local-gpu', [perfRecord({ workload: { id: 'terrain', version: 1 } })]);
-  const candidate = await capture(directory, 'candidate', 'local-gpu', [
+  const baseline = await capture(directory, 'baseline', 'local', [perfRecord({ workload: { id: 'terrain', version: 1 } })]);
+  const candidate = await capture(directory, 'candidate', 'local', [
     perfRecord({ workload: { id: 'terrain', version: 2 } }),
-    perfRecord({ lane: 'renderer-frame-interval', workload: { id: 'terrain', version: 1 } }),
+    perfRecord({ lane: 'csharp-rust-crossover', workload: { id: 'terrain', version: 1 } }),
   ]);
   const report = comparePerformanceResults(baseline, candidate);
   assert.equal(report.status, 'incompatible');
@@ -148,7 +141,7 @@ test('compare reports missing and differently configured workloads instead of tr
   assert.equal(report.missing.baseline.length, 2);
   assert.equal(report.missing.candidate.length, 1);
   assert.deepEqual(report.workloadMismatches, [{
-    lane: 'renderer-cpu-submission',
+    lane: 'voxel-dc-meshing',
     baseline: [{ id: 'terrain', version: 1 }],
     candidate: [{ id: 'terrain', version: 2 }],
   }]);
@@ -158,8 +151,8 @@ test('workload-order changes do not create an incompatibility', async () => {
   const directory = await fixtureDirectory();
   const first = perfRecord({ workload: { id: 'terrain', version: 1 } });
   const second = perfRecord({ workload: { id: 'caves', version: 1 } });
-  const baseline = await capture(directory, 'baseline', 'local-gpu', [first, second]);
-  const candidate = await capture(directory, 'candidate', 'local-gpu', [second, first]);
+  const baseline = await capture(directory, 'baseline', 'local', [first, second]);
+  const candidate = await capture(directory, 'candidate', 'local', [second, first]);
   const report = comparePerformanceResults(baseline, candidate);
   assert.equal(report.status, 'compatible');
   assert.deepEqual(report.workloadMismatches, []);
@@ -167,10 +160,10 @@ test('workload-order changes do not create an incompatibility', async () => {
 
 test('floating timestamp noise rounds to no change while a small measured increase remains visible', async () => {
   const directory = await fixtureDirectory();
-  const baseline = await capture(directory, 'baseline', 'local-gpu', [
+  const baseline = await capture(directory, 'baseline', 'local', [
     perfRecord({ median: 33.13999999999942, p95: 34.13999999999942 }),
   ]);
-  const noisyCandidate = await capture(directory, 'noisy', 'local-gpu', [
+  const noisyCandidate = await capture(directory, 'noisy', 'local', [
     perfRecord({ median: 33.14000000000033, p95: 34.14000000000033 }),
   ]);
   const noisyReport = comparePerformanceResults(baseline, noisyCandidate);
@@ -178,7 +171,7 @@ test('floating timestamp noise rounds to no change while a small measured increa
   assert.deepEqual(noisyReport.reportOnlyIncreases, []);
   assert.deepEqual(noisyReport.matching[0].metrics.map((metric) => metric.changePercent), [0, 0]);
 
-  const measuredCandidate = await capture(directory, 'measured', 'local-gpu', [
+  const measuredCandidate = await capture(directory, 'measured', 'local', [
     perfRecord({ median: 33.140001, p95: 34.140001 }),
   ]);
   const measuredReport = comparePerformanceResults(baseline, measuredCandidate);
@@ -191,7 +184,7 @@ test('floating timestamp noise rounds to no change while a small measured increa
 
 test('compare rejects an empty performance artifact', async () => {
   const directory = await fixtureDirectory();
-  const candidate = await capture(directory, 'candidate', 'local-gpu', [perfRecord()]);
+  const candidate = await capture(directory, 'candidate', 'local', [perfRecord()]);
   assert.throws(
     () => comparePerformanceResults({ ...candidate, records: [] }, candidate),
     /not a rusty-engine\.performance-results\/v1 artifact/u,

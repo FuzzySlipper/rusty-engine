@@ -67,15 +67,15 @@ pub use video::{VideoFact, VideoFailure};
 use pipelines::{Layouts, Pipelines};
 use tables::{Builtin, GpuMesh, GpuTexture, Tables};
 
-/// The Three lane's default world rig (`createNeutralLights([5, 8, 6])`):
-/// a hemisphere light and a key light, unless the product disables it.
+/// The default world rig: a hemisphere light and a key light at (5, 8, 6),
+/// unless the product disables it.
 pub(crate) const NEUTRAL_HEMISPHERE_INTENSITY: f32 = 2.4;
 /// Hemisphere ground colour 0x263238, sRGB.
 pub(crate) const NEUTRAL_GROUND_SRGB: [f32; 3] = [38.0 / 255.0, 50.0 / 255.0, 56.0 / 255.0];
 pub(crate) const NEUTRAL_KEY_INTENSITY: f32 = 2.2;
 pub(crate) const NEUTRAL_KEY_POSITION: [f32; 3] = [5.0, 8.0, 6.0];
 /// The viewmodel rig's key light, in camera-local coordinates
-/// (`createNeutralLights([2, 3, 2])`).
+/// (a key light at (2, 3, 2)).
 pub(crate) const NEUTRAL_VIEWMODEL_KEY_POSITION: [f32; 3] = [2.0, 3.0, 2.0];
 /// Clear colour with no background or sky selected: 0x101820, sRGB.
 pub(crate) const DEFAULT_CLEAR_SRGB: [f32; 3] = [16.0 / 255.0, 24.0 / 255.0, 32.0 / 255.0];
@@ -98,8 +98,7 @@ pub struct RendererOptions {
     /// viewmodel layer unless the product disables it.
     pub default_viewmodel_lights: bool,
     /// Render shadow maps for world lights whose `shadow_intent` requests
-    /// them (Three's `lighting.shadows.enabled` host option). Off by
-    /// default; C# products do not enable it.
+    /// them. Off by default; C# products do not enable it.
     pub shadows: bool,
 }
 
@@ -260,8 +259,7 @@ impl Renderer {
     /// Target pixels per CSS pixel of the output: the desktop window's scale
     /// factor, or the stream viewer's device pixel ratio. The host sets it,
     /// not the product. Labels, pixel-sized sprites and particle points are
-    /// authored in CSS pixels and keep that size on a denser target, as they
-    /// did under Three's `pixelRatio`. Labels rasterize again at a new ratio.
+    /// authored in CSS pixels and keep that size on a denser target. Labels rasterize again at a new ratio.
     pub fn set_pixel_ratio(&mut self, ratio: f32) {
         if ratio.is_finite() && ratio > 0.0 {
             self.labels.set_pixel_ratio(ratio);

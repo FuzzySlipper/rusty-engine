@@ -1,7 +1,7 @@
 //! Decoding an admitted animated-mesh GLB (`animated-mesh-resource/…`) into
 //! CPU-side data: the node hierarchy with rest TRS, primitives, skins, clips
 //! and materials. The runtime admitted the bytes (`asset-import`); this reads
-//! them as the Three lane's `GLTFLoader` did and does not re-validate.
+//! them and does not re-validate.
 
 use glam::{Mat4, Quat, Vec3};
 use gltf::animation::util::ReadOutputs;
@@ -36,8 +36,7 @@ pub(crate) struct GlbPrimitive {
     pub uvs: Option<Vec<[f32; 2]>>,
     pub colors: Option<Vec<[f32; 4]>>,
     pub joints: Option<Vec<[u16; 4]>>,
-    /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`), as Three's
-    /// `normalizeSkinWeights` did.
+    /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`).
     pub weights: Option<Vec<[f32; 4]>>,
     pub indices: Vec<u32>,
     pub material: Option<usize>,

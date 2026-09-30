@@ -75,7 +75,7 @@ fn expand(pixels: &[u8], stride: usize, to_rgba: impl Fn(&[u8]) -> [u8; 4]) -> V
 }
 
 /// Vertex streams ready for upload. Colours (RGBA) are drawn only for static
-/// meshes, the one family whose Three materials enabled vertex colours.
+/// meshes; the other families clear them before upload.
 pub(crate) struct MeshStreams {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,

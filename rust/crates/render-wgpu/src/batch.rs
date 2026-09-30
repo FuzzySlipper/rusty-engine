@@ -20,8 +20,8 @@ use crate::tables::{Aabb, PartClass, PartId, Parts};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Pass {
     Opaque,
-    /// Negative determinant: front faces wind clockwise (Three flips
-    /// `frontFace` for such meshes).
+    /// Negative determinant: the mirror reverses winding, so front faces
+    /// wind clockwise.
     OpaqueMirrored,
     OpaqueDoubleSided,
     Lines,
@@ -146,8 +146,7 @@ pub(crate) fn view_list(
 type Entry = (Pass, u32, PartId, Pass);
 
 /// Shadow casters: every shown triangle part of the scene layer, not culled
-/// by any camera. Blended parts cast as opaque, as Three's depth material
-/// did. Passes select the face culling: single-sided parts render their back
+/// by any camera. Blended parts cast as opaque. Passes select the face culling: single-sided parts render their back
 /// faces, double-sided parts both.
 pub(crate) fn caster_list(parts: &Parts, base: u32) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();

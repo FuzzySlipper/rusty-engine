@@ -12,7 +12,7 @@
 //!
 //! [`Renderer::capture_image`] is the output job: capture into linear half
 //! float, then resolve, un-premultiply, expose or tone map, encode sRGB, read
-//! back and write PNG. GLB export stays with the browser output executor.
+//! back and write PNG. GLB export lives in the `export` module.
 
 use render_host_contracts::{RenderOutputJob, RenderOutputOperation, RendererCameraProjection};
 use render_model::RenderFrameDiff;
@@ -95,7 +95,7 @@ impl Renderer {
         );
         let color_view = color.create_view(&Default::default());
         let depth_view = depth.create_view(&Default::default());
-        // Captures are render targets: single-sample, as Three's were.
+        // Captures are render targets: single-sample.
         let target = TargetView {
             color: &color_view,
             resolve: None,

@@ -1,5 +1,5 @@
 // World pass: parts drawn with the retained material and light rows, and the
-// equirectangular sky. Lighting follows the Three lane's MeshStandardMaterial
+// equirectangular sky. Lighting is a standard metallic-roughness model
 // with metalness 0 (Lambert diffuse plus GGX specular, F0 0.04), in linear
 // light with no tone mapping; the sRGB target encodes the output.
 

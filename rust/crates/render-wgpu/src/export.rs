@@ -1,11 +1,10 @@
-//! GLB export of an output job's frozen frame (#8826), in place of the Three
-//! lane's `GLTFExporter`.
+//! GLB export of an output job's frozen frame.
 //!
 //! The export holds the selected node, its descendants, and the ancestor path
 //! that places it, with each node's local transform. The geometry is the
 //! geometry render-wgpu draws: built-in primitives, mesh payloads, static
 //! meshes by material slot, and animated meshes with their rig. Materials
-//! follow Three's mapping:
+//! map as follows:
 //! - retained materials become metallic-roughness with metalness 0;
 //! - primitives become `KHR_materials_unlit`;
 //! - animated meshes keep their embedded materials unless overridden.
@@ -15,7 +14,7 @@
 //!
 //! Some nodes fail the job, naming the node, where glTF has no counterpart:
 //! sprites, voxel-surface materials and voxel objects, and ambient lights.
-//! Hidden nodes are exported, as Three exported with `onlyVisible: false`.
+//! Hidden nodes are exported too.
 //! No GPU is involved.
 
 use std::collections::{BTreeMap, HashMap};
@@ -790,7 +789,7 @@ impl<'a> Writer<'a> {
 
     // ── Materials ───────────────────────────────────────────────────────────
 
-    /// Three's `MeshBasicMaterial` for a primitive's view colour.
+    /// An unlit material for a primitive's view colour.
     fn unlit(&mut self, color: [f32; 4]) -> usize {
         self.document.extensions.insert("KHR_materials_unlit");
         let mut material = json!({
@@ -807,7 +806,7 @@ impl<'a> Writer<'a> {
         self.document.material(material)
     }
 
-    /// Three's `MeshStandardMaterial` for a retained material, with the
+    /// A metallic-roughness material for a retained material, with the
     /// node's instance parameters for its slot and a view colour multiplier.
     fn retained_material(
         &mut self,
@@ -865,7 +864,7 @@ impl<'a> Writer<'a> {
         Ok(self.document.material(material))
     }
 
-    /// Emission as GLTFExporter wrote it: intensity above 1 moves into
+    /// Emission: intensity above 1 moves into
     /// `KHR_materials_emissive_strength`.
     fn emission(&mut self, material: &mut Value, color: [f32; 3], intensity: f32) {
         if intensity <= 1.0 {
@@ -1172,9 +1171,8 @@ impl<'a> Writer<'a> {
 
     // ── Lights ──────────────────────────────────────────────────────────────
 
-    /// `KHR_lights_punctual`, as GLTFExporter wrote point, spot and
-    /// directional lights: a child node placed at the light and aimed down
-    /// its direction.
+    /// `KHR_lights_punctual` point, spot and directional lights: a child node
+    /// placed at the light and aimed down its direction.
     fn light(
         &mut self,
         index: usize,

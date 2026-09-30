@@ -9,7 +9,9 @@ import { pathToFileURL } from 'node:url';
 const SCHEMA_VERSION = 1;
 const ARTIFACT = 'rusty-engine.performance-results';
 const PREFIX = 'RUSTY_PERF ';
-const COMPATIBILITY_FIELDS = ['renderer', 'vendor', 'browser', 'canvas', 'rendererClass', 'runtime'];
+// Record fields that must match for two runs to be pooled or compared, beside
+// the timing unit. The managed probe reports its .NET `runtime`.
+const COMPATIBILITY_FIELDS = ['runtime'];
 
 export async function capturePerformanceResults({ output, environment, logs, cwd = process.cwd() }) {
   if (typeof output !== 'string' || output.length === 0) throw new Error('--output is required');
@@ -156,11 +158,11 @@ function groupRecords(records) {
 
 function compareGroupCompatibility(baseline, candidate) {
   const mismatches = [];
-  if (baseline.compatibility.size !== 1) mismatches.push('baseline group has multiple renderer/browser/canvas configurations');
-  if (candidate.compatibility.size !== 1) mismatches.push('candidate group has multiple renderer/browser/canvas configurations');
+  if (baseline.compatibility.size !== 1) mismatches.push('baseline group has multiple runtime/unit configurations');
+  if (candidate.compatibility.size !== 1) mismatches.push('candidate group has multiple runtime/unit configurations');
   if (baseline.compatibility.size === 1 && candidate.compatibility.size === 1
     && baseline.compatibility.keys().next().value !== candidate.compatibility.keys().next().value) {
-    mismatches.push('renderer/vendor/browser/canvas configuration differs');
+    mismatches.push('runtime/unit configuration differs');
   }
   return mismatches;
 }

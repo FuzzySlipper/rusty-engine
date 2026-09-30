@@ -611,8 +611,8 @@ impl Renderer {
         draws
     }
 
-    /// Blended parts and blended sprites in one order, as Three sorts its
-    /// transparent list: render order (parts are 0), then back to front.
+    /// Blended parts and blended sprites in one order: render order (parts
+    /// are 0), then back to front.
     /// A blended surface writes no depth, so drawing either family as a
     /// block would let whatever draws second cover the other.
     fn draw_blended<'a>(

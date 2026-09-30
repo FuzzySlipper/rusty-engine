@@ -1,6 +1,4 @@
-//! Sprites and particles: the family that replaces `sprite-material.ts`,
-//! `particle-sink.ts`, the browser particle host and the sprite realization in
-//! `three-renderer.ts`.
+//! Sprites and particles.
 //!
 //! Sprites are retained nodes (`NodeKind::Sprite`); their quads depend on the
 //! camera (billboard orientation, pixel size, viewport placement), so each
@@ -36,12 +34,12 @@ use crate::tables::{GpuMesh, GpuTexture, NodeKind, SpriteRow};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{srgb_to_linear, ApplyIssue, Gpu, Renderer};
 
-/// Three drew particle billboards as points of `size × 24` pixels.
+/// Particle billboards are drawn `size × 24` pixels across.
 const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
 const SPRITE_ROW_FLOATS: usize = 32;
 const PARTICLE_ROW_FLOATS: usize = 12;
 const CUBE_ROW_FLOATS: usize = 8;
-/// Viewport-placed sprites sit mid-depth, where Three unprojected them (GL z 0).
+/// Viewport-placed sprites sit mid-depth (GL clip z 0).
 const PLACEMENT_DEPTH: f32 = 0.5;
 
 /// Pipeline state a sprite needs, from its depth policy and alpha mode.
@@ -79,8 +77,8 @@ pub(crate) struct EffectsPass {
     pub sprite_candidates: u32,
 }
 
-/// A blended sprite with the keys the world pass merges it by: Three sorts
-/// transparent objects by render order, then back to front.
+/// A blended sprite with the keys the world pass merges it by: transparent
+/// objects sort by render order, then back to front.
 struct BlendedSprite {
     state: SpriteState,
     textures: SpriteTextures,
@@ -328,7 +326,7 @@ impl Effects {
             wgpu::PrimitiveTopology::TriangleList,
             Some(wgpu::Face::Back),
             format,
-            // Three's cube particles are transparent but write depth.
+            // Cube particles are transparent but write depth.
             SpriteState {
                 depth_test: true,
                 depth_write: true,
@@ -527,7 +525,7 @@ struct ParticleTexture {
     bind_group: wgpu::BindGroup,
 }
 
-/// The Three sprite material's alpha and depth state.
+/// A sprite material's alpha and depth state.
 fn sprite_state(sprite: &SpriteInstanceDescriptor) -> (SpriteState, f32) {
     let (transparent, cutoff, alpha_write) = match sprite.material.alpha {
         SpriteAlphaMode::Opaque => (sprite.tint[3] < 1.0, 0.0, true),

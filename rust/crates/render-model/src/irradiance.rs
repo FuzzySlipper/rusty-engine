@@ -66,7 +66,7 @@ pub fn sample_direct_lighting(
                 let delta = std::array::from_fn(|i| f64::from(source[i]) - position[i]);
                 let distance = length(delta);
                 let direction = normalize(delta);
-                // Mirrors the Engine Three backend's physically-decaying direct lights.
+                // Physically decaying direct light, with a smooth range cutoff.
                 let mut attenuation = 1.0 / distance.powf(f64::from(*decay)).max(0.01);
                 if let Some(range) = range {
                     attenuation *= (1.0 - (distance / f64::from(*range)).powi(4))

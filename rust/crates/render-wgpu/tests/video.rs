@@ -149,7 +149,7 @@ fn a_rebuilt_renderer_plays_an_active_clip_from_its_start() {
 }
 
 #[test]
-fn skips_stops_and_unreadable_clips_end_as_the_browser_host_ended_them() {
+fn skips_stops_and_unreadable_clips_end_with_their_facts() {
     let mut harness = room_harness();
     play(&mut harness, CLIP_RESOURCE);
     render_at(&mut harness, 1.0);
@@ -188,7 +188,7 @@ fn skips_stops_and_unreadable_clips_end_as_the_browser_host_ended_them() {
             failure: VideoFailure::DecodeFailed
         }]
     );
-    // A skip with nothing playing is still reported, as the browser did.
+    // A skip with nothing playing is still reported.
     apply(&mut harness, VideoProjectionOp::Skip { handle: HANDLE });
     assert_eq!(
         harness.renderer.take_video_facts(),

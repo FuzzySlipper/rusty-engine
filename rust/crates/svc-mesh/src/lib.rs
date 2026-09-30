@@ -76,8 +76,8 @@ pub struct SurfaceMeshOptions {
     pub limits: SurfaceMeshLimits,
 }
 
-/// One contiguous run of indices sharing a material slot — maps 1:1 to a
-/// `THREE.BufferGeometry` group (`addGroup(start, count, materialIndex)`).
+/// One contiguous run of indices sharing a material slot: one draw range of
+/// the mesh, bound to that slot's material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeshGroup {
     pub state: u16,

@@ -6,11 +6,13 @@ on:
     branches: [main]
     paths:
       - 'render/**'
+      - 'scripts/capture-playtest-warning-delta*.mjs'
       - 'scripts/performance-results*.mjs'
       - '.github/workflows/browser.yml'
   pull_request:
     paths:
       - 'render/**'
+      - 'scripts/capture-playtest-warning-delta*.mjs'
       - 'scripts/performance-results*.mjs'
       - '.github/workflows/browser.yml'
 
@@ -46,5 +48,7 @@ jobs:
       - name: Build and test the browser shell and live-debug panel
         run: pnpm --dir render run verify
 
-      - name: Test the performance result tooling
-        run: node --test scripts/performance-results.test.mjs
+      - name: Test the Node script tooling
+        run: |
+          node --test scripts/performance-results.test.mjs
+          node --test scripts/capture-playtest-warning-delta.test.mjs

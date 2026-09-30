@@ -42,7 +42,7 @@ use std::{
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
 const MAX_SPRITE_PLAYBACK_TRANSITIONS_PER_ADVANCE: usize = 16_384;
 
-/// Latest bounded browser realization snapshot for one opaque ghost owner.
+/// Latest bounded renderer realization snapshot for one opaque ghost owner.
 /// It is observation only: product callbacks continue to own all ghost policy.
 #[derive(Clone, Copy, Debug)]
 pub struct GhostPlateRealizationFact {
@@ -528,7 +528,7 @@ fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteApp
 #[test]
 fn a_released_body_stays_servable_through_the_next_call() {
     // #8771: output of the releasing call can still name the body; the
-    // browser fetches it after the call, so it stays until the call after next.
+    // renderer reads it after the call, so it stays until the call after next.
     let mut content_resources = BTreeMap::new();
     content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
     let mut bridge =
@@ -1504,7 +1504,7 @@ thread_local! {
 
 /// Monotonic slots keep stale handles invalid while released payloads leave memory.
 impl RuntimeAppearanceData {
-    /// Released bodies the browser may still fetch for recent output.
+    /// Released bodies the renderer may still read for recent output.
     pub(crate) fn recently_released_resources(
         &self,
     ) -> impl Iterator<Item = &CsharpRenderResource> {
@@ -1595,7 +1595,7 @@ pub(crate) struct RuntimeAppearanceData {
     next_material: u64,
     pub(crate) render_resources: RenderResourceSlots,
     /// Bodies released during the current call, and during the call before
-    /// it. The browser fetches a body after it receives the call's output, so
+    /// it. The renderer reads a body after it receives the call's output, so
     /// a texture defined and released within one call (#8771) stays servable
     /// for one more call instead of forcing a renderer rebaseline.
     released_this_call: Vec<CsharpRenderResource>,
@@ -1696,7 +1696,7 @@ pub(crate) struct RuntimeAppearanceCall {
     admitted_update: Option<NativeProductUpdateFacts>,
     resource_releases_pending: bool,
     pub(crate) release_error: Option<CsharpEngineServicesError>,
-    /// Typed browser realization work in the order the C# product invoked the
+    /// Typed renderer realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
     /// output transport and only represents this service family's existing
     /// renderer and presentation outputs.
@@ -1828,10 +1828,6 @@ impl RuntimeAppearanceCall {
 
 pub(crate) type CollisionMeshGeometry = (Vec<[f64; 3]>, Vec<[u32; 3]>);
 
-/// Engine-owned appearance admission and retained projection for trusted C# products.
-/// `Create` selects the immutable renderer resources the browser host will serve; calls stage
-/// both resource selection, newly admitted appearances, and snapshots so a failure cannot partly
-/// advance renderer-visible state.
 struct ImportedStaticContent {
     source: Arc<[u8]>,
     payload: MeshPayloadDescriptor,
@@ -1845,6 +1841,10 @@ struct ImportedAnimatedContent {
     resource: CsharpRenderResource,
 }
 
+/// Engine-owned appearance admission and retained projection for trusted C# products.
+/// `Create` selects the immutable resources the renderer reads; calls stage resource
+/// selection, newly admitted appearances, and snapshots so a failure cannot partly advance
+/// renderer-visible state.
 pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
     /// Held in `state` while a product call owns the real state.
@@ -2655,8 +2655,8 @@ impl RuntimeAppearanceBridge {
         let mut next = self.ghost_plate(handle)?;
         next.placement = native_ghost_plate_placement(request.placement);
         next.config = native_ghost_plate_config(request.config);
-        // The browser host performs this patch as an atomic retained
-        // replacement, including sector-count capture-bank changes.
+        // The renderer applies this patch as one retained replacement,
+        // recapturing when the sector count changes.
         self.stage_ghost_plate(
             handle,
             next.source_object_id,

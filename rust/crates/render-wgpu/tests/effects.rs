@@ -594,7 +594,7 @@ fn particles_mark_offscreen_targets_stale_only_when_they_move() {
 /// Blended sprites and blended meshes share one order: render order, then
 /// back to front (#8787 review). A red half-transparent sprite behind blue
 /// glass shows blue-dominant, in front of it red-dominant; a positive render
-/// order draws it after the glass even from behind, as Three's does.
+/// order draws it after the glass even from behind.
 #[test]
 fn blended_sprites_and_blended_meshes_share_one_back_to_front_order() {
     let mut harness = Harness::new(RendererOptions {

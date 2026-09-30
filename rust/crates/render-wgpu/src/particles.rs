@@ -1,11 +1,10 @@
-//! Cosmetic particle simulation for `PresentationOp::Particle`, ported from
-//! the browser particle host (`renderer-host/src/particle-host.ts`).
+//! Cosmetic particle simulation for `PresentationOp::Particle`.
 //!
 //! Emitters are a handle-keyed table (retained emitters) plus one entry per
 //! direct burst; live particles are one dense `Vec`. Nothing here reads a
 //! clock: particles age only when the runtime passes Engine update time to
 //! [`Particles::advance`], so a held simulation freezes every burst. The
-//! descriptors carry no policy caps since #8798; each emitter's own
+//! descriptors carry no policy caps; each emitter's own
 //! `max_particles` is the only bound.
 //!
 //! A billboard visual's texture is a slot in the effects cache. Each emitter
@@ -485,7 +484,7 @@ fn emitter(descriptor: ParticleEmitterDescriptor, texture: Option<u32>) -> Emitt
     }
 }
 
-/// xorshift32, as the browser host: the same seed gives the same burst.
+/// xorshift32: the same seed gives the same burst.
 fn random_range(state: &mut u32, low: f32, high: f32) -> f32 {
     let mut value = *state;
     value ^= value << 13;

@@ -66,8 +66,7 @@ pub(crate) mod header {
     pub const LEN: usize = 40;
 }
 pub(crate) const FLAG_HELD: u8 = 1;
-/// The page shows such a frame above its UI, as a browser's video element
-/// covered the page.
+/// A frame showing a playing video: the page shows it above its UI.
 pub(crate) const FLAG_VIDEO: u8 = 2;
 /// Largest size a viewer may ask for, per side.
 const MAX_FRAME_SIDE: u32 = 4096;

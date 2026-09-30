@@ -313,8 +313,9 @@ pub enum ParticleEmissionAdmissionOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParticleProjectionLimits {
-    /// Particles the browser host simulates at once. Optional bursts are
-    /// clamped or dropped at this budget; retained emitters must fit in it.
+    /// Particles the projector reserves at once across retained emitters and
+    /// bursts, all simulated by the renderer. Optional bursts are clamped or
+    /// dropped at this budget; retained emitters must fit in it.
     pub max_reserved_particles: u32,
 }
 

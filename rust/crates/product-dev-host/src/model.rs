@@ -329,9 +329,9 @@ pub struct ProductDevBrowserDiagnosticsResult {
 }
 
 /// Bounded host-owned product-lane telemetry returned alongside the existing
-/// diagnostics batch. These are observations only; renderer cadence remains
-/// in the browser renderer diagnostics report and is intentionally not folded
-/// into this product-lane snapshot.
+/// diagnostics batch. These are observations only; renderer statistics are
+/// answered by `engine.renderer` and are not folded into this product-lane
+/// snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevTelemetrySnapshot {
@@ -693,7 +693,7 @@ impl ProductDevDebugCatalog {
             ("engine.time.advance", "Advance held simulation by a bounded duration in milliseconds"),
             (
                 "engine.renderer",
-                "Show the latest compact browser renderer timing, pacing, canvas, and resource summary",
+                "Show the renderer's adapter, output, recent stream frame costs, and skipped operations",
             ),
             (
                 "engine.renderer.presentation",
@@ -701,7 +701,7 @@ impl ProductDevDebugCatalog {
             ),
             (
                 "engine.renderer.detail",
-                "Show bounded renderer admission, callback phase, cadence, pacing, and texture details",
+                "Show the same renderer status as engine.renderer",
             ),
             (
                 "engine.renderer.show",

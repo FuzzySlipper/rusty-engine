@@ -629,7 +629,6 @@ pub fn render_output_mode() -> Result<RenderOutput, CsharpProductRuntimeError> {
 
 pub use render_stream::{Gpu, Renderer, SceneDriver};
 
-/// A loaded trusted C# product adapted to the existing local browser host.
 mod playtest;
 
 /// A finished product call: what it published, any input mapping it
@@ -937,7 +936,7 @@ impl CsharpProductRuntime {
 
     /// Runs provider-fixture assertions, not a general product health check.
     /// Requires fixture UI, voxel, input, timeline and fault/restart behavior;
-    /// see docs/csharp-sdk.md#host-exercise-contract.
+    /// see docs/csharp-product-project.md#host-exercise-contract.
     /// Exercises the selected lifecycle mode plus its rejected neighbouring
     /// operation. Rejection happens before the NativeAOT product update, so its
     /// pending input and lifecycle counters remain unchanged.
@@ -4800,7 +4799,7 @@ fn complete_voxel_baseline(
              This is an Engine fixture check, not a general product health check. \
              The fixture commits a nonempty Voxel scene with a retained VoxelScenePresentation \
              projection before attachment; product metadata alone does not create it. \
-             Products without voxel content should launch without --exercise. See docs/csharp-sdk.md#host-exercise-contract",
+             Products without voxel content should launch without --exercise. See docs/csharp-product-project.md#host-exercise-contract",
             if observed_frames.is_empty() {
                 "no frame publications observed; missing [defineMaterial, create, replaceMeshPayload]".to_owned()
             } else {

@@ -86,8 +86,8 @@ fn import_glb_scene(
             "animation and skin sampling belong to the animated import stage",
         ));
     }
-    // Match GLTFLoader: the default-scene property is optional; use the first
-    // scene when it is omitted so imported bounds and visible geometry agree.
+    // The default-scene property is optional; use the first scene when it is
+    // omitted so imported bounds and visible geometry agree.
     let default_scene = parsed
         .document
         .default_scene()

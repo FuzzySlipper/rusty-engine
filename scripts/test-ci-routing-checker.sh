@@ -23,6 +23,11 @@ sed -i "/'render\/\*\*'/d" "$PROBE_ROOT.missing-browser/.github/workflows/browse
 PROBE_ROOT="$PROBE_ROOT.missing-browser" expect_rejection "missing browser shell owner"
 rm -rf "$PROBE_ROOT.missing-browser"
 
+cp -a "$PROBE_ROOT" "$PROBE_ROOT.missing-node-tooling"
+sed -i "/capture-playtest-warning-delta/d" "$PROBE_ROOT.missing-node-tooling/.github/workflows/browser.yml"
+PROBE_ROOT="$PROBE_ROOT.missing-node-tooling" expect_rejection "missing Node script tooling routing"
+rm -rf "$PROBE_ROOT.missing-node-tooling"
+
 cp -a "$PROBE_ROOT" "$PROBE_ROOT.no-cancel"
 sed -i '/^concurrency:/,/^permissions:/d' "$PROBE_ROOT.no-cancel/.github/workflows/docs.yml"
 PROBE_ROOT="$PROBE_ROOT.no-cancel" expect_rejection "missing superseded-run cancellation"

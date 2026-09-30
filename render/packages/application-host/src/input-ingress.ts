@@ -115,7 +115,7 @@ export interface RustyApplicationInputQueue {
 export interface RustyApplicationManagedInputIngress extends RustyApplicationInputPort {
   /** Clear the old owner and adopt held controller state without replaying its press. */
   readonly interactionModeChanged: () => void;
-  /** Application-host lifecycle seam for transactional renderer canvas replacement. */
+  /** Application-host lifecycle seam: adopt a replacement canvas, clearing held input as a pointer-lock loss. */
   readonly rebindCanvas: (canvas: HTMLCanvasElement) => void;
   /** Application-host lifecycle seam; product callers use the owning host disposal instead. */
   readonly dispose: () => void;

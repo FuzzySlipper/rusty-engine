@@ -685,8 +685,7 @@ fn bounds_requested_with_a_move_report_the_moved_world_state() {
     );
 }
 
-/// Inspection wireframe draws the posed instance's triangle edges, as
-/// Three's mesh inspection cloned its materials with `wireframe`.
+/// Inspection wireframe draws the posed instance's triangle edges.
 #[test]
 fn inspection_wireframe_outlines_the_posed_character() {
     let mut harness = Harness::new(RendererOptions::default());

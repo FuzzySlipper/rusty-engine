@@ -109,11 +109,17 @@ def main() -> None:
         {"Cargo.toml", "Cargo.lock", "rust/**", "render/**"},
     )
 
+    # The browser workflow is the Node lane: it also owns the Node script
+    # tooling tests.
     require_paths(
         "browser",
         workflows["browser"],
-        {"render/**"},
-        {"rust/**", "csharp/**"},
+        {
+            "render/**",
+            "scripts/capture-playtest-warning-delta*.mjs",
+            "scripts/performance-results*.mjs",
+        },
+        {"rust/**", "csharp/**", "scripts/**"},
     )
 
     routing_cases = {
@@ -127,6 +133,10 @@ def main() -> None:
         "render/packages/product-browser-host/src/index.ts": {"browser"},
         "render/packages/live-debug-panel/src/browser-mount.ts": {"browser"},
         "render/packages/application-host/src/generated/contracts.ts": {"browser", "verify"},
+        "scripts/performance-results.mjs": {"browser"},
+        "scripts/performance-results.test.mjs": {"browser"},
+        "scripts/capture-playtest-warning-delta.mjs": {"browser"},
+        "scripts/capture-playtest-warning-delta.test.mjs": {"browser"},
         "rust/crates/entity-state/src/lib.rs": {"verify"},
         "docs/csharp-sdk.md": {"docs"},
         ".github/workflows/browser.yml": {"docs", "browser"},

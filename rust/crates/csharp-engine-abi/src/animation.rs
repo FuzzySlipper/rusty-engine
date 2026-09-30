@@ -2,7 +2,7 @@
 //!
 //! Products select immutable admitted GLB content and presentation facts.  The
 //! Engine retains resource, instance, graph and controller lifetime; the
-//! browser renderer remains an implementation detail behind the generated API.
+//! renderer stays an implementation detail behind the generated API.
 
 use crate::{
     NativeAppearanceHandle, NativeMeshMaterialBinding, NativeRenderResourceHandle, NativeUtf8Slice,

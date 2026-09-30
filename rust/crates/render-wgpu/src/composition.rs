@@ -494,8 +494,7 @@ impl Renderer {
             if fresh {
                 continue;
             }
-            // Offscreen composition targets stay single-sample, as Three's
-            // render targets were.
+            // Offscreen composition targets are single-sample.
             let view = TargetView {
                 color: &color,
                 resolve: None,

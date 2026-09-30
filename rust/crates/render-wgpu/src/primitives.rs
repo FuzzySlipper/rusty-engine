@@ -1,11 +1,11 @@
-//! Built-in geometry for primitive nodes, sized as the Three lane sized it:
+//! Built-in geometry for primitive nodes:
 //! a unit cube, a radius-0.5 sphere (8×8 segments), a unit quad facing +Z, and
 //! points as small cubes.
 
 use crate::pipelines::VERTEX_FLOATS;
 use crate::tables::Builtin;
 
-/// Side of the cube a `Point` node is drawn as (Three used 0.1-unit points).
+/// Side of the cube a `Point` node is drawn as.
 const POINT_SIZE: f32 = 0.1;
 const SPHERE_RADIUS: f32 = 0.5;
 const SPHERE_SEGMENTS: u32 = 8;

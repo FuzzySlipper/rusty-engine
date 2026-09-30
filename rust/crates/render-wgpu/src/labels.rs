@@ -1,22 +1,19 @@
-//! Billboard labels (#8827): `PresentationOp::Billboard` drawn by wgpu, in
-//! place of renderer-host's DOM billboard host.
+//! Billboard labels: `PresentationOp::Billboard` drawn by wgpu.
 //!
 //! A label's content is rasterized on the CPU when it is created or updated,
-//! into an image laid out as the DOM host's CSS laid out its element (font
-//! size = `height_pixels`, line height 1.2, the structured indicator's flex
-//! column), then uploaded as one texture. Each primary view projects the
-//! anchors, applies the DOM host's visibility and layout policy, and draws
+//! into an image laid out with CSS box rules (font size = `height_pixels`,
+//! line height 1.2, the structured indicator's flex column), then uploaded as
+//! one texture. Each primary view projects the anchors, applies the labels'
+//! visibility and layout policy, and draws
 //! the images as screen-space quads:
 //!
 //! - `DepthTested` and `Occluded` labels draw after the world pass, before the
 //!   viewmodel. `DepthTested` depth-tests every pixel against the scene;
 //!   `Occluded` hides the whole label when the scene covers its anchor (the
-//!   anchor's depth is sampled in the vertex shader). The DOM host had no
-//!   depth readback, so both always showed there.
+//!   anchor's depth is sampled in the vertex shader).
 //! - `AlwaysOnTop` labels draw after the viewmodel, over everything.
 //!
-//! Output captures and offscreen composition targets draw no labels, as the
-//! DOM overlay never reached them.
+//! Output captures and offscreen composition targets draw no labels.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -38,16 +35,16 @@ use crate::Renderer;
 
 /// Every system family resolves to this bundled face (`fonts/LICENSE`).
 const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/DejaVuSans.ttf");
-/// CSS `line-height: 1.2`, which the DOM host set on every label.
+/// CSS `line-height: 1.2` for every label.
 const LINE_HEIGHT: f32 = 1.2;
-/// The DOM host's `border-radius` for text, value and icon labels.
+/// The `border-radius` of text, value and icon labels.
 const LABEL_RADIUS_PIXELS: f32 = 4.0;
 /// Meter rows are `height: 0.5em` with a 1px border.
 const METER_HEIGHT_EM: f32 = 0.5;
 const BORDER_PIXELS: f32 = 1.0;
-/// The meter segment divider colour of the DOM host's gradient.
+/// The meter segment divider colour.
 const SEGMENT_DIVIDER: [f32; 4] = [0.0, 0.0, 0.0, 0.72];
-/// The DOM host laid out at most this many structured labels.
+/// At most this many structured labels are laid out per view.
 const MAX_VISIBLE_STRUCTURED: usize = 256;
 /// A placement closer than this to the previous one keeps the previous one.
 const PLACEMENT_HYSTERESIS_PIXELS: f32 = 0.5;
@@ -606,7 +603,7 @@ fn text_width(font: &fontdue::Font, size: f32, text: &str) -> f32 {
 
 /// Text, value and icon labels: one nowrap line of text on the background,
 /// radius 4px. An icon label draws its image behind its alternative text,
-/// fitted and centred, as the DOM host set it as the element's background.
+/// fitted and centred, as an element background.
 fn text_label(
     font: &fontdue::Font,
     size: f32,
@@ -649,7 +646,7 @@ fn contain(image: &DecodedImage, rect: Rect, fit: Fit) -> Rect {
     }
 }
 
-/// The DOM host's structured indicator: a flex column `width_pixels` wide
+/// A structured indicator: a flex column `width_pixels` wide
 /// with a 1px border, `spacing_pixels` padding and gap, and items aligned by
 /// `alignment`: the label, the icon at its natural size, full-width meters
 /// and the status cues.
@@ -841,9 +838,9 @@ struct Projection {
     inside: bool,
 }
 
-/// Where the view sees an anchor, as the DOM host's CPU projection computed it
-/// (the perspective divide applies even behind the camera, so a clamped
-/// label follows the mirrored point as it did there).
+/// Where the view sees an anchor, projected on the CPU (the perspective divide
+/// applies even behind the camera, so a clamped label follows the mirrored
+/// point).
 fn project(view_proj: &glam::Mat4, eye: Vec3, point: Vec3, area: [f32; 4]) -> Projection {
     let clip = *view_proj * Vec4::new(point.x, point.y, point.z, 1.0);
     let ndc = clip.truncate() / clip.w;
@@ -861,8 +858,7 @@ fn project(view_proj: &glam::Mat4, eye: Vec3, point: Vec3, area: [f32; 4]) -> Pr
 }
 
 impl Labels {
-    /// The labels one view draws, visibility and layout applied as the DOM
-    /// host's `refreshLayout` did. `area` is the view's viewport in target
+    /// The labels one view draws, visibility and layout applied. `area` is the view's viewport in target
     /// pixels: x, y, width, height.
     pub fn place(&mut self, view_proj: &glam::Mat4, eye: Vec3, area: [f32; 4]) -> Vec<Placed> {
         let mut placed = Vec::new();
@@ -901,7 +897,7 @@ impl Labels {
                 depth: projection.depth,
             });
         }
-        // Structured labels: priority first, then handle, as the DOM host.
+        // Structured labels: priority first, then handle.
         structured.sort_by(|a, b| b.2.priority.cmp(&a.2.priority).then(a.0.cmp(&b.0)));
         let mut occupied: Vec<[f32; 4]> = Vec::new();
         for (handle, projection, policy) in structured {
@@ -921,7 +917,7 @@ impl Labels {
             let unscaled = label.image.height as f32;
             let width = label.image.width as f32 * scale;
             let height = unscaled * scale;
-            // Placement uses the DOM host's row estimate, as its layout did.
+            // Placement uses the row estimate, not the rasterized height.
             let layout_height =
                 estimated_height(indicator, label.descriptor.height_pixels) * scale * css;
             let half_width = indicator.width_pixels * scale * css / 2.0;
@@ -976,8 +972,8 @@ impl Labels {
             label.placement = Some((x, y, scale));
             placed.push(Placed {
                 handle,
-                // CSS scaled the element about its centre, which
-                // `translate(-50%, -100%)` had put `unscaled` above (x, y).
+                // The unscaled box is centred on x with its bottom at y; the
+                // label scales about that box's centre.
                 rect: [
                     x - width / 2.0,
                     y - (unscaled + height) / 2.0,
@@ -990,8 +986,7 @@ impl Labels {
                 depth: projection.depth,
             });
         }
-        // Painter's order: farther first, then creation order, as the DOM
-        // host's depth z-index and element order stacked them.
+        // Painter's order: farther first, then creation order.
         placed.sort_by(|a, b| b.depth.total_cmp(&a.depth).then(a.handle.cmp(&b.handle)));
         placed
     }
@@ -1012,7 +1007,8 @@ fn layout_scale(policy: &BillboardLayoutPolicy, distance: f32) -> f32 {
     }
 }
 
-/// The DOM host's `indicatorHeight`: rows × height plus spacing around them.
+/// A structured indicator's estimated height: rows × height plus spacing
+/// around them.
 fn estimated_height(indicator: &BillboardIndicator, height_pixels: f32) -> f32 {
     let rows = usize::from(indicator.label.is_some())
         + indicator.meters.len()
@@ -1021,7 +1017,7 @@ fn estimated_height(indicator: &BillboardIndicator, height_pixels: f32) -> f32 {
     height_pixels.max(rows * height_pixels + (rows + 1.0) * indicator.spacing_pixels)
 }
 
-/// The DOM host's clamp: a range narrower than zero centres.
+/// Clamp, where a range narrower than zero centres.
 fn clamp(value: f32, minimum: f32, maximum: f32) -> f32 {
     if minimum > maximum {
         (minimum + maximum) / 2.0

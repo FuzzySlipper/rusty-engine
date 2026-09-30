@@ -787,7 +787,9 @@ unsafe extern "C" fn generate(
     let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
     // Generate validates/extracts before publishing a retained mesh. Expected
     // rejections belong to this operation, so a managed caller may catch them
-    // and keep its prior scene. A panic still poisons the owning callback.
+    // and keep its prior scene. A panic is caught here and reported as this
+    // operation's error too, which C# sees as an `EngineCallException` like
+    // any other refusal.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         bridge.generate(&*request)
     })) {

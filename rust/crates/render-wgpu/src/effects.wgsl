@@ -56,8 +56,9 @@ fn vs_sprite(in: SpriteIn) -> SpriteOut {
 
 const SPRITE_ROUGHNESS: f32 = 0.82;
 
-// Screen-space derivatives in GL orientation (y up), so the tangent frames
-// below are Three's `perturbNormal2Arb` and `perturbNormalArb` unchanged.
+// Screen-space derivatives in GL orientation (y up), the orientation the
+// derivative tangent frames below (`perturbNormal2Arb`, `perturbNormalArb`)
+// are written for.
 fn gl_dpdy3(value: vec3<f32>) -> vec3<f32> {
     return -dpdy(value);
 }
@@ -106,7 +107,7 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
         let tbn = mat3x3<f32>(tangent * scale, bitangent * scale, normal);
         var local = vec3<f32>(0.0, 0.0, 1.0);
         if mode == 1u {
-            // Synthetic dome over the atlas uv, as Three's sprite material.
+            // Synthetic dome over the atlas uv.
             let radius = max(0.001, 1.0 + in.params.w);
             let xy = (in.uv * 2.0 - 1.0) * strength / radius;
             local = vec3<f32>(xy, sqrt(max(0.001, 1.0 - min(dot(xy, xy), 0.999))));
@@ -127,8 +128,8 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
     return vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0), color.a);
 }
 
-// Particle billboard: a screen-aligned quad of constant pixel size (Three drew
-// points of `size × 24` pixels), with a horizontal flipbook strip.
+// Particle billboard: a screen-aligned quad of constant pixel size
+// (`size × 24` pixels), with a horizontal flipbook strip.
 struct ParticleIn {
     @location(0) corner: vec2<f32>,
     // xyz: world position; w: half width in clip units.

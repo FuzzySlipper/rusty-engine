@@ -7,7 +7,7 @@
 //! instance's parts, never by re-uploading geometry.
 //!
 //! Voxel scene chunks arrive as `ReplaceMeshPayload` on chunk nodes (only
-//! changed chunks, since #8797) and bind `voxel-material/<slot>` materials;
+//! changed chunks) and bind `voxel-material/<slot>` materials;
 //! `apply.rs` realizes them as payload parts. A material with a voxel surface
 //! samples its texture through [`VoxelSurfaceUniform`]: chunk UVs are tile
 //! coordinates in cells, repeated by the tile scale from the tile origin and
@@ -54,8 +54,9 @@ pub(crate) struct VoxelSurfaceUniform {
 
 impl VoxelSurfaceUniform {
     /// Resolve the mapping against the texture the material binds. An atlas
-    /// region is sampled half a texel inside its content edges, as the Three
-    /// lane did; a repeat mapping covers the whole texture.
+    /// region is sampled half a texel inside its content edges, so filtering
+    /// never reaches a neighbouring region; a repeat mapping covers the whole
+    /// texture.
     pub fn resolve(surface: &VoxelSurfaceDescriptor, texture_size: Option<(u32, u32)>) -> Self {
         let (tile_scale, tile_origin, region) = match &surface.mapping {
             VoxelSurfaceMappingDescriptor::Repeat {
@@ -110,7 +111,7 @@ impl Renderer {
         let mut meshes = Vec::with_capacity(asset.meshes.len());
         for (index, mesh) in asset.meshes.iter().enumerate() {
             let mut streams = resources::mesh_streams(&mesh.payload, resources)?;
-            // Voxel object materials draw without vertex colours, as in Three.
+            // Voxel object materials draw without vertex colours.
             streams.colors = None;
             meshes.push(
                 self.upload_mesh(
