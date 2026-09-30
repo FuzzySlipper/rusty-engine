@@ -78,6 +78,43 @@ audio device opens.
 NativeAOT product, an explicit fidelity/release check rather than the edit
 loop.
 
+## Test
+
+A product's test project exercises its Engine calls against the Engine's own
+services with `Rusty.Engine.Testing.EngineTestHost`: the same service set a
+running product receives, in process, with no renderer, browser, window or
+audio device. Ownership, admission and handle rules refuse exactly as at run
+time, with the same `EngineCallException` diagnostic codes. For example,
+releasing a render resource that a live sprite atlas uses refuses with
+`CSHARP_RENDER_RESOURCE_IN_USE`, a collision residency request for an absent
+asset with `CSHARP_COLLISION_REPLACE`, and separate Persistence scopes get
+separate stores.
+
+```csharp
+using var host = EngineTestHost.Create(new EngineTestHostOptions
+{
+    PersistenceRoot = temporaryDirectory,
+    Content = new Dictionary<string, ReadOnlyMemory<byte>> { ["textures/atlas.png"] = png },
+});
+host.Call(engine =>
+{
+    RenderResource texture = engine.Graphics.OpenResource(new("textures/atlas.png")).Handle;
+    using SpriteAtlas atlas = engine.Graphics.CreateSpriteAtlas(new(texture, frames));
+    var refusal = Assert.Throws<EngineCallException>(texture.Dispose);
+    Assert.Equal("CSHARP_RENDER_RESOURCE_IN_USE", refusal.Diagnostics.Span[0].Code);
+});
+```
+
+Each `Call` stands for one product callback; make Engine calls inside one.
+The renderer work a call produces is dropped. The library ships in the pinned
+pair's runtime pack (`lib/librusty_engine_test_host.so`); a project with
+`IsTestProject` (set by `Microsoft.NET.Test.Sdk`) that references the product
+or `Rusty.Engine` records its path at build time, so `rusty install` is the
+only setup. `RustyEngineTestHostLibrary` or `EngineTestHostOptions.LibraryPath`
+names another. A library from a different pair refuses with
+`CSHARP_TEST_HOST_ABI`. Content bundles, input and product lifecycle are not
+part of the test host; drive those through `rusty dev` or the host exercise.
+
 ## Update
 
 ```bash

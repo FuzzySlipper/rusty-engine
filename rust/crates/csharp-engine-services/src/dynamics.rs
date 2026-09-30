@@ -2732,7 +2732,14 @@ mod tests {
         };
         let mut replace = NativeCollisionReplaceReceipt::default();
         assert_eq!(
-            unsafe { (spatial_api.replace_collision)(spatial_api.context, &request, &mut replace) },
+            unsafe {
+                (spatial_api.replace_collision)(
+                    spatial_api.context,
+                    &request,
+                    &mut replace,
+                    std::ptr::null_mut(),
+                )
+            },
             ABI_OK
         );
         assert_eq!(replace.instance_count, 1);
@@ -2906,6 +2913,7 @@ mod tests {
                         instances_len: instances.len(),
                     },
                     &mut collision,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

@@ -166,6 +166,44 @@ if find "$consumer" -type f \( -name 'NativeProduct.cs' -o -name 'NativeProduct.
     exit 1
 fi
 
+# A test project that references the product runs the Engine's services in
+# process (EngineTestHost). Its library path comes from the SDK's build: the
+# pinned pair's runtime pack under RustyEngineCache, laid out as `rusty
+# install` leaves it.
+tests="$work/consumer-tests"
+mkdir -p "$tests" "$work/cache/pairs"
+ln -s "$pair_root" "$work/cache/pairs/$version"
+cp "$consumer/NuGet.Config" "$tests/NuGet.Config"
+cat > "$tests/ConsumerTests.csproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../consumer/PairConsumer.csproj" />
+  </ItemGroup>
+</Project>
+EOF
+cat > "$tests/Program.cs" <<'EOF'
+EngineTestHostChecks.Run(args[0], File.ReadAllBytes(args[1]));
+Console.WriteLine("engine test host checks passed");
+EOF
+cp "$repo_root/scripts/fixtures/EngineTestHostChecks.cs" "$tests/EngineTestHostChecks.cs"
+(
+    cd "$tests"
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet run --project ConsumerTests.csproj -p:RustyEngineCache="$work/cache" -- \
+        "$work/test-host-persistence" "$consumer/content/Textures/wall_lines.png"
+) | tee "$work/test-host.log"
+grep -Fx 'engine test host checks passed' "$work/test-host.log" >/dev/null || {
+    echo "RUSTY_ENGINE_PAIR_TEST_HOST: the consumer test project did not complete the Engine test host checks" >&2
+    exit 1
+}
+
 host_log="$work/runtime-host.log"
 "$runtime/bin/rusty" dev --help > "$work/rusty-dev-help.log" 2>&1 || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted rusty dev --help failed" >&2

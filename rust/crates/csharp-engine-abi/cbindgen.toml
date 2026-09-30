@@ -728,4 +728,10 @@ include = [
     "NativeProductAbiFingerprint",
     "NativeProductAbiHandshakeV1",
     "NativeProductBindV1",
+    "NativeEngineTestHostRequest",
+    "NativeBeginEngineTestHostCall",
+    "NativeFinishEngineTestHostCall",
+    "NativeDestroyEngineTestHost",
+    "NativeEngineTestHostApi",
+    "NativeCreateEngineTestHost",
 ]

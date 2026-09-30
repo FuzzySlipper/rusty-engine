@@ -1,0 +1,18 @@
+[package]
+name = "csharp-engine-test-host"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "rusty_engine_test_host"
+crate-type = ["cdylib"]
+
+[dependencies]
+csharp-engine-abi.workspace = true
+csharp-engine-services.workspace = true
+runtime-diagnostics.workspace = true
+runtime-lifecycle.workspace = true
+runtime-ui.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

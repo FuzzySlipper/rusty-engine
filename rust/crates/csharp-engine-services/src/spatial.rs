@@ -3673,7 +3673,9 @@ unsafe extern "C" fn replace_spatial_collision(
     context: *mut c_void,
     request: *const NativeCollisionReplaceRequest,
     receipt: *mut NativeCollisionReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    crate::operation_diagnostics::clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3683,7 +3685,10 @@ unsafe extern "C" fn replace_spatial_collision(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => {
+            bridge.operation_diagnostics.retain(&refusal, error);
+            0
+        }
     }
 }
 
@@ -3691,7 +3696,9 @@ unsafe extern "C" fn apply_collision_residency(
     context: *mut c_void,
     request: *const NativeCollisionResidencyRequest,
     receipt: *mut NativeCollisionReplaceReceipt,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    crate::operation_diagnostics::clear_receipt(error);
     if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
@@ -3701,7 +3708,10 @@ unsafe extern "C" fn apply_collision_residency(
             unsafe { *receipt = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(refusal) => {
+            bridge.operation_diagnostics.retain(&refusal, error);
+            0
+        }
     }
 }
 
@@ -5730,6 +5740,7 @@ mod tests {
                         instances_len: instances.len(),
                     },
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6025,6 +6036,7 @@ mod tests {
                         instances_len: instances.len(),
                     },
                     &mut collision,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6168,6 +6180,7 @@ mod tests {
                         instances_len: instances.len(),
                     },
                     &mut collision,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6264,6 +6277,7 @@ mod tests {
                         instances_len: 1,
                     },
                     &mut collision,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -6311,6 +6325,7 @@ mod tests {
                         instances_len: instances.len(),
                     },
                     &mut collision,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK

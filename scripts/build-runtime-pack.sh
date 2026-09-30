@@ -68,6 +68,9 @@ fi
 cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
   --bin rusty-product-host --bin rusty-live-debug
 cargo build --locked --release -p rusty-cli --bin rusty
+# The Engine services, headless and in process, for products' unit tests
+# (Rusty.Engine.Testing.EngineTestHost).
+cargo build --locked --release -p csharp-engine-test-host --lib
 
 install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
@@ -75,6 +78,7 @@ release="${CARGO_TARGET_DIR:-target}/release"
 install -m 755 "$release/rusty-product-host" "$STAGE/bin/rusty-product-host"
 install -m 755 "$release/rusty-live-debug" "$STAGE/bin/rusty-live-debug"
 install -m 755 "$release/rusty" "$STAGE/bin/rusty"
+install -D -m 755 "$release/librusty_engine_test_host.so" "$STAGE/lib/librusty_engine_test_host.so"
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
 install -m 644 render/artifacts/live-debug-panel/index.js \
@@ -129,6 +133,8 @@ if command -v objcopy >/dev/null 2>&1; then
     "$STAGE/symbols/rusty-live-debug.debug"
   objcopy --only-keep-debug "$STAGE/bin/rusty" \
     "$STAGE/symbols/rusty.debug"
+  objcopy --only-keep-debug "$STAGE/lib/librusty_engine_test_host.so" \
+    "$STAGE/symbols/librusty_engine_test_host.so.debug"
 fi
 
 IDENTITY="$($STAGE/bin/rusty-product-host --identity)"

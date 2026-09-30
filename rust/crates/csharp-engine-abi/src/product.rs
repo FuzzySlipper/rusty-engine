@@ -157,11 +157,13 @@ pub type NativeReplaceCollision = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCollisionReplaceRequest,
     *mut NativeCollisionReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeApplyCollisionResidency = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCollisionResidencyRequest,
     *mut NativeCollisionReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceSpatialContentArtifact = unsafe extern "C" fn(
     *mut c_void,

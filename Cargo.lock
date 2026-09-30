@@ -1091,6 +1091,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "csharp-engine-test-host"
+version = "0.1.0"
+dependencies = [
+ "csharp-engine-abi",
+ "csharp-engine-services",
+ "runtime-diagnostics",
+ "runtime-lifecycle",
+ "runtime-ui",
+ "tempfile",
+]
+
+[[package]]
 name = "csharp-product-runtime"
 version = "0.1.0"
 dependencies = [
