@@ -206,6 +206,10 @@ operation phase. Modifier handles are local to their creating stat.
 Inventory quantities, capacity and entity identities are checked integers and
 do not pass through floating-point stats.
 
+A refused inventory, equipment, effect, stat or track operation throws
+`MechanicsException`. Branch on its `Reason` (`MechanicsRefusal`, such as
+`StackMaximum` or `Capacity`), not on its message.
+
 ## Resource tracks
 
 A `Track` references its actual maximum `Stat` and owns its current value:

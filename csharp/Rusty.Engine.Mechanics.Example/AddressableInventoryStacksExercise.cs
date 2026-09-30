@@ -51,7 +51,8 @@ internal static class AddressableInventoryStacksExercise
 
         InventoryView beforeInsufficient = store.View(owner);
         ulong beforeInsufficientRevision = store.Revision;
-        ExpectMechanicsError(
+        ExpectRefusal(
+            MechanicsRefusal.Insufficient,
             () => store.TransferFungible(owner, destination, second, destinationStack, 3),
             "insufficient selected-stack transfer succeeded");
         Require(store.Revision == beforeInsufficientRevision && SameStacks(beforeInsufficient, store.View(owner)),
@@ -59,14 +60,16 @@ internal static class AddressableInventoryStacksExercise
 
         InventoryView beforeCapacity = store.View(destination);
         ulong beforeCapacityRevision = store.Revision;
-        ExpectMechanicsError(
+        ExpectRefusal(
+            MechanicsRefusal.Capacity,
             () => store.TransferFungible(owner, destination, second, destinationStack, 2),
             "capacity-rejected selected-stack transfer succeeded");
         Require(store.Revision == beforeCapacityRevision && SameStacks(beforeCapacity, store.View(destination)),
             "capacity-rejected selected-stack transfer changed the ledger");
 
         ulong beforeRejectedRestore = store.Revision;
-        ExpectMechanicsError(
+        ExpectRefusal(
+            MechanicsRefusal.Capacity,
             () => InventoryState.Restore(
                 new EntityId(43),
                 [new InventoryStackCapture(rejectedStack, supply, 4)],
@@ -80,7 +83,8 @@ internal static class AddressableInventoryStacksExercise
             [new InventoryStackCapture(rejectedStack, supply, 4)],
             [new InventoryCapacityLimit(mass, 4)]);
         registrationCandidate.SetCapacityLimit(new InventoryCapacityLimit(mass, 3));
-        ExpectMechanicsError(
+        ExpectRefusal(
+            MechanicsRefusal.Capacity,
             () => store.RegisterInventory(registrationCandidate),
             "over-capacity standalone inventory was registered");
         Require(store.Revision == beforeRejectedRestore && !store.TryGetInventory(new EntityId(43), out _),
@@ -97,7 +101,7 @@ internal static class AddressableInventoryStacksExercise
         using InventoryEdit stale = restored.Prepare();
         stale.SplitFungible(owner, first, split, 1);
         restored.Consume(owner, second, 1);
-        ExpectMechanicsError(stale.Publish, "stale selected-stack edit was published");
+        ExpectRefusal(MechanicsRefusal.RevisionConflict, stale.Publish, "stale selected-stack edit was published");
         RequireStacks(restored.View(owner), (first, 3), (second, 1));
 
         Console.WriteLine("passed: addressable inventory stacks preserve identity, quantity, capacity, and restore relationships");
@@ -125,6 +129,15 @@ internal static class AddressableInventoryStacksExercise
         RequireStacks(store.View(destination), (secondStack, 4), (destinationStack, 1));
         Require(store.View(owner).Stacks.Single(stack => stack.Id == secondStack).Definition == secondDefinition.Id,
             "a stack name matching another definition changed the selected definition");
+        ExpectRefusal(
+            MechanicsRefusal.StackMaximum,
+            () => store.Grant(owner, secondDefinition, secondStack, 9),
+            "grant beyond the per-stack maximum succeeded");
+        ExpectRefusal(
+            MechanicsRefusal.NotFound,
+            () => store.Consume(owner, destinationStack, 1),
+            "consume from a missing stack succeeded");
+        RequireStacks(store.View(owner), (secondStack, 2), (firstStack, 1));
     }
 
     private static InventoryState RequireInventory(InventoryStore store, EntityId owner)
@@ -152,13 +165,13 @@ internal static class AddressableInventoryStacksExercise
         && left.Stacks.OrderBy(stack => stack.Id.Value, StringComparer.Ordinal)
             .SequenceEqual(right.Stacks.OrderBy(stack => stack.Id.Value, StringComparer.Ordinal));
 
-    private static void ExpectMechanicsError(Action action, string message)
+    private static void ExpectRefusal(MechanicsRefusal reason, Action action, string message)
     {
         try
         {
             action();
         }
-        catch (MechanicsException)
+        catch (MechanicsException exception) when (exception.Reason == reason)
         {
             return;
         }

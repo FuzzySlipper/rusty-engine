@@ -40,7 +40,7 @@ public readonly record struct InventoryStackCapture
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         if (definition.Kind != ItemKind.Fungible)
         {
-            throw new MechanicsException($"Item {definition.Id} is {definition.Kind}, but a fungible stack was required.");
+            throw new MechanicsException(MechanicsRefusal.Incompatible, $"Item {definition.Id} is {definition.Kind}, but a fungible stack was required.");
         }
         if (quantity == 0)
         {
@@ -388,7 +388,7 @@ public sealed class InventoryState
             }
             catch (OverflowException)
             {
-                throw new MechanicsException($"Quantity for item {definition} overflowed.");
+                throw new MechanicsException(MechanicsRefusal.Overflow, $"Quantity for item {definition} overflowed.");
             }
             found = true;
         }
@@ -464,12 +464,13 @@ public sealed class InventoryState
             if (stack.Quantity > stack.Definition.MaximumQuantity)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.StackMaximum,
                     $"Item {stack.Definition.Id} cannot exceed quantity {stack.Definition.MaximumQuantity}; attempted {stack.Quantity}.");
             }
             EnsureCompatibleDefinition(result, stack.Definition);
             if (!result._stacks.TryAdd(stack.Id, new InventoryStackEntry(stack.Id, stack.Definition, stack.Quantity)))
             {
-                throw new MechanicsException($"Inventory stack {stack.Id} was restored more than once for owner {owner.Value}.");
+                throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory stack {stack.Id} was restored more than once for owner {owner.Value}.");
             }
         }
 
@@ -491,6 +492,7 @@ public sealed class InventoryState
             if (used.TryGetValue(limit.Metric, out ulong amount) && amount > limit.Maximum)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Capacity,
                     $"Inventory {Owner.Value} exceeds capacity {limit.Metric}: attempted {amount}, maximum {limit.Maximum}.");
             }
         }
@@ -503,6 +505,7 @@ public sealed class InventoryState
             if (!entry.Definition.Matches(definition))
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Inconsistent,
                     $"Item definition {definition.Id} conflicts with the definition already stored in this inventory.");
             }
         }
@@ -536,7 +539,7 @@ public sealed partial class InventoryStore
         ArgumentNullException.ThrowIfNull(state);
         if (_inventories.ContainsKey(state.Owner))
         {
-            throw new MechanicsException($"Inventory owner {state.Owner.Value} is already registered.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory owner {state.Owner.Value} is already registered.");
         }
         InventoryState admitted = state.Clone();
         _ = ComputeCapacity(admitted.Owner, admitted);
@@ -550,11 +553,11 @@ public sealed partial class InventoryStore
         ArgumentNullException.ThrowIfNull(state);
         if (!_inventories.ContainsKey(state.Owner))
         {
-            throw new MechanicsException($"Inventory owner {state.Owner.Value} must be registered before equipment.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory owner {state.Owner.Value} must be registered before equipment.");
         }
         if (!_equipment.TryAdd(state.Owner, state.Clone()))
         {
-            throw new MechanicsException($"Equipment owner {state.Owner.Value} is already registered.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Equipment owner {state.Owner.Value} is already registered.");
         }
 
         TouchStore();
@@ -696,11 +699,12 @@ public sealed partial class InventoryStore
         }
         catch (OverflowException)
         {
-            throw new MechanicsException($"Quantity for item {definition.Id} overflowed.");
+            throw new MechanicsException(MechanicsRefusal.Overflow, $"Quantity for item {definition.Id} overflowed.");
         }
         if (after > definition.MaximumQuantity)
         {
             throw new MechanicsException(
+                MechanicsRefusal.StackMaximum,
                 $"Item {definition.Id} cannot exceed quantity {definition.MaximumQuantity}; attempted {after}.");
         }
 
@@ -737,13 +741,14 @@ public sealed partial class InventoryStore
         if (!inventory.TryGetEntry(stack, out InventoryState.InventoryStackEntry? entry)
             || entry is null)
         {
-            throw new MechanicsException($"Inventory {owner.Value} has no stack {stack}.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory {owner.Value} has no stack {stack}.");
         }
         EnsureFungible(entry.Definition);
         ulong before = entry.Quantity;
         if (quantity > before)
         {
             throw new MechanicsException(
+                MechanicsRefusal.Insufficient,
                 $"Inventory {owner.Value} stack {stack} has only {before} of item {entry.Definition.Id}, requested {quantity}.");
         }
 
@@ -780,23 +785,25 @@ public sealed partial class InventoryStore
         EnsurePositiveQuantity(quantity);
         if (fromOwner == toOwner)
         {
-            throw new MechanicsException("A fungible transfer requires distinct owners.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "A fungible transfer requires distinct owners.");
         }
 
         InventoryState from = RequireInventory(fromOwner);
         if (!from.TryGetEntry(stack, out InventoryState.InventoryStackEntry? source) || source is null)
         {
-            throw new MechanicsException($"Inventory {fromOwner.Value} has no stack {stack}.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory {fromOwner.Value} has no stack {stack}.");
         }
         if (quantity != source.Quantity)
         {
             throw new MechanicsException(
+                MechanicsRefusal.InvalidRequest,
                 $"A partial transfer from stack {stack} requires a destination InventoryStackId.");
         }
         InventoryState to = RequireInventory(toOwner);
         if (to.TryGetEntry(stack, out _))
         {
             throw new MechanicsException(
+                MechanicsRefusal.AlreadyPresent,
                 $"Inventory {toOwner.Value} already has stack {stack}; select that destination explicitly to merge.");
         }
 
@@ -815,19 +822,20 @@ public sealed partial class InventoryStore
         EnsurePositiveQuantity(quantity);
         if (fromOwner == toOwner)
         {
-            throw new MechanicsException("A fungible transfer requires distinct owners.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "A fungible transfer requires distinct owners.");
         }
 
         InventoryState from = RequireInventory(fromOwner);
         InventoryState to = RequireInventory(toOwner);
         if (!from.TryGetEntry(sourceStack, out InventoryState.InventoryStackEntry? source) || source is null)
         {
-            throw new MechanicsException($"Inventory {fromOwner.Value} has no stack {sourceStack}.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory {fromOwner.Value} has no stack {sourceStack}.");
         }
         EnsureFungible(source.Definition);
         if (quantity > source.Quantity)
         {
             throw new MechanicsException(
+                MechanicsRefusal.Insufficient,
                 $"Inventory {fromOwner.Value} stack {sourceStack} has only {source.Quantity} of item {source.Definition.Id}, requested {quantity}.");
         }
         if (to.TryGetEntry(destinationStack, out InventoryState.InventoryStackEntry? destination)
@@ -848,11 +856,12 @@ public sealed partial class InventoryStore
         }
         catch (OverflowException)
         {
-            throw new MechanicsException($"Quantity for item {source.Definition.Id} overflowed.");
+            throw new MechanicsException(MechanicsRefusal.Overflow, $"Quantity for item {source.Definition.Id} overflowed.");
         }
         if (destinationAfter > source.Definition.MaximumQuantity)
         {
             throw new MechanicsException(
+                MechanicsRefusal.StackMaximum,
                 $"Item {source.Definition.Id} cannot exceed quantity {source.Definition.MaximumQuantity}; attempted {destinationAfter}.");
         }
 
@@ -902,22 +911,23 @@ public sealed partial class InventoryStore
         EnsurePositiveQuantity(quantity);
         if (sourceStack == splitStack)
         {
-            throw new MechanicsException("A fungible split requires a distinct stack identity.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "A fungible split requires a distinct stack identity.");
         }
 
         InventoryState inventory = RequireInventory(owner);
         if (!inventory.TryGetEntry(sourceStack, out InventoryState.InventoryStackEntry? source) || source is null)
         {
-            throw new MechanicsException($"Inventory {owner.Value} has no stack {sourceStack}.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory {owner.Value} has no stack {sourceStack}.");
         }
         EnsureFungible(source.Definition);
         if (inventory.TryGetEntry(splitStack, out _))
         {
-            throw new MechanicsException($"Inventory {owner.Value} already has stack {splitStack}.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory {owner.Value} already has stack {splitStack}.");
         }
         if (quantity >= source.Quantity)
         {
             throw new MechanicsException(
+                MechanicsRefusal.InvalidRequest,
                 $"Split quantity {quantity} must be less than stack {sourceStack} quantity {source.Quantity}.");
         }
 
@@ -949,14 +959,14 @@ public sealed partial class InventoryStore
         ArgumentNullException.ThrowIfNull(destinationStack);
         if (sourceStack == destinationStack)
         {
-            throw new MechanicsException("A fungible merge requires distinct stack identities.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "A fungible merge requires distinct stack identities.");
         }
 
         InventoryState inventory = RequireInventory(owner);
         if (!inventory.TryGetEntry(sourceStack, out InventoryState.InventoryStackEntry? source) || source is null
             || !inventory.TryGetEntry(destinationStack, out InventoryState.InventoryStackEntry? destination) || destination is null)
         {
-            throw new MechanicsException($"Inventory {owner.Value} does not contain both selected stacks.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory {owner.Value} does not contain both selected stacks.");
         }
         EnsureFungible(source.Definition);
         EnsureDefinitionMatches(source.Definition, destination.Definition);
@@ -967,11 +977,12 @@ public sealed partial class InventoryStore
         }
         catch (OverflowException)
         {
-            throw new MechanicsException($"Quantity for item {source.Definition.Id} overflowed.");
+            throw new MechanicsException(MechanicsRefusal.Overflow, $"Quantity for item {source.Definition.Id} overflowed.");
         }
         if (destinationAfter > source.Definition.MaximumQuantity)
         {
             throw new MechanicsException(
+                MechanicsRefusal.StackMaximum,
                 $"Item {source.Definition.Id} cannot exceed quantity {source.Definition.MaximumQuantity}; attempted {destinationAfter}.");
         }
 
@@ -1017,6 +1028,7 @@ public sealed partial class InventoryStore
         if (_revision != preparedRevision)
         {
             throw new MechanicsException(
+                MechanicsRefusal.RevisionConflict,
                 "The inventory store changed after this edit began; its operations were not applied.");
         }
         _inventories = candidate._inventories;
@@ -1032,17 +1044,17 @@ public sealed partial class InventoryStore
     private InventoryState RequireInventory(EntityId owner) =>
         _inventories.TryGetValue(owner, out InventoryState? state)
             ? state
-            : throw new MechanicsException($"Inventory owner {owner.Value} is not registered.");
+            : throw new MechanicsException(MechanicsRefusal.NotFound, $"Inventory owner {owner.Value} is not registered.");
 
     private ItemState RequireItem(EntityId item) =>
         _items.TryGetValue(item, out ItemState? state)
             ? state
-            : throw new MechanicsException($"Unique item entity {item.Value} is not registered.");
+            : throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item entity {item.Value} is not registered.");
 
     private EquipmentState RequireEquipment(EntityId owner) =>
         _equipment.TryGetValue(owner, out EquipmentState? state)
             ? state
-            : throw new MechanicsException($"Equipment owner {owner.Value} is not registered.");
+            : throw new MechanicsException(MechanicsRefusal.NotFound, $"Equipment owner {owner.Value} is not registered.");
 
     private InventoryView BuildView(
         EntityId owner,
@@ -1099,7 +1111,7 @@ public sealed partial class InventoryStore
             ItemDefinition definition = _items.TryGetValue(included, out ItemState? stored)
                 ? stored.Definition
                 : includedState?.Definition
-                    ?? throw new MechanicsException($"Unique item entity {included.Value} is not registered.");
+                    ?? throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item entity {included.Value} is not registered.");
             AddCapacityCosts(used, definition, 1);
         }
 
@@ -1112,6 +1124,7 @@ public sealed partial class InventoryStore
             if (maximum is ulong admittedMaximum && amount > admittedMaximum)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Capacity,
                     $"Inventory {owner.Value} exceeds capacity {metric}: attempted {amount}, maximum {admittedMaximum}.");
             }
             result.Add(new CapacityUsage(metric, amount, maximum));
@@ -1137,6 +1150,7 @@ public sealed partial class InventoryStore
             catch (OverflowException)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Overflow,
                     $"Capacity arithmetic overflowed for metric {cost.Metric}.");
             }
             used[cost.Metric] = total;
@@ -1148,6 +1162,7 @@ public sealed partial class InventoryStore
         if (definition.Kind != ItemKind.Fungible)
         {
             throw new MechanicsException(
+                MechanicsRefusal.Incompatible,
                 $"Item {definition.Id} is {definition.Kind}, but a fungible stack was required.");
         }
     }
@@ -1159,6 +1174,7 @@ public sealed partial class InventoryStore
         if (!expected.Matches(actual))
         {
             throw new MechanicsException(
+                MechanicsRefusal.Inconsistent,
                 $"Item definition {expected.Id} conflicts with the definition already stored in this store.");
         }
     }
@@ -1167,7 +1183,7 @@ public sealed partial class InventoryStore
     {
         if (quantity == 0)
         {
-            throw new MechanicsException("Inventory quantities must be positive.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "Inventory quantities must be positive.");
         }
     }
 

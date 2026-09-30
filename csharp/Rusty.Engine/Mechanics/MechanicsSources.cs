@@ -55,7 +55,7 @@ public static class MechanicsSourceOrdering
         foreach (var entry in ordered)
         {
             if (!identities.Add(entry.Identity))
-                throw new MechanicsException($"Source identity {entry.Identity} was activated more than once.");
+                throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Source identity {entry.Identity} was activated more than once.");
         }
 
         return ordered.Select(entry => entry.Value).ToArray();
@@ -68,8 +68,40 @@ public static class MechanicsSourceOrdering
         short Priority);
 }
 
+/// <summary>Why a mechanics operation was refused.</summary>
+public enum MechanicsRefusal
+{
+    /// <summary>A fungible stack would exceed its item's maximum quantity.</summary>
+    StackMaximum,
+    /// <summary>An inventory capacity limit or an effect group's instance limit would be exceeded.</summary>
+    Capacity,
+    /// <summary>Quantity or capacity arithmetic overflowed.</summary>
+    Overflow,
+    /// <summary>A stack or track holds less than the requested amount.</summary>
+    Insufficient,
+    /// <summary>The owner, stack, item, effect, equipped item or containment named is not present.</summary>
+    NotFound,
+    /// <summary>The identity, stack, registration, container, equipped item or effect is already present.</summary>
+    AlreadyPresent,
+    /// <summary>An equipment slot or exclusivity group already holds another item.</summary>
+    Occupied,
+    /// <summary>A unique item must be unequipped before it is transferred or destroyed.</summary>
+    Equipped,
+    /// <summary>The item or effect definition's kind, equipment policy or stacking policy does not allow the operation.</summary>
+    Incompatible,
+    /// <summary>The request itself is malformed, such as a zero quantity or the same source and destination.</summary>
+    InvalidRequest,
+    /// <summary>Definitions, stacking policies, modifiers or restored effects are invalid or contradict each other.</summary>
+    Inconsistent,
+    /// <summary>The inventory store changed after the edit began.</summary>
+    RevisionConflict,
+}
+
 /// <summary>Common managed mechanics operation error.</summary>
 public sealed class MechanicsException : InvalidOperationException
 {
-    public MechanicsException(string message) : base(message) { }
+    public MechanicsException(MechanicsRefusal reason, string message) : base(message) => Reason = reason;
+
+    /// <summary>Why the operation was refused.</summary>
+    public MechanicsRefusal Reason { get; }
 }

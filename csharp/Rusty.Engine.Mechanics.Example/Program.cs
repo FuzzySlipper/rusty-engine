@@ -42,7 +42,8 @@ static void ExerciseEffectPolicies()
         new IntrinsicSourceIdentity(new EntityId(1), SourceInstanceId.Parse("item-two")),
         stacks: 1);
     Require(second.ActivatedSources.Count == 1, "effect source activation count was incorrect");
-    ExpectMechanicsError(
+    ExpectRefusal(
+        MechanicsRefusal.AlreadyPresent,
         () => independentState.Apply(
             independent,
             EffectInstanceId.Parse("ward-three"),
@@ -166,7 +167,8 @@ static void ExerciseManagedInventory()
         "equipped item source was not activated once per item");
 
     ulong beforeRejectedCapacity = world.Revision;
-    ExpectMechanicsError(
+    ExpectRefusal(
+        MechanicsRefusal.Capacity,
         () => world.MaterializeUnique(
             new ItemState(new EntityId(ShieldEntity), shield),
             new EntityId(Owner)),
@@ -176,7 +178,8 @@ static void ExerciseManagedInventory()
         "rejected materialization changed managed world state");
 
     ulong beforeEquippedTransfer = world.Revision;
-    ExpectMechanicsError(
+    ExpectRefusal(
+        MechanicsRefusal.Equipped,
         () => world.TransferUnique(new EntityId(RifleEntity),
             new EntityId(Owner),
             new EntityId(SecondOwner)),
@@ -203,7 +206,8 @@ static void ExerciseManagedInventory()
 
     InventoryEdit rejectedEdit = world.Prepare();
     rejectedEdit.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1);
-    ExpectMechanicsError(
+    ExpectRefusal(
+        MechanicsRefusal.Insufficient,
         () => rejectedEdit.Consume(new EntityId(Owner), ammunitionStack, 10),
         "rejected edit operation was accepted");
     ExpectInvalidOperation(
@@ -215,7 +219,7 @@ static void ExerciseManagedInventory()
     InventoryEdit staleEdit = world.Prepare();
     staleEdit.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1);
     world.Grant(new EntityId(Owner), ammunition, ammunitionStack, 1);
-    ExpectMechanicsError(staleEdit.Publish, "stale inventory edit was published");
+    ExpectRefusal(MechanicsRefusal.RevisionConflict, staleEdit.Publish, "stale inventory edit was published");
     ExpectInvalidOperation(staleEdit.Publish, "stale inventory edit was retried");
     Require(world.View(new EntityId(Owner)).Stacks.Single().Quantity == 6,
         "stale inventory edit overwrote current state");
@@ -241,7 +245,8 @@ static void ExerciseManagedInventory()
         new EntityId(SecondOwner));
     Require(secondShield.CapacityAfter.Single().Used == 14,
         "second-owner capacity was not maintained");
-    ExpectMechanicsError(
+    ExpectRefusal(
+        MechanicsRefusal.Occupied,
         () => world.Equip(new EntityId(SecondOwner),
             new EntityId(ShieldEntity),
             [shieldHand]),
@@ -259,14 +264,13 @@ static void ExerciseManagedInventory()
 
 }
 
-static void ExpectMechanicsError(Action action, string message)
+static void ExpectRefusal(MechanicsRefusal reason, Action action, string message)
 {
     try
     {
         action();
     }
-    catch (Exception exception) when (
-        exception is MechanicsException or ArgumentException or OverflowException)
+    catch (MechanicsException exception) when (exception.Reason == reason)
     {
         return;
     }

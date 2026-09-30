@@ -179,7 +179,7 @@ public sealed partial class InventoryStore
         EnsureContainedBy(item, owner);
         if (equipment.ContainsItem(item))
         {
-            throw new MechanicsException($"Unique item {item.Value} is already equipped by {owner.Value}.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Unique item {item.Value} is already equipped by {owner.Value}.");
         }
 
         EquipmentSlotDefinition[] requested = CopyRequestedSlots(slots);
@@ -191,6 +191,7 @@ public sealed partial class InventoryStore
                 && occupied is not null)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Occupied,
                     $"Equipment slot {slot.Id} is occupied by item {occupied.Item.Value}.");
             }
             candidate.Set(slot, item);
@@ -217,7 +218,7 @@ public sealed partial class InventoryStore
         EquipmentState equipment = RequireEquipment(owner);
         if (!equipment.ContainsItem(item))
         {
-            throw new MechanicsException($"Unique item {item.Value} is not equipped by {owner.Value}.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item {item.Value} is not equipped by {owner.Value}.");
         }
 
         EquipmentState candidate = equipment.Clone();
@@ -251,7 +252,7 @@ public sealed partial class InventoryStore
         ArgumentNullException.ThrowIfNull(slots);
         if (outgoingItem == incomingItem)
         {
-            throw new MechanicsException("An equipment swap requires distinct items.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "An equipment swap requires distinct items.");
         }
 
         EquipmentState equipment = RequireEquipment(owner);
@@ -260,11 +261,11 @@ public sealed partial class InventoryStore
         EnsureContainedBy(incomingItem, owner);
         if (!equipment.ContainsItem(outgoingItem))
         {
-            throw new MechanicsException($"Unique item {outgoingItem.Value} is not equipped by {owner.Value}.");
+            throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item {outgoingItem.Value} is not equipped by {owner.Value}.");
         }
         if (equipment.ContainsItem(incomingItem))
         {
-            throw new MechanicsException($"Unique item {incomingItem.Value} is already equipped by {owner.Value}.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Unique item {incomingItem.Value} is already equipped by {owner.Value}.");
         }
 
         EquipmentSlotDefinition[] requested = CopyRequestedSlots(slots);
@@ -280,6 +281,7 @@ public sealed partial class InventoryStore
                 && occupied is not null)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Occupied,
                     $"Equipment slot {slot.Id} is occupied by item {occupied.Item.Value}.");
             }
             candidate.Set(slot, incomingItem);
@@ -325,11 +327,12 @@ public sealed partial class InventoryStore
             ItemState itemState = RequireItem(item);
             EnsureContainedBy(item, owner);
             ItemEquipmentPolicy? policy = itemState.Definition.Equipment
-                ?? throw new MechanicsException($"Item {item.Value} is not equippable.");
+                ?? throw new MechanicsException(MechanicsRefusal.Incompatible, $"Item {item.Value} is not equippable.");
             List<EquipmentState.EquipmentSlotEntry> assignments = byItem[item];
             if (assignments.Count != policy.RequiredSlots)
             {
                 throw new MechanicsException(
+                    MechanicsRefusal.Incompatible,
                     $"Item {item.Value} requires {policy.RequiredSlots} equipment slots but has {assignments.Count}.");
             }
 
@@ -340,6 +343,7 @@ public sealed partial class InventoryStore
                         classification => itemState.Definition.Classifications.Contains(classification)))
                 {
                     throw new MechanicsException(
+                        MechanicsRefusal.Incompatible,
                         $"Item {item.Value} does not match equipment slot {assignment.Slot.Id} classifications.");
                 }
             }
@@ -350,6 +354,7 @@ public sealed partial class InventoryStore
                     && existing != item)
                 {
                     throw new MechanicsException(
+                        MechanicsRefusal.Occupied,
                         $"Equipment exclusivity group {exclusiveGroup} already contains item {existing.Value}.");
                 }
                 exclusiveItems[exclusiveGroup] = item;
@@ -375,7 +380,7 @@ public sealed partial class InventoryStore
             .ToArray();
         if (requested.Select(slot => slot.Id).Distinct().Count() != requested.Length)
         {
-            throw new MechanicsException("An equipment request cannot repeat a slot.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "An equipment request cannot repeat a slot.");
         }
         return requested;
     }
@@ -385,10 +390,11 @@ public sealed partial class InventoryStore
         IReadOnlyList<EquipmentSlotDefinition> slots)
     {
         ItemEquipmentPolicy policy = definition.Equipment
-            ?? throw new MechanicsException($"Item {definition.Id} is not equippable.");
+            ?? throw new MechanicsException(MechanicsRefusal.Incompatible, $"Item {definition.Id} is not equippable.");
         if (slots.Count != policy.RequiredSlots)
         {
             throw new MechanicsException(
+                MechanicsRefusal.Incompatible,
                 $"Item {definition.Id} requires {policy.RequiredSlots} equipment slots but requested {slots.Count}.");
         }
     }
@@ -399,6 +405,7 @@ public sealed partial class InventoryStore
         if (!_containment.TryGetValue(item, out EntityId actual) || actual != owner)
         {
             throw new MechanicsException(
+                MechanicsRefusal.NotFound,
                 $"Unique item {item.Value} is not contained by inventory owner {owner.Value}.");
         }
     }

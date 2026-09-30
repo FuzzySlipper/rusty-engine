@@ -17,7 +17,7 @@ public sealed class ItemState
         ArgumentNullException.ThrowIfNull(definition);
         if (definition.Kind != ItemKind.Unique)
         {
-            throw new MechanicsException($"Item {definition.Id} is not a unique item definition.");
+            throw new MechanicsException(MechanicsRefusal.Incompatible, $"Item {definition.Id} is not a unique item definition.");
         }
 
         Entity = entity;
@@ -158,11 +158,11 @@ public sealed partial class InventoryStore
         InventoryState inventory = RequireInventory(owner);
         if (_items.ContainsKey(item.Entity))
         {
-            throw new MechanicsException($"Unique item entity {item.Entity.Value} is already registered.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Unique item entity {item.Entity.Value} is already registered.");
         }
         if (_containment.ContainsKey(item.Entity))
         {
-            throw new MechanicsException($"Unique item entity {item.Entity.Value} already has a container.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Unique item entity {item.Entity.Value} already has a container.");
         }
         ulong inventoryRevisionBefore = _revision;
         IReadOnlyList<CapacityUsage> before = ComputeCapacity(owner, inventory);
@@ -191,7 +191,7 @@ public sealed partial class InventoryStore
     {
         if (fromOwner == toOwner)
         {
-            throw new MechanicsException("A unique item transfer requires distinct owners.");
+            throw new MechanicsException(MechanicsRefusal.InvalidRequest, "A unique item transfer requires distinct owners.");
         }
 
         ItemState itemState = RequireItem(item);
@@ -203,11 +203,13 @@ public sealed partial class InventoryStore
                 ? value.Value.ToString()
                 : "none";
             throw new MechanicsException(
+                MechanicsRefusal.NotFound,
                 $"Unique item {item.Value} is contained by {actual}, not {fromOwner.Value}.");
         }
         if (IsEquipped(fromOwner, item))
         {
             throw new MechanicsException(
+                MechanicsRefusal.Equipped,
                 $"Unique item {item.Value} must be unequipped before transfer.");
         }
         ulong inventoryRevisionBefore = _revision;
@@ -250,6 +252,7 @@ public sealed partial class InventoryStore
         if (IsEquippedAnywhere(item))
         {
             throw new MechanicsException(
+                MechanicsRefusal.Equipped,
                 $"Unique item {item.Value} must be unequipped before destruction.");
         }
 
@@ -278,7 +281,7 @@ public sealed partial class InventoryStore
     {
         if (_containment.ContainsKey(child))
         {
-            throw new MechanicsException($"Unique item {child.Value} already has a container.");
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Unique item {child.Value} already has a container.");
         }
 
         _containment.Add(child, container);

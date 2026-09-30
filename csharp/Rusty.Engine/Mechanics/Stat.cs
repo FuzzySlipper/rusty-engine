@@ -249,7 +249,7 @@ public sealed class Stat
             var members = group.ToArray();
             var policy = members[0].Definition.Stacking;
             if (members.Any(member => member.Definition.Stacking != policy))
-                throw new MechanicsException($"Stacking group {group.Key.Value} uses more than one policy.");
+                throw new MechanicsException(MechanicsRefusal.Inconsistent, $"Stacking group {group.Key.Value} uses more than one policy.");
             IEnumerable<Candidate> selected;
             switch (policy)
             {
@@ -260,7 +260,7 @@ public sealed class Stat
                 case MechanicsStackingPolicy.Lowest:
                     var kind = members[0].Definition.Contribution.Kind;
                     if (members.Any(member => member.Definition.Contribution.Kind != kind))
-                        throw new MechanicsException("Highest/lowest stacking requires one contribution kind.");
+                        throw new MechanicsException(MechanicsRefusal.Inconsistent, "Highest/lowest stacking requires one contribution kind.");
                     selected = [policy == MechanicsStackingPolicy.Highest
                         ? members.MaxBy(member => member.Definition.Contribution.Magnitude)!
                         : members.MinBy(member => member.Definition.Contribution.Magnitude)!];
@@ -281,7 +281,7 @@ public sealed class Stat
             else if (kind == StatModifierKind.Minimum) minimum = Math.Max(minimum, amount);
             else if (kind == StatModifierKind.Maximum) maximum = Math.Min(maximum, amount);
         }
-        if (minimum > maximum) throw new MechanicsException("Stat modifiers produced inverted bounds.");
+        if (minimum > maximum) throw new MechanicsException(MechanicsRefusal.Inconsistent, "Stat modifiers produced inverted bounds.");
         double scaled = additions;
         foreach (var (kind, amount) in operations)
             if (kind == StatModifierKind.Multiply) scaled = Result(scaled * amount);

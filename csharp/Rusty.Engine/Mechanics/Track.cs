@@ -82,7 +82,7 @@ public sealed class Track
     public double Spend(double amount)
     {
         double before = _current;
-        if (!TrySpend(amount)) throw new MechanicsException("Insufficient track value.");
+        if (!TrySpend(amount)) throw new MechanicsException(MechanicsRefusal.Insufficient, "Insufficient track value.");
         return before - _current;
     }
 
@@ -121,7 +121,7 @@ public sealed class Track
     // Only Stat calls these methods. It validates all dependents before publishing any of them.
     internal double PrepareMaximum(double maximum)
     {
-        if (maximum < Minimum) throw new MechanicsException("Stat change would put a track maximum below its minimum.");
+        if (maximum < Minimum) throw new MechanicsException(MechanicsRefusal.Inconsistent, "Stat change would put a track maximum below its minimum.");
         if (maximum == MaximumValue) return _current;
         if (MaximumChangePolicy == TrackMaximumChangePolicy.PreserveCurrent)
             return Math.Clamp(_current, Minimum, maximum);

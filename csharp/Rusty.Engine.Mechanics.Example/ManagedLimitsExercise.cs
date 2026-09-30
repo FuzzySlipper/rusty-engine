@@ -115,7 +115,8 @@ internal static class ManagedLimitsExercise
             capacityCosts: [new ItemCapacityCost(metric, ulong.MaxValue)]);
 
         InventoryStackId stack = InventoryStackId.Parse("overflowing-stack");
-        ExpectMechanicsError(
+        ExpectRefusal(
+            MechanicsRefusal.Overflow,
             () => inventory.Grant(owner, definition, stack, 2),
             "overflowing capacity arithmetic was admitted");
         Check(inventory.View(owner).Stacks.Count == 0, "overflowing grant changed inventory state");
@@ -148,13 +149,13 @@ internal static class ManagedLimitsExercise
         throw new InvalidOperationException(message);
     }
 
-    private static void ExpectMechanicsError(Action action, string message)
+    private static void ExpectRefusal(MechanicsRefusal reason, Action action, string message)
     {
         try
         {
             action();
         }
-        catch (MechanicsException)
+        catch (MechanicsException exception) when (exception.Reason == reason)
         {
             return;
         }
