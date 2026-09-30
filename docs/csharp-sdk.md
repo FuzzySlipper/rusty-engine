@@ -52,9 +52,12 @@ rusty dev --project src/Game/Game.csproj --port 8787
 ```
 
 `rusty dev` builds and stages the product, runs it on CoreCLR, and watches the
-declared inputs. UI and content-bundle edits reload into the running product;
-C#, project and loose-content edits rebuild and replace the runtime. Useful
-flags: `--live-debug`, `--debugger` (managed breakpoints, see
+declared inputs: by default the product project, its referenced projects, the
+UI source and the content (see
+[run and package](csharp-product-project.md#run-and-package)). UI and
+content-bundle edits reload into the running product; C#, project and
+loose-content edits rebuild and replace the runtime. Useful flags:
+`--live-debug`, `--debugger` (managed breakpoints, see
 [CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`.
 
 The runtime renders the world itself with `render-wgpu`. By default it streams

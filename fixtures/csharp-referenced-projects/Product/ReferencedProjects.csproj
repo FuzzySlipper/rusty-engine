@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RustyEngineSdkPackageVersion>$(RustyEngineFixtureSdkVersion)</RustyEngineSdkPackageVersion>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RustyEngineProductEntryType>ReferencedProjects.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-referenced-projects</RustyEngineProductId>
+    <RustyEngineProductTitle>Referenced Projects</RustyEngineProductTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)">
+      <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
+    </PackageReference>
+    <ProjectReference Include="../Library/ReferencedProjects.Library.csproj" />
+  </ItemGroup>
+</Project>

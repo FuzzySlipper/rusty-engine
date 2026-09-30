@@ -374,6 +374,40 @@ while IFS= read -r fixture_project; do
 done < <(cd "$repo_root" && git grep -l 'Version="$(RustyEngineFixtureSdkVersion)"' -- 'fixtures/csharp-*/*.csproj' \
     | grep -v '^fixtures/csharp-crossover-performance/')
 
+# The derived watch declaration that `rusty dev` reads after staging lists the
+# directories of the product's referenced projects, transitive ones included,
+# and never an Engine project that a source override references.
+referenced_fixture="$fixture_root/csharp-referenced-projects"
+check_referenced_watch_paths() {
+    local watch_paths="$work_dir/referenced-watch-paths.txt"
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild "$referenced_fixture/Product/ReferencedProjects.csproj" -restore \
+            -t:StageRustyEngineCoreClrProduct \
+            -p:RustyEngineFixtureSdkVersion="$package_version" \
+            -p:RestoreAdditionalProjectSources="$feed_dir" \
+            "$@" \
+            -getProperty:RustyEngineWatchPaths \
+            "-getResultOutputFile:$watch_paths" \
+            > "$work_dir/referenced-watch-paths.log" 2>&1 || {
+        echo "test-csharp-sdk-package: the referenced-projects fixture did not stage." >&2
+        cat "$work_dir/referenced-watch-paths.log" >&2
+        exit 1
+    }
+    local declared
+    declared=$(tr ';' '\n' < "$watch_paths")
+    for expected in Product Product/product-ui Product/content Library Transitive; do
+        grep -qxF "$referenced_fixture/$expected" <<<"$declared" || {
+            echo "test-csharp-sdk-package: derived watch paths omit $expected: $declared" >&2
+            exit 1
+        }
+    done
+    if grep -qF "$repo_root/csharp/" <<<"$declared"; then
+        echo "test-csharp-sdk-package: derived watch paths include an Engine source project: $declared" >&2
+        exit 1
+    fi
+}
+check_referenced_watch_paths
+
 if [[ "$coreclr_smoke" != true ]]; then
     (
         cd "$source_override_dir"
@@ -388,6 +422,9 @@ if [[ "$coreclr_smoke" != true ]]; then
         echo "test-csharp-sdk-package: source override retained package compile/runtime assets." >&2
         exit 1
     }
+    check_referenced_watch_paths \
+        -p:RustyEngineUseSourceDevelopment=true \
+        -p:RustyEngineSourceDevelopmentPath="$repo_root"
 fi
 
 staged_product_directory=$(cd "$consumer_dir" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \

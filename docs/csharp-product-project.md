@@ -359,7 +359,17 @@ rusty dev --project src/Example.Game/Example.Game.csproj
 It restores, builds and stages the ordinary project in one MSBuild invocation
 with no nested build, then launches the packaged host through CoreCLR. Staging
 copies only changed UI and content, removes deleted files, and writes
-`product.json` last. When declared inputs change, `rusty dev` routes the edit:
+`product.json` last.
+
+The declared inputs are `RustyEngineWatchPaths`. By default the SDK declares
+the project directory, the UI source root, the content root, and the directory
+of every project the product references, directly or transitively. The Engine
+projects that a source-development override references are not declared. A
+product that sets `RustyEngineWatchPaths` declares the whole list itself.
+Beneath each path, `rusty dev` skips `bin`, `obj`, `node_modules` and other
+build or tool directories.
+
+When declared inputs change, `rusty dev` routes the edit:
 
 - **UI or content-bundle edits only.** These are files under
   `RustyEngineProductUiSourceRoot`, `RustyEngineProductUiRoot`, or a
@@ -372,7 +382,8 @@ copies only changed UI and content, removes deleted files, and writes
     their bytes.
   - If the stage or the reload fails, the old UI and bundle inventory stay in
     place until the next edit.
-- **Anything else** (C#, the project file, loose content) restages the whole
+- **Anything else** (C# in the product or a referenced project, a project
+  file, loose content) restages the whole
   Product and replaces the runtime. Loose content is the create-time snapshot
   described above.
 

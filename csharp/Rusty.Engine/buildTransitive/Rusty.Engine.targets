@@ -37,10 +37,14 @@
        the product project body. Edits under the UI source root, the UI root
        or a content bundle root reach a running `rusty dev` product without a
        C# build or runtime replacement. Without a build command the UI root is
-       its own source. -->
+       its own source. Referenced projects are added by
+       _RustyEngineWatchReferencedProjects once the reference graph is known. -->
   <PropertyGroup>
     <RustyEngineProductUiSourceRoot Condition="'$(RustyEngineProductUiSourceRoot)' == ''">$(RustyEngineProductUiRoot)</RustyEngineProductUiSourceRoot>
-    <RustyEngineWatchPaths Condition="'$(RustyEngineWatchPaths)' == ''">$(MSBuildProjectDirectory);$([System.IO.Path]::GetFullPath('$(RustyEngineProductUiSourceRoot)', '$(MSBuildProjectDirectory)'));$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)', '$(MSBuildProjectDirectory)'))</RustyEngineWatchPaths>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RustyEngineWatchPaths)' == ''">
+    <_RustyEngineWatchReferencedProjects>true</_RustyEngineWatchReferencedProjects>
+    <RustyEngineWatchPaths>$(MSBuildProjectDirectory);$([System.IO.Path]::GetFullPath('$(RustyEngineProductUiSourceRoot)', '$(MSBuildProjectDirectory)'));$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)', '$(MSBuildProjectDirectory)'))</RustyEngineWatchPaths>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -215,9 +219,30 @@
                       Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductRenderOutput)&quot;,&quot;lighting&quot;:{&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;audio&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductAudioOutput)&quot;},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
   </Target>
 
+  <!-- The directories of the projects the product references, directly or
+       transitively (the .NET SDK adds transitive references to
+       ProjectReference), are C# sources too. `rusty dev` reads the property
+       after staging. The Engine projects a source-development override
+       references are not product sources. -->
+  <Target Name="_RustyEngineWatchReferencedProjects"
+          Condition="'$(_RustyEngineWatchReferencedProjects)' == 'true'"
+          DependsOnTargets="IncludeTransitiveProjectReferences">
+    <PropertyGroup>
+      <_RustyEngineSourceDevelopmentProjects Condition="'$(RustyEngineUseSourceDevelopment)' == 'true' and '$(RustyEngineSourceDevelopmentPath)' != ''">$([MSBuild]::NormalizeDirectory('$(RustyEngineSourceDevelopmentPath)', 'csharp'))</_RustyEngineSourceDevelopmentProjects>
+    </PropertyGroup>
+    <ItemGroup>
+      <_RustyEngineReferencedProject Include="@(ProjectReference->'%(FullPath)')" />
+      <_RustyEngineReferencedProject Remove="@(_RustyEngineReferencedProject)"
+                                     Condition="'$(_RustyEngineSourceDevelopmentProjects)' != '' and $([System.String]::Copy('%(Identity)').StartsWith('$(_RustyEngineSourceDevelopmentProjects)'))" />
+    </ItemGroup>
+    <PropertyGroup>
+      <RustyEngineWatchPaths>$(RustyEngineWatchPaths);@(_RustyEngineReferencedProject->DirectoryName()->Distinct())</RustyEngineWatchPaths>
+    </PropertyGroup>
+  </Target>
+
   <!-- CoreCLR is the normal, explicit staging operation used by development. -->
   <Target Name="StageRustyEngineCoreClrProduct"
-          DependsOnTargets="_RustyEngineStageCoreClrAssemblies;StageRustyEngineProductAssets;_RustyEngineWriteProductManifest">
+          DependsOnTargets="_RustyEngineStageCoreClrAssemblies;StageRustyEngineProductAssets;_RustyEngineWriteProductManifest;_RustyEngineWatchReferencedProjects">
     <Message Importance="High" Text="Rusty Engine CoreCLR Product staged at $(RustyEngineStagedProductDirectory)" />
   </Target>
 
