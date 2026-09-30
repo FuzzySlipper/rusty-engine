@@ -1075,6 +1075,7 @@ pub type NativeOpenPersistenceStore = unsafe extern "C" fn(
     *mut c_void,
     *const NativePersistenceOpenRequest,
     *mut NativePersistenceStoreHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyPersistenceStore =
     unsafe extern "C" fn(*mut c_void, NativePersistenceStoreHandle) -> i32;
@@ -1082,11 +1083,13 @@ pub type NativeSavePersistence = unsafe extern "C" fn(
     *mut c_void,
     *const NativePersistenceSaveRequest,
     *mut NativePersistenceSaveReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeLoadPersistence = unsafe extern "C" fn(
     *mut c_void,
     *const NativePersistenceLoadRequest,
     *mut NativePersistenceBlobHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyPersistenceBlob =
     unsafe extern "C" fn(*mut c_void, NativePersistenceBlobHandle) -> i32;

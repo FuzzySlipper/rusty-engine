@@ -42,10 +42,31 @@ internal static class JsonPersistenceChecks
             using var raw = engine.Persistence.OpenStore(new PersistenceOpenRequest(scope));
             engine.Persistence.Save(new PersistenceSaveRequest(raw, "malformed",
                 PersistenceRevisionGuard.Any, 0, "{bad json"u8.ToArray()));
-            try { reopened.Load("malformed"); }
-            catch (JsonException) { return; }
-            throw new InvalidOperationException("Malformed JSON was accepted.");
+            try
+            {
+                reopened.Load("malformed");
+                throw new InvalidOperationException("Malformed JSON was accepted.");
+            }
+            catch (JsonException) { }
         }
+        // test-csharp-release-pair.sh seeds these files; each refusal leaves them unchanged.
+        using var refusals = new ProductStateStore<SavedJourney>(engine, "storage-refusals", codec);
+        ExpectRefusal(() => refusals.Load("retired"), PersistenceStorageFailure.UnrecognizedContainer);
+        ExpectRefusal(() => refusals.Save("retired", expected), PersistenceStorageFailure.UnrecognizedContainer);
+        ExpectRefusal(() => refusals.Delete("retired"), PersistenceStorageFailure.UnrecognizedContainer);
+        ExpectRefusal(() => refusals.Load("malformed"), PersistenceStorageFailure.MalformedContainer);
+        ExpectRefusal(() => refusals.Save("malformed", expected), PersistenceStorageFailure.MalformedContainer);
+        ExpectRefusal(() => refusals.Load("unreadable"), PersistenceStorageFailure.Io);
+        ExpectRefusal(() => refusals.Save("unreadable", expected), PersistenceStorageFailure.Io);
+        if (refusals.Save("fresh", expected).Outcome != PersistenceSaveOutcome.Saved)
+            throw new InvalidOperationException("A refused key stopped the store from saving others.");
+    }
+
+    private static void ExpectRefusal(Func<object> operation, PersistenceStorageFailure failure)
+    {
+        try { operation(); }
+        catch (PersistenceStorageException refusal) when (refusal.Failure == failure) { return; }
+        throw new InvalidOperationException($"Stored file was not refused as {failure}.");
     }
 }
 

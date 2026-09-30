@@ -189,6 +189,16 @@ output_dir="$work/output-$loader-$reopen"
 mkdir -p "$output_dir"
 host_log="$work/runtime-host-$loader-$reopen.log"
 control_fifo="$work/control-$loader-$reopen"
+# Stored files the Engine must refuse, unchanged, without faulting the Product
+# (JsonPersistenceChecks): a retired layout, a damaged container and a key
+# the file system cannot read.
+refusals="$work/persistence-$loader/storage-refusals"
+if [[ ! -d "$refusals" ]]; then
+    mkdir -p "$refusals/unreadable"
+    printf 'RSP1\001\000\000\000retired save' > "$refusals/retired"
+    printf 'RSP2\001\000\000\000\000\000\000\000\011\000\000\000\000\000\000\000short' > "$refusals/malformed"
+    (cd "$refusals" && sha256sum retired malformed) > "$work/refusals-$loader.sha256"
+fi
 mkfifo "$control_fifo"
 exec 9<>"$control_fifo"
 control_open=1
@@ -216,6 +226,9 @@ curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "f
 }
 [[ ! -e "$work/persistence-$loader/json-roundtrip/discarded" ]] || {
     echo "JSON fixture did not remove deleted persistent state" >&2; exit 1;
+}
+(cd "$refusals" && sha256sum --check --quiet "$work/refusals-$loader.sha256") && [[ -d "$refusals/unreadable" ]] || {
+    echo "Refused persistent state was changed" >&2; exit 1;
 }
 for _ in $(seq 1 240); do
     [[ -f "$output_dir/complete" ]] && break

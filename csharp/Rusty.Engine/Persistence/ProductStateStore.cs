@@ -21,7 +21,8 @@ public readonly record struct ProductStateLoad<TState>(bool Present, ulong Revis
 /// Managed composition around the generated direct Persistence service. It is
 /// intentionally the place where a C# product selects its codec. The constructor
 /// receives a relative product scope; the developer host selects the absolute
-/// persistence root before product creation.
+/// persistence root before product creation. A stored file the Engine cannot read
+/// or write throws <see cref="PersistenceStorageException"/> and changes nothing.
 /// </summary>
 public sealed class ProductStateStore<TState> : IDisposable
 {
@@ -38,7 +39,7 @@ public sealed class ProductStateStore<TState> : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
         _persistence = engine.Persistence;
-        _store = _persistence.OpenStore(new PersistenceOpenRequest(scope));
+        _store = PersistenceStorageException.Refuse(() => _persistence.OpenStore(new PersistenceOpenRequest(scope)));
     }
 
     /// <summary>Returns RevisionConflict with the current stored revision when
@@ -52,12 +53,12 @@ public sealed class ProductStateStore<TState> : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         var payload = new ArrayBufferWriter<byte>();
         _codec.Encode(in state, payload);
-        return _persistence.Save(new PersistenceSaveRequest(
+        return PersistenceStorageException.Refuse(() => _persistence.Save(new PersistenceSaveRequest(
             _store,
             key,
             guard,
             expectedRevision,
-            payload.WrittenMemory));
+            payload.WrittenMemory)));
     }
 
     /// <summary>
@@ -68,7 +69,7 @@ public sealed class ProductStateStore<TState> : IDisposable
     public ProductStateLoad<TState> Load(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        using PersistenceBlob blob = _persistence.Load(new PersistenceLoadRequest(_store, key));
+        using PersistenceBlob blob = PersistenceStorageException.Refuse(() => _persistence.Load(new PersistenceLoadRequest(_store, key)));
         PersistenceBlobInfo info = _persistence.DescribeBlob(blob);
         if (!info.Present)
         {
@@ -86,7 +87,8 @@ public sealed class ProductStateStore<TState> : IDisposable
     /// Guards follow Save: Exact requires an existing matching revision, and Absent
     /// requires no key. A mismatch returns RevisionConflict without removing bytes.
     /// Previously loaded blobs remain readable. Recreating a deleted key starts at revision one.
-    /// Storage failures throw; after an I/O failure callers must reload to determine the state.
+    /// Storage failures throw <see cref="PersistenceStorageException"/>; after an I/O failure
+    /// callers must reload to determine the state.
     /// </summary>
     public PersistenceDeleteReceipt Delete(
         string key,
@@ -94,7 +96,7 @@ public sealed class ProductStateStore<TState> : IDisposable
         ulong expectedRevision = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        return _persistence.Delete(new PersistenceDeleteRequest(_store, key, guard, expectedRevision));
+        return PersistenceStorageException.Refuse(() => _persistence.Delete(new PersistenceDeleteRequest(_store, key, guard, expectedRevision)));
     }
 
     public void Dispose() => _store.Dispose();

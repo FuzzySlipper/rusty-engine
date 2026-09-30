@@ -95,6 +95,7 @@ pub type NativeDeletePersistence = unsafe extern "C" fn(
     *mut c_void,
     *const NativePersistenceDeleteRequest,
     *mut NativePersistenceDeleteReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 
 #[repr(C)]

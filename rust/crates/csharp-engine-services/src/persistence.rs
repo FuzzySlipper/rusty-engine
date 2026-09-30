@@ -9,13 +9,17 @@ use std::{
     collections::BTreeMap,
     ffi::c_void,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     path::{Component, Path, PathBuf},
 };
 
 use csharp_engine_abi::*;
 
-use crate::{composition::borrowed_utf8, composition::ABI_OK};
+use crate::{
+    composition::{borrowed_utf8, ABI_OK},
+    operation_diagnostics::{clear_receipt, OperationDiagnostics},
+    CsharpEngineServicesError,
+};
 
 const HEADER_MAGIC: [u8; 4] = *b"RSP2";
 const HEADER_LEN: usize = 4 + 8 + 8;
@@ -40,6 +44,7 @@ pub(crate) struct RuntimePersistenceBridge {
     blobs: BTreeMap<u64, PersistenceBlob>,
     next_store: u64,
     next_blob: u64,
+    diagnostics: OperationDiagnostics,
 }
 
 impl RuntimePersistenceBridge {
@@ -50,6 +55,7 @@ impl RuntimePersistenceBridge {
             blobs: BTreeMap::new(),
             next_store: 1,
             next_blob: 1,
+            diagnostics: OperationDiagnostics::default(),
         }
     }
 
@@ -65,6 +71,130 @@ impl RuntimePersistenceBridge {
         self.next_blob = value.checked_add(1)?;
         self.blobs.insert(value, blob);
         Some(NativePersistenceBlobHandle { value })
+    }
+
+    fn store_path(
+        &self,
+        store: NativePersistenceStoreHandle,
+        key: NativeUtf8Slice,
+    ) -> Result<(PathBuf, String), CsharpEngineServicesError> {
+        let key = unsafe { borrowed_utf8(key.bytes, key.len, "persistence key") }?;
+        let store = self.stores.get(&store.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_PERSISTENCE_STORE",
+                "the persistence store handle is not open",
+            )
+        })?;
+        Ok((storage_path(&store.root, key, "key")?, key.to_owned()))
+    }
+
+    fn open_store(
+        &mut self,
+        request: &NativePersistenceOpenRequest,
+    ) -> Result<NativePersistenceStoreHandle, CsharpEngineServicesError> {
+        let scope =
+            unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "persistence scope") }?;
+        let base_root = self.persistence_root.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_PERSISTENCE_ROOT",
+                "the host was started without a persistence root",
+            )
+        })?;
+        let root = storage_path(base_root, scope, "scope")?;
+        fs::create_dir_all(&root).map_err(|error| {
+            io_error(format!(
+                "creating persistence scope `{scope}` failed: {error}"
+            ))
+        })?;
+        self.insert_store(DurableStore { root })
+            .ok_or_else(handle_exhausted)
+    }
+
+    fn save(
+        &mut self,
+        request: &NativePersistenceSaveRequest,
+    ) -> Result<NativePersistenceSaveReceipt, CsharpEngineServicesError> {
+        let (path, key) = self.store_path(request.store, request.key)?;
+        let payload = unsafe { borrowed_bytes(request.payload, "persistence payload") }?.to_vec();
+        let current = read_blob(&path, &key)?;
+        if !matches_guard(
+            request.revision_guard,
+            request.expected_revision,
+            current.as_ref(),
+        ) {
+            return Ok(NativePersistenceSaveReceipt {
+                outcome: NativePersistenceSaveOutcome::RevisionConflict,
+                revision: current.as_ref().map_or(0, |blob| blob.revision),
+            });
+        }
+        let revision = match current {
+            Some(value) => value.revision.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_PERSISTENCE_REVISION",
+                    format!("persistence key `{key}` has no revision after u64::MAX"),
+                )
+            })?,
+            None => 1,
+        };
+        let next = PersistenceBlob {
+            present: true,
+            revision,
+            payload,
+        };
+        write_atomically(&path, &next).map_err(|error| {
+            io_error(format!("writing persistence key `{key}` failed: {error}"))
+        })?;
+        Ok(NativePersistenceSaveReceipt {
+            outcome: NativePersistenceSaveOutcome::Saved,
+            revision,
+        })
+    }
+
+    fn delete(
+        &mut self,
+        request: &NativePersistenceDeleteRequest,
+    ) -> Result<NativePersistenceDeleteReceipt, CsharpEngineServicesError> {
+        let (path, key) = self.store_path(request.store, request.key)?;
+        let current = read_blob(&path, &key)?;
+        let revision = current.as_ref().map_or(0, |blob| blob.revision);
+        let outcome = if !matches_guard(
+            request.revision_guard,
+            request.expected_revision,
+            current.as_ref(),
+        ) {
+            NativePersistenceDeleteOutcome::RevisionConflict
+        } else if current.is_none() {
+            NativePersistenceDeleteOutcome::Missing
+        } else {
+            // Flush the directory entry removal before reporting durable success.
+            // A failed flush is an operation failure, not a deletion receipt.
+            let removed = path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("the key has no parent directory"))
+                .and_then(File::open)
+                .and_then(|directory| {
+                    fs::remove_file(&path)?;
+                    directory.sync_all()
+                });
+            removed.map_err(|error| {
+                io_error(format!("deleting persistence key `{key}` failed: {error}"))
+            })?;
+            NativePersistenceDeleteOutcome::Deleted
+        };
+        Ok(NativePersistenceDeleteReceipt { outcome, revision })
+    }
+
+    fn load(
+        &mut self,
+        request: &NativePersistenceLoadRequest,
+    ) -> Result<NativePersistenceBlobHandle, CsharpEngineServicesError> {
+        let (path, key) = self.store_path(request.store, request.key)?;
+        let blob = read_blob(&path, &key)?.unwrap_or(PersistenceBlob {
+            present: false,
+            revision: 0,
+            payload: Vec::new(),
+        });
+        self.insert_blob(blob).ok_or_else(handle_exhausted)
     }
 }
 
@@ -83,37 +213,45 @@ pub(crate) fn api(bridge: &mut RuntimePersistenceBridge) -> NativePersistenceApi
     }
 }
 
+/// Runs one refusable operation: writes its result or reports its refusal
+/// through the receipt.
+unsafe fn refusable<Request, Output>(
+    context: *mut c_void,
+    request: *const Request,
+    result: *mut Output,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: impl FnOnce(
+        &mut RuntimePersistenceBridge,
+        &Request,
+    ) -> Result<Output, CsharpEngineServicesError>,
+) -> i32 {
+    clear_receipt(receipt);
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
+    match operation(bridge, unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.diagnostics.retain(&error, receipt);
+            0
+        }
+    }
+}
+
 unsafe extern "C" fn open_store(
     context: *mut c_void,
     request: *const NativePersistenceOpenRequest,
     result: *mut NativePersistenceStoreHandle,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let request = unsafe { &*request };
-    let scope =
-        match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "persistence scope") }
-        {
-            Ok(value) => value,
-            Err(_) => return 0,
-        };
-    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
-    let Some(base_root) = bridge.persistence_root.as_ref() else {
-        return 0;
-    };
-    let Ok(root) = storage_path(base_root, scope) else {
-        return 0;
-    };
-    if fs::create_dir_all(&root).is_err() || !root.is_dir() {
-        return 0;
-    }
-    match bridge.insert_store(DurableStore { root }) {
-        Some(handle) => {
-            unsafe { *result = handle };
-            ABI_OK
-        }
-        None => 0,
+    unsafe {
+        refusable(context, request, result, receipt, |bridge, request| {
+            bridge.open_store(request)
+        })
     }
 }
 
@@ -135,160 +273,39 @@ unsafe extern "C" fn destroy_store(
 unsafe extern "C" fn save(
     context: *mut c_void,
     request: *const NativePersistenceSaveRequest,
-    receipt: *mut NativePersistenceSaveReceipt,
+    result: *mut NativePersistenceSaveReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || receipt.is_null() {
-        return 0;
-    }
-    let request = unsafe { &*request };
-    let key = match unsafe { borrowed_utf8(request.key.bytes, request.key.len, "persistence key") }
-    {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    let payload = match unsafe { borrowed_bytes(request.payload, "persistence payload") } {
-        Ok(value) => value.to_vec(),
-        Err(_) => return 0,
-    };
-    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
-    let Some(store) = bridge.stores.get(&request.store.value) else {
-        return 0;
-    };
-    let Ok(path) = storage_path(&store.root, key) else {
-        return 0;
-    };
-    let current = match read_blob(&path) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    if !matches_guard(
-        request.revision_guard,
-        request.expected_revision,
-        current.as_ref(),
-    ) {
-        unsafe {
-            *receipt = NativePersistenceSaveReceipt {
-                outcome: NativePersistenceSaveOutcome::RevisionConflict,
-                revision: current.as_ref().map_or(0, |blob| blob.revision),
-            };
-        }
-        return ABI_OK;
-    }
-    let revision = match current {
-        Some(value) => match value.revision.checked_add(1) {
-            Some(value) => value,
-            None => return 0,
-        },
-        None => 1,
-    };
-    let next = PersistenceBlob {
-        present: true,
-        revision,
-        payload,
-    };
-    if write_atomically(&path, &next).is_err() {
-        return 0;
-    }
     unsafe {
-        *receipt = NativePersistenceSaveReceipt {
-            outcome: NativePersistenceSaveOutcome::Saved,
-            revision,
-        };
+        refusable(context, request, result, receipt, |bridge, request| {
+            bridge.save(request)
+        })
     }
-    ABI_OK
 }
 
 unsafe extern "C" fn delete(
     context: *mut c_void,
     request: *const NativePersistenceDeleteRequest,
-    receipt: *mut NativePersistenceDeleteReceipt,
+    result: *mut NativePersistenceDeleteReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || receipt.is_null() {
-        return 0;
-    }
-    let request = unsafe { &*request };
-    let key = match unsafe { borrowed_utf8(request.key.bytes, request.key.len, "persistence key") }
-    {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
-    let Some(store) = bridge.stores.get(&request.store.value) else {
-        return 0;
-    };
-    let Ok(path) = storage_path(&store.root, key) else {
-        return 0;
-    };
-    let current = match read_blob(&path) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    let revision = current.as_ref().map_or(0, |blob| blob.revision);
-    let outcome = if !matches_guard(
-        request.revision_guard,
-        request.expected_revision,
-        current.as_ref(),
-    ) {
-        NativePersistenceDeleteOutcome::RevisionConflict
-    } else if current.is_none() {
-        NativePersistenceDeleteOutcome::Missing
-    } else {
-        // Flush the directory entry removal before reporting durable success.
-        // A failed flush is an operation failure, not a deletion receipt.
-        let Some(parent) = path.parent() else {
-            return 0;
-        };
-        let directory = match File::open(parent) {
-            Ok(value) => value,
-            Err(_) => return 0,
-        };
-        if fs::remove_file(&path).is_err() || directory.sync_all().is_err() {
-            return 0;
-        }
-        NativePersistenceDeleteOutcome::Deleted
-    };
     unsafe {
-        *receipt = NativePersistenceDeleteReceipt { outcome, revision };
+        refusable(context, request, result, receipt, |bridge, request| {
+            bridge.delete(request)
+        })
     }
-    ABI_OK
 }
 
 unsafe extern "C" fn load(
     context: *mut c_void,
     request: *const NativePersistenceLoadRequest,
     result: *mut NativePersistenceBlobHandle,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
-    if context.is_null() || request.is_null() || result.is_null() {
-        return 0;
-    }
-    let request = unsafe { &*request };
-    let key = match unsafe { borrowed_utf8(request.key.bytes, request.key.len, "persistence key") }
-    {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
-    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
-    let Some(store) = bridge.stores.get(&request.store.value) else {
-        return 0;
-    };
-    let Ok(path) = storage_path(&store.root, key) else {
-        return 0;
-    };
-    let blob = match read_blob(&path) {
-        Ok(Some(blob)) => blob,
-        Ok(None) => PersistenceBlob {
-            present: false,
-            revision: 0,
-            payload: Vec::new(),
-        },
-        Err(_) => return 0,
-    };
-    match bridge.insert_blob(blob) {
-        Some(handle) => {
-            unsafe { *result = handle };
-            ABI_OK
-        }
-        None => 0,
+    unsafe {
+        refusable(context, request, result, receipt, |bridge, request| {
+            bridge.load(request)
+        })
     }
 }
 
@@ -380,12 +397,15 @@ unsafe extern "C" fn copy_blob(
     ABI_OK
 }
 
-pub(crate) unsafe fn borrowed_bytes<'a>(
+unsafe fn borrowed_bytes<'a>(
     value: NativeByteSlice,
-    _field: &'static str,
-) -> Result<&'a [u8], ()> {
+    field: &'static str,
+) -> Result<&'a [u8], CsharpEngineServicesError> {
     if value.len > 0 && value.bytes.is_null() {
-        return Err(());
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_BYTES_POINTER",
+            format!("C# {field} had length without bytes"),
+        ));
     }
     if value.len == 0 {
         Ok(&[])
@@ -395,15 +415,33 @@ pub(crate) unsafe fn borrowed_bytes<'a>(
     }
 }
 
-fn storage_path(root: &Path, key: &str) -> Result<PathBuf, ()> {
-    let path = Path::new(key);
-    if key.is_empty()
+fn io_error(detail: String) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new("CSHARP_PERSISTENCE_IO", detail)
+}
+
+fn handle_exhausted() -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(
+        "CSHARP_PERSISTENCE_HANDLES",
+        "persistence handle identities are exhausted",
+    )
+}
+
+fn storage_path(
+    root: &Path,
+    relative: &str,
+    field: &str,
+) -> Result<PathBuf, CsharpEngineServicesError> {
+    let path = Path::new(relative);
+    if relative.is_empty()
         || path.is_absolute()
         || path
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
     {
-        return Err(());
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_PERSISTENCE_PATH",
+            format!("persistence {field} `{relative}` must be a nonempty relative path without `.` or `..`"),
+        ));
     }
     Ok(root.join(path))
 }
@@ -422,30 +460,48 @@ fn matches_guard(
     }
 }
 
-fn read_blob(path: &Path) -> Result<Option<PersistenceBlob>, ()> {
-    let mut file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(()),
+/// Reads the stored container for `key`. A file that is not an RSP2
+/// container, including a retired layout, is refused, never migrated; a
+/// truncated or overlong RSP2 container is malformed. Neither is changed.
+fn read_blob(path: &Path, key: &str) -> Result<Option<PersistenceBlob>, CsharpEngineServicesError> {
+    let io = |error: std::io::Error| {
+        io_error(format!("reading persistence key `{key}` failed: {error}"))
     };
-    let mut header = [0_u8; HEADER_LEN];
-    file.read_exact(&mut header).map_err(|_| ())?;
-    if header[..4] != HEADER_MAGIC {
-        return Err(());
+    let malformed = |detail: &str| {
+        CsharpEngineServicesError::new(
+            "CSHARP_PERSISTENCE_CONTAINER_MALFORMED",
+            format!("persistence key `{key}` is a damaged RSP2 container: {detail}"),
+        )
+    };
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io(error)),
+    };
+    if bytes.len() < HEADER_MAGIC.len() || bytes[..HEADER_MAGIC.len()] != HEADER_MAGIC {
+        let header = String::from_utf8_lossy(&bytes[..bytes.len().min(HEADER_MAGIC.len())])
+            .escape_debug()
+            .to_string();
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_PERSISTENCE_CONTAINER_UNRECOGNIZED",
+            format!(
+                "persistence key `{key}` is not an RSP2 container (it starts with \"{header}\"); the Engine does not migrate other layouts, so discard or convert the file"
+            ),
+        ));
     }
-    let revision = u64::from_le_bytes(header[4..12].try_into().map_err(|_| ())?);
-    let payload_len = u64::from_le_bytes(header[12..20].try_into().map_err(|_| ())?);
-    let payload_len: usize = payload_len.try_into().map_err(|_| ())?;
-    // A corrupt header must not size an allocation beyond the file itself.
-    let remaining = file.metadata().map_err(|_| ())?.len();
-    if payload_len as u64 > remaining.saturating_sub(HEADER_LEN as u64) {
-        return Err(());
+    if bytes.len() < HEADER_LEN {
+        return Err(malformed("the header is truncated"));
     }
-    let mut payload = vec![0; payload_len];
-    file.read_exact(&mut payload).map_err(|_| ())?;
-    if file.read(&mut [0_u8; 1]).map_err(|_| ())? != 0 {
-        return Err(());
+    let revision = u64::from_le_bytes(bytes[4..12].try_into().expect("eight header bytes"));
+    let payload_len = u64::from_le_bytes(bytes[12..20].try_into().expect("eight header bytes"));
+    let stored = (bytes.len() - HEADER_LEN) as u64;
+    if payload_len != stored {
+        return Err(malformed(&format!(
+            "the header declares {payload_len} payload bytes but {stored} follow it"
+        )));
     }
+    let mut payload = bytes;
+    payload.drain(..HEADER_LEN);
     Ok(Some(PersistenceBlob {
         present: true,
         revision,
@@ -453,34 +509,32 @@ fn read_blob(path: &Path) -> Result<Option<PersistenceBlob>, ()> {
     }))
 }
 
-fn write_atomically(path: &Path, blob: &PersistenceBlob) -> Result<(), ()> {
-    let parent = path.parent().ok_or(())?;
-    fs::create_dir_all(parent).map_err(|_| ())?;
+fn write_atomically(path: &Path, blob: &PersistenceBlob) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("the key has no parent directory"))?;
+    fs::create_dir_all(parent)?;
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
-        .ok_or(())?;
+        .ok_or_else(|| std::io::Error::other("the key has no UTF-8 file name"))?;
     let temporary = parent.join(format!(".{name}.rusty-engine-pending"));
     // A prior interrupted commit can leave only this never-published sibling.
     // The target is untouched until the later same-directory rename succeeds.
     if temporary.exists() {
-        fs::remove_file(&temporary).map_err(|_| ())?;
+        fs::remove_file(&temporary)?;
     }
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temporary)
-            .map_err(|_| ())?;
-        file.write_all(&HEADER_MAGIC).map_err(|_| ())?;
-        file.write_all(&blob.revision.to_le_bytes())
-            .map_err(|_| ())?;
-        file.write_all(&(blob.payload.len() as u64).to_le_bytes())
-            .map_err(|_| ())?;
-        file.write_all(&blob.payload).map_err(|_| ())?;
-        file.sync_all().map_err(|_| ())?;
-        fs::rename(&temporary, path).map_err(|_| ())?;
-        Ok(())
+            .open(&temporary)?;
+        file.write_all(&HEADER_MAGIC)?;
+        file.write_all(&blob.revision.to_le_bytes())?;
+        file.write_all(&(blob.payload.len() as u64).to_le_bytes())?;
+        file.write_all(&blob.payload)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -502,7 +556,10 @@ mod tests {
         bytes.extend_from_slice(&(u64::MAX / 2).to_le_bytes());
         bytes.extend_from_slice(b"short");
         std::fs::write(&path, bytes).unwrap();
-        assert!(read_blob(&path).is_err());
+        assert_eq!(
+            read_blob(&path, "corrupt").unwrap_err().code(),
+            "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"
+        );
     }
 
     #[test]
@@ -518,7 +575,10 @@ mod tests {
             },
         };
         let mut store = NativePersistenceStoreHandle::default();
-        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        assert_eq!(
+            unsafe { open_store(context, &open, &mut store, std::ptr::null_mut()) },
+            ABI_OK
+        );
 
         let key = b"campaign.state";
         let first_payload = b"first";
@@ -536,7 +596,10 @@ mod tests {
             },
         };
         let mut saved = NativePersistenceSaveReceipt::default();
-        assert_eq!(unsafe { save(context, &first, &mut saved) }, ABI_OK);
+        assert_eq!(
+            unsafe { save(context, &first, &mut saved, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(saved.revision, 1);
 
         let stale_payload = b"stale";
@@ -549,13 +612,19 @@ mod tests {
             expected_revision: 0,
             ..first
         };
-        assert_eq!(unsafe { save(context, &stale, &mut saved) }, ABI_OK);
+        assert_eq!(
+            unsafe { save(context, &stale, &mut saved, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(
             saved.outcome,
             NativePersistenceSaveOutcome::RevisionConflict
         );
         assert_eq!(saved.revision, 1);
-        assert_eq!(unsafe { save(context, &first, &mut saved) }, ABI_OK);
+        assert_eq!(
+            unsafe { save(context, &first, &mut saved, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(
             saved.outcome,
             NativePersistenceSaveOutcome::RevisionConflict
@@ -569,7 +638,10 @@ mod tests {
             },
         };
         let mut blob = NativePersistenceBlobHandle::default();
-        assert_eq!(unsafe { load(context, &load_request, &mut blob) }, ABI_OK);
+        assert_eq!(
+            unsafe { load(context, &load_request, &mut blob, std::ptr::null_mut()) },
+            ABI_OK
+        );
         let mut info = NativePersistenceBlobInfo {
             present: false,
             revision: 0,
@@ -611,12 +683,18 @@ mod tests {
         drop(bridge);
         let mut reopened = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
         let context = (&mut reopened as *mut RuntimePersistenceBridge).cast();
-        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        assert_eq!(
+            unsafe { open_store(context, &open, &mut store, std::ptr::null_mut()) },
+            ABI_OK
+        );
         let request = NativePersistenceLoadRequest {
             store,
             ..load_request
         };
-        assert_eq!(unsafe { load(context, &request, &mut blob) }, ABI_OK);
+        assert_eq!(
+            unsafe { load(context, &request, &mut blob, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(unsafe { describe_blob(context, blob, &mut info) }, ABI_OK);
         assert_eq!((info.revision, info.payload_len), (1, first_payload.len()));
         let copy = NativePersistenceCopyBlobRequest { blob, ..copy };
@@ -642,7 +720,10 @@ mod tests {
             scope: utf8("campaign"),
         };
         let mut store = NativePersistenceStoreHandle::default();
-        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        assert_eq!(
+            unsafe { open_store(context, &open, &mut store, std::ptr::null_mut()) },
+            ABI_OK
+        );
         let first = NativePersistenceSaveRequest {
             store,
             key: utf8("nested/slot"),
@@ -654,7 +735,10 @@ mod tests {
             },
         };
         let mut saved = NativePersistenceSaveReceipt::default();
-        assert_eq!(unsafe { save(context, &first, &mut saved) }, ABI_OK);
+        assert_eq!(
+            unsafe { save(context, &first, &mut saved, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(
             unsafe {
                 save(
@@ -664,6 +748,7 @@ mod tests {
                         ..first
                     },
                     &mut saved,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -677,6 +762,7 @@ mod tests {
                         scope: utf8("elsewhere"),
                     },
                     &mut other_store,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -690,6 +776,7 @@ mod tests {
                         ..first
                     },
                     &mut saved,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -700,7 +787,7 @@ mod tests {
         };
         let mut retained = NativePersistenceBlobHandle::default();
         assert_eq!(
-            unsafe { load(context, &load_request, &mut retained) },
+            unsafe { load(context, &load_request, &mut retained, std::ptr::null_mut()) },
             ABI_OK
         );
         let request = NativePersistenceDeleteRequest {
@@ -710,7 +797,10 @@ mod tests {
             expected_revision: 2,
         };
         let mut receipt = NativePersistenceDeleteReceipt::default();
-        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, ABI_OK);
+        assert_eq!(
+            unsafe { delete(context, &request, &mut receipt, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(
             receipt.outcome,
             NativePersistenceDeleteOutcome::RevisionConflict
@@ -726,6 +816,7 @@ mod tests {
                         ..request
                     },
                     &mut receipt,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -738,12 +829,18 @@ mod tests {
             expected_revision: 1,
             ..request
         };
-        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, ABI_OK);
+        assert_eq!(
+            unsafe { delete(context, &request, &mut receipt, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(receipt.outcome, NativePersistenceDeleteOutcome::Deleted);
         assert_eq!(receipt.revision, 1);
         assert!(!root.path().join("campaign/nested/slot").exists());
         assert_eq!(bridge.blobs[&retained.value].payload, b"saved");
-        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, ABI_OK);
+        assert_eq!(
+            unsafe { delete(context, &request, &mut receipt, std::ptr::null_mut()) },
+            ABI_OK
+        );
         assert_eq!(
             receipt.outcome,
             NativePersistenceDeleteOutcome::RevisionConflict
@@ -762,6 +859,7 @@ mod tests {
                             ..request
                         },
                         &mut receipt,
+                        std::ptr::null_mut(),
                     )
                 },
                 ABI_OK
@@ -770,13 +868,19 @@ mod tests {
         }
         assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
         receipt = NativePersistenceDeleteReceipt::default();
-        assert_eq!(unsafe { delete(context, &request, &mut receipt) }, 0);
+        assert_eq!(
+            unsafe { delete(context, &request, &mut receipt, std::ptr::null_mut()) },
+            0
+        );
         assert_ne!(receipt.outcome, NativePersistenceDeleteOutcome::Deleted);
         drop(bridge);
 
         let mut reopened = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
         let context = (&mut reopened as *mut RuntimePersistenceBridge).cast();
-        assert_eq!(unsafe { open_store(context, &open, &mut store) }, ABI_OK);
+        assert_eq!(
+            unsafe { open_store(context, &open, &mut store, std::ptr::null_mut()) },
+            ABI_OK
+        );
         let mut blob = NativePersistenceBlobHandle::default();
         assert_eq!(
             unsafe {
@@ -787,17 +891,20 @@ mod tests {
                         ..load_request
                     },
                     &mut blob,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
         );
         assert!(!reopened.blobs[&blob.value].present);
-        assert!(read_blob(&root.path().join("campaign/other"))
+        assert!(read_blob(&root.path().join("campaign/other"), "other")
             .unwrap()
             .is_some());
-        assert!(read_blob(&root.path().join("elsewhere/nested/slot"))
-            .unwrap()
-            .is_some());
+        assert!(
+            read_blob(&root.path().join("elsewhere/nested/slot"), "nested/slot")
+                .unwrap()
+                .is_some()
+        );
         // Invalid paths and unreadable/corrupt storage cannot produce a success receipt.
         fs::write(root.path().join("campaign/broken"), b"invalid header").unwrap();
         for key in ["../escape", "broken", "nested"] {
@@ -813,6 +920,7 @@ mod tests {
                             ..request
                         },
                         &mut receipt,
+                        std::ptr::null_mut(),
                     )
                 },
                 0
@@ -823,6 +931,143 @@ mod tests {
             fs::read(root.path().join("campaign/broken")).unwrap(),
             b"invalid header"
         );
+    }
+
+    #[test]
+    fn retired_malformed_and_unreadable_storage_are_refused_with_codes_and_left_untouched() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        use std::os::unix::fs::PermissionsExt;
+        fn utf8(value: &str) -> NativeUtf8Slice {
+            NativeUtf8Slice {
+                bytes: value.as_ptr(),
+                len: value.len(),
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+        let context = (&mut bridge as *mut RuntimePersistenceBridge).cast();
+        let mut store = NativePersistenceStoreHandle::default();
+        let mut refusal = empty_receipt();
+        let open = NativePersistenceOpenRequest {
+            scope: utf8("slots"),
+        };
+        assert_eq!(
+            unsafe { open_store(context, &open, &mut store, &mut refusal) },
+            ABI_OK
+        );
+        let scope = root.path().join("slots");
+        let mut rsp2 = b"RSP2".to_vec();
+        rsp2.extend_from_slice(&7_u64.to_le_bytes());
+        rsp2.extend_from_slice(&3_u64.to_le_bytes());
+        let files: [(&str, Vec<u8>); 5] = [
+            ("retired", b"RSP1\x01\x00\x00\x00old save".to_vec()),
+            ("tiny", b"RS".to_vec()),
+            ("truncated-header", b"RSP2\x01".to_vec()),
+            ("short-payload", [rsp2.as_slice(), b"ab"].concat()),
+            ("trailing-payload", [rsp2.as_slice(), b"abcd"].concat()),
+        ];
+        for (key, bytes) in &files {
+            fs::write(scope.join(key), bytes).unwrap();
+        }
+        fs::create_dir(scope.join("directory")).unwrap();
+        let expected = [
+            ("retired", "CSHARP_PERSISTENCE_CONTAINER_UNRECOGNIZED"),
+            ("tiny", "CSHARP_PERSISTENCE_CONTAINER_UNRECOGNIZED"),
+            ("truncated-header", "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"),
+            ("short-payload", "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"),
+            ("trailing-payload", "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"),
+            ("directory", "CSHARP_PERSISTENCE_IO"),
+        ];
+        for (key, code) in expected {
+            let save_request = NativePersistenceSaveRequest {
+                store,
+                key: utf8(key),
+                revision_guard: NativePersistenceRevisionGuard::Any,
+                expected_revision: 0,
+                payload: NativeByteSlice {
+                    bytes: b"new".as_ptr(),
+                    len: 3,
+                },
+            };
+            let mut saved = NativePersistenceSaveReceipt::default();
+            refusal = empty_receipt();
+            assert_eq!(
+                unsafe { save(context, &save_request, &mut saved, &mut refusal) },
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), [code], "save {key}");
+            let mut blob = NativePersistenceBlobHandle::default();
+            let load_request = NativePersistenceLoadRequest {
+                store,
+                key: utf8(key),
+            };
+            assert_eq!(
+                unsafe { load(context, &load_request, &mut blob, &mut refusal) },
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), [code], "load {key}");
+            let delete_request = NativePersistenceDeleteRequest {
+                store,
+                key: utf8(key),
+                revision_guard: NativePersistenceRevisionGuard::Any,
+                expected_revision: 0,
+            };
+            let mut deleted = NativePersistenceDeleteReceipt::default();
+            assert_eq!(
+                unsafe { delete(context, &delete_request, &mut deleted, &mut refusal) },
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), [code], "delete {key}");
+        }
+        for (key, bytes) in &files {
+            assert_eq!(
+                &fs::read(scope.join(key)).unwrap(),
+                bytes,
+                "{key} was changed"
+            );
+        }
+        assert!(scope.join("directory").is_dir());
+
+        // A write failure keeps the committed revision and payload.
+        let committed = NativePersistenceSaveRequest {
+            store,
+            key: utf8("committed"),
+            revision_guard: NativePersistenceRevisionGuard::Any,
+            expected_revision: 0,
+            payload: NativeByteSlice {
+                bytes: b"kept".as_ptr(),
+                len: 4,
+            },
+        };
+        let mut saved = NativePersistenceSaveReceipt::default();
+        assert_eq!(
+            unsafe { save(context, &committed, &mut saved, &mut refusal) },
+            ABI_OK
+        );
+        let before = fs::read(scope.join("committed")).unwrap();
+        fs::set_permissions(&scope, fs::Permissions::from_mode(0o500)).unwrap();
+        // A privileged user writes through permissions; there is no failure to observe.
+        let writable = fs::write(scope.join("probe"), b"").is_ok();
+        if !writable {
+            assert_eq!(
+                unsafe { save(context, &committed, &mut saved, &mut refusal) },
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_PERSISTENCE_IO"]);
+        }
+        fs::set_permissions(&scope, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(fs::read(scope.join("committed")).unwrap(), before);
+        let mut blob = NativePersistenceBlobHandle::default();
+        let load_request = NativePersistenceLoadRequest {
+            store,
+            key: utf8("committed"),
+        };
+        assert_eq!(
+            unsafe { load(context, &load_request, &mut blob, &mut refusal) },
+            ABI_OK
+        );
+        assert_eq!(bridge.blobs[&blob.value].revision, 1);
+        assert_eq!(bridge.blobs[&blob.value].payload, b"kept");
     }
 
     #[test]
@@ -838,7 +1083,14 @@ mod tests {
         let mut unconfigured = RuntimePersistenceBridge::new(None);
         let unconfigured_context = (&mut unconfigured as *mut RuntimePersistenceBridge).cast();
         assert_eq!(
-            unsafe { open_store(unconfigured_context, &request, &mut store) },
+            unsafe {
+                open_store(
+                    unconfigured_context,
+                    &request,
+                    &mut store,
+                    std::ptr::null_mut(),
+                )
+            },
             0
         );
 
@@ -852,7 +1104,10 @@ mod tests {
                 len: escape.len(),
             },
         };
-        assert_eq!(unsafe { open_store(context, &request, &mut store) }, 0);
+        assert_eq!(
+            unsafe { open_store(context, &request, &mut store, std::ptr::null_mut()) },
+            0
+        );
         assert!(!root.path().join("outside").exists());
     }
 }

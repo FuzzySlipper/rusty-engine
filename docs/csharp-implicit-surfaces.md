@@ -410,6 +410,17 @@ The direct Persistence requests, receipts and blobs also carry no product schema
 version. Storage owns only its file layout marker and revision; specialized codecs
 (such as voxel edit history) identify their own payload format during decoding.
 
+A stored file the Engine cannot read or write is an expected refusal, not a fault.
+`ProductStateStore<T>` throws `PersistenceStorageException`, whose `Failure` is
+`UnrecognizedContainer` (not the current RSP2 layout, for example a retired RSP1
+file), `MalformedContainer` (an RSP2 header that disagrees with its payload) or
+`Io`. Catch it to report the save or load; the file, its revision and the store
+are unchanged, and other keys keep working. The Engine never migrates an old
+layout: discard the file or convert it with a product tool. The direct Persistence
+service throws `EngineCallException` with the diagnostic codes
+`CSHARP_PERSISTENCE_CONTAINER_UNRECOGNIZED`, `CSHARP_PERSISTENCE_CONTAINER_MALFORMED`
+and `CSHARP_PERSISTENCE_IO`.
+
 `ProductStateStore<T>.Delete(key, guard, expectedRevision)` and the direct
 `Persistence.Delete(PersistenceDeleteRequest)` durably remove one scoped key.
 `Deleted` reports the removed revision; `Missing` reports zero. Guards match Save:
