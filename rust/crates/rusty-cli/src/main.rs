@@ -98,6 +98,11 @@ fn install_termination_signal_hook() -> Result<Arc<AtomicBool>, String> {
 
 fn dev(mut options: DevOptions) -> Result<(), String> {
     use_dotnet_root_for_host();
+    // The pinned pair's pack, as `rusty dev` selects it: no --runtime, or the
+    // delegated run of that pack's own `rusty`. Any other --runtime (and an
+    // --engine-source) is the caller's explicit choice.
+    let pinned_selection =
+        options.engine_source.is_none() && options.runtime.as_deref().is_none_or(runs_from_pack);
     if options.engine_source.is_none() {
         let pinned = if options.runtime.is_none() {
             pinned_pair(&options.project)?
@@ -131,7 +136,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
     let initial = stage_product(&options)?;
     let mut staged = initial.directory;
     verify_staged_product(&staged)?;
-    let runtime = window_runtime(runtime, &staged)?;
+    let runtime = window_runtime(runtime, &staged, pinned_selection)?;
     let mut watches = initial.watches;
     let mut asset_roots = initial.asset_roots;
     let mut snapshot = FileSnapshot::capture(&watches)?;
@@ -1130,33 +1135,28 @@ fn window_output(staged: &Path) -> Result<bool, String> {
     Ok(manifest["renderer"]["output"] == "window")
 }
 
+/// Whether this process is `runtime`'s own `rusty`: the run the pinned pair's
+/// selection delegates to.
+fn runs_from_pack(runtime: &Path) -> bool {
+    let current = env::current_exe().and_then(fs::canonicalize).ok();
+    current.is_some() && current == fs::canonicalize(runtime.join("bin/rusty")).ok()
+}
+
 /// Window output runs a desktop pack: the same host with the desktop shell
-/// and Chromium's runtime (`lib/cef`). A pinned pair's pack is swapped for
+/// and Chromium's runtime (`lib/cef`). The pinned pair's pack is swapped for
 /// the pair's desktop pack, installed on first use; an explicit runtime pack
 /// must already be one.
-fn window_runtime(runtime: RuntimePack, staged: &Path) -> Result<RuntimePack, String> {
-    if !window_output(staged)? || runtime.root.join("lib/cef").is_dir() {
+fn window_runtime(
+    runtime: RuntimePack,
+    staged: &Path,
+    pinned_selection: bool,
+) -> Result<RuntimePack, String> {
+    if !window_output(staged)? {
         return Ok(runtime);
     }
-    let pair = runtime
-        .root
-        .parent()
-        .filter(|root| {
-            runtime.root.file_name() == Some("runtime-pack".as_ref())
-                && root.join("pair-manifest.json").is_file()
-        })
-        .and_then(|root| {
-            Some(pair::InstalledPair {
-                version: root.file_name()?.to_str()?.to_owned(),
-                root: root.to_owned(),
-            })
-        })
-        .ok_or_else(|| {
-            format!(
-                "RUSTY_DEV_WINDOW: window output needs a desktop runtime pack; `{}` has no lib/cef. Pass --runtime <desktop pack>",
-                runtime.root.display()
-            )
-        })?;
+    let Some(pair) = desktop_pair_for(&runtime.root, pinned_selection)? else {
+        return Ok(runtime);
+    };
     let (root, downloaded) = pair::install_desktop_pack(&pair)?;
     diagnostic(
         "desktop-pack",
@@ -1165,6 +1165,40 @@ fn window_runtime(runtime: RuntimePack, staged: &Path) -> Result<RuntimePack, St
     let desktop = RuntimePack::at(root)?;
     desktop.verify()?;
     Ok(desktop)
+}
+
+/// The pair whose desktop pack replaces `root` in window output, or `None`
+/// when `root` already is a desktop pack. Only the pinned pair's selection is
+/// swapped.
+fn desktop_pair_for(
+    root: &Path,
+    pinned_selection: bool,
+) -> Result<Option<pair::InstalledPair>, String> {
+    if root.join("lib/cef").is_dir() {
+        return Ok(None);
+    }
+    let refused = || {
+        format!(
+            "RUSTY_DEV_WINDOW: window output needs a desktop runtime pack; `{}` has no lib/cef. Pass --runtime <desktop pack>, or omit --runtime to use the pinned pair's",
+            root.display()
+        )
+    };
+    if !pinned_selection {
+        return Err(refused());
+    }
+    root.parent()
+        .filter(|pair| {
+            root.file_name() == Some("runtime-pack".as_ref())
+                && pair.join("pair-manifest.json").is_file()
+        })
+        .and_then(|pair| {
+            Some(pair::InstalledPair {
+                version: pair.file_name()?.to_str()?.to_owned(),
+                root: pair.to_owned(),
+            })
+        })
+        .map(Some)
+        .ok_or_else(refused)
 }
 
 /// Runs the pinned pair's own `rusty dev`, whose supervisor protocol and
@@ -2291,6 +2325,34 @@ mod tests {
             ["dev", "--project", "P.csproj", "--chromium", "/c"].map(str::to_owned)
         )
         .is_err());
+    }
+
+    #[test]
+    fn only_the_pinned_selection_swaps_to_the_desktop_pack() {
+        let base = env::temp_dir().join(format!("rusty-window-{}", std::process::id()));
+        let pair = base.join("pairs/0.1.0-dev.abc123def456");
+        let pack = pair.join("runtime-pack");
+        fs::create_dir_all(&pack).unwrap();
+        fs::write(pair.join("pair-manifest.json"), "{}").unwrap();
+
+        let swapped = desktop_pair_for(&pack, true).expect("the pinned pack swaps");
+        assert_eq!(
+            swapped.map(|pair| pair.version).as_deref(),
+            Some("0.1.0-dev.abc123def456")
+        );
+        let explicit = desktop_pair_for(&pack, false).expect_err("an explicit pack is not swapped");
+        assert!(explicit.contains("RUSTY_DEV_WINDOW"), "{explicit}");
+
+        let loose = base.join("contributor-pack");
+        fs::create_dir_all(&loose).unwrap();
+        assert!(desktop_pair_for(&loose, true).is_err(), "no pair beside it");
+
+        fs::create_dir_all(loose.join("lib/cef")).unwrap();
+        assert!(
+            desktop_pair_for(&loose, false).unwrap().is_none(),
+            "already a desktop pack"
+        );
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

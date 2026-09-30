@@ -273,25 +273,37 @@ ALLOWED_ENVIRONMENT_READS = {
     "DEN_SERVE_SESSION_DIR": "den-serve's session directory until #8955 lands",
 }
 ENVIRONMENT_READ = re.compile(r"env::var(?:_os)?\(\s*([^)]*)\)")
+ENVIRONMENT_SCAN = re.compile(r"env::vars(?:_os)?\(")
+USE_STATEMENT = re.compile(r"\buse\s+[^;]*;", re.DOTALL)
+# An import that would let a read escape the literal `env::var("NAME")` form:
+# `var`/`var_os`/`vars` brought in from std::env, or std::env renamed.
+ENVIRONMENT_IMPORT = re.compile(
+    r"env::(?:\{[^}]*\bvars?(?:_os)?\b|vars?(?:_os)?\b)|\benv\s+as\b"
+)
 
 
-def environment_reads(crate: str) -> list[tuple[str, str]]:
-    reads = []
-    for source in sorted((REPO_ROOT / "rust" / "crates" / crate / "src").rglob("*.rs")):
-        text = source.read_text(encoding="utf-8")
-        for match in ENVIRONMENT_READ.finditer(text):
-            reads.append((str(source.relative_to(REPO_ROOT)), match.group(1).strip()))
-    return reads
+def environment_violations(text: str) -> list[str]:
+    """Environment reads in Rust source that could select behaviour."""
+    violations = []
+    for match in ENVIRONMENT_READ.finditer(text):
+        argument = match.group(1).strip()
+        if not argument.startswith('"') or argument.strip('"') not in ALLOWED_ENVIRONMENT_READS:
+            violations.append(f"env::var({argument})")
+    violations.extend(match.group(0) for match in ENVIRONMENT_SCAN.finditer(text))
+    for statement in USE_STATEMENT.finditer(text):
+        normalized = " ".join(statement.group(0).split())
+        if "env" in normalized and ENVIRONMENT_IMPORT.search(normalized):
+            violations.append(normalized)
+    return violations
 
 
 class EnvironmentReadTests(unittest.TestCase):
     def test_behaviour_is_not_selected_by_environment_variables(self) -> None:
         refused = [
-            f"{path}: env::var({argument})"
+            f"{source.relative_to(REPO_ROOT)}: {violation}"
             for crate in ENVIRONMENT_CHECKED_CRATES
-            for path, argument in environment_reads(crate)
-            if argument.strip('"') not in ALLOWED_ENVIRONMENT_READS
-            or not argument.startswith('"')
+            for source in sorted((REPO_ROOT / "rust" / "crates" / crate / "src").rglob("*.rs"))
+            for violation in environment_violations(source.read_text(encoding="utf-8"))
         ]
         self.assertEqual(
             refused,
@@ -299,13 +311,27 @@ class EnvironmentReadTests(unittest.TestCase):
             "select behaviour through the product manifest, a launch argument or a config file",
         )
 
-    def test_the_check_sees_a_behaviour_variable(self) -> None:
-        text = 'let output = std::env::var_os("RUSTY_RENDER_OUTPUT");'
-        self.assertEqual(
-            [match.group(1) for match in ENVIRONMENT_READ.finditer(text)],
-            ['"RUSTY_RENDER_OUTPUT"'],
-        )
+    def test_the_check_sees_every_way_to_read_a_behaviour_variable(self) -> None:
         self.assertNotIn("RUSTY_RENDER_OUTPUT", ALLOWED_ENVIRONMENT_READS)
+        for text in [
+            'let output = std::env::var_os("RUSTY_RENDER_OUTPUT");',
+            "let output = env::var(OUTPUT_VARIABLE);",
+            'use std::env::var;\nlet output = var("RUSTY_RENDER_OUTPUT");',
+            'use std::env::{self, var_os};\nlet output = var_os("RUSTY_RENDER_OUTPUT");',
+            'use std::{\n    env::var_os as read,\n    fs,\n};\nlet output = read("RUSTY_RENDER_OUTPUT");',
+            'use std::env as environment;\nlet output = environment::var("RUSTY_RENDER_OUTPUT");',
+            "for (name, value) in std::env::vars() {}",
+        ]:
+            self.assertNotEqual(environment_violations(text), [], text)
+
+    def test_platform_conventions_and_plain_env_imports_pass(self) -> None:
+        text = (
+            "use std::{env, fs};\n"
+            'let path = env::var_os("PATH");\n'
+            'let home = std::env::var_os("HOME");\n'
+            "let exe = env::current_exe();\n"
+        )
+        self.assertEqual(environment_violations(text), [])
 
 
 if __name__ == "__main__":
