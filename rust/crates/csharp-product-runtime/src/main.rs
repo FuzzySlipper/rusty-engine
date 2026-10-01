@@ -1,7 +1,9 @@
+#[cfg(unix)]
+use std::net::TcpListener;
 use std::{
     env, fs,
     io::{BufRead, Read, Write},
-    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    net::{Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -14,10 +16,11 @@ use csharp_product_runtime::{
     product_host_runtime_identity, CsharpProductContent, CsharpProductRuntime,
     CsharpProductRuntimeConfig,
 };
+#[cfg(unix)]
+use product_host::ProductHostRuntime;
 use product_host::{
     ProductHost, ProductHostAssetReload, ProductHostBundle, ProductHostBundleEntry,
-    ProductHostConfig, ProductHostLog, ProductHostLogConfig, ProductHostRuntime,
-    RunningProductHost,
+    ProductHostConfig, ProductHostLog, ProductHostLogConfig, RunningProductHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -28,10 +31,16 @@ use runtime_lifecycle::RuntimeInstanceId;
 
 #[cfg(feature = "desktop")]
 mod desktop;
+#[cfg(unix)]
 mod headless_browser;
 mod product_bundle;
 #[cfg(unix)]
 mod supervisor;
+
+/// Forwarded to a serving runtime after `rusty dev` restaged only UI or
+/// bundle content: the runtime re-reads them without restarting the product.
+/// A supervised runtime reads it on stdin on every platform.
+pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
 use product_bundle::ProductBundle;
 
 const MAX_PHYSICAL_MAPPINGS: usize = 256;
@@ -310,6 +319,10 @@ fn validate_headless_host(args: &Arguments) -> Result<(), String> {
     if args.product_path.is_none() {
         return Err("--headless requires a packaged --product bundle".to_owned());
     }
+    // The supervisor opens and closes the headless page; it runs on Unix.
+    if cfg!(not(unix)) {
+        return Err("--headless is not supported on this platform".to_owned());
+    }
     Ok(())
 }
 
@@ -320,6 +333,7 @@ fn print_line(line: &str) {
     let _ = writeln!(stdout, "{line}").and_then(|_| stdout.flush());
 }
 
+#[cfg(unix)]
 fn browser_url(address: SocketAddr) -> String {
     let ip = if address.ip().is_unspecified() {
         Ipv4Addr::LOCALHOST.into()
@@ -429,7 +443,7 @@ fn wait_for_process_termination(
         std::thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
-                if line == supervisor::RELOAD_ASSETS_COMMAND {
+                if line == RELOAD_ASSETS_COMMAND {
                     if let Some(reload) = &reload_assets {
                         reload();
                     }
@@ -616,6 +630,7 @@ struct Arguments {
     debugger: bool,
     headless: bool,
     /// The Chromium executable `--headless` opens; else one on `PATH`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     chromium: Option<PathBuf>,
     /// Chromium's runtime files for the desktop window; else `lib/cef` in the
     /// runtime pack.
@@ -1911,6 +1926,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn headless_browser_uses_loopback_for_a_wildcard_listener() {
         assert_eq!(

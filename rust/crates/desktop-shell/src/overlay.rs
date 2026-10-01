@@ -93,6 +93,9 @@ pub(crate) struct UiOverlay {
     /// centre, not by a pointer grab (X11).
     recentring: bool,
     focused: bool,
+    /// Windows creates the browser asynchronously: the page takes focus
+    /// once it exists.
+    focus_pending: bool,
     motion: (f64, f64),
 }
 
@@ -113,7 +116,7 @@ impl UiOverlay {
             size.height,
             window.scale_factor() as f32,
         )?;
-        page.focus()?;
+        let focus_pending = page.focus().is_err();
         Ok(Self {
             page,
             runtime,
@@ -123,6 +126,7 @@ impl UiOverlay {
             grabbed: false,
             recentring: false,
             focused: window.has_focus(),
+            focus_pending,
             motion: (0.0, 0.0),
         })
     }
@@ -142,6 +146,9 @@ impl UiOverlay {
     /// Chromium's work and the page's requests.
     pub(crate) fn pump(&mut self, window: &Window) {
         self.runtime.pump();
+        if self.focus_pending {
+            self.focus_pending = self.page.focus().is_err();
+        }
         while let Some(event) = self.page.poll_event() {
             match event {
                 NavigationEvent::LoadStart { .. } | NavigationEvent::LoadEnd { .. } => {

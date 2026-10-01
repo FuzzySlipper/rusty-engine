@@ -13,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 const render = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = path.resolve(render, '../csharp/Rusty.Engine/buildTransitive/rusty-engine-product-ui.d.ts');
-const tsc = path.join(render, 'node_modules/.bin/tsc');
+// TypeScript's own entry, run by this node: node_modules/.bin/tsc is a
+// shell script, and on Windows a .cmd shim execFileSync cannot start.
+const tsc = path.join(render, 'node_modules/typescript/bin/tsc');
 
 function declarations(entry, publicName, paths = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'rusty-product-ui-types-'));
@@ -22,6 +24,7 @@ function declarations(entry, publicName, paths = {}) {
     writeFileSync(config, JSON.stringify({
       compilerOptions: {
         declaration: true,
+        newLine: 'lf',
         emitDeclarationOnly: true,
         module: 'amd',
         moduleResolution: 'node10',
@@ -36,9 +39,9 @@ function declarations(entry, publicName, paths = {}) {
       },
       files: [path.join(render, entry)],
     }));
-    execFileSync(tsc, ['-p', config], { stdio: 'inherit' });
+    execFileSync(process.execPath, [tsc, '-p', config], { stdio: 'inherit' });
     let text = readFileSync(path.join(directory, 'out.d.ts'), 'utf8');
-    const entryName = path.relative(path.join(render, 'packages'), path.join(render, entry)).replace(/\.ts$/, '');
+    const entryName = path.relative(path.join(render, 'packages'), path.join(render, entry)).replace(/\.ts$/, '').split(path.sep).join('/');
     for (const [, name] of text.matchAll(/^declare module "([^"]+)"/gm)) {
       text = text.replaceAll(`"${name}"`, `"${name === entryName ? publicName : `${publicName}/internal/${name}`}"`);
     }

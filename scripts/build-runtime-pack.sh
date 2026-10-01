@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build one source-independent, matched Linux-x64 Engine development runtime.
+# Build one source-independent, matched Engine development runtime for this
+# machine: linux-x64, or win-x64 under Git Bash with the MSVC toolchain.
 # This intentionally packages only Engine-owned host/browser/debug artifacts;
 # product bundle layout and product staging remain outside this script.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUTPUT="$REPO_ROOT/target/runtime-pack/linux-x64"
+case "$(uname -s)" in
+  MINGW* | MSYS*) TARGET=win-x64 EXE=.exe ;;
+  *) TARGET=linux-x64 EXE= ;;
+esac
+OUTPUT="$REPO_ROOT/target/runtime-pack/$TARGET"
 
 usage() {
   echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop]" >&2
@@ -75,11 +80,14 @@ cargo build --locked --release -p csharp-engine-test-host --lib
 install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
 release="${CARGO_TARGET_DIR:-target}/release"
-install -m 755 "$release/rusty-product-host" "$STAGE/bin/rusty-product-host"
-install -m 755 "$release/rusty-live-debug" "$STAGE/bin/rusty-live-debug"
-install -m 755 "$release/rusty-scene-render" "$STAGE/bin/rusty-scene-render"
-install -m 755 "$release/rusty" "$STAGE/bin/rusty"
-install -D -m 755 "$release/librusty_engine_test_host.so" "$STAGE/lib/librusty_engine_test_host.so"
+for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty; do
+  install -m 755 "$release/$binary$EXE" "$STAGE/bin/$binary$EXE"
+done
+if [[ $TARGET == win-x64 ]]; then
+  install -D -m 755 "$release/rusty_engine_test_host.dll" "$STAGE/lib/rusty_engine_test_host.dll"
+else
+  install -D -m 755 "$release/librusty_engine_test_host.so" "$STAGE/lib/librusty_engine_test_host.so"
+fi
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
 install -m 644 render/artifacts/live-debug-panel/index.js \
@@ -100,22 +108,35 @@ if ((DESKTOP)); then
   # bundled Vulkan loader are left out (#8860): the overlay imports Chromium's
   # frames as GPU textures, which needs the same system GPU driver and Vulkan
   # loader the world renderer uses, so neither is ever loaded.
-  CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_linux_x86_64/libcef.so' -print -quit)")"
-  [[ -f "$CEF_DIST/libcef.so" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
   install -d "$STAGE/lib/cef/locales" "$STAGE/share/third-party/cef"
-  strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
-  for file in chrome_100_percent.pak chrome_200_percent.pak resources.pak icudtl.dat \
-    v8_context_snapshot.bin libEGL.so libGLESv2.so; do
+  CEF_RESOURCES=(chrome_100_percent.pak chrome_200_percent.pak resources.pak icudtl.dat v8_context_snapshot.bin)
+  if [[ $TARGET == win-x64 ]]; then
+    # Windows CEF carries no debug info in libcef.dll. chrome_elf is loaded
+    # with it; ANGLE (libEGL, libGLESv2) draws through D3D11 with
+    # d3dcompiler_47, and dxcompiler/dxil compile Dawn's D3D12 shaders.
+    CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_windows_x86_64/libcef.dll' -print -quit)")"
+    [[ -f "$CEF_DIST/libcef.dll" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
+    for file in libcef.dll chrome_elf.dll libEGL.dll libGLESv2.dll d3dcompiler_47.dll dxcompiler.dll dxil.dll; do
+      install -m 755 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
+    done
+  else
+    CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_linux_x86_64/libcef.so' -print -quit)")"
+    [[ -f "$CEF_DIST/libcef.so" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
+    strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
+    CEF_RESOURCES+=(libEGL.so libGLESv2.so)
+  fi
+  for file in "${CEF_RESOURCES[@]}"; do
     install -m 644 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
   done
-  chmod 755 "$STAGE/lib/cef/"*.so
+  [[ $TARGET == win-x64 ]] || chmod 755 "$STAGE/lib/cef/"*.so
   install -m 644 "$CEF_DIST/locales/en-US.pak" "$STAGE/lib/cef/locales/en-US.pak"
   install -m 644 "$CEF_DIST/CREDITS.html" "$STAGE/share/third-party/cef/CREDITS.html"
   # welding and grafting are MPL-2.0: their source ships with the binary, as
   # fidget-mesh's does.
   metadata=$(cargo metadata --format-version 1 --locked --all-features)
   for crate in welding grafting; do
-    manifest=$(jq -r --arg name "$crate" '.packages[] | select(.name == $name) | .manifest_path' <<<"$metadata" | head -n 1)
+    manifest=$(jq -r --arg name "$crate" '.packages[] | select(.name == $name) | .manifest_path' <<<"$metadata" | head -n 1 | tr -d '\r')
+    [[ $TARGET != win-x64 ]] || manifest=$(cygpath -u "$manifest")
     [[ -f "$manifest" ]] || { echo "source of $crate not found" >&2; exit 1; }
     cp -a "$(dirname "$manifest")" "$STAGE/share/third-party/$crate"
   done
@@ -127,7 +148,12 @@ cp -a rust/vendor/fidget-mesh "$STAGE/share/third-party/fidget-mesh"
 # render-wgpu embeds DejaVu Sans; its license travels with the binaries.
 install -D -m 0644 rust/crates/render-wgpu/fonts/LICENSE "$STAGE/share/third-party/dejavu-sans/LICENSE"
 
-if command -v objcopy >/dev/null 2>&1; then
+if [[ $TARGET == win-x64 ]]; then
+  # MSVC writes symbols beside each binary as a .pdb.
+  for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty; do
+    [[ ! -f "$release/${binary//-/_}.pdb" ]] || install -m 644 "$release/${binary//-/_}.pdb" "$STAGE/symbols/$binary.pdb"
+  done
+elif command -v objcopy >/dev/null 2>&1; then
   objcopy --only-keep-debug "$STAGE/bin/rusty-product-host" \
     "$STAGE/symbols/rusty-product-host.debug"
   objcopy --only-keep-debug "$STAGE/bin/rusty-live-debug" \
@@ -140,7 +166,7 @@ if command -v objcopy >/dev/null 2>&1; then
     "$STAGE/symbols/librusty_engine_test_host.so.debug"
 fi
 
-IDENTITY="$($STAGE/bin/rusty-product-host --identity)"
+IDENTITY="$("$STAGE/bin/rusty-product-host$EXE" --identity)"
 REVISION="$(git rev-parse HEAD)"
 # Source/compiler provenance travels with the symbols. Dirty contributor packs
 # identify that fact explicitly; published packs should come from a clean commit.
@@ -160,7 +186,7 @@ REVISION="$(git rev-parse HEAD)"
   printf '{\n'
   printf '  "artifact": "rusty.product.runtime-pack",\n'
   printf '  "schemaVersion": 1,\n'
-  printf '  "target": "linux-x64",\n'
+  printf '  "target": "%s",\n' "$TARGET"
   printf '  "sourceRevision": "%s",\n' "$REVISION"
   printf '  "runtime": %s,\n' "$IDENTITY"
   printf '  "files": [\n'

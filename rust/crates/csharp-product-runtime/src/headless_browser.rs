@@ -11,7 +11,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 static NEXT_PROFILE_ID: AtomicU64 = AtomicU64::new(0);
@@ -136,9 +136,9 @@ fn stop_browser_processes(child: &mut Child) -> std::io::Result<()> {
     {
         let process_group = format!("-{}", child.id());
         let termination = signal_process_group("TERM", &process_group);
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
         let mut wait_error = None;
-        while Instant::now() < deadline {
+        while std::time::Instant::now() < deadline {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) => thread::sleep(Duration::from_millis(25)),

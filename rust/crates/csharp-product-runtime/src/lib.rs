@@ -2232,10 +2232,10 @@ impl CsharpProductRuntime {
     /// Ends a harness's claim whose lease passed without input: a fresh
     /// binding clears what it held and hands input back to the page.
     fn expire_input_claim(&mut self) -> Result<Vec<RuntimePublication>, ProductHostRuntimeError> {
-        if !self
+        if self
             .input_claim
             .as_ref()
-            .is_some_and(|claim| claim.renewed.elapsed() >= claim.lease)
+            .is_none_or(|claim| claim.renewed.elapsed() < claim.lease)
         {
             return Ok(Vec::new());
         }

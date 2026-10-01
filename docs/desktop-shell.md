@@ -89,6 +89,9 @@ rusty dev --project <product.csproj> --output window
 - **Contributors.** `scripts/build-runtime-pack.sh --desktop` builds a pack
   from a checkout; pass it with `--runtime`.
   - Building needs `cmake` and `ninja`.
+  - On Windows it runs in Git Bash inside the MSVC developer environment
+    (`vcvars64.bat`), with MSVC's directory ahead of Git's own `link` on
+    `PATH`, and builds `target/runtime-pack/win-x64`.
   - The CEF build script downloads CEF into `CEF_PATH` (default `target/cef`).
   - Default workspace builds and the verify workflow never enable the
     feature.
@@ -127,9 +130,20 @@ An installer is chosen when a product asks for one.
   browser's rate on both.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than
   grabbing it, because during a grab XInput delivers every raw motion twice.
-- **Windows:** the device prefers DX12, which Chromium's shared textures
-  require. Not run here; `welding` records it working on hardware.
-- **macOS:** not built.
+- **Windows:** measured on an RTX 3080 with Windows 11
+  ([evidence](evidence/desktop-shell-windows/README.md)). The device is DX12,
+  which Chromium's shared textures require; Chromium's D3D11 frames are copied
+  into textures shared with it.
+  - `libcef.dll` is delay-loaded, so the pack keeps the Linux layout: the host
+    points the DLL search at `lib/cef` before Chromium's first use.
+  - The browser is created asynchronously; the page takes keyboard focus once
+    it exists.
+  - Chromium derives `KeyboardEvent.code` from the key's scan code (0xE0-prefixed
+    for extended keys), which the shell passes as the native key code.
+  - `--headless` is Unix-only: the supervisor that opens the headless page is.
+- **macOS:** not built and not in scope. `welding` lists an IOSurface→Metal
+  import, and the shell already runs the window on the main thread, as macOS
+  requires.
 
 Chromium runs unsandboxed: it shows the product's own first-party UI, never
 arbitrary pages. Packaging (installers, updater, signing) is outside this

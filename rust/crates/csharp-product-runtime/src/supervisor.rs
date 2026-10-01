@@ -25,6 +25,7 @@ use product_host::ProductHostLog;
 
 use crate::{
     browser_url, headless_browser, install_termination_signal_hook, Arguments, ProductLoader,
+    RELOAD_ASSETS_COMMAND,
 };
 
 /// Cold managed products can spend longer loading content than one callback.
@@ -36,9 +37,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// [`SERVE_COMMAND`] on stdin before it accepts from the shared listener.
 pub(crate) const RUNTIME_READY_LINE: &str = "RUSTY_RUNTIME ready";
 pub(crate) const SERVE_COMMAND: &str = "serve";
-/// Forwarded to a serving runtime after `rusty dev` restaged only UI or
-/// bundle content: the runtime re-reads them without restarting the product.
-pub(crate) const RELOAD_ASSETS_COMMAND: &str = "reload-assets";
 
 /// `rusty dev` writes one command over stdin after each restage: a new
 /// Product directory replaces the runtime, restaged UI or bundle content is

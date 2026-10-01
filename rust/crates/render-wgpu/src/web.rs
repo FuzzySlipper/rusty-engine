@@ -115,6 +115,7 @@ impl WebOverlay {
         height: u32,
         scale_factor: f32,
     ) -> Result<Self, String> {
+        let host = HostWgpuContext::new(gpu.device.clone(), gpu.queue.clone());
         let producer = welding::PlatformCefProducer::new(
             &runtime.runtime,
             welding::PlatformCefConfig {
@@ -129,6 +130,10 @@ impl WebOverlay {
                     ..Default::default()
                 },
             },
+            // Windows copies Chromium's D3D11 frames into textures shared
+            // with this device.
+            #[cfg(windows)]
+            &host,
         )
         .map_err(|e| e.to_string())?;
         let device = &gpu.device;
@@ -151,7 +156,7 @@ impl WebOverlay {
         });
         Ok(Self {
             producer,
-            host: HostWgpuContext::new(gpu.device.clone(), gpu.queue.clone()),
+            host,
             frame: None,
             bind_group: None,
             layout,

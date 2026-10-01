@@ -121,7 +121,7 @@ pub(crate) fn windows_key_code(code: KeyCode) -> Option<i32> {
 }
 
 /// The native key code Chromium maps to `KeyboardEvent.code`: the XKB
-/// keycode on Linux, the `WM_KEYDOWN` lParam on Windows, the virtual key
+/// keycode on Linux, the scan code on Windows, the virtual key
 /// code on macOS.
 pub(crate) fn native_key_code(code: KeyCode) -> i32 {
     let Some(scancode) = code.to_scancode() else {
@@ -131,13 +131,9 @@ pub(crate) fn native_key_code(code: KeyCode) -> i32 {
         // winit reports the evdev code; XKB keycodes are evdev + 8.
         scancode as i32 + 8
     } else if cfg!(windows) {
-        // Extended keys carry 0xE0 in the high byte of winit's scancode.
-        let extended = if scancode & 0xE000 == 0xE000 {
-            1 << 24
-        } else {
-            0
-        };
-        (((scancode & 0xFF) as i32) << 16) | extended | 1
+        // Chromium reads the scan code, 0xE0-prefixed for extended keys,
+        // which is winit's scancode as is.
+        scancode as i32
     } else {
         scancode as i32
     }
@@ -176,5 +172,13 @@ mod tests {
         // evdev KEY_W is 17, so its XKB keycode is 25.
         assert_eq!(native_key_code(KeyCode::KeyW), 25);
         assert_eq!(native_key_code(KeyCode::Escape), 9);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_codes_are_scan_codes() {
+        // Chromium maps these to KeyboardEvent.code; an lParam gives "".
+        assert_eq!(native_key_code(KeyCode::KeyW), 0x11);
+        assert_eq!(native_key_code(KeyCode::ArrowUp), 0xE048);
     }
 }
