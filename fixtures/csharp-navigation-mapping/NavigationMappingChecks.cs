@@ -13,11 +13,48 @@ internal static class NavigationMappingChecks
     private const uint MaximumVisited = 32;
     private const int FloorCells = 3;
     private const float FootClearance = 0.02f;
+    private const ulong NoisyFloorAsset = 9_301;
+    private const ulong NoisyFloorInstance = 9_302;
+    private const float NoisyFloorLength = 4;
+    // Each 0.5-unit column is a few nanometres higher than the last, as
+    // mesh floors are after float rounding.
+    private const float NoisyFloorRise = 1.0e-5f;
 
     internal static void Run(IEngineContext engine)
     {
         CheckFloor(engine, new VoxelAddress(-21, -5, 35));
         CheckFloor(engine, new VoxelAddress(37, 4, -29));
+        CheckNoisyMeshFloor(engine);
+    }
+
+    private static void CheckNoisyMeshFloor(IEngineContext engine)
+    {
+        using SpatialSession session = engine.Spatial.CreateSession(new(CellSize, ChunkSize, VoxelSurfaceMode.GreedyCubes));
+        Vector3[] vertices =
+        [
+            new(0, 0, 0), new(0, 0, 1),
+            new(NoisyFloorLength, NoisyFloorRise, 0), new(NoisyFloorLength, NoisyFloorRise, 1),
+        ];
+        Triangle[] triangles = [new(0, 1, 2), new(2, 1, 3)];
+        engine.Spatial.ApplyCollisionResidency(new CollisionResidencyRequest(
+            session,
+            new[] { new StaticMeshAsset(NoisyFloorAsset, default, 0, (uint)vertices.Length, 0, (uint)triangles.Length) },
+            vertices,
+            triangles,
+            new[] { new StaticMeshInstance(NoisyFloorInstance, NoisyFloorAsset, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One)) },
+            ReadOnlyMemory<ulong>.Empty,
+            ReadOnlyMemory<ulong>.Empty));
+        CollisionNavigationConfig config = new(GridId, CellSize, ChunkSize, 1, 0.1, 0.4, 45, MaximumCells);
+        engine.Spatial.ReplaceCollisionNavigation(new(session, new(0, -1, 0), new(NoisyFloorLength, 2, 1), config));
+
+        Vector3 west = new(0.25f, FootClearance, 0.25f);
+        Vector3 east = new(NoisyFloorLength - 0.25f, FootClearance, 0.25f);
+        NavigationStepResult rising = engine.Spatial.EvaluateNavigationStep(new(session, west, east, (float)CellSize, MaximumVisited));
+        Require(rising.Outcome == NavigationPathOutcome.Reached && rising.Path.Length == 8,
+            $"a floor rising by float noise was not level: {rising.Outcome}");
+        NavigationStepResult falling = engine.Spatial.EvaluateNavigationStep(new(session, east, west, (float)CellSize, MaximumVisited));
+        Require(falling.Outcome == NavigationPathOutcome.Reached && falling.Path.Length == 8,
+            $"a floor falling by float noise was not level: {falling.Outcome}");
     }
 
     private static void CheckFloor(IEngineContext engine, VoxelAddress first)

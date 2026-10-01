@@ -13,6 +13,8 @@ unaligned with cell and chunk boundaries. The fixture derives cells directly
 from world support positions, queries every reported cell, checks a three-cell
 route and its returned middle cell, and exercises world-position steering with
 standing clearance. Box-relative coordinates reproduce `StartNotWalkable`.
+A static-mesh floor whose columns differ by float noise must route both ways
+as level floor.
 
 The Engine mapping is world-aligned: floor each world coordinate divided by
 cell size, using the surface support height for Y. Publication bounds select

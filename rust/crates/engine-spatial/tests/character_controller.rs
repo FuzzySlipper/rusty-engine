@@ -256,6 +256,18 @@ fn character_capsule_edge_and_ordinary_controls_cross_a_quarter_meter_step() {
 }
 
 #[test]
+fn a_floor_rising_by_float_noise_is_level_for_an_edge() {
+    // Mesh floors differ by float noise between columns (#8865); a rise that
+    // small is no step, so the step solver must not be asked to climb it.
+    let rise = 1.0e-5;
+    let scene = ramp_scene(rise);
+    let config = CharacterControllerConfig::default();
+    let at = |z: f64| WorldPos::new(0.0, 1.0 - rise * z / 4.0, z);
+    assert!(character_edge_is_traversable(&scene, &config, at(-1.0), at(-1.5)).unwrap());
+    assert!(character_edge_is_traversable(&scene, &config, at(-1.5), at(-1.0)).unwrap());
+}
+
+#[test]
 fn level_motion_normalizes_diagonal_and_receipt_owns_continuation() {
     let scene = floor_scene();
     let (entity, mut state) = character(1.9);

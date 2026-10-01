@@ -828,10 +828,19 @@ pub fn character_edge_is_traversable(
     if translation.x.abs() <= f64::EPSILON && translation.z.abs() <= f64::EPSILON {
         return Ok(false);
     }
+    let tolerance = f64::from(
+        config
+            .shape
+            .contact_skin
+            .max(config.recovery.normal_nudge)
+            .max(0.001),
+    );
     // An upward edge must always run the step maneuver. A diagonal sweep could
     // otherwise cut through a riser in a way that the controller's
-    // rise-forward-drop solver would reject.
-    if end_support.y <= start_support.y
+    // rise-forward-drop solver would reject. A rise within the capsule's skin
+    // is level floor (mesh floors differ by float noise between columns), and
+    // the step solver refuses it as no higher tread.
+    if end_support.y <= start_support.y + tolerance
         && cast_world(
             &scene.projection,
             &[],
@@ -875,13 +884,6 @@ pub fn character_edge_is_traversable(
     let Some(landing) = landing else {
         return Ok(false);
     };
-    let tolerance = f64::from(
-        config
-            .shape
-            .contact_skin
-            .max(config.recovery.normal_nudge)
-            .max(0.001),
-    );
     Ok((landing.center.x - end.x).abs() <= tolerance
         && (landing.center.y - end.y).abs() <= tolerance
         && (landing.center.z - end.z).abs() <= tolerance)
