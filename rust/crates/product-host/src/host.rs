@@ -2577,11 +2577,19 @@ impl Drop for CounterGuard<'_> {
 }
 
 fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
-    counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            (current < maximum).then_some(current + 1)
-        })
-        .is_ok()
+    let mut current = counter.load(Ordering::Acquire);
+    while current < maximum {
+        match counter.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+    false
 }
 
 #[cfg(test)]

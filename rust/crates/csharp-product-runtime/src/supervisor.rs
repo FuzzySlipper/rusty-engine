@@ -327,11 +327,9 @@ impl RuntimeLaunch {
             "--serve-listener-fd".to_owned(),
             self.listener_fd.to_string(),
         ];
-        for (flag, root) in [("--persistence-root", &self.persistence_root)] {
-            if let Some(root) = root {
-                arguments.push(flag.to_owned());
-                arguments.push(path_argument(root)?);
-            }
+        if let Some(root) = &self.persistence_root {
+            arguments.push("--persistence-root".to_owned());
+            arguments.push(path_argument(root)?);
         }
         arguments.extend(self.forwarded.iter().cloned());
         Ok(arguments)
