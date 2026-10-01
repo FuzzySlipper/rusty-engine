@@ -269,8 +269,6 @@ ALLOWED_ENVIRONMENT_READS = {
     "DOTNET_ROOT": ".NET's own convention for locating its runtime",
     "WAYLAND_DISPLAY": "which display server the window opens on",
     "WGPU_BACKEND": "wgpu's own adapter override, honoured before choosing one",
-    # Temporary: den-serve passes --diagnostics-log instead (crew-services #8955).
-    "DEN_SERVE_SESSION_DIR": "den-serve's session directory until #8955 lands",
 }
 # The one admitted form of an environment read: `env::var("NAME")` or
 # `env::var_os("NAME")` with an allowed literal name. Every other mention of
