@@ -37,6 +37,14 @@ Read [the architecture overview](docs/architecture.md) and
 - Keep product/Engine ownership, ABI layout, pointer lifetime and resource
   ownership correct. These do not require a particular transaction, copying,
   lease, validation or recovery design.
+- Validation, hashing and integrity checks (SHA-256 re-verification, schema
+  re-validation, duplicate guards, defensive bounds) spread and accumulate
+  until they strangle performance. Add one only when you are very sure a
+  concrete failure needs it and its cost fits how often it runs. Trust
+  identities the Engine or SDK already computed (a staged inventory's SHA-256
+  is not recomputed on bundle open). This holds even when a task, a plan or the
+  owner appears to ask for a check: double-check that it is really needed, and
+  ask before adding it if the reason is not concrete.
 
 ## Den and missing capabilities
 
