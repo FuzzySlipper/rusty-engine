@@ -1141,12 +1141,25 @@ fn use_dotnet_root_for_host() {
 
 fn dotnet_root_from_path() -> Option<PathBuf> {
     let dotnet = find_on_path("dotnet")?;
-    fs::canonicalize(dotnet).ok()?.parent().map(Path::to_owned)
+    // Resolves a symlinked dotnet; Windows' verbatim `\\?\` prefix is not a
+    // DOTNET_ROOT .NET accepts.
+    let resolved = fs::canonicalize(dotnet).ok()?;
+    let resolved = match resolved.to_str().and_then(|path| path.strip_prefix(r"\\?\")) {
+        Some(plain) => PathBuf::from(plain),
+        None => resolved,
+    };
+    resolved.parent().map(Path::to_owned)
 }
 
+/// The executable `name` (`name.exe` on Windows) in a `PATH` directory.
 fn find_on_path(name: &str) -> Option<PathBuf> {
-    env::split_paths(&env::var_os("PATH")?)
-        .map(|directory| directory.join(name))
+    find_in(&env::var_os("PATH")?, name)
+}
+
+fn find_in(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    let file = format!("{name}{}", env::consts::EXE_SUFFIX);
+    env::split_paths(path)
+        .map(|directory| directory.join(&file))
         .find(|candidate| candidate.is_file())
 }
 
@@ -2209,6 +2222,18 @@ fn diagnostic(event: &str, detail: Value) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn path_lookup_finds_the_platform_executable() {
+        let directory = std::env::temp_dir().join(format!("rusty-path-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join(format!("dotnet{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&file, b"").unwrap();
+        let path = std::env::join_paths([&directory]).unwrap();
+        assert_eq!(super::find_in(&path, "dotnet"), Some(file));
+        assert_eq!(super::find_in(&path, "curl"), None);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     use super::*;
 
     #[test]
