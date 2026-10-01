@@ -91,18 +91,6 @@ pub(crate) fn refuse(
     0
 }
 
-/// Reports a refusal from a domain error that carries no Engine code.
-pub(crate) fn refuse_as(
-    code: &'static str,
-    detail: impl std::fmt::Debug,
-    receipt: *mut NativeOperationErrorReceipt,
-) -> i32 {
-    refuse(
-        &CsharpEngineServicesError::new(code, format!("{detail:?}")),
-        receipt,
-    )
-}
-
 /// Zeroes an operation receipt before a call writes it.
 pub(crate) fn clear_receipt(receipt: *mut NativeOperationErrorReceipt) {
     if !receipt.is_null() {

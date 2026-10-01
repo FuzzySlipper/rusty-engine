@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, ffi::c_void};
 
-use crate::operation_diagnostics::{clear_receipt, refuse, refuse_as};
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use svc_rng::{KeyedRngV1, RngSeed, ScopedRng};
 
@@ -76,7 +76,7 @@ unsafe extern "C" fn draw_keyed_rng(
             unsafe { *receipt = NativeKeyedRngReceipt { value } };
             ABI_OK
         }
-        Err(refusal) => refuse_as("CSHARP_RNG_RANGE", refusal, error),
+        Err(_) => 0,
     }
 }
 

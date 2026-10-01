@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::operation_diagnostics::{clear_receipt, refuse, refuse_as};
+use crate::operation_diagnostics::{clear_receipt, refuse};
 use csharp_engine_abi::*;
 use render_model::{RenderFrameDiff, RenderMaterialDescriptor, RenderMetadata, Transform};
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
@@ -1084,11 +1084,11 @@ unsafe extern "C" fn admit_asset(
     let request = unsafe { &*request };
     let body = match unsafe { borrowed_json(request.bytes) } {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_BYTES", refusal, error),
+        Err(_) => return 0,
     };
     let asset = match decode_voxel_asset(body) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_ASSET", refusal, error),
+        Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.insert_asset(asset) {
@@ -1117,11 +1117,11 @@ unsafe extern "C" fn load_asset_from_content(
     };
     let body = match std::str::from_utf8(&content.bytes) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_UTF8", refusal, error),
+        Err(_) => return 0,
     };
     let asset = match decode_voxel_asset(body) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_ASSET", refusal, error),
+        Err(_) => return 0,
     };
     match bridge.insert_asset(asset) {
         Some(handle) => {
@@ -1224,11 +1224,11 @@ unsafe extern "C" fn admit_object(
     let request = unsafe { &*request };
     let body = match unsafe { borrowed_json(request.bytes) } {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_BYTES", refusal, error),
+        Err(_) => return 0,
     };
     let object = match admit_voxel_object_json(body, Default::default()) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_OBJECT", refusal, error),
+        Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.insert_object(object) {
@@ -1257,11 +1257,11 @@ unsafe extern "C" fn load_object_from_content(
     };
     let body = match std::str::from_utf8(&content.bytes) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_UTF8", refusal, error),
+        Err(_) => return 0,
     };
     let object = match admit_voxel_object_json(body, Default::default()) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_OBJECT", refusal, error),
+        Err(_) => return 0,
     };
     match bridge.insert_object(object) {
         Some(handle) => {
@@ -1458,11 +1458,11 @@ unsafe extern "C" fn admit_annotation(
     let request = unsafe { &*request };
     let body = match unsafe { borrowed_json(request.bytes) } {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_BYTES", refusal, error),
+        Err(_) => return 0,
     };
     let layer = match decode_annotation_layer(body) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
+        Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let asset = match bridge.asset_arc(request.asset) {
@@ -1498,11 +1498,11 @@ unsafe extern "C" fn load_annotation_from_content(
     };
     let body = match std::str::from_utf8(&content.bytes) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_CONTENT_UTF8", refusal, error),
+        Err(_) => return 0,
     };
     let layer = match decode_annotation_layer(body) {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
+        Err(_) => return 0,
     };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
@@ -1570,7 +1570,7 @@ unsafe extern "C" fn query_annotation(
             },
         ) {
             Ok(value) => value,
-            Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
+            Err(_) => return 0,
         };
         (readout, annotation.revision)
     };
@@ -1794,7 +1794,7 @@ unsafe extern "C" fn set_annotation_tags(
     };
     let tags = match unsafe { borrowed_annotation_tags(request.tags, request.tags_len) } {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_ANNOTATION", refusal, error),
+        Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     match bridge.apply_annotation_edit(
@@ -1975,7 +1975,7 @@ unsafe extern "C" fn play_object_player(
     let rate = match VoxelObjectPlaybackRate::new(request.rate_numerator, request.rate_denominator)
     {
         Ok(value) => value,
-        Err(refusal) => return refuse_as("CSHARP_VOXEL_OBJECT_PLAYER", refusal, error),
+        Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let retained = match bridge.player_mut(request.player_handle) {
@@ -2113,7 +2113,7 @@ unsafe extern "C" fn read_object_player(
             unsafe { *output = native_player_readout(&posture) };
             ABI_OK
         }
-        Err(refusal) => refuse_as("CSHARP_VOXEL_OBJECT_PLAYER", refusal, error),
+        Err(_) => 0,
     }
 }
 
@@ -2140,7 +2140,7 @@ unsafe extern "C" fn sample_object_player(
             unsafe { *output = native_player_sample_readout(sample) };
             ABI_OK
         }
-        Err(refusal) => refuse_as("CSHARP_VOXEL_OBJECT_PLAYER", refusal, error),
+        Err(_) => 0,
     }
 }
 
