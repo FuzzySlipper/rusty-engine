@@ -52,6 +52,7 @@ internal static class NavigationMappingChecks
             MaximumCells = MaximumCells,
             Character = body,
             MaximumDrop = CellSize,
+            VerticalSearchCells = 1,
         };
     }
 
@@ -83,6 +84,13 @@ internal static class NavigationMappingChecks
         Require(wall.Samples.Length == 1 && !wall.BudgetExhausted
                 && wall.Samples.Span[0].Outcome == CollisionNavigationSampleOutcome.Support && wall.Samples.Span[0].StandingY == 1.5,
             "the wall column was not explained as one support on its top");
+
+        // Searching two levels finds the wall top without climbing it.
+        config = config with { VerticalSearchCells = 2 };
+        engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
+        CollisionNavigationEdgeReadout searched = engine.Spatial.ExplainCollisionNavigationEdge(new(session, beforeWall, wallTop));
+        Require(searched.Outcome == CollisionNavigationEdgeOutcome.RiseOverStep && !searched.Admitted,
+            $"a deeper search changed the step: {searched}");
 
         // A one-unit step and drop cross the wall.
         config = config with

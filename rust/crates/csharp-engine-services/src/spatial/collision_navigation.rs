@@ -22,6 +22,7 @@ pub(super) struct CollisionNavigationPolicy {
     pub(super) chunk_size: u32,
     pub(super) character: CharacterControllerConfig,
     pub(super) maximum_drop: f64,
+    pub(super) vertical_search_cells: u8,
     pub(super) supports_per_column: u32,
     pub(super) diagonal: bool,
 }
@@ -67,30 +68,29 @@ impl CollisionNavigationPolicy {
                 "collision navigation drop and snap distances must be finite and non-negative, with at least one support per column",
             ));
         }
+        let vertical_search_cells = u8::try_from(config.vertical_search_cells)
+            .map_err(|_| invalid("collision navigation searches at most 255 cell levels"))?;
         let policy = Self {
             grid_id: config.grid_id,
             cell_size: config.cell_size,
             chunk_size: config.chunk_size,
             character,
             maximum_drop: config.maximum_drop,
+            vertical_search_cells,
             supports_per_column: config.supports_per_column,
             diagonal: config.diagonal_neighbors,
         };
-        u8::try_from(policy.reach_cells())
-            .map_err(|_| invalid("collision navigation step or drop spans more than 255 cells"))?;
         Ok((policy, snap))
     }
 
-    /// How many cell levels up or down a neighbour is searched: enough for
-    /// the step up and the drop.
+    /// How many cell levels up or down a neighbour is searched.
     pub(super) fn reach_cells(&self) -> u32 {
-        let reach = f64::from(self.character.surface.maximum_step_height).max(self.maximum_drop);
-        (reach / self.cell_size).ceil().min(f64::from(u32::MAX)) as u32
+        u32::from(self.vertical_search_cells)
     }
 
     pub(super) fn neighbor_policy(&self) -> PlanarNavNeighborPolicy {
         PlanarNavNeighborPolicy {
-            max_step_cells: self.reach_cells() as u8,
+            max_step_cells: self.vertical_search_cells,
             diagonal: self.diagonal,
         }
     }
@@ -774,6 +774,7 @@ pub(super) unsafe extern "C" fn default_config(
         maximum_cells: 65_536,
         maximum_drop: f64::from(character.surface.maximum_step_height),
         character: native_character_config(character),
+        vertical_search_cells: 1,
         supports_per_column: 8,
         diagonal_neighbors: false,
         snap_above: DEFAULT_SNAP,
@@ -1007,6 +1008,7 @@ pub(super) fn flat_config(
         maximum_cells: 4096,
         maximum_drop: f64::from(character.surface.maximum_step_height),
         character: native_character_config(character),
+        vertical_search_cells: max_step_cells,
         supports_per_column: 8,
         diagonal_neighbors: false,
         snap_above: snap,
@@ -1474,12 +1476,27 @@ mod tests {
                 traversable
             );
         }
-        // Higher than the step is refused, and says why.
-        let config = flat_config(0.5, 1, 0.2, 1.5, 45.0);
+        // A deeper search finds more candidates but climbs no higher.
+        let mut config = flat_config(1.0, 1, 0.3, 1.6, 45.0);
+        config.vertical_search_cells = 3;
+        let (mut bridge, session) = publish_over(riser(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [3, 1, 2], [4, 2, 2]),
+            (NativeCollisionNavigationEdgeOutcome::Traversable, true)
+        );
+        // Higher than the step is refused, and says why: beyond the search it
+        // is no neighbour; within it, the rise is over the step.
+        let mut config = flat_config(0.5, 1, 0.2, 1.5, 45.0);
         let (mut bridge, session) = publish_over(riser(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
         assert_eq!(
             edge(&mut bridge, session, [7, 2, 4], [8, 4, 4]),
             (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+        config.vertical_search_cells = 2;
+        let (mut bridge, session) = publish_over(riser(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [7, 2, 4], [8, 4, 4]),
+            (NativeCollisionNavigationEdgeOutcome::RiseOverStep, false)
         );
     }
 
@@ -1500,6 +1517,21 @@ mod tests {
         assert_eq!(
             edge(&mut bridge, session, [3, 4, 2], [4, 1, 2]),
             (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+        // The drop alone does not widen the search, and the search alone
+        // does not lengthen the drop.
+        config.maximum_drop = 3.0;
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 8.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [3, 4, 2], [4, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+        config.maximum_drop = 1.0;
+        config.vertical_search_cells = 3;
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 8.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [3, 4, 2], [4, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::DropOverMaximum, false)
         );
         config.maximum_drop = 3.0;
         let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 8.0, 4.0]);

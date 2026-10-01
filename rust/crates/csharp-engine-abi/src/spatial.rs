@@ -665,6 +665,10 @@ pub struct NativeCollisionNavigationConfig {
     pub character: NativeCharacterControllerConfig,
     /// Farthest a one-way downward edge may fall, in metres.
     pub maximum_drop: f64,
+    /// How many cell levels up or down a neighbouring support is searched
+    /// for. The step height and drop decide which of those are edges; a
+    /// neighbour beyond this reach is never considered.
+    pub vertical_search_cells: u32,
     /// Surfaces sampled per X/Z column, top down; a deeper layer is unknown.
     pub supports_per_column: u32,
     /// Also connect diagonal neighbours. A diagonal is one path step, as an

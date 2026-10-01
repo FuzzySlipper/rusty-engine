@@ -468,13 +468,13 @@ at a time with `with`:
 | `GridId`, `CellSize`, `ChunkSize`, `MaximumCells` | The world-aligned grid and the most X/Z columns one publication may cover. | 1, 1 m, 16, 65,536 |
 | `Character` | The body navigation stands and moves with. Pass the `CharacterControllerConfig` the product's character uses: `Shape` radius, standing height and contact skin; `Surface` maximum slope, maximum step height (metres up), minimum step width and floor snap; `Recovery` tolerances. Its radius may be at most half a cell. | `DefaultCharacterControllerConfig()` |
 | `MaximumDrop` | Farthest a one-way downward edge falls, in metres. | The default step height |
+| `VerticalSearchCells` | How many cell levels up or down a neighbouring support is searched for. The step height and drop decide which of those are edges; raise this with them, since a support beyond it is never a neighbour. | 1 |
 | `SupportsPerColumn` | Surfaces sampled per X/Z column, top down. A deeper layer is unknown, not walkable. | 8 |
 | `DiagonalNeighbors` | Also connect diagonal neighbours. A diagonal is one path step, as an orthogonal one is. | off |
 | `SnapAbove`, `SnapBelow` | How far a query point may lie above or below a support and still stand on it. | 0.101 m |
 | `SnapAcross` | How far beyond the footprint of the cell containing a query point a support may be taken from. | 0 (that cell only) |
 
-Neighbours are searched as many cell levels up and down as the step height and
-the drop reach. Each X/Z column is sampled down through solid as well as air,
+Each X/Z column is sampled down through solid as well as air,
 so floors inside an enclosed volume (rooms stacked in rock) are found. On a
 slope the capsule's feet rest above the surface, by `(radius + skin) × (1/cos
 θ − 1)`, so any slope up to the maximum is a support. A riser up to the step
