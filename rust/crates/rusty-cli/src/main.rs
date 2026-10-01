@@ -968,7 +968,9 @@ impl RuntimePack {
         let root = if let Some(path) = &options.runtime {
             absolute(path)?
         } else if let Some(source) = &options.engine_source {
-            absolute(source)?.join("target/runtime-pack/linux-x64")
+            absolute(source)?
+                .join("target/runtime-pack")
+                .join(pair::TARGET)
         } else {
             runtime_beside_current_executable(&options.project)?
         };
@@ -992,7 +994,7 @@ impl RuntimePack {
                     )
                 })
             })?;
-        let host = root.join("bin/rusty-product-host");
+        let host = root.join(format!("bin/rusty-product-host{}", env::consts::EXE_SUFFIX));
         Ok(Self {
             root,
             host,
@@ -1006,7 +1008,7 @@ impl RuntimePack {
         {
             return Err("RUSTY_DEV_RUNTIME_IDENTITY: runtime manifest must be rusty.product.runtime-pack schemaVersion 1".to_owned());
         }
-        if self.manifest.target != "linux-x64" {
+        if self.manifest.target != pair::TARGET {
             return Err(format!(
                 "RUSTY_DEV_RUNTIME_TARGET: runtime pack target `{}` is not supported by this host",
                 self.manifest.target
@@ -1241,7 +1243,7 @@ fn desktop_pair_for(
 fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
 
-    let pair_cli = runtime.join("bin/rusty");
+    let pair_cli = runtime.join(format!("bin/rusty{}", env::consts::EXE_SUFFIX));
     if is_current_exe(&pair_cli) {
         return Ok(());
     }
@@ -1260,7 +1262,10 @@ fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), Stri
 fn pinned_pair_cli(project: Option<&Path>) -> Option<PathBuf> {
     let pin = Pin::find(&product_start(project).ok()?).ok()??;
     let pair = pair::installed(&pin.version).ok()??;
-    Some(pair.runtime_pack().join("bin/rusty"))
+    Some(
+        pair.runtime_pack()
+            .join(format!("bin/rusty{}", env::consts::EXE_SUFFIX)),
+    )
 }
 
 /// Shows the pinned pair's `rusty dev --help`: that copy runs `rusty dev`, so
@@ -1281,8 +1286,20 @@ fn delegate_help_to_pair_cli(pair_cli: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn delegate_help_to_pair_cli(_pair_cli: &Path) -> Result<(), String> {
-    Ok(())
+fn delegate_help_to_pair_cli(pair_cli: &Path) -> Result<(), String> {
+    if is_current_exe(pair_cli) {
+        return Ok(());
+    }
+    let status = Command::new(pair_cli)
+        .args(["dev", "--help"])
+        .status()
+        .map_err(|error| {
+            format!(
+                "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
+                pair_cli.display()
+            )
+        })?;
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn is_current_exe(path: &Path) -> bool {
@@ -1336,9 +1353,24 @@ fn delegated_arguments(options: &DevOptions) -> Vec<std::ffi::OsString> {
     arguments
 }
 
+/// Windows has no exec: run the pinned pair's `rusty dev` in this console,
+/// which delivers Ctrl+C to both, and exit with its code.
 #[cfg(not(unix))]
-fn delegate_to_pair_cli(_runtime: &Path, _options: &DevOptions) -> Result<(), String> {
-    Ok(())
+fn delegate_to_pair_cli(runtime: &Path, options: &DevOptions) -> Result<(), String> {
+    let pair_cli = runtime.join(format!("bin/rusty{}", env::consts::EXE_SUFFIX));
+    if is_current_exe(&pair_cli) {
+        return Ok(());
+    }
+    let status = Command::new(&pair_cli)
+        .args(delegated_arguments(options))
+        .status()
+        .map_err(|error| {
+            format!(
+                "RUSTY_DEV_RUNTIME: could not run the pinned pair's `{}`: {error}; run `rusty install` again if the cache was edited",
+                pair_cli.display()
+            )
+        })?;
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn build(options: &BuildOptions) -> Result<ExitCode, String> {

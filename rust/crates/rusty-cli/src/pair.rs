@@ -27,7 +27,12 @@ pub const PIN_ELEMENT: &str = "RustyEnginePackageVersion";
 pub const CONFIG_FILE: &str = "config.json";
 const DEFAULT_RELEASES: &str = "https://github.com/FuzzySlipper/rusty-engine/releases";
 const RELEASE_METADATA: &str = "pair-release.json";
-const TARGET: &str = "linux-x64";
+/// The platform this `rusty` installs pairs and runtime packs for.
+pub(crate) const TARGET: &str = if cfg!(windows) {
+    "win-x64"
+} else {
+    "linux-x64"
+};
 /// How many `releaseInfo.previous` links an update follows before it gives
 /// the source comparison instead.
 const MAX_NOTES_CHAIN: usize = 30;
