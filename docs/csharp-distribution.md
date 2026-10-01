@@ -135,7 +135,7 @@ same source revision.
   then builds and uploads the Windows archives for the Latest pair (or
   `--version`), and adds `targets."win-x64"` to its `pair-release.json`.
 - **Which pairs:** only pairs whose revision has the Windows support, from
-  0.1.0-dev.(this change's pair) on. Older pairs have no Windows archives.
+  0.1.0-dev.73f9e99ece2e on. Older pairs have no Windows archives.
 - **Running the build there:** the machine needs the MSVC build tools, Git Bash,
   Rust, .NET, Node and pnpm, cmake and ninja (crew-services
   `docs/playtest-windows.md` sets one up).
