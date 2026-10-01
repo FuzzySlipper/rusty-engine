@@ -4,6 +4,16 @@ set -euo pipefail
 # Verify a released C# SDK/runtime pair without consulting an Engine checkout.
 # The package, runtime manifest, host identity, and every payload hash must
 # describe the same immutable source revision and ABI before it is consumed.
+# It runs where the pair runs: Linux, or Git Bash on Windows.
+
+case "$(uname -s)" in
+    MINGW* | MSYS*)
+        pair_target=win-x64 pair_exe=.exe
+        # jq writes CRLF on Windows unless asked for binary output.
+        jq() { command jq -b "$@"; }
+        ;;
+    *) pair_target=linux-x64 pair_exe= ;;
+esac
 
 usage() {
     echo "usage: $(basename "$0") (--archive <pair.tar.gz> | --directory <extracted-pair>)" >&2
@@ -67,7 +77,7 @@ fi
 [[ -d "$pair_root" ]] || fail LAYOUT "pair directory is missing: $pair_root"
 manifest="$pair_root/pair-manifest.json"
 [[ -f "$manifest" ]] || fail LAYOUT "pair-manifest.json is missing"
-jq -e '.artifact == "rusty.engine.csharp-pair" and .schemaVersion == 1 and .target == "linux-x64"' "$manifest" >/dev/null \
+jq -e '.artifact == "rusty.engine.csharp-pair" and .schemaVersion == 1 and .target == $target' --arg target "$pair_target" "$manifest" >/dev/null \
     || fail MANIFEST "pair manifest is not a supported Linux-x64 C# pair"
 
 while IFS=$'\t' read -r path digest bytes; do
@@ -115,7 +125,7 @@ sdk_version=$(sed -n 's|.*<RustyEngineSdkPackageVersion>\([^<]*\)</RustyEngineSd
 
 runtime_manifest="$runtime_pack/runtime-manifest.json"
 [[ -f "$runtime_manifest" ]] || fail RUNTIME_METADATA "runtime-manifest.json is missing"
-jq -e '.artifact == "rusty.product.runtime-pack" and .schemaVersion == 1 and .target == "linux-x64"' "$runtime_manifest" >/dev/null \
+jq -e '.artifact == "rusty.product.runtime-pack" and .schemaVersion == 1 and .target == $target' --arg target "$pair_target" "$runtime_manifest" >/dev/null \
     || fail RUNTIME_METADATA "runtime manifest is not a supported Linux-x64 runtime pack"
 [[ $(jq -r '.sourceRevision' "$runtime_manifest") == "$(jq -r '.sourceRevision' "$manifest")" ]] \
     || fail IDENTITY "runtime source revision does not match pair source revision"
@@ -126,7 +136,7 @@ jq -e --slurpfile pair "$manifest" '
   .runtime.abi.fingerprint == $pair[0].package.fingerprint
 ' "$runtime_manifest" >/dev/null || fail IDENTITY "runtime ABI does not match SDK ABI metadata"
 
-host="$runtime_pack/bin/rusty-product-host"
+host="$runtime_pack/bin/rusty-product-host$pair_exe"
 [[ -x "$host" ]] || fail RUNTIME_HOST "runtime host is missing or not executable"
 host_identity=$($host --identity) || fail RUNTIME_HOST "runtime host --identity failed"
 jq -e --argjson host "$host_identity" '.runtime == $host' "$runtime_manifest" >/dev/null \

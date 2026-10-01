@@ -119,6 +119,27 @@ https://github.com/FuzzySlipper/rusty-engine/releases/latest/download/pair-relea
 https://github.com/FuzzySlipper/rusty-engine/releases/download/csharp-sdk-v<version>/pair-release.json
 ```
 
+### Windows
+
+A pair can also carry win-x64 archives:
+`rusty-engine-csharp-pair-<version>-win-x64.tar.gz` and
+`rusty-engine-desktop-pack-<version>-win-x64.tar.xz`, with their checksums.
+`pair-release.json` names them under `targets."win-x64"`. On Windows, `rusty
+install`, `update`, `status` and `dev` use these archives. The win-x64 pair
+holds the same SDK package as the Linux one and a runtime pack built at the
+same source revision.
+
+- **Where they are built:** on the Windows playtest machine over SSH, not in
+  CI. CI publishes the Linux pair as before; nothing waits on Windows.
+  `scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <path>`
+  then builds and uploads the Windows archives for the Latest pair (or
+  `--version`), and adds `targets."win-x64"` to its `pair-release.json`.
+- **Which pairs:** only pairs whose revision has the Windows support, from
+  0.1.0-dev.(this change's pair) on. Older pairs have no Windows archives.
+- **Running the build there:** the machine needs the MSVC build tools, Git Bash,
+  Rust, .NET, Node and pnpm, cmake and ninja (crew-services
+  `docs/playtest-windows.md` sets one up).
+
 Latest only makes an update available. A product keeps its explicit pin until
 someone runs `rusty update`. To use another copy of this releases layout,
 bootstrap with `install-rusty.sh --releases <url>`: it records the mirror in

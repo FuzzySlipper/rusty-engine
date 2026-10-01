@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build one immutable Linux-x64 C# SDK/runtime distribution pair.  The pair is
+# Build one immutable C# SDK/runtime distribution pair for this machine's
+# target (linux-x64, or win-x64 in Git Bash on Windows).  The pair is
 # intentionally derived from the checked-out commit rather than a caller's
 # version string, so it cannot silently relabel uncommitted or mismatched bits.
+# --sdk-feed reuses the SDK package another target's pair already published
+# for this revision: the package is the same on every target.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
+source "$script_dir/pair-platform.sh"
 output=""
 print_version=0
+reuse_feed=""
 
 usage() {
-    echo "usage: scripts/build-csharp-release-pair.sh (--output <new-directory> | --print-version)" >&2
+    echo "usage: scripts/build-csharp-release-pair.sh (--output <new-directory> [--sdk-feed <pair-sdk-feed>] | --print-version)" >&2
 }
 
 while (($#)); do
@@ -24,6 +29,11 @@ while (($#)); do
         --print-version)
             print_version=1
             shift
+            ;;
+        --sdk-feed)
+            (($# >= 2)) || { usage; exit 2; }
+            reuse_feed=$2
+            shift 2
             ;;
         --help)
             usage
@@ -57,7 +67,7 @@ if [[ -e "$output" ]]; then
 fi
 
 revision=$(git rev-parse HEAD)
-pair_name="rusty-engine-csharp-pair-$version-linux-x64"
+pair_name="rusty-engine-csharp-pair-$version-$pair_target"
 archive_name="$pair_name.tar.gz"
 archive_path="$output/$archive_name"
 checksum_path="$archive_path.sha256"
@@ -72,7 +82,12 @@ sdk_feed="$pair_root/sdk-feed"
 runtime_pack="$pair_root/runtime-pack"
 mkdir -p "$sdk_feed"
 
-sdk_package=$("$script_dir/pack-csharp-sdk.sh" "$version" "$sdk_feed" | tail -n 1)
+if [[ -n "$reuse_feed" ]]; then
+    install -m 644 "$reuse_feed/Rusty.Engine.$version.nupkg" "$sdk_feed/"
+    sdk_package="$sdk_feed/Rusty.Engine.$version.nupkg"
+else
+    sdk_package=$("$script_dir/pack-csharp-sdk.sh" "$version" "$sdk_feed" | tail -n 1)
+fi
 [[ -f "$sdk_package" ]] || {
     echo "RUSTY_ENGINE_PAIR_SDK_BUILD: SDK pack builder did not produce its declared package" >&2
     exit 1
@@ -117,7 +132,7 @@ pair_manifest="$pair_root/pair-manifest.json"
     printf '{\n'
     printf '  "artifact": "rusty.engine.csharp-pair",\n'
     printf '  "schemaVersion": 1,\n'
-    printf '  "target": "linux-x64",\n'
+    printf '  "target": "%s",\n' "$pair_target"
     printf '  "sourceRevision": "%s",\n' "$revision"
     printf '  "package": {"id":"Rusty.Engine","version":"%s","path":"sdk-feed/Rusty.Engine.%s.nupkg","repositoryType":"%s","repositoryUrl":"%s","repositoryCommit":"%s","sdkBuildIdentity":"%s","protocolVersion":%s,"fingerprint":"%s"},\n' "$version" "$version" "$package_repository_type" "$package_repository_url" "$package_commit" "$sdk_identity" "$sdk_protocol" "$sdk_fingerprint"
     printf '  "runtime": {"path":"runtime-pack","sourceRevision":"%s","abi":%s},\n' "$runtime_revision" "$(jq -c '.runtime.abi' "$runtime_manifest")"

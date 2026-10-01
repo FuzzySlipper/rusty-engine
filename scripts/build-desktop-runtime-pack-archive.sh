@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Build the desktop runtime pack for this exact revision and archive it beside
-# the C# release pair: rusty-engine-desktop-pack-<version>-linux-x64.tar.xz and
+# the C# release pair: rusty-engine-desktop-pack-<version>-<target>.tar.xz and
 # its .sha256. It is the pair's runtime pack built with the desktop shell and
 # Chromium's runtime (lib/cef), so its ABI fingerprint equals the pair's; the
 # default pack stays free of Chromium. `rusty dev` fetches it on the first
@@ -11,6 +11,7 @@ set -euo pipefail
 # usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory>
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
+source "$script_dir/pair-platform.sh"
 
 output=""
 while [[ $# -gt 0 ]]; do
@@ -41,14 +42,16 @@ fi
 
 revision=$(git rev-parse HEAD)
 version="0.1.0-dev.$(git rev-parse --short=12 HEAD)"
-name="rusty-engine-desktop-pack-$version-linux-x64"
+name="rusty-engine-desktop-pack-$version-$pair_target"
+libcef=libcef.so
+[[ $pair_target != win-x64 ]] || libcef=libcef.dll
 mkdir -p "$(dirname "$output")"
 stage=$(mktemp -d "$(dirname "$output")/.desktop-pack.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 
 "$script_dir/build-runtime-pack.sh" --desktop --output "$stage/$name" >/dev/null
 manifest="$stage/$name/runtime-manifest.json"
-if [[ "$(jq -r '.sourceRevision' "$manifest")" != "$revision" ]] || [[ ! -f "$stage/$name/lib/cef/libcef.so" ]]; then
+if [[ "$(jq -r '.sourceRevision' "$manifest")" != "$revision" ]] || [[ ! -f "$stage/$name/lib/cef/$libcef" ]]; then
     echo "RUSTY_ENGINE_DESKTOP_PACK_BUILD: the desktop pack is not this revision's, or has no Chromium runtime" >&2
     exit 1
 fi
