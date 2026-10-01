@@ -16,12 +16,19 @@ Native live-debug commands (require the ordinary live-debug opt-in):
 - `engine.time.advance MS`: positive duration up to 2000 ms, rounded up to fixed
   steps, returning actual advancement. Both held modes allow explicit advances.
 
-The browser shell exposes `window.__rustyPlaytest(request)` for crew-services'
-browser driver. Each operation runs Engine or product debug commands through
-`/__rusty/product/runtime/debug/execute`. The hook waits until the page has
-observed that command's outputs, and, for a command that draws, until the
-canvas shows the drawn frame. A client without a page can call the same debug
-commands directly.
+A playtest harness drives the runtime directly: debug commands through
+`/__rusty/product/runtime/debug/execute`, input through a
+[harness claim](#harness-input), and world frames through
+[tool captures](presentation-capture.md#captures). None of these needs a
+page or OS focus. crew-services' `engine` backend works this way, with no
+browser.
+
+A page is the lane for the product's DOM UI (focus, text entry, menus, the
+pointer-lock shim) and for composite screenshots of the world under the UI.
+For it, the browser shell exposes `window.__rustyPlaytest(request)`, which
+crew-services' browser backend calls. Each operation runs the same debug
+commands; the hook waits until the page has observed that command's outputs,
+and, for a command that draws, until the canvas shows the drawn frame.
 
 ## Harness input
 
@@ -67,11 +74,14 @@ Doom is the first provider. No ABI or handwritten product bridge is required.
 
 ## Time, drawing and camera
 
-Page operations: discover, observe, action, look, time, advance, drawing,
-frame, camera, targets, route, focus and flush, plus interaction, grid, probe,
-clearance and jump-plan when the product registers those modules.
-crew-services adds keyboard action orchestration, captures, surveys and
-recordings on top.
+The page's operations are discover, observe, action, look, time, advance,
+drawing, frame, camera, targets, route, focus and flush, plus interaction,
+grid, probe, clearance and jump-plan when the product registers those modules.
+Each maps onto the debug commands below, so a harness without a page runs the
+same commands itself; crew-services' engine backend answers the same
+operations that way (its `focus` reports that no page is involved).
+crew-services adds action orchestration, captures, surveys and recordings on
+top.
 
 The world is drawn by the runtime's renderer, so the observer camera, drawing
 mode and held time are runtime state that every attached page shares

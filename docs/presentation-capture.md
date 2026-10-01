@@ -69,7 +69,9 @@ Three captures are available, and they show different things:
 
 The stream draws at the most recent viewer's size, so a harness pulling
 `frames` and an attached page change each other's resolution; a harness
-uses `frames/capture` instead. Record the viewport with a page screenshot. Keep product overlays and diagnostics unless the
+uses `frames/capture` instead. Tool captures are how a harness sees the world
+(crew-services' engine backend names each by its step); a page screenshot is
+for checks that need the product UI in the image. Record the viewport with a page screenshot. Keep product overlays and diagnostics unless the
 capture says otherwise; `engine.renderer.hide` hides only the Engine metrics.
 
 ## Scene snapshots
