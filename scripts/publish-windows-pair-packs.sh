@@ -52,6 +52,9 @@ tar -xzf "$work/$pair-linux-x64.tar.gz" -C "$work" "$pair-linux-x64/sdk-feed"
 # The build runs in Git Bash inside the MSVC developer environment, with
 # MSVC's link.exe ahead of Git's own `link`.
 remote="C:/Users/$(ssh "$host" '$env:USERNAME' | tr -d '\r')/rusty-windows-pair/$version"
+# Git Bash paths: the pair scripts take a path not starting with / as relative.
+drive=${remote%%:*}
+posix="/${drive,,}${remote#*:}"
 cat > "$work/build.sh" <<EOF
 set -euo pipefail
 export PATH="\$(dirname "\$(command -v cl)"):\$HOME/AppData/Local/Microsoft/WinGet/Links:/c/Program Files/nodejs:\$HOME/AppData/Local/pnpm:\$PATH"
@@ -60,9 +63,9 @@ git fetch -q origin
 git checkout -q --force "$revision"
 git clean -q -fd
 pnpm install --frozen-lockfile --reporter=silent
-rm -rf "$remote/out"
-scripts/build-csharp-release-pair.sh --sdk-feed "$remote/sdk-feed" --output "$remote/out/pair"
-scripts/build-desktop-runtime-pack-archive.sh --output "$remote/out/desktop"
+rm -rf "$posix/out"
+scripts/build-csharp-release-pair.sh --sdk-feed "$posix/sdk-feed" --output "$posix/out/pair"
+scripts/build-desktop-runtime-pack-archive.sh --output "$posix/out/desktop"
 EOF
 cat > "$work/build.ps1" <<'EOF'
 # A .cmd file keeps cmd's quote stripping away from the paths with spaces.
