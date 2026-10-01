@@ -557,3 +557,13 @@ voxels or fixture callbacks to pass this check. Launch normally with
 `rusty-product-host --product <staged-Product-directory|product.rpak> --loader coreclr`
 without `--exercise`. Verify the product's actual startup and interactions
 through that host; fixture success is not evidence of gameplay correctness.
+
+### Requested scene shadows
+
+Set `RustyEngineProductSceneShadows` to `enabled` to render scene shadow maps
+for lights with `LightShadowIntent.Requested`. The default is `disabled`.
+This writes `renderer.lighting.shadows` in the staged product manifest and
+applies to streamed and native-window output, including skinned meshes and
+joint-attached meshes. Only requesting lights allocate maps: directional and
+spot lights use one 512-pixel map, point lights six. Ambient lights cannot cast
+shadows. Prefer a small number of authored shadow lights in dungeon scenes.

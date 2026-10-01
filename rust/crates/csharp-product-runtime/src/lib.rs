@@ -249,6 +249,12 @@ impl CsharpProductRuntimeConfig {
         self
     }
 
+    /// Select scene shadows for lights that explicitly request them.
+    pub fn with_scene_shadows(mut self, enabled: bool) -> Self {
+        self.renderer_options.shadows = enabled;
+        self
+    }
+
     /// Adds typed standard-runtime physical mappings to create-time host
     /// configuration. The product receives a copied descriptor; it does not
     /// own or mutate the runtime lane's mapping evaluation.

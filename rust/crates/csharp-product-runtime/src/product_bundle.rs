@@ -206,6 +206,10 @@ impl ProductBundle {
         self.renderer_lighting.enabled()
     }
 
+    pub(super) fn shadows_enabled(&self) -> bool {
+        self.renderer_lighting.shadows
+    }
+
     pub(super) fn browser_entries(&self) -> Result<Vec<ProductHostBundleEntry>, String> {
         let mut entries = Vec::new();
         self.collect_ui(&mut entries)?;
@@ -523,6 +527,8 @@ struct ManifestAudio {
 #[serde(rename_all = "camelCase")]
 struct ManifestRendererLighting {
     #[serde(default)]
+    shadows: Option<String>,
+    #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
 #[derive(Debug, Deserialize)]
@@ -559,6 +565,7 @@ impl ProductDefaultLights {
 }
 #[derive(Debug)]
 struct ProductRendererLighting {
+    shadows: bool,
     world: ProductDefaultLights,
     viewmodel: ProductDefaultLights,
 }
@@ -572,7 +579,18 @@ impl ProductRendererLighting {
     }
 
     fn from_manifest(value: ManifestRenderer) -> Result<Self, String> {
+        let shadows = match value.lighting.shadows.as_deref() {
+            None | Some("disabled") => false,
+            Some("enabled") => true,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.shadows",
+                    "must be enabled or disabled",
+                ))
+            }
+        };
         Ok(Self {
+            shadows,
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,
                 "renderer.lighting.defaultLights.world",
@@ -924,6 +942,33 @@ mod tests {
 
         let product = read(&root).expect("independent light modes admit");
         assert_eq!(product.default_lights(), (false, true));
+        assert!(!product.shadows_enabled());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_scene_shadow_selection() {
+        let root = fixture_root("scene-shadows");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"lighting\":{\"shadows\":\"enabled\"}}",
+            ),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap().shadows_enabled());
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"lighting\":{\"shadows\":\"auto\"}}"),
+        )
+        .unwrap();
+        assert!(read(&root)
+            .unwrap_err()
+            .contains("renderer.lighting.shadows"));
         fs::remove_dir_all(root).unwrap();
     }
 }

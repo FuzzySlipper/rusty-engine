@@ -784,6 +784,7 @@ impl Arguments {
             config = config
                 .with_input_cursor_mode(product.input_cursor_mode.native())
                 .with_default_lights(world_lights, viewmodel_lights)
+                .with_scene_shadows(product.shadows_enabled())
                 .with_audio_device_required(product.audio_device_required)
                 .with_product(&product.id, &product.title);
         }

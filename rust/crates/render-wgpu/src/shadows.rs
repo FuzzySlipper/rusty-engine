@@ -1,5 +1,5 @@
 //! Shadow maps for lights that request them, when the host enables shadows
-//! (`RendererOptions::shadows`; C# products do not enable it).
+//! (`RendererOptions::shadows`; products opt in through their manifest).
 //!
 //! Each shadowed light takes layers of one depth texture array: one for a
 //! directional or spot light, six for a point light. There is no light quota:
