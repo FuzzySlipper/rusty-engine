@@ -3,8 +3,10 @@
 Use retained `Graphics` lights for cave and torch illumination. They support
 point/spot attenuation and directional light. `ShadowIntent.Requested` draws
 shadow maps only when the renderer enables shadows (`render-wgpu`
-`RendererOptions::shadows`). The C# product runtime leaves them off, so
-requested shadows affect only the CPU sample below. Set
+`RendererOptions::shadows`). A C# product enables them for both streamed and
+window presentation with `RustyEngineProductSceneShadows` set to `enabled` in
+its project. The default is `disabled`; requesting a light's shadows alone does
+not enable the renderer. The CPU sample below uses each light's intent independently. Set
 `RustyEngineProductDefaultWorldLights` to `disabled` for a dark unlit world;
 otherwise the default neutral rig lights it. Emissive material
 color makes a surface visible but does not emit light onto other surfaces. Pair
