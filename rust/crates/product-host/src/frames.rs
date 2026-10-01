@@ -4,7 +4,10 @@
 //! one request at a time: `?after=<sequence>` answers with the latest frame
 //! newer than `sequence`, waiting for one when there is none yet, and `204 No
 //! Content` when none arrives in time. There is no history and no replay; a
-//! viewer that starts with `after=0` gets the latest frame. Because a viewer
+//! viewer that starts with `after=0` gets the latest frame. A runtime that
+//! `rusty dev` replaced numbers its frames from 1 again, so a cursor beyond
+//! any frame this runtime numbered is a viewer of the previous one, and is
+//! answered as `after=0`. Because a viewer
 //! asks for the next frame only when it can take one, a slow viewer skips
 //! frames instead of queueing them in socket buffers.
 //!
@@ -180,6 +183,7 @@ impl ProductHostFrameStream {
         timeout: Duration,
     ) -> Option<Arc<[u8]>> {
         let mut state = self.state();
+        let after = if after > state.sequence { 0 } else { after };
         let demand_changed = !state.watched() || size.is_some_and(|size| state.size != Some(size));
         if size.is_some() {
             state.size = size;
@@ -436,6 +440,16 @@ mod tests {
         stream.publish(frame(4));
         let skipped = stream.next_after(2, None, Duration::ZERO).unwrap();
         assert_eq!(sequence(&skipped), 4);
+    }
+
+    #[test]
+    fn a_cursor_from_a_replaced_runtime_gets_this_runtimes_latest_frame() {
+        let stream = ProductHostFrameStream::new();
+        stream.publish(frame(1));
+        stream.publish(frame(2));
+        // The page last saw frame 8096 of the runtime this one replaced.
+        let frame = stream.next_after(8096, None, Duration::ZERO).unwrap();
+        assert_eq!(sequence(&frame), 2);
     }
 
     #[test]

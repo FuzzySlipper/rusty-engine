@@ -95,6 +95,23 @@ moves them with the steps it admits. Performance metrics still use wall time.
 Media and UI playback have their own ownership; these controls concern world
 simulation and presentation.
 
+### After `rusty dev` replaces the runtime
+
+A full restage starts a new runtime incarnation, with a new runtime binding and
+fresh runtime state. Time is realtime again, the observer camera and drawing
+mode are cleared, claims are released and the step count starts over.
+- **The attached page recovers by itself.** It re-attaches to the new runtime's
+  output stream and takes its binding. The frame view follows the new
+  runtime's frames, whose sequence starts again at 1: a frame request after a
+  sequence the new runtime has not reached is answered with its latest frame.
+- **A harness re-reads.** It re-reads the binding (`discover`, or a fresh
+  attachment) and reselects `manual` or `action-driven` time before `advance`.
+  Its old binding's claims and input sequence are gone.
+- **`503`** means no runtime is serving: during the swap, or after a failed
+  restage until the next one succeeds.
+- **`422` from `debug/execute`** is a refused debug command (a usage or product
+  refusal), not a stale connection.
+
 See crew-services `docs/playtest.md` for CLI examples, evidence handling and
 shared-host/reset semantics. Raw keyboard input is unchanged; `assist act` is
 the bounded action that pairs physical input with manual advancement.

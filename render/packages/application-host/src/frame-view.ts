@@ -61,6 +61,31 @@ async function decodeFrame(frame: RustyApplicationStreamedFrame): Promise<ImageB
   throw new Error(`frame stream sent unknown format ${frame.format}`);
 }
 
+/** Where a viewer's frame pulls stand: the newest frame shown, and the next cursor to ask after. */
+export interface RustyApplicationFrameCursor {
+  readonly newest: number;
+  readonly nextAfter: number;
+}
+
+/**
+ * The cursor after a request for frames after `after` answered with frame
+ * `sequence`, and whether to show it. A frame never numbers at or below the
+ * cursor it answers unless the runtime restarted its numbering (`rusty dev`
+ * replaced it), so the viewer starts over from that frame instead of waiting
+ * for the old runtime's sequence. With two requests outstanding, an older
+ * frame that arrives late is not shown.
+ */
+export function advanceRustyApplicationFrameCursor(
+  cursor: RustyApplicationFrameCursor,
+  after: number,
+  sequence: number,
+): RustyApplicationFrameCursor & { readonly show: boolean } {
+  const { newest, nextAfter } = sequence <= after ? { newest: 0, nextAfter: 0 } : cursor;
+  const show = sequence > newest;
+  const shown = show ? sequence : newest;
+  return { show, newest: shown, nextAfter: Math.max(nextAfter + 1, shown) };
+}
+
 export interface RustyApplicationFrameView {
   readonly dispose: () => void;
 }
@@ -126,8 +151,7 @@ export function mountRustyApplicationFrameView(
   // the next frame and the other already waits for the frame after it, so a
   // request's setup is never between a frame being drawn and its display.
   const pull = (): void => {
-    let newest = 0;
-    let nextAfter = 0;
+    let cursor: RustyApplicationFrameCursor = { newest: 0, nextAfter: 0 };
     const ask = async (after: number): Promise<void> => {
       while (!pulling.signal.aborted) {
         const [width, height] = backingSize();
@@ -147,13 +171,13 @@ export function mountRustyApplicationFrameView(
           }
           if (!response.ok) throw new Error(`frame request refused: HTTP ${response.status}`);
           const frame = parseRustyApplicationStreamedFrame(new Uint8Array(await response.arrayBuffer()));
-          if (frame.sequence > newest) {
-            newest = frame.sequence;
+          const advanced = advanceRustyApplicationFrameCursor(cursor, after, frame.sequence);
+          cursor = { newest: advanced.newest, nextAfter: advanced.nextAfter };
+          if (advanced.show) {
             pending = frame;
             decodeLatest();
           }
-          nextAfter = Math.max(nextAfter + 1, newest);
-          void ask(nextAfter);
+          void ask(cursor.nextAfter);
           return;
         } catch {
           if (pulling.signal.aborted) return;
