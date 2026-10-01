@@ -131,7 +131,10 @@ An installer is chosen when a product asks for one.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than
   grabbing it, because during a grab XInput delivers every raw motion twice.
 - **Windows:** measured on an RTX 3080 with Windows 11
-  ([evidence](evidence/desktop-shell-windows/README.md)). The device is DX12,
+  ([evidence](evidence/desktop-shell-windows/README.md)). That machine is the
+  shared Windows test box: agents playtest on it through crew-services
+  (`environment: "windows-desktop"`), and its access, agent and build setup are
+  in crew-services `docs/playtest-windows.md`. The device is DX12,
   which Chromium's shared textures require; Chromium's D3D11 frames are copied
   into textures shared with it.
   - `libcef.dll` is delay-loaded, so the pack keeps the Linux layout: the host
