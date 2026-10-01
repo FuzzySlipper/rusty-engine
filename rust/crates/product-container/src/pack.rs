@@ -57,6 +57,16 @@ pub fn pack_product(staged: &Path, release: &Path, compress: bool) -> Result<Pac
     let ProductSource::Directory(staged) = &source else {
         return Err(Error::NotRegular(staged.display().to_string()));
     };
+    // Packing removes and rewrites parts of the release directory, so it must
+    // not be the staged Product, lie inside it, or contain it: that would
+    // delete the inputs or pack the previous release into the next.
+    let resolved = resolve(release)?;
+    if resolved.starts_with(staged) || staged.starts_with(&resolved) {
+        return Err(Error::Overlap {
+            staged: staged.clone(),
+            release: resolved,
+        });
+    }
     let manifest: Manifest =
         serde_json::from_slice(&source.read(MANIFEST)?).map_err(|error| Error::Corrupt {
             path: staged.join(MANIFEST),
@@ -131,14 +141,29 @@ pub fn pack_product(staged: &Path, release: &Path, compress: bool) -> Result<Pac
     })
 }
 
+/// `path` made absolute with symlinks and `..` resolved, also when its
+/// trailing directories do not exist yet.
+fn resolve(path: &Path) -> Result<PathBuf, Error> {
+    let absolute = std::path::absolute(path).map_err(Error::io(path))?;
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let name = existing
+            .file_name()
+            .ok_or_else(|| Error::InvalidPath(path.display().to_string()))?;
+        missing.push(name);
+        existing = existing.parent().expect("a named path has a parent");
+    }
+    let mut resolved = fs::canonicalize(existing).map_err(Error::io(existing))?;
+    resolved.extend(missing.iter().rev());
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn packs_manifest_ui_and_content_and_leaves_native_code_loose() {
-        let directory = tempfile::tempdir().unwrap();
-        let staged = directory.path().join("staged");
+    fn staged_fixture(staged: &Path) {
         for dir in ["ui", "content/rules", "coreclr"] {
             fs::create_dir_all(staged.join(dir)).unwrap();
         }
@@ -156,6 +181,13 @@ mod tests {
         )
         .unwrap();
         fs::write(staged.join("coreclr/Game.dll"), b"MZ").unwrap();
+    }
+
+    #[test]
+    fn packs_manifest_ui_and_content_and_leaves_native_code_loose() {
+        let directory = tempfile::tempdir().unwrap();
+        let staged = directory.path().join("staged");
+        staged_fixture(&staged);
 
         let release = directory.path().join("release");
         fs::create_dir_all(release.join("coreclr")).unwrap();
@@ -193,5 +225,43 @@ mod tests {
             Some("rules")
         );
         assert_eq!(container.entry("content/loose.txt").unwrap().bundle, None);
+    }
+
+    #[test]
+    fn a_release_directory_overlapping_the_staged_product_is_refused_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let staged = directory.path().join("staged");
+        staged_fixture(&staged);
+        let link = directory.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&staged, &link).unwrap();
+        let before = ProductSource::open(&staged).unwrap().files("").unwrap();
+        let mut overlapping = vec![
+            staged.clone(),
+            staged.join("release"),
+            staged.join("new/../release"),
+            directory.path().to_owned(),
+        ];
+        if cfg!(unix) {
+            overlapping.push(link.join("release"));
+        }
+        for release in overlapping {
+            let error = pack_product(&staged, &release, false).unwrap_err();
+            assert!(
+                matches!(error, Error::Overlap { .. } | Error::InvalidPath(_)),
+                "{release:?}: {error}"
+            );
+            assert_eq!(
+                ProductSource::open(&staged).unwrap().files("").unwrap(),
+                before
+            );
+            assert!(!staged.join("release").exists() && !staged.join("product.rpak").exists());
+        }
+        // A sibling directory still packs, and packs again the same way.
+        let release = directory.path().join("release");
+        for _ in 0..2 {
+            let report = pack_product(&staged, &release, false).unwrap();
+            assert_eq!(report.loose_files, ["coreclr/Game.dll"]);
+        }
     }
 }

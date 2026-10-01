@@ -49,6 +49,11 @@ pub enum Error {
     NotRegular(String),
     /// A path is not relative, `/`-separated and normalized.
     InvalidPath(String),
+    /// The release directory is the staged Product, inside it, or contains it.
+    Overlap {
+        staged: PathBuf,
+        release: PathBuf,
+    },
 }
 
 impl Error {
@@ -61,6 +66,7 @@ impl Error {
             Self::Missing(_) => "PRODUCT_SOURCE_MISSING",
             Self::NotRegular(_) => "PRODUCT_SOURCE_NOT_REGULAR",
             Self::InvalidPath(_) => "PRODUCT_SOURCE_PATH",
+            Self::Overlap { .. } => "PRODUCT_PACK_OVERLAP",
         }
     }
 
@@ -95,6 +101,12 @@ impl fmt::Display for Error {
                     "`{path}` must be a regular file or directory, not a symlink"
                 )
             }
+            Self::Overlap { staged, release } => write!(
+                f,
+                "release directory `{}` overlaps the staged Product `{}`; choose a directory outside it",
+                release.display(),
+                staged.display()
+            ),
             Self::InvalidPath(path) => write!(
                 f,
                 "`{path}` must be a relative, `/`-separated, normalized path"
