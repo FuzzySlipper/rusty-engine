@@ -813,7 +813,8 @@ mod tests {
     use super::*;
     use render_host_contracts::{
         RendererCameraBasis, RendererCameraPose, RendererCameraProjection,
-        RendererCompositionCamera,
+        RendererCompositionCamera, RendererCompositionView, RendererViewComposition,
+        RendererViewTarget, RendererViewport,
     };
 
     #[test]
@@ -896,5 +897,62 @@ mod tests {
         // A frame drawn before any camera report keeps the descriptor.
         let unreported = drawn_cameras(std::slice::from_ref(&descriptor), &[]);
         assert_eq!(unreported[0], json!(descriptor));
+    }
+
+    #[test]
+    fn the_reported_camera_is_the_primary_views_not_the_first_listed() {
+        let camera = |id: &str, x: f64| RendererCompositionCamera {
+            id: id.to_owned(),
+            pose: RendererCameraPose {
+                position: [x, 1.0, 0.0],
+                yaw_degrees: 0.0,
+                pitch_degrees: 0.0,
+            },
+            basis: None,
+            projection: RendererCameraProjection::Perspective {
+                fov_y_degrees: 60.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            motion: None,
+        };
+        let whole = RendererViewport {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        let view = |id: &str, camera_id: &str, target: RendererViewTarget, order: u64| {
+            RendererCompositionView {
+                id: id.to_owned(),
+                camera_id: camera_id.to_owned(),
+                target,
+                viewport: whole,
+                order,
+            }
+        };
+        // A minimap camera listed first, drawn offscreen and earlier.
+        let mut composition = RendererViewComposition {
+            cameras: vec![camera("minimap", 9.0), camera("player", 2.0)],
+            targets: Vec::new(),
+            views: vec![
+                view(
+                    "map",
+                    "minimap",
+                    RendererViewTarget::Offscreen {
+                        target_id: "map".to_owned(),
+                        target_revision: 1,
+                    },
+                    0,
+                ),
+                view("main", "player", RendererViewTarget::Primary, 1),
+            ],
+            presentations: Vec::new(),
+        };
+        let pose = primary_camera_pose(&composition).expect("a primary view");
+        assert_eq!(pose.position, [2.0, 1.0, 0.0]);
+        // No primary view: no pose to report or move from.
+        composition.views.remove(1);
+        assert!(primary_camera_pose(&composition).is_none());
     }
 }
