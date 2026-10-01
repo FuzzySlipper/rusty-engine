@@ -8,7 +8,7 @@ use gltf::animation::util::ReadOutputs;
 use gltf::animation::{Interpolation, Property};
 
 use crate::convert;
-use crate::resources::{decode_png, DecodedImage};
+use crate::resources::{decode_jpeg, decode_png, DecodedImage};
 
 pub struct GlbNode {
     pub name: Option<String>,
@@ -325,14 +325,15 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
         .textures()
         .map(|texture| {
             let image = match texture.source().map(|image| image.source()) {
-                Some(gltf::image::Source::View {
-                    view,
-                    mime_type: "image/png",
-                }) => {
+                Some(gltf::image::Source::View { view, mime_type }) => {
                     let buffer = data(view.buffer());
                     buffer
                         .and_then(|bytes| bytes.get(view.offset()..view.offset() + view.length()))
-                        .and_then(|png| decode_png(png).ok())
+                        .and_then(|bytes| match mime_type {
+                            "image/png" => decode_png(bytes).ok(),
+                            "image/jpeg" => decode_jpeg(bytes).ok(),
+                            _ => None,
+                        })
                 }
                 _ => None,
             };
@@ -444,6 +445,65 @@ impl Channel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn textured_glb(image: &[u8], mime_type: &str) -> Vec<u8> {
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[]}}],"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteLength":{}}}],"images":[{{"bufferView":0,"mimeType":"{}"}}],"textures":[{{"source":0}}],"materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}]}}"#,
+            image.len(),
+            image.len(),
+            mime_type
+        );
+        let mut json = json.into_bytes();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let mut bin = image.to_vec();
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let mut bytes = Vec::new();
+        for word in [
+            0x4654_6c67,
+            2,
+            (28 + json.len() + bin.len()) as u32,
+            json.len() as u32,
+            0x4e4f_534a,
+        ] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend(json);
+        bytes.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0x004e_4942u32.to_le_bytes());
+        bytes.extend(bin);
+        bytes
+    }
+
+    #[test]
+    fn embedded_jpeg_and_png_material_textures_keep_their_pixels() {
+        let rgb = [240, 20, 10].repeat(64);
+        let mut jpeg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpeg, 100)
+            .encode(&rgb, 8, 8, jpeg_encoder::ColorType::Rgb)
+            .unwrap();
+        let rgba = [240, 20, 10, 255].repeat(64);
+        let png = crate::resources::encode_png(8, 8, &rgba).unwrap();
+        for (bytes, mime) in [(&jpeg, "image/jpeg"), (&png, "image/png")] {
+            let model = decode(&textured_glb(bytes, mime)).unwrap();
+            assert_eq!(model.materials[0].base_color_texture, Some(0));
+            let image = model.textures[0]
+                .image
+                .as_ref()
+                .expect("embedded image decoded");
+            assert_eq!((image.width, image.height), (8, 8));
+            assert_eq!(image.rgba.len(), rgba.len());
+            for pixel in image.rgba.chunks_exact(4) {
+                for channel in 0..3 {
+                    assert!(pixel[channel].abs_diff(rgba[channel]) <= 3);
+                }
+                assert_eq!(pixel[3], 255);
+            }
+        }
+    }
 
     fn channel(interpolation: Interp, values: Vec<f32>) -> Channel {
         Channel {

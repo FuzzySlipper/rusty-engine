@@ -74,6 +74,31 @@ fn expand(pixels: &[u8], stride: usize, to_rgba: impl Fn(&[u8]) -> [u8; 4]) -> V
     pixels.chunks_exact(stride).flat_map(to_rgba).collect()
 }
 
+pub(crate) fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, String> {
+    use jpeg_decoder::PixelFormat;
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
+    let pixels = decoder.decode().map_err(|error| error.to_string())?;
+    let info = decoder.info().ok_or("jpeg has no image information")?;
+    let rgba = match info.pixel_format {
+        PixelFormat::RGB24 => expand(&pixels, 3, |p| [p[0], p[1], p[2], 255]),
+        PixelFormat::L8 => expand(&pixels, 1, |p| [p[0], p[0], p[0], 255]),
+        PixelFormat::L16 => expand(&pixels, 2, |p| {
+            let luminance = (u16::from_ne_bytes([p[0], p[1]]) >> 8) as u8;
+            [luminance, luminance, luminance, 255]
+        }),
+        PixelFormat::CMYK32 => expand(&pixels, 4, |p| {
+            // The decoder returns inverted CMYK components, including K.
+            let channel = |c: u8| (u16::from(c) * u16::from(p[3]) / 255) as u8;
+            [channel(p[0]), channel(p[1]), channel(p[2]), 255]
+        }),
+    };
+    Ok(DecodedImage {
+        width: u32::from(info.width),
+        height: u32::from(info.height),
+        rgba,
+    })
+}
+
 /// Vertex streams ready for upload. Colours (RGBA) are drawn only for static
 /// meshes; the other families clear them before upload.
 pub struct MeshStreams {

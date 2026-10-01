@@ -15,6 +15,7 @@ render-video.workspace = true
 wgpu = "30.0.1"
 glam.workspace = true
 png.workspace = true
+jpeg-decoder = { version = "0.3.2", default-features = false }
 # Animated mesh GLBs (the runtime admits them; this crate only reads them).
 gltf.workspace = true
 bytemuck.workspace = true
@@ -31,6 +32,7 @@ dpi = { version = "0.1.2", optional = true }
 web-overlay = ["dep:welding", "dep:dpi"]
 
 [dev-dependencies]
+jpeg-encoder = { version = "0.6", features = ["simd"] }
 # Voxel scene fixtures: real chunk payloads from the scene projector.
 render-projection.workspace = true
 engine-spatial.workspace = true

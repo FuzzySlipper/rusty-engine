@@ -90,6 +90,7 @@ For models, open the selected model member and pass it to
 or `Graphics.CreateStaticMeshFromContentReference` for Engine mesh JSON. Resolve named clip relationships
 against `Animation.ReadClips` and use ordinary playback/scrub APIs. Descriptors do
 not replace glTF hierarchy or grant product code a second animation loop.
+The native GLB renderer decodes embedded PNG and JPEG base-color textures.
 
 The packaged fixture `fixtures/csharp-portable-assets` contains equivalent loose
 and bundle sprite/model/material documents, ordered timing, explicit missing
