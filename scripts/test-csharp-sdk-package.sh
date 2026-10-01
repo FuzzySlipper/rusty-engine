@@ -328,9 +328,8 @@ PY
 # StaticMeshAsset is the authored JSON contract whose inline payload the
 # Engine packs on admission. The collision importer fixture remains a separate
 # source-format test and is not substituted for this runtime asset contract.
-cat > "$consumer_dir/content/mixed/triangle.static-mesh.json" <<'EOF'
-{"asset":"mesh/bundle-triangle","payload":{"layout":{"vertexCount":3,"indexCount":3,"indexWidth":"u32","attributes":[{"name":"position","components":3,"kind":"f32"},{"name":"normal","components":3,"kind":"f32"}]},"groups":[{"materialSlot":0,"start":0,"count":3}],"bounds":{"min":[0,0,0],"max":[1,1,0]},"source":{"kind":"inline","positions":[0,0,0,1,0,0,0,1,0],"normals":[0,0,1,0,0,1,0,0,1],"indices":[0,1,2]},"provenance":"staticAsset"},"materialSlots":[{"slot":0,"material":"material/bundle-triangle"}],"collision":{"kind":"visualOnly"}}
-EOF
+cp "$repo_root/fixtures/csharp-static-mesh/triangle.static-mesh.json" \
+  "$repo_root/fixtures/csharp-static-mesh/triangle.rstatmsh" "$consumer_dir/content/mixed/"
 
 # The only available package source is the fresh local feed. The SDK's source
 # tree is not an input to restore or build; consumer assets must not name it.
@@ -468,7 +467,7 @@ fi
 }
 jq -e '.bundles | map(.id) == ["mixed", "rules"] and
        ([.[] | select(.id == "mixed") | .files[].path] | sort) ==
-         ["NotoSans-LICENSE.txt", "NotoSans-Regular.woff2", "character.glb", "clip-pack.glb", "general.bin", "readme.txt", "texture.png", "tone.wav", "triangle.static-mesh.json", "wall.voxel.json"]' \
+         ["NotoSans-LICENSE.txt", "NotoSans-Regular.woff2", "character.glb", "clip-pack.glb", "general.bin", "readme.txt", "texture.png", "tone.wav", "triangle.rstatmsh", "triangle.static-mesh.json", "wall.voxel.json"]' \
     "$staged_product_directory/content/.rusty-bundles.json" >/dev/null || {
     echo "test-csharp-sdk-package: SDK staging did not generate the mixed bundle inventory." >&2
     exit 1

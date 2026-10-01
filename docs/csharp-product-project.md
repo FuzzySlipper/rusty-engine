@@ -325,7 +325,7 @@ Use the same asset admissions during Create or a later product update:
 | --- | --- | --- |
 | Images and textures | `Graphics.OpenResourceFromContent` | RGBA PNG |
 | Packed static geometry | `Graphics.OpenResourceFromContent` | `.rmesh` |
-| Authored static mesh | `Graphics.CreateStaticMeshFromContentReference` | StaticMeshAsset JSON with inline payload |
+| Authored static mesh | `Graphics.CreateStaticMeshFromContentReference` | StaticMeshAsset JSON with inline payload, or its [binary form](#binary-static-meshes) |
 | Animated meshes and animation packs | `Animation.OpenAnimatedMeshFromContent`, `OpenAnimationClipPackFromContent` | GLB, including same-bundle relative dependencies |
 | Fonts | `Graphics.OpenResourceFromContent` | WOFF2 |
 | Audio clips | `Audio.OpenClipFromContent` | WAV, Ogg Vorbis, Ogg Opus, MP3, FLAC ([memory policy](recorded-audio.md)) |
@@ -347,6 +347,31 @@ are directories in a staged Product and inventory entries in a [release
 container](#release-container); both open the same way. Closing a collection does not
 free independent GPU resources or force managed garbage collection. Bundle
 discovery does not produce URLs for DOM images.
+
+### Binary static meshes
+
+A large static mesh can skip the JSON parse. The same call admits a binary
+file that carries the JSON form's static mesh document, with its payload read
+from the Engine's packed mesh resource that follows it, recognised by its first
+eight bytes. Little-endian:
+
+| Field | Encoding |
+| --- | --- |
+| Magic | `RSTATMSH` (8 bytes) |
+| Descriptor length | u32 |
+| Descriptor | the static mesh JSON document, its `payload.source` a `resource` source: `resource` `mesh-resource/<hex>`, `contentHash` `sha256:<hex>` of the resource bytes, `byteLength`, `encoding` and each stream's byte offset |
+| Packed mesh resource | `byteLength` bytes, to the end of the file |
+
+The packed mesh resource is the Engine's `.rmesh` body: an 8-byte magic
+(`RMSHLE01` for positions and normals, `RMSHLE02` with UVs, `RMSHLE03` with
+colors; encoding `packedStreamsLeV1`/`V2`/`V3`), its total byte length and its
+payload count (1) as u32, then f32 positions, normals, UVs and colors and u32
+indices. Validation, refusal codes and the admitted renderer resource are those
+of the JSON form; a changed stream fails its `contentHash`
+(`CSHARP_STATIC_MESH_PACK`). A town-sized mesh of 100,000 vertices is 3.8 MB
+instead of 6.0 MB of JSON, and imports in about 3.5 ms instead of 41 ms.
+[`triangle.rstatmsh`](../fixtures/csharp-static-mesh/triangle.rstatmsh) is
+`triangle.static-mesh.json` in this form.
 
 ## Run and package
 

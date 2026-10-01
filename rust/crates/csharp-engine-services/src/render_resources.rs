@@ -20,12 +20,12 @@ use csharp_engine_abi::{
     NativeVec3,
 };
 use render_model::{
-    mesh_resource_content_hash, pack_mesh_resources, partition_mesh_spatially,
-    validate_mesh_resource_header, AnimatedMeshAsset, MeshAttribute, MeshAttributeKind,
-    MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshCollisionPolicy,
-    MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot, MeshPayloadDescriptor,
-    MeshPayloadSource, MeshProvenance, PackedMeshResource, StaticMeshAsset, TextureDescriptor,
-    TextureFilter, TexturePayloadSource, TextureWrap, MAX_MESH_RESOURCE_BYTES,
+    decode_mesh_resource_payload, mesh_resource_content_hash, pack_mesh_resources,
+    partition_mesh_spatially, validate_mesh_resource_header, AnimatedMeshAsset, MeshAttribute,
+    MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout,
+    MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
+    MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, PackedMeshResource, StaticMeshAsset,
+    TextureDescriptor, TextureFilter, TexturePayloadSource, TextureWrap, MAX_MESH_RESOURCE_BYTES,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -693,8 +693,9 @@ impl RenderResourceImports {
         }
     }
 
-    /// Packs a static mesh JSON document into one mesh resource, returned with
-    /// the payload and material slots that read it.
+    /// Packs a static mesh JSON document into one mesh resource, or admits a
+    /// binary static mesh (`RSTATMSH`) whose resource is already packed, and
+    /// returns it with the payload and material slots that read it.
     pub(crate) fn static_mesh(
         &mut self,
         content: RetainedContent,
@@ -712,15 +713,26 @@ impl RenderResourceImports {
             .is_some_and(|imported| Arc::ptr_eq(&imported.source, &content.bytes))
         {
             let bytes = content.bytes.as_ref();
-            let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
-                CsharpEngineServicesError::new("CSHARP_STATIC_MESH_CONTENT_JSON", error.to_string())
-            })?;
-            let mut packed = pack_mesh_resources(&[asset.payload], MAX_MESH_RESOURCE_BYTES)
+            let (asset, payload, packed_resource) = if bytes.starts_with(STATIC_MESH_MAGIC) {
+                decode_static_mesh(bytes)?
+            } else {
+                let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_STATIC_MESH_CONTENT_JSON",
+                        error.to_string(),
+                    )
+                })?;
+                let mut packed = pack_mesh_resources(
+                    std::slice::from_ref(&asset.payload),
+                    MAX_MESH_RESOURCE_BYTES,
+                )
                 .map_err(|error| {
                     CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
                 })?;
-            let payload = packed.payloads.pop().expect("one packed inline payload");
-            let packed_resource = packed.resources.pop().expect("one packed inline resource");
+                let payload = packed.payloads.pop().expect("one packed inline payload");
+                let packed_resource = packed.resources.pop().expect("one packed inline resource");
+                (asset, payload, packed_resource)
+            };
             let content_hash = &packed_resource.content_hash["sha256:".len()..];
             let browser_path = format!("content/engine-mesh/{content_hash}.rmesh");
             let resource = CsharpRenderResource::from_packed_mesh(browser_path, packed_resource);
@@ -1435,6 +1447,58 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
     Ok(value.to_owned())
 }
 
+/// The binary static mesh: the JSON form's descriptor, with its payload read
+/// from the Engine's packed mesh resource that follows it, so the streams need
+/// no parse and no repacking. Little-endian:
+///
+/// | field | encoding |
+/// |---|---|
+/// | magic | `RSTATMSH` (8 bytes) |
+/// | descriptor length | u32 |
+/// | descriptor | UTF-8 JSON static mesh document whose `payload.source` is a `resource` source naming the bytes below |
+/// | packed mesh resource | `payload.source.byteLength` bytes, to the end of the file (`RMSHLE01`–`03`) |
+///
+/// The resource is checked as the renderer reads it
+/// ([`decode_mesh_resource_payload`]): its identity is its content hash, and
+/// every stream must match the descriptor, as an inline payload must.
+const STATIC_MESH_MAGIC: &[u8; 8] = b"RSTATMSH";
+
+type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, PackedMeshResource);
+
+fn decode_static_mesh(bytes: &[u8]) -> Result<DecodedStaticMesh, CsharpEngineServicesError> {
+    let malformed =
+        |detail: String| CsharpEngineServicesError::new("CSHARP_STATIC_MESH_CONTENT_JSON", detail);
+    let header = STATIC_MESH_MAGIC.len() + 4;
+    let length = bytes
+        .get(STATIC_MESH_MAGIC.len()..header)
+        .map(|length| u32::from_le_bytes(length.try_into().expect("four bytes")) as usize)
+        .ok_or_else(|| malformed("binary static mesh is truncated".to_owned()))?;
+    let descriptor = bytes
+        .get(header..header.saturating_add(length))
+        .ok_or_else(|| malformed("binary static mesh descriptor is truncated".to_owned()))?;
+    let asset = serde_json::from_slice::<StaticMeshAsset>(descriptor)
+        .map_err(|error| malformed(error.to_string()))?;
+    let resource = &bytes[header + length..];
+    decode_mesh_resource_payload(&asset.payload, resource).map_err(|error| {
+        CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
+    })?;
+    let MeshPayloadSource::Resource {
+        resource: identity,
+        content_hash,
+        ..
+    } = &asset.payload.source
+    else {
+        unreachable!("a decoded payload names its resource");
+    };
+    let packed = PackedMeshResource {
+        resource: identity.clone(),
+        content_hash: content_hash.clone(),
+        bytes: resource.to_vec(),
+    };
+    let payload = asset.payload.clone();
+    Ok((asset, payload, packed))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1597,6 +1661,161 @@ pub(crate) mod tests {
         let unchanged =
             pack_animated_glb_closure("character.glb", CHARACTER_GLB, &BTreeMap::new()).unwrap();
         assert_eq!(unchanged.bytes, CHARACTER_GLB);
+    }
+
+    fn static_mesh_content(path: &str, bytes: Vec<u8>) -> RetainedContent {
+        RetainedContent {
+            path: path.to_owned(),
+            identity: Default::default(),
+            bytes: Arc::from(bytes),
+            transient: false,
+            files: Arc::default(),
+        }
+    }
+
+    fn static_mesh_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../fixtures/csharp-static-mesh")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    fn import_static_mesh(
+        bytes: Vec<u8>,
+    ) -> Result<
+        (
+            MeshPayloadDescriptor,
+            Vec<MeshMaterialSlot>,
+            CsharpRenderResource,
+        ),
+        String,
+    > {
+        RenderResourceImports::default()
+            .static_mesh(static_mesh_content("mesh", bytes))
+            .map_err(|error| error.code().to_owned())
+    }
+
+    #[test]
+    fn a_binary_static_mesh_admits_the_mesh_its_json_form_packs_to() {
+        let (json_payload, json_slots, json_resource) =
+            import_static_mesh(static_mesh_fixture("triangle.static-mesh.json")).unwrap();
+        // Written from the documented layouts by an independent script.
+        let (payload, slots, resource) =
+            import_static_mesh(static_mesh_fixture("triangle.rstatmsh")).unwrap();
+        assert_eq!((payload, slots), (json_payload, json_slots));
+        assert_eq!(resource.identity(), json_resource.identity());
+        assert_eq!(resource.bytes(), json_resource.bytes());
+        assert_eq!(resource.path(), json_resource.path());
+    }
+
+    #[test]
+    fn a_damaged_binary_static_mesh_is_refused_with_the_json_forms_codes() {
+        let binary = static_mesh_fixture("triangle.rstatmsh");
+        let refused = |bytes: Vec<u8>| import_static_mesh(bytes).unwrap_err();
+        assert_eq!(
+            refused(binary[..10].to_vec()),
+            "CSHARP_STATIC_MESH_CONTENT_JSON"
+        );
+        let mut long = binary.clone();
+        long[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(refused(long), "CSHARP_STATIC_MESH_CONTENT_JSON");
+        // A changed stream byte no longer matches the resource's identity.
+        let mut changed = binary.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        assert_eq!(refused(changed), "CSHARP_STATIC_MESH_PACK");
+        assert_eq!(
+            refused(binary[..binary.len() - 4].to_vec()),
+            "CSHARP_STATIC_MESH_PACK"
+        );
+    }
+
+    /// A town-sized static mesh (rusty-dagger's Charing ships 6.9 MB of JSON),
+    /// imported from each encoding.
+    /// `cargo test --release -p csharp-engine-services --lib measure_static_mesh -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing measurement"]
+    fn measure_static_mesh_encodings() {
+        let quads = 25_000_u32;
+        let mut positions = Vec::new();
+        let mut uvs = Vec::new();
+        let mut indices = Vec::new();
+        for quad in 0..quads {
+            // Fractional values, as imported geometry has, for a realistic JSON size.
+            let (x, z) = ((quad % 160) as f32 * 1.2537, (quad / 160) as f32 * 1.2491);
+            for (dx, dz) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                positions.extend([x + dx, ((quad % 7) as f32) * 0.4831 + 0.0173, z + dz]);
+                uvs.extend([dx * 0.9817 + 0.0091, dz * 0.9817 + 0.0091]);
+            }
+            let base = quad * 4;
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+        let vertices = positions.len() / 3;
+        let normals = [0.0_f32, 1.0, 0.0].repeat(vertices);
+        let attribute = |name, components| MeshAttribute {
+            name,
+            components,
+            kind: MeshAttributeKind::F32,
+        };
+        let asset = StaticMeshAsset {
+            asset: "mesh/charing".to_owned(),
+            payload: MeshPayloadDescriptor {
+                layout: MeshBufferLayout {
+                    vertex_count: vertices as u32,
+                    index_count: indices.len() as u32,
+                    index_width: MeshIndexWidth::U32,
+                    attributes: vec![
+                        attribute(MeshAttributeName::Position, 3),
+                        attribute(MeshAttributeName::Normal, 3),
+                        attribute(MeshAttributeName::Uv, 2),
+                    ],
+                },
+                groups: vec![MeshGroupDescriptor {
+                    material_slot: 0,
+                    start: 0,
+                    count: indices.len() as u32,
+                }],
+                bounds: MeshBoundsDescriptor {
+                    min: [0.0, 0.0, 0.0],
+                    max: [202.0, 3.0, 201.0],
+                },
+                source: MeshPayloadSource::Inline {
+                    positions,
+                    normals,
+                    uvs: Some(uvs),
+                    colors: None,
+                    indices,
+                },
+                provenance: MeshProvenance::StaticAsset,
+            },
+            material_slots: vec![MeshMaterialSlot {
+                slot: 0,
+                material: "material/charing".to_owned(),
+            }],
+            collision: MeshCollisionPolicy::VisualOnly,
+        };
+        let json = serde_json::to_vec(&asset).unwrap();
+        let mut packed = pack_mesh_resources(
+            std::slice::from_ref(&asset.payload),
+            MAX_MESH_RESOURCE_BYTES,
+        )
+        .unwrap();
+        let descriptor = serde_json::to_vec(&StaticMeshAsset {
+            payload: packed.payloads.pop().unwrap(),
+            ..asset
+        })
+        .unwrap();
+        let mut binary = STATIC_MESH_MAGIC.to_vec();
+        binary.extend((descriptor.len() as u32).to_le_bytes());
+        binary.extend(descriptor);
+        binary.extend(packed.resources.pop().unwrap().bytes);
+        for (label, bytes) in [("JSON", json), ("binary", binary)] {
+            let size = bytes.len();
+            let started = std::time::Instant::now();
+            import_static_mesh(bytes).unwrap();
+            println!("{label}: {size} bytes, imported in {:?}", started.elapsed());
+        }
     }
 
     #[test]

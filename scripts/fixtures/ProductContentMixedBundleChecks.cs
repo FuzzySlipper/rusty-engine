@@ -54,7 +54,7 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
         }
 
         using ProductContentBundle bundle = content.OpenBundle("mixed");
-        Require(bundle.Entries.Length == 10, "mixed inventory was discovered without loading its bodies at Create");
+        Require(bundle.Entries.Length == 11, "mixed inventory was discovered without loading its bodies at Create");
         Require(bundle.ReadText("readme.txt") == "bundle text body\n", "bundle text stays an ordinary product format");
 
         RenderResourceInfo textureInfo = OpenRenderResource(bundle, "texture.png", TextureFilter.Nearest);
@@ -248,6 +248,12 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
 
     private Appearance OpenStaticMesh(ProductContentBundle bundle)
     {
+        // The binary encoding of the same triangle admits through the same call.
+        using (ContentReference binary = bundle.OpenReference("triangle.rstatmsh"))
+        using (engine.Graphics.CreateStaticMeshFromContentReference(new StaticMeshContentReferenceRequest(
+            binary, new Color(0.3f, 0.6f, 0.9f, 1))))
+        {
+        }
         using ContentReference reference = bundle.OpenReference("triangle.static-mesh.json");
         return engine.Graphics.CreateStaticMeshFromContentReference(new StaticMeshContentReferenceRequest(
             reference, new Color(0.3f, 0.6f, 0.9f, 1)));
