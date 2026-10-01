@@ -57,3 +57,21 @@ bullets on the HUD.
 
 Dagger's cinematic and soundtrack were not run: Dagger pins another pair
 revision, which needs its own Windows pack.
+
+## A published pair on Windows (#8889)
+
+Pair `0.1.0-dev.73f9e99ece2e` carries win-x64 archives, built on the box with
+`scripts/publish-windows-pair-packs.sh` and listed under `targets."win-x64"`
+in its `pair-release.json`. With Doom pinned to it on the box:
+
+- `rusty install` downloaded and verified
+  `rusty-engine-csharp-pair-0.1.0-dev.73f9e99ece2e-win-x64.tar.gz`.
+- `rusty status`: exact pin and pair feed declared; the cache holds the pair;
+  dotnet 10.0.401, curl and tar found; ready.
+- `rusty dev --output window` resolved the pin, ran the pair's own `rusty`,
+  downloaded the win-x64 desktop pack, and opened Loading Bay — Doom E1M1:
+  "NVIDIA GeForce RTX 3080 (Dx12)", 59.9 fps
+  ([published-pair.png](published-pair.png)).
+
+The room study did not build against this pair: #9032 changed
+`CollisionNavigationConfig`, which `LoadingBayRoomStudy.cs` constructs.
