@@ -910,8 +910,8 @@ pub fn animation_rig_fingerprint(
 }
 
 fn push_json_string(output: &mut String, value: &str) {
-    // Joint IDs are restricted to ASCII identifiers, but delegate escaping to
-    // serde for correctness if this helper is ever reused with wider names.
+    // Joint identities are exact authored glTF node names. Preserve punctuation
+    // and Unicode through the canonical JSON escaping.
     output.push_str(&serde_json::to_string(value).expect("serializing a string cannot fail"));
 }
 
@@ -1016,11 +1016,7 @@ fn valid_sha256(value: &str) -> bool {
 }
 
 fn valid_joint_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    !value.trim().is_empty() && value.len() <= 4_096
 }
 
 fn valid_ordered_joint_ids(values: &[String]) -> bool {
@@ -1896,7 +1892,7 @@ mod tests {
     }
 
     #[test]
-    fn animation_clip_pack_rejects_joint_ids_with_path_characters() {
+    fn animation_clip_pack_preserves_authored_joint_names() {
         let hash = format!("sha256:{}", "a".repeat(64));
         let mut pack = AnimationClipPack {
             asset: "animation-clip-pack/test".to_owned(),
@@ -1928,7 +1924,19 @@ mod tests {
             },
         };
         assert_eq!(pack.validate(), Ok(()));
-        for invalid in ["mixamorig:Hips", "joint.part", "joint/path", "joint[0]"] {
+        for name in [
+            "mixamorig:Hips",
+            "joint.part",
+            "joint/path",
+            "joint[0]",
+            "手の骨",
+        ] {
+            pack.rig.joints[0].id = name.to_owned();
+            pack.rig.root_joint_id = name.to_owned();
+            pack.rig.structural_root_ids = vec![name.to_owned()];
+            assert_eq!(pack.validate(), Ok(()));
+        }
+        for invalid in ["", " "] {
             pack.rig.joints[0].id = invalid.to_owned();
             pack.rig.root_joint_id = invalid.to_owned();
             assert_eq!(pack.validate(), Err(AnimationClipPackError::InvalidRig));

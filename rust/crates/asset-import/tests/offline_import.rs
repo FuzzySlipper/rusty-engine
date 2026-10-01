@@ -2083,3 +2083,31 @@ fn glb_exact_byte_fast_path_preserves_embedded_buffer_validation() {
         .is_err());
     }
 }
+
+#[test]
+fn animated_glb_preserves_mixamo_names_for_joint_attachments() {
+    let source = rewrite_glb_json(ANIMATED_GLB, |document| {
+        for node in document["nodes"].as_array_mut().unwrap() {
+            if let Some(name) = node["name"].as_str() {
+                node["name"] = serde_json::json!(format!("mixamorig:{name}"));
+            }
+        }
+    });
+    let result = import_animated_glb_asset(
+        &SourceUri::RelativePath("actor.glb".to_owned()),
+        &source,
+        &ImportContext::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let mesh = result.assets.unwrap().animated_mesh;
+    let rig = mesh
+        .rig
+        .expect("authored names must not discard the named skin rig");
+    assert!(!rig.joints.is_empty());
+    assert!(rig
+        .joints
+        .iter()
+        .all(|joint| joint.id.starts_with("mixamorig:")));
+    rig.validate().unwrap();
+    assert_eq!(mesh.clips.len(), 3);
+}

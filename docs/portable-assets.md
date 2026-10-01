@@ -119,7 +119,8 @@ engine.Graphics.PublishChanges(new(facts, ReadOnlyMemory<ulong>.Empty,
 An attachment belongs to the child's fact: upserting the child without one
 returns it to its parent's root, and `PublishSnapshot` keeps it unchanged. The
 Engine checks the actual admitted rig, reports a missing or ambiguous joint
-with the requested name and object, and changes nothing on rejection. Joint names are case-sensitive;
+with the requested name and object, and changes nothing on rejection. Joint names are exact, case-sensitive authored glTF names, including namespace
+colons such as `mixamorig:RightHand`;
 unnamed or duplicate source joints are diagnosed by normal glTF admission.
 Arbitrary non-skin node/socket lookup is not implied by the joint API.
 
