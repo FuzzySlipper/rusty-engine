@@ -653,3 +653,126 @@ fn inspection_wireframe_outlines_the_posed_character() {
         "clearing inspection restores the solid body"
     );
 }
+
+/// The joint attachment character over a floor, lit by a directional light
+/// that requests a shadow.
+fn shadowed_character(harness: &mut Harness) {
+    character_scene(harness);
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/floor", [0.75, 0.75, 0.72, 1.0], None),
+        },
+        static_mesh(
+            "mesh/floor",
+            box_mesh([-4.0, -0.1, -4.0], [4.0, 0.0, 4.0], |_| 0),
+            "material/floor",
+        ),
+        instance(20, None, "mesh/floor", Transform::IDENTITY),
+        // A directional light casts from its node, so the node sits above the
+        // character, back along the light's direction.
+        group(23, None, transform([2.5, 4.0, 1.5], 0.0, [1.0; 3])),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(21),
+            parent: Some(RenderHandle::new(23)),
+            light: LightDescriptor::Directional {
+                color: [1.0, 0.97, 0.9],
+                intensity: 2.5,
+                enabled: true,
+                direction: [-0.5, -1.0, -0.3],
+                shadow_intent: LightShadowIntent::Requested,
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(22),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: 0.35,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+            },
+        },
+    ]);
+}
+
+/// Pixels the shadow darkens: the same frame drawn with and without shadows.
+fn shadowed_pixels(lit: &[u8], unshadowed: &[u8]) -> Vec<usize> {
+    lit.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(unshadowed.as_chunks::<4>().0)
+        .enumerate()
+        .filter(|(_, (lit, plain))| {
+            let sum = |pixel: &[u8; 4]| pixel[..3].iter().map(|&c| u32::from(c)).sum::<u32>();
+            sum(plain) > sum(lit) + 30
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+#[test]
+fn a_skinned_character_and_its_held_weapon_cast_shadows_that_follow_the_pose() {
+    let mut shadowed = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    let mut plain = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    shadowed_character(&mut shadowed);
+    shadowed_character(&mut plain);
+    // From above, so the shadows of the body, arms and weapon fall in view.
+    let view = camera([0.5, 5.5, 3.5], 0.0, -58.0);
+    let (first, pixels) = shadowed.render(&view);
+    assert_eq!(shadowed.renderer.table_counts().shadow_layers, 1);
+    assert!(first.shadow_draws > 0);
+    assert_screenshot("animated-shadows", &pixels);
+    let running = shadowed_pixels(&pixels, &plain.render(&view).1);
+    assert!(running.len() > 100, "{} shadowed pixels", running.len());
+
+    // The weapon on the hand casts too: hiding it removes its shadow.
+    let weapon_shown = |visible| RenderDiff::Update {
+        handle: RenderHandle::new(WEAPON),
+        transform: None,
+        material: None,
+        visible: Some(visible),
+        metadata: None,
+    };
+    for harness in [&mut shadowed, &mut plain] {
+        harness.apply(vec![weapon_shown(false)]);
+    }
+    let (unarmed_stats, pixels) = shadowed.render(&view);
+    assert!(unarmed_stats.shadow_draws > 0 && unarmed_stats.shadow_draws < first.shadow_draws);
+    let unarmed = shadowed_pixels(&pixels, &plain.render(&view).1);
+    assert!(
+        unarmed.len() < running.len(),
+        "{} shadowed pixels without the weapon, {} with it",
+        unarmed.len(),
+        running.len()
+    );
+
+    // Another pose re-renders the maps, and the shadow takes the new pose.
+    for harness in [&mut shadowed, &mut plain] {
+        harness.apply(vec![
+            weapon_shown(true),
+            RenderDiff::SetAnimatedMeshPlayback {
+                handle: RenderHandle::new(BODY),
+                playback: sample("run", 0.0),
+            },
+        ]);
+    }
+    let (posed, pixels) = shadowed.render(&view);
+    assert!(posed.shadow_draws > 0, "{posed:?}");
+    let other = shadowed_pixels(&pixels, &plain.render(&view).1);
+    let changed = running
+        .iter()
+        .filter(|pixel| other.binary_search(pixel).is_err())
+        .count();
+    assert!(
+        changed > running.len() / 10,
+        "{changed} of {} shadowed pixels moved with the pose",
+        running.len()
+    );
+}

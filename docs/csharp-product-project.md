@@ -566,4 +566,7 @@ This writes `renderer.lighting.shadows` in the staged product manifest and
 applies to streamed and native-window output, including skinned meshes and
 joint-attached meshes. Only requesting lights allocate maps: directional and
 spot lights use one 512-pixel map, point lights six. Ambient lights cannot cast
-shadows. Prefer a small number of authored shadow lights in dungeon scenes.
+shadows. A directional light casts from its node, one unit up, over a box 10
+units across: parent it to a node above the shaded area and back along the
+light's direction, or casters above the node fall outside its map. Prefer a
+small number of authored shadow lights in dungeon scenes.
