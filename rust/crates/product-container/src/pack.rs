@@ -50,8 +50,9 @@ pub struct PackReport {
 /// the UI root and the content root, with bundle membership from the staged
 /// bundle inventory. Every other staged file (CoreCLR assemblies, the
 /// NativeAOT module) is copied loose beside it, replacing the release's
-/// previous copy of each top-level directory.
-pub fn pack_product(staged: &Path, release: &Path) -> Result<PackReport, Error> {
+/// previous copy of each top-level directory. With `compress`, files that zstd
+/// shrinks enough are stored compressed (see [`write`]).
+pub fn pack_product(staged: &Path, release: &Path, compress: bool) -> Result<PackReport, Error> {
     let source = ProductSource::open(staged)?;
     let ProductSource::Directory(staged) = &source else {
         return Err(Error::NotRegular(staged.display().to_string()));
@@ -104,7 +105,7 @@ pub fn pack_product(staged: &Path, release: &Path) -> Result<PackReport, Error> 
 
     fs::create_dir_all(release).map_err(Error::io(release))?;
     let container = release.join(CONTAINER_NAME);
-    let report = write(&container, entries, bundles)?;
+    let report = write(&container, entries, bundles, compress)?;
     let tops: BTreeSet<&str> = loose
         .iter()
         .map(|path| path.split('/').next().unwrap_or(path))
@@ -159,7 +160,7 @@ mod tests {
         let release = directory.path().join("release");
         fs::create_dir_all(release.join("coreclr")).unwrap();
         fs::write(release.join("coreclr/Stale.dll"), b"old").unwrap();
-        let report = pack_product(&staged, &release).unwrap();
+        let report = pack_product(&staged, &release, false).unwrap();
         assert_eq!(report.packed_files, 4);
         assert_eq!(report.loose_files, ["coreclr/Game.dll"]);
         assert!(!release.join("coreclr/Stale.dll").exists());

@@ -205,8 +205,9 @@ pub fn write_scene_snapshot<'a>(
             body: Body::Bytes(bytes),
         });
     }
-    let written =
-        product_container::write(path, entries, Vec::new()).map_err(|error| error.to_string())?;
+    // Raw, so a reader borrows every resource from the map.
+    let written = product_container::write(path, entries, Vec::new(), false)
+        .map_err(|error| error.to_string())?;
     Ok(SceneSnapshotReport {
         path: path.display().to_string(),
         bytes: written.bytes,
@@ -276,11 +277,11 @@ impl SceneSnapshot {
         let json = |name: &str| {
             container
                 .get(name)
-                .ok_or_else(|| format!("{}: snapshot has no {name}", path.display()))
+                .map_err(|error| format!("{}: {error}", path.display()))
         };
-        let metadata = serde_json::from_slice(json(METADATA)?)
+        let metadata = serde_json::from_slice(&json(METADATA)?)
             .map_err(|error| format!("{METADATA}: {error}"))?;
-        let changes = serde_json::from_slice(json(CHANGES)?)
+        let changes = serde_json::from_slice(&json(CHANGES)?)
             .map_err(|error| format!("{CHANGES}: {error}"))?;
         Ok(Self {
             container,
@@ -305,9 +306,7 @@ impl SceneSnapshot {
 
 impl ResourceSource for SceneSnapshot {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
-        self.container
-            .get(&format!("{RESOURCES}/{identity}"))
-            .map(Cow::Borrowed)
+        self.container.get(&format!("{RESOURCES}/{identity}")).ok()
     }
 }
 

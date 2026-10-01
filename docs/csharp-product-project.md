@@ -468,11 +468,17 @@ file paths. The container is a header, each file's bytes at a 64-byte-aligned
 offset, and an inventory of path, length, SHA-256 and bundle membership; the
 host maps it read-only and reads the manifest, UI, content and bundles from it
 as it reads a loose directory. The inventory's SHA-256 is each file's identity;
-there is no second checksum, compression or version field (a pair reads its
-own output). A missing magic, a truncated file or an inconsistent inventory
-stops the host at start with `PRODUCT_CONTAINER_NOT_A_CONTAINER`,
-`PRODUCT_CONTAINER_TRUNCATED` or `PRODUCT_CONTAINER_CORRUPT`. `rusty dev`
-keeps the loose directory, so a UI or bundle restage still reloads in place.
+there is no second checksum or version field (a pair reads its own output). A
+missing magic, a truncated file or an inconsistent inventory stops the host at
+start with `PRODUCT_CONTAINER_NOT_A_CONTAINER`, `PRODUCT_CONTAINER_TRUNCATED`
+or `PRODUCT_CONTAINER_CORRUPT`. `rusty dev` keeps the loose directory, so a UI
+or bundle restage still reloads in place.
+
+Files are stored raw, so the host borrows them from the mapped file. `--pack
+--compress` stores each file that zstd shrinks by at least a tenth compressed
+instead (JSON and other text; images, audio and video stay raw), and the host
+decompresses it when it reads the file. That suits a product with much JSON
+content: it trades a smaller release for decompression at startup.
 
 The package and runtime pack carry exact generated ABI identities. A mismatch
 is rejected before product construction. Use a package and runtime pack built

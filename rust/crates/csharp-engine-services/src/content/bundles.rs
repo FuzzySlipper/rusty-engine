@@ -541,6 +541,12 @@ mod tests {
 
     #[test]
     fn packed_bundles_open_with_the_loose_identity() {
+        for compress in [false, true] {
+            packed_bundle_parity(compress);
+        }
+    }
+
+    fn packed_bundle_parity(compress: bool) {
         use product_container::{write, Body, Bundle, NewEntry};
         let directory = tempfile::tempdir().unwrap();
         fixture(directory.path());
@@ -561,7 +567,7 @@ mod tests {
             id: "rules".into(),
             root: "content/rules".into(),
         }];
-        write(&out, entries, bundles).unwrap();
+        write(&out, entries, bundles, compress).unwrap();
         let packed =
             ProductContentBundles::admit(&ProductSource::open(&out).unwrap(), "content").unwrap();
         let loose = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();

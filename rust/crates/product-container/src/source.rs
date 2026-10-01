@@ -70,10 +70,7 @@ impl ProductSource {
                 }
                 fs::read(&file).map(Cow::Owned).map_err(Error::io(file))
             }
-            Self::Container { container, .. } => container
-                .get(path)
-                .map(Cow::Borrowed)
-                .ok_or_else(|| Error::Missing(path.to_owned())),
+            Self::Container { container, .. } => container.get(path),
         }
     }
 
@@ -189,9 +186,10 @@ mod tests {
         fs::write(root.join("ui/main.js"), b"export {}").unwrap();
         fs::write(root.join("ui/assets/a.css"), b"a{}").unwrap();
         fs::write(root.join("content/rules/a.json"), b"{\"id\":1}").unwrap();
+        fs::write(root.join("content/table.json"), "[1,2,3],".repeat(4096)).unwrap();
     }
 
-    fn packed(root: &Path, out: &Path) {
+    fn packed(root: &Path, out: &Path, compress: bool) {
         let source = ProductSource::open(root).unwrap();
         let entries = source
             .files("")
@@ -207,19 +205,26 @@ mod tests {
             id: "rules".into(),
             root: "content/rules".into(),
         }];
-        write(out, entries, bundles).unwrap();
+        write(out, entries, bundles, compress).unwrap();
     }
 
     #[test]
     fn loose_and_packed_list_and_read_the_same_files() {
+        for compress in [false, true] {
+            parity(compress);
+        }
+    }
+
+    fn parity(compress: bool) {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("product");
         loose(&root);
         let out = directory.path().join("release.rpak");
-        packed(&root, &out);
+        packed(&root, &out, compress);
         let loose = ProductSource::open(&root).unwrap();
         let packed = ProductSource::open(&out).unwrap();
-        assert!(packed.container().is_some());
+        let table = packed.container().unwrap().entry("content/table.json");
+        assert_eq!(table.unwrap().zstd_length.is_some(), compress);
         assert_eq!(
             packed.native_root(),
             fs::canonicalize(directory.path()).unwrap()

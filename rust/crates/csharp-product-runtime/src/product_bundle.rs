@@ -783,7 +783,7 @@ mod tests {
         let root = fixture_root("packed");
         write_manifest(&root, "native/product.so");
         let release = root.with_extension("release");
-        let report = product_container::pack_product(&root, &release).unwrap();
+        let report = product_container::pack_product(&root, &release, false).unwrap();
         assert_eq!(
             report.loose_files,
             [

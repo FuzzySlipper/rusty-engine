@@ -504,6 +504,8 @@ struct BuildOptions {
     aot: bool,
     /// Release directory for the packed Product.
     pack: Option<PathBuf>,
+    /// Store files zstd shrinks enough compressed in the packed Product.
+    compress: bool,
 }
 
 #[derive(Debug)]
@@ -687,6 +689,7 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
     let mut engine_source = None;
     let mut aot = false;
     let mut pack = None;
+    let mut compress = false;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
@@ -698,14 +701,19 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
             }
             "--aot" => aot = true,
             "--pack" => pack = Some(PathBuf::from(required_value(&mut values, "--pack")?)),
+            "--compress" => compress = true,
             _ => return Err(unknown_argument("build", &value, build_usage)),
         }
+    }
+    if compress && pack.is_none() {
+        return Err("RUSTY_ARGUMENT: --compress applies to --pack".to_owned());
     }
     Ok(BuildOptions {
         project: project.ok_or("RUSTY_ARGUMENT: rusty build needs --project <product.csproj>")?,
         engine_source,
         aot,
         pack,
+        compress,
     })
 }
 
@@ -861,7 +869,7 @@ Examples:
 }
 
 fn build_usage() -> String {
-    "usage: rusty build --project <product.csproj> [--aot] [--pack <release-dir>] [--engine-source <rusty-engine-source>]
+    "usage: rusty build --project <product.csproj> [--aot] [--pack <release-dir> [--compress]] [--engine-source <rusty-engine-source>]
 
 Restores against the pinned SDK in the shared cache, builds, and stages the CoreCLR product bundle
 (the SDK target StageRustyEngineCoreClrProduct). --aot runs VerifyRustyEngineAot, which also
@@ -870,6 +878,8 @@ publishes the NativeAOT product. Compiler output and dotnet's exit code are pass
 --pack then writes the staged Product as a release: <release-dir>/product.rpak holds product.json,
 the UI and the content; the CoreCLR assemblies or NativeAOT module are copied loose beside it.
 Run it with `rusty-product-host --product <release-dir>/product.rpak --loader <coreclr|nativeaot>`.
+--compress stores each file zstd shrinks by at least a tenth compressed (text and JSON, not media);
+the rest stay raw.
 
 Plain `dotnet build`, `dotnet test` and `dotnet run` resolve the same SDK: the product's
 Directory.Build.props declares the pinned pair's feed (`rusty status` checks it).
@@ -877,7 +887,8 @@ Directory.Build.props declares the pinned pair's feed (`rusty status` checks it)
 Examples:
   rusty build --project src/Game/Game.csproj
   rusty build --project src/Game/Game.csproj --aot
-  rusty build --project src/Game/Game.csproj --pack release"
+  rusty build --project src/Game/Game.csproj --pack release
+  rusty build --project src/Game/Game.csproj --pack release --compress"
         .to_owned()
 }
 
@@ -1390,8 +1401,9 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
                 .filter(|value| !value.is_empty())
                 .ok_or("RUSTY_BUILD_PACK: staging reported no product directory")?;
             let release = absolute(release)?;
-            let report = product_container::pack_product(Path::new(staged), &release)
-                .map_err(|error| format!("RUSTY_BUILD_PACK: {error}"))?;
+            let report =
+                product_container::pack_product(Path::new(staged), &release, options.compress)
+                    .map_err(|error| format!("RUSTY_BUILD_PACK: {error}"))?;
             println!(
                 "Packed {} files ({} bytes) into {}; {} native files beside it",
                 report.packed_files,

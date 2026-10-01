@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -16,7 +17,12 @@ const HEADER_LEN: u64 = 32;
 /// any `f32`/`u32`/SIMD array without copying.
 const ALIGNMENT: u64 = 64;
 
-/// One file in the inventory.
+/// A compressed entry must save at least this fraction of its length, or it
+/// is stored raw.
+const MIN_COMPRESSION_SAVING: f64 = 0.1;
+
+/// One file in the inventory. `byteLength` and `sha256` describe the file
+/// itself, compressed or not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Entry {
@@ -27,6 +33,16 @@ pub struct Entry {
     /// The bundle this file belongs to, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle: Option<String>,
+    /// Present when the file is stored as zstd: the stored length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zstd_length: Option<u64>,
+}
+
+impl Entry {
+    /// The bytes the entry occupies in the container.
+    pub fn stored_length(&self) -> u64 {
+        self.zstd_length.unwrap_or(self.byte_length)
+    }
 }
 
 /// A content bundle: its ID and its root, a path prefix within the container.
@@ -141,13 +157,33 @@ impl Container {
             .map(|index| &self.entries[index])
     }
 
-    /// The entry's bytes, borrowed from the map.
-    pub fn bytes(&self, entry: &Entry) -> &[u8] {
-        &self.map[entry.offset as usize..(entry.offset + entry.byte_length) as usize]
+    /// The entry's file bytes: borrowed from the map when stored raw,
+    /// decompressed when stored as zstd.
+    pub fn read(&self, entry: &Entry) -> Result<Cow<'_, [u8]>, Error> {
+        let stored =
+            &self.map[entry.offset as usize..(entry.offset + entry.stored_length()) as usize];
+        if entry.zstd_length.is_none() {
+            return Ok(Cow::Borrowed(stored));
+        }
+        let corrupt = |detail: String| Error::Corrupt {
+            path: self.path.clone(),
+            detail: format!("entry `{}`: {detail}", entry.path),
+        };
+        let bytes = zstd::bulk::decompress(stored, entry.byte_length as usize)
+            .map_err(|error| corrupt(error.to_string()))?;
+        // The output buffer is sized from the inventory; a short stream would
+        // otherwise pass for the file.
+        if bytes.len() as u64 != entry.byte_length {
+            return Err(corrupt(format!("decompressed to {} bytes", bytes.len())));
+        }
+        Ok(Cow::Owned(bytes))
     }
 
-    pub fn get(&self, path: &str) -> Option<&[u8]> {
-        self.entry(path).map(|entry| self.bytes(entry))
+    pub fn get(&self, path: &str) -> Result<Cow<'_, [u8]>, Error> {
+        let entry = self
+            .entry(path)
+            .ok_or_else(|| Error::Missing(path.to_owned()))?;
+        self.read(entry)
     }
 }
 
@@ -195,8 +231,8 @@ fn check(inventory: &Inventory, data_end: u64) -> Result<(), String> {
         if entry.offset % ALIGNMENT != 0 {
             return Err(format!("entry `{path}` is not {ALIGNMENT}-byte aligned"));
         }
-        let start = previous.map_or(HEADER_LEN, |p| p.offset + p.byte_length);
-        let end = entry.offset.checked_add(entry.byte_length);
+        let start = previous.map_or(HEADER_LEN, |p| p.offset + p.stored_length());
+        let end = entry.offset.checked_add(entry.stored_length());
         if entry.offset < start || end.is_none_or(|end| end > data_end) {
             return Err(format!(
                 "entry `{path}` overlaps another or lies outside the file"
@@ -231,12 +267,15 @@ pub struct WriteReport {
     pub entries: usize,
 }
 
-/// Writes a container, hashing each body while copying it. The file appears
-/// at `out` by rename once complete.
+/// Writes a container, hashing each body while copying it. With `compress`,
+/// a body that zstd shrinks by at least `MIN_COMPRESSION_SAVING` is stored
+/// compressed; the rest stay raw. The file appears at `out` by rename once
+/// complete.
 pub fn write(
     out: &Path,
     mut entries: Vec<NewEntry<'_>>,
     bundles: Vec<Bundle>,
+    compress: bool,
 ) -> Result<WriteReport, Error> {
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     for (index, entry) in entries.iter().enumerate() {
@@ -257,7 +296,7 @@ pub fn write(
             .open(&pending)
             .map_err(Error::io(&pending))?;
         let io = Error::io(&pending);
-        let written = write_body(&mut file, entries, bundles);
+        let written = write_body(&mut file, entries, bundles, compress);
         let (inventory_offset, inventory_len, file_len, count) = written.map_err(io)?;
         let io = Error::io(&pending);
         (|| {
@@ -285,6 +324,7 @@ fn write_body(
     file: &mut File,
     entries: Vec<NewEntry<'_>>,
     bundles: Vec<Bundle>,
+    compress: bool,
 ) -> std::io::Result<(u64, u64, u64, usize)> {
     let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
     out.write_all(&[0; HEADER_LEN as usize])?;
@@ -298,32 +338,49 @@ fn write_body(
         let padding = position.next_multiple_of(ALIGNMENT) - position;
         out.write_all(&[0; ALIGNMENT as usize][..padding as usize])?;
         let offset = position + padding;
-        let mut hash = Sha256::new();
-        let mut length = 0_u64;
-        let mut copy = |bytes: &[u8]| -> std::io::Result<()> {
-            hash.update(bytes);
-            length += bytes.len() as u64;
-            out.write_all(bytes)
-        };
-        match entry.body {
-            Body::Bytes(bytes) => copy(bytes)?,
-            Body::File(path) => {
-                let mut source = File::open(&path)?;
-                loop {
-                    match source.read(&mut buffer)? {
-                        0 => break,
-                        count => copy(&buffer[..count])?,
+        let (length, sha256, zstd_length) = if compress {
+            let raw = match entry.body {
+                Body::Bytes(bytes) => Cow::Borrowed(bytes),
+                Body::File(path) => Cow::Owned(fs::read(path)?),
+            };
+            let packed = zstd::bulk::compress(&raw, zstd::DEFAULT_COMPRESSION_LEVEL)?;
+            let worth = (packed.len() as f64) <= raw.len() as f64 * (1.0 - MIN_COMPRESSION_SAVING);
+            out.write_all(if worth { &packed } else { &raw })?;
+            (
+                raw.len() as u64,
+                format!("{:x}", Sha256::digest(&raw)),
+                worth.then_some(packed.len() as u64),
+            )
+        } else {
+            let mut hash = Sha256::new();
+            let mut length = 0_u64;
+            let mut copy = |bytes: &[u8]| -> std::io::Result<()> {
+                hash.update(bytes);
+                length += bytes.len() as u64;
+                out.write_all(bytes)
+            };
+            match entry.body {
+                Body::Bytes(bytes) => copy(bytes)?,
+                Body::File(path) => {
+                    let mut source = File::open(&path)?;
+                    loop {
+                        match source.read(&mut buffer)? {
+                            0 => break,
+                            count => copy(&buffer[..count])?,
+                        }
                     }
                 }
             }
-        }
-        position = offset + length;
+            (length, format!("{:x}", hash.finalize()), None)
+        };
+        position = offset + zstd_length.unwrap_or(length);
         inventory.entries.push(Entry {
             path: entry.path,
             byte_length: length,
-            sha256: format!("{:x}", hash.finalize()),
+            sha256,
             offset,
             bundle: entry.bundle,
+            zstd_length,
         });
     }
     let json = serde_json::to_vec(&inventory).map_err(std::io::Error::other)?;
@@ -343,6 +400,10 @@ mod tests {
     use super::*;
 
     fn fixture(directory: &Path) -> PathBuf {
+        fixture_with(directory, false)
+    }
+
+    fn fixture_with(directory: &Path, compress: bool) -> PathBuf {
         let body = directory.join("body.bin");
         fs::write(&body, vec![7_u8; 100_000]).unwrap();
         let out = directory.join("product.rpak");
@@ -369,15 +430,22 @@ mod tests {
                 id: "rules".into(),
                 root: "content/rules".into(),
             }],
+            compress,
         )
         .unwrap();
         out
     }
 
     #[test]
-    fn round_trip_borrows_aligned_bytes() {
+    fn round_trip_borrows_raw_entries_and_decompresses_zstd_ones() {
+        for compress in [false, true] {
+            round_trip(compress);
+        }
+    }
+
+    fn round_trip(compress: bool) {
         let directory = tempfile::tempdir().unwrap();
-        let container = Container::open(&fixture(directory.path())).unwrap();
+        let container = Container::open(&fixture_with(directory.path(), compress)).unwrap();
         let paths: Vec<_> = container
             .entries()
             .iter()
@@ -388,23 +456,44 @@ mod tests {
             ["content/body.bin", "content/rules/a.json", "product.json"]
         );
         assert_eq!(
-            container.get("content/rules/a.json").unwrap(),
+            container.get("content/rules/a.json").unwrap().as_ref(),
             b"{\"id\":1}"
         );
         assert_eq!(
-            container.get("content/body.bin").unwrap(),
+            container.get("content/body.bin").unwrap().as_ref(),
             &[7; 100_000][..]
         );
         for entry in container.entries() {
             assert_eq!(entry.offset % ALIGNMENT, 0);
-            assert_eq!(
-                entry.sha256,
-                format!("{:x}", Sha256::digest(container.bytes(entry)))
-            );
+            let bytes = container.read(entry).unwrap();
+            assert_eq!(entry.sha256, format!("{:x}", Sha256::digest(&bytes)));
+            // Only a body zstd shrinks enough is stored compressed.
+            let shrinks = compress && entry.path == "content/body.bin";
+            assert_eq!(entry.zstd_length.is_some(), shrinks, "{}", entry.path);
+            assert_eq!(matches!(bytes, Cow::Borrowed(_)), !shrinks);
         }
         let rules = container.entry("content/rules/a.json").unwrap();
         assert_eq!(rules.bundle.as_deref(), Some("rules"));
-        assert!(container.get("content/missing").is_none());
+        assert!(matches!(
+            container.get("content/missing"),
+            Err(Error::Missing(_))
+        ));
+    }
+
+    #[test]
+    fn a_damaged_zstd_entry_fails_its_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = fixture_with(directory.path(), true);
+        let entry = Container::open(&path)
+            .unwrap()
+            .entry("content/body.bin")
+            .unwrap()
+            .clone();
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[entry.offset as usize..][..8].copy_from_slice(b"notzstd!");
+        fs::write(&path, bytes).unwrap();
+        let container = Container::open(&path).unwrap();
+        assert!(matches!(container.read(&entry), Err(Error::Corrupt { .. })));
     }
 
     fn damaged(edit: impl FnOnce(&mut Vec<u8>)) -> Error {

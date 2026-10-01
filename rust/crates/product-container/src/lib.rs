@@ -4,9 +4,11 @@
 //! A container is a 32-byte header, each file's bytes at a 64-byte-aligned
 //! offset, and a JSON inventory: per file its Product-relative path, byte
 //! length, SHA-256, offset and bundle membership. The runtime maps it
-//! read-only and borrows file bytes from the map. Integrity is the inventory's
-//! SHA-256 values: there is no second checksum, no compression and, since a
-//! pair reads only its own output, no version field beyond the magic.
+//! read-only and borrows raw file bytes from the map. A writer may store a
+//! file that zstd shrinks enough compressed instead (its stored length is the
+//! entry's `zstdLength`); reading it decompresses it. Integrity is the
+//! inventory's SHA-256 values: there is no second checksum and, since a pair
+//! reads only its own output, no version field beyond the magic.
 //!
 //! Native code (CoreCLR assemblies, the NativeAOT module) stays loose beside
 //! the container: hostfxr and the dynamic loader take file paths.
