@@ -253,7 +253,8 @@ public sealed class Product : IEngineProduct
 EOF
 mkdir -p "$consumer_dir/product-ui/assets" "$consumer_dir/content/rules/nested" "$consumer_dir/content/mixed"
 mkdir -p "$consumer_dir/content/spatial-artifact"
-cp "$repo_root/fixtures/csharp-spatial-artifact/"*.json "$consumer_dir/content/spatial-artifact/"
+cp "$repo_root/fixtures/csharp-spatial-artifact/"*.json "$repo_root/fixtures/csharp-spatial-artifact/"*.rspatial \
+  "$consumer_dir/content/spatial-artifact/"
 cat > "$consumer_dir/product-ui/main.js" <<'EOF'
 // package-only staged product UI
 EOF

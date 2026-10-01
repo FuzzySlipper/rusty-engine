@@ -4,6 +4,10 @@
 format. It contains a two-triangle collision mesh and precomputed navigation.
 `bad-bounds.json` differs only in bounds whose minimum exceeds their maximum,
 producing `CSHARP_SPATIAL_CONTENT_BOUNDS`.
+`valid.rspatial` holds the same facts in the binary encoding
+(`docs/csharp-lifecycle.md#generated-level-artifact-admission`); the check
+admits it and compares its counts, navigation projection hash and queries
+with the JSON admission.
 
 Run `scripts/test-csharp-sdk-package.sh --coreclr-smoke` from the Engine root.
 The packaged consumer runs `fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs` through

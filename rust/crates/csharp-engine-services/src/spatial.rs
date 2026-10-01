@@ -1,3 +1,4 @@
+mod artifact_binary;
 mod collision_navigation;
 mod inspection;
 
@@ -64,7 +65,7 @@ const MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN: usize = 8;
 const COLLISION_NAVIGATION_EPSILON: f64 = 0.001;
 const COLLISION_NAVIGATION_CLEARANCE_EPSILON: f64 = 0.02;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SpatialContentArtifact {
     schema_version: u32,
@@ -74,21 +75,21 @@ struct SpatialContentArtifact {
     navigation: SpatialContentNavigation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SpatialContentBounds {
     min: [f64; 3],
     max: [f64; 3],
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SpatialContentCollision {
     positions: Vec<[f64; 3]>,
     triangles: Vec<[u32; 3]>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SpatialContentNavigation {
     id: String,
@@ -96,7 +97,7 @@ struct SpatialContentNavigation {
     cells: Vec<SpatialContentNavigationCell>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SpatialContentNavigationConfig {
     schema_version: u32,
@@ -107,7 +108,7 @@ struct SpatialContentNavigationConfig {
     support_probe_drop: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SpatialContentNavigationCell {
     column: i64,
@@ -4613,12 +4614,21 @@ fn parse_spatial_content_artifact(
             format!("spatial artifact '{path}' was empty"),
         ));
     }
-    let artifact: SpatialContentArtifact = serde_json::from_slice(bytes).map_err(|error| {
-        spatial_error(
-            "CSHARP_SPATIAL_CONTENT_SCHEMA",
-            format!("spatial artifact '{path}' was not canonical schema JSON: {error}"),
-        )
-    })?;
+    let artifact: SpatialContentArtifact = if bytes.starts_with(artifact_binary::MAGIC) {
+        artifact_binary::decode(bytes).map_err(|error| {
+            spatial_error(
+                "CSHARP_SPATIAL_CONTENT_SCHEMA",
+                format!("spatial artifact '{path}' was not a valid binary artifact: {error}"),
+            )
+        })?
+    } else {
+        serde_json::from_slice(bytes).map_err(|error| {
+            spatial_error(
+                "CSHARP_SPATIAL_CONTENT_SCHEMA",
+                format!("spatial artifact '{path}' was not canonical schema JSON: {error}"),
+            )
+        })?
+    };
     if artifact.schema_version != 1 || artifact.navigation.config.schema_version != 1 {
         return Err(spatial_error(
             "CSHARP_SPATIAL_CONTENT_SCHEMA",
@@ -4689,15 +4699,20 @@ fn parse_spatial_content_artifact(
             "navigation derivation configuration was invalid",
         ));
     }
-    let mut identities = BTreeSet::new();
+    let mut identities: Vec<_> = artifact
+        .navigation
+        .cells
+        .iter()
+        .map(|cell| (cell.column, cell.row, cell.level))
+        .collect();
+    identities.sort_unstable();
+    if identities.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_NAVIGATION",
+            "navigation cell identities were not unique",
+        ));
+    }
     for cell in &artifact.navigation.cells {
-        let identity = (cell.column, cell.row, cell.level);
-        if !identities.insert(identity) {
-            return Err(spatial_error(
-                "CSHARP_SPATIAL_CONTENT_NAVIGATION",
-                "navigation cell identities were not unique",
-            ));
-        }
         if !cell.support_height.is_finite()
             || cell.support_height < artifact.bounds.min[1]
             || cell.support_height > artifact.bounds.max[1]

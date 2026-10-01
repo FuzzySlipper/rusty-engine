@@ -587,7 +587,38 @@ revisions, counts and projection hashes—and `ReadContentArtifact`—identify t
 admitted source. Disposing the Content reference afterward does not remove the
 copied spatial state.
 
+The same facts can also be written as a compact binary file, recognised by
+its first eight bytes, `RSPATIAL`. It is admitted through the same call with
+the same validation and refusals, so a binary file and the JSON file of the
+same facts install the same collision and navigation: the receipt's counts and
+navigation projection hash match. Its collision projection hash differs,
+because the collider asset is named by the artifact's content digest. Use it for large
+navigation sets: a town of 544,563 cells is about 12 MB instead of 43 MB of
+JSON, and parses and validates in about 15 ms instead of 75 ms. Write
+little-endian, with no padding:
+
+| Field | Encoding |
+|---|---|
+| Magic | `RSPATIAL` (8 bytes) |
+| `schemaVersion`, `navigation.config.schemaVersion` | u32, u32 (both 1) |
+| `bounds.min`, `bounds.max` | 6 × f64 |
+| `cellSize`, `levelQuantum`, `maximumSlopeDegrees`, `requiredHeadroom`, `supportProbeDrop` | 5 × f64 |
+| `staticMeshArtifactId`, `navigation.id` | each a u32 byte length, then UTF-8 |
+| position, triangle and cell counts | 3 × u64 |
+| `collision.positions` | count × 3 f64 |
+| `collision.triangles` | count × 3 u32 |
+| cell `column`s, then cell `row`s | count × i32 each |
+| cell `supportHeight`s | count × f64 |
+| cell `walkable` flags | ⌈count / 8⌉ bytes; cell `i` is bit `i % 8` of byte `i / 8` |
+
+A cell's `level` is not stored: it is `round(supportHeight / levelQuantum)`,
+which the JSON form must state and validation checks. Cells written in
+(column, row, level) order admit fastest. [`valid.rspatial`](../fixtures/csharp-spatial-artifact/valid.rspatial)
+is `valid.json` in this encoding.
+
 Refusal leaves collision, navigation, artifact identity and residency unchanged.
+A truncated or otherwise malformed binary file is refused with
+`CSHARP_SPATIAL_CONTENT_SCHEMA`.
 `EngineCallException` reports service `Spatial`, operation
 `ReplaceContentArtifact`, and a named diagnostic such as
 `CSHARP_SPATIAL_CONTENT_BOUNDS`, `CSHARP_SPATIAL_CONTENT_COLLISION`,

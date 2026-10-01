@@ -8,8 +8,8 @@ internal static class ProductContentBundleChecks
     internal static void Run(ProductCreateContext context)
     {
         ProductContent content = context.Content;
-        // trial.txt plus the two spatial artifacts and particle texture.
-        Require(content.Files.Length == 4 && content.ReadText("trial.txt").Contains("package-only"), "legacy snapshot excludes bundle bodies and inventory");
+        // trial.txt plus the three spatial artifacts and particle texture.
+        Require(content.Files.Length == 5 && content.ReadText("trial.txt").Contains("package-only"), "legacy snapshot excludes bundle bodies and inventory");
         Require(content.ListBundles().ToArray().Single(bundle => bundle.Id == "rules").Id == "rules", "rules metadata discovery");
         try { content.OpenBundle("missing"); throw new Exception("missing bundle accepted"); }
         catch (IOException) { }

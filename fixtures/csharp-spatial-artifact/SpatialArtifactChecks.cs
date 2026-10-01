@@ -8,6 +8,7 @@ internal static class SpatialArtifactChecks
 {
     private const string ValidPath = "spatial-artifact/valid.json";
     private const string InvalidPath = "spatial-artifact/bad-bounds.json";
+    private const string BinaryPath = "spatial-artifact/valid.rspatial";
     private const ulong NavigationGridId = 7;
     private const uint ChunkSize = 8;
     private const uint MaximumStepCells = 1;
@@ -29,6 +30,23 @@ internal static class SpatialArtifactChecks
         Require(admitted.ContentSha256 == source.Sha256, "admission lost immutable content identity");
         Require(engine.Voxel.ReadScene(new(session)) == resident, "artifact admission changed voxel residency");
         CheckQueries(engine, session);
+
+        // The binary encoding of the same facts admits the same collision and
+        // navigation. Its collision projection hash differs: the collider asset
+        // is named by the artifact's content digest.
+        using (ContentReference binary = engine.Content.OpenReference(new(BinaryPath)))
+        {
+            SpatialContentArtifactReplaceReceipt packed = engine.Spatial.ReplaceContentArtifact(request with { Content = binary });
+            Require(packed.CollisionVertexCount == admitted.CollisionVertexCount
+                && packed.CollisionTriangleCount == admitted.CollisionTriangleCount
+                && packed.NavigationCellCount == admitted.NavigationCellCount
+                && packed.NavigationProjectionHash == admitted.NavigationProjectionHash,
+                $"binary artifact admitted different facts than its JSON form: {packed} against {admitted}");
+            Require(packed.ContentSha256 == engine.Content.ReadReferenceInfo(binary).Span[0].Sha256,
+                "binary admission lost its content identity");
+            CheckQueries(engine, session);
+        }
+        admitted = engine.Spatial.ReplaceContentArtifact(request);
 
         SpatialProjectionReadout collision = engine.Spatial.ReadProjection(new(session));
         NavigationProjectionReadout navigation = engine.Spatial.ReadNavigationProjection(new(session));
