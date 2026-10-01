@@ -1144,7 +1144,10 @@ fn dotnet_root_from_path() -> Option<PathBuf> {
     // Resolves a symlinked dotnet; Windows' verbatim `\\?\` prefix is not a
     // DOTNET_ROOT .NET accepts.
     let resolved = fs::canonicalize(dotnet).ok()?;
-    let resolved = match resolved.to_str().and_then(|path| path.strip_prefix(r"\\?\")) {
+    let resolved = match resolved
+        .to_str()
+        .and_then(|path| path.strip_prefix(r"\\?\"))
+    {
         Some(plain) => PathBuf::from(plain),
         None => resolved,
     };

@@ -130,7 +130,7 @@ jobs:
         run: |
           previous=()
           if latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null); then
-            gh release download "$latest" --pattern '*.tar.gz' --dir "$RUNNER_TEMP/previous"
+            gh release download "$latest" --pattern '*-linux-x64.tar.gz' --dir "$RUNNER_TEMP/previous"
             previous=(--previous "$RUNNER_TEMP"/previous/*.tar.gz)
           fi
           ./scripts/build-csharp-release-info.sh --pair "$RUNNER_TEMP"/pair/*.tar.gz \
