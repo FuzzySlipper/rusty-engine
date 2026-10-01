@@ -457,14 +457,15 @@ collision capsule casts and step solver: a traversable floor lip can connect
 without admitting a thin separating wall or insufficient headroom. Agent radius
 and height define capsule clearance; the step limit is cell size times
 `MaxStepCells`. Path, weighted-path and navigation-step queries apply these
-edge checks alongside product traversal overlays. It considers at most eight
-support layers per X/Z cell, so a deeper layer is unknown rather than implied
-walkable. Use the live foot position for `EvaluateNavigationStep` so it can
-reconcile to the nearest retained support in that X/Z cell (see below). This
-is a bounded route suggestion only: normal character collision and controls
-remain the authority for physical movement. Product door and hazard state
-belongs in the planar traversal overlay; read-only evaluation honors that
-overlay.
+edge checks alongside product traversal overlays. Each X/Z cell is sampled
+down through solid as well as air, so floors inside an enclosed volume (rooms
+stacked in rock) are found. It considers at most eight surfaces per X/Z cell,
+so a deeper layer is unknown rather than implied walkable. Use the live foot
+position for `EvaluateNavigationStep` so it can reconcile to the nearest
+retained support in that X/Z cell (see below). This is a bounded route
+suggestion only: normal character collision and controls remain the authority
+for physical movement. Product door and hazard state belongs in the planar
+traversal overlay; read-only evaluation honors that overlay.
 
 Republishing is incremental. The session keeps the previous collision-derived
 publication's columns and connections, and a new one derives only the X/Z

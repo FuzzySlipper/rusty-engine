@@ -516,7 +516,12 @@ fn derive_column(
         if support_y < world_min[1] - COLLISION_NAVIGATION_EPSILON {
             break;
         }
-        origin_y = support_y - COLLISION_NAVIGATION_EPSILON;
+        // Just under a voxel surface the ray is inside solid, where it would
+        // hit again at once; continue from the air below the solid run.
+        let below = support_y - COLLISION_NAVIGATION_EPSILON;
+        origin_y = scene
+            .collidable_voxel_run_bottom([center.x, below, center.z], world_min[1])
+            .map_or(below, |bottom| bottom - COLLISION_NAVIGATION_EPSILON);
         if normal_y < minimum_upward_normal {
             continue;
         }
@@ -928,6 +933,74 @@ mod tests {
             published(&bridge, session),
             from_scratch(&bridge, session, publish)
         );
+    }
+
+    /// Solid rock with two rooms carved one above the other and a stair
+    /// between them: every floor lies below solid, not below air (#9024).
+    #[test]
+    fn an_enclosed_volume_finds_every_floor_beneath_its_rock() {
+        let air = |x: i64, y: i64, z: i64| {
+            let room = (1..15).contains(&x) && (1..7).contains(&z);
+            let lower = room && z >= 3 && (3..6).contains(&y);
+            let upper = room && (9..12).contains(&y);
+            // One cell down per column from the upper floor at x = 7 to the
+            // lower floor's height at x = 13, beside the lower room.
+            let stair = (8..14).contains(&x) && (1..3).contains(&z) && (16 - x..12).contains(&y);
+            lower || upper || stair
+        };
+        let mut voxels = Vec::new();
+        for x in 0..16 {
+            for y in 0..20 {
+                for z in 0..8 {
+                    if !air(x, y, z) {
+                        voxels.push([x, y, z]);
+                    }
+                }
+            }
+        }
+        let (mut bridge, session) = bridge_with(Arc::new(
+            VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
+        ));
+        let mut publish = request(session, 0.0);
+        publish.world_max = NativeVec3 {
+            x: 16.0,
+            y: 20.0,
+            z: 8.0,
+        };
+        bridge.replace_collision_navigation(&publish).unwrap();
+        let (_, _, heights) = published(&bridge, session);
+        let column = |x, z| {
+            heights
+                .iter()
+                .filter(|(cell, _)| (cell.x, cell.z) == (x, z))
+                .map(|(_, height)| f64::from_bits(*height))
+                .collect::<Vec<_>>()
+        };
+        // The rock cap and both floors; a stair column has its own step.
+        assert_eq!(column(4, 4), [3.0, 9.0, 20.0]);
+        assert_eq!(column(10, 1), [6.0, 20.0]);
+        let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
+        let (step, path) = evaluate_navigation_step_facts(
+            navigation,
+            NativeNavigationStepRequest {
+                session,
+                from: NativeVec3 {
+                    x: 3.5,
+                    y: 9.0,
+                    z: 4.5,
+                },
+                target: NativeVec3 {
+                    x: 3.5,
+                    y: 3.0,
+                    z: 4.5,
+                },
+                max_step_units: 1.0,
+                max_visited: 4096,
+            },
+        );
+        assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
+        // Down the stair, not through the rock between the rooms.
+        assert!(path.iter().any(|cell| cell.z < 3), "{path:?}");
     }
 
     /// The downstream shape (#8999): a 64 x 64 x 32 box over relief of about

@@ -870,6 +870,27 @@ impl VoxelCollisionScene {
         })
     }
 
+    /// The height where the run of collidable voxels containing `point` ends
+    /// below it, or `None` when `point` is not in a collidable voxel. The
+    /// walk down stops at `floor`.
+    pub fn collidable_voxel_run_bottom(&self, point: [f64; 3], floor: f64) -> Option<f64> {
+        let grid = self.voxel_world.grid();
+        let solid = |cell| {
+            collision_solid(&self.voxel_world, &self.noncollidable_materials, cell) == Some(true)
+        };
+        let mut cell = grid.world_to_voxel(WorldPos::new(point[0], point[1], point[2]));
+        if !solid(cell) {
+            return None;
+        }
+        loop {
+            let below = VoxelCoord::new(cell.x, cell.y - 1, cell.z);
+            if grid.voxel_min_world(cell).y <= floor || !solid(below) {
+                return Some(grid.voxel_min_world(cell).y);
+            }
+            cell = below;
+        }
+    }
+
     pub fn contains_point(&self, point: [f64; 3]) -> bool {
         self.projection
             .contains_point(WorldPos::new(point[0], point[1], point[2]))
