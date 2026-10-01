@@ -134,6 +134,10 @@ same source revision.
   `scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <path>`
   then builds and uploads the Windows archives for the Latest pair (or
   `--version`), and adds `targets."win-x64"` to its `pair-release.json`.
+  A timer on den-agents runs it with `--if-missing` every 30 minutes, so each
+  new Latest pair gains Windows archives without anyone asking (crew-services
+  `docs/playtest-windows.md`). A pair that is never Latest, because a newer
+  one followed within the interval, gets them only by `--version`.
 - **Which pairs:** only pairs whose revision has the Windows support, from
   0.1.0-dev.73f9e99ece2e on. Older pairs have no Windows archives.
 - **Running the build there:** the machine needs the MSVC build tools, Git Bash,

@@ -12,19 +12,24 @@ set -euo pipefail
 # ninja, and a clone of this repository (see crew-services
 # docs/playtest-windows.md). Run from a machine with `gh` access to the repo.
 #
-# usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>]
+# usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing]
+#
+# Without --version it takes the Latest pair. --if-missing succeeds without
+# building when the pair already has win-x64 archives, for a recurring job.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=FuzzySlipper/rusty-engine
 host=""
 checkout=""
 version=""
-usage() { echo "usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>]" >&2; }
+if_missing=false
+usage() { echo "usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing]" >&2; }
 while (($#)); do
     case "$1" in
         --host) host=${2:?}; shift 2 ;;
         --checkout) checkout=${2:?}; shift 2 ;;
         --version) version=${2:?}; shift 2 ;;
+        --if-missing) if_missing=true; shift ;;
         *) usage; exit 2 ;;
     esac
 done
@@ -39,6 +44,7 @@ desktop="rusty-engine-desktop-pack-$version"
 
 if gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | grep -qx "$pair-win-x64.tar.gz"; then
     echo "$tag already has $pair-win-x64.tar.gz" >&2
+    $if_missing && exit 0
     exit 1
 fi
 
