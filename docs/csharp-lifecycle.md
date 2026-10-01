@@ -476,7 +476,9 @@ collidable materials, content artifacts), a different policy, or a different
 `WorldMin.Y`/`WorldMax.Y` derives the whole box. So keep the vertical range
 fixed, or snap it to a coarse step, when the box follows a moving point. The
 receipt's `DerivedColumnCount` and `ReusedColumnCount` show which path ran;
-the result is the same as a full derivation.
+the result is the same as a full derivation. A republish updates the installed
+navigation in place, so its cost follows the derived columns and their
+neighbours, not the box: one that derives nothing costs microseconds.
 
 ### Collision navigation coordinates
 

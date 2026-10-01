@@ -91,6 +91,18 @@ impl NavProjection {
         self.walkable.iter().copied()
     }
 
+    /// Adds (`true`) or removes one walkable cell, as an owner that keeps
+    /// its projection current applies a local change. The hash follows.
+    pub fn set_walkable(&mut self, cell: VoxelCoord, walkable: bool) {
+        if walkable {
+            if self.walkable.insert(cell) {
+                self.projection_hash = self.projection_hash.wrapping_add(cell_hash(cell));
+            }
+        } else if self.walkable.remove(&cell) {
+            self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(cell));
+        }
+    }
+
     /// Recompute walkability for `cells` after a local voxel or residency
     /// change. `solid` reports a cell's collision solidity, or `None` outside
     /// every resident chunk (never walkable). The hash follows each change.
@@ -107,13 +119,7 @@ impl NavProjection {
                     || is_solid(VoxelCoord::new(cell.x, cell.y - 1, cell.z)))
                 && (0..config.agent_height_voxels)
                     .all(|dy| !is_solid(VoxelCoord::new(cell.x, cell.y + i64::from(dy), cell.z)));
-            if walkable {
-                if self.walkable.insert(cell) {
-                    self.projection_hash = self.projection_hash.wrapping_add(cell_hash(cell));
-                }
-            } else if self.walkable.remove(&cell) {
-                self.projection_hash = self.projection_hash.wrapping_sub(cell_hash(cell));
-            }
+            self.set_walkable(cell, walkable);
         }
     }
 }
@@ -166,6 +172,18 @@ impl NavEdgeAdmission {
         Self {
             allowed,
             admission_hash,
+        }
+    }
+
+    /// Admits (`true`) or withdraws one directed edge, as an owner that keeps
+    /// its admission current applies a local change. The hash follows.
+    pub fn set_allowed(&mut self, from: VoxelCoord, to: VoxelCoord, allowed: bool) {
+        if allowed {
+            if self.allowed.insert((from, to)) {
+                self.admission_hash = self.admission_hash.wrapping_add(edge_hash(from, to));
+            }
+        } else if self.allowed.remove(&(from, to)) {
+            self.admission_hash = self.admission_hash.wrapping_sub(edge_hash(from, to));
         }
     }
 
@@ -1595,13 +1613,18 @@ fn cell_hash(coord: VoxelCoord) -> u64 {
     h
 }
 
+/// A sum of per-edge hashes, like the walkable hash, so a local change
+/// updates it without visiting every edge.
 fn hash_edge_admission(edges: &BTreeSet<(VoxelCoord, VoxelCoord)>) -> u64 {
+    edges.iter().fold(0u64, |sum, &(from, to)| {
+        sum.wrapping_add(edge_hash(from, to))
+    })
+}
+
+fn edge_hash(from: VoxelCoord, to: VoxelCoord) -> u64 {
     let mut h = fnv_offset();
-    feed_u64(&mut h, edges.len() as u64);
-    for (from, to) in edges {
-        feed_coord(&mut h, *from);
-        feed_coord(&mut h, *to);
-    }
+    feed_coord(&mut h, from);
+    feed_coord(&mut h, to);
     h
 }
 

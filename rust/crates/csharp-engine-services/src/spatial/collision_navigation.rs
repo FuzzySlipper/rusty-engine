@@ -80,6 +80,32 @@ impl SceneRevisions {
     }
 }
 
+/// One X/Z column of the navigation grid.
+type Column = (i64, i64);
+
+/// The columns a publication's box covers, inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ColumnBounds {
+    pub(super) min_x: i64,
+    pub(super) max_x: i64,
+    pub(super) min_z: i64,
+    pub(super) max_z: i64,
+}
+
+impl ColumnBounds {
+    fn contains(self, (x, z): Column) -> bool {
+        (self.min_x..=self.max_x).contains(&x) && (self.min_z..=self.max_z).contains(&z)
+    }
+
+    fn columns(self) -> impl Iterator<Item = Column> {
+        (self.min_x..=self.max_x).flat_map(move |x| (self.min_z..=self.max_z).map(move |z| (x, z)))
+    }
+
+    fn len(self) -> u64 {
+        (self.max_x - self.min_x + 1) as u64 * (self.max_z - self.min_z + 1) as u64
+    }
+}
+
 /// The columns and edges of the last collision-derived publication, and the
 /// world regions whose collision changed since.
 #[derive(Debug, Clone)]
@@ -88,11 +114,41 @@ pub(super) struct CollisionNavigationCache {
     /// The scene the columns plus `dirty` describe. A publication against any
     /// other scene derives everything.
     scene: SceneRevisions,
-    columns: BTreeMap<(i64, i64), Vec<(VoxelCoord, f64)>>,
+    bounds: ColumnBounds,
+    columns: BTreeMap<Column, Vec<(VoxelCoord, f64)>>,
     edges: BTreeMap<VoxelCoord, Vec<VoxelCoord>>,
     /// World-space `[min_x, min_z, max_x, max_z]` of changes since; `None`
     /// when too many were recorded.
     dirty: Option<Vec<[f64; 4]>>,
+    /// The navigation revision whose installed projection, supports and edge
+    /// admission hold exactly these columns and edges; `None` once a rebase
+    /// moved them.
+    installed: Option<u64>,
+}
+
+/// The parts of an installed collision-derived navigation a publication
+/// updates in place.
+pub(super) struct CollisionNavigationGraph {
+    pub(super) projection: NavProjection,
+    pub(super) supports: BTreeMap<VoxelCoord, f64>,
+    pub(super) edge_admission: NavEdgeAdmission,
+}
+
+impl CollisionNavigationGraph {
+    fn from_cache(grid: VoxelGridSpec, cache: &CollisionNavigationCache) -> Self {
+        let supports: BTreeMap<VoxelCoord, f64> =
+            cache.columns.values().flatten().copied().collect();
+        Self {
+            projection: NavProjection::from_walkable_cells(grid, supports.keys().copied()),
+            supports,
+            edge_admission: NavEdgeAdmission::from_allowed_edges(
+                cache
+                    .edges
+                    .iter()
+                    .flat_map(|(&from, targets)| targets.iter().map(move |&to| (from, to))),
+            ),
+        }
+    }
 }
 
 impl CollisionNavigationCache {
@@ -125,7 +181,8 @@ impl CollisionNavigationCache {
     /// Follows a world-origin rebase that moved local coordinates by
     /// `shift`. The grid is world-aligned, so a shift of whole cells moves
     /// every column and edge unchanged; any other shift leaves the cache
-    /// describing nothing.
+    /// describing nothing. The installed navigation does not move, so the
+    /// next publication rebuilds it from the moved columns and edges.
     pub(super) fn rebase(
         &mut self,
         before: SceneRevisions,
@@ -169,34 +226,134 @@ impl CollisionNavigationCache {
                 ];
             }
         }
+        self.bounds = ColumnBounds {
+            min_x: self.bounds.min_x + dx,
+            max_x: self.bounds.max_x + dx,
+            min_z: self.bounds.min_z + dz,
+            max_z: self.bounds.max_z + dz,
+        };
         self.key = self.key.translated(shift[1]);
         self.scene = after;
+        self.installed = None;
     }
 
-    fn column_is_clean(&self, grid: VoxelGridSpec, x: i64, z: i64) -> bool {
-        let Some(dirty) = &self.dirty else {
-            return false;
-        };
-        let cell_size = grid.voxel_size();
-        let margin = cell_size * DIRTY_MARGIN_CELLS + COLLISION_NAVIGATION_CLEARANCE_EPSILON;
-        let min = grid.voxel_min_world(VoxelCoord::new(x, 0, z));
-        let (min_x, min_z) = (min.x - margin, min.z - margin);
-        let (max_x, max_z) = (min.x + cell_size + margin, min.z + cell_size + margin);
-        !dirty.iter().any(|region| {
-            region[0] <= max_x && region[2] >= min_x && region[1] <= max_z && region[3] >= min_z
-        })
+    /// The navigation revision this cache was installed as, while the
+    /// installed graph still matches it.
+    pub(super) fn installed_revision(&self) -> Option<u64> {
+        self.installed
+    }
+
+    pub(super) fn set_installed(&mut self, revision: u64) {
+        self.installed = Some(revision);
+    }
+
+    fn supports(&self, column: Column) -> &[(VoxelCoord, f64)] {
+        self.columns.get(&column).map_or(&[], Vec::as_slice)
     }
 }
 
-/// One collision-derived publication and the counts that show how much of
-/// it was derived rather than kept.
-pub(super) struct CollisionNavigationDerivation {
-    pub(super) projection: NavProjection,
-    pub(super) supports: BTreeMap<VoxelCoord, f64>,
-    pub(super) edge_admission: NavEdgeAdmission,
-    pub(super) derived_columns: u64,
-    pub(super) reused_columns: u64,
-    pub(super) cache: CollisionNavigationCache,
+/// What one publication derives: the columns new to the box or near a
+/// recorded change, the columns that left the box, and the edges of every
+/// cell in or beside either. Everything else is kept from the last
+/// publication.
+pub(super) struct CollisionNavigationDelta {
+    key: DerivationKey,
+    scene: SceneRevisions,
+    bounds: ColumnBounds,
+    /// Derived against the last publication rather than from nothing.
+    incremental: bool,
+    derived: BTreeMap<Column, Vec<(VoxelCoord, f64)>>,
+    removed: Vec<Column>,
+    edge_columns: BTreeSet<Column>,
+    edges: Vec<(VoxelCoord, Vec<VoxelCoord>)>,
+}
+
+impl CollisionNavigationDelta {
+    pub(super) fn derived_columns(&self) -> u64 {
+        self.derived.len() as u64
+    }
+
+    pub(super) fn reused_columns(&self) -> u64 {
+        self.bounds.len() - self.derived_columns()
+    }
+
+    /// Applies the delta to the cache it was derived against and to the
+    /// graph installed from that cache, in place: the cost follows the
+    /// derived columns, not the box. Without an installed graph (after a
+    /// rebase) the graph is rebuilt from the updated cache.
+    pub(super) fn apply(
+        self,
+        grid: VoxelGridSpec,
+        previous: Option<CollisionNavigationCache>,
+        installed: Option<CollisionNavigationGraph>,
+    ) -> (CollisionNavigationCache, CollisionNavigationGraph) {
+        let (mut cache, mut graph) = match previous.filter(|_| self.incremental) {
+            Some(cache) => (cache, installed),
+            None => (
+                CollisionNavigationCache {
+                    key: self.key,
+                    scene: self.scene,
+                    bounds: self.bounds,
+                    columns: BTreeMap::new(),
+                    edges: BTreeMap::new(),
+                    dirty: None,
+                    installed: None,
+                },
+                Some(CollisionNavigationGraph {
+                    projection: NavProjection::from_walkable_cells(grid, std::iter::empty()),
+                    supports: BTreeMap::new(),
+                    edge_admission: NavEdgeAdmission::from_allowed_edges(std::iter::empty()),
+                }),
+            ),
+        };
+        for column in &self.edge_columns {
+            let Some(supports) = cache.columns.get(column) else {
+                continue;
+            };
+            for &(from, _) in supports {
+                let Some(targets) = cache.edges.remove(&from) else {
+                    continue;
+                };
+                if let Some(graph) = &mut graph {
+                    for to in targets {
+                        graph.edge_admission.set_allowed(from, to, false);
+                    }
+                }
+            }
+        }
+        for column in self.removed.iter().chain(self.derived.keys()) {
+            for (cell, _) in cache.columns.remove(column).unwrap_or_default() {
+                if let Some(graph) = &mut graph {
+                    graph.projection.set_walkable(cell, false);
+                    graph.supports.remove(&cell);
+                }
+            }
+        }
+        for (column, supports) in self.derived {
+            if let Some(graph) = &mut graph {
+                for &(cell, height) in &supports {
+                    graph.projection.set_walkable(cell, true);
+                    graph.supports.insert(cell, height);
+                }
+            }
+            cache.columns.insert(column, supports);
+        }
+        for (from, targets) in self.edges {
+            if let Some(graph) = &mut graph {
+                for &to in &targets {
+                    graph.edge_admission.set_allowed(from, to, true);
+                }
+            }
+            cache.edges.insert(from, targets);
+        }
+        cache.key = self.key;
+        cache.scene = self.scene;
+        cache.bounds = self.bounds;
+        cache.dirty = Some(Vec::new());
+        cache.installed = None;
+        let graph = graph.unwrap_or_else(|| CollisionNavigationGraph::from_cache(grid, &cache));
+        (cache, graph)
+    }
 }
 
 /// Derive a conservative, finite planar projection from the session's coherent
@@ -205,86 +362,131 @@ pub(super) struct CollisionNavigationDerivation {
 /// ordinary spatial queries. Cells prove only that a capsule can stand at
 /// their center; directed edges then use the character step solver to prove a
 /// wall cannot be crossed and a bounded step can be climbed. Columns and edges
-/// that `previous` holds for the same policy, range and scene are kept.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn collision_navigation_projection(
+/// that `previous` holds for the same policy, range and scene are kept. This
+/// reads only; [`CollisionNavigationDelta::apply`] installs the result.
+pub(super) fn derive_collision_navigation(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     world_min: [f64; 3],
     world_max: [f64; 3],
     config: NativeCollisionNavigationConfig,
-    columns: std::ops::RangeInclusive<i64>,
-    rows: std::ops::RangeInclusive<i64>,
-    previous: Option<CollisionNavigationCache>,
-) -> Result<CollisionNavigationDerivation, CharacterControllerError> {
+    bounds: ColumnBounds,
+    previous: Option<&CollisionNavigationCache>,
+) -> Result<CollisionNavigationDelta, CharacterControllerError> {
     let key = DerivationKey::new(config, world_min[1], world_max[1]);
     let revisions = SceneRevisions::of(scene);
     let previous = previous.filter(|cache| cache.key == key && cache.scene == revisions);
-    let mut derived = BTreeSet::new();
-    let mut column_supports = BTreeMap::new();
-    for x in columns {
-        for z in rows.clone() {
-            let kept = previous
-                .as_ref()
-                .filter(|cache| cache.column_is_clean(grid, x, z))
-                .and_then(|cache| cache.columns.get(&(x, z)));
-            let supports = match kept {
-                Some(supports) => supports.clone(),
-                None => {
-                    derived.insert((x, z));
-                    derive_column(scene, grid, world_min, world_max, config, x, z)?
+    let mut to_derive = BTreeSet::new();
+    let mut removed = Vec::new();
+    match previous {
+        Some(cache) => {
+            to_derive.extend(
+                bounds
+                    .columns()
+                    .filter(|&column| !cache.bounds.contains(column)),
+            );
+            removed.extend(
+                cache
+                    .bounds
+                    .columns()
+                    .filter(|&column| !bounds.contains(column)),
+            );
+            match &cache.dirty {
+                Some(regions) => {
+                    for region in regions {
+                        to_derive.extend(columns_near(grid, bounds, *region));
+                    }
                 }
-            };
-            column_supports.insert((x, z), supports);
+                None => to_derive.extend(bounds.columns()),
+            }
+        }
+        None => to_derive.extend(bounds.columns()),
+    }
+    let mut derived = BTreeMap::new();
+    for (x, z) in to_derive {
+        derived.insert(
+            (x, z),
+            derive_column(scene, grid, world_min, world_max, config, x, z)?,
+        );
+    }
+    let supports_of = |column: Column| -> &[(VoxelCoord, f64)] {
+        match derived.get(&column) {
+            Some(supports) => supports,
+            None if bounds.contains(column) => previous.map_or(&[], |cache| cache.supports(column)),
+            None => &[],
+        }
+    };
+    let support = |cell: VoxelCoord| {
+        supports_of((cell.x, cell.z))
+            .iter()
+            .find(|(support, _)| *support == cell)
+            .map(|&(_, height)| height)
+    };
+    let mut edge_columns = BTreeSet::new();
+    for &(x, z) in derived.keys().chain(&removed) {
+        for (dx, dz) in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1)] {
+            edge_columns.insert((x + dx, z + dz));
         }
     }
-    let supports: BTreeMap<VoxelCoord, f64> = column_supports
-        .values()
-        .flatten()
-        .map(|&(cell, height)| (cell, height))
-        .collect();
-    let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
     let character = collision_navigation_character_config(config);
-    let mut edges = BTreeMap::new();
-    for (&from, &from_y) in &supports {
-        let near_derived = derived.contains(&(from.x, from.z))
-            || [(1, 0), (0, 1), (-1, 0), (0, -1)]
-                .into_iter()
-                .any(|(dx, dz)| derived.contains(&(from.x + dx, from.z + dz)));
-        let kept = (!near_derived)
-            .then(|| previous.as_ref().and_then(|cache| cache.edges.get(&from)))
-            .flatten();
-        let targets = match kept {
-            Some(targets) => targets
-                .iter()
-                .copied()
-                .filter(|to| supports.contains_key(to))
-                .collect(),
-            None => derive_edges(scene, grid, &character, &supports, from, from_y, config)?,
-        };
-        edges.insert(from, targets);
+    let mut edges = Vec::new();
+    for &column in edge_columns
+        .iter()
+        .filter(|&&column| bounds.contains(column))
+    {
+        for &(from, from_y) in supports_of(column) {
+            let targets = derive_edges(scene, grid, &character, &support, from, from_y, config)?;
+            edges.push((from, targets));
+        }
     }
-    let edge_admission = NavEdgeAdmission::from_allowed_edges(
-        edges
-            .iter()
-            .flat_map(|(&from, targets)| targets.iter().map(move |&to| (from, to))),
-    );
-    let derived_columns = derived.len() as u64;
-    let reused_columns = column_supports.len() as u64 - derived_columns;
-    Ok(CollisionNavigationDerivation {
-        projection,
-        supports,
-        edge_admission,
-        derived_columns,
-        reused_columns,
-        cache: CollisionNavigationCache {
-            key,
-            scene: revisions,
-            columns: column_supports,
-            edges,
-            dirty: Some(Vec::new()),
-        },
+    Ok(CollisionNavigationDelta {
+        key,
+        scene: revisions,
+        bounds,
+        incremental: previous.is_some(),
+        derived,
+        removed,
+        edge_columns,
+        edges,
     })
+}
+
+/// The columns of `bounds` within one cell of a changed world region.
+fn columns_near(
+    grid: VoxelGridSpec,
+    bounds: ColumnBounds,
+    [min_x, min_z, max_x, max_z]: [f64; 4],
+) -> impl Iterator<Item = Column> {
+    let cell_size = grid.voxel_size();
+    let margin = cell_size * DIRTY_MARGIN_CELLS + COLLISION_NAVIGATION_CLEARANCE_EPSILON;
+    let low = grid.world_to_voxel(core_space::WorldPos::new(
+        min_x - margin - cell_size,
+        0.0,
+        min_z - margin - cell_size,
+    ));
+    let high = grid.world_to_voxel(core_space::WorldPos::new(
+        max_x + margin + cell_size,
+        0.0,
+        max_z + margin + cell_size,
+    ));
+    let candidates = ColumnBounds {
+        min_x: low.x.max(bounds.min_x),
+        max_x: high.x.min(bounds.max_x),
+        min_z: low.z.max(bounds.min_z),
+        max_z: high.z.min(bounds.max_z),
+    };
+    let empty = candidates.min_x > candidates.max_x || candidates.min_z > candidates.max_z;
+    (!empty)
+        .then(|| candidates.columns())
+        .into_iter()
+        .flatten()
+        .filter(move |&(x, z)| {
+            let min = grid.voxel_min_world(VoxelCoord::new(x, 0, z));
+            min.x - margin <= max_x
+                && min.x + cell_size + margin >= min_x
+                && min.z - margin <= max_z
+                && min.z + cell_size + margin >= min_z
+        })
 }
 
 fn derive_column(
@@ -335,7 +537,7 @@ fn derive_edges(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
     character: &CharacterControllerConfig,
-    supports: &BTreeMap<VoxelCoord, f64>,
+    support: &dyn Fn(VoxelCoord) -> Option<f64>,
     from: VoxelCoord,
     from_y: f64,
     config: NativeCollisionNavigationConfig,
@@ -343,7 +545,7 @@ fn derive_edges(
     let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
     let mut targets = Vec::new();
     for to in collision_navigation_neighbors(from, config.max_step_cells) {
-        let Some(&to_y) = supports.get(&to) else {
+        let Some(to_y) = support(to) else {
             continue;
         };
         let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
@@ -591,6 +793,76 @@ mod tests {
         );
     }
 
+    fn clear_voxel(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        at: [i64; 3],
+    ) {
+        let edits = [NativeVoxelEdit {
+            state: 0,
+            kind: NativeVoxelEditKind::Clear,
+            address: NativeVoxelAddress {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+            },
+            material_slot: 0,
+        }];
+        let voxel = crate::voxel::api(bridge);
+        let mut edited = NativeVoxelEditReceipt::default();
+        let mut refusal = crate::operation_diagnostics::empty_receipt();
+        let status = unsafe {
+            (voxel.apply_edits)(
+                voxel.context,
+                &NativeVoxelEditTransaction {
+                    session,
+                    edits: edits.as_ptr(),
+                    edits_len: edits.len(),
+                },
+                &mut edited,
+                &mut refusal,
+            )
+        };
+        assert_eq!(status, ABI_OK);
+    }
+
+    #[test]
+    fn successive_publications_update_the_installed_navigation_in_place() {
+        let (mut bridge, session) = bridge_with(Arc::new(terrain()));
+        let all = (WIDTH * WIDTH) as u64;
+        let at = |min_x| request(session, min_x);
+        bridge.replace_collision_navigation(&at(0.0)).unwrap();
+        // Nothing changed: nothing is derived.
+        let receipt = bridge.replace_collision_navigation(&at(0.0)).unwrap();
+        assert_eq!(
+            (receipt.derived_column_count, receipt.reused_column_count),
+            (0, all)
+        );
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, at(0.0))
+        );
+        bridge.replace_collision_navigation(&at(4.0)).unwrap();
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, at(4.0))
+        );
+        clear_voxel(&mut bridge, session, [12, 4, 10]);
+        clear_voxel(&mut bridge, session, [25, 3, 25]);
+        let receipt = bridge.replace_collision_navigation(&at(4.0)).unwrap();
+        assert!((1..=50).contains(&receipt.derived_column_count));
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, at(4.0))
+        );
+        let receipt = bridge.replace_collision_navigation(&at(0.0)).unwrap();
+        assert_eq!(receipt.derived_column_count, (4 * WIDTH) as u64);
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, at(0.0))
+        );
+    }
+
     #[test]
     fn a_whole_cell_rebase_keeps_every_column() {
         let (mut bridge, session) = bridge_with(Arc::new(terrain()));
@@ -693,6 +965,11 @@ mod tests {
         let (shift, receipt) = publish(&mut bridge, 12.0);
         println!(
             "12 m shift: {shift:?} derived {} reused {}",
+            receipt.derived_column_count, receipt.reused_column_count
+        );
+        let (same, receipt) = publish(&mut bridge, 12.0);
+        println!(
+            "nothing changed: {same:?} derived {} reused {}",
             receipt.derived_column_count, receipt.reused_column_count
         );
         let edits: Vec<_> = (0..4)

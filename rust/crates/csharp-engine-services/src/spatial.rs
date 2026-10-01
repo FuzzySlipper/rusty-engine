@@ -12,7 +12,7 @@ use std::{
 
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use collision_navigation::{
-    collision_navigation_projection, CollisionNavigationCache, CollisionNavigationDerivation,
+    derive_collision_navigation, CollisionNavigationCache, CollisionNavigationGraph, ColumnBounds,
     SceneRevisions,
 };
 use core_ids::EntityId;
@@ -1279,18 +1279,15 @@ impl RuntimeSpatialBridge {
                 "collision navigation region exceeds its maximum cell budget",
             ));
         }
+        let bounds = ColumnBounds {
+            min_x: min_cell.x,
+            max_x: max_cell.x,
+            min_z: min_cell.z,
+            max_z: max_cell.z,
+        };
         let session = self.session_mut(request.session)?;
-        let scene = session.scene.clone();
-        let previous = session.collision_navigation.take();
-        let CollisionNavigationDerivation {
-            projection,
-            supports: support_heights,
-            edge_admission,
-            derived_columns,
-            reused_columns,
-            cache,
-        } = collision_navigation_projection(
-            &scene,
+        let delta = derive_collision_navigation(
+            &session.scene,
             grid,
             [
                 f64::from(world_min.x),
@@ -1303,13 +1300,39 @@ impl RuntimeSpatialBridge {
                 f64::from(world_max.z),
             ],
             request.config,
-            min_cell.x..=max_cell.x,
-            min_cell.z..=max_cell.z,
-            previous,
+            bounds,
+            session.collision_navigation.as_ref(),
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
         })?;
+        let (derived_columns, reused_columns) = (delta.derived_columns(), delta.reused_columns());
+        // The installed navigation is updated in place when it is the one the
+        // cache describes; nothing below can fail.
+        let previous = session.collision_navigation.take();
+        let installed = previous
+            .as_ref()
+            .and_then(CollisionNavigationCache::installed_revision)
+            .filter(|&revision| {
+                session
+                    .navigation
+                    .as_ref()
+                    .is_some_and(|navigation| navigation.revision == revision)
+            })
+            .and_then(|_| session.navigation.take())
+            .and_then(|navigation| {
+                Some(CollisionNavigationGraph {
+                    projection: navigation.projection,
+                    supports: navigation.vertical_mapping?.support_heights,
+                    edge_admission: navigation.edge_admission?,
+                })
+            });
+        let (mut cache, graph) = delta.apply(grid, previous, installed);
+        let CollisionNavigationGraph {
+            projection,
+            supports: support_heights,
+            edge_admission,
+        } = graph;
         let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
@@ -1322,6 +1345,7 @@ impl RuntimeSpatialBridge {
             derived_column_count: derived_columns,
             reused_column_count: reused_columns,
         };
+        cache.set_installed(navigation_revision);
         session.collision_navigation = Some(cache);
         session.navigation = Some(NavigationState {
             source: NavigationSource::CollisionDerived,
