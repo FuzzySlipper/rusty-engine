@@ -496,7 +496,7 @@ mod tests {
                 .expect("embedded image decoded");
             assert_eq!((image.width, image.height), (8, 8));
             assert_eq!(image.rgba.len(), rgba.len());
-            for pixel in image.rgba.chunks_exact(4) {
+            for pixel in image.rgba.as_chunks::<4>().0 {
                 for channel in 0..3 {
                     assert!(pixel[channel].abs_diff(rgba[channel]) <= 3);
                 }
