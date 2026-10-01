@@ -28,15 +28,15 @@ mod voxel_template;
 mod world_origin;
 
 pub use character_controller::{
-    character_edge_is_traversable, CharacterAirConfig, CharacterBlockKind, CharacterConfigError,
-    CharacterContactFact, CharacterContactKind, CharacterControllerCommand,
+    character_edge_is_traversable, character_edge_outcome, CharacterAirConfig, CharacterBlockKind,
+    CharacterConfigError, CharacterContactFact, CharacterContactKind, CharacterControllerCommand,
     CharacterControllerConfig, CharacterControllerError, CharacterControllerReadout,
-    CharacterControllerReceipt, CharacterControllerService, CharacterExternalMotionConfig,
-    CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig, CharacterMeshInstance,
-    CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig, CharacterShapeConfig,
-    CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders, CharacterStepFact,
-    CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig, CharacterVerticalConfig,
-    DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
+    CharacterControllerReceipt, CharacterControllerService, CharacterEdgeOutcome,
+    CharacterExternalMotionConfig, CharacterGroundConfig, CharacterGroundFact, CharacterJumpConfig,
+    CharacterMeshInstance, CharacterPlatformConfig, CharacterPlatformFact, CharacterRecoveryConfig,
+    CharacterShapeConfig, CharacterSolverConfig, CharacterStanceFact, CharacterStepColliders,
+    CharacterStepFact, CharacterStepSubject, CharacterStepWorld, CharacterSurfaceConfig,
+    CharacterVerticalConfig, DynamicImpulseProposal, FirstPersonLookCommand, FirstPersonLookConfig,
     FirstPersonLookDiagnostic, FirstPersonLookError, FirstPersonLookReceipt,
     FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
 };

@@ -13,40 +13,111 @@ const DIRTY_MARGIN_CELLS: f64 = 1.0;
 /// Beyond this many recorded changes the next publication derives everything.
 const MAX_DIRTY_REGIONS: usize = 256;
 
-/// Everything besides the scene that a derived column depends on, compared
-/// bit for bit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DerivationKey {
-    grid_id: u64,
-    cell_size: u64,
-    chunk_size: u32,
-    max_step_cells: u32,
-    agent_radius: u64,
-    agent_height: u64,
-    maximum_slope_degrees: u64,
-    world_min_y: u64,
-    world_max_y: u64,
+/// A validated collision-navigation policy: everything besides the scene
+/// and the vertical range that a derived column or edge depends on.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CollisionNavigationPolicy {
+    pub(super) grid_id: u64,
+    pub(super) cell_size: f64,
+    pub(super) chunk_size: u32,
+    pub(super) character: CharacterControllerConfig,
+    pub(super) maximum_drop: f64,
+    pub(super) supports_per_column: u32,
+    pub(super) diagonal: bool,
 }
 
-impl DerivationKey {
-    fn new(config: NativeCollisionNavigationConfig, world_min_y: f64, world_max_y: f64) -> Self {
-        Self {
+/// How far a query point may be from a support and still stand on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct SupportSnap {
+    pub(super) above: f64,
+    pub(super) below: f64,
+    pub(super) across: f64,
+}
+
+impl CollisionNavigationPolicy {
+    pub(super) fn from_native(
+        config: &NativeCollisionNavigationConfig,
+    ) -> Result<(Self, SupportSnap), CsharpEngineServicesError> {
+        let invalid =
+            |message| CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_CONFIG", message);
+        let character = character_config(config.character)?;
+        character
+            .validate()
+            .map_err(|_| invalid("collision navigation character configuration is invalid"))?;
+        let snap = SupportSnap {
+            above: config.snap_above,
+            below: config.snap_below,
+            across: config.snap_across,
+        };
+        if !(config.cell_size.is_finite() && config.cell_size > 0.0)
+            || f64::from(character.shape.radius) * 2.0 > config.cell_size
+            || character.surface.maximum_slope_radians > 89.0_f32.to_radians()
+        {
+            return Err(invalid(
+                "collision navigation needs a positive cell at least the agent's diameter and a slope of at most 89 degrees",
+            ));
+        }
+        if !(config.maximum_drop.is_finite() && config.maximum_drop >= 0.0)
+            || config.supports_per_column == 0
+            || [snap.above, snap.below, snap.across]
+                .iter()
+                .any(|value| !(value.is_finite() && *value >= 0.0))
+        {
+            return Err(invalid(
+                "collision navigation drop and snap distances must be finite and non-negative, with at least one support per column",
+            ));
+        }
+        let policy = Self {
             grid_id: config.grid_id,
-            cell_size: config.cell_size.to_bits(),
+            cell_size: config.cell_size,
             chunk_size: config.chunk_size,
-            max_step_cells: config.max_step_cells,
-            agent_radius: config.agent_radius.to_bits(),
-            agent_height: config.agent_height.to_bits(),
-            maximum_slope_degrees: config.maximum_slope_degrees.to_bits(),
-            world_min_y: world_min_y.to_bits(),
-            world_max_y: world_max_y.to_bits(),
+            character,
+            maximum_drop: config.maximum_drop,
+            supports_per_column: config.supports_per_column,
+            diagonal: config.diagonal_neighbors,
+        };
+        u8::try_from(policy.reach_cells())
+            .map_err(|_| invalid("collision navigation step or drop spans more than 255 cells"))?;
+        Ok((policy, snap))
+    }
+
+    /// How many cell levels up or down a neighbour is searched: enough for
+    /// the step up and the drop.
+    pub(super) fn reach_cells(&self) -> u32 {
+        let reach = f64::from(self.character.surface.maximum_step_height).max(self.maximum_drop);
+        (reach / self.cell_size).ceil().min(f64::from(u32::MAX)) as u32
+    }
+
+    pub(super) fn neighbor_policy(&self) -> PlanarNavNeighborPolicy {
+        PlanarNavNeighborPolicy {
+            max_step_cells: self.reach_cells() as u8,
+            diagonal: self.diagonal,
         }
     }
 
+    pub(super) fn grid(&self) -> Result<VoxelGridSpec, CsharpEngineServicesError> {
+        navigation_grid(NativePlanarNavConfig {
+            grid_id: self.grid_id,
+            cell_size: self.cell_size,
+            chunk_size: self.chunk_size,
+            max_step_cells: self.reach_cells(),
+        })
+    }
+}
+
+/// Everything besides the scene that a derived column depends on.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct DerivationKey {
+    pub(super) policy: CollisionNavigationPolicy,
+    pub(super) world_min_y: f64,
+    pub(super) world_max_y: f64,
+}
+
+impl DerivationKey {
     fn translated(self, shift_y: f64) -> Self {
         Self {
-            world_min_y: (f64::from_bits(self.world_min_y) + shift_y).to_bits(),
-            world_max_y: (f64::from_bits(self.world_max_y) + shift_y).to_bits(),
+            world_min_y: self.world_min_y + shift_y,
+            world_max_y: self.world_max_y + shift_y,
             ..self
         }
     }
@@ -192,7 +263,7 @@ impl CollisionNavigationCache {
         if self.scene != before {
             return;
         }
-        let cell_size = f64::from_bits(self.key.cell_size);
+        let cell_size = self.key.policy.cell_size;
         let cells = shift.map(|value| value / cell_size);
         if cells
             .iter()
@@ -232,7 +303,7 @@ impl CollisionNavigationCache {
             min_z: self.bounds.min_z + dz,
             max_z: self.bounds.max_z + dz,
         };
-        self.key = self.key.translated(shift[1]);
+        self.key = self.key.clone().translated(shift[1]);
         self.scene = after;
         self.installed = None;
     }
@@ -245,6 +316,16 @@ impl CollisionNavigationCache {
 
     pub(super) fn set_installed(&mut self, revision: u64) {
         self.installed = Some(revision);
+    }
+
+    pub(super) fn key(&self) -> &DerivationKey {
+        &self.key
+    }
+
+    pub(super) fn admits(&self, from: VoxelCoord, to: VoxelCoord) -> bool {
+        self.edges
+            .get(&from)
+            .is_some_and(|targets| targets.contains(&to))
     }
 
     fn supports(&self, column: Column) -> &[(VoxelCoord, f64)] {
@@ -291,7 +372,7 @@ impl CollisionNavigationDelta {
             Some(cache) => (cache, installed),
             None => (
                 CollisionNavigationCache {
-                    key: self.key,
+                    key: self.key.clone(),
                     scene: self.scene,
                     bounds: self.bounds,
                     columns: BTreeMap::new(),
@@ -367,13 +448,16 @@ impl CollisionNavigationDelta {
 pub(super) fn derive_collision_navigation(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
-    world_min: [f64; 3],
-    world_max: [f64; 3],
-    config: NativeCollisionNavigationConfig,
+    world_y: [f64; 2],
+    policy: CollisionNavigationPolicy,
     bounds: ColumnBounds,
     previous: Option<&CollisionNavigationCache>,
 ) -> Result<CollisionNavigationDelta, CharacterControllerError> {
-    let key = DerivationKey::new(config, world_min[1], world_max[1]);
+    let key = DerivationKey {
+        policy: policy.clone(),
+        world_min_y: world_y[0],
+        world_max_y: world_y[1],
+    };
     let revisions = SceneRevisions::of(scene);
     let previous = previous.filter(|cache| cache.key == key && cache.scene == revisions);
     let mut to_derive = BTreeSet::new();
@@ -406,7 +490,7 @@ pub(super) fn derive_collision_navigation(
     for (x, z) in to_derive {
         derived.insert(
             (x, z),
-            derive_column(scene, grid, world_min, world_max, config, x, z)?,
+            sample_column(scene, grid, world_y, &policy, x, z, None)?.0,
         );
     }
     let supports_of = |column: Column| -> &[(VoxelCoord, f64)] {
@@ -424,18 +508,18 @@ pub(super) fn derive_collision_navigation(
     };
     let mut edge_columns = BTreeSet::new();
     for &(x, z) in derived.keys().chain(&removed) {
-        for (dx, dz) in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1)] {
+        edge_columns.insert((x, z));
+        for (dx, dz) in planar_nav_offsets(policy.diagonal) {
             edge_columns.insert((x + dx, z + dz));
         }
     }
-    let character = collision_navigation_character_config(config);
     let mut edges = Vec::new();
     for &column in edge_columns
         .iter()
         .filter(|&&column| bounds.contains(column))
     {
         for &(from, from_y) in supports_of(column) {
-            let targets = derive_edges(scene, grid, &character, &support, from, from_y, config)?;
+            let targets = derive_edges(scene, grid, &policy, &support, from, from_y)?;
             edges.push((from, targets));
         }
     }
@@ -489,99 +573,143 @@ fn columns_near(
         })
 }
 
-fn derive_column(
+/// One surface a column's downward casts hit, and what became of it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ColumnSample {
+    pub(super) outcome: NativeCollisionNavigationSampleOutcome,
+    pub(super) hit_kind: NativeSpatialHitKind,
+    pub(super) surface_y: f64,
+    pub(super) normal_y: f64,
+    pub(super) standing_y: f64,
+    pub(super) cell: VoxelCoord,
+    pub(super) overlap: Option<(CharacterCollisionSource, core_space::WorldPos)>,
+}
+
+/// The supports of one X/Z column, top down, each as its cell and the height
+/// a standing capsule's feet rest at; and whether sampling stopped at the
+/// per-column budget. With `record`, every surface hit is recorded with what
+/// became of it, and the budget flag is set only when a surface remains.
+pub(super) fn sample_column(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
-    world_min: [f64; 3],
-    world_max: [f64; 3],
-    config: NativeCollisionNavigationConfig,
+    world_y: [f64; 2],
+    policy: &CollisionNavigationPolicy,
     x: i64,
     z: i64,
-) -> Result<Vec<(VoxelCoord, f64)>, CharacterControllerError> {
-    let minimum_upward_normal = config.maximum_slope_degrees.to_radians().cos();
-    let standing = collision_navigation_character_config(config);
+    mut record: Option<&mut Vec<ColumnSample>>,
+) -> Result<(Vec<(VoxelCoord, f64)>, bool), CharacterControllerError> {
+    let standing = &policy.character;
+    let minimum_upward_normal = f64::from(standing.surface.maximum_slope_radians).cos();
+    let radius_and_skin = f64::from(standing.shape.radius + standing.shape.contact_skin);
     let center = grid.voxel_center_world(VoxelCoord::new(x, 0, z));
+    let cast = |origin_y: f64| {
+        let maximum_distance = origin_y - world_y[0] + COLLISION_NAVIGATION_EPSILON;
+        scene
+            .raycast_world(
+                [center.x, origin_y, center.z],
+                [0.0, -1.0, 0.0],
+                maximum_distance,
+            )
+            .map(collision_navigation_support)
+            .filter(|&(support_y, _, _)| support_y >= world_y[0] - COLLISION_NAVIGATION_EPSILON)
+    };
     let mut supports: Vec<(VoxelCoord, f64)> = Vec::new();
-    let mut origin_y = world_max[1] + COLLISION_NAVIGATION_EPSILON;
-    for _ in 0..MAX_COLLISION_NAVIGATION_SUPPORTS_PER_COLUMN {
-        let maximum_distance = origin_y - world_min[1] + COLLISION_NAVIGATION_EPSILON;
-        let Some(hit) = scene.raycast_world(
-            [center.x, origin_y, center.z],
-            [0.0, -1.0, 0.0],
-            maximum_distance,
-        ) else {
+    let mut origin_y = world_y[1] + COLLISION_NAVIGATION_EPSILON;
+    let mut exhausted = true;
+    for _ in 0..policy.supports_per_column {
+        let Some((support_y, normal_y, hit_kind)) = cast(origin_y) else {
+            exhausted = false;
             break;
         };
-        let (support_y, normal_y) = collision_navigation_support(hit);
-        if support_y < world_min[1] - COLLISION_NAVIGATION_EPSILON {
-            break;
-        }
         // Just under a voxel surface the ray is inside solid, where it would
         // hit again at once; continue from the air below the solid run.
         let below = support_y - COLLISION_NAVIGATION_EPSILON;
         origin_y = scene
-            .collidable_voxel_run_bottom([center.x, below, center.z], world_min[1])
+            .collidable_voxel_run_bottom([center.x, below, center.z], world_y[0])
             .map_or(below, |bottom| bottom - COLLISION_NAVIGATION_EPSILON);
+        // On a floor tilted by θ the capsule's sphere, kept its skin off the
+        // plane, rests (r + skin)(1 / cos θ - 1) higher than on flat ground.
+        let standing_y = if normal_y > 0.0 {
+            support_y + radius_and_skin * (1.0 / normal_y - 1.0)
+        } else {
+            support_y
+        };
+        let cell = grid.world_to_voxel(core_space::WorldPos::new(center.x, standing_y, center.z));
+        let mut sample = ColumnSample {
+            outcome: NativeCollisionNavigationSampleOutcome::Support,
+            hit_kind,
+            surface_y: support_y,
+            normal_y,
+            standing_y,
+            cell,
+            overlap: None,
+        };
         if normal_y < minimum_upward_normal {
-            continue;
+            sample.outcome = NativeCollisionNavigationSampleOutcome::TooSteep;
+        } else if let Some(overlap) = scene
+            .character_capsule_overlap(collision_navigation_capsule(center, standing_y, standing))?
+        {
+            sample.outcome = NativeCollisionNavigationSampleOutcome::CapsuleOverlap;
+            sample.overlap = Some((overlap.source, overlap.point));
+        } else if supports.iter().any(|(existing, _)| *existing == cell) {
+            // The first support found for a cell wins, as the highest one.
+            sample.outcome = NativeCollisionNavigationSampleOutcome::SameCell;
+        } else {
+            supports.push((cell, standing_y));
         }
-        let capsule = collision_navigation_capsule(center, support_y, &standing);
-        if scene.character_capsule_overlap(capsule)?.is_some() {
-            continue;
-        }
-        let cell = grid.world_to_voxel(core_space::WorldPos::new(center.x, support_y, center.z));
-        // The first support found for a cell wins, as the highest one.
-        if !supports.iter().any(|(existing, _)| *existing == cell) {
-            supports.push((cell, support_y));
+        if let Some(record) = record.as_deref_mut() {
+            record.push(sample);
         }
     }
-    Ok(supports)
+    if exhausted && record.is_some() {
+        exhausted = cast(origin_y).is_some();
+    }
+    Ok((supports, exhausted))
 }
 
 fn derive_edges(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
-    character: &CharacterControllerConfig,
+    policy: &CollisionNavigationPolicy,
     support: &dyn Fn(VoxelCoord) -> Option<f64>,
     from: VoxelCoord,
     from_y: f64,
-    config: NativeCollisionNavigationConfig,
 ) -> Result<Vec<VoxelCoord>, CharacterControllerError> {
-    let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
     let mut targets = Vec::new();
-    for to in collision_navigation_neighbors(from, config.max_step_cells) {
+    for to in collision_navigation_neighbors(from, policy) {
         let Some(to_y) = support(to) else {
             continue;
         };
-        let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
-        if character_edge_is_traversable(
-            scene,
-            character,
-            core_space::WorldPos::new(from_center.x, from_y, from_center.z),
-            core_space::WorldPos::new(to_center.x, to_y, to_center.z),
-        )? {
+        if edge_outcome(scene, grid, policy, (from, from_y), (to, to_y))?
+            == CharacterEdgeOutcome::Traversable
+        {
             targets.push(to);
         }
     }
     Ok(targets)
 }
 
-pub(super) fn collision_navigation_character_config(
-    config: NativeCollisionNavigationConfig,
-) -> CharacterControllerConfig {
-    let mut character = CharacterControllerConfig::default();
-    character.shape.radius = config.agent_radius as f32;
-    character.shape.standing_height = config.agent_height as f32;
-    character.shape.contact_skin = COLLISION_NAVIGATION_CLEARANCE_EPSILON as f32;
-    character.surface.maximum_step_height =
-        (config.cell_size * f64::from(config.max_step_cells)) as f32;
-    character.surface.maximum_slope_radians = config.maximum_slope_degrees.to_radians() as f32;
-    character
+pub(super) fn edge_outcome(
+    scene: &VoxelCollisionScene,
+    grid: VoxelGridSpec,
+    policy: &CollisionNavigationPolicy,
+    (from, from_y): (VoxelCoord, f64),
+    (to, to_y): (VoxelCoord, f64),
+) -> Result<CharacterEdgeOutcome, CharacterControllerError> {
+    let from_center = grid.voxel_center_world(VoxelCoord::new(from.x, 0, from.z));
+    let to_center = grid.voxel_center_world(VoxelCoord::new(to.x, 0, to.z));
+    character_edge_outcome(
+        scene,
+        &policy.character,
+        core_space::WorldPos::new(from_center.x, from_y, from_center.z),
+        core_space::WorldPos::new(to_center.x, to_y, to_center.z),
+        policy.maximum_drop,
+    )
 }
 
 fn collision_navigation_capsule(
     center: core_space::WorldPos,
-    support_y: f64,
+    standing_y: f64,
     config: &CharacterControllerConfig,
 ) -> CharacterCapsule {
     let radius = f64::from(config.shape.radius);
@@ -590,7 +718,7 @@ fn collision_navigation_capsule(
     CharacterCapsule {
         center: core_space::WorldPos::new(
             center.x,
-            support_y + half_height + radius + f64::from(config.shape.contact_skin),
+            standing_y + half_height + radius + f64::from(config.shape.contact_skin),
             center.z,
         ),
         half_height,
@@ -598,27 +726,292 @@ fn collision_navigation_capsule(
     }
 }
 
-fn collision_navigation_neighbors(
+pub(super) fn collision_navigation_neighbors(
     coord: VoxelCoord,
-    max_step_cells: u32,
+    policy: &CollisionNavigationPolicy,
 ) -> impl Iterator<Item = VoxelCoord> {
-    let mut neighbors = Vec::with_capacity(4 * (1 + max_step_cells as usize * 2));
-    for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
-        neighbors.push(VoxelCoord::new(coord.x + dx, coord.y, coord.z + dz));
-        for step in 1..=i64::from(max_step_cells) {
-            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y + step, coord.z + dz));
-            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y - step, coord.z + dz));
-        }
-    }
-    neighbors.into_iter()
+    let reach = i64::from(policy.reach_cells());
+    planar_nav_offsets(policy.diagonal)
+        .iter()
+        .flat_map(move |&(dx, dz)| {
+            std::iter::once(0)
+                .chain((1..=reach).flat_map(|step| [step, -step]))
+                .map(move |dy| VoxelCoord::new(coord.x + dx, coord.y + dy, coord.z + dz))
+        })
 }
 
-fn collision_navigation_support(hit: engine_spatial::SpatialCollisionHit) -> (f64, f64) {
+fn collision_navigation_support(
+    hit: engine_spatial::SpatialCollisionHit,
+) -> (f64, f64, NativeSpatialHitKind) {
     match hit {
-        engine_spatial::SpatialCollisionHit::Voxel(hit) => {
-            (hit.point[1], f64::from((hit.face == Face::PosY) as u8))
+        engine_spatial::SpatialCollisionHit::Voxel(hit) => (
+            hit.point[1],
+            f64::from((hit.face == Face::PosY) as u8),
+            NativeSpatialHitKind::Voxel,
+        ),
+        engine_spatial::SpatialCollisionHit::StaticMesh(hit) => {
+            (hit.point.y, hit.normal.y, NativeSpatialHitKind::StaticMesh)
         }
-        engine_spatial::SpatialCollisionHit::StaticMesh(hit) => (hit.point.y, hit.normal.y),
+    }
+}
+
+/// A query point may lie this far above or below a support: a tenth of a
+/// metre, plus the derivation's own rounding allowance.
+const DEFAULT_SNAP: f64 = 0.1 + COLLISION_NAVIGATION_EPSILON;
+
+pub(super) unsafe extern "C" fn default_config(
+    context: *mut c_void,
+    config: *mut NativeCollisionNavigationConfig,
+) -> i32 {
+    if context.is_null() || config.is_null() {
+        return 0;
+    }
+    let character = CharacterControllerConfig::default();
+    let value = NativeCollisionNavigationConfig {
+        grid_id: 1,
+        cell_size: 1.0,
+        chunk_size: 16,
+        maximum_cells: 65_536,
+        maximum_drop: f64::from(character.surface.maximum_step_height),
+        character: native_character_config(character),
+        supports_per_column: 8,
+        diagonal_neighbors: false,
+        snap_above: DEFAULT_SNAP,
+        snap_below: DEFAULT_SNAP,
+        snap_across: 0.0,
+    };
+    // SAFETY: the caller owns the output for this direct call.
+    unsafe { *config = value };
+    ABI_OK
+}
+
+fn unpublished() -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(
+        "CSHARP_COLLISION_NAVIGATION_UNAVAILABLE",
+        "the session has no collision-derived navigation to explain",
+    )
+}
+
+fn projection_error(error: CharacterControllerError) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
+}
+
+fn native_sample(sample: ColumnSample) -> NativeCollisionNavigationSample {
+    let mut value = NativeCollisionNavigationSample {
+        outcome: sample.outcome,
+        hit_kind: sample.hit_kind,
+        surface_y: sample.surface_y,
+        normal_y: sample.normal_y,
+        standing_y: sample.standing_y,
+        cell: native_nav_cell(sample.cell),
+        ..Default::default()
+    };
+    if let Some((source, point)) = sample.overlap {
+        (
+            value.overlap_kind,
+            _,
+            value.overlap_instance,
+            value.overlap_asset,
+            _,
+            value.overlap_chunk_x,
+            value.overlap_chunk_y,
+            value.overlap_chunk_z,
+        ) = native_character_source(source, &BTreeMap::new());
+        value.overlap_point = NativeVec3 {
+            x: point.x as f32,
+            y: point.y as f32,
+            z: point.z as f32,
+        };
+    }
+    value
+}
+
+fn native_edge_outcome(outcome: CharacterEdgeOutcome) -> NativeCollisionNavigationEdgeOutcome {
+    match outcome {
+        CharacterEdgeOutcome::Traversable => NativeCollisionNavigationEdgeOutcome::Traversable,
+        CharacterEdgeOutcome::NoHorizontalMove => NativeCollisionNavigationEdgeOutcome::NotNeighbor,
+        CharacterEdgeOutcome::RiseOverStep => NativeCollisionNavigationEdgeOutcome::RiseOverStep,
+        CharacterEdgeOutcome::DropOverMaximum => {
+            NativeCollisionNavigationEdgeOutcome::DropOverMaximum
+        }
+        CharacterEdgeOutcome::StartOverlap => NativeCollisionNavigationEdgeOutcome::StartOverlap,
+        CharacterEdgeOutcome::EndOverlap => NativeCollisionNavigationEdgeOutcome::EndOverlap,
+        CharacterEdgeOutcome::HorizontalSweepBlocked => {
+            NativeCollisionNavigationEdgeOutcome::HorizontalSweepBlocked
+        }
+        CharacterEdgeOutcome::DescentBlocked => {
+            NativeCollisionNavigationEdgeOutcome::DescentBlocked
+        }
+        CharacterEdgeOutcome::StepManeuverFailed => {
+            NativeCollisionNavigationEdgeOutcome::StepManeuverFailed
+        }
+    }
+}
+
+impl RuntimeSpatialBridge {
+    fn explain_collision_navigation_column(
+        &mut self,
+        request: &NativeCollisionNavigationColumnRequest,
+    ) -> Result<NativeCollisionNavigationColumnResult, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let key = session
+            .collision_navigation
+            .as_ref()
+            .ok_or_else(unpublished)?
+            .key();
+        let mut samples = Vec::new();
+        let (_, budget_exhausted) = sample_column(
+            &session.scene,
+            key.policy.grid()?,
+            [key.world_min_y, key.world_max_y],
+            &key.policy,
+            request.x,
+            request.z,
+            Some(&mut samples),
+        )
+        .map_err(projection_error)?;
+        let navigation_revision = session.navigation_revision;
+        let samples: Box<[_]> = samples.into_iter().map(native_sample).collect();
+        let result = NativeCollisionNavigationColumnResult {
+            samples: samples.as_ptr(),
+            samples_len: samples.len(),
+            budget_exhausted,
+            navigation_revision,
+        };
+        self.borrowed.hold(samples);
+        Ok(result)
+    }
+
+    fn explain_collision_navigation_edge(
+        &mut self,
+        request: &NativeCollisionNavigationEdgeRequest,
+    ) -> Result<NativeCollisionNavigationEdgeReadout, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let cache = session
+            .collision_navigation
+            .as_ref()
+            .ok_or_else(unpublished)?;
+        let key = cache.key();
+        let grid = key.policy.grid()?;
+        let world_y = [key.world_min_y, key.world_max_y];
+        let support = |cell: VoxelCoord| {
+            sample_column(
+                &session.scene,
+                grid,
+                world_y,
+                &key.policy,
+                cell.x,
+                cell.z,
+                None,
+            )
+            .map(|(supports, _)| {
+                supports
+                    .into_iter()
+                    .find(|(support, _)| *support == cell)
+                    .map(|(_, height)| height)
+            })
+        };
+        let (from, to) = (nav_cell(request.from), nav_cell(request.to));
+        let from_y = support(from).map_err(projection_error)?;
+        let to_y = support(to).map_err(projection_error)?;
+        let outcome = match (from_y, to_y) {
+            (None, _) => NativeCollisionNavigationEdgeOutcome::FromNotSupport,
+            (_, None) => NativeCollisionNavigationEdgeOutcome::ToNotSupport,
+            _ if !collision_navigation_neighbors(from, &key.policy).any(|cell| cell == to) => {
+                NativeCollisionNavigationEdgeOutcome::NotNeighbor
+            }
+            (Some(from_y), Some(to_y)) => native_edge_outcome(
+                edge_outcome(
+                    &session.scene,
+                    grid,
+                    &key.policy,
+                    (from, from_y),
+                    (to, to_y),
+                )
+                .map_err(projection_error)?,
+            ),
+        };
+        Ok(NativeCollisionNavigationEdgeReadout {
+            outcome,
+            admitted: cache.admits(from, to),
+            from_y: from_y.unwrap_or_default(),
+            to_y: to_y.unwrap_or_default(),
+            navigation_revision: session.navigation_revision,
+        })
+    }
+}
+
+pub(super) unsafe extern "C" fn explain_column(
+    context: *mut c_void,
+    request: *const NativeCollisionNavigationColumnRequest,
+    result: *mut NativeCollisionNavigationColumnResult,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.explain_collision_navigation_column(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
+    }
+}
+
+pub(super) unsafe extern "C" fn explain_edge(
+    context: *mut c_void,
+    request: *const NativeCollisionNavigationEdgeRequest,
+    readout: *mut NativeCollisionNavigationEdgeReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || request.is_null() || readout.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.explain_collision_navigation_edge(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *readout = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
+    }
+}
+
+/// The configuration that reproduces the navigation the flat parameters
+/// (cell size, step cells, agent radius and height, slope) used to describe,
+/// on grid 7 with 16-cell chunks and a 4096-column budget.
+#[cfg(test)]
+pub(super) fn flat_config(
+    cell_size: f64,
+    max_step_cells: u32,
+    agent_radius: f64,
+    agent_height: f64,
+    maximum_slope_degrees: f64,
+) -> NativeCollisionNavigationConfig {
+    let mut character = CharacterControllerConfig::default();
+    character.shape.radius = agent_radius as f32;
+    character.shape.standing_height = agent_height as f32;
+    character.shape.crouched_height = ((agent_radius * 2.0 + agent_height) * 0.5) as f32;
+    character.shape.contact_skin = COLLISION_NAVIGATION_CLEARANCE_EPSILON as f32;
+    character.surface.maximum_step_height = (cell_size * f64::from(max_step_cells)) as f32;
+    character.surface.maximum_slope_radians = maximum_slope_degrees.to_radians() as f32;
+    let snap = (cell_size * 0.25).min(0.1) + COLLISION_NAVIGATION_EPSILON;
+    NativeCollisionNavigationConfig {
+        grid_id: 7,
+        cell_size,
+        chunk_size: 16,
+        maximum_cells: 4096,
+        maximum_drop: f64::from(character.surface.maximum_step_height),
+        character: native_character_config(character),
+        supports_per_column: 8,
+        diagonal_neighbors: false,
+        snap_above: snap,
+        snap_below: snap,
+        snap_across: 0.0,
     }
 }
 
@@ -659,16 +1052,7 @@ mod tests {
                 y: 12.0,
                 z: WIDTH as f32,
             },
-            config: NativeCollisionNavigationConfig {
-                grid_id: 7,
-                cell_size: 1.0,
-                chunk_size: 16,
-                max_step_cells: 1,
-                agent_radius: 0.3,
-                agent_height: 1.6,
-                maximum_slope_degrees: 45.0,
-                maximum_cells: 4096,
-            },
+            config: flat_config(1.0, 1, 0.3, 1.6, 45.0),
         }
     }
 
@@ -1001,6 +1385,479 @@ mod tests {
         assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
         // Down the stair, not through the rock between the rooms.
         assert!(path.iter().any(|cell| cell.z < 3), "{path:?}");
+    }
+
+    /// Publishes `config` over `[min, max]` on a fresh session of `scene`.
+    fn publish_over(
+        scene: VoxelCollisionScene,
+        config: NativeCollisionNavigationConfig,
+        min: [f32; 3],
+        max: [f32; 3],
+    ) -> (RuntimeSpatialBridge, NativeSpatialSessionHandle) {
+        let (mut bridge, session) = bridge_with(Arc::new(scene));
+        let vec = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+        bridge
+            .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                session,
+                world_min: vec(min),
+                world_max: vec(max),
+                config,
+            })
+            .unwrap();
+        (bridge, session)
+    }
+
+    fn edge(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        from: [i64; 3],
+        to: [i64; 3],
+    ) -> (NativeCollisionNavigationEdgeOutcome, bool) {
+        let cell = |[x, y, z]: [i64; 3]| NativePlanarNavCell { x, y, z };
+        let readout = bridge
+            .explain_collision_navigation_edge(&NativeCollisionNavigationEdgeRequest {
+                session,
+                from: cell(from),
+                to: cell(to),
+            })
+            .unwrap();
+        (readout.outcome, readout.admitted)
+    }
+
+    fn column(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        x: i64,
+        z: i64,
+    ) -> (Vec<NativeCollisionNavigationSample>, bool) {
+        let result = bridge
+            .explain_collision_navigation_column(&NativeCollisionNavigationColumnRequest {
+                session,
+                x,
+                z,
+            })
+            .unwrap();
+        let samples =
+            unsafe { std::slice::from_raw_parts(result.samples, result.samples_len) }.to_vec();
+        (samples, result.budget_exhausted)
+    }
+
+    /// A floor of 1 m voxels at height 1 rising by one block at x = 4, under a
+    /// ceiling at height 4: three cells of headroom below the riser.
+    fn riser() -> VoxelCollisionScene {
+        let mut voxels = Vec::new();
+        for x in 0..8 {
+            for z in 0..4 {
+                for y in 0..if x >= 4 { 2 } else { 1 } {
+                    voxels.push([x, y, z]);
+                }
+                voxels.push([x, 4, z]);
+            }
+        }
+        VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap()
+    }
+
+    #[test]
+    fn a_riser_of_exactly_the_step_height_is_an_edge_both_ways() {
+        // A 1 m step, and steps whose full lift would reach the ceiling.
+        for (step_cells, radius, height) in [(1, 0.3, 1.6), (2, 0.3, 1.6), (3, 0.2, 1.5)] {
+            let config = flat_config(1.0, step_cells, radius, height, 45.0);
+            let (mut bridge, session) =
+                publish_over(riser(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
+            let traversable = (NativeCollisionNavigationEdgeOutcome::Traversable, true);
+            assert_eq!(
+                edge(&mut bridge, session, [3, 1, 2], [4, 2, 2]),
+                traversable
+            );
+            assert_eq!(
+                edge(&mut bridge, session, [4, 2, 2], [3, 1, 2]),
+                traversable
+            );
+        }
+        // Higher than the step is refused, and says why.
+        let config = flat_config(0.5, 1, 0.2, 1.5, 45.0);
+        let (mut bridge, session) = publish_over(riser(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [7, 2, 4], [8, 4, 4]),
+            (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+    }
+
+    #[test]
+    fn a_drop_is_a_one_way_edge_within_the_maximum_drop() {
+        // A ledge three blocks above the floor beside it.
+        let mut voxels = Vec::new();
+        for x in 0..8 {
+            for z in 0..4 {
+                for y in 0..if x < 4 { 4 } else { 1 } {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let scene = || VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels.clone()).unwrap();
+        let mut config = flat_config(1.0, 1, 0.3, 1.6, 45.0);
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 8.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [3, 4, 2], [4, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+        config.maximum_drop = 3.0;
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 8.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [3, 4, 2], [4, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::Traversable, true)
+        );
+        assert_eq!(
+            edge(&mut bridge, session, [4, 1, 2], [3, 4, 2]),
+            (NativeCollisionNavigationEdgeOutcome::RiseOverStep, false)
+        );
+        config.maximum_drop = 2.5;
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 8.0, 4.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [3, 4, 2], [4, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::DropOverMaximum, false)
+        );
+    }
+
+    /// A static-mesh plane through the origin rising along +X at `degrees`.
+    fn slope(degrees: f64) -> VoxelCollisionScene {
+        let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 16, Vec::new()).unwrap();
+        let rise = 8.0 * degrees.to_radians().tan();
+        let asset = StaticMeshColliderAsset::new(
+            StaticMeshAssetId(1),
+            vec![
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 4.0],
+                [8.0, rise, 0.0],
+                [8.0, rise, 4.0],
+            ],
+            vec![[0, 1, 2], [2, 1, 3]],
+        )
+        .unwrap();
+        scene
+            .replace_static_mesh_colliders(
+                [asset],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(1),
+                    asset: StaticMeshAssetId(1),
+                    transform: StaticMeshTransform::IDENTITY,
+                }],
+            )
+            .unwrap();
+        scene
+    }
+
+    #[test]
+    fn a_slope_up_to_the_maximum_is_a_support_with_its_feet_lifted() {
+        // #9032 finding A: r = 0.3 and skin 0.02 refused anything steeper than
+        // about 20 degrees although the maximum slope is 50.
+        let config = flat_config(1.0, 1, 0.3, 1.6, 50.0);
+        for degrees in [25.0_f64, 45.0, 10.0] {
+            let (mut bridge, session) =
+                publish_over(slope(degrees), config, [0.0, -1.0, 0.0], [8.0, 9.0, 4.0]);
+            let (samples, exhausted) = column(&mut bridge, session, 3, 2);
+            assert!(!exhausted);
+            let [sample] = samples[..] else {
+                panic!("{samples:?}")
+            };
+            assert_eq!(
+                sample.outcome,
+                NativeCollisionNavigationSampleOutcome::Support,
+                "{degrees} degrees"
+            );
+            assert_eq!(sample.hit_kind, NativeSpatialHitKind::StaticMesh);
+            let lift = 0.32 * (1.0 / degrees.to_radians().cos() - 1.0);
+            assert!((sample.standing_y - sample.surface_y - lift).abs() < 1.0e-4);
+            // Every column of the plane is a support, and they connect.
+            let receipt =
+                bridge.replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                    session,
+                    world_min: NativeVec3 {
+                        x: 0.0,
+                        y: -1.0,
+                        z: 0.0,
+                    },
+                    world_max: NativeVec3 {
+                        x: 8.0,
+                        y: 9.0,
+                        z: 4.0,
+                    },
+                    config,
+                });
+            assert_eq!(
+                receipt.unwrap().walkable_cell_count,
+                32,
+                "{degrees} degrees"
+            );
+        }
+        let (mut bridge, session) =
+            publish_over(slope(60.0), config, [0.0, -1.0, 0.0], [8.0, 15.0, 4.0]);
+        let (samples, _) = column(&mut bridge, session, 3, 2);
+        assert_eq!(
+            samples[0].outcome,
+            NativeCollisionNavigationSampleOutcome::TooSteep
+        );
+    }
+
+    #[test]
+    fn a_column_explains_overlap_and_the_layer_budget() {
+        // A floor at 1, a slab at 2 leaving no headroom, and floors below.
+        let mut voxels = Vec::new();
+        for x in 0..4 {
+            for z in 0..4 {
+                for y in [0, 2, 5, 8, 11] {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let mut config = flat_config(1.0, 1, 0.3, 1.6, 45.0);
+        config.supports_per_column = 2;
+        let (mut bridge, session) = publish_over(
+            VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
+            config,
+            [0.0, 0.0, 0.0],
+            [4.0, 12.0, 4.0],
+        );
+        let (samples, exhausted) = column(&mut bridge, session, 1, 1);
+        assert!(exhausted);
+        let outcomes: Vec<_> = samples.iter().map(|sample| sample.outcome).collect();
+        assert_eq!(
+            outcomes,
+            [
+                NativeCollisionNavigationSampleOutcome::Support,
+                NativeCollisionNavigationSampleOutcome::Support
+            ]
+        );
+        config.supports_per_column = 8;
+        let (mut bridge, session) = {
+            let scene = Arc::clone(&bridge.sessions[&session.value].scene);
+            let (mut bridge, session) = bridge_with(scene);
+            let mut request = request(session, 0.0);
+            request.world_max = NativeVec3 {
+                x: 4.0,
+                y: 12.0,
+                z: 4.0,
+            };
+            request.config = config;
+            bridge.replace_collision_navigation(&request).unwrap();
+            (bridge, session)
+        };
+        let (samples, exhausted) = column(&mut bridge, session, 1, 1);
+        assert!(!exhausted);
+        let last = samples.last().unwrap();
+        assert_eq!(last.surface_y, 1.0);
+        assert_eq!(
+            last.outcome,
+            NativeCollisionNavigationSampleOutcome::CapsuleOverlap
+        );
+        assert!(matches!(
+            last.overlap_kind,
+            NativeCharacterCollisionSourceKind::VoxelChunk
+        ));
+        // Against the slab above, at the capsule's top.
+        assert!((last.overlap_point.y - 2.0).abs() < 0.05, "{last:?}");
+    }
+
+    #[test]
+    fn diagonal_neighbours_connect_corners_but_not_through_a_wall() {
+        let mut voxels = Vec::new();
+        for x in 0..6 {
+            for z in 0..6 {
+                voxels.push([x, 0, z]);
+                // A wall corner at (3, 3): cutting it is not an edge.
+                if (x, z) == (3, 3) {
+                    voxels.extend([[x, 1, z], [x, 2, z]]);
+                }
+            }
+        }
+        let scene = || VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels.clone()).unwrap();
+        let mut config = flat_config(1.0, 1, 0.3, 1.6, 45.0);
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [6.0, 4.0, 6.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [1, 1, 1], [2, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::NotNeighbor, false)
+        );
+        config.diagonal_neighbors = true;
+        let (mut bridge, session) = publish_over(scene(), config, [0.0, 0.0, 0.0], [6.0, 4.0, 6.0]);
+        assert_eq!(
+            edge(&mut bridge, session, [1, 1, 1], [2, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::Traversable, true)
+        );
+        assert!(
+            !edge(&mut bridge, session, [2, 1, 3], [3, 1, 4]).1,
+            "the capsule sweeps through the wall corner"
+        );
+        // A diagonal route is shorter, and republishing after an edit beside
+        // a diagonal edge matches a full derivation.
+        let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
+        let (step, path) = evaluate_navigation_step_facts(
+            navigation,
+            NativeNavigationStepRequest {
+                session,
+                from: NativeVec3 {
+                    x: 0.5,
+                    y: 1.0,
+                    z: 0.5,
+                },
+                target: NativeVec3 {
+                    x: 2.5,
+                    y: 1.0,
+                    z: 2.5,
+                },
+                max_step_units: 1.0,
+                max_visited: 4096,
+            },
+        );
+        assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(path.len(), 3);
+        let publish = NativeCollisionNavigationReplaceRequest {
+            session,
+            world_min: NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            world_max: NativeVec3 {
+                x: 6.0,
+                y: 4.0,
+                z: 6.0,
+            },
+            config,
+        };
+        clear_voxel(&mut bridge, session, [3, 2, 3]);
+        clear_voxel(&mut bridge, session, [3, 1, 3]);
+        bridge.replace_collision_navigation(&publish).unwrap();
+        assert_eq!(
+            published(&bridge, session),
+            from_scratch(&bridge, session, publish)
+        );
+        assert_eq!(
+            edge(&mut bridge, session, [2, 1, 3], [3, 1, 4]),
+            (NativeCollisionNavigationEdgeOutcome::Traversable, true)
+        );
+    }
+
+    #[test]
+    fn a_query_snaps_to_a_support_within_the_configured_distances() {
+        // A floor at 1, and one at 1.5 from x = 4.
+        let mut voxels = Vec::new();
+        for x in 0..8 {
+            for z in 0..2 {
+                voxels.push([x, 0, z]);
+            }
+        }
+        let mut config = flat_config(1.0, 1, 0.3, 1.6, 45.0);
+        let at = |x: f32, y: f32| NativeVec3 { x, y, z: 0.5 };
+        let step = |bridge: &RuntimeSpatialBridge, from: NativeVec3, to: NativeVec3| {
+            let navigation = bridge.sessions[&session_of(bridge)]
+                .navigation
+                .as_ref()
+                .unwrap();
+            evaluate_navigation_step_facts(
+                navigation,
+                NativeNavigationStepRequest {
+                    session: NativeSpatialSessionHandle {
+                        value: session_of(bridge),
+                    },
+                    from,
+                    target: to,
+                    max_step_units: 1.0,
+                    max_visited: 4096,
+                },
+            )
+            .0
+            .outcome
+        };
+        let scene = || VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels.clone()).unwrap();
+        let (bridge, _) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 2.0]);
+        // Within the default tenth of a metre, but not a quarter above.
+        assert_eq!(
+            step(&bridge, at(0.5, 1.05), at(7.5, 1.0)),
+            NativeNavigationPathOutcome::Reached
+        );
+        assert_eq!(
+            step(&bridge, at(0.5, 1.25), at(7.5, 1.0)),
+            NativeNavigationPathOutcome::StartNotWalkable
+        );
+        assert_eq!(
+            step(&bridge, at(0.5, 1.0), at(7.5, 0.8)),
+            NativeNavigationPathOutcome::GoalNotWalkable
+        );
+        // Off the floor's edge, across, it lands on no cell.
+        assert_eq!(
+            step(&bridge, at(0.5, 1.0), at(8.2, 1.0)),
+            NativeNavigationPathOutcome::GoalNotWalkable
+        );
+        config.snap_above = 0.3;
+        config.snap_below = 0.3;
+        config.snap_across = 0.25;
+        let (bridge, _) = publish_over(scene(), config, [0.0, 0.0, 0.0], [8.0, 4.0, 2.0]);
+        assert_eq!(
+            step(&bridge, at(0.5, 1.25), at(7.5, 0.8)),
+            NativeNavigationPathOutcome::Reached
+        );
+        assert_eq!(
+            step(&bridge, at(0.5, 1.0), at(8.2, 1.0)),
+            NativeNavigationPathOutcome::Reached
+        );
+    }
+
+    fn session_of(bridge: &RuntimeSpatialBridge) -> u64 {
+        *bridge.sessions.keys().next().unwrap()
+    }
+
+    #[test]
+    fn no_path_reports_how_far_the_search_got() {
+        // Two floors separated by a wall the agent cannot step over.
+        let mut voxels = Vec::new();
+        for x in 0..8 {
+            for z in 0..3 {
+                voxels.push([x, 0, z]);
+                if x == 4 {
+                    voxels.extend([[x, 1, z], [x, 2, z], [x, 3, z]]);
+                }
+            }
+        }
+        let (bridge, session) = publish_over(
+            VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
+            flat_config(1.0, 1, 0.3, 1.6, 45.0),
+            [0.0, 0.0, 0.0],
+            [8.0, 3.0, 3.0],
+        );
+        let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
+        let (step, _) = evaluate_navigation_step_facts(
+            navigation,
+            NativeNavigationStepRequest {
+                session,
+                from: NativeVec3 {
+                    x: 0.5,
+                    y: 1.0,
+                    z: 1.5,
+                },
+                target: NativeVec3 {
+                    x: 7.5,
+                    y: 1.0,
+                    z: 1.5,
+                },
+                max_step_units: 1.0,
+                max_visited: 4096,
+            },
+        );
+        assert_eq!(step.outcome, NativeNavigationPathOutcome::NoPath);
+        assert_eq!(step.visited, 12);
+        assert!(step.nearest_present);
+        assert_eq!(
+            (
+                step.nearest_cell.x,
+                step.nearest_cell.y,
+                step.nearest_cell.z
+            ),
+            (3, 1, 1)
+        );
+        assert_eq!(
+            (step.nearest.x, step.nearest.y, step.nearest.z),
+            (3.5, 1.0, 1.5)
+        );
     }
 
     /// The downstream shape (#8999): a 64 x 64 x 32 box over relief of about

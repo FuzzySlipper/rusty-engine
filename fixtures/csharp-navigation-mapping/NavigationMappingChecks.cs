@@ -20,11 +20,89 @@ internal static class NavigationMappingChecks
     // mesh floors are after float rounding.
     private const float NoisyFloorRise = 1.0e-5f;
 
+    private const int WallColumn = 3;
+    private const int WallRow = 7;
+
     internal static void Run(IEngineContext engine)
     {
         CheckFloor(engine, new VoxelAddress(-21, -5, 35));
         CheckFloor(engine, new VoxelAddress(37, 4, -29));
         CheckNoisyMeshFloor(engine);
+        CheckPolicyAndExplanations(engine);
+    }
+
+    // A 0.2-unit body on half-unit cells that steps and drops one cell.
+    private static CollisionNavigationConfig Config(IEngineContext engine)
+    {
+        CollisionNavigationConfig defaults = engine.Spatial.DefaultCollisionNavigationConfig();
+        CharacterControllerConfig body = defaults.Character with
+        {
+            Shape = defaults.Character.Shape with { Radius = 0.1f, StandingHeight = 0.4f, CrouchedHeight = 0.3f },
+            Surface = defaults.Character.Surface with
+            {
+                MaximumStepHeight = (float)CellSize,
+                MaximumSlopeRadians = 45 * MathF.PI / 180,
+            },
+        };
+        return defaults with
+        {
+            GridId = GridId,
+            CellSize = CellSize,
+            ChunkSize = ChunkSize,
+            MaximumCells = MaximumCells,
+            Character = body,
+            MaximumDrop = CellSize,
+        };
+    }
+
+    // A row of floor with a wall two cells high across it: the route needs a
+    // one-unit step up and drop down, and every refusal says why.
+    private static void CheckPolicyAndExplanations(IEngineContext engine)
+    {
+        using SpatialSession session = engine.Spatial.CreateSession(new(CellSize, ChunkSize, VoxelSurfaceMode.GreedyCubes));
+        var edits = new VoxelEdit[WallRow + 1 + 2];
+        for (int x = 0; x <= WallRow; x++)
+            edits[x] = new(VoxelEditKind.Set, new(x, 0, 0), 1);
+        edits[WallRow + 1] = new(VoxelEditKind.Set, new(WallColumn, 1, 0), 1);
+        edits[WallRow + 2] = new(VoxelEditKind.Set, new(WallColumn, 2, 0), 1);
+        Require(engine.Voxel.ApplyEdits(new(session, edits)).Status == VoxelEditStatus.Accepted, "wall admission failed");
+        Vector3 worldMin = new(0, -1, 0), worldMax = new((WallRow + 1) * (float)CellSize, 3, (float)CellSize);
+        Vector3 west = new(0.25f, 0.5f, 0.25f), east = new(WallRow * (float)CellSize + 0.25f, 0.5f, 0.25f);
+        CollisionNavigationConfig config = Config(engine);
+        engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
+
+        NavigationStepResult blocked = engine.Spatial.EvaluateNavigationStep(new(session, west, east, (float)CellSize, MaximumVisited));
+        Require(blocked.Outcome == NavigationPathOutcome.NoPath && blocked.Visited == WallColumn && blocked.NearestPresent
+                && blocked.NearestCell == new PlanarNavCell(WallColumn - 1, 1, 0) && blocked.Nearest.X == 1.25f,
+            $"NoPath did not say how far it got: {blocked}");
+        PlanarNavCell beforeWall = new(WallColumn - 1, 1, 0), wallTop = new(WallColumn, 3, 0);
+        CollisionNavigationEdgeReadout tooHigh = engine.Spatial.ExplainCollisionNavigationEdge(new(session, beforeWall, wallTop));
+        Require(tooHigh.Outcome == CollisionNavigationEdgeOutcome.NotNeighbor && !tooHigh.Admitted && tooHigh.ToY == 1.5,
+            $"a two-cell rise was not explained: {tooHigh}");
+        CollisionNavigationColumnResult wall = engine.Spatial.ExplainCollisionNavigationColumn(new(session, WallColumn, 0));
+        Require(wall.Samples.Length == 1 && !wall.BudgetExhausted
+                && wall.Samples.Span[0].Outcome == CollisionNavigationSampleOutcome.Support && wall.Samples.Span[0].StandingY == 1.5,
+            "the wall column was not explained as one support on its top");
+
+        // A one-unit step and drop cross the wall.
+        config = config with
+        {
+            Character = config.Character with { Surface = config.Character.Surface with { MaximumStepHeight = 1 } },
+            MaximumDrop = 1,
+        };
+        engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
+        Require(engine.Spatial.EvaluateNavigationStep(new(session, west, east, (float)CellSize, MaximumVisited)).Outcome == NavigationPathOutcome.Reached,
+            "a step and drop of one unit did not cross the wall");
+        CollisionNavigationEdgeReadout step = engine.Spatial.ExplainCollisionNavigationEdge(new(session, beforeWall, wallTop));
+        Require(step.Outcome == CollisionNavigationEdgeOutcome.Traversable && step.Admitted, $"the step was not admitted: {step}");
+
+        // A start a fifth of a unit above the floor stands on it only within the snap.
+        Vector3 hovering = west + new Vector3(0, 0.2f, 0);
+        Require(engine.Spatial.EvaluateNavigationStep(new(session, hovering, east, (float)CellSize, MaximumVisited)).Outcome == NavigationPathOutcome.StartNotWalkable,
+            "a start beyond the default snap stood on the floor");
+        engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config with { SnapAbove = 0.25 }));
+        Require(engine.Spatial.EvaluateNavigationStep(new(session, hovering, east, (float)CellSize, MaximumVisited)).Outcome == NavigationPathOutcome.Reached,
+            "a start within the snap did not stand on the floor");
     }
 
     private static void CheckNoisyMeshFloor(IEngineContext engine)
@@ -44,8 +122,7 @@ internal static class NavigationMappingChecks
             new[] { new StaticMeshInstance(NoisyFloorInstance, NoisyFloorAsset, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One)) },
             ReadOnlyMemory<ulong>.Empty,
             ReadOnlyMemory<ulong>.Empty));
-        CollisionNavigationConfig config = new(GridId, CellSize, ChunkSize, 1, 0.1, 0.4, 45, MaximumCells);
-        engine.Spatial.ReplaceCollisionNavigation(new(session, new(0, -1, 0), new(NoisyFloorLength, 2, 1), config));
+        engine.Spatial.ReplaceCollisionNavigation(new(session, new(0, -1, 0), new(NoisyFloorLength, 2, 1), Config(engine)));
 
         Vector3 west = new(0.25f, FootClearance, 0.25f);
         Vector3 east = new(NoisyFloorLength - 0.25f, FootClearance, 0.25f);
@@ -72,7 +149,7 @@ internal static class NavigationMappingChecks
         // Deliberately nonzero and not aligned to either a cell or chunk boundary.
         Vector3 worldMin = firstSupport - new Vector3(0.35f, 1, 0.35f);
         Vector3 worldMax = lastSupport + new Vector3(0.35f, 2, 0.35f);
-        CollisionNavigationConfig config = new(GridId, CellSize, ChunkSize, 1, 0.1, 0.4, 45, MaximumCells);
+        CollisionNavigationConfig config = Config(engine);
         CollisionNavigationReplaceReceipt projection = engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));
         Require(projection.WalkableCellCount == FloorCells, "unexpected reported walkable count");
         CollisionNavigationReplaceReceipt republished = engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config));

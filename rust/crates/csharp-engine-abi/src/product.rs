@@ -197,6 +197,20 @@ pub type NativeReplaceCollisionNavigation = unsafe extern "C" fn(
     *mut NativeCollisionNavigationReplaceReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeDefaultCollisionNavigationConfig =
+    unsafe extern "C" fn(*mut c_void, *mut NativeCollisionNavigationConfig) -> i32;
+pub type NativeExplainCollisionNavigationColumn = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCollisionNavigationColumnRequest,
+    *mut NativeCollisionNavigationColumnResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeExplainCollisionNavigationEdge = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCollisionNavigationEdgeRequest,
+    *mut NativeCollisionNavigationEdgeReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceNavigationTraversal = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationTraversalReplaceRequest,
@@ -1233,6 +1247,9 @@ pub struct NativeSpatialApi {
     pub replace_navigation: NativeReplaceNavigation,
     pub replace_voxel_navigation: NativeReplaceVoxelNavigation,
     pub replace_collision_navigation: NativeReplaceCollisionNavigation,
+    pub default_collision_navigation_config: NativeDefaultCollisionNavigationConfig,
+    pub explain_collision_navigation_column: NativeExplainCollisionNavigationColumn,
+    pub explain_collision_navigation_edge: NativeExplainCollisionNavigationEdge,
     pub replace_navigation_traversal: NativeReplaceNavigationTraversal,
     pub clear_navigation_traversal: NativeClearNavigationTraversal,
     pub replace_volumetric_navigation_traversal: NativeReplaceVolumetricNavigationTraversal,

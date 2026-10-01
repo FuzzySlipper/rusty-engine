@@ -448,24 +448,59 @@ so a product that needs a path later keeps the one it was given.
 
 `Spatial.ReplaceCollisionNavigation` derives and retains a planar projection
 from the session's current Engine collision scene. The request supplies a
-finite `WorldMin`/`WorldMax` volume plus cell, bounded grid, step, agent
-clearance, and maximum-slope policy; it never supplies geometry. The Engine
-samples voxel and retained static-mesh collision for support and headroom,
-preserves supported elevations, and checks a standing capsule at each cell
-center. Directed connections between supported cells use the character
-collision capsule casts and step solver: a traversable floor lip can connect
-without admitting a thin separating wall or insufficient headroom. Agent radius
-and height define capsule clearance; the step limit is cell size times
-`MaxStepCells`. Path, weighted-path and navigation-step queries apply these
-edge checks alongside product traversal overlays. Each X/Z cell is sampled
-down through solid as well as air, so floors inside an enclosed volume (rooms
-stacked in rock) are found. It considers at most eight surfaces per X/Z cell,
-so a deeper layer is unknown rather than implied walkable. Use the live foot
-position for `EvaluateNavigationStep` so it can reconcile to the nearest
-retained support in that X/Z cell (see below). This is a bounded route
+finite `WorldMin`/`WorldMax` volume and a `CollisionNavigationConfig`; it never
+supplies geometry. The Engine samples voxel and retained static-mesh collision
+for support and headroom, preserves supported elevations, and checks a
+standing capsule at each cell center. Directed connections between supported
+cells use the character collision capsule casts and step solver: a traversable
+floor lip can connect without admitting a thin separating wall or insufficient
+headroom. Path, weighted-path and navigation-step queries apply these edge
+checks alongside product traversal overlays. This is a bounded route
 suggestion only: normal character collision and controls remain the authority
 for physical movement. Product door and hazard state belongs in the planar
 traversal overlay; read-only evaluation honors that overlay.
+
+Start from `Spatial.DefaultCollisionNavigationConfig()` and change one option
+at a time with `with`:
+
+| Option | Meaning | Default |
+|---|---|---|
+| `GridId`, `CellSize`, `ChunkSize`, `MaximumCells` | The world-aligned grid and the most X/Z columns one publication may cover. | 1, 1 m, 16, 65,536 |
+| `Character` | The body navigation stands and moves with. Pass the `CharacterControllerConfig` the product's character uses: `Shape` radius, standing height and contact skin; `Surface` maximum slope, maximum step height (metres up), minimum step width and floor snap; `Recovery` tolerances. Its radius may be at most half a cell. | `DefaultCharacterControllerConfig()` |
+| `MaximumDrop` | Farthest a one-way downward edge falls, in metres. | The default step height |
+| `SupportsPerColumn` | Surfaces sampled per X/Z column, top down. A deeper layer is unknown, not walkable. | 8 |
+| `DiagonalNeighbors` | Also connect diagonal neighbours. A diagonal is one path step, as an orthogonal one is. | off |
+| `SnapAbove`, `SnapBelow` | How far a query point may lie above or below a support and still stand on it. | 0.101 m |
+| `SnapAcross` | How far beyond the footprint of the cell containing a query point a support may be taken from. | 0 (that cell only) |
+
+Neighbours are searched as many cell levels up and down as the step height and
+the drop reach. Each X/Z column is sampled down through solid as well as air,
+so floors inside an enclosed volume (rooms stacked in rock) are found. On a
+slope the capsule's feet rest above the surface, by `(radius + skin) × (1/cos
+θ − 1)`, so any slope up to the maximum is a support. A riser up to the step
+height is climbed when the headroom above it fits the body, as the character
+controller climbs it.
+
+To see why navigation hangs up, ask it:
+
+- `ExplainCollisionNavigationColumn(session, x, z)` samples one column again
+  against current collision with the published configuration. Each sample is
+  a surface the downward casts hit, with its height, normal, where the feet
+  would stand, its cell, and an outcome: `Support`, `TooSteep`,
+  `CapsuleOverlap` (with the collision chunk or static-mesh instance and the
+  contact point), or `SameCell` (a higher support holds that cell). No samples
+  means nothing was hit; `BudgetExhausted` means a surface remains below the
+  last one sampled.
+- `ExplainCollisionNavigationEdge(session, from, to)` evaluates one directed
+  edge: `Traversable`, `FromNotSupport`, `ToNotSupport`, `NotNeighbor`,
+  `RiseOverStep`, `DropOverMaximum`, `StartOverlap`, `EndOverlap`,
+  `HorizontalSweepBlocked`, `DescentBlocked` or `StepManeuverFailed`, with
+  both support heights and whether the installed navigation holds the edge.
+- A `NoPath` step result carries `Visited` and the visited cell nearest the
+  goal (`NearestCell`, standing at `Nearest`).
+
+Use the live foot position for `EvaluateNavigationStep` so it can reconcile to
+the nearest retained support (see below).
 
 Republishing is incremental. The session keeps the previous collision-derived
 publication's columns and connections, and a new one derives only the X/Z
@@ -499,7 +534,8 @@ cell.Z = floor(z / s)
 ```
 
 Use mathematical floor, including for negative values. The level is the
-**collision surface's support height**, not the occupied floor voxel's index,
+**collision surface's support height** (on a slope, the height the feet stand
+at), not the occupied floor voxel's index,
 agent center, height above `WorldMin`, or a layer ordinal. For example, with
 `s = 0.5`, support `(-10.25, -2.0, 17.75)` maps to `(-21, -4, 35)` regardless
 of the publication box minimum. A solid voxel at `(-21, -5, 35)` supplies that
@@ -519,12 +555,13 @@ static PlanarNavCell CellAtSupport(Vector3 support, double cellSize) => new(
 For creature movement from live foot positions, prefer
 `Spatial.EvaluateNavigationStep(new NavigationStepRequest(session, fromFeet,
 targetFeet, maximumStepDistance, maximumVisitedCells))`. It resolves each
-position to the nearest retained support in its world-aligned X/Z column within
-`min(s * 0.25, 0.1) + 0.001` world units. This handles the controller's small
-standing clearance without searching grid levels. A position with no support
-within that tolerance returns `StartNotWalkable` or `GoalNotWalkable`; it does
-not snap to a distant floor or a different column. Supply both endpoints in the
-same current session frame as the collision publication.
+position to the nearest retained support within the configuration's snap:
+`SnapAbove`/`SnapBelow` vertically and, beyond the containing cell's
+footprint, `SnapAcross`. The nearest across wins, then the nearest vertically.
+The defaults (0.101 m, and the containing cell only) handle the controller's
+small standing clearance. A position with no support within the snap returns
+`StartNotWalkable` or `GoalNotWalkable`. Supply both endpoints in the same
+current session frame as the collision publication.
 
 The result's `NextPathCell` is a grid identity; `NextWaypoint` is a
 world-space movement proposal bounded by `maximumStepDistance`. Use that
@@ -536,7 +573,9 @@ uses that support height when constructing its proposal.
 The [packaged mapping fixture](../fixtures/csharp-navigation-mapping/NavigationMappingChecks.cs)
 checks positive and negative coordinates, non-unit cells, unaligned publication
 bounds, every reported walkable cell, a multi-cell route, and world-position
-steering. It also reproduces `StartNotWalkable` from subtracting the box minimum.
+steering. It also reproduces `StartNotWalkable` from subtracting the box minimum,
+and explains a wall the default step refuses before a one-unit step and drop
+cross it.
 Run it with `scripts/test-csharp-sdk-package.sh --coreclr-smoke`.
 
 ### Spatial triggers

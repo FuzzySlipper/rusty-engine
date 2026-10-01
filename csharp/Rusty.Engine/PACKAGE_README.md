@@ -71,8 +71,9 @@ negative coordinates too. The Y level uses the standing surface, not the solid
 voxel below it or the character center. `ChunkSize` does not shift this grid.
 
 For live foot positions, `Spatial.EvaluateNavigationStep` resolves the nearest
-retained support in each endpoint's X/Z column within `min(s * 0.25, 0.1) + 0.001`
-world units and returns a world-space `NextWaypoint`. This avoids guessing
+retained support within the configuration's snap distances (by default 0.101
+units up or down, in the endpoint's own X/Z cell) and returns a world-space
+`NextWaypoint`. This avoids guessing
 levels or scanning cells. A reported walkable count includes every retained
 support level; it does not imply that every point inside the publication box
 is walkable. See `docs/csharp-lifecycle.md#collision-navigation-coordinates` and the

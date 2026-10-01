@@ -148,6 +148,8 @@ pub struct NavPathQuery {
 pub struct PlanarNavNeighborPolicy {
     /// Maximum upward or downward cell difference across one X/Z edge.
     pub max_step_cells: u8,
+    /// Also step to the four diagonal X/Z neighbours.
+    pub diagonal: bool,
 }
 
 /// Canonical directed surface edges admitted by the collision owner.
@@ -205,6 +207,8 @@ pub struct NavPathReadout {
     pub visited: usize,
     pub path: Vec<VoxelCoord>,
     pub path_hash: u64,
+    /// On `NoPath`, the visited cell nearest the goal.
+    pub nearest: Option<VoxelCoord>,
 }
 
 /// Maximum number of caller-supplied per-cell traversal records retained by
@@ -848,6 +852,7 @@ fn find_path_with_optional_edge_admission(
             visited: 1,
             path_hash: hash_path(&path),
             path,
+            nearest: None,
         });
     }
 
@@ -876,6 +881,7 @@ fn find_path_with_optional_edge_admission(
                     visited: visited.len() + 1,
                     path_hash: hash_path(&path),
                     path,
+                    nearest: None,
                 });
             }
             visited.insert(next);
@@ -888,6 +894,7 @@ fn find_path_with_optional_edge_admission(
         visited: visited.len(),
         path: Vec::new(),
         path_hash: hash_path(&[]),
+        nearest: nearest_to(query.goal, &visited),
     })
 }
 
@@ -950,6 +957,7 @@ fn find_path_with_traversal_and_optional_edge_admission(
             visited: 1,
             path_hash: hash_path(&path),
             path,
+            nearest: None,
         });
     }
     let mut queue = VecDeque::new();
@@ -977,6 +985,7 @@ fn find_path_with_traversal_and_optional_edge_admission(
                     visited: visited.len() + 1,
                     path_hash: hash_path(&path),
                     path,
+                    nearest: None,
                 });
             }
             visited.insert(next);
@@ -988,6 +997,7 @@ fn find_path_with_traversal_and_optional_edge_admission(
         visited: visited.len(),
         path: Vec::new(),
         path_hash: hash_path(&[]),
+        nearest: nearest_to(query.goal, &visited),
     })
 }
 
@@ -1440,13 +1450,42 @@ fn nav_neighbors(coord: VoxelCoord) -> [VoxelCoord; 4] {
     ]
 }
 
+/// The visited cell nearest `goal`, the first in cell order on a tie.
+fn nearest_to(goal: VoxelCoord, visited: &BTreeSet<VoxelCoord>) -> Option<VoxelCoord> {
+    visited.iter().copied().min_by_key(|cell| {
+        let [dx, dy, dz] = [cell.x - goal.x, cell.y - goal.y, cell.z - goal.z]
+            .map(|delta| i128::from(delta) * i128::from(delta));
+        dx + dy + dz
+    })
+}
+
+/// X/Z neighbour offsets: orthogonal first, then diagonal when asked.
+pub fn planar_nav_offsets(diagonal: bool) -> &'static [(i64, i64)] {
+    const OFFSETS: [(i64, i64); 8] = [
+        (1, 0),
+        (0, 1),
+        (-1, 0),
+        (0, -1),
+        (1, 1),
+        (-1, 1),
+        (-1, -1),
+        (1, -1),
+    ];
+    if diagonal {
+        &OFFSETS
+    } else {
+        &OFFSETS[..4]
+    }
+}
+
 fn planar_nav_neighbors(
     coord: VoxelCoord,
     policy: PlanarNavNeighborPolicy,
 ) -> impl Iterator<Item = VoxelCoord> {
-    let horizontal = [(1, 0), (0, 1), (-1, 0), (0, -1)];
-    let mut neighbors = Vec::with_capacity(4 * (1 + usize::from(policy.max_step_cells) * 2));
-    for (dx, dz) in horizontal {
+    let horizontal = planar_nav_offsets(policy.diagonal);
+    let mut neighbors =
+        Vec::with_capacity(horizontal.len() * (1 + usize::from(policy.max_step_cells) * 2));
+    for &(dx, dz) in horizontal {
         neighbors.push(VoxelCoord::new(coord.x + dx, coord.y, coord.z + dz));
         for step in 1..=i64::from(policy.max_step_cells) {
             neighbors.push(VoxelCoord::new(coord.x + dx, coord.y + step, coord.z + dz));
@@ -1854,7 +1893,10 @@ mod tests {
             VoxelCoord::new(3, 3, 0),
         ];
         let projection = NavProjection::from_walkable_cells(test_grid(), cells);
-        let policy = PlanarNavNeighborPolicy { max_step_cells: 1 };
+        let policy = PlanarNavNeighborPolicy {
+            max_step_cells: 1,
+            diagonal: false,
+        };
 
         for (start, goal, expected) in [
             (cells[0], cells[3], cells.to_vec()),
@@ -1889,7 +1931,10 @@ mod tests {
                 goal,
                 max_visited: 16,
             },
-            PlanarNavNeighborPolicy { max_step_cells: 1 },
+            PlanarNavNeighborPolicy {
+                max_step_cells: 1,
+                diagonal: false,
+            },
         )
         .expect("bounded drop query");
         assert_eq!(blocked.outcome, NavPathOutcome::NoPath);
@@ -1901,7 +1946,10 @@ mod tests {
                 goal,
                 max_visited: 16,
             },
-            PlanarNavNeighborPolicy { max_step_cells: 2 },
+            PlanarNavNeighborPolicy {
+                max_step_cells: 2,
+                diagonal: false,
+            },
         )
         .expect("explicit drop query");
         assert_eq!(allowed.path, vec![start, goal]);

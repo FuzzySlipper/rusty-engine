@@ -648,18 +648,146 @@ pub struct NativeNavigationVoxelReplaceRequest {
 }
 
 /// Bounded agent policy for deriving a planar navigation projection from the
-/// session's retained voxel and static-mesh collision authority.
+/// session's retained voxel and static-mesh collision authority. The default
+/// configuration (`default_collision_navigation_config`) is a starting point
+/// to vary one option at a time.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCollisionNavigationConfig {
     pub grid_id: u64,
     pub cell_size: f64,
     pub chunk_size: u32,
-    pub max_step_cells: u32,
-    pub agent_radius: f64,
-    pub agent_height: f64,
-    pub maximum_slope_degrees: f64,
     pub maximum_cells: u32,
+    /// The body navigation stands and steps with, as the product's character
+    /// controller uses it: shape radius, standing height and contact skin;
+    /// surface maximum slope, maximum step height (metres up), minimum step
+    /// width and floor snap; recovery tolerances.
+    pub character: NativeCharacterControllerConfig,
+    /// Farthest a one-way downward edge may fall, in metres.
+    pub maximum_drop: f64,
+    /// Surfaces sampled per X/Z column, top down; a deeper layer is unknown.
+    pub supports_per_column: u32,
+    /// Also connect diagonal neighbours. A diagonal is one path step, as an
+    /// orthogonal neighbour is.
+    pub diagonal_neighbors: bool,
+    /// How far a query point may lie above a support and still stand on it.
+    pub snap_above: f64,
+    /// How far a query point may lie below a support and still stand on it.
+    pub snap_below: f64,
+    /// How far beyond the footprint of the cell containing a query point a
+    /// support may be taken from; zero keeps the containing cell only.
+    pub snap_across: f64,
+}
+
+/// Why one surface a collision-navigation column sampled is or is not a
+/// support.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeCollisionNavigationSampleOutcome {
+    #[default]
+    Support = 0,
+    /// Steeper than the character's maximum slope.
+    TooSteep = 1,
+    /// The standing capsule overlaps collision; the overlap source says what.
+    CapsuleOverlap = 2,
+    /// A higher support already holds this cell.
+    SameCell = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCollisionNavigationSample {
+    pub outcome: NativeCollisionNavigationSampleOutcome,
+    pub hit_kind: NativeSpatialHitKind,
+    pub surface_y: f64,
+    pub normal_y: f64,
+    /// Where the capsule's feet stand: above the surface on a slope.
+    pub standing_y: f64,
+    pub cell: NativePlanarNavCell,
+    /// For `CapsuleOverlap`: what the capsule overlaps (a voxel collision
+    /// chunk or a static-mesh instance) and the deepest contact point.
+    pub overlap_kind: NativeCharacterCollisionSourceKind,
+    pub overlap_instance: u64,
+    pub overlap_asset: u64,
+    pub overlap_chunk_x: i64,
+    pub overlap_chunk_y: i64,
+    pub overlap_chunk_z: i64,
+    pub overlap_point: NativeVec3,
+}
+
+/// One X/Z column of the session's collision-derived navigation, derived
+/// again against current collision with the published policy and range.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionNavigationColumnRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub x: i64,
+    pub z: i64,
+}
+
+/// Borrowed until the next Spatial call. No samples means the column hit
+/// nothing in the published vertical range.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionNavigationColumnResult {
+    pub samples: *const NativeCollisionNavigationSample,
+    pub samples_len: usize,
+    /// Sampling stopped at the per-column budget, not at the range's bottom.
+    pub budget_exhausted: bool,
+    pub navigation_revision: u64,
+}
+
+impl Default for NativeCollisionNavigationColumnResult {
+    fn default() -> Self {
+        Self {
+            samples: std::ptr::null(),
+            samples_len: 0,
+            budget_exhausted: false,
+            navigation_revision: 0,
+        }
+    }
+}
+
+/// Why a directed collision-navigation edge is or is not traversable.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeCollisionNavigationEdgeOutcome {
+    #[default]
+    Traversable = 0,
+    FromNotSupport = 1,
+    ToNotSupport = 2,
+    /// Not a neighbour under the published neighbourhood and reach.
+    NotNeighbor = 3,
+    RiseOverStep = 4,
+    DropOverMaximum = 5,
+    StartOverlap = 6,
+    EndOverlap = 7,
+    /// A level or downward move is blocked at the start height.
+    HorizontalSweepBlocked = 8,
+    /// The fall onto the lower support is blocked.
+    DescentBlocked = 9,
+    /// The rise-forward-drop step manoeuvre found no landing on the target.
+    StepManeuverFailed = 10,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionNavigationEdgeRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub from: NativePlanarNavCell,
+    pub to: NativePlanarNavCell,
+}
+
+/// The edge evaluated against current collision with the published policy;
+/// `admitted` says whether the installed navigation holds it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCollisionNavigationEdgeReadout {
+    pub outcome: NativeCollisionNavigationEdgeOutcome,
+    pub admitted: bool,
+    pub from_y: f64,
+    pub to_y: f64,
+    pub navigation_revision: u64,
 }
 
 /// Atomically replaces the session's retained planar projection by sampling
@@ -1448,6 +1576,11 @@ pub struct NativeNavigationStepResult {
     pub navigation_revision: u64,
     pub projection_hash: u64,
     pub path_hash: u64,
+    /// On `NoPath` or `BudgetExhausted`, the visited cell nearest the goal
+    /// and where it stands.
+    pub nearest_present: bool,
+    pub nearest_cell: NativePlanarNavCell,
+    pub nearest: NativeVec3,
 }
 
 impl Default for NativeNavigationStepResult {
@@ -1460,6 +1593,9 @@ impl Default for NativeNavigationStepResult {
             next_path_cell: Default::default(),
             reached: 0,
             visited: 0,
+            nearest_present: false,
+            nearest_cell: Default::default(),
+            nearest: Default::default(),
             navigation_revision: 0,
             projection_hash: 0,
             path_hash: 0,

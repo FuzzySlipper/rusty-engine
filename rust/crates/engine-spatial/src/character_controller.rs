@@ -788,20 +788,58 @@ pub struct CharacterControllerService {
     last_readout: Option<CharacterControllerReadout>,
 }
 
+/// Why a directed support-to-support surface edge is or is not traversable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterEdgeOutcome {
+    Traversable,
+    /// The two supports share an X/Z position.
+    NoHorizontalMove,
+    RiseOverStep,
+    DropOverMaximum,
+    StartOverlap,
+    EndOverlap,
+    /// A level or downward move is blocked at the start height, and the step
+    /// manoeuvre does not clear it either.
+    HorizontalSweepBlocked,
+    /// The fall onto the lower support is blocked.
+    DescentBlocked,
+    /// The rise-forward-drop step manoeuvre found no landing on the target.
+    StepManeuverFailed,
+}
+
 /// Admit one directed, support-to-support surface edge using the same capsule
-/// casts and step solver as ordinary character movement.
-///
-/// This is intentionally a geometry query rather than a controller update: it
-/// owns no entity state, does not advance timers, and does not publish motion.
-/// Collision-derived navigation uses it when deciding whether two already
-/// supported columns may be connected. Callers remain responsible for proving
-/// both endpoint supports are standable before asking for the edge.
+/// casts and step solver as ordinary character movement, with a downward edge
+/// falling at most `step_height` (the configured maximum step height).
 pub fn character_edge_is_traversable(
     scene: &VoxelCollisionScene,
     config: &CharacterControllerConfig,
     start_support: WorldPos,
     end_support: WorldPos,
 ) -> Result<bool, CharacterControllerError> {
+    let maximum_drop = f64::from(config.surface.maximum_step_height);
+    Ok(
+        character_edge_outcome(scene, config, start_support, end_support, maximum_drop)?
+            == CharacterEdgeOutcome::Traversable,
+    )
+}
+
+/// Evaluate one directed, support-to-support surface edge using the same
+/// capsule casts and step solver as ordinary character movement. An upward
+/// edge rises at most the configured maximum step height; a downward edge
+/// falls at most `maximum_drop`.
+///
+/// This is intentionally a geometry query rather than a controller update: it
+/// owns no entity state, does not advance timers, and does not publish motion.
+/// Collision-derived navigation uses it when deciding whether two already
+/// supported columns may be connected. Callers remain responsible for proving
+/// both endpoint supports are standable before asking for the edge.
+pub fn character_edge_outcome(
+    scene: &VoxelCollisionScene,
+    config: &CharacterControllerConfig,
+    start_support: WorldPos,
+    end_support: WorldPos,
+    maximum_drop: f64,
+) -> Result<CharacterEdgeOutcome, CharacterControllerError> {
     let height = stance_height(config, CharacterStance::Standing);
     let capsule = |center| capsule_at(center, height, config.shape.radius);
     let center_offset =
@@ -812,21 +850,26 @@ pub fn character_edge_is_traversable(
         start_support.z,
     );
     let end = WorldPos::new(end_support.x, end_support.y + center_offset, end_support.z);
-    let rise = (end_support.y - start_support.y).abs() as f32;
-    if rise > config.surface.maximum_step_height + config.recovery.normal_nudge {
-        return Ok(false);
+    let nudge = f64::from(config.recovery.normal_nudge);
+    let rise = end_support.y - start_support.y;
+    if rise > f64::from(config.surface.maximum_step_height) + nudge {
+        return Ok(CharacterEdgeOutcome::RiseOverStep);
+    }
+    if -rise > maximum_drop + nudge {
+        return Ok(CharacterEdgeOutcome::DropOverMaximum);
     }
 
     let mut stats = CharacterCollisionQueryStats::default();
-    if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some()
-        || overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some()
-    {
-        return Ok(false);
+    if overlap_world(&scene.projection, &[], capsule(start), &mut stats)?.is_some() {
+        return Ok(CharacterEdgeOutcome::StartOverlap);
+    }
+    if overlap_world(&scene.projection, &[], capsule(end), &mut stats)?.is_some() {
+        return Ok(CharacterEdgeOutcome::EndOverlap);
     }
 
     let translation = WorldVec::new(end.x - start.x, end.y - start.y, end.z - start.z);
     if translation.x.abs() <= f64::EPSILON && translation.z.abs() <= f64::EPSILON {
-        return Ok(false);
+        return Ok(CharacterEdgeOutcome::NoHorizontalMove);
     }
     let tolerance = f64::from(
         config
@@ -840,7 +883,8 @@ pub fn character_edge_is_traversable(
     // rise-forward-drop solver would reject. A rise within the capsule's skin
     // is level floor (mesh floors differ by float noise between columns), and
     // the step solver refuses it as no higher tread.
-    if end_support.y <= start_support.y + tolerance
+    let level_or_down = end_support.y <= start_support.y + tolerance;
+    if level_or_down
         && cast_world(
             &scene.projection,
             &[],
@@ -853,10 +897,10 @@ pub fn character_edge_is_traversable(
     {
         let descent = WorldVec::new(0.0, translation.y, 0.0);
         if descent.y >= 0.0 {
-            return Ok(true);
+            return Ok(CharacterEdgeOutcome::Traversable);
         }
         let horizontal_end = WorldPos::new(end.x, start.y, end.z);
-        return Ok(cast_world(
+        let landed = cast_world(
             &scene.projection,
             &[],
             capsule(horizontal_end),
@@ -864,7 +908,12 @@ pub fn character_edge_is_traversable(
             0.0,
             &mut stats,
         )?
-        .is_none_or(|hit| hit.time_of_impact >= 1.0 - f64::from(config.recovery.normal_nudge)));
+        .is_none_or(|hit| hit.time_of_impact >= 1.0 - nudge);
+        return Ok(if landed {
+            CharacterEdgeOutcome::Traversable
+        } else {
+            CharacterEdgeOutcome::DescentBlocked
+        });
     }
 
     // A direct capsule sweep correctly rejects a wall, but an ordinary
@@ -881,12 +930,16 @@ pub fn character_edge_is_traversable(
         config,
         &mut stats,
     )?;
-    let Some(landing) = landing else {
-        return Ok(false);
-    };
-    Ok((landing.center.x - end.x).abs() <= tolerance
-        && (landing.center.y - end.y).abs() <= tolerance
-        && (landing.center.z - end.z).abs() <= tolerance)
+    let landed = landing.is_some_and(|landing| {
+        (landing.center.x - end.x).abs() <= tolerance
+            && (landing.center.y - end.y).abs() <= tolerance
+            && (landing.center.z - end.z).abs() <= tolerance
+    });
+    Ok(match (landed, level_or_down) {
+        (true, _) => CharacterEdgeOutcome::Traversable,
+        (false, true) => CharacterEdgeOutcome::HorizontalSweepBlocked,
+        (false, false) => CharacterEdgeOutcome::StepManeuverFailed,
+    })
 }
 
 impl CharacterControllerService {
@@ -1918,18 +1971,30 @@ fn try_step(
     if rise <= 0.0 || requested.x * requested.x + requested.z * requested.z <= 1.0e-8 {
         return Ok((None, casts));
     }
+    // Lift until the capsule clears a riser of the full step height by its
+    // skin, which the forward sweep below keeps clear, or as far as the
+    // headroom allows: a lower riser still fits under a ceiling that stops
+    // the full lift.
+    let skin = config.shape.contact_skin;
+    let full_lift = rise + skin;
     // A grounded capsule can be within the query skin of its support. Begin the
     // upward clearance cast just beyond that skin so the separating floor does
     // not mask a real ceiling farther along the probe. Sweep actual geometry:
     // inflating by skin also reports a parallel nearby riser as an obstruction
-    // at time zero, masking the clear upward path. Real ceilings still block.
-    let departure = (config.shape.contact_skin + config.recovery.normal_nudge).min(rise);
+    // at time zero, masking the clear upward path.
+    let departure = (skin + config.recovery.normal_nudge).min(full_lift);
     let upward_start = add_world(start, WorldVec::new(0.0, f64::from(departure), 0.0));
-    let upward = WorldVec::new(0.0, f64::from(rise - departure), 0.0);
-    if cast_step(capsule(upward_start), upward, 0.0)?.is_some() {
+    let upward = f64::from(full_lift - departure);
+    let lift = match cast_step(capsule(upward_start), WorldVec::new(0.0, upward, 0.0), 0.0)? {
+        Some(ceiling) => {
+            f64::from(departure) + (ceiling.time_of_impact * upward - f64::from(skin)).max(0.0)
+        }
+        None => f64::from(full_lift),
+    };
+    if lift <= f64::from(departure) {
         return Ok((None, casts));
     }
-    let raised = add_world(start, WorldVec::new(0.0, f64::from(rise), 0.0));
+    let raised = add_world(start, WorldVec::new(0.0, lift, 0.0));
     let horizontal = Vec3::new(requested.x, 0.0, requested.z);
     if cast_step(
         capsule(raised),
@@ -1941,7 +2006,7 @@ fn try_step(
         return Ok((None, casts));
     }
     let forward = add_world(raised, vec3_world(horizontal));
-    let downward_distance = rise + config.surface.floor_snap_distance;
+    let downward_distance = lift as f32 + config.surface.floor_snap_distance;
     let Some(landing) = cast_step(
         capsule(forward),
         WorldVec::new(0.0, -f64::from(downward_distance), 0.0),
