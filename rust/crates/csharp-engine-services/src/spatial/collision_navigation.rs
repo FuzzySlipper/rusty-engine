@@ -1579,6 +1579,136 @@ mod tests {
         scene
     }
 
+    /// A static-mesh surface along +X through `profile`'s (x, height)
+    /// points, 4 units deep in Z.
+    fn surface(profile: &[(f64, f64)]) -> VoxelCollisionScene {
+        let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 16, Vec::new()).unwrap();
+        let positions = profile
+            .iter()
+            .flat_map(|&(x, y)| [[x, y, 0.0], [x, y, 4.0]])
+            .collect();
+        let triangles = (0..profile.len() as u32 - 1)
+            .flat_map(|i| {
+                [
+                    [2 * i, 2 * i + 1, 2 * i + 2],
+                    [2 * i + 2, 2 * i + 1, 2 * i + 3],
+                ]
+            })
+            .collect();
+        let asset =
+            StaticMeshColliderAsset::new(StaticMeshAssetId(1), positions, triangles).unwrap();
+        scene
+            .replace_static_mesh_colliders(
+                [asset],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(1),
+                    asset: StaticMeshAssetId(1),
+                    transform: StaticMeshTransform::IDENTITY,
+                }],
+            )
+            .unwrap();
+        scene
+    }
+
+    /// The body #9035 reported (r 0.3, height 1.75, 50 degree slopes) with a
+    /// step of `step` metres, on 1 m cells.
+    fn walker(step: f32) -> NativeCollisionNavigationConfig {
+        let mut config = flat_config(1.0, 2, 0.3, 1.75, 50.0);
+        let mut character = character_config(config.character).unwrap();
+        character.surface.maximum_step_height = step;
+        config.character = native_character_config(character);
+        config.maximum_drop = f64::from(step);
+        config
+    }
+
+    /// Routes from the first to the last column of row z = 2 and back.
+    fn route_both_ways(
+        scene: VoxelCollisionScene,
+        config: NativeCollisionNavigationConfig,
+    ) -> [NativeNavigationPathOutcome; 2] {
+        let (mut bridge, session) = publish_over(scene, config, [0.0, -2.0, 0.0], [8.0, 12.0, 4.0]);
+        let feet = |bridge: &mut RuntimeSpatialBridge, x: i64| {
+            let (samples, _) = column(bridge, session, x, 2);
+            NativeVec3 {
+                x: x as f32 + 0.5,
+                y: samples[0].standing_y as f32,
+                z: 2.5,
+            }
+        };
+        let (low, high) = (feet(&mut bridge, 0), feet(&mut bridge, 7));
+        let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
+        [(low, high), (high, low)].map(|(from, target)| {
+            evaluate_navigation_step_facts(
+                navigation,
+                NativeNavigationStepRequest {
+                    session,
+                    from,
+                    target,
+                    max_step_units: 1.0,
+                    max_visited: 4096,
+                },
+            )
+            .0
+            .outcome
+        })
+    }
+
+    #[test]
+    fn a_route_climbs_and_descends_a_slope_within_the_maximum() {
+        // #9035: past about 35 degrees every upward edge failed the step
+        // manoeuvre. A slope is walked, so it needs no step height either.
+        let reached = [NativeNavigationPathOutcome::Reached; 2];
+        for degrees in [30.0, 40.0, 45.0, 49.0] {
+            for step in [1.05, 0.4] {
+                assert_eq!(
+                    route_both_ways(slope(degrees), walker(step)),
+                    reached,
+                    "{degrees} degrees, step {step}"
+                );
+            }
+        }
+        // A smoothed stair: treads and 45 degree noses averaging about 31
+        // degrees, so each 1 m cell rises more than a 0.4 m step.
+        let profile: Vec<_> = (0..=16)
+            .map(|i| {
+                let x = f64::from(i) * 0.5;
+                (
+                    x,
+                    f64::from(i / 2) * 0.6 + if i % 2 == 1 { 0.1 } else { 0.0 },
+                )
+            })
+            .collect();
+        assert_eq!(route_both_ways(surface(&profile), walker(0.4)), reached);
+    }
+
+    #[test]
+    fn a_riser_or_cliff_within_the_slope_grade_is_still_no_slope() {
+        // A 1 m riser and a 1 m cliff rise and fall no steeper than 50
+        // degrees between 1 m cells, but neither is a slope.
+        let mut voxels = Vec::new();
+        for x in 0..8 {
+            for z in 0..4 {
+                for y in 0..if x >= 4 { 2 } else { 1 } {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let (mut bridge, session) = publish_over(
+            VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap(),
+            walker(0.4),
+            [0.0, 0.0, 0.0],
+            [8.0, 6.0, 4.0],
+        );
+        assert_eq!(
+            edge(&mut bridge, session, [3, 1, 2], [4, 2, 2]),
+            (NativeCollisionNavigationEdgeOutcome::RiseOverStep, false)
+        );
+        assert_eq!(
+            edge(&mut bridge, session, [4, 2, 2], [3, 1, 2]),
+            (NativeCollisionNavigationEdgeOutcome::DropOverMaximum, false)
+        );
+    }
+
     #[test]
     fn a_slope_up_to_the_maximum_is_a_support_with_its_feet_lifted() {
         // #9032 finding A: r = 0.3 and skin 0.02 refused anything steeper than

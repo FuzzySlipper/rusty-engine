@@ -479,7 +479,10 @@ so floors inside an enclosed volume (rooms stacked in rock) are found. On a
 slope the capsule's feet rest above the surface, by `(radius + skin) × (1/cos
 θ − 1)`, so any slope up to the maximum is a support. A riser up to the step
 height is climbed when the headroom above it fits the body, as the character
-controller climbs it.
+controller climbs it. A slope up to the maximum is walked up and down whatever
+the step height and drop: an edge steeper than a step or longer than a drop is
+admitted when the ground between rises or falls no more than such a slope over
+any short stretch, so a riser or a cliff of the same grade is still refused.
 
 To see why navigation hangs up, ask it:
 

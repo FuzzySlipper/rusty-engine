@@ -852,10 +852,16 @@ pub fn character_edge_outcome(
     let end = WorldPos::new(end_support.x, end_support.y + center_offset, end_support.z);
     let nudge = f64::from(config.recovery.normal_nudge);
     let rise = end_support.y - start_support.y;
-    if rise > f64::from(config.surface.maximum_step_height) + nudge {
+    let over_step = rise > f64::from(config.surface.maximum_step_height) + nudge;
+    // A rise no steeper than the maximum slope may be a slope, which the
+    // controller walks rather than steps.
+    let run = (end_support.x - start_support.x).hypot(end_support.z - start_support.z);
+    let slope_grade = rise.abs() <= run * f64::from(config.surface.maximum_slope_radians).tan();
+    if over_step && !slope_grade {
         return Ok(CharacterEdgeOutcome::RiseOverStep);
     }
-    if -rise > maximum_drop + nudge {
+    let over_drop = -rise > maximum_drop + nudge;
+    if over_drop && !slope_grade {
         return Ok(CharacterEdgeOutcome::DropOverMaximum);
     }
 
@@ -870,6 +876,16 @@ pub fn character_edge_outcome(
     let translation = WorldVec::new(end.x - start.x, end.y - start.y, end.z - start.z);
     if translation.x.abs() <= f64::EPSILON && translation.z.abs() <= f64::EPSILON {
         return Ok(CharacterEdgeOutcome::NoHorizontalMove);
+    }
+    // Farther down than a drop, only a walkable slope gets there.
+    if over_drop {
+        return Ok(
+            if walk_slope(&scene.projection, &capsule, start, end, config, &mut stats)? {
+                CharacterEdgeOutcome::Traversable
+            } else {
+                CharacterEdgeOutcome::DropOverMaximum
+            },
+        );
     }
     let tolerance = f64::from(
         config
@@ -935,11 +951,82 @@ pub fn character_edge_outcome(
             && (landing.center.y - end.y).abs() <= tolerance
             && (landing.center.z - end.z).abs() <= tolerance
     });
-    Ok(match (landed, level_or_down) {
-        (true, _) => CharacterEdgeOutcome::Traversable,
-        (false, true) => CharacterEdgeOutcome::HorizontalSweepBlocked,
-        (false, false) => CharacterEdgeOutcome::StepManeuverFailed,
+    if landed && !over_step {
+        return Ok(CharacterEdgeOutcome::Traversable);
+    }
+    if !level_or_down
+        && slope_grade
+        && walk_slope(&scene.projection, &capsule, start, end, config, &mut stats)?
+    {
+        return Ok(CharacterEdgeOutcome::Traversable);
+    }
+    Ok(if over_step {
+        CharacterEdgeOutcome::RiseOverStep
+    } else if level_or_down {
+        CharacterEdgeOutcome::HorizontalSweepBlocked
+    } else {
+        CharacterEdgeOutcome::StepManeuverFailed
     })
+}
+
+/// Walk a capsule from `start` to `end` (centres) over ground the way the
+/// controller slides along a walkable slope: in short segments, each lifting
+/// at most what a slope at the maximum rises over it (and never more than the
+/// step height), sweeping forward, and landing on standable ground no farther
+/// down than such a slope falls. A riser higher than that blocks the sweep,
+/// and a cliff or gap leaves nothing to land on.
+fn walk_slope(
+    projection: &svc_collision::CollisionProjection,
+    capsule: &impl Fn(WorldPos) -> CharacterCapsule,
+    start: WorldPos,
+    end: WorldPos,
+    config: &CharacterControllerConfig,
+    stats: &mut CharacterCollisionQueryStats,
+) -> Result<bool, CharacterControllerError> {
+    const MAXIMUM_SEGMENTS: f64 = 64.0;
+    let skin = f64::from(config.shape.contact_skin);
+    let grade = f64::from(config.surface.maximum_slope_radians).tan();
+    let step = f64::from(config.surface.maximum_step_height);
+    let run = (end.x - start.x).hypot(end.z - start.z);
+    let mut segment = f64::from(config.shape.radius) * 0.5;
+    if grade > 0.0 {
+        segment = segment.min(step / grade);
+    }
+    let segments = (run / segment).ceil().clamp(1.0, MAXIMUM_SEGMENTS);
+    let advance = WorldVec::new(
+        (end.x - start.x) / segments,
+        0.0,
+        (end.z - start.z) / segments,
+    );
+    // What a slope at the maximum rises or falls over a segment, plus the
+    // capsule's skin measured vertically on such a slope.
+    let allowance =
+        run / segments * grade + skin / f64::from(config.surface.maximum_slope_radians).cos();
+    let up = WorldVec::new(0.0, allowance, 0.0);
+    let down = WorldVec::new(0.0, -2.0 * allowance, 0.0);
+    let mut center = start;
+    for _ in 0..segments as u32 {
+        if cast_world(projection, &[], capsule(center), up, 0.0, stats)?.is_some() {
+            return Ok(false);
+        }
+        let lifted = add_world(center, up);
+        if cast_world(projection, &[], capsule(lifted), advance, 0.0, stats)?.is_some() {
+            return Ok(false);
+        }
+        let ahead = add_world(lifted, advance);
+        let Some(ground) = cast_world(projection, &[], capsule(ahead), down, 0.0, stats)? else {
+            return Ok(false);
+        };
+        if ground.start_solid || !standable(vec3_from_world(ground.normal)?, config) {
+            return Ok(false);
+        }
+        center = WorldPos::new(
+            ahead.x,
+            ahead.y + down.y * ground.time_of_impact + skin,
+            ahead.z,
+        );
+    }
+    Ok((center.y - end.y).abs() <= allowance)
 }
 
 impl CharacterControllerService {
