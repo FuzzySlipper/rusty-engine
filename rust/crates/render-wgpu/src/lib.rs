@@ -207,6 +207,7 @@ impl Renderer {
         let caster_bind_group = frame::caster_bind_group(
             device,
             &layouts.casters,
+            &frame_buffer,
             &parts_buffer,
             &instances_buffer,
             &shadows,

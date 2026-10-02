@@ -425,14 +425,18 @@ pub struct MaterialShaderDescriptor {
     pub shader: String,
     /// The shader's own values, `material.parameters` in WGSL.
     pub parameters: [[f32; 4]; 4],
-    /// Up to two textures of the shader's own, `product_map_a` and
+    /// The shader's own textures by slot, `product_map_a` and
     /// `product_map_b` in WGSL (white when absent).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub textures: Vec<String>,
+    #[serde(default, skip_serializing_if = "no_shader_textures")]
+    pub textures: [Option<String>; MATERIAL_SHADER_TEXTURES],
 }
 
 /// How many textures of its own a product shader can sample.
 pub const MATERIAL_SHADER_TEXTURES: usize = 2;
+
+fn no_shader_textures(textures: &[Option<String>; MATERIAL_SHADER_TEXTURES]) -> bool {
+    textures.iter().all(Option::is_none)
+}
 
 /// A product shader: one WGSL module imported as `rusty::product`, defining
 /// `fn shade(surface: Surface) -> vec4<f32>` (render-shaders). `path` is the
@@ -486,7 +490,11 @@ impl RenderMaterialDescriptor {
         self.texture
             .iter()
             .chain(self.normal_map.iter().map(|map| &map.texture))
-            .chain(self.shader.iter().flat_map(|shader| &shader.textures))
+            .chain(
+                self.shader
+                    .iter()
+                    .flat_map(|shader| shader.textures.iter().flatten()),
+            )
     }
 
     pub fn validate(&self) -> Result<(), MaterialDescriptorError> {
@@ -521,10 +529,10 @@ impl RenderMaterialDescriptor {
                     .iter()
                     .flatten()
                     .all(|value| value.is_finite())
-                || shader.textures.len() > MATERIAL_SHADER_TEXTURES
                 || shader
                     .textures
                     .iter()
+                    .flatten()
                     .any(|texture| validate_asset_id(texture, RenderAssetKind::Texture).is_err())
             {
                 return Err(MaterialDescriptorError::InvalidShader);

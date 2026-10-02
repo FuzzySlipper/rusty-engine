@@ -9167,22 +9167,22 @@ fn material_shader(
             )
         })?;
     let row = |value: csharp_engine_abi::NativeVec4| [value.x, value.y, value.z, value.w];
-    let textures = [request.texture_a, request.texture_b]
-        .into_iter()
-        .filter(|texture| texture.value != 0)
-        .map(|texture| {
-            resources
-                .get(texture.value)
-                .and_then(CsharpRenderResource::texture)
-                .map(|texture| texture.id.clone())
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_MATERIAL_SHADER",
-                        "a material shader's textures must be texture resources",
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let texture = |texture: csharp_engine_abi::NativeRenderResourceReference| {
+        if texture.value == 0 {
+            return Ok(None);
+        }
+        resources
+            .get(texture.value)
+            .and_then(CsharpRenderResource::texture)
+            .map(|texture| Some(texture.id.clone()))
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_MATERIAL_SHADER",
+                    "a material shader's textures must be texture resources",
+                )
+            })
+    };
+    let textures = [texture(request.texture_a)?, texture(request.texture_b)?];
     Ok(Some((
         render_model::MaterialShaderDescriptor {
             shader: shader.id.clone(),
@@ -10893,7 +10893,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             b: 1.0,
             a: 1.0,
         };
-        let request = |texture_a: u64| NativeMaterialRequest {
+        let request = |texture_a: u64, texture_b: u64| NativeMaterialRequest {
             color: white,
             texture: NativeRenderResourceReference::default(),
             roughness: 0.8,
@@ -10912,25 +10912,38 @@ fn shade(surface: Surface) -> vec4<f32> {
                     value: glow.handle.value,
                 },
                 texture_a: NativeRenderResourceReference { value: texture_a },
+                texture_b: NativeRenderResourceReference { value: texture_b },
                 ..Default::default()
             },
         };
         assert_eq!(
             bridge
-                .create_material(request(plain.handle.value))
+                .create_material(request(plain.handle.value, 0))
                 .unwrap_err()
                 .code(),
             "CSHARP_MATERIAL_SHADER",
             "a shader texture must be a texture"
         );
-        let material = bridge.create_material(request(noise.handle.value)).unwrap();
+        let material = bridge
+            .create_material(request(noise.handle.value, 0))
+            .unwrap();
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
         let used = resources.materials.last().unwrap().shader.clone().unwrap();
-        assert_eq!(used.textures.len(), 1);
+        let [Some(noise_id), None] = used.textures else {
+            panic!("slot A holds the texture: {:?}", used.textures);
+        };
         assert!(resources
             .textures
             .iter()
-            .any(|texture| texture.id == used.textures[0]));
+            .any(|texture| texture.id == noise_id));
+        // Each texture keeps its slot: B alone leaves A white.
+        let only_b = bridge
+            .create_material(request(0, noise.handle.value))
+            .unwrap();
+        let resources = bridge.staged_ref().unwrap().state.projector.resources();
+        let used = resources.materials.last().unwrap().shader.clone().unwrap();
+        assert_eq!(used.textures, [None, Some(noise_id)]);
+        bridge.destroy_material(only_b).unwrap();
         assert_eq!(
             bridge.destroy_resource(noise.handle).unwrap_err().code(),
             "CSHARP_RENDER_RESOURCE_IN_USE"

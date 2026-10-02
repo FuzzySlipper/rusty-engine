@@ -166,8 +166,14 @@ impl Layouts {
         });
         let casters = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu casters"),
-            // parts, instances and shadow views at their `rusty::view` numbers.
-            entries: &[storage_entry(1), storage_entry(3), storage_entry(6)],
+            // The frame (a product caster's time), parts, instances and shadow
+            // views at their `rusty::view` numbers.
+            entries: &[
+                uniform_entry(0),
+                storage_entry(1),
+                storage_entry(3),
+                storage_entry(6),
+            ],
         });
         let shadow_layer = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu shadow layer"),

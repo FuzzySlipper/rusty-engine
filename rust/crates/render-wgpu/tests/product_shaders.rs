@@ -47,7 +47,7 @@ fn shaded(
     descriptor.shader = Some(MaterialShaderDescriptor {
         shader: "shader/flat".to_owned(),
         parameters: [first, second, [0.0; 4], [0.0; 4]],
-        textures: Vec::new(),
+        textures: [None, None],
     });
     descriptor
 }
@@ -319,7 +319,7 @@ fn a_product_shader_samples_its_own_textures_and_animates_with_presentation_time
     blink.shader = Some(MaterialShaderDescriptor {
         shader: "shader/blink".to_owned(),
         parameters: [[0.0; 4]; 4],
-        textures: vec![red.id.clone(), blue.id.clone()],
+        textures: [Some(red.id.clone()), Some(blue.id.clone())],
     });
     harness.apply(vec![
         RenderDiff::DefineTexture { texture: red },
@@ -344,6 +344,23 @@ fn a_product_shader_samples_its_own_textures_and_animates_with_presentation_time
     assert_eq!(
         pixel(&harness.render(&view).1, right.0, right.1),
         [255, 0, 0, 255]
+    );
+    // Each texture keeps its slot: with only B, A samples white.
+    let mut only_b = material("material/right", [1.0; 4], None);
+    only_b.shader = Some(MaterialShaderDescriptor {
+        shader: "shader/blink".to_owned(),
+        parameters: [[0.0; 4]; 4],
+        textures: [None, Some("texture/blue".to_owned())],
+    });
+    harness.apply(vec![RenderDiff::DefineMaterial { material: only_b }]);
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [255, 255, 255, 255]
+    );
+    harness.renderer.set_animation_time(11.75);
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [0, 0, 255, 255]
     );
 }
 
@@ -383,7 +400,7 @@ fn a_keyword_variant_dissolves_a_material_and_its_caster_stage_cuts_the_shadow_a
         dissolving.shader = Some(MaterialShaderDescriptor {
             shader: "shader/dissolve".to_owned(),
             parameters: [[0.6, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]],
-            textures: Vec::new(),
+            textures: [None, None],
         });
         harness.apply(vec![RenderDiff::DefineShader {
             shader: ShaderDescriptor {
@@ -397,13 +414,6 @@ fn a_keyword_variant_dissolves_a_material_and_its_caster_stage_cuts_the_shadow_a
         harness.render(&camera(VIEW.0, VIEW.1, VIEW.2)).1
     };
     let (whole, dissolved) = (render(&[]), render(&["DISSOLVE"]));
-    // Dark floor pixels in the right box's shadow, in front of it.
-    let shadowed = |rgba: &[u8]| {
-        (HEIGHT / 2 + 10..HEIGHT * 3 / 4)
-            .flat_map(|y| (WIDTH / 2 + 10..WIDTH - 10).map(move |x| (x, y)))
-            .filter(|(x, y)| pixel(rgba, *x, *y)[0] < 60)
-            .count()
-    };
     let (whole_shadow, dissolved_shadow) = (shadowed(&whole), shadowed(&dissolved));
     assert!(whole_shadow > 500, "the whole box casts {whole_shadow}");
     assert!(
@@ -417,4 +427,69 @@ fn a_keyword_variant_dissolves_a_material_and_its_caster_stage_cuts_the_shadow_a
         pixel(&dissolved, right.0 - 12, right.1)
     );
     assert_screenshot("product-shader-dissolve", &dissolved);
+}
+
+/// Dark floor pixels in the right box's shadow, in front of it.
+fn shadowed(rgba: &[u8]) -> usize {
+    (HEIGHT / 2 + 10..HEIGHT * 3 / 4)
+        .flat_map(|y| (WIDTH / 2 + 10..WIDTH - 10).map(move |x| (x, y)))
+        .filter(|(x, y)| pixel(rgba, *x, *y)[0] < 60)
+        .count()
+}
+
+/// Only its shadow dissolves, with presentation time: the left part of each
+/// face (uv.x below the second's fraction) casts none.
+const FADING_SHADOW: &str = "#import rusty::types::{Surface, Caster}
+#import rusty::view::frame
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return standard_shade(surface);
+}
+
+fn cast_shadow(caster: Caster) {
+    if caster.uv.x < fract(frame.time.x) {
+        discard;
+    }
+}
+";
+
+#[test]
+fn a_caster_stage_reads_presentation_time_and_the_shadow_follows_it() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    let mut fading = material("material/right", [0.8, 0.8, 0.8, 1.0], None);
+    fading.shader = Some(MaterialShaderDescriptor {
+        shader: "shader/fading".to_owned(),
+        parameters: [[0.0; 4]; 4],
+        textures: [None, None],
+    });
+    harness.apply(vec![shader("shader/fading", FADING_SHADOW)]);
+    scene(&mut harness, fading);
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    let mut at = |time: f64| {
+        harness.renderer.set_animation_time(time);
+        harness.render(&view).1
+    };
+    // Nothing else changes between frames: the maps redraw for time alone.
+    let whole = at(10.0);
+    let faded = at(10.6);
+    let held = at(10.6);
+    let again = at(11.0);
+    assert!(
+        shadowed(&whole) > 500,
+        "the whole box casts {}",
+        shadowed(&whole)
+    );
+    assert!(
+        shadowed(&faded) * 10 < shadowed(&whole) * 7,
+        "the faded box casts {} of {}",
+        shadowed(&faded),
+        shadowed(&whole)
+    );
+    assert!(held == faded, "a held time draws the same");
+    assert!(again == whole, "the shadow follows time back");
 }

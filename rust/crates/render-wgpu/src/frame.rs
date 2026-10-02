@@ -478,6 +478,7 @@ impl Renderer {
         self.caster_bind_group = caster_bind_group(
             &self.gpu.device,
             &self.layouts.casters,
+            &self.frame_buffer,
             &self.parts_buffer,
             &self.instances_buffer,
             &self.shadows,
@@ -551,15 +552,22 @@ impl Renderer {
     }
 
     /// Render every shadow layer's casters when a light or part changed since
-    /// the maps were drawn. Returns what the casters encoded and the caster
-    /// pipelines compiled for them.
+    /// the maps were drawn, or presentation time moved and a product's caster
+    /// stage (which may read it) draws. Returns what the casters encoded and
+    /// the caster pipelines compiled for them.
     fn encode_shadows(&mut self, encoder: &mut wgpu::CommandEncoder) -> (Encoded, u32) {
-        if !self.shadows.stale || self.shadows.layers == 0 {
+        let retimed = self.shadows.timed && self.shadows.time != self.animation_time;
+        if !(self.shadows.stale || retimed) || self.shadows.layers == 0 {
             return Default::default();
         }
         self.shadows.stale = false;
+        self.shadows.time = self.animation_time;
+        let variants = self.batch_variants(&self.casters.batches);
+        self.shadows.timed = variants
+            .iter()
+            .any(|(features, _)| features.caster().product() != 0);
         let mut created = 0;
-        for (features, pass) in self.batch_variants(&self.casters.batches) {
+        for (features, pass) in variants {
             created += u32::from(
                 self.layouts
                     .prepare_caster(&self.gpu.device, features, pass),
@@ -1062,6 +1070,7 @@ pub(crate) fn frame_bind_group(
 pub(crate) fn caster_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
+    frame: &wgpu::Buffer,
     parts: &wgpu::Buffer,
     instances: &wgpu::Buffer,
     shadows: &ShadowMaps,
@@ -1070,6 +1079,10 @@ pub(crate) fn caster_bind_group(
         label: Some("render-wgpu casters"),
         layout,
         entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame.as_entire_binding(),
+            },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: parts.as_entire_binding(),

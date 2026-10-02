@@ -150,6 +150,9 @@ pub(crate) struct ShadowMaps {
     pub layers: u32,
     /// A light or caster changed since the maps were rendered.
     pub stale: bool,
+    /// A product's caster stage drew the maps, at presentation `time`.
+    pub timed: bool,
+    pub time: f64,
 }
 
 impl ShadowMaps {
@@ -236,6 +239,8 @@ impl ShadowMaps {
             layer_bind_group,
             layers: 0,
             stale: true,
+            timed: false,
+            time: 0.0,
         }
     }
 

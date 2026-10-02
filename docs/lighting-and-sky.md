@@ -127,7 +127,10 @@ fn shade(surface: Surface) -> vec4<f32> {
   which the shadow pass calls for its materials after the alpha mask and
   which may `discard`, so a dissolve's shadow follows its image. `Caster`
   holds the uv, world position and alpha (part, vertex and base texture).
-  Without it, materials cast through the standard caster.
+  It may read `frame.time`: while such a caster draws, the shadow maps
+  redraw as presentation time moves. Defined under a keyword's `#ifdef`, only
+  that variant has it. Without it, materials cast through the standard
+  caster.
 - **Checked when opened.** `OpenResource` checks the keywords and composes
   the shader (and its caster stage) with the standard modules, refusing an
   error with `CSHARP_SHADER`, naming the file, line and column. A product

@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::ops::BitOr;
 
 use naga_oil::compose::{
+    comment_strip_iter::CommentReplaceExt, preprocess::Preprocessor, tokenizer::Tokenizer,
     ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderDefValue, ShaderLanguage,
     ShaderType,
 };
@@ -187,11 +188,24 @@ pub struct ProductShader {
 }
 
 impl ProductShader {
-    /// Whether it defines a caster stage, `fn cast_shadow(`, outside comments.
+    /// Whether it defines a caster stage, `fn cast_shadow`, under its
+    /// keywords: naga_oil's own comment stripping, preprocessor and
+    /// tokenizer, so any legal spelling counts. A shader that does not
+    /// preprocess fails composition instead.
     fn casts(&self) -> bool {
-        self.source.lines().any(|line| {
-            let code = line.split("//").next().unwrap_or_default();
-            code.contains("fn cast_shadow(") || code.contains("fn cast_shadow (")
+        let mut lines = self.source.lines();
+        let code: Vec<_> = lines.replace_comments().collect();
+        let defs = self
+            .keywords
+            .iter()
+            .map(|keyword| (keyword.clone(), ShaderDefValue::Bool(true)))
+            .collect();
+        let Ok(output) = Preprocessor::default().preprocess(&code.join("\n"), &defs) else {
+            return false;
+        };
+        let tokens: Vec<_> = Tokenizer::new(&output.preprocessed_source, false).collect();
+        tokens.windows(2).any(|pair| {
+            pair[0].identifier() == Some("fn") && pair[1].identifier() == Some("cast_shadow")
         })
     }
 }
@@ -507,5 +521,29 @@ fn cast_shadow(caster: Caster) {
                 }
             }
         }
+
+        // Any legal spelling of the declaration is a caster stage; one in a
+        // comment, or under a keyword not given, is not.
+        let casts = |source: &str, names: &[&str]| {
+            let product = Shaders::new().product(ProductShader {
+                path: "shaders/dissolve.wgsl".to_string(),
+                source: source.to_string(),
+                keywords: keywords(names),
+            });
+            Features::default().with_product(product).caster().product() != 0
+        };
+        assert!(casts(
+            &DISSOLVE.replace("fn cast_shadow(", "fn\n    cast_shadow ("),
+            &[]
+        ));
+        assert!(!casts(
+            &format!("{RIM}/*\nfn cast_shadow(caster: Caster) {{}}\n*/\n"),
+            &[]
+        ));
+        let optional =
+            DISSOLVE.replace("fn cast_shadow(", "#ifdef CASTS\nfn cast_shadow(") + "#endif\n";
+        assert!(casts(&optional, &["CASTS"]));
+        assert!(!casts(&optional, &[]));
+        check_product_shader("shaders/dissolve.wgsl", &optional, &[]).unwrap();
     }
 }

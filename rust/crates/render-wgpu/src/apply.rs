@@ -1291,12 +1291,10 @@ impl MaterialParams {
                 .shader
                 .as_ref()
                 .map_or([[0.0; 4]; 4], |shader| shader.parameters),
-            product_textures: std::array::from_fn(|slot| {
-                descriptor
-                    .shader
-                    .as_ref()
-                    .and_then(|shader| shader.textures.get(slot).cloned())
-            }),
+            product_textures: descriptor
+                .shader
+                .as_ref()
+                .map_or([None, None], |shader| shader.textures.clone()),
             maps: MaterialMaps {
                 normal: descriptor.normal_map.as_ref().map(|map| {
                     (
