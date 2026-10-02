@@ -16,7 +16,7 @@
     occlusion_map,
     occlusion_sampler,
 }
-#import rusty::surface::{transform_uv, voxel_uv, perturb_normal}
+#import rusty::surface::{transform_uv, voxel_uv, voxel_lod, perturb_normal}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 
@@ -55,11 +55,15 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     let row = parts[in.part];
 #ifdef VOXEL_SURFACE
     let uv = voxel_uv(in.uv, material.tile, material.sample_rect);
+    let lod = voxel_lod(in.uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(albedo, 0)));
+    let texture_color = textureSampleLevel(albedo, albedo_sampler,
+        transform_uv(material.base_uv_u, material.base_uv_v, uv), lod);
 #else
     let uv = in.uv;
+    let texture_color = textureSample(albedo, albedo_sampler,
+        transform_uv(material.base_uv_u, material.base_uv_v, uv));
 #endif
-    let base = row.color * in.color
-        * textureSample(albedo, albedo_sampler, transform_uv(material.base_uv_u, material.base_uv_v, uv));
+    let base = row.color * in.color * texture_color;
 #ifdef UNLIT
 #ifdef MASK
     if base.a < material.alpha_cutoff {

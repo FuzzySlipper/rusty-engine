@@ -397,9 +397,10 @@ impl Renderer {
                     true,
                     texture.nearest,
                     texture.repeat,
+                    texture.mipmaps,
                 ),
                 None => crate::apply::upload_rgba_texture(
-                    &self.gpu, id, 1, 1, &[255; 4], true, true, false,
+                    &self.gpu, id, 1, 1, &[255; 4], true, true, false, false,
                 ),
             };
             self.tables.textures.insert(id.clone(), uploaded);
@@ -432,6 +433,7 @@ impl Renderer {
                     false,
                     texture.nearest,
                     texture.repeat,
+                    texture.mipmaps,
                 );
                 self.tables.textures.insert(id.clone(), uploaded);
                 linear_textures.insert(slot.texture, id);

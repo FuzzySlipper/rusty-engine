@@ -852,3 +852,69 @@ fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
         "metal reflection keeps the gold tint: {metal:?}"
     );
 }
+
+#[test]
+fn linear_textures_mipmap_so_a_receding_tiled_floor_settles_to_its_average() {
+    // A one-texel black and white checker tiled 200 times over a 100 m
+    // floor, seen at a grazing angle.
+    let checker: Vec<u8> = (0..64)
+        .flat_map(|texel| {
+            let white = (texel % 8 + texel / 8) % 2 == 0;
+            if white {
+                [255, 255, 255, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        })
+        .collect();
+    let floor = payload(
+        vec![
+            -50.0, 0.0, -50.0, 50.0, 0.0, -50.0, 50.0, 0.0, 50.0, -50.0, 0.0, 50.0,
+        ],
+        vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        vec![0.0, 0.0, 200.0, 0.0, 200.0, 200.0, 0.0, 200.0],
+        vec![0, 2, 1, 0, 3, 2],
+        &[(0, 6)],
+    );
+    let render = |filter: TextureFilter| {
+        let mut harness = Harness::new(RendererOptions::default());
+        let mut texture =
+            harness
+                .resources
+                .texture("texture/checker", 8, 8, &checker, TextureWrap::Repeat);
+        texture.filter = filter;
+        harness.apply(vec![
+            RenderDiff::DefineTexture { texture },
+            RenderDiff::DefineMaterial {
+                material: material("material/checker", [1.0; 4], Some("texture/checker")),
+            },
+            static_mesh("mesh/floor", floor.clone(), "material/checker"),
+            instance(1, None, "mesh/floor", Transform::IDENTITY),
+        ]);
+        harness.render(&camera([0.0, 1.5, 0.0], 0.0, -8.0)).1
+    };
+    // Luminance spread along rows just below the horizon, where each pixel
+    // covers many texels.
+    let far_spread = |rgba: &[u8]| {
+        let rows = HEIGHT as usize / 2 + 8..HEIGHT as usize / 2 + 24;
+        let mut spread = 0.0;
+        for y in rows.clone() {
+            let row: Vec<f32> = (40..WIDTH as usize - 40)
+                .map(|x| f32::from(rgba[(y * WIDTH as usize + x) * 4 + 1]))
+                .collect();
+            let mean = row.iter().sum::<f32>() / row.len() as f32;
+            spread +=
+                (row.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / row.len() as f32).sqrt();
+        }
+        spread / rows.len() as f32
+    };
+    // No reference image: anisotropic filtering is implementation-defined,
+    // and llvmpipe and RADV differ on this checker near the Nyquist limit.
+    let mipmapped = render(TextureFilter::Linear);
+    let single = render(TextureFilter::Nearest);
+    let (smooth, aliased) = (far_spread(&mipmapped), far_spread(&single));
+    assert!(
+        smooth * 4.0 < aliased,
+        "far texels average to grey with mips: spread {smooth} against {aliased} unmipmapped"
+    );
+}

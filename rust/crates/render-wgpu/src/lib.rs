@@ -398,5 +398,6 @@ fn white_texture(gpu: &Gpu) -> GpuTexture {
         size: (1, 1),
         view: texture.create_view(&Default::default()),
         sampler: gpu.device.create_sampler(&Default::default()),
+        mipped: None,
     }
 }

@@ -186,6 +186,9 @@ pub struct GlbTexture {
     pub image: Option<DecodedImage>,
     pub nearest: bool,
     pub repeat: bool,
+    /// The sampler's minFilter reads mipmaps, or (unspecified) the texture
+    /// is not nearest-filtered.
+    pub mipmaps: bool,
 }
 
 pub struct GlbModel {
@@ -443,13 +446,20 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
                     gltf::image::Source::Uri { .. } => None,
                 });
             let sampler = texture.sampler();
+            let nearest = matches!(
+                sampler.mag_filter(),
+                Some(gltf::texture::MagFilter::Nearest)
+            );
+            use gltf::texture::MinFilter;
             GlbTexture {
                 image,
-                nearest: matches!(
-                    sampler.mag_filter(),
-                    Some(gltf::texture::MagFilter::Nearest)
-                ),
+                nearest,
                 repeat: sampler.wrap_s() == gltf::texture::WrappingMode::Repeat,
+                mipmaps: match sampler.min_filter() {
+                    None => !nearest,
+                    Some(MinFilter::Nearest | MinFilter::Linear) => false,
+                    Some(_) => true,
+                },
             }
         })
         .collect();

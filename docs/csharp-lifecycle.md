@@ -312,8 +312,15 @@ var texture = engine.Graphics.OpenResource(new RenderResourceRequest(
     "textures/stone.png", TextureFilter.Nearest, TextureWrap.Repeat));
 ```
 
-`TextureFilter.Linear` is also available. Sampling applies only to PNG
-resources. The same PNG can be selected with different samplers: pixel content
+`TextureFilter.Linear` is also available. A linear texture gets a mip chain
+at upload, built in linear light, and materials sample it trilinearly with
+16× anisotropic filtering, so tiled surfaces do not speckle at distance. That
+costs about 40 ms and a third more memory for a 2048² colour texture.
+Voxel-surface tiling picks its level from the unwrapped tile coordinate,
+clamped so an atlas region keeps at least 4×4 texels. Nearest textures stay
+single-level, for pixel art. Sky panoramas, sprites and particles always
+sample the base level. GLB textures follow their sampler's `minFilter`.
+Sampling applies only to PNG resources. The same PNG can be selected with different samplers: pixel content
 is shared, while each sampler has its own retained texture identity. Keep
 sprite/atlas resources clamped unless their authored usage calls for something
 else.

@@ -44,10 +44,25 @@ use crate::animated::{AnimatedAssetRow, AnimatedInstance, ControllerRow};
 use crate::voxel::VoxelObjectRow;
 
 pub(crate) struct GpuTexture {
+    /// The base level, for sky, sprites, particles and any other sampling
+    /// whose coordinates jump (a panorama's seam, atlas frames).
     pub view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
     /// Pixel size; voxel atlas regions are resolved against it.
     pub size: (u32, u32),
+    /// Every mip level with a trilinear sampler, for material sampling; None
+    /// for nearest-filtered and single-level textures.
+    pub mipped: Option<(wgpu::TextureView, wgpu::Sampler)>,
+}
+
+impl GpuTexture {
+    /// What a material samples: the mip chain when there is one.
+    pub fn material_binding(&self) -> (&wgpu::TextureView, &wgpu::Sampler) {
+        match &self.mipped {
+            Some((view, sampler)) => (view, sampler),
+            None => (&self.view, &self.sampler),
+        }
+    }
 }
 
 pub(crate) struct MaterialRow {

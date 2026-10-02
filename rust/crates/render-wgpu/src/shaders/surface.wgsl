@@ -15,6 +15,20 @@ fn voxel_uv(uv: vec2<f32>, tile: vec4<f32>, sample_rect: vec4<f32>) -> vec2<f32>
     return mix(sample_rect.xy, sample_rect.zw, repeated);
 }
 
+// The mip level a voxel surface samples its texture at, from the continuous
+// tile coordinate: the wrapped uv jumps at every tile seam, where screen
+// derivatives would pick the smallest level and draw a line. `size` is the
+// texture's base size; the level is clamped so an atlas region keeps at
+// least 4×4 texels rather than blending its neighbours.
+fn voxel_lod(uv: vec2<f32>, tile: vec4<f32>, sample_rect: vec4<f32>, size: vec2<f32>) -> f32 {
+    let texels = (sample_rect.zw - sample_rect.xy) * size;
+    let tile_texels = (uv - tile.zw) / tile.xy * texels;
+    let dx = dpdx(tile_texels);
+    let dy = dpdy(tile_texels);
+    let lod = 0.5 * log2(max(dot(dx, dx), dot(dy, dy)));
+    return clamp(lod, 0.0, max(log2(min(texels.x, texels.y)) - 2.0, 0.0));
+}
+
 // The surface normal under a tangent-space normal map sample, with the
 // tangent frame from the screen-space derivatives of the map's uv and the
 // position (as glTF viewers do for a mesh without tangents): the tangent

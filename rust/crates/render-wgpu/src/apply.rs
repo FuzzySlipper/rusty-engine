@@ -36,6 +36,8 @@ pub struct ApplyIssue {
 /// the base, emissive, normal and occlusion uv transforms (two rows each); the
 /// occlusion strength.
 const MATERIAL_UNIFORM_BYTES: usize = 192;
+/// Anisotropic filtering of mipmapped material textures.
+const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
 /// Prefix of the retained materials payload mesh groups bind by slot.
@@ -820,6 +822,7 @@ impl Renderer {
             srgb,
             descriptor.filter == TextureFilter::Nearest,
             descriptor.wrap == TextureWrap::Repeat,
+            descriptor.filter == TextureFilter::Linear,
         )
     }
 
@@ -1054,7 +1057,8 @@ impl Renderer {
 }
 
 /// Upload RGBA8 pixels (sRGB or linear) with nearest or linear filtering and
-/// repeat or clamp wrapping.
+/// repeat or clamp wrapping. With `mipmaps`, the full mip chain is built for
+/// material sampling (trilinear); every other user samples the base level.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn upload_rgba_texture(
     gpu: &crate::Gpu,
@@ -1065,13 +1069,21 @@ pub(crate) fn upload_rgba_texture(
     srgb: bool,
     nearest: bool,
     repeat: bool,
+    mipmaps: bool,
 ) -> GpuTexture {
+    let chain;
+    let (levels, pixels) = if mipmaps && width.max(height) > 1 {
+        chain = resources::mip_chain(width, height, pixels, srgb);
+        (chain.0, chain.1.as_slice())
+    } else {
+        (1, pixels)
+    };
     let texture = gpu.device.create_texture_with_data(
         &gpu.queue,
         &wgpu::TextureDescriptor {
             label: Some(label),
             size: crate::target::extent(width, height),
-            mip_level_count: 1,
+            mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: if srgb {
@@ -1095,16 +1107,32 @@ pub(crate) fn upload_rgba_texture(
     } else {
         wgpu::AddressMode::ClampToEdge
     };
-    GpuTexture {
-        size: (width, height),
-        view: texture.create_view(&Default::default()),
-        sampler: gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+    let sampler = |mipmap_filter, anisotropy_clamp| {
+        gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some(label),
             address_mode_u: address,
             address_mode_v: address,
             mag_filter: filter,
             min_filter: filter,
+            mipmap_filter,
+            anisotropy_clamp,
             ..Default::default()
+        })
+    };
+    GpuTexture {
+        size: (width, height),
+        view: texture.create_view(&wgpu::TextureViewDescriptor {
+            mip_level_count: Some(1),
+            ..Default::default()
+        }),
+        sampler: sampler(wgpu::MipmapFilterMode::Nearest, 1),
+        mipped: (levels > 1).then(|| {
+            (
+                texture.create_view(&Default::default()),
+                // Mipmapped textures are linear-filtered, which anisotropic
+                // filtering requires; it keeps grazing surfaces sharp.
+                sampler(wgpu::MipmapFilterMode::Linear, MATERIAL_ANISOTROPY),
+            )
         }),
     }
 }
@@ -1253,35 +1281,35 @@ pub(crate) fn material_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(&texture.view),
+                resource: wgpu::BindingResource::TextureView(texture.material_binding().0),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                resource: wgpu::BindingResource::Sampler(texture.material_binding().1),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(&maps.emissive.view),
+                resource: wgpu::BindingResource::TextureView(maps.emissive.material_binding().0),
             },
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: wgpu::BindingResource::Sampler(&maps.emissive.sampler),
+                resource: wgpu::BindingResource::Sampler(maps.emissive.material_binding().1),
             },
             wgpu::BindGroupEntry {
                 binding: 5,
-                resource: wgpu::BindingResource::TextureView(&maps.normal.view),
+                resource: wgpu::BindingResource::TextureView(maps.normal.material_binding().0),
             },
             wgpu::BindGroupEntry {
                 binding: 6,
-                resource: wgpu::BindingResource::Sampler(&maps.normal.sampler),
+                resource: wgpu::BindingResource::Sampler(maps.normal.material_binding().1),
             },
             wgpu::BindGroupEntry {
                 binding: 7,
-                resource: wgpu::BindingResource::TextureView(&maps.occlusion.view),
+                resource: wgpu::BindingResource::TextureView(maps.occlusion.material_binding().0),
             },
             wgpu::BindGroupEntry {
                 binding: 8,
-                resource: wgpu::BindingResource::Sampler(&maps.occlusion.sampler),
+                resource: wgpu::BindingResource::Sampler(maps.occlusion.material_binding().1),
             },
         ],
     })

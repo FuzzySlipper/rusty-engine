@@ -99,6 +99,63 @@ pub(crate) fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, String> {
     })
 }
 
+/// Every mip level of an RGBA8 image after the first, smallest last: each a
+/// 2×2 box filter of the one above (odd edges repeat their last texel), in
+/// linear light for sRGB images. Returns the level count and the pixels of
+/// all levels, base first, as one texture upload expects them.
+pub(crate) fn mip_chain(width: u32, height: u32, rgba: &[u8], srgb: bool) -> (u32, Vec<u8>) {
+    let to_linear: [f32; 256] = std::array::from_fn(|value| {
+        let c = value as f32 / 255.0;
+        if !srgb {
+            c
+        } else if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let encode = |linear: f32| {
+        let c = if !srgb {
+            linear
+        } else if linear <= 0.0031308 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1.0 / 2.4) - 0.055
+        };
+        (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    };
+    let levels = 32 - width.max(height).max(1).leading_zeros();
+    let mut all = rgba.to_vec();
+    let (mut source, mut w, mut h) = (0usize, width as usize, height as usize);
+    for _ in 1..levels {
+        let (next_w, next_h) = ((w / 2).max(1), (h / 2).max(1));
+        let start = all.len();
+        all.reserve(next_w * next_h * 4);
+        for y in 0..next_h {
+            for x in 0..next_w {
+                let texel = |sx: usize, sy: usize| source + (sy.min(h - 1) * w + sx.min(w - 1)) * 4;
+                let corners = [
+                    texel(2 * x, 2 * y),
+                    texel(2 * x + 1, 2 * y),
+                    texel(2 * x, 2 * y + 1),
+                    texel(2 * x + 1, 2 * y + 1),
+                ];
+                for channel in 0..3 {
+                    let sum: f32 = corners
+                        .iter()
+                        .map(|at| to_linear[all[at + channel] as usize])
+                        .sum();
+                    all.push(encode(sum * 0.25));
+                }
+                let alpha: u32 = corners.iter().map(|at| u32::from(all[at + 3])).sum();
+                all.push(((alpha + 2) / 4) as u8);
+            }
+        }
+        (source, w, h) = (start, next_w, next_h);
+    }
+    (levels, all)
+}
+
 /// A lossy or lossless WebP image (GLB `EXT_texture_webp`), as RGBA.
 pub(crate) fn decode_webp(bytes: &[u8]) -> Result<DecodedImage, String> {
     let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes))
@@ -227,4 +284,43 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Strin
 /// Decode a PNG to tightly packed RGBA8 rows: `(width, height, rgba)`.
 pub fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     decode_png(bytes).map(|image| (image.width, image.height, image.rgba))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mip_levels_average_in_linear_light_down_to_one_texel() {
+        // A 4×2 sRGB black/white checker: levels 4×2, 2×1, 1×1.
+        let checker: Vec<u8> = (0..8)
+            .flat_map(|texel| {
+                if (texel % 4 + texel / 4) % 2 == 0 {
+                    [255; 4]
+                } else {
+                    [0, 0, 0, 255]
+                }
+            })
+            .collect();
+        let (levels, pixels) = mip_chain(4, 2, &checker, true);
+        assert_eq!(levels, 3);
+        assert_eq!(pixels.len(), (8 + 2 + 1) * 4);
+        // Half white in linear light is sRGB 188, not 128.
+        assert!(pixels[32..]
+            .chunks(4)
+            .all(|texel| texel == [188, 188, 188, 255]));
+        let (_, linear) = mip_chain(4, 2, &checker, false);
+        assert!(linear[32..]
+            .chunks(4)
+            .all(|texel| texel == [128, 128, 128, 255]));
+        // An odd edge repeats its last texel.
+        let (levels, pixels) = mip_chain(
+            3,
+            1,
+            &[10, 10, 10, 255, 20, 20, 20, 255, 40, 40, 40, 255],
+            false,
+        );
+        assert_eq!(levels, 2);
+        assert_eq!(&pixels[12..], [15, 15, 15, 255]);
+    }
 }
