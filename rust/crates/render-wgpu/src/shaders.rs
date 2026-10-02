@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let mut shaders = Shaders::new();
-        let all = (0..128).map(Features);
+        let all = (0..=u8::MAX).map(Features);
         let mut compose = |entry: Entry, features: Features| {
             let (path, source) = entry.source();
             if let Err(error) = shaders.composer.make_naga_module(NagaModuleDescriptor {
