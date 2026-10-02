@@ -179,6 +179,9 @@ impl Renderer {
                 issue.op, issue.detail
             ));
         }
+        // The job's own exposure and tone mapping convert the linear capture;
+        // the scene's would apply twice. Fog stays.
+        isolated.tables.tone_mapping = render_model::ToneMappingDescriptor::NONE;
         // A pose job samples one animated instance of the frozen scene.
         if let Some(pose) = pose {
             isolated

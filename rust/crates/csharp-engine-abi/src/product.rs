@@ -1073,6 +1073,16 @@ pub type NativeSetSkyBackgroundBlend = unsafe extern "C" fn(
     *const NativeSkyBackgroundBlendRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetFog = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetToneMapping = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeToneMappingRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeClearSkyBackground = unsafe extern "C" fn(
     *mut c_void,
     *const NativeClearSkyBackgroundRequest,
@@ -1523,6 +1533,8 @@ pub struct NativeCameraViewApi {
     pub set_sky_background_blend: NativeSetSkyBackgroundBlend,
     pub clear_sky_background: NativeClearSkyBackground,
     pub set_background_color: NativeSetBackgroundColor,
+    pub set_fog: NativeSetFog,
+    pub set_tone_mapping: NativeSetToneMapping,
 }
 
 #[repr(C)]

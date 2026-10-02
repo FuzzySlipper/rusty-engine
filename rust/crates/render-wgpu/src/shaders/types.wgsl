@@ -9,6 +9,13 @@ struct Frame {
     camera: vec4<f32>,
     // x: light count, y: first light row (world lights, then viewmodel lights)
     counts: vec4<u32>,
+    // x: exposure; fog y: start, z: end (linear), w: density (exponential)
+    finish: vec4<f32>,
+    // rgb: linear fog colour
+    fog_color: vec4<f32>,
+    // x: tone mapping operator (0 none, 1 neutral, 2 ACES filmic);
+    // y: fog (0 off, 1 linear, 2 exponential, 3 exponential squared)
+    modes: vec4<u32>,
 };
 
 struct Part {

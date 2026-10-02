@@ -19,6 +19,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Vector3 TorchPosition = new(3.5f,2.5f,3.5f);
     private static readonly Vector3 RoomEye = new(3.5f,2.5f,6.5f), RoomTarget = new(3.5f,2,1);
     private static readonly Vector3 SkyEye = new(12,8,14), SkyTarget = new(3.5f,5,3.5f);
+    private static readonly Color FogColor = new(.55f,.6f,.7f,1);
     private readonly IEngineContext engine;
     private readonly SpatialSession scene;
     private readonly Material stone;
@@ -81,6 +82,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Sky(float amount) { clock=Math.Clamp(amount,0,1); engine.CameraView.SetSkyBackgroundBlend(new(day,night,clock)); engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyTarget))); return Inspect(); }
     [DebugCommand("lighting.room")]
     public string Room() { engine.CameraView.UpdateCamera(new(camera,Camera(RoomEye,RoomTarget))); return Inspect(); }
+    [DebugCommand("lighting.fog")]
+    public string Fog(float density) { engine.CameraView.SetFog(density>0 ? new(FogMode.ExponentialSquared,FogColor,0,0,density) : new(FogMode.Off,default,0,0,0)); return Inspect(); }
+    [DebugCommand("lighting.exposure")]
+    public string Exposure(float exposure) { engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic,exposure)); return Inspect(); }
     [DebugCommand("lighting.panorama")]
     public string Panorama() { engine.CameraView.SetSkyBackground(day); return Inspect(); }
     [DebugCommand("lighting.inspect")]

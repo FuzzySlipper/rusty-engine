@@ -39,6 +39,92 @@ impl SkyBackgroundDescriptor {
     }
 }
 
+/// Distance fog over everything drawn in the world (not the background),
+/// blended toward `color` after exposure and tone mapping, by distance from
+/// the camera.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum FogDescriptor {
+    /// None before `start`, full at `end` and beyond.
+    Linear {
+        color: [f32; 3],
+        start: f32,
+        end: f32,
+    },
+    /// Remaining visibility `exp(-density × distance)`.
+    Exponential { color: [f32; 3], density: f32 },
+    /// Remaining visibility `exp(-(density × distance)²)`.
+    ExponentialSquared { color: [f32; 3], density: f32 },
+}
+
+impl FogDescriptor {
+    pub fn color(&self) -> [f32; 3] {
+        match self {
+            Self::Linear { color, .. }
+            | Self::Exponential { color, .. }
+            | Self::ExponentialSquared { color, .. } => *color,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), crate::RenderOperationError> {
+        let color = self.color();
+        let valid = color.iter().all(|value| value.is_finite() && *value >= 0.0)
+            && match *self {
+                Self::Linear { start, end, .. } => {
+                    start.is_finite() && end.is_finite() && start >= 0.0 && end > start
+                }
+                Self::Exponential { density, .. } | Self::ExponentialSquared { density, .. } => {
+                    density.is_finite() && density > 0.0
+                }
+            };
+        if valid {
+            Ok(())
+        } else {
+            Err(crate::RenderOperationError::Fog)
+        }
+    }
+}
+
+/// How lit colour maps to the output: a linear exposure multiplier, then an
+/// operator. The background is not tone mapped.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToneMappingDescriptor {
+    pub operator: ToneMappingOperator,
+    pub exposure: f32,
+}
+
+impl ToneMappingDescriptor {
+    /// Exposure 1 and no operator: colour is clamped as the target encodes it.
+    pub const NONE: Self = Self {
+        operator: ToneMappingOperator::None,
+        exposure: 1.0,
+    };
+}
+
+impl Default for ToneMappingDescriptor {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToneMappingOperator {
+    /// Clamp to the target's range.
+    #[default]
+    None,
+    /// Khronos PBR Neutral: base colours stay true, highlights compress.
+    Neutral,
+    /// ACES filmic (Stephen Hill's fit): film-like contrast and roll-off.
+    AcesFilmic,
+}
+
 pub const JSON_SAFE_U64_MAX: u64 = (1_u64 << 53) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -330,6 +416,13 @@ pub enum RenderDiff {
     SetBackgroundColor {
         color: [f32; 4],
     },
+    /// Selects the world's distance fog; None turns it off.
+    SetFog {
+        fog: Option<FogDescriptor>,
+    },
+    SetToneMapping {
+        tone_mapping: ToneMappingDescriptor,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -455,6 +548,14 @@ impl RenderDiff {
             Self::SetSkyBackground { background: None } => Ok(()),
             Self::SetBackgroundColor { color } if valid_color(*color) && color[3] == 1.0 => Ok(()),
             Self::SetBackgroundColor { .. } => Err(RenderOperationError::BackgroundColor),
+            Self::SetFog { fog: Some(fog) } => fog.validate(),
+            Self::SetFog { fog: None } => Ok(()),
+            Self::SetToneMapping { tone_mapping }
+                if tone_mapping.exposure.is_finite() && tone_mapping.exposure >= 0.0 =>
+            {
+                Ok(())
+            }
+            Self::SetToneMapping { .. } => Err(RenderOperationError::ToneMapping),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -543,6 +644,8 @@ impl RenderDiff {
             | Self::DefineTexture { .. }
             | Self::SetSkyBackground { .. }
             | Self::SetBackgroundColor { .. }
+            | Self::SetFog { .. }
+            | Self::SetToneMapping { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::ReleaseMaterial { .. }
@@ -577,6 +680,8 @@ pub enum RenderOperationError {
     Texture(crate::TextureError),
     SkyBackground(crate::RenderAssetError),
     BackgroundColor,
+    Fog,
+    ToneMapping,
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
@@ -641,6 +746,8 @@ impl RenderFrameDiff {
                 | RenderDiff::ReleaseTexture { .. }
                 | RenderDiff::SetSkyBackground { .. }
                 | RenderDiff::SetBackgroundColor { .. }
+                | RenderDiff::SetFog { .. }
+                | RenderDiff::SetToneMapping { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

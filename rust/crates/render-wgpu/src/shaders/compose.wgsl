@@ -2,6 +2,8 @@
 // a shared target, presenting an offscreen target into the primary output,
 // and converting a linear capture into its encoded image.
 
+#import rusty::tonemap::aces_filmic
+
 struct Params {
     // Clear colour, linear RGBA.
     color: vec4<f32>,
@@ -40,24 +42,6 @@ fn fs_blit(in: FullscreenOut) -> @location(0) vec4<f32> {
     return textureSample(source, source_sampler, in.uv);
 }
 
-// ACES filmic tone mapping (Stephen Hill's RRT and ODT fit).
-fn aces_filmic(input: vec3<f32>, exposure: f32) -> vec3<f32> {
-    let aces_in = mat3x3<f32>(
-        vec3<f32>(0.59719, 0.07600, 0.02840),
-        vec3<f32>(0.35458, 0.90834, 0.13383),
-        vec3<f32>(0.04823, 0.01566, 0.83777),
-    );
-    let aces_out = mat3x3<f32>(
-        vec3<f32>(1.60475, -0.10208, -0.00327),
-        vec3<f32>(-0.53108, 1.10813, -0.07276),
-        vec3<f32>(-0.07367, -0.00605, 1.07602),
-    );
-    let color = aces_in * (input * exposure / 0.6);
-    let a = color * (color + 0.0245786) - 0.000090537;
-    let b = color * (0.983729 * color + 0.4329510) + 0.238081;
-    return clamp(aces_out * (a / b), vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
 // Resolve factor x factor linear texels, un-premultiply the colour blended
 // over the clear, tone map or scale by exposure, and write straight alpha to
 // an sRGB target that encodes it.
@@ -78,7 +62,7 @@ fn fs_convert(in: FullscreenOut) -> @location(0) vec4<f32> {
         linear = color.rgb / alpha;
     }
     if params.tone.y > 0.5 {
-        linear = aces_filmic(linear, params.tone.x);
+        linear = aces_filmic(linear * params.tone.x);
     } else {
         linear = linear * params.tone.x;
     }

@@ -1,9 +1,10 @@
 //! The standard shader family (`src/shaders`): WGSL modules composed with
 //! naga_oil, and the features a material compiles into its variant.
 //!
-//! `types`, `view`, `material`, `surface` and `lighting` are importable
-//! modules (`#import rusty::lighting::standard_radiance`); `world`, `sky`,
-//! `shadow`, `effects` and `ghost` are the entry shaders built from them.
+//! `types`, `view`, `material`, `surface`, `lighting`, `tonemap` and `finish`
+//! are importable modules (`#import rusty::lighting::standard_radiance`);
+//! `world`, `sky`, `shadow`, `effects`, `ghost` and `compose` are the entry
+//! shaders built from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
 
@@ -74,7 +75,7 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 5] = [
+const MODULES: [(&str, &str); 7] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     (
@@ -86,6 +87,8 @@ const MODULES: [(&str, &str); 5] = [
         "shaders/lighting.wgsl",
         include_str!("shaders/lighting.wgsl"),
     ),
+    ("shaders/tonemap.wgsl", include_str!("shaders/tonemap.wgsl")),
+    ("shaders/finish.wgsl", include_str!("shaders/finish.wgsl")),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +98,7 @@ pub(crate) enum Entry {
     Shadow,
     Effects,
     Ghost,
+    Compose,
 }
 
 impl Entry {
@@ -105,6 +109,7 @@ impl Entry {
             Self::Shadow => ("shaders/shadow.wgsl", include_str!("shaders/shadow.wgsl")),
             Self::Effects => ("shaders/effects.wgsl", include_str!("shaders/effects.wgsl")),
             Self::Ghost => ("shaders/ghost.wgsl", include_str!("shaders/ghost.wgsl")),
+            Self::Compose => ("shaders/compose.wgsl", include_str!("shaders/compose.wgsl")),
         }
     }
 }
@@ -183,7 +188,7 @@ mod tests {
             compose(Entry::World, features);
             compose(Entry::Shadow, features.caster());
         }
-        for entry in [Entry::Sky, Entry::Effects, Entry::Ghost] {
+        for entry in [Entry::Sky, Entry::Effects, Entry::Ghost, Entry::Compose] {
             compose(entry, Features::default());
         }
     }

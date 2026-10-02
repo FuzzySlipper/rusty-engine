@@ -6,7 +6,10 @@ use render_host_contracts::{
     RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
     RendererViewComposition, RendererViewTarget, RendererViewport,
 };
-use render_model::{RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor};
+use render_model::{
+    FogDescriptor, RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor, ToneMappingDescriptor,
+    ToneMappingOperator,
+};
 
 use crate::{
     appearance::RuntimeAppearanceCall,
@@ -60,6 +63,10 @@ pub(crate) struct RuntimeCameraViewCall {
     state: CameraState,
     pub(crate) composition: Option<RendererViewComposition>,
     pub(crate) background: Option<CameraBackground>,
+    /// Fog selected during the call (`Some(None)` turns it off). The
+    /// presentation world retains the selection.
+    pub(crate) fog: Option<Option<FogDescriptor>>,
+    pub(crate) tone_mapping: Option<ToneMappingDescriptor>,
 }
 
 /// Engine-owned typed camera/view projection. Product facts are copied at the
@@ -95,6 +102,8 @@ impl RuntimeCameraViewBridge {
             state: std::mem::take(&mut self.state),
             composition: None,
             background: None,
+            fog: None,
+            tone_mapping: None,
         });
     }
 
@@ -141,6 +150,8 @@ impl RuntimeCameraViewBridge {
             state: self.state.clone(),
             composition: None,
             background: None,
+            fog: None,
+            tone_mapping: None,
         };
         stage_composition(&mut snapshot)?;
         Ok(snapshot
@@ -422,6 +433,8 @@ impl RuntimeCameraViewBridge {
             state: staged.state.clone(),
             composition: None,
             background: None,
+            fog: None,
+            tone_mapping: None,
         };
         candidate.state.views = views.to_vec();
         candidate.state.presentations = presentations.to_vec();
@@ -524,6 +537,56 @@ impl RuntimeCameraViewBridge {
         let staged = self.staged_mut()?;
         staged.state.background = CameraBackground::Color(color);
         staged.background = Some(staged.state.background);
+        Ok(())
+    }
+
+    fn set_fog(&mut self, request: NativeFogRequest) -> Result<(), CsharpEngineServicesError> {
+        let color = [request.color.r, request.color.g, request.color.b];
+        let fog = match request.mode {
+            NativeFogMode::Off => None,
+            NativeFogMode::Linear => Some(FogDescriptor::Linear {
+                color,
+                start: request.start,
+                end: request.end,
+            }),
+            NativeFogMode::Exponential => Some(FogDescriptor::Exponential {
+                color,
+                density: request.density,
+            }),
+            NativeFogMode::ExponentialSquared => Some(FogDescriptor::ExponentialSquared {
+                color,
+                density: request.density,
+            }),
+        };
+        if fog.is_some_and(|fog| fog.validate().is_err()) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_FOG",
+                "fog needs a finite non-negative colour; linear fog 0 <= start < end; \
+                 exponential fog density > 0",
+            ));
+        }
+        self.staged_mut()?.fog = Some(fog);
+        Ok(())
+    }
+
+    fn set_tone_mapping(
+        &mut self,
+        request: NativeToneMappingRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if !request.exposure.is_finite() || request.exposure < 0.0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_TONE_MAPPING",
+                "tone mapping exposure must be finite and non-negative",
+            ));
+        }
+        self.staged_mut()?.tone_mapping = Some(ToneMappingDescriptor {
+            operator: match request.operator {
+                NativeToneMappingOperator::None => ToneMappingOperator::None,
+                NativeToneMappingOperator::Neutral => ToneMappingOperator::Neutral,
+                NativeToneMappingOperator::AcesFilmic => ToneMappingOperator::AcesFilmic,
+            },
+            exposure: request.exposure,
+        });
         Ok(())
     }
 }
@@ -783,14 +846,40 @@ fn validate_target_descriptor(
     })
 }
 
-pub(crate) fn background_frame(
-    change: Option<CameraBackground>,
+/// The call's background, fog and tone mapping selections as one frame, or
+/// None when the call selected none of them.
+pub(crate) fn environment_frame(
+    call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
 ) -> Result<Option<RenderFrameDiff>, CsharpEngineServicesError> {
-    let Some(change) = change else {
+    let mut operations = Vec::with_capacity(4);
+    if let Some(fog) = call.fog {
+        operations.push(RenderDiff::SetFog { fog });
+    }
+    if let Some(tone_mapping) = call.tone_mapping {
+        operations.push(RenderDiff::SetToneMapping { tone_mapping });
+    }
+    if let Some(change) = call.background {
+        background_operations(change, appearance, &mut operations)?;
+    }
+    if operations.is_empty() {
         return Ok(None);
-    };
-    let mut operations = Vec::with_capacity(2);
+    }
+    RenderFrameDiff::try_from_ops(operations)
+        .map(Some)
+        .map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SKY_BACKGROUND",
+                format!("sky frame is invalid: {error:?}"),
+            )
+        })
+}
+
+fn background_operations(
+    change: CameraBackground,
+    appearance: &RuntimeAppearanceCall,
+    operations: &mut Vec<RenderDiff>,
+) -> Result<(), CsharpEngineServicesError> {
     match change {
         CameraBackground::Sky(handle) => {
             let texture = appearance.texture_descriptor(handle)?;
@@ -828,14 +917,7 @@ pub(crate) fn background_frame(
             operations.push(RenderDiff::SetSkyBackground { background: None })
         }
     }
-    RenderFrameDiff::try_from_ops(operations)
-        .map(Some)
-        .map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SKY_BACKGROUND",
-                format!("sky frame is invalid: {error:?}"),
-            )
-        })
+    Ok(())
 }
 
 pub(crate) unsafe extern "C" fn create_camera(
@@ -1161,6 +1243,48 @@ pub(crate) unsafe extern "C" fn set_background_color(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.set_background_color(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_fog(
+    context: *mut c_void,
+    request: *const NativeFogRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_fog(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_tone_mapping(
+    context: *mut c_void,
+    request: *const NativeToneMappingRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_tone_mapping(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

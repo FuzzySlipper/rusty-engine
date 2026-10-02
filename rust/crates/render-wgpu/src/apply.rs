@@ -105,6 +105,10 @@ impl Renderer {
                 self.tables.environment = Environment::Color(*color);
                 self.tables.environment_dirty = true;
             }
+            RenderDiff::SetFog { fog } => self.tables.fog = *fog,
+            RenderDiff::SetToneMapping { tone_mapping } => {
+                self.tables.tone_mapping = *tone_mapping;
+            }
             RenderDiff::SetSkyBackground { background } => {
                 self.tables.environment = match background {
                     Some(sky) => Environment::Sky(sky.clone()),
@@ -1524,6 +1528,8 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::ReleaseTexture { .. } => "releaseTexture",
         RenderDiff::SetSkyBackground { .. } => "setSkyBackground",
         RenderDiff::SetBackgroundColor { .. } => "setBackgroundColor",
+        RenderDiff::SetFog { .. } => "setFog",
+        RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",
         RenderDiff::DefineStaticMesh { .. } => "defineStaticMesh",

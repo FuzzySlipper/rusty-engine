@@ -72,7 +72,7 @@ fn params_bytes(color: [f32; 4], exposure: f32, aces: bool, factor: u32) -> Vec<
 }
 
 impl Compose {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, shader: wgpu::ShaderModule) -> Self {
         let layout = |label, entries: &[wgpu::BindGroupLayoutEntry]| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some(label),
@@ -116,10 +116,7 @@ impl Compose {
             }],
         });
         Self {
-            shader: device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("render-wgpu compose"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("compose.wgsl").into()),
-            }),
+            shader,
             clear_pipeline_layout: pipeline_layout("render-wgpu compose clear", &clear_layout),
             blit_pipeline_layout: pipeline_layout("render-wgpu compose blit", &blit_layout),
             convert_pipeline_layout: pipeline_layout(

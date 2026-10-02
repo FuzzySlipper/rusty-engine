@@ -1,5 +1,6 @@
 // The standard shader's world pass: parts drawn with their material and the
-// pass's light rows. Each material compiles the features it uses
+// pass's light rows, finished by exposure, tone mapping and fog
+// (`rusty::finish`). Each material compiles the features it uses
 // (`shaders.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP.
 
@@ -17,6 +18,7 @@
 }
 #import rusty::surface::{transform_uv, voxel_uv, perturb_normal}
 #import rusty::lighting::standard_radiance
+#import rusty::finish::finish
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -64,7 +66,7 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
         discard;
     }
 #endif
-    return base;
+    return finish(base, in.world_position);
 #else
     // Every map is sampled, and every derivative taken, before the discard.
 #ifdef EMISSIVE_MAP
@@ -103,6 +105,6 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     let roughness = min(max(material.roughness, 0.0525) + geometry_roughness, 1.0);
     let radiance = standard_radiance(base.rgb, normal, in.world_position, roughness, material.metalness, occlusion)
         + row.emission.rgb * emissive;
-    return vec4<f32>(radiance, base.a);
+    return finish(vec4<f32>(radiance, base.a), in.world_position);
 #endif
 }

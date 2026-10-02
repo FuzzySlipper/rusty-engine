@@ -226,6 +226,55 @@ pub struct NativeSetBackgroundColorRequest {
     pub color: NativeColor,
 }
 
+/// Distance fog mode. `Off` clears the fog.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeFogMode {
+    Off = 0,
+    /// No fog before `start`, full fog at `end` and beyond (metres).
+    Linear = 1,
+    /// Visibility `exp(-density × distance)`.
+    Exponential = 2,
+    /// Visibility `exp(-(density × distance)²)`: clearer near, denser far.
+    ExponentialSquared = 3,
+}
+
+/// Distance fog over everything drawn in the world, by distance from the
+/// camera, toward `color` (linear RGB; alpha is ignored). It blends after
+/// exposure and tone mapping and never touches the background, so a fog
+/// colour equal to the background colour fades geometry exactly into it.
+/// Linear fog reads `start` and `end`; the exponential modes read `density`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogRequest {
+    pub mode: NativeFogMode,
+    pub color: NativeColor,
+    pub start: f32,
+    pub end: f32,
+    pub density: f32,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeToneMappingOperator {
+    /// Colour clamps at the target's range (the default).
+    None = 0,
+    /// Khronos PBR Neutral: base colours stay true, highlights compress.
+    Neutral = 1,
+    /// ACES filmic: film-like contrast, highlights roll toward white.
+    AcesFilmic = 2,
+}
+
+/// How lit colour reaches the output: a linear exposure multiplier (1 by
+/// default), then the operator. Applies to everything drawn in the world, not
+/// the background. Image captures use their own exposure and tone mapping.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeToneMappingRequest {
+    pub operator: NativeToneMappingOperator,
+    pub exposure: f32,
+}
+
 /// Blends two retained equirectangular panoramas. Amount is in [0,1]; the
 /// product supplies its clock-derived value. Neither texture is recreated.
 #[repr(C)]

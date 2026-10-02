@@ -10,7 +10,9 @@ use std::ops::{Add, AddAssign};
 
 use glam::{Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
-use render_model::{RenderHandle, RenderLayer};
+use render_model::{
+    FogDescriptor, RenderHandle, RenderLayer, ToneMappingDescriptor, ToneMappingOperator,
+};
 
 use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
@@ -27,8 +29,10 @@ use crate::{
 };
 
 const LIGHT_ROW_FLOATS: usize = 16;
-/// Frame uniform: two matrices, camera position, light count and first light.
-const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4) * 4;
+/// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
+/// light count and first light; then exposure and fog distances, fog colour,
+/// and the tone mapping and fog modes.
+const FRAME_UNIFORM_BYTES: u64 = (16 + 16 + 4 + 4 + 4 + 4 + 4) * 4;
 
 /// Per-frame counts for diagnostics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -812,6 +816,7 @@ impl Renderer {
         for count in [lights.count, lights.first, 0, 0] {
             bytes.extend_from_slice(&count.to_le_bytes());
         }
+        bytes.extend_from_slice(&finish_uniform(self.tables.tone_mapping, self.tables.fog));
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
 
         // Format and sample count: every pipeline drawing here must match.
@@ -1096,4 +1101,29 @@ fn neutral_rig(rows: &mut Vec<f32>, key_position: [f32; 3]) {
         0.0,
         0.0,
     ]);
+}
+
+/// The frame uniform's finish rows: exposure and fog distances, fog colour,
+/// then the tone mapping and fog modes (`rusty::finish`).
+fn finish_uniform(tone_mapping: ToneMappingDescriptor, fog: Option<FogDescriptor>) -> Vec<u8> {
+    let operator: u32 = match tone_mapping.operator {
+        ToneMappingOperator::None => 0,
+        ToneMappingOperator::Neutral => 1,
+        ToneMappingOperator::AcesFilmic => 2,
+    };
+    let (mode, start, end, density): (u32, f32, f32, f32) = match fog {
+        None => (0, 0.0, 0.0, 0.0),
+        Some(FogDescriptor::Linear { start, end, .. }) => (1, start, end, 0.0),
+        Some(FogDescriptor::Exponential { density, .. }) => (2, 0.0, 0.0, density),
+        Some(FogDescriptor::ExponentialSquared { density, .. }) => (3, 0.0, 0.0, density),
+    };
+    let [r, g, b] = fog.map_or([0.0; 3], |fog| fog.color());
+    let mut bytes = Vec::with_capacity(48);
+    for value in [tone_mapping.exposure, start, end, density, r, g, b, 0.0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in [operator, mode, 0, 0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
 }

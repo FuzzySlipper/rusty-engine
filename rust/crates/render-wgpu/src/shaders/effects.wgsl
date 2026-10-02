@@ -1,9 +1,11 @@
-// Sprites and particles, lit by the world pass's light rows. Sprite bindings
-// in group 1 start at 10 and particle bindings at 20, so the two layouts never
-// collide in this module.
+// Sprites and particles, lit by the world pass's light rows and finished as
+// the world pass is (`rusty::finish`). Sprite bindings in group 1 start at 10
+// and particle bindings at 20, so the two layouts never collide in this
+// module.
 
 #import rusty::view::frame
 #import rusty::lighting::standard_radiance
+#import rusty::finish::finish
 
 // Sprite: one instanced quad. Rows are built per view pass (billboard
 // orientation, pixel size and viewport placement depend on the camera).
@@ -93,7 +95,7 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
     }
     let mode = u32(in.params.x + 0.5);
     if mode == 0u {
-        return color;
+        return finish(color, in.world_position);
     }
     let strength = in.params.z;
     let q1_perp = cross(q1, normal);
@@ -128,7 +130,10 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
         normal = normalize(abs(determinant) * normal - direction);
     }
     let roughness = min(SPRITE_ROUGHNESS + geometry_roughness, 1.0);
-    return vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0), color.a);
+    return finish(
+        vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0), color.a),
+        in.world_position,
+    );
 }
 
 // Particle billboard: a screen-aligned quad of constant pixel size
@@ -146,6 +151,8 @@ struct ParticleOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // The billboard's centre, for fog.
+    @location(2) world_position: vec3<f32>,
 };
 
 @group(1) @binding(20) var particle_texture: texture_2d<f32>;
@@ -162,6 +169,7 @@ fn vs_particle(in: ParticleIn) -> ParticleOut {
     let frame_index = clamp(floor(in.flipbook.y + 0.5), 0.0, count - 1.0);
     out.uv = vec2<f32>((frame_index + in.corner.x) / count, 1.0 - in.corner.y);
     out.color = in.color;
+    out.world_position = in.center.xyz;
     return out;
 }
 
@@ -171,7 +179,7 @@ fn fs_particle(in: ParticleOut) -> @location(0) vec4<f32> {
     if color.a <= 0.001 {
         discard;
     }
-    return color;
+    return finish(color, in.world_position);
 }
 
 // Particle cube: the builtin unit cube per instance, flat colour.
@@ -187,12 +195,14 @@ struct CubeParticleIn {
 struct CubeParticleOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) world_position: vec3<f32>,
 };
 
 @vertex
 fn vs_particle_cube(in: CubeParticleIn) -> CubeParticleOut {
     var out: CubeParticleOut;
-    out.clip = frame.view_proj * vec4<f32>(in.center.xyz + in.position * in.center.w, 1.0);
+    out.world_position = in.center.xyz + in.position * in.center.w;
+    out.clip = frame.view_proj * vec4<f32>(out.world_position, 1.0);
     out.color = in.color;
     return out;
 }
@@ -202,5 +212,5 @@ fn fs_particle_cube(in: CubeParticleOut) -> @location(0) vec4<f32> {
     if in.color.a <= 0.001 {
         discard;
     }
-    return in.color;
+    return finish(in.color, in.world_position);
 }

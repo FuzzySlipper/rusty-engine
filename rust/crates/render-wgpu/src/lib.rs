@@ -224,6 +224,9 @@ impl Renderer {
         let ghost_shader = layouts
             .shaders
             .module(device, Entry::Ghost, Features::default());
+        let compose_shader = layouts
+            .shaders
+            .module(device, Entry::Compose, Features::default());
         let mut renderer = Self {
             gpu: gpu.clone(),
             options,
@@ -253,7 +256,7 @@ impl Renderer {
             ghosts: HashMap::new(),
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             scene_generation: 0,
-            compose: compose::Compose::new(device),
+            compose: compose::Compose::new(device, compose_shader),
             composition: Default::default(),
             effects,
             particles: Default::default(),

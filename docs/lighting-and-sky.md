@@ -17,8 +17,9 @@ its surroundings. Updating or disabling that light changes the same retained lig
 
 Retained meshes, voxel surfaces and GLB parts all draw with the Engine's
 standard shader: metallic-roughness lighting (Lambert diffuse plus GGX
-specular) from the scene's lights and requested shadows, in linear light with
-no tone mapping. A material compiles only the features its contents use:
+specular) from the scene's lights and requested shadows, in linear light,
+then finished by the product's exposure, tone mapping and fog (below). A
+material compiles only the features its contents use:
 
 | Feature | A material has it when |
 | --- | --- |
@@ -32,7 +33,44 @@ feature set compiles once, when its first material is defined: about 8 ms on
 an RX 9070 XT, then about 0.4 ms for each further pass it draws in. Doom's E1M1
 uses two. The shader is composed from importable WGSL modules in
 `render-wgpu/src/shaders/` (`types`, `view`, `material`, `surface`,
-`lighting`).
+`lighting`, `tonemap`, `finish`).
+
+## Exposure, tone mapping and fog
+
+Everything drawn in the world (lit and unlit meshes, voxel surfaces, GLB
+parts, sprites and particles) ends in one finish step: exposure, then the tone
+mapping operator, then distance fog. The background, a clear colour or sky
+panorama, is never finished. Both settings are retained camera-view state,
+like the sky, and products change them at runtime, for a cave, underwater or
+at night:
+
+```csharp
+engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic, exposure));
+engine.CameraView.SetFog(new(FogMode.Linear, fogColor, Start: 3, End: 30, Density: 0));
+engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
+```
+
+- **Exposure** multiplies lit colour; it defaults to 1.
+- **Operators.** `None` (the default) clamps at the target's range, so bright
+  lights clip to white or a saturated primary. `Neutral` (Khronos PBR Neutral)
+  keeps base colours true and compresses only highlights. `AcesFilmic` adds
+  film-like contrast and rolls highlights toward white. Choose one before
+  tuning light intensities: the same lights read differently under each.
+- **Fog.** `Linear` has none before `start` and is full at `end` (metres from
+  the camera). `Exponential` leaves `exp(-density × distance)` of the colour,
+  and `ExponentialSquared` leaves `exp(-(density × distance)²)`, which is
+  clearer near and denser far. The colour is linear RGB; alpha is ignored.
+  Fog blends after tone mapping, so a fog colour equal to the background
+  colour fades distant geometry exactly into it. Over a sky panorama, pick a
+  colour that matches its horizon.
+- **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
+  and tone mapping. It keeps the scene's fog only with `UseCameraBackground`.
+
+Changing either setting recompiles nothing: both are values in the frame
+uniform, so a product may update them every frame. Blended surfaces are
+finished before they blend, as three.js does, so there is no bloom; that
+needs an HDR intermediate the renderer does not have. Fog and tone mapping do
+not change `Voxel.SampleDirectLighting`, which reports linear light.
 
 ## Read light at a voxel location
 
@@ -99,7 +137,8 @@ engine.CameraView.SetSkyBackgroundBlend(new(dayTexture, nightTexture, amount));
 value and chooses authored keyframes, sun/moon positions/colors, horizon tint,
 and stars in the panoramas. Blend consecutive pairs for dawn/day/dusk/night;
 use coherent features and artwork to avoid double sun/moon images during a
-crossfade. A blend is not a physical atmosphere simulation or fog control.
+crossfade. A blend is not a physical atmosphere simulation; distance fog is
+`CameraView.SetFog`.
 Update ordinary scene lights from the same product clock when illumination
 should change too; sky presentation does not create environment lighting.
 
@@ -120,5 +159,6 @@ them. The Engine owns GPU lifetime and panorama orientation.
 `fixtures/csharp-lighting-sky` uses the packaged SDK, a voxel room, a retained
 torch light, a persistence round-trip and two deterministic authored panoramas.
 Commands: `lighting.inspect`, `lighting.torch true|false`, `lighting.sky 0..1`,
-`lighting.room`, and `lighting.panorama`. Debug selection is explicit fixture
+`lighting.room`, `lighting.fog <density>` (0 turns it off),
+`lighting.exposure <exposure>` (ACES filmic), and `lighting.panorama`. Debug selection is explicit fixture
 assistance; no downstream gameplay acceptance is implied.

@@ -14,6 +14,7 @@
 //! | `animated_assets` | animated mesh asset id | decoded GLB (nodes, skins, clips), uploaded unskinned primitives, GLB materials and textures | `DefineAnimatedMesh` / `ReleaseAnimatedMesh` |
 //! | `animated` | `RenderHandle` | playback, pose, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetAnimatedMeshPlayback`, `SetAnimatedMeshInspection` |
 //! | `environment` | (single) | background colour or equirectangular sky (with blend) | `SetBackgroundColor` / `SetSkyBackground` |
+//! | `fog`, `tone_mapping` | (single) | distance fog; exposure and tone mapping operator | `SetFog` / `SetToneMapping` |
 //!
 //! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
 //!
@@ -33,10 +34,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use glam::{Mat4, Vec3};
 use render_model::{
-    AnimatedMeshInstanceDescriptor, Geometry, LightDescriptor, Material,
+    AnimatedMeshInstanceDescriptor, FogDescriptor, Geometry, LightDescriptor, Material,
     MaterialInstanceParameters, RenderHandle, RenderLayer, RenderMaterialDescriptor,
     SkyBackgroundDescriptor, SpriteAtlasDescriptor, SpriteInstanceDescriptor,
-    VoxelObjectInstanceDescriptor,
+    ToneMappingDescriptor, VoxelObjectInstanceDescriptor,
 };
 
 use crate::animated::{AnimatedAssetRow, AnimatedInstance, ControllerRow};
@@ -524,6 +525,8 @@ pub(crate) struct Tables {
     /// Animation controllers by projection handle.
     pub controllers: HashMap<u64, ControllerRow>,
     pub environment: Environment,
+    pub fog: Option<FogDescriptor>,
+    pub tone_mapping: ToneMappingDescriptor,
     /// Nodes whose transform, visibility or parent changed since `prepare`.
     pub dirty_nodes: HashSet<RenderHandle>,
     /// Light nodes; the light rows are rebuilt when any of them changes.
@@ -549,6 +552,8 @@ impl Tables {
             animated: HashMap::new(),
             controllers: HashMap::new(),
             environment: Environment::Default,
+            fog: None,
+            tone_mapping: ToneMappingDescriptor::NONE,
             dirty_nodes: HashSet::new(),
             lights: HashSet::new(),
             lights_dirty: true,

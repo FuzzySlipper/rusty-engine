@@ -120,6 +120,8 @@ struct RetainedGraphics {
     voxel_objects: BTreeMap<String, Arc<VoxelObjectRenderAsset>>,
     sky: Option<SkyBackgroundDescriptor>,
     background_color: Option<[f32; 4]>,
+    fog: Option<FogDescriptor>,
+    tone_mapping: ToneMappingDescriptor,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -244,6 +246,8 @@ impl PresentationWorld {
                 if self.retained.textures.get(&texture.id).is_some_and(|current| current.as_ref() == texture))
                 || matches!(&op, RenderDiff::SetSkyBackground { background } if &self.retained.sky == background && self.retained.background_color.is_none())
                 || matches!(&op, RenderDiff::SetBackgroundColor { color } if self.retained.background_color == Some(*color) && self.retained.sky.is_none())
+                || matches!(&op, RenderDiff::SetFog { fog } if &self.retained.fog == fog)
+                || matches!(&op, RenderDiff::SetToneMapping { tone_mapping } if &self.retained.tone_mapping == tone_mapping)
             {
                 continue;
             }
@@ -457,9 +461,12 @@ impl PresentationWorld {
             node.material_parameters.clear();
         }
 
+        // Without the camera background a capture is its subject alone: no
+        // sky, clear colour or scene fog.
         if !retain_background {
             captured.retained.sky = None;
             captured.retained.background_color = None;
+            captured.retained.fog = None;
         }
         // Capture dependencies are a subset of the live world. In particular,
         // one small plate must not copy or realize every unrelated mesh.
@@ -639,6 +646,16 @@ impl PresentationWorld {
         } else {
             ops.push(RenderDiff::SetSkyBackground {
                 background: self.retained.sky.clone(),
+            });
+        }
+        if self.retained.fog.is_some() {
+            ops.push(RenderDiff::SetFog {
+                fog: self.retained.fog,
+            });
+        }
+        if self.retained.tone_mapping != ToneMappingDescriptor::NONE {
+            ops.push(RenderDiff::SetToneMapping {
+                tone_mapping: self.retained.tone_mapping,
             });
         }
         // Creation requires an existing parent and parents cannot be changed,
@@ -1116,6 +1133,10 @@ impl PresentationWorld {
             RenderDiff::SetBackgroundColor { color } => {
                 self.retained.sky = None;
                 self.retained.background_color = Some(*color);
+            }
+            RenderDiff::SetFog { fog } => self.retained.fog = *fog,
+            RenderDiff::SetToneMapping { tone_mapping } => {
+                self.retained.tone_mapping = *tone_mapping;
             }
         }
         Ok(())
