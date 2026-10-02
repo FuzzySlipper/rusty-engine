@@ -147,7 +147,7 @@ impl Renderer {
                 *parent,
                 crate::convert::transform_matrix(&instance.transform),
                 instance.visible,
-                RenderLayer::Scene,
+                instance.layer,
                 NodeKind::StaticMesh {
                     asset: instance.asset.clone(),
                     overrides: instance
@@ -168,7 +168,7 @@ impl Renderer {
                     *parent,
                     crate::convert::transform_matrix(&instance.transform),
                     instance.visible,
-                    RenderLayer::Scene,
+                    instance.layer,
                     NodeKind::AnimatedMesh(Box::new(instance.clone())),
                 );
                 self.create_animated_instance(*handle);

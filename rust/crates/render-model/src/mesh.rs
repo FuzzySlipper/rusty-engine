@@ -651,6 +651,9 @@ pub struct StaticMeshInstanceDescriptor {
     pub visible: bool,
     pub material_overrides: Vec<MeshMaterialSlot>,
     pub metadata: RenderMetadata,
+    /// The layer a root instance draws in; children take their root's.
+    #[serde(default, skip_serializing_if = "crate::RenderLayer::is_scene")]
+    pub layer: crate::RenderLayer,
 }
 
 impl StaticMeshInstanceDescriptor {
@@ -1207,6 +1210,9 @@ pub struct AnimatedMeshInstanceDescriptor {
     pub material_overrides: Vec<MeshMaterialSlot>,
     pub playback: Option<AnimatedMeshPlaybackCommand>,
     pub metadata: RenderMetadata,
+    /// The layer a root instance draws in; children take their root's.
+    #[serde(default, skip_serializing_if = "crate::RenderLayer::is_scene")]
+    pub layer: crate::RenderLayer,
 }
 
 impl AnimatedMeshInstanceDescriptor {

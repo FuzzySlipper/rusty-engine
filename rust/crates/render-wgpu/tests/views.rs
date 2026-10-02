@@ -167,6 +167,42 @@ fn the_viewmodel_draws_over_the_world_after_a_depth_break() {
 }
 
 #[test]
+fn a_root_mesh_instance_in_the_viewmodel_layer_draws_camera_local() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = room();
+    ops.push(instance(
+        20,
+        None,
+        "red",
+        transform([0.0, 0.0, -1.3], 0.0, 1.5),
+    ));
+    // No group parent: the instance itself carries the layer.
+    let mut held = instance(31, None, "green", transform([0.35, -0.28, -0.9], 35.0, 0.3));
+    let RenderDiff::CreateStaticMeshInstance {
+        instance: descriptor,
+        ..
+    } = &mut held
+    else {
+        unreachable!()
+    };
+    descriptor.layer = RenderLayer::Viewmodel;
+    ops.push(held);
+    harness.apply(ops);
+    let eye = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+    let frame = harness.single(&eye);
+    let (x, y) = (WIDTH * 3 / 4 - 8, HEIGHT * 3 / 4);
+    let [r, g, ..] = pixel(&frame, WIDTH, x, y);
+    assert!(
+        g > 60 && g > r,
+        "the green box draws over the nearer red wall: {:?}",
+        [r, g]
+    );
+    // At the world origin it would sit behind the camera's wall instead.
+    let [r, g, ..] = pixel(&frame, WIDTH, WIDTH / 2, HEIGHT / 3);
+    assert!(r > g, "the wall still fills the rest of the view");
+}
+
+#[test]
 fn camera_motion_interpolates_on_the_host_clock_and_holds_when_samples_stop() {
     let mut harness = Harness::new(RendererOptions::default());
     harness.apply(room());

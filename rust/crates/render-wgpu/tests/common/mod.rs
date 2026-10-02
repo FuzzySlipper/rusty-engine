@@ -298,6 +298,7 @@ pub fn instance(handle: u64, parent: Option<u64>, mesh: &str, transform: Transfo
             visible: true,
             material_overrides: Vec::new(),
             metadata: RenderMetadata::default(),
+            layer: RenderLayer::Scene,
         },
     }
 }

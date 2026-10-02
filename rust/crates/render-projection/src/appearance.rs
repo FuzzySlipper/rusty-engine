@@ -253,6 +253,7 @@ pub(crate) fn validate_appearance(
                 visible: node.visible,
                 material_overrides: material_overrides.clone(),
                 metadata: metadata.clone(),
+                layer: node.layer,
             }
             .validate()
             .map_err(|source| AppearanceProjectionError::InvalidStaticMeshInstance { id, source })
@@ -278,6 +279,7 @@ pub(crate) fn validate_appearance(
                 material_overrides: material_overrides.clone(),
                 playback: playback.clone(),
                 metadata: metadata.clone(),
+                layer: node.layer,
             }
             .validate()
             .map_err(|source| AppearanceProjectionError::InvalidAnimatedMeshInstance { id, source })
@@ -480,6 +482,7 @@ pub(crate) fn create_node(
                 visible: node.visible,
                 material_overrides: material_overrides.clone(),
                 metadata,
+                layer: node.layer,
             },
         },
         Appearance::AnimatedMesh {
@@ -498,6 +501,7 @@ pub(crate) fn create_node(
                 material_overrides: material_overrides.clone(),
                 playback: playback.clone(),
                 metadata,
+                layer: node.layer,
             },
         },
         Appearance::Sprite { sprite } => {
@@ -758,4 +762,41 @@ pub enum JointAttachmentProblem {
     ParentNotAnimated,
     MissingJoint,
     AmbiguousJoint,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mesh appearance keeps its fact's layer, as primitives and sprites do,
+    /// so a viewmodel mesh draws camera-local.
+    #[test]
+    fn mesh_instances_carry_the_appearance_layer() {
+        let meshes = [
+            Appearance::StaticMesh {
+                asset: "mesh/held".to_owned(),
+                material_overrides: Vec::new(),
+            },
+            Appearance::AnimatedMesh {
+                asset: "animated/held".to_owned(),
+                material_overrides: Vec::new(),
+                playback: None,
+                inspection: Default::default(),
+            },
+        ];
+        for appearance in &meshes {
+            let node = NodeValues {
+                appearance,
+                transform: Transform::IDENTITY,
+                visible: true,
+                layer: RenderLayer::Viewmodel,
+            };
+            let layer = match create_node(RenderHandle::new(1), None, node, Default::default()) {
+                RenderDiff::CreateStaticMeshInstance { instance, .. } => instance.layer,
+                RenderDiff::CreateAnimatedMeshInstance { instance, .. } => instance.layer,
+                other => panic!("unexpected op {other:?}"),
+            };
+            assert_eq!(layer, RenderLayer::Viewmodel);
+        }
+    }
 }

@@ -270,6 +270,12 @@ pub enum RenderLayer {
     Viewmodel,
 }
 
+impl RenderLayer {
+    pub fn is_scene(&self) -> bool {
+        *self == Self::Scene
+    }
+}
+
 /// Authority provenance remains raw identity data at this border. The renderer
 /// may report it in a pick, but cannot turn it into gameplay authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

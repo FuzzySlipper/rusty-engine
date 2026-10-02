@@ -237,6 +237,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 visible: true,
                 material_overrides: Vec::new(),
                 metadata: metadata(3, "static"),
+                layer: RenderLayer::Scene,
             },
         },
         RenderDiff::SetMaterialInstanceParameters {
@@ -259,6 +260,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 material_overrides: Vec::new(),
                 playback: Some(playback.clone()),
                 metadata: metadata(4, "animated"),
+                layer: RenderLayer::Scene,
             },
         },
         RenderDiff::SetAnimatedMeshPlayback {

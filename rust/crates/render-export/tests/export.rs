@@ -245,6 +245,7 @@ fn character(resources: &mut Resources) -> (Vec<RenderDiff>, AnimatedMeshAsset) 
                 material_overrides: Vec::new(),
                 playback: None,
                 metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
             },
         }
     };
@@ -355,6 +356,7 @@ fn a_joint_attachment_follows_the_skin_joint_when_another_node_shares_its_name()
                 material_overrides: Vec::new(),
                 playback: None,
                 metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
             },
         },
         primitive(5, Some(BODY), Geometry::Cube, [0.8, 0.2, 0.1, 1.0]),
@@ -430,6 +432,7 @@ fn a_reopened_character_renders_the_sampled_pose_as_the_original_did() {
                 material_overrides: Vec::new(),
                 playback: Some(pose),
                 metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
             },
         },
     ]);

@@ -67,6 +67,7 @@ fn animated(
                 source_entity: Some(handle),
                 ..RenderMetadata::default()
             },
+            layer: RenderLayer::Scene,
         },
     }
 }

@@ -153,6 +153,7 @@ fn render(glb: Vec<u8>, lights: Vec<RenderDiff>) -> Vec<u8> {
                 material_overrides: Vec::new(),
                 playback: None,
                 metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
             },
         },
     ];

@@ -1480,6 +1480,7 @@ mod tests {
                         visible: true,
                         material_overrides: Vec::new(),
                         metadata: RenderMetadata::default(),
+                        layer: RenderLayer::Scene,
                     },
                 },
             ]))
@@ -1717,6 +1718,7 @@ mod joint_attachment_tests {
                     visible: true,
                     metadata: RenderMetadata::default(),
                     inspection: AnimatedMeshInspection::default(),
+                    layer: RenderLayer::Scene,
                 },
             },
             RenderDiff::Create {
