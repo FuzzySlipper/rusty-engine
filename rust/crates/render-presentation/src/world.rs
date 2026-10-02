@@ -1152,6 +1152,7 @@ mod tests {
         StaticMeshAsset {
             asset: asset.to_string(),
             payload: MeshPayloadDescriptor {
+                texture_space: None,
                 layout: MeshBufferLayout {
                     vertex_count: 3,
                     index_count: 3,

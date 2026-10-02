@@ -5,8 +5,9 @@ use engine_spatial::{VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
     Geometry, Material, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
     MeshBufferLayout, MeshGroupDescriptor, MeshIndexWidth, MeshPayloadDescriptor,
-    MeshPayloadSource, MeshProvenance, RenderDiff, RenderFrameDiff, RenderFramePublication,
-    RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode, Transform,
+    MeshPayloadSource, MeshProvenance, MeshTextureSpace, RenderDiff, RenderFrameDiff,
+    RenderFramePublication, RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata,
+    RenderNode, Transform,
 };
 
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
@@ -631,6 +632,10 @@ fn voxel_mesh_payload_with_material_slots(
             indices: chunk.indices.clone(),
         },
         provenance: MeshProvenance::VoxelChunk,
+        texture_space: Some(MeshTextureSpace {
+            cell_size: chunk.voxel_size,
+            origin: chunk.origin_voxel.map(|cell| cell as f32),
+        }),
     }
 }
 
@@ -723,6 +728,7 @@ mod tests {
             double_sided: false,
             voxel_surface: None,
             normal_map: None,
+            triplanar: None,
         }
     }
 

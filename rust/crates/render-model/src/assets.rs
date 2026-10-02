@@ -404,6 +404,20 @@ pub struct RenderMaterialDescriptor {
     /// texture holds data, so it is retained with a linear colour space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normal_map: Option<MaterialNormalMapDescriptor>,
+    /// Sample the base texture (and normal map) from three axis planes
+    /// blended by the surface normal, instead of the mesh uv. The planes use
+    /// voxel cube faces' texture bases, over the mesh's texture positions
+    /// (absolute cells on voxel chunks) or else its object-space positions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triplanar: Option<MaterialTriplanarDescriptor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialTriplanarDescriptor {
+    /// Blend weights are |normal| to this power: higher keeps each plane
+    /// sharper, nearer box projection; 1 blends widely.
+    pub sharpness: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -450,6 +464,12 @@ impl RenderMaterialDescriptor {
         if !self.metalness.is_finite() || !(0.0..=1.0).contains(&self.metalness) {
             return Err(MaterialDescriptorError::InvalidMetalness);
         }
+        if self
+            .triplanar
+            .is_some_and(|triplanar| !triplanar.sharpness.is_finite() || triplanar.sharpness < 1.0)
+        {
+            return Err(MaterialDescriptorError::InvalidTriplanar);
+        }
         if let Some(map) = &self.normal_map {
             if validate_asset_id(&map.texture, RenderAssetKind::Texture).is_err()
                 || !map.scale.is_finite()
@@ -488,6 +508,7 @@ pub enum MaterialDescriptorError {
     InvalidRoughness,
     InvalidMetalness,
     InvalidNormalMap,
+    InvalidTriplanar,
     InvalidEmission,
     InvalidAlphaCutoff,
     InvalidVoxelSurface(VoxelSurfaceDescriptorError),
@@ -1491,6 +1512,7 @@ mod tests {
             double_sided: false,
             voxel_surface: Some(surface.clone()),
             normal_map: None,
+            triplanar: None,
         };
         assert_eq!(material.validate(), Ok(()));
         let material_json = serde_json::to_string(&material).unwrap();
@@ -1514,6 +1536,7 @@ mod tests {
         let legacy = RenderMaterialDescriptor {
             voxel_surface: None,
             normal_map: None,
+            triplanar: None,
             ..material
         };
         let encoded = serde_json::to_string(&legacy).unwrap();
@@ -1540,6 +1563,7 @@ mod tests {
             double_sided: true,
             voxel_surface: None,
             normal_map: None,
+            triplanar: None,
         };
         material.validate().unwrap();
         let encoded = serde_json::to_string(&material).unwrap();

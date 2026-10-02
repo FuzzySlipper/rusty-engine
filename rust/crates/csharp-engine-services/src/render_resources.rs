@@ -1338,6 +1338,7 @@ unsafe fn generated_mesh_payload(
         });
     }
     let payload = MeshPayloadDescriptor {
+        texture_space: None,
         layout: MeshBufferLayout {
             vertex_count,
             index_count,
@@ -1787,6 +1788,7 @@ pub(crate) mod tests {
         let asset = StaticMeshAsset {
             asset: "mesh/charing".to_owned(),
             payload: MeshPayloadDescriptor {
+                texture_space: None,
                 layout: MeshBufferLayout {
                     vertex_count: vertices as u32,
                     index_count: indices.len() as u32,

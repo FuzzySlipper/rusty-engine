@@ -144,6 +144,21 @@ pub struct MeshPayloadDescriptor {
     pub bounds: MeshBoundsDescriptor,
     pub source: MeshPayloadSource,
     pub provenance: MeshProvenance,
+    /// Where triplanar materials project this mesh's positions from. Without
+    /// it they project its object-space positions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_space: Option<MeshTextureSpace>,
+}
+
+/// A mesh's texture space: `position / cell_size + origin`, in voxel cells,
+/// the space a voxel mesh's tile coordinates are in. Voxel chunks carry it
+/// so triplanar planes line up with cube faces across chunks and world-origin
+/// rebases.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MeshTextureSpace {
+    pub cell_size: f32,
+    pub origin: [f32; 3],
 }
 
 impl MeshPayloadDescriptor {
@@ -1625,6 +1640,7 @@ mod tests {
 
     fn triangle() -> MeshPayloadDescriptor {
         MeshPayloadDescriptor {
+            texture_space: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,

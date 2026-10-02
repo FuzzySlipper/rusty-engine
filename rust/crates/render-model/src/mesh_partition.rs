@@ -106,6 +106,7 @@ pub fn partition_mesh_spatially(
         layout.vertex_count = (out_positions.len() / 3) as u32;
         layout.index_count = out_indices.len() as u32;
         parts.push(MeshPayloadDescriptor {
+            texture_space: None,
             layout,
             groups,
             bounds,

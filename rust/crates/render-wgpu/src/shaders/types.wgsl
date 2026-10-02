@@ -20,12 +20,20 @@ struct Frame {
 
 struct Part {
     model: mat4x4<f32>,
+    // The normal matrix's columns; w: the texture-space origin (x, y, z).
     normal_x: vec4<f32>,
     normal_y: vec4<f32>,
     normal_z: vec4<f32>,
     color: vec4<f32>,
+    // w: texture-space cells per model unit.
     emission: vec4<f32>,
 };
+
+// Where a triplanar material projects a model-space position from: the
+// part's mesh texture space, or the model space itself.
+fn texture_space_position(row: Part, position: vec3<f32>) -> vec3<f32> {
+    return position * row.emission.w + vec3<f32>(row.normal_x.w, row.normal_y.w, row.normal_z.w);
+}
 
 // kind in color_kind.w: 0 ambient, 1 hemisphere, 2 directional, 3 point, 4 spot.
 struct Light {
@@ -59,8 +67,8 @@ struct MaterialUniform {
     normal_uv_v: vec4<f32>,
     occlusion_uv_u: vec4<f32>,
     occlusion_uv_v: vec4<f32>,
-    // x: occlusion strength.
-    occlusion: vec4<f32>,
+    // x: occlusion strength; y: triplanar sharpness.
+    factors: vec4<f32>,
     // The uv set (0 or 1) each slot reads: base, emissive, normal, occlusion.
     tex_coords: vec4<u32>,
 };

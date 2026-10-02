@@ -1081,3 +1081,235 @@ fn a_voxel_surface_normal_map_follows_its_tiles_without_seams() {
         "seam lines across the floor: {low}..{high}"
     );
 }
+
+/// Blocks across several chunks, on both sides of the origin: a floor, a
+/// wall facing +Z, and a pillar showing its ±X faces.
+fn block_faces() -> VoxelCollisionScene {
+    let mut voxels = Vec::new();
+    for x in -10..6 {
+        for z in -12..2 {
+            voxels.push(MaterialVoxel {
+                state: 0,
+                address: [x, -1, z],
+                material_slot: 1,
+            });
+        }
+        for y in 0..5 {
+            voxels.push(MaterialVoxel {
+                state: 0,
+                address: [x, y, -12],
+                material_slot: 1,
+            });
+        }
+    }
+    for y in 0..4 {
+        voxels.push(MaterialVoxel {
+            state: 0,
+            address: [-3, y, -6],
+            material_slot: 1,
+        });
+    }
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK_CELLS,
+        voxels,
+        SurfaceMeshOptions::default(),
+    )
+    .expect("block faces")
+}
+
+#[test]
+fn a_triplanar_material_keeps_block_faces_as_box_projection_draws_them() {
+    let render = |triplanar: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let stone = harness.resources.texture(
+            "texture/stone",
+            8,
+            8,
+            &image(8, 8, |x, y| {
+                [40 + 25 * x as u8, 40 + 25 * y as u8, 120, 255]
+            }),
+            TextureWrap::Repeat,
+        );
+        let map = tilted_normal_map(&mut harness, "texture/stone-normal", TextureWrap::Repeat);
+        let mut stone_material = voxel_material(
+            1,
+            [1.0; 4],
+            Some(&stone),
+            Some(VoxelSurfaceMappingDescriptor::Repeat {
+                texture: stone.id.clone(),
+                texture_version: stone.version,
+                texture_content_hash: stone.content_hash.clone().unwrap(),
+                tile_scale_cells: [2.0, 2.0],
+                tile_origin_cells: [0.5, 0.0],
+            }),
+        );
+        stone_material.normal_map = Some(MaterialNormalMapDescriptor {
+            texture: map.id.clone(),
+            scale: 1.0,
+        });
+        stone_material.triplanar =
+            triplanar.then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+        let materials = BTreeMap::from([(1, stone_material)]);
+        let mut projector = VoxelRenderProjector::new();
+        let mut ops = vec![
+            RenderDiff::DefineTexture { texture: stone },
+            RenderDiff::DefineTexture { texture: map },
+            sun([0.4, -0.6, -0.7]),
+        ];
+        ops.extend(project(&mut projector, &block_faces(), &materials));
+        harness.apply(ops);
+        harness.render(&camera([3.0, 2.5, 3.0], 20.0, -15.0)).1
+    };
+    let (boxed, triplanar) = (render(false), render(true));
+    // An axis-aligned face takes its one plane whole, in its face's texture
+    // basis, so texels and the normal map's frame land where the tile
+    // coordinates put them.
+    let differing = boxed
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(triplanar.as_chunks::<4>().0)
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 2))
+        .count();
+    assert!(
+        differing * 1000 < boxed.len() / 4,
+        "{differing} pixels differ from box projection"
+    );
+}
+
+#[test]
+fn a_triplanar_material_draws_a_dual_contoured_mound_without_chart_seams() {
+    let mound = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK_CELLS,
+        (-7..=7).flat_map(|x| {
+            (0..=7).flat_map(move |y| {
+                (-7..=7).filter_map(move |z| {
+                    (x * x + y * y + z * z <= 42).then_some(MaterialVoxel {
+                        state: 0,
+                        address: [x, y - 1, z - 10],
+                        material_slot: 1,
+                    })
+                })
+            })
+        }),
+        // Smooth placement, shaded smooth: a rounded rock, whose dominant
+        // axis turns continuously.
+        SurfaceMeshOptions {
+            materials: engine_spatial::SurfaceMaterials::new([(
+                1,
+                engine_spatial::MaterialSurface {
+                    mode: engine_spatial::SurfaceMode::DualContouring,
+                    character: engine_spatial::SurfaceCharacter {
+                        placement: engine_spatial::VertexPlacement::Smooth,
+                        crease_angle_degrees: 180.0,
+                        roughness: 0.0,
+                    },
+                },
+            )])
+            .unwrap(),
+            ..SurfaceMeshOptions::default()
+        },
+    )
+    .expect("dual-contoured mound");
+    let render = |triplanar: Option<bool>| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        // Smooth and periodic in both directions, so only a chart switch can
+        // make a sharp step in it.
+        let wave =
+            |at: u32| (128.0 + 100.0 * (at as f32 * std::f32::consts::TAU / 16.0).cos()) as u8;
+        let mut rock = harness.resources.texture(
+            "texture/rock",
+            16,
+            16,
+            &image(16, 16, |x, y| [wave(x), wave(y), 128, 255]),
+            TextureWrap::Repeat,
+        );
+        let mut rock_material = voxel_material(
+            1,
+            [1.0; 4],
+            Some(&rock),
+            Some(VoxelSurfaceMappingDescriptor::Repeat {
+                texture: rock.id.clone(),
+                texture_version: rock.version,
+                texture_content_hash: rock.content_hash.clone().unwrap(),
+                tile_scale_cells: [4.0, 4.0],
+                tile_origin_cells: [0.0, 0.0],
+            }),
+        );
+        rock.filter = TextureFilter::Linear;
+        if let Some(surface) = rock_material.voxel_surface.as_mut() {
+            surface.filter = TextureFilter::Linear;
+        }
+        rock_material.triplanar =
+            (triplanar == Some(true)).then_some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+        // Ambient π: the surface shows exactly its texture.
+        let mut ops = vec![
+            RenderDiff::DefineTexture { texture: rock },
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(90),
+                parent: None,
+                light: LightDescriptor::Ambient {
+                    color: [1.0; 3],
+                    intensity: std::f32::consts::PI,
+                    enabled: true,
+                    shadow_intent: LightShadowIntent::Disabled,
+                },
+            },
+        ];
+        if triplanar.is_some() {
+            let mut projector = VoxelRenderProjector::new();
+            ops.extend(project(
+                &mut projector,
+                &mound,
+                &BTreeMap::from([(1, rock_material)]),
+            ));
+        }
+        harness.apply(ops);
+        harness.render(&camera([0.0, 6.0, 2.0], 0.0, -30.0)).1
+    };
+    let background = render(None);
+    let (boxed, triplanar) = (render(Some(false)), render(Some(true)));
+    // Steps between neighbouring pixels sharper than the texture's own
+    // gradient draws, across the mound's middle (its sides fold behind
+    // themselves, which steps too).
+    let seam_steps = |rgba: &[u8]| {
+        let at = |x: usize, y: usize| &rgba[(y * WIDTH as usize + x) * 4..][..3];
+        let inside = |x: usize, y: usize| {
+            (x - 2..=x + 2).all(|x| {
+                (y - 2..=y + 2)
+                    .all(|y| at(x, y) != &background[(y * WIDTH as usize + x) * 4..][..3])
+            })
+        };
+        let (mut steps, mut pixels) = (0, 0);
+        for y in 2..HEIGHT as usize - 3 {
+            for x in WIDTH as usize * 3 / 10..WIDTH as usize * 7 / 10 {
+                if !inside(x, y) || !inside(x + 1, y) || !inside(x, y + 1) {
+                    continue;
+                }
+                pixels += 1;
+                for (nx, ny) in [(x + 1, y), (x, y + 1)] {
+                    if (0..3).any(|channel| at(x, y)[channel].abs_diff(at(nx, ny)[channel]) > 60) {
+                        steps += 1;
+                    }
+                }
+            }
+        }
+        assert!(pixels > 10_000, "the mound covers {pixels} pixels");
+        steps
+    };
+    let (box_steps, triplanar_steps) = (seam_steps(&boxed), seam_steps(&triplanar));
+    assert!(
+        box_steps > 200,
+        "box projection's chart seams step {box_steps} times"
+    );
+    assert_eq!(triplanar_steps, 0, "triplanar seams");
+    assert_screenshot("scene_triplanar_dual_contoured_mound", &triplanar);
+}

@@ -190,6 +190,11 @@ pub struct VoxelMeshChunk {
     pub source_chunk_hash: u64,
     pub surface_mode: SurfaceMode,
     pub translation: [f32; 3],
+    /// The absolute voxel at the chunk's local origin, and the voxel size:
+    /// `origin_voxel + position / voxel_size` is a vertex's absolute cell
+    /// position, stable across world-origin rebases.
+    pub origin_voxel: [i64; 3],
+    pub voxel_size: f32,
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub tile_coordinates: Vec<f32>,
@@ -1469,6 +1474,7 @@ pub(crate) fn build_mesh_chunk(
         origin,
         grid.chunk_origin_voxel(coordinate).to_array(),
         grid.chunk_dims().to_array(),
+        grid.voxel_size() as f32,
         chunk.content_hash().0,
         mesh,
     ))
@@ -1536,6 +1542,7 @@ fn voxel_mesh_chunk(
     origin: WorldPos,
     origin_voxel: [i64; 3],
     size: [u32; 3],
+    voxel_size: f32,
     source_chunk_hash: u64,
     mesh: svc_mesh::MeshPayload,
 ) -> VoxelMeshChunk {
@@ -1556,6 +1563,8 @@ fn voxel_mesh_chunk(
         source_chunk_hash,
         surface_mode: mesh.surface_mode,
         translation: [origin.x as f32, origin.y as f32, origin.z as f32],
+        origin_voxel,
+        voxel_size,
         positions: mesh.positions,
         normals: mesh.normals,
         tile_coordinates: mesh.tile_coordinates,

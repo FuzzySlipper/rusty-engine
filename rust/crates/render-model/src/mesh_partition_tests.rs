@@ -30,6 +30,7 @@ fn attributed_mesh() -> MeshPayloadDescriptor {
             .collect(),
     );
     MeshPayloadDescriptor {
+        texture_space: None,
         layout: MeshBufferLayout {
             vertex_count: 9,
             index_count: 9,

@@ -31,8 +31,9 @@ impl Features {
     /// The mesh's second stream: tangents and a second uv set (a mesh
     /// feature, not a material one).
     pub const VERTEX_TANGENTS: Self = Self(64);
+    pub const TRIPLANAR: Self = Self(128);
 
-    const DEFS: [(Self, &'static str); 7] = [
+    const DEFS: [(Self, &'static str); 8] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -40,6 +41,7 @@ impl Features {
         (Self::EMISSIVE_MAP, "EMISSIVE_MAP"),
         (Self::OCCLUSION_MAP, "OCCLUSION_MAP"),
         (Self::VERTEX_TANGENTS, "VERTEX_TANGENTS"),
+        (Self::TRIPLANAR, "TRIPLANAR"),
     ];
 
     pub fn contains(self, other: Self) -> bool {
@@ -56,9 +58,9 @@ impl Features {
     }
 
     /// What the shadow caster pass compiles: only the alpha mask and the
-    /// voxel uv remap it samples through.
+    /// voxel uv remap and triplanar planes it samples through.
     pub fn caster(self) -> Self {
-        Self(self.0 & (Self::MASK.0 | Self::VOXEL_SURFACE.0))
+        Self(self.0 & (Self::MASK.0 | Self::VOXEL_SURFACE.0 | Self::TRIPLANAR.0))
     }
 
     fn defs(self) -> HashMap<String, ShaderDefValue> {

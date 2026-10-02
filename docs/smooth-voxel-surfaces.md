@@ -68,8 +68,22 @@ face, so textured, atlas-tiled and direction-specific materials (a grass top
 over dirt sides) draw on smooth surfaces with the same bindings as on cubes. A
 Blocky material's planar faces texture exactly like cubes. On curved surfaces
 the chart changes where the dominant axis does, which shows as a texture seam
-on slopes near 45°. Blended triplanar sampling needs a shader variant and is
-not available yet.
+on slopes near 45°.
+
+For rock and other curved ground, give the material a nonzero
+`TriplanarSharpness` (`AuthoredMaterialAppearanceRequest`, or
+`MaterialRequest` for a mesh). The shader then samples the texture, and its
+normal map, from three axis planes in each face direction's texture basis,
+over absolute cells (object cells on a voxel object), and blends them by
+the surface normal: weights are |normal| to the sharpness, so 1 blends widely
+and larger values keep each plane longer, nearer box projection; 4 is a
+reasonable start. There is no seam, at the price of three samples per map, in
+a shader variant only triplanar materials compile. An axis-aligned face takes
+its one plane whole, so cubes and Blocky faces keep their tiles exactly. The
+planes follow the voxel grid, not a block's orientation state, and a
+direction-specific material on a smooth surface is chosen by the polygon's
+dominant axis as before, then blended across its planes. On a retained mesh
+the planes run over its object-space positions in metres.
 
 ## Densities
 

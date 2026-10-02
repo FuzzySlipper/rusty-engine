@@ -69,3 +69,34 @@ fn tangent_normal(normal: vec3<f32>, tangent: vec4<f32>, sample: vec3<f32>, scal
     let unit = along / length_along;
     return mapped_normal(normal, unit, cross(normal, unit) * tangent.w, sample, scale);
 }
+
+// A triplanar material's planes at texture position `p` (cells on voxel
+// meshes) and texture-space normal `n`: the x, y and z planes' uvs in the
+// texture bases of the cube faces `n` points toward (svc-mesh
+// `voxel_surface_texture_basis`), so an axis-aligned face matches its tile
+// coordinates.
+fn triplanar_uvs(p: vec3<f32>, n: vec3<f32>) -> array<vec2<f32>, 3> {
+    let side = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
+    return array<vec2<f32>, 3>(
+        vec2<f32>(p.z * side.x, -p.y),
+        vec2<f32>(p.z, p.x * side.y),
+        vec2<f32>(-p.x * side.z, -p.y),
+    );
+}
+
+// Each plane's share: |n| to the material's sharpness, normalized.
+fn triplanar_weights(n: vec3<f32>, sharpness: f32) -> vec3<f32> {
+    let weights = pow(abs(n), vec3<f32>(sharpness));
+    return weights / max(weights.x + weights.y + weights.z, 1e-6);
+}
+
+// The texture-space normal under a triplanar normal map: each plane's sample
+// in its face's frame (tangent along u, bitangent up the image, -v), blended
+// by the plane weights. A flat map leaves `n`.
+fn triplanar_normal(n: vec3<f32>, samples: array<vec3<f32>, 3>, weights: vec3<f32>, scale: f32) -> vec3<f32> {
+    let side = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
+    let x = mapped_normal(n, vec3<f32>(0.0, 0.0, side.x), vec3<f32>(0.0, 1.0, 0.0), samples[0], scale);
+    let y = mapped_normal(n, vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(-side.y, 0.0, 0.0), samples[1], scale);
+    let z = mapped_normal(n, vec3<f32>(-side.z, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), samples[2], scale);
+    return normalize(x * weights.x + y * weights.y + z * weights.z);
+}

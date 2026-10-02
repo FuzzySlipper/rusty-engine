@@ -140,5 +140,6 @@ fn material() -> RenderMaterialDescriptor {
         double_sided: false,
         voxel_surface: None,
         normal_map: None,
+        triplanar: None,
     }
 }

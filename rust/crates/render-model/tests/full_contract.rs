@@ -15,11 +15,13 @@ fn material() -> RenderMaterialDescriptor {
         double_sided: false,
         voxel_surface: None,
         normal_map: None,
+        triplanar: None,
     }
 }
 
 fn payload(provenance: MeshProvenance) -> MeshPayloadDescriptor {
     MeshPayloadDescriptor {
+        texture_space: None,
         layout: MeshBufferLayout {
             vertex_count: 3,
             index_count: 3,

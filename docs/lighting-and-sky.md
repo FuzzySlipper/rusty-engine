@@ -34,6 +34,7 @@ use:
 | Voxel surface | it carries a voxel surface mapping |
 | Normal map | it is a GLB material with a normal texture, or `MaterialRequest.NormalMap` names one |
 | Emissive, occlusion map | it is a GLB material with that texture |
+| Triplanar | its `TriplanarSharpness` is nonzero ([three planes](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)) |
 
 Materials with the same features share pipelines and batch together. A new
 feature set compiles once, when its first material is defined: about 8 ms on

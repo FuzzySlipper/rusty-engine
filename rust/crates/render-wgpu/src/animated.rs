@@ -502,6 +502,7 @@ impl Renderer {
                 double_sided: material.double_sided,
                 voxel_surface: None,
                 normal_map: None,
+                triplanar: None,
             };
             self.define_material_with(descriptor, material.unlit, maps);
         }
@@ -1363,6 +1364,7 @@ impl Renderer {
             }),
             edges: Default::default(),
             extra: None,
+            texture_space: None,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

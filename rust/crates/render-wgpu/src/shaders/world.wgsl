@@ -2,8 +2,9 @@
 // pass's light rows, finished by exposure, tone mapping and fog
 // (`rusty::finish`). Each material compiles the features it uses
 // (`shaders.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
-// EMISSIVE_MAP, OCCLUSION_MAP.
+// EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR.
 
+#import rusty::types::texture_space_position
 #import rusty::view::{frame, parts, instances}
 #import rusty::material::{
     material,
@@ -16,7 +17,16 @@
     occlusion_map,
     occlusion_sampler,
 }
-#import rusty::surface::{transform_uv, voxel_uv, voxel_lod, perturb_normal, tangent_normal}
+#import rusty::surface::{
+    transform_uv,
+    voxel_uv,
+    voxel_lod,
+    perturb_normal,
+    tangent_normal,
+    triplanar_uvs,
+    triplanar_weights,
+    triplanar_normal,
+}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 
@@ -31,6 +41,11 @@ struct VsOut {
     // World tangent; w: handedness, flipped under a mirroring model matrix.
     @location(5) tangent: vec4<f32>,
     @location(6) uv1: vec2<f32>,
+#endif
+#ifdef TRIPLANAR
+    // Texture-space position and normal, which the planes project.
+    @location(7) texture_position: vec3<f32>,
+    @location(8) texture_normal: vec3<f32>,
 #endif
 };
 
@@ -70,21 +85,51 @@ fn vs_world(
     out.tangent = vec4<f32>(model * tangent.xyz, tangent.w * sign(determinant(model)));
     out.uv1 = uv1;
 #endif
+#ifdef TRIPLANAR
+    out.texture_position = texture_space_position(row, position);
+    out.texture_normal = normal;
+#endif
     return out;
+}
+
+// The base texture at a surface uv: tile coordinates through the voxel
+// surface tiling, or a mesh uv.
+fn base_texture(uv: vec2<f32>) -> vec4<f32> {
+#ifdef VOXEL_SURFACE
+    return textureSampleLevel(albedo, albedo_sampler,
+        transform_uv(material.base_uv_u, material.base_uv_v, voxel_uv(uv, material.tile, material.sample_rect)),
+        voxel_lod(uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(albedo, 0))));
+#else
+    return textureSample(albedo, albedo_sampler, transform_uv(material.base_uv_u, material.base_uv_v, uv));
+#endif
+}
+
+// The normal map at a surface uv, as `base_texture` samples.
+fn normal_texture(uv: vec2<f32>) -> vec3<f32> {
+#ifdef VOXEL_SURFACE
+    return textureSampleLevel(normal_map, normal_sampler,
+        transform_uv(material.normal_uv_u, material.normal_uv_v, voxel_uv(uv, material.tile, material.sample_rect)),
+        voxel_lod(uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(normal_map, 0)))).rgb;
+#else
+    return textureSample(normal_map, normal_sampler,
+        transform_uv(material.normal_uv_u, material.normal_uv_v, uv)).rgb;
+#endif
 }
 
 @fragment
 fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let row = parts[in.part];
-#ifdef VOXEL_SURFACE
-    let uv = voxel_uv(in.uv, material.tile, material.sample_rect);
-    let lod = voxel_lod(in.uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(albedo, 0)));
-    let texture_color = textureSampleLevel(albedo, albedo_sampler,
-        transform_uv(material.base_uv_u, material.base_uv_v, uv), lod);
+#ifdef TRIPLANAR
+    let planes = triplanar_uvs(in.texture_position, in.texture_normal);
+    let weights = triplanar_weights(in.texture_normal, material.factors.y);
+    let texture_color = base_texture(planes[0]) * weights.x + base_texture(planes[1]) * weights.y
+        + base_texture(planes[2]) * weights.z;
 #else
-    let uv = slot_uv(in, material.tex_coords.x);
-    let texture_color = textureSample(albedo, albedo_sampler,
-        transform_uv(material.base_uv_u, material.base_uv_v, uv));
+#ifdef VOXEL_SURFACE
+    let texture_color = base_texture(in.uv);
+#else
+    let texture_color = base_texture(slot_uv(in, material.tex_coords.x));
+#endif
 #endif
     let base = row.color * in.color * texture_color;
 #ifdef UNLIT
@@ -105,20 +150,24 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
 #ifdef OCCLUSION_MAP
     let occlusion_sample = textureSample(occlusion_map, occlusion_sampler,
         transform_uv(material.occlusion_uv_u, material.occlusion_uv_v, slot_uv(in, material.tex_coords.w))).r;
-    let occlusion = 1.0 + material.occlusion.x * (occlusion_sample - 1.0);
+    let occlusion = 1.0 + material.factors.x * (occlusion_sample - 1.0);
 #else
     let occlusion = 1.0;
 #endif
     let geometric = normalize(in.normal);
 #ifdef NORMAL_MAP
+#ifdef TRIPLANAR
+    // Blended in texture space, then into the world by the normal matrix.
+    let samples = array<vec3<f32>, 3>(normal_texture(planes[0]), normal_texture(planes[1]),
+        normal_texture(planes[2]));
+    let mapped = triplanar_normal(normalize(in.texture_normal), samples, weights, material.normal_scale);
+    var normal = normalize(mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * mapped);
+#else
 #ifdef VOXEL_SURFACE
     // Through the same tiling as the base texture; the frame comes from the
     // continuous tile coordinate, which does not jump at tile seams.
-    let normal_sample = textureSampleLevel(normal_map, normal_sampler,
-        transform_uv(material.normal_uv_u, material.normal_uv_v, uv),
-        voxel_lod(in.uv, material.tile, material.sample_rect, vec2<f32>(textureDimensions(normal_map, 0)))).rgb;
     var normal = perturb_normal(geometric, in.world_position, (in.uv - material.tile.zw) / material.tile.xy,
-        normal_sample, material.normal_scale);
+        normal_texture(in.uv), material.normal_scale);
 #else
     let normal_uv = transform_uv(material.normal_uv_u, material.normal_uv_v, slot_uv(in, material.tex_coords.z));
     let normal_sample = textureSample(normal_map, normal_sampler, normal_uv).rgb;
@@ -126,6 +175,7 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     var normal = tangent_normal(geometric, in.tangent, normal_sample, material.normal_scale);
 #else
     var normal = perturb_normal(geometric, in.world_position, normal_uv, normal_sample, material.normal_scale);
+#endif
 #endif
 #endif
 #else

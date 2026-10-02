@@ -194,6 +194,7 @@ pub fn payload(positions: Vec<f32>, normals: Vec<f32>, indices: Vec<u32>) -> Mes
         kind: MeshAttributeKind::F32,
     };
     MeshPayloadDescriptor {
+        texture_space: None,
         layout: MeshBufferLayout {
             vertex_count: (positions.len() / 3) as u32,
             index_count: indices.len() as u32,
@@ -276,6 +277,7 @@ pub fn coloured_mesh(
                 double_sided: false,
                 voxel_surface: None,
                 normal_map: None,
+                triplanar: None,
             },
         },
         RenderDiff::DefineStaticMesh {

@@ -98,6 +98,8 @@ pub(crate) struct GpuMesh {
     /// A second vertex stream, tangent (xyz, handedness w) and `TEXCOORD_1`
     /// per vertex: only GLB primitives whose material reads them.
     pub extra: Option<wgpu::Buffer>,
+    /// The payload's texture space, for triplanar materials.
+    pub texture_space: Option<render_model::MeshTextureSpace>,
 }
 
 impl GpuMesh {
@@ -381,7 +383,23 @@ pub(crate) const PART_ROW_FLOATS: usize = 16 + 12 + 4 + 4;
 pub(crate) struct PartRow {
     pub color: [f32; 4],
     pub emission: [f32; 3],
+    /// Texture-space origin (xyz) and cells per unit (w): where triplanar
+    /// materials project the part's positions from. Set from its mesh.
+    pub texture_space: [f32; 4],
 }
+
+impl PartRow {
+    pub fn new(color: [f32; 4], emission: [f32; 3]) -> Self {
+        Self {
+            color,
+            emission,
+            texture_space: OBJECT_TEXTURE_SPACE,
+        }
+    }
+}
+
+/// Object-space positions, for meshes without a texture space.
+pub(crate) const OBJECT_TEXTURE_SPACE: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// What makes two parts one instanced draw.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -472,11 +490,12 @@ impl Parts {
             .enumerate()
         {
             out[16 + column * 4..16 + column * 4 + 3].copy_from_slice(&values.to_array());
-            out[16 + column * 4 + 3] = 0.0;
+            // The normal columns' spare lanes carry the texture origin.
+            out[16 + column * 4 + 3] = row.texture_space[column];
         }
         out[28..32].copy_from_slice(&row.color);
         out[32..35].copy_from_slice(&row.emission);
-        out[35] = 0.0;
+        out[35] = row.texture_space[3];
         let state = &mut self.state[id as usize];
         let mirrored = world.determinant() < 0.0;
         if state.mirrored != mirrored || state.shown != shown || state.layer != layer {

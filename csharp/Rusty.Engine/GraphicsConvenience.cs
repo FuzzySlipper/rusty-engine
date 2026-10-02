@@ -26,7 +26,8 @@ public readonly partial record struct MaterialRequest
             0.5f,
             0,
             default,
-            1)
+            1,
+            0)
     {
     }
 
@@ -53,7 +54,8 @@ public readonly partial record struct MaterialRequest
             alphaCutoff,
             0,
             default,
-            1)
+            1,
+            0)
     {
     }
 
@@ -81,7 +83,39 @@ public readonly partial record struct MaterialRequest
             alphaCutoff,
             metalness,
             default,
-            1)
+            1,
+            0)
+    {
+    }
+
+    /// <summary>A material read through the mesh uv (no triplanar planes).</summary>
+    public MaterialRequest(
+        Color color,
+        RenderResourceReference texture,
+        float roughness,
+        Color textureTint,
+        Vector3 emissionColor,
+        float emissionIntensity,
+        bool doubleSided,
+        MaterialAlphaMode alphaMode,
+        float alphaCutoff,
+        float metalness,
+        RenderResourceReference normalMap,
+        float normalScale)
+        : this(
+            color,
+            texture,
+            roughness,
+            textureTint,
+            emissionColor,
+            emissionIntensity,
+            doubleSided,
+            alphaMode,
+            alphaCutoff,
+            metalness,
+            normalMap,
+            normalScale,
+            0)
     {
     }
 }
@@ -162,5 +196,14 @@ public readonly partial record struct AuthoredMaterialAppearanceRequest
 {
     /// <summary>An authored material appearance without a normal map.</summary>
     public AuthoredMaterialAppearanceRequest(AuthoredCatalog catalog, string materialId, RenderResourceReference texture)
-        : this(catalog, materialId, texture, default, 1) { }
+        : this(catalog, materialId, texture, default, 1, 0) { }
+
+    /// <summary>An authored material appearance read through its tile coordinates (no triplanar planes).</summary>
+    public AuthoredMaterialAppearanceRequest(
+        AuthoredCatalog catalog,
+        string materialId,
+        RenderResourceReference texture,
+        RenderResourceReference normalMap,
+        float normalScale)
+        : this(catalog, materialId, texture, normalMap, normalScale, 0) { }
 }

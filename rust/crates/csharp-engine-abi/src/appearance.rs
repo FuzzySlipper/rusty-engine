@@ -579,6 +579,11 @@ pub struct NativeMaterialRequest {
     pub normal_map: NativeRenderResourceReference,
     /// Scales the normal map's x and y.
     pub normal_scale: f32,
+    /// Blend the base texture and normal map from three axis planes by the
+    /// surface normal, instead of reading the mesh uv; 0 for the mesh uv.
+    /// Plane weights are |normal| to this power (1 or more): higher keeps
+    /// each plane sharper, nearer box projection.
+    pub triplanar_sharpness: f32,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and
@@ -595,6 +600,11 @@ pub struct NativeAuthoredMaterialAppearanceRequest {
     /// the selected texture, so an atlas normal map shares its layout.
     pub normal_map: NativeRenderResourceReference,
     pub normal_scale: f32,
+    /// Triplanar sharpness as in `NativeMaterialRequest`; 0 for the surface's
+    /// tile coordinates. On a voxel surface the planes repeat or follow the
+    /// atlas regions in the faces' texture bases, so axis-aligned faces keep
+    /// their tiles.
+    pub triplanar_sharpness: f32,
 }
 
 #[repr(C)]

@@ -208,6 +208,7 @@ pub fn pack_mesh_resources(
                 indices_byte_offset,
             };
             packed_payloads.push(MeshPayloadDescriptor {
+                texture_space: None,
                 layout: payload.layout.clone(),
                 groups: payload.groups.clone(),
                 bounds: payload.bounds,
@@ -406,6 +407,7 @@ pub fn decode_mesh_resource_payload(
     )?;
 
     let decoded = MeshPayloadDescriptor {
+        texture_space: None,
         layout: payload.layout.clone(),
         groups: payload.groups.clone(),
         bounds: payload.bounds,
@@ -625,6 +627,7 @@ mod tests {
 
     fn triangle(offset: f32) -> MeshPayloadDescriptor {
         MeshPayloadDescriptor {
+            texture_space: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,

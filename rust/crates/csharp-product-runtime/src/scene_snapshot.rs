@@ -326,6 +326,7 @@ mod tests {
             kind: MeshAttributeKind::F32,
         };
         MeshPayloadDescriptor {
+            texture_space: None,
             layout: MeshBufferLayout {
                 vertex_count: 3,
                 index_count: 3,

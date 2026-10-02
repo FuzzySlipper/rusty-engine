@@ -940,6 +940,7 @@ mod tests {
             double_sided: false,
             voxel_surface: None,
             normal_map: None,
+            triplanar: None,
         }
     }
 
@@ -947,6 +948,7 @@ mod tests {
         StaticMeshAsset {
             asset: "mesh/triangle".to_string(),
             payload: MeshPayloadDescriptor {
+                texture_space: None,
                 layout: MeshBufferLayout {
                     vertex_count: 3,
                     index_count: 3,

@@ -203,6 +203,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
     let static_mesh = StaticMeshAsset {
         asset: mesh_id.clone(),
         payload: MeshPayloadDescriptor {
+            texture_space: None,
             layout: MeshBufferLayout {
                 vertex_count: vertex_count as u32,
                 index_count: source.indices.len() as u32,

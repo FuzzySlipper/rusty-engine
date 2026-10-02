@@ -78,6 +78,7 @@ pub fn project_catalog_material(
         double_sided: false,
         voxel_surface,
         normal_map: None,
+        triplanar: None,
     };
     descriptor
         .validate()

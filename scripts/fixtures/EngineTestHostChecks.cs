@@ -38,6 +38,9 @@ internal static class EngineTestHostChecks
                 Vector3.Zero, 0, false, MaterialAlphaMode.Opaque, .5f, 0, normalMap, 1);
             using Material material = engine.Graphics.CreateMaterial(Mapped(data));
             ExpectRefusal(() => engine.Graphics.CreateMaterial(Mapped(colour)), "CSHARP_MATERIAL_NORMAL_MAP");
+            // Triplanar planes blend at a sharpness of 1 or more.
+            using Material triplanar = engine.Graphics.CreateMaterial(Mapped(data) with { TriplanarSharpness = 4 });
+            ExpectRefusal(() => engine.Graphics.CreateMaterial(Mapped(data) with { TriplanarSharpness = .5f }), "CSHARP_MATERIAL");
         });
 
         host.Call(engine =>

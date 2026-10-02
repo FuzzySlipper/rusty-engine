@@ -3187,12 +3187,14 @@ impl RuntimeAppearanceBridge {
             request.normal_map,
             request.normal_scale,
         )?;
+        material.triplanar = triplanar_descriptor(request.triplanar_sharpness);
         let normal_texture = match &material.normal_map {
             Some(map) => Some(
                 texture_descriptors_for_material(
                     &RenderMaterialDescriptor {
                         texture: Some(map.texture.clone()),
                         normal_map: None,
+                        triplanar: None,
                         ..material.clone()
                     },
                     &staged.state.render_resources,
@@ -3783,6 +3785,7 @@ impl RuntimeAppearanceBridge {
         let asset = StaticMeshAsset {
             asset: mesh_id.clone(),
             payload: MeshPayloadDescriptor {
+                texture_space: None,
                 layout: MeshBufferLayout {
                     vertex_count: request.vertex_count,
                     index_count: request.index_count,
@@ -8819,6 +8822,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         double_sided: false,
         voxel_surface: None,
         normal_map: None,
+        triplanar: None,
     }
 }
 
@@ -8955,6 +8959,7 @@ fn material_descriptor(
         double_sided: request.double_sided,
         voxel_surface: None,
         normal_map,
+        triplanar: triplanar_descriptor(request.triplanar_sharpness),
     };
     descriptor.validate().map_err(|error| {
         CsharpEngineServicesError::new("CSHARP_MATERIAL", format!("material is invalid: {error:?}"))
@@ -9028,6 +9033,11 @@ fn normal_map_descriptor(
         texture: resource.asset_identity().to_owned(),
         scale,
     }))
+}
+
+/// Triplanar sampling at this sharpness, or none for 0.
+fn triplanar_descriptor(sharpness: f32) -> Option<render_model::MaterialTriplanarDescriptor> {
+    (sharpness != 0.0).then_some(render_model::MaterialTriplanarDescriptor { sharpness })
 }
 
 fn texture_descriptors_for_material(
@@ -9665,6 +9675,7 @@ pub(super) mod tests {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                triplanar_sharpness: 0.0,
                 color,
                 texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.7,
@@ -9862,6 +9873,7 @@ pub(super) mod tests {
         };
         let material = bridge
             .create_material(NativeMaterialRequest {
+                triplanar_sharpness: 0.0,
                 color,
                 texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.7,
@@ -10359,6 +10371,7 @@ pub(super) mod tests {
             a: 1.0,
         };
         let request = NativeMaterialRequest {
+            triplanar_sharpness: 0.0,
             color,
             texture: NativeRenderResourceReference { value: 0 },
             roughness: 0.5,
@@ -10407,6 +10420,7 @@ pub(super) mod tests {
             a: 1.0,
         };
         let metal = NativeMaterialRequest {
+            triplanar_sharpness: 0.0,
             color,
             texture: NativeRenderResourceReference { value: 0 },
             roughness: 0.35,
@@ -10503,6 +10517,7 @@ pub(super) mod tests {
             a: 1.0,
         };
         let request = |normal_map: NativeRenderResourceHandle| NativeMaterialRequest {
+            triplanar_sharpness: 0.0,
             color: white,
             texture: NativeRenderResourceReference {
                 value: colour.handle.value,
@@ -10589,6 +10604,7 @@ pub(super) mod tests {
         for resource in [clamp, repeat, linear] {
             bridge
                 .create_material(NativeMaterialRequest {
+                    triplanar_sharpness: 0.0,
                     color: NativeColor {
                         r: 1.0,
                         g: 1.0,
@@ -10807,6 +10823,7 @@ pub(super) mod tests {
         assert!(bridge.resource(first.handle.value).is_ok());
         bridge
             .create_material(NativeMaterialRequest {
+                triplanar_sharpness: 0.0,
                 color: NativeColor {
                     r: 1.0,
                     g: 1.0,
@@ -10940,6 +10957,7 @@ pub(super) mod tests {
         let document = StaticMeshAsset {
             asset: "mesh/test".to_owned(),
             payload: MeshPayloadDescriptor {
+                texture_space: None,
                 layout: MeshBufferLayout {
                     vertex_count: 3,
                     index_count: 3,
@@ -11554,6 +11572,7 @@ pub(super) mod tests {
             .expect("animated appearance");
         let material = bridge
             .create_material(NativeMaterialRequest {
+                triplanar_sharpness: 0.0,
                 color: NativeColor {
                     r: 0.8,
                     g: 0.2,

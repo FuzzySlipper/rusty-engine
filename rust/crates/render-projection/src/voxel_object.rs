@@ -4,11 +4,11 @@ use render_model::{
     pack_mesh_resources, MaterialDescriptorError, MeshAttribute, MeshAttributeKind,
     MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshDescriptorError,
     MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot, MeshPayloadDescriptor,
-    MeshPayloadSource, MeshProvenance, MeshResourceError, PackedMeshResource, RenderDiff,
-    RenderFrameDiff, RenderFrameError, RenderHandle, RenderMaterialDescriptor, RenderMetadata,
-    Transform, TransformError, VoxelObjectInstanceDescriptor, VoxelObjectRenderAsset,
-    VoxelObjectRenderAssetError, VoxelObjectRenderFrame, VoxelObjectRenderMesh,
-    MAX_MESH_RESOURCE_BYTES,
+    MeshPayloadSource, MeshProvenance, MeshResourceError, MeshTextureSpace, PackedMeshResource,
+    RenderDiff, RenderFrameDiff, RenderFrameError, RenderHandle, RenderMaterialDescriptor,
+    RenderMetadata, Transform, TransformError, VoxelObjectInstanceDescriptor,
+    VoxelObjectRenderAsset, VoxelObjectRenderAssetError, VoxelObjectRenderFrame,
+    VoxelObjectRenderMesh, MAX_MESH_RESOURCE_BYTES,
 };
 use svc_mesh::SurfaceMode;
 use voxel_object_runtime::{AdmittedVoxelObject, VoxelObjectFrameSource, VoxelObjectRuntimeFrame};
@@ -418,6 +418,11 @@ fn voxel_object_render_asset_as(
     object: &AdmittedVoxelObject,
     render_asset_id: &str,
 ) -> VoxelObjectRenderAsset {
+    let grid = &object.source().grid;
+    let texture_space = MeshTextureSpace {
+        cell_size: grid.cell_size as f32,
+        origin: grid.pivot.map(|cell| cell as f32),
+    };
     VoxelObjectRenderAsset {
         asset: render_asset_id.to_string(),
         content_hash: object.content_hash().to_string(),
@@ -425,7 +430,7 @@ fn voxel_object_render_asset_as(
             .meshes()
             .iter()
             .map(|mesh| VoxelObjectRenderMesh {
-                payload: voxel_object_mesh_payload(mesh),
+                payload: voxel_object_mesh_payload(mesh, texture_space),
             })
             .collect(),
         frames: object
@@ -495,7 +500,12 @@ fn projection_asset_id(
     }
 }
 
-pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDescriptor {
+/// `texture_space` is the object's local cells, which its tile coordinates
+/// are in: its grid's cell size and pivot.
+pub fn voxel_object_mesh_payload(
+    mesh: &svc_mesh::MeshPayload,
+    texture_space: MeshTextureSpace,
+) -> MeshPayloadDescriptor {
     let mut attributes = vec![
         MeshAttribute {
             name: MeshAttributeName::Position,
@@ -544,6 +554,7 @@ pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDes
             indices: mesh.indices.clone(),
         },
         provenance: MeshProvenance::VoxelObject,
+        texture_space: Some(texture_space),
     }
 }
 

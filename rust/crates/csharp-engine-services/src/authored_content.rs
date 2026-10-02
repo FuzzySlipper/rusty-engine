@@ -3595,6 +3595,7 @@ mod tests {
         for material_id in [b"material/repeat".as_slice(), b"material/atlas".as_slice()] {
             let atlas = material_id == b"material/atlas";
             let request = NativeAuthoredMaterialAppearanceRequest {
+                triplanar_sharpness: 0.0,
                 catalog: NativeAuthoredCatalogHandle { value: 1 },
                 material_id: NativeUtf8Slice {
                     bytes: material_id.as_ptr(),

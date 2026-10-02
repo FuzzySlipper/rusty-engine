@@ -1177,6 +1177,7 @@ mod tests {
                 crate::appearance::create_material(
                     (appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
+                        triplanar_sharpness: 0.0,
                         color,
                         texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
@@ -2093,6 +2094,7 @@ mod tests {
                 crate::appearance::create_material(
                     (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
+                        triplanar_sharpness: 0.0,
                         color: NativeColor {
                             r: 1.0,
                             g: 1.0,

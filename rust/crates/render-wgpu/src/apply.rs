@@ -34,7 +34,7 @@ pub struct ApplyIssue {
 /// `MaterialUniform` size (`rusty::types`): roughness, cutoff, metalness,
 /// normal scale; the voxel surface's tile scale, tile origin and sample rect;
 /// the base, emissive, normal and occlusion uv transforms (two rows each); the
-/// occlusion strength; each slot's uv set.
+/// occlusion strength and triplanar sharpness; each slot's uv set.
 const MATERIAL_UNIFORM_BYTES: usize = 208;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
@@ -301,7 +301,7 @@ impl Renderer {
                 let mut streams = resources::mesh_streams(payload, resources)?;
                 // Uploaded payloads draw without vertex colours.
                 streams.colors = None;
-                let mesh = self.upload_mesh(
+                let mut mesh = self.upload_mesh(
                     &format!("payload {}", handle.raw()),
                     &streams,
                     Topology::Triangles,
@@ -312,6 +312,7 @@ impl Renderer {
                         .collect(),
                     BTreeMap::new(),
                 );
+                mesh.texture_space = payload.texture_space;
                 self.tables.payload_meshes.insert(*handle, mesh);
                 if let NodeKind::Primitive { has_payload, .. } = &mut self.node_mut(*handle)?.kind {
                     *has_payload = true;
@@ -520,10 +521,7 @@ impl Renderer {
                             material: MaterialRef::Unlit,
                             wireframe,
                         },
-                        PartRow {
-                            color: material.color,
-                            emission: [0.0; 3],
-                        },
+                        PartRow::new(material.color, [0.0; 3]),
                     )
                 };
                 if *has_payload {
@@ -556,10 +554,7 @@ impl Renderer {
                                     // included, applies to uploaded meshes.
                                     wireframe: material.wireframe,
                                 },
-                                PartRow {
-                                    color: mul(color, material.color),
-                                    emission,
-                                },
+                                PartRow::new(mul(color, material.color), emission),
                             ));
                         }
                     }
@@ -624,7 +619,7 @@ impl Renderer {
                                 material: material_ref,
                                 wireframe: false,
                             },
-                            PartRow { color, emission },
+                            PartRow::new(color, emission),
                         ));
                     }
                 }
@@ -666,7 +661,7 @@ impl Renderer {
                                     material: material_ref,
                                     wireframe: false,
                                 },
-                                PartRow { color, emission },
+                                PartRow::new(color, emission),
                             ));
                         }
                     }
@@ -702,7 +697,7 @@ impl Renderer {
                             material,
                             wireframe,
                         },
-                        PartRow { color, emission },
+                        PartRow::new(color, emission),
                     ));
                 }
             }
@@ -710,11 +705,19 @@ impl Renderer {
         }
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let mut ids = Vec::with_capacity(parts.len());
-        for (mut part, row) in parts {
+        for (mut part, mut row) in parts {
             if let MeshRef::Builtin(kind) = part.mesh {
                 part.index_count = self.builtins[&kind].groups[0].2;
             }
             let mesh = self.mesh(&part.mesh);
+            if let Some(space) = mesh.and_then(|mesh| mesh.texture_space) {
+                row.texture_space = [
+                    space.origin[0],
+                    space.origin[1],
+                    space.origin[2],
+                    1.0 / space.cell_size,
+                ];
+            }
             let bounds = mesh.map_or(Aabb::EMPTY, |mesh| mesh.bounds);
             if let (true, Some(mesh)) = (part.wireframe, mesh) {
                 mesh.edges
@@ -1042,6 +1045,7 @@ impl Renderer {
             }),
             edges: Default::default(),
             extra: None,
+            texture_space: None,
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
@@ -1148,6 +1152,8 @@ pub(crate) struct MaterialParams {
     pub unlit: bool,
     pub metalness: f32,
     pub voxel_surface: Option<VoxelSurfaceUniform>,
+    /// Triplanar blend sharpness.
+    pub triplanar: Option<f32>,
     pub maps: MaterialMaps,
 }
 
@@ -1201,6 +1207,7 @@ impl MaterialParams {
             unlit: false,
             metalness: descriptor.metalness,
             voxel_surface,
+            triplanar: descriptor.triplanar.map(|triplanar| triplanar.sharpness),
             maps: MaterialMaps {
                 normal: descriptor.normal_map.as_ref().map(|map| {
                     (
@@ -1222,7 +1229,8 @@ impl MaterialParams {
     pub(crate) fn features(&self) -> Features {
         let base = Features::default()
             .with(Features::MASK, self.alpha_cutoff.is_some())
-            .with(Features::VOXEL_SURFACE, self.voxel_surface.is_some());
+            .with(Features::VOXEL_SURFACE, self.voxel_surface.is_some())
+            .with(Features::TRIPLANAR, self.triplanar.is_some());
         if self.unlit {
             return base | Features::UNLIT;
         }
@@ -1301,6 +1309,7 @@ pub(crate) fn material_bind_group(
         .occlusion
         .as_ref()
         .map_or(0.0, |(_, strength)| *strength);
+    floats[45] = params.triplanar.unwrap_or(1.0);
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -1368,6 +1377,7 @@ pub(crate) fn builtin_materials(
                 unlit: true,
                 metalness: 0.0,
                 voxel_surface: None,
+                triplanar: None,
                 maps: MaterialMaps::default(),
             },
             white,
@@ -1387,6 +1397,7 @@ pub(crate) fn builtin_materials(
                 unlit: false,
                 metalness: 0.0,
                 voxel_surface: None,
+                triplanar: None,
                 maps: MaterialMaps::default(),
             },
             white,

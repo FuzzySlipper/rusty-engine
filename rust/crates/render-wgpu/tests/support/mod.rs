@@ -180,6 +180,7 @@ pub fn payload(
         })
         .collect();
     MeshPayloadDescriptor {
+        texture_space: None,
         layout: MeshBufferLayout {
             vertex_count: (positions.len() / 3) as u32,
             index_count: indices.len() as u32,
@@ -269,6 +270,7 @@ pub fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMater
         double_sided: false,
         voxel_surface: None,
         normal_map: None,
+        triplanar: None,
     }
 }
 

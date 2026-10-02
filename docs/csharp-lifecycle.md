@@ -196,6 +196,10 @@ opened as data, with `TextureColorSpace.Linear`. A colour texture is refused
 with `CSHARP_MATERIAL_NORMAL_MAP`. The map reads the base texture's uv. On a
 voxel surface it repeats or follows the atlas region with the base texture,
 and its tangent frame stays continuous across tile seams.
+`TriplanarSharpness` (0, the default, for none) samples the base texture and
+normal map from three axis planes blended by the surface normal instead of
+the uv; see [textures on reconstructed
+surfaces](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces).
 Sprite requests accept a `SpriteMaterialDescriptor` for lighting, normal/depth
 maps, alpha, and shadow policy. Sprites and atlases keep the sampler selected
 when their texture was opened; the short constructors select opaque mesh and
@@ -429,7 +433,9 @@ texture resource, then bind its source slot through `VoxelScenePresentation`.
 `AuthoredMaterialAppearanceRequest.NormalMap` adds a normal map opened with
 `TextureColorSpace.Linear`. It repeats with the material's tiling, or
 shares an atlas material's region layout, so an atlas normal map matches its
-colour atlas texel for texel.
+colour atlas texel for texel. `TriplanarSharpness` blends the material's
+texture from three planes on smooth surfaces
+([textures on reconstructed surfaces](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces)).
 An atlas reference must keep the catalog's pinned version/hash. Structural
 class does not select a scene atlas or replace canonical voxel state.
 

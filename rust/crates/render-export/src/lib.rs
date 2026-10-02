@@ -87,7 +87,7 @@ enum Kind {
     Primitive {
         geometry: Geometry,
         material: Material,
-        payload: Option<MeshPayloadDescriptor>,
+        payload: Option<Box<MeshPayloadDescriptor>>,
     },
     StaticMesh {
         asset: String,
@@ -260,7 +260,7 @@ impl Frozen {
                         ..
                     }) = scene.nodes.get_mut(handle)
                     {
-                        *slot = Some(payload.clone());
+                        *slot = Some(Box::new(payload.clone()));
                     }
                     continue;
                 }
@@ -578,7 +578,7 @@ impl<'a> Writer<'a> {
                 geometry,
                 material,
                 payload,
-            } => self.primitive(node, *geometry, *material, payload.as_ref())?,
+            } => self.primitive(node, *geometry, *material, payload.as_deref())?,
             Kind::StaticMesh { asset, overrides } => Some(self.static_mesh(node, asset, overrides)?),
             Kind::AnimatedMesh { asset, overrides } => {
                 self.animated(handle, index, asset, overrides, &node.parameters)?;

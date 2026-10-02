@@ -5772,6 +5772,7 @@ mod tests {
                 (api.graphics.create_material)(
                     api.graphics.context,
                     NativeMaterialRequest {
+                        triplanar_sharpness: 0.0,
                         color: NativeColor {
                             r: 0.25,
                             g: 0.5,

@@ -113,19 +113,19 @@ impl Renderer {
             let mut streams = resources::mesh_streams(&mesh.payload, resources)?;
             // Voxel object materials draw without vertex colours.
             streams.colors = None;
-            meshes.push(
-                self.upload_mesh(
-                    &format!("{} mesh {index}", asset.asset),
-                    &streams,
-                    Topology::Triangles,
-                    mesh.payload
-                        .groups
-                        .iter()
-                        .map(|group| (group.material_slot, group.start, group.count))
-                        .collect(),
-                    BTreeMap::new(),
-                ),
+            let mut gpu = self.upload_mesh(
+                &format!("{} mesh {index}", asset.asset),
+                &streams,
+                Topology::Triangles,
+                mesh.payload
+                    .groups
+                    .iter()
+                    .map(|group| (group.material_slot, group.start, group.count))
+                    .collect(),
+                BTreeMap::new(),
             );
+            gpu.texture_space = mesh.payload.texture_space;
+            meshes.push(gpu);
         }
         let id = self.tables.names.id(&asset.asset);
         self.tables.voxel_objects.insert(

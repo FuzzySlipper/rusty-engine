@@ -310,6 +310,7 @@ fn materials(
                 double_sided: false,
                 voxel_surface: texture.map(|descriptor| atlas_surface(descriptor, slot)),
                 normal_map: None,
+                triplanar: None,
             };
             (material.id.clone(), material)
         })
