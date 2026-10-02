@@ -378,11 +378,19 @@ mod tests {
         );
 
         // A supervisor that died without cleaning up leaves its record behind.
+        // Another test thread's fork can hold the lock's file until its exec.
+        let not_running = || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while paths.running().unwrap().is_some() {
+                assert!(Instant::now() < deadline, "the lock stayed held");
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
         let record = fs::read(&paths.record).unwrap();
         drop(session);
-        assert!(paths.running().unwrap().is_none());
+        not_running();
         fs::write(&paths.record, record).unwrap();
-        assert!(paths.running().unwrap().is_none());
+        not_running();
         assert!(!paths.record.exists());
         fs::remove_dir_all(root).unwrap();
     }
