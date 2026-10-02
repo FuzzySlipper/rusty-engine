@@ -22,7 +22,7 @@ use render_model::{
     SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
 };
 use render_presentation::{
-    ParticleSpriteRef, ParticleVisual, PresentationFrameDiff, PresentationOp,
+    ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff, PresentationOp,
 };
 
 use crate::camera::CameraMatrices;
@@ -1077,27 +1077,30 @@ impl Renderer {
                             Some((last, _, count)) if *last == texture => *count += 1,
                             _ => pass.billboards.push((texture, first, 1)),
                         }
-                        let frames =
-                            match &self.particles.particles[*index as usize].descriptor.visual {
-                                ParticleVisual::Billboard { sprite } => {
-                                    f32::from(sprite.frame_count.max(1))
-                                }
-                                ParticleVisual::Cube => 1.0,
-                            };
+                        let descriptor = &self.particles.particles[*index as usize].descriptor;
+                        let frames = match &descriptor.visual {
+                            ParticleVisual::Billboard { sprite } => {
+                                f32::from(sprite.frame_count.max(1))
+                            }
+                            ParticleVisual::Cube => 1.0,
+                        };
                         let size = particle.size.max(0.0);
-                        rows.extend_from_slice(&[
-                            p.x,
-                            p.y,
-                            p.z,
-                            half.x * size.max(1.0 / PARTICLE_PIXELS_PER_UNIT),
-                        ]);
+                        // Screen size is a fixed clip offset scaled by depth in
+                        // the shader; world size is a projected half edge.
+                        let (half_x, half_y, world) = match descriptor.size_mode {
+                            ParticleSizeMode::Screen => {
+                                let size = size.max(1.0 / PARTICLE_PIXELS_PER_UNIT);
+                                (half.x * size, half.y * size, 0.0)
+                            }
+                            ParticleSizeMode::World => (
+                                0.5 * size * view.camera.projection.x_axis.x,
+                                0.5 * size * view.camera.projection.y_axis.y,
+                                1.0,
+                            ),
+                        };
+                        rows.extend_from_slice(&[p.x, p.y, p.z, half_x]);
                         rows.extend_from_slice(&color);
-                        rows.extend_from_slice(&[
-                            half.y * size.max(1.0 / PARTICLE_PIXELS_PER_UNIT),
-                            particle.frame as f32,
-                            frames,
-                            0.0,
-                        ]);
+                        rows.extend_from_slice(&[half_y, particle.frame as f32, frames, world]);
                     }
                 }
             }

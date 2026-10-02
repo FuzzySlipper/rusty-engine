@@ -58,6 +58,7 @@ fn particle() -> ParticleEmitterDescriptor {
                 frame_count: 4,
             },
         },
+        size_mode: Default::default(),
         rate_per_second: 8.0,
         burst_count: 4,
         lifetime_seconds: [0.2, 0.6],

@@ -13,8 +13,8 @@ use common::*;
 use render_model::*;
 use render_presentation::{
     ParticleAnchor, ParticleColorKey, ParticleEmitterDescriptor, ParticleEmitterHandle,
-    ParticleEmitterPatch, ParticleProjectionOp, ParticleScalarKey, ParticleSpriteRef,
-    ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+    ParticleEmitterPatch, ParticleProjectionOp, ParticleScalarKey, ParticleSizeMode,
+    ParticleSpriteRef, ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 use render_wgpu::{OffscreenTarget, RendererOptions, TargetStatus};
 
@@ -422,6 +422,7 @@ fn emitter(
     ParticleEmitterDescriptor {
         anchor: ParticleAnchor::World { position },
         visual,
+        size_mode: Default::default(),
         rate_per_second: 0.0,
         burst_count: count,
         lifetime_seconds: [1.5, 2.5],
@@ -517,6 +518,105 @@ fn particle_bursts_age_on_engine_time_and_freeze_when_held() {
     let (live, emitters) = harness.renderer.particle_counts();
     assert_eq!(emitters, 1);
     assert!(live > 0 && live < 150, "only the fountain remains: {live}");
+}
+
+/// Rows of `rgba` holding a lit (non-background) pixel.
+fn covered_rows(rgba: &[u8]) -> usize {
+    rgba.as_chunks::<{ WIDTH as usize * 4 }>()
+        .0
+        .iter()
+        .filter(|row| row.as_chunks::<4>().0.iter().any(|pixel| pixel[0] > 128))
+        .count()
+}
+
+/// A world-size billboard particle is an edge length in metres: 0.5 covers half
+/// the height of a 1-unit sprite at the same distance, near or far. A screen
+/// size keeps its pixels at every distance.
+#[test]
+fn world_size_particles_shrink_with_distance_like_sprites() {
+    let white = vec![255; 8 * 8 * 4];
+    let height = |distance: f32, what: &str| {
+        let mut harness = Harness::new(RendererOptions::default());
+        let mut ops = vec![RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        }];
+        let (texture, hash) =
+            harness
+                .resources
+                .texture("texture/white", 8, 8, &white, TextureFilter::Nearest);
+        ops.push(texture);
+        if what == "sprite" {
+            ops.push(RenderDiff::DefineSpriteAtlas {
+                atlas: SpriteAtlasDescriptor {
+                    id: "sprite/atlas".to_owned(),
+                    texture: "texture/white".to_owned(),
+                    frames: vec![SpriteFrameRect {
+                        frame: 0,
+                        uv_min: [0.0, 0.0],
+                        uv_max: [1.0, 1.0],
+                        size: None,
+                    }],
+                },
+            });
+            ops.push(create(
+                20,
+                sprite(0, [0.0, 0.0, -distance], BillboardMode::Spherical),
+            ));
+        }
+        harness.apply(ops);
+        if what != "sprite" {
+            let mut still = emitter(
+                ParticleVisual::Billboard {
+                    sprite: ParticleSpriteRef {
+                        asset: "texture/white".to_owned(),
+                        content_hash: hash,
+                        frame_count: 1,
+                    },
+                },
+                [0.0, 0.0, -distance],
+                1,
+                5,
+            );
+            still.size_mode = if what == "world" {
+                ParticleSizeMode::World
+            } else {
+                ParticleSizeMode::Screen
+            };
+            still.velocity_min = [0.0; 3];
+            still.velocity_max = [0.0; 3];
+            still.acceleration = [0.0; 3];
+            still.lifetime_seconds = [10.0, 10.0];
+            for key in &mut still.size_curve {
+                key.value = 0.5;
+            }
+            for key in &mut still.color_curve {
+                key.color = [1.0; 4];
+            }
+            let issues = harness.renderer.apply_presentation(
+                &particle_frame(vec![ParticleProjectionOp::Emit {
+                    signal_id: "still".to_owned(),
+                    descriptor: still,
+                }]),
+                &harness.resources,
+                NO_ENTITIES,
+            );
+            assert!(issues.is_empty(), "{issues:?}");
+            harness.renderer.advance_effects(0.01, NO_ENTITIES);
+        }
+        covered_rows(&harness.single(&camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0)))
+    };
+    for distance in [3.0, 8.0] {
+        let (sprite, particle) = (height(distance, "sprite"), height(distance, "world"));
+        assert!(
+            sprite >= 19,
+            "a 1 m sprite at {distance} m covers {sprite} rows"
+        );
+        assert!(
+            (sprite as f32 / 2.0 - particle as f32).abs() <= 1.0,
+            "at {distance} m a 1 m sprite covers {sprite} rows and a 0.5 m particle {particle}"
+        );
+    }
+    assert_eq!(height(3.0, "screen"), height(8.0, "screen"));
 }
 
 #[test]

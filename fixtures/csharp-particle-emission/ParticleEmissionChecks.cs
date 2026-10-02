@@ -45,6 +45,12 @@ internal static class ParticleEmissionChecks
         ExpectRefusal(engine, billboard); // A nonanimated sprite still needs frame count one.
         Require(engine.Presentation.EmitParticles(billboard with { SpriteFrameCount = 1 }).Outcome == PresentationParticleEmissionOutcome.Admitted,
             "valid billboard burst was not admitted after missing-frame refusal");
+        Require(engine.Presentation.EmitParticles(billboard with
+        {
+            SignalId = "fixture.particle.world-billboard",
+            SpriteFrameCount = 1,
+            SizeMode = PresentationParticleSizeMode.World,
+        }).Outcome == PresentationParticleEmissionOutcome.Admitted, "world-size billboard burst was not admitted");
         Require(engine.Presentation.EmitParticles(valid with { SignalId = "fixture.particle.after-errors" }).Outcome == PresentationParticleEmissionOutcome.Admitted,
             "emission did not recover after caught descriptor failures");
         Require(engine.Presentation.EmitParticles(valid with

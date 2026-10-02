@@ -80,6 +80,12 @@ in 0–1. Lifetimes must be positive and ordered, velocity bounds ordered and
 finite, and acceleration finite. A burst needs `0 < BurstCount <= MaxParticles`
 and `Seed <= 9007199254740991` (53 bits).
 
+`SizeCurve` values are edge lengths. A cube particle's is in metres. A
+billboard's follows `SizeMode`: `Screen` (the zero default) keeps a fixed size
+on screen at any distance, 24 CSS pixels per unit, and `World` takes metres and
+shrinks with distance like a sprite, which suits world effects such as embers or
+dust.
+
 For billboard smoke, use an admitted `Graphics.OpenResource` image handle as
 `Sprite` and set `SpriteFrameCount = 1`. More frames require a positive
 `FlipbookFramesPerSecond`; cubes require zero. `HasCollision` enables the
@@ -93,6 +99,12 @@ escape faults the lifecycle (see
 [Diagnosing native service refusals](csharp-product-project.md#diagnosing-native-service-refusals)).
 All emitters and bursts share a retained budget of 4,096 particles; a valid
 burst returns `Admitted`, `Clamped` or `Dropped` against it.
+
+A retained emitter (`CreateEmitter`, `UpdateEmitter`) spawns `RatePerSecond`
+particles each second; the rate must be finite and not negative. Rate 0 pauses
+it: it keeps its handle and its `MaxParticles` reservation, spawns nothing, and
+its live particles finish their lifetimes. `Visible = false` also stops it
+spawning. Destroy it to give back its reservation.
 The [packaged fixture](../fixtures/csharp-particle-emission/ParticleEmissionChecks.cs)
 exercises caught refusals followed by cube, billboard and colliding debris
 admission in the same callback.

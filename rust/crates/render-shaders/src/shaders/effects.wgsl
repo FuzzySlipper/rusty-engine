@@ -146,14 +146,15 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
     );
 }
 
-// Particle billboard: a screen-aligned quad of constant pixel size
-// (`size × 24` pixels), with a horizontal flipbook strip.
+// Particle billboard: a screen-aligned quad, of constant pixel size
+// (`size × 24` pixels) or of a world size, with a horizontal flipbook strip.
 struct ParticleIn {
     @location(0) corner: vec2<f32>,
     // xyz: world position; w: half width in clip units.
     @location(1) center: vec4<f32>,
     @location(2) color: vec4<f32>,
-    // x: half height in clip units; y: frame; z: frame count.
+    // x: half height in clip units; y: frame; z: frame count; w: 1 when the
+    // half extents are projected world sizes (no depth scaling), 0 for screen.
     @location(3) flipbook: vec4<f32>,
 };
 
@@ -172,7 +173,8 @@ struct ParticleOut {
 fn vs_particle(in: ParticleIn) -> ParticleOut {
     var clip = frame.view_proj * vec4<f32>(in.center.xyz, 1.0);
     let offset = (in.corner * 2.0 - 1.0) * vec2<f32>(in.center.w, in.flipbook.x);
-    clip = vec4<f32>(clip.xy + offset * clip.w, clip.zw);
+    let depth_scale = select(clip.w, 1.0, in.flipbook.w > 0.5);
+    clip = vec4<f32>(clip.xy + offset * depth_scale, clip.zw);
     var out: ParticleOut;
     out.clip = clip;
     let count = max(in.flipbook.z, 1.0);

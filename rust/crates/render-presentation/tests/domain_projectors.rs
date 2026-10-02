@@ -86,6 +86,7 @@ fn particle_descriptor() -> ParticleEmitterDescriptor {
                 frame_count: 4,
             },
         },
+        size_mode: Default::default(),
         rate_per_second: 12.0,
         burst_count: 8,
         lifetime_seconds: [0.2, 0.6],
@@ -859,4 +860,46 @@ fn particle_descriptors_take_long_curves_high_rates_and_long_lifetimes() {
         )
         .unwrap();
     assert_eq!(projector.readout().active_emitters, 1);
+}
+
+#[test]
+fn a_zero_rate_pauses_a_retained_emitter_and_a_negative_rate_is_invalid() {
+    let assets = assets();
+    let mut projector = ParticleProjector::new(ParticleProjectionLimits {
+        max_reserved_particles: 64,
+    });
+    let handle = ParticleEmitterHandle::new(1);
+    let mut paused = particle_descriptor();
+    paused.rate_per_second = 0.0;
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(0),
+            ParticleProjectionOp::Create {
+                handle,
+                descriptor: paused,
+            },
+        )
+        .expect("a paused emitter is created");
+    let update = |rate: f32| ParticleProjectionOp::Update {
+        handle,
+        patch: ParticleEmitterPatch {
+            rate_per_second: Some(rate),
+            ..ParticleEmitterPatch::default()
+        },
+    };
+    projector
+        .project(&assets, PresentationOpMeta::new(1), update(12.0))
+        .expect("resumed");
+    projector
+        .project(&assets, PresentationOpMeta::new(2), update(0.0))
+        .expect("paused again");
+    assert_eq!(
+        projector
+            .project(&assets, PresentationOpMeta::new(3), update(-1.0))
+            .unwrap_err()
+            .code,
+        ParticleProjectionDiagnosticCode::InvalidDescriptor
+    );
+    assert_eq!(projector.descriptor(handle).unwrap().rate_per_second, 0.0);
 }

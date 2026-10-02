@@ -23,7 +23,7 @@ use render_presentation::{
     ParticleAnchor, ParticleCollisionDescriptor, ParticleCollisionLimitBehavior,
     ParticleCollisionVolume, ParticleEmissionAdmissionOutcome, ParticleEmitterDescriptor,
     ParticleEmitterHandle, ParticleEmitterPatch, ParticleProjectionDiagnosticCode,
-    ParticleProjectionOp, ParticleProjector, ParticleSpriteRef, ParticleVisual,
+    ParticleProjectionOp, ParticleProjector, ParticleSizeMode, ParticleSpriteRef, ParticleVisual,
     PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 use render_projection::{
@@ -1979,6 +1979,7 @@ impl RuntimeAppearanceBridge {
             anchor: Some(descriptor.anchor),
             visual: Some(descriptor.visual),
             sprite: None,
+            size_mode: Some(descriptor.size_mode),
             rate_per_second: Some(descriptor.rate_per_second),
             burst_count: Some(descriptor.burst_count),
             lifetime_seconds: Some(descriptor.lifetime_seconds),
@@ -2662,6 +2663,10 @@ impl RuntimeAppearanceBridge {
         Ok(ParticleEmitterDescriptor {
             anchor: native_presentation_particle_anchor(request.anchor),
             visual,
+            size_mode: match request.size_mode {
+                NativePresentationParticleSizeMode::Screen => ParticleSizeMode::Screen,
+                NativePresentationParticleSizeMode::World => ParticleSizeMode::World,
+            },
             rate_per_second: request.rate_per_second,
             burst_count: request.burst_count,
             lifetime_seconds: [request.lifetime_min_seconds, request.lifetime_max_seconds],
@@ -12645,6 +12650,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 signal_id: empty,
                 anchor,
                 visual: NativePresentationParticleVisual::Cube,
+                size_mode: Default::default(),
                 sprite: NativeRenderResourceReference::default(),
                 sprite_frame_count: 0,
                 rate_per_second: 1.0,
@@ -12701,6 +12707,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     signal_id: slice(b"burst-1"),
                     anchor,
                     visual: NativePresentationParticleVisual::Cube,
+                    size_mode: Default::default(),
                     sprite: NativeRenderResourceReference::default(),
                     sprite_frame_count: 0,
                     rate_per_second: 0.0,
@@ -13125,6 +13132,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     offset: NativeVec3::default(),
                 },
                 visual: NativePresentationParticleVisual::Cube,
+                size_mode: Default::default(),
                 sprite: NativeRenderResourceReference::default(),
                 sprite_frame_count: 0,
                 rate_per_second: 1.0,

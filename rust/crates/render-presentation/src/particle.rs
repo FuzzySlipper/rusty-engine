@@ -93,10 +93,23 @@ pub struct ParticleColorKey {
     pub color: [f32; 4],
 }
 
+/// What a billboard particle's size curve measures. Cube particles always
+/// take their size as a world edge length.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParticleSizeMode {
+    /// A fixed size on screen at any distance: 24 CSS pixels per unit.
+    #[default]
+    Screen,
+    /// A world edge length in metres, smaller with distance.
+    World,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleEmitterDescriptor {
     pub anchor: ParticleAnchor,
     pub visual: ParticleVisual,
+    pub size_mode: ParticleSizeMode,
     pub rate_per_second: f32,
     pub burst_count: u32,
     pub lifetime_seconds: [f32; 2],
@@ -121,6 +134,8 @@ struct ParticleEmitterDescriptorWire {
     /// Legacy v1 sprite form. New writers always emit `visual`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sprite: Option<ParticleSpriteRef>,
+    #[serde(default)]
+    size_mode: ParticleSizeMode,
     rate_per_second: f32,
     burst_count: u32,
     lifetime_seconds: [f32; 2],
@@ -146,6 +161,7 @@ impl Serialize for ParticleEmitterDescriptor {
             anchor: self.anchor.clone(),
             visual: Some(self.visual.clone()),
             sprite: None,
+            size_mode: self.size_mode,
             rate_per_second: self.rate_per_second,
             burst_count: self.burst_count,
             lifetime_seconds: self.lifetime_seconds,
@@ -187,6 +203,7 @@ impl<'de> Deserialize<'de> for ParticleEmitterDescriptor {
         Ok(Self {
             anchor: wire.anchor,
             visual,
+            size_mode: wire.size_mode,
             rate_per_second: wire.rate_per_second,
             burst_count: wire.burst_count,
             lifetime_seconds: wire.lifetime_seconds,
@@ -211,6 +228,7 @@ pub struct ParticleEmitterPatch {
     pub visual: Option<ParticleVisual>,
     /// Legacy source/JSON compatibility. Prefer `visual` for new callers.
     pub sprite: Option<ParticleSpriteRef>,
+    pub size_mode: Option<ParticleSizeMode>,
     pub rate_per_second: Option<f32>,
     pub burst_count: Option<u32>,
     pub lifetime_seconds: Option<[f32; 2]>,
@@ -518,11 +536,12 @@ impl ParticleProjector {
                     return Err(ParticleProjectionDiagnosticCode::DuplicateHandle);
                 }
                 self.validate_descriptor(assets, descriptor)?;
-                if descriptor.rate_per_second <= 0.0
-                    || self
-                        .reserved_particles()
-                        .saturating_add(descriptor.max_particles)
-                        > self.limits.max_reserved_particles
+                // A zero rate is a paused emitter: it keeps its handle and
+                // reservation and spawns nothing.
+                if self
+                    .reserved_particles()
+                    .saturating_add(descriptor.max_particles)
+                    > self.limits.max_reserved_particles
                 {
                     return Err(ParticleProjectionDiagnosticCode::BudgetExceeded);
                 }
@@ -540,12 +559,11 @@ impl ParticleProjector {
                 }
                 let updated = apply_patch(current.clone(), patch);
                 self.validate_descriptor(assets, &updated)?;
-                if updated.rate_per_second <= 0.0
-                    || self
-                        .reserved_particles()
-                        .saturating_sub(current.max_particles)
-                        .saturating_add(updated.max_particles)
-                        > self.limits.max_reserved_particles
+                if self
+                    .reserved_particles()
+                    .saturating_sub(current.max_particles)
+                    .saturating_add(updated.max_particles)
+                    > self.limits.max_reserved_particles
                 {
                     return Err(ParticleProjectionDiagnosticCode::BudgetExceeded);
                 }
@@ -637,6 +655,9 @@ fn apply_patch(
         descriptor.visual = ParticleVisual::Billboard {
             sprite: value.clone(),
         };
+    }
+    if let Some(value) = patch.size_mode {
+        descriptor.size_mode = value;
     }
     if let Some(value) = patch.rate_per_second {
         descriptor.rate_per_second = value;

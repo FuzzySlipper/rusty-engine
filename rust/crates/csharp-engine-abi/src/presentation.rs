@@ -222,6 +222,17 @@ pub enum NativePresentationParticleVisual {
     Cube = 2,
 }
 
+/// What a billboard particle's size curve measures: a fixed screen size
+/// (24 CSS pixels per unit, the zero default) or a world edge length in
+/// metres that shrinks with distance. Cubes always take a world edge length.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativePresentationParticleSizeMode {
+    #[default]
+    Screen = 0,
+    World = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationParticleScalarKey {
@@ -311,6 +322,7 @@ pub struct NativePresentationParticleDescriptor {
     pub collision: NativePresentationParticleCollision,
     pub collision_volumes: *const NativePresentationParticleCollisionVolume,
     pub collision_volumes_len: usize,
+    pub size_mode: NativePresentationParticleSizeMode,
 }
 
 /// Direct particle emissions are cosmetic. Valid one-shots return an
