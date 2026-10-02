@@ -28,6 +28,8 @@ interface Presenter {
 const shownFrameSequence = (): number =>
   Number(document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]')?.dataset['rustyFrameSequence'] ?? 0);
 const FRAME_SHOWN_WAIT_MS = 2000;
+/** One debug-command argument: declared intent names such as `party.move-forward`, and target IDs. */
+const INSPECTION_ID = /^[A-Za-z0-9_.-]{1,64}$/;
 /**
  * Engine-owned browser inspection adapter; gameplay remains in the product.
  * The world is rendered in the runtime: inspection goes to its
@@ -67,7 +69,7 @@ export function installPlaytestInspection(flushInput: () => Promise<void>, settl
   };
   const invoke = async (request: PlaytestInspectionRequest): Promise<unknown> => {
     const id = request.id ?? '';
-    if (id && !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('invalid target/action id');
+    if (id && !INSPECTION_ID.test(id)) throw new Error('invalid target/action id: 1-64 letters, digits, ".", "_" or "-"');
     switch (request.op) {
       case 'discover': {
         const catalog = await fetch('/__rusty/product/runtime/debug/catalog').then(r => r.json()) as ProductHostDebugCatalog;
