@@ -29,9 +29,9 @@ if (engine.RenderOutput.Read(image).State == RenderOutputState.Completed)
 
 Image dimensions are independent of the window. The result is a top-to-bottom
 8-bit sRGB RGBA PNG with straight alpha. Clear colors use linear RGB;
-`UseCameraBackground` instead selects the current `CameraView` sky/color and
-keeps the scene's fog. Retained lights, material assignments, camera framing
-and projection are Engine inputs. Exposure, no tone mapping/ACES, and
+`UseCameraBackground` instead selects the current `CameraView` sky/color.
+Retained lights, scene fog, material assignments, camera framing and
+projection are Engine inputs. Exposure, no tone mapping/ACES, and
 multisample count are explicit capture choices; the scene's
 `CameraView.SetToneMapping` does not apply to captures; a sample count above 1 supersamples. Dimensions
 beyond the device's texture limit fail with a diagnostic. A zero

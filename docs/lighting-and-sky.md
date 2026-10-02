@@ -70,7 +70,8 @@ engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
   colour fades distant geometry exactly into it. Over a sky panorama, pick a
   colour that matches its horizon.
 - **Captures.** `RenderOutput.CaptureImage` uses its request's own exposure
-  and tone mapping. It keeps the scene's fog only with `UseCameraBackground`.
+  and tone mapping, and keeps the scene's fog as it keeps the scene's lights,
+  whichever background it selects.
 
 Changing either setting recompiles nothing: both are values in the frame
 uniform, so a product may update them every frame. Blended surfaces are

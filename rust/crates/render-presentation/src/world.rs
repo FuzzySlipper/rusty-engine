@@ -461,12 +461,9 @@ impl PresentationWorld {
             node.material_parameters.clear();
         }
 
-        // Without the camera background a capture is its subject alone: no
-        // sky, clear colour or scene fog.
         if !retain_background {
             captured.retained.sky = None;
             captured.retained.background_color = None;
-            captured.retained.fog = None;
         }
         // Capture dependencies are a subset of the live world. In particular,
         // one small plate must not copy or realize every unrelated mesh.

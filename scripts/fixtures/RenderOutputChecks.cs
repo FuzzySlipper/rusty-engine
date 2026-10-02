@@ -148,8 +148,8 @@ internal sealed class RenderOutputChecks
         }
         if (_batch == 2)
         {
-            // Scene fog reaches a capture that keeps the camera background, not
-            // one of the subject alone; scene tone mapping reaches neither.
+            // Scene fog reaches every capture, whatever its background, as the
+            // scene's lights do; scene tone mapping reaches none.
             _engine.CameraView.SetFog(new(FogMode.Exponential, new(.9f, .9f, .9f, 1), 0, 0, 2));
             _engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic, 1));
             _jobs.Add(("fog-background.png", _engine.RenderOutput.CaptureImage(Request(GeneratedObject) with { UseCameraBackground = true })));
@@ -159,8 +159,8 @@ internal sealed class RenderOutputChecks
         string Output(string name) => Path.Combine(_directory, name);
         if (File.ReadAllBytes(Output("fog-background.png")).SequenceEqual(File.ReadAllBytes(Output("batch-reuse.png"))))
             throw new InvalidOperationException("Scene fog did not reach a capture with the camera background.");
-        if (!File.ReadAllBytes(Output("fog-subject.png")).SequenceEqual(File.ReadAllBytes(Output("generated.png"))))
-            throw new InvalidOperationException("Scene fog or tone mapping changed a capture of the subject alone.");
+        if (File.ReadAllBytes(Output("fog-subject.png")).SequenceEqual(File.ReadAllBytes(Output("generated.png"))))
+            throw new InvalidOperationException("Scene fog did not reach a capture with its own background.");
         _engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
         _engine.CameraView.SetToneMapping(new(ToneMappingOperator.None, 1));
         _engine.Graphics.PublishSnapshot([]);
