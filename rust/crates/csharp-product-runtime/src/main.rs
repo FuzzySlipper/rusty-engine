@@ -173,7 +173,8 @@ fn main() -> Result<(), String> {
     let mut config = ProductHostConfig::new(args.port(), bundle.clone())
         .with_bind_host(args.bind_host())
         .with_live_debug(args.live_debug())
-        .with_diagnostics(diagnostics);
+        .with_diagnostics(diagnostics)
+        .with_ui_images(runtime.ui_images());
     if let Some(frames) = runtime.frame_stream() {
         config = config.with_frame_stream(frames);
     }

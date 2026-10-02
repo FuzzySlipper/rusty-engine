@@ -1104,6 +1104,17 @@ pub type NativeDestroyUiStream = unsafe extern "C" fn(
     NativeUiStreamHandle,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeOpenUiImage = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeUiImageRequest,
+    *mut NativeUiImageHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyUiImage = unsafe extern "C" fn(
+    *mut c_void,
+    NativeUiImageHandle,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativePublishUiProjection = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiProjection,
@@ -1315,6 +1326,8 @@ pub struct NativeUiApi {
     pub open_stream: NativeOpenUiStream,
     pub destroy_stream: NativeDestroyUiStream,
     pub publish_projection: NativePublishUiProjection,
+    pub open_image: NativeOpenUiImage,
+    pub destroy_image: NativeDestroyUiImage,
 }
 
 #[repr(C)]

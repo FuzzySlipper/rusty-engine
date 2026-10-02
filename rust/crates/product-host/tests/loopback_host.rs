@@ -1739,3 +1739,44 @@ fn input_http_framing_remains_host_owned() {
     let error = ProductHostInputBatch::decode_json(bytes.as_bytes()).unwrap_err();
     assert_eq!(error.code(), "PRODUCT_HOST_BODY_BOUNDS");
 }
+
+#[test]
+fn granted_ui_images_are_served_as_png_until_released() {
+    let granted = Arc::new(std::sync::Mutex::new(Some(Arc::<[u8]>::from(
+        &b"png body"[..],
+    ))));
+    let images = Arc::clone(&granted);
+    let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let host = ProductHost::start(
+        FixtureRuntime::default(),
+        ProductHostConfig::new(0, bundle).with_ui_images(Arc::new(move |id| {
+            (id == 7).then(|| images.lock().unwrap().clone()).flatten()
+        })),
+    )
+    .unwrap();
+    let origin = host.origin();
+    let get = |path: &str| {
+        request(
+            &origin,
+            &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+        )
+    };
+    let served = get("/__rusty/product/runtime/ui-images/7");
+    assert!(served.starts_with("HTTP/1.1 200 OK\r\n"), "{served}");
+    assert!(served.contains("Content-Type: image/png\r\n"));
+    assert!(served.ends_with("body"));
+    for path in [
+        "/__rusty/product/runtime/ui-images/8",
+        "/__rusty/product/runtime/ui-images/x",
+    ] {
+        assert!(get(path).starts_with("HTTP/1.1 404"), "{path}");
+    }
+    granted.lock().unwrap().take();
+    assert!(get("/__rusty/product/runtime/ui-images/7").starts_with("HTTP/1.1 404"));
+}

@@ -405,6 +405,15 @@ container](#release-container); both open the same way. Closing a collection doe
 free independent GPU resources or force managed garbage collection. Bundle
 discovery does not produce URLs for DOM images.
 
+To show a bundle's or container's PNG in DOM UI (a portrait, an item icon),
+grant it to the UI: `UiImage image = engine.Ui.OpenImage(new
+UiImageRequest(reference))` takes an open `ContentReference` whose bytes are a
+PNG (else `CSHARP_UI_IMAGE_NOT_PNG`) and keeps them, so the reference and its
+bundle may be released. `image.Url()` is a same-origin URL the product puts in
+its projection for an `<img src>`; the host serves the PNG there until the
+product disposes the image, and answers 404 afterwards. The UI never receives
+image bytes through a projection.
+
 ### Binary static meshes
 
 A large static mesh can skip the JSON parse. The same call admits a binary

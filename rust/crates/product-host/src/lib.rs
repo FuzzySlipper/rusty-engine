@@ -65,7 +65,9 @@ pub use frames::{
     ProductHostFrameFormat, ProductHostFrameStream, FRAME_REQUEST_WAIT, PRODUCT_HOST_FRAMES_PATH,
     PRODUCT_HOST_FRAME_CAPTURE_PATH,
 };
-pub use host::{ProductHost, ProductHostAssetReload, ProductHostConfig, RunningProductHost};
+pub use host::{
+    ProductHost, ProductHostAssetReload, ProductHostConfig, ProductHostUiImages, RunningProductHost,
+};
 pub use log::{
     ProductHostLog, ProductHostLogBatch, ProductHostLogConfig, ProductHostLogDisposition,
     ProductHostLogEvent, ProductHostLogSeverity, ProductHostLogSnapshot, ProductHostLogWriterState,

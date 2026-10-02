@@ -2483,6 +2483,12 @@ impl CsharpProductRuntime {
         }
     }
 
+    /// The PNGs the product granted its UI, which the host serves to the page.
+    pub fn ui_images(&self) -> product_host::ProductHostUiImages {
+        let images = self.services.ui_images();
+        Arc::new(move |id| images.png(id))
+    }
+
     /// The host serves these frames when this process streams the world.
     pub fn frame_stream(&self) -> Option<Arc<product_host::ProductHostFrameStream>> {
         self.frame_output

@@ -4,6 +4,22 @@ pub struct NativeUiStreamHandle {
     pub value: u64,
 }
 
+/// A PNG the product UI may show, served by the host at
+/// `/__rusty/product/runtime/ui-images/<value>` until it is destroyed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeUiImageHandle {
+    pub value: u64,
+}
+
+/// Grants the product UI the PNG a content reference names. The image keeps
+/// its bytes, so the reference may be released afterwards.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUiImageRequest {
+    pub content: crate::NativeContentReferenceHandle,
+}
+
 /// One borrowed UTF-8 identity. It is valid only for the immediate direct
 /// service call that accepts it.
 #[repr(C)]

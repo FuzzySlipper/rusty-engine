@@ -388,6 +388,8 @@ impl EngineServiceSet {
         video.bind_content(&content);
         let mut voxel_content = RuntimeVoxelContentBridge::new();
         voxel_content.bind_content(&content);
+        let mut ui = crate::ui::RuntimeUiBridge::new();
+        ui.bind_content(&content);
         Ok(Self {
             in_call: false,
             call_elapsed_seconds: 0.0,
@@ -409,8 +411,13 @@ impl EngineServiceSet {
             implicit: crate::implicit_surfaces::RuntimeImplicitBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
             persistence: crate::persistence::RuntimePersistenceBridge::new(persistence_root),
-            ui: crate::ui::RuntimeUiBridge::new(),
+            ui,
         })
+    }
+
+    /// The PNGs the product granted its UI, which the product host serves.
+    pub fn ui_images(&self) -> Arc<crate::UiImages> {
+        self.ui.images()
     }
 
     pub fn api(&mut self) -> NativeEngineApi {

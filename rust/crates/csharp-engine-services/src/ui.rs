@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, ffi::c_void};
+use std::{
+    collections::BTreeMap,
+    ffi::c_void,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use csharp_engine_abi::*;
 use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
@@ -7,7 +11,25 @@ use serde_json::{Map, Number, Value};
 use crate::{
     composition::ABI_OK,
     composition::{borrowed_utf8, CsharpEngineServicesError},
+    content::RuntimeContentBridge,
 };
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// The PNGs the product granted its UI, by image ID. The product host serves
+/// them to the page until the product releases them.
+#[derive(Default)]
+pub struct UiImages(Mutex<BTreeMap<u64, Arc<[u8]>>>);
+
+impl UiImages {
+    pub fn png(&self, id: u64) -> Option<Arc<[u8]>> {
+        self.lock().get(&id).cloned()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Arc<[u8]>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// Callback state remains Engine-owned for the complete NativeAOT runtime lifetime.
 pub(crate) struct RuntimeUiBridge {
@@ -16,6 +38,9 @@ pub(crate) struct RuntimeUiBridge {
     binding: Option<RuntimeUiRuntimeBinding>,
     streams: BTreeMap<u64, RuntimeUiStream>,
     next_stream: u64,
+    images: Arc<UiImages>,
+    next_image: u64,
+    content: Option<*const RuntimeContentBridge>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
 }
 
@@ -37,8 +62,73 @@ impl RuntimeUiBridge {
             binding: None,
             streams: BTreeMap::new(),
             next_stream: 1,
+            images: Arc::default(),
+            next_image: 1,
+            content: None,
             operation_diagnostics: Default::default(),
         }
+    }
+
+    pub(crate) fn bind_content(&mut self, content: &RuntimeContentBridge) {
+        self.content = Some(content as *const RuntimeContentBridge);
+    }
+
+    pub(crate) fn images(&self) -> Arc<UiImages> {
+        Arc::clone(&self.images)
+    }
+
+    fn open_image(
+        &mut self,
+        request: *const NativeUiImageRequest,
+        handle: *mut NativeUiImageHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if request.is_null() || handle.is_null() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_UI_IMAGE_POINTER",
+                "C# UI image open had a null request or result pointer",
+            ));
+        }
+        // SAFETY: pointers are valid for this synchronous callback.
+        let request = unsafe { *request };
+        // SAFETY: the content bridge is boxed by the service set, which outlives this bridge.
+        let content = self
+            .content
+            .and_then(|content| unsafe { &*content }.retained_content(request.content))
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_UI_IMAGE_CONTENT",
+                    "C# UI image named a content reference that is not open",
+                )
+            })?;
+        // The host serves these bytes as image/png.
+        if !content.bytes.starts_with(PNG_SIGNATURE) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_UI_IMAGE_NOT_PNG",
+                format!("C# UI image `{}` is not a PNG", content.path),
+            ));
+        }
+        let value = self.next_image;
+        self.next_image += 1;
+        self.images.lock().insert(value, content.bytes);
+        // SAFETY: result pointer was checked above and belongs to the immediate direct call.
+        unsafe { *handle = NativeUiImageHandle { value } };
+        Ok(())
+    }
+
+    fn destroy_image(
+        &mut self,
+        handle: NativeUiImageHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.images
+            .lock()
+            .remove(&handle.value)
+            .map(|_| ())
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_UI_IMAGE",
+                    "C# UI image handle was unknown or already released",
+                )
+            })
     }
 
     pub(crate) fn begin_call(&mut self, binding: RuntimeUiRuntimeBinding) {
@@ -417,18 +507,117 @@ fn arena_text<'a>(
     })
 }
 
+unsafe extern "C" fn open_ui_image(
+    context: *mut c_void,
+    request: *const NativeUiImageRequest,
+    handle: *mut NativeUiImageHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: `context` is stable for the complete product lifetime.
+    let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
+    match bridge.open_image(request, handle) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn destroy_ui_image(
+    context: *mut c_void,
+    handle: NativeUiImageHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: `context` is stable for the complete product lifetime.
+    let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
+    match bridge.destroy_image(handle) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
 pub(crate) fn api(bridge: &mut RuntimeUiBridge) -> NativeUiApi {
     NativeUiApi {
         context: (bridge as *mut RuntimeUiBridge).cast(),
         open_stream: open_ui_stream,
         destroy_stream: destroy_ui_stream,
         publish_projection: publish_ui_projection,
+        open_image: open_ui_image,
+        destroy_image: destroy_ui_image,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_images_serve_granted_pngs_until_released() {
+        let png: Arc<[u8]> = Arc::from(&b"\x89PNG\r\n\x1a\nportrait"[..]);
+        let mut content = RuntimeContentBridge::new(BTreeMap::from([
+            ("portrait.png".to_owned(), Arc::clone(&png)),
+            ("notes.txt".to_owned(), Arc::from(&b"text"[..])),
+        ]));
+        let content_api = crate::content::api(&mut content);
+        let open = |path: &str| {
+            let mut reference = NativeContentReferenceHandle::default();
+            let request = NativeContentOpenRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            };
+            let status = unsafe {
+                (content_api.open_reference)(
+                    content_api.context,
+                    &request,
+                    &mut reference,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(status, ABI_OK);
+            reference
+        };
+        let mut bridge = RuntimeUiBridge::new();
+        bridge.bind_content(&content);
+        let images = bridge.images();
+        let mut grant = |content| {
+            let mut handle = NativeUiImageHandle::default();
+            bridge
+                .open_image(&NativeUiImageRequest { content }, &mut handle)
+                .map(|()| handle)
+                .map_err(|error| error.code().to_owned())
+        };
+        let portrait = grant(open("portrait.png")).unwrap();
+        assert_eq!(images.png(portrait.value).as_deref(), Some(&*png));
+        assert_eq!(
+            grant(open("notes.txt")).unwrap_err(),
+            "CSHARP_UI_IMAGE_NOT_PNG"
+        );
+        assert_eq!(
+            grant(NativeContentReferenceHandle { value: 999 }).unwrap_err(),
+            "CSHARP_UI_IMAGE_CONTENT"
+        );
+        bridge.destroy_image(portrait).unwrap();
+        assert!(images.png(portrait.value).is_none());
+        assert!(bridge.destroy_image(portrait).is_err());
+    }
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 
     fn binding(control_revision: u64) -> RuntimeUiRuntimeBinding {
