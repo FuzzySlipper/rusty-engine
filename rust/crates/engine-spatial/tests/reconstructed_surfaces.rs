@@ -1,6 +1,8 @@
 //! Collision, raycasts and characters follow reconstructed surfaces, and
 //! density edits reshape them locally.
 
+use std::collections::BTreeSet;
+
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use engine_spatial::{
@@ -401,4 +403,52 @@ fn residency_carries_densities_through_eviction_and_rebase() {
         .unwrap();
     assert!((height(&rebased, 3.3 - 4.0) - 1.3).abs() < 1.0e-4);
     assert_eq!(rebased.density([3, 2, 4]), scene.density([3, 2, 4]));
+}
+
+/// A 4×2×4 dual-contoured slab in an 8-cell chunk.
+fn dual_contoured_slab() -> VoxelCollisionScene {
+    VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+        1.0,
+        8,
+        (0..4).flat_map(|x| (0..4).flat_map(move |z| (0..2).map(move |y| [x, y, z]))),
+        SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_noncollidable_material_change_removes_retained_surface_collision() {
+    let mut scene = dual_contoured_slab();
+    let down = |scene: &VoxelCollisionScene| scene.raycast([1.5, 5.0, 1.5], [0.0, -1.0, 0.0], 10.0);
+    assert!(down(&scene).is_some());
+    // The drawn mesh is unchanged; only which materials collide changes.
+    scene.set_noncollidable_materials(BTreeSet::from([1]));
+    assert!(down(&scene).is_none(), "noncollidable surface still hit");
+    scene.set_noncollidable_materials(BTreeSet::new());
+    assert!(down(&scene).is_some());
+}
+
+#[test]
+fn box_queries_reach_surface_triangles_past_their_owning_chunk() {
+    let mut scene = dual_contoured_slab();
+    // Softened densities bulge the surface past x = 0, the chunk's edge.
+    VoxelDensityEditService::apply(
+        &mut scene,
+        &[VoxelDensityEdit::Region {
+            min: [0, 0, 0],
+            size: [4, 2, 4],
+            densities: vec![-2.0; 32],
+            materials: vec![],
+        }],
+    )
+    .unwrap();
+    let hit = scene
+        .raycast([-0.1, 5.0, 1.5], [0.0, -1.0, 0.0], 10.0)
+        .expect("the drawn surface reaches into chunk -1");
+    let point = hit.point;
+    assert!(point[0] < 0.0);
+    assert!(
+        scene.aabb_overlaps_solid(point.map(|v| v - 0.02), point.map(|v| v + 0.02)),
+        "a box around the hit at {point:?} misses the surface"
+    );
 }

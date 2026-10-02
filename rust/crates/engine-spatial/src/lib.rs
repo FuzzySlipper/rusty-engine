@@ -1171,6 +1171,7 @@ impl VoxelCollisionScene {
     /// Replace the colliders of `coordinates` with what their reconstructed
     /// meshes draw. Sessions with any reconstructed material only.
     fn install_surface_colliders(&mut self, coordinates: impl IntoIterator<Item = ChunkCoord>) {
+        let participation = surface_collision::noncollidable_key(&self.noncollidable_materials);
         for coordinate in coordinates {
             let Some(chunk) = self.voxel_world.get(coordinate) else {
                 self.projection.remove_chunk(coordinate);
@@ -1187,7 +1188,9 @@ impl VoxelCollisionScene {
                 coordinate,
                 chunk.content_hash().0,
                 &cubes,
-                mesh.map_or(0, |mesh| mesh.content_hash),
+                // The triangles depend on which materials collide as well as
+                // on the drawn mesh.
+                mesh.map_or(0, |mesh| mesh.content_hash) ^ participation,
                 || {
                     mesh.and_then(|mesh| {
                         surface_collision::collider_surface(

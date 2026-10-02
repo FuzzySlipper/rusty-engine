@@ -216,3 +216,12 @@ pub(crate) fn collider_surface(
         (!surface.triangles.is_empty()).then_some(surface)
     }
 }
+
+/// Identity of a noncollidable material set, mixed into a surface collider's
+/// key so a participation change replaces the retained triangles even when
+/// the drawn mesh is unchanged. The empty set is 0, leaving the key the mesh's.
+pub(crate) fn noncollidable_key(materials: &BTreeSet<u16>) -> u64 {
+    materials.iter().fold(0, |key, material| {
+        (key ^ u64::from(*material).wrapping_add(1)).wrapping_mul(0x100000001b3)
+    })
+}

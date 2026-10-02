@@ -313,6 +313,9 @@ pub struct CollisionProjection {
     world_offset: WorldVec,
     /// Only chunks with at least one solid voxel appear here (deterministic order).
     chunks: BTreeMap<ChunkCoord, ChunkCollider>,
+    /// A reconstructed surface has been installed: its triangles may reach up
+    /// to a cell past their chunk, so box queries look one cell further.
+    has_surfaces: bool,
     static_meshes: StaticMeshCollisionProjection,
     /// Bumped on every (re)build so downstream can cheaply detect projection changes.
     version: u64,
@@ -604,6 +607,7 @@ impl CollisionProjection {
             grid: world.grid(),
             world_offset,
             chunks: BTreeMap::new(),
+            has_surfaces: false,
             static_meshes: StaticMeshCollisionProjection::default(),
             version: 0,
         };
@@ -1138,6 +1142,7 @@ impl CollisionProjection {
                     })
                 })
         });
+        self.has_surfaces |= surface.is_some();
         if cubes.is_none() && surface.is_none() {
             self.chunks.remove(&coord);
             return;
@@ -1374,14 +1379,7 @@ impl CollisionProjection {
             (lo.y + hi.y) * 0.5,
             (lo.z + hi.z) * 0.5,
         ));
-        // Chunk span the AABB covers (inclusive); `hi` is on a boundary so step in.
-        let vmin = self.grid.world_to_voxel(lo - self.world_offset);
-        let vmax = self.grid.world_to_voxel(hi - self.world_offset);
-        let span = ChunkRegion::new(self.grid.voxel_to_chunk(vmin), {
-            let c = self.grid.voxel_to_chunk(vmax);
-            ChunkCoord::new(c.x + 1, c.y + 1, c.z + 1)
-        });
-        if self.aabb_overlaps_chunks(span, &pose, &cuboid) {
+        if self.aabb_overlaps_chunks(self.chunk_span(lo, hi), &pose, &cuboid) {
             return true;
         }
         self.static_meshes.aabb_overlaps(lo, hi)
@@ -1452,13 +1450,24 @@ impl CollisionProjection {
             (lo.y + hi.y) * 0.5,
             (lo.z + hi.z) * 0.5,
         ));
-        let vmin = self.grid.world_to_voxel(lo - self.world_offset);
-        let vmax = self.grid.world_to_voxel(hi - self.world_offset);
-        let span = ChunkRegion::new(self.grid.voxel_to_chunk(vmin), {
-            let c = self.grid.voxel_to_chunk(vmax);
-            ChunkCoord::new(c.x + 1, c.y + 1, c.z + 1)
-        });
-        self.aabb_overlaps_chunks(span, &pose, &cuboid)
+        self.aabb_overlaps_chunks(self.chunk_span(lo, hi), &pose, &cuboid)
+    }
+
+    /// The chunks a box query over `[lo, hi]` tests: those the box covers,
+    /// widened by one voxel when reconstructed surfaces are installed, since
+    /// a surface's triangles reach up to a cell past their owning chunk.
+    fn chunk_span(&self, lo: WorldPos, hi: WorldPos) -> ChunkRegion {
+        let mut vmin = self.grid.world_to_voxel(lo - self.world_offset);
+        let mut vmax = self.grid.world_to_voxel(hi - self.world_offset);
+        if self.has_surfaces {
+            vmin = VoxelCoord::new(vmin.x - 1, vmin.y - 1, vmin.z - 1);
+            vmax = VoxelCoord::new(vmax.x + 1, vmax.y + 1, vmax.z + 1);
+        }
+        let last = self.grid.voxel_to_chunk(vmax);
+        ChunkRegion::new(
+            self.grid.voxel_to_chunk(vmin),
+            ChunkCoord::new(last.x + 1, last.y + 1, last.z + 1),
+        )
     }
 
     /// A box overlaps a chunk's solid when it meets a cuboid or surface
