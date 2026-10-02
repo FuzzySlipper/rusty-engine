@@ -325,6 +325,74 @@ fn lit_sprites_shade_with_synthetic_normal_and_height_maps() {
     assert_screenshot("sprites-lit", WIDTH, HEIGHT, &pixels);
 }
 
+/// A synthetic dome spans the sprite's atlas frame: a sprite drawn from one
+/// cell of a sheet shades as the same image drawn as a whole texture.
+#[test]
+fn synthetic_sprite_domes_span_the_atlas_frame() {
+    let render = |whole: bool| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut ops = scene();
+        if whole {
+            // Frame 0 of the sheet, alone.
+            let red: Vec<u8> = atlas_image()
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(index, _)| index % 16 < 8)
+                .flat_map(|(_, pixel)| pixel.to_vec())
+                .collect();
+            let (texture, _) =
+                harness
+                    .resources
+                    .texture("texture/atlas", 8, 8, &red, TextureFilter::Nearest);
+            ops.push(texture);
+            ops.push(RenderDiff::DefineSpriteAtlas {
+                atlas: SpriteAtlasDescriptor {
+                    id: "sprite/atlas".to_owned(),
+                    texture: "texture/atlas".to_owned(),
+                    frames: vec![SpriteFrameRect {
+                        frame: 0,
+                        uv_min: [0.0, 0.0],
+                        uv_max: [1.0, 1.0],
+                        size: None,
+                    }],
+                },
+            });
+        } else {
+            ops.extend(atlas_ops(&mut harness.resources));
+        }
+        let mut lit = sprite(0, [0.0, 0.4, -4.0], BillboardMode::Spherical);
+        lit.size = [1.3, 1.3];
+        lit.material.lighting = SpriteLightingMode::Synthetic;
+        lit.material.normal_strength = 1.5;
+        ops.push(create(20, lit));
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(30),
+            parent: None,
+            light: LightDescriptor::Point {
+                enabled: true,
+                color: [1.0, 0.85, 0.6],
+                intensity: 18.0,
+                position: [-1.5, 2.0, -2.5],
+                range: None,
+                decay: 2.0,
+                shadow_intent: LightShadowIntent::Disabled,
+            },
+        });
+        harness.apply(ops);
+        harness.single(&camera("eye", [0.0, 0.6, 1.0], 0.0, -4.0))
+    };
+    let (cell, whole) = (render(false), render(true));
+    let differing = cell
+        .chunks_exact(4)
+        .zip(whole.chunks_exact(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 2))
+        .count();
+    assert_eq!(differing, 0, "an atlas cell and a whole texture shade differently");
+}
+
 fn particle_frame(ops: Vec<ParticleProjectionOp>) -> PresentationFrameDiff {
     PresentationFrameDiff::try_from_ops(
         ops.into_iter()

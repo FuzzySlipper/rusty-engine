@@ -33,6 +33,9 @@ struct SpriteOut {
     @location(2) uv: vec2<f32>,
     @location(3) tint: vec4<f32>,
     @location(4) params: vec4<f32>,
+    // Where the fragment lies in its atlas frame, in image orientation: the
+    // whole-texture uv for a whole texture.
+    @location(5) cell: vec2<f32>,
 };
 
 @group(1) @binding(10) var sprite_color: texture_2d<f32>;
@@ -54,6 +57,9 @@ fn vs_sprite(in: SpriteIn) -> SpriteOut {
         mix(in.uv_rect.x, in.uv_rect.z, in.corner.x),
         mix(in.uv_rect.w, in.uv_rect.y, in.corner.y),
     );
+    let frame_min = min(in.uv_rect.xy, in.uv_rect.zw);
+    let frame_size = max(abs(in.uv_rect.zw - in.uv_rect.xy), vec2<f32>(1e-6));
+    out.cell = (out.uv - frame_min) / frame_size;
     out.tint = in.tint;
     out.params = in.params;
     return out;
@@ -79,6 +85,10 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
     let q1 = gl_dpdy3(in.world_position);
     let st0 = dpdx(in.uv);
     let st1 = gl_dpdy2(in.uv);
+    // The frame's own derivatives: the whole-texture uv's, whatever the
+    // frame's share of the sheet.
+    let cell0 = dpdx(in.cell);
+    let cell1 = gl_dpdy2(in.cell);
     let color = textureSample(sprite_color, sprite_color_sampler, in.uv) * in.tint;
     let detail = textureSample(sprite_detail, sprite_detail_sampler, in.uv);
     let height_x = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st0).x;
@@ -102,8 +112,8 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
     let q0_perp = cross(normal, q0);
     if mode == 1u || mode == 2u {
         // Tangent frame from screen derivatives (perturbNormal2Arb).
-        let tangent = q1_perp * st0.x + q0_perp * st1.x;
-        let bitangent = q1_perp * st0.y + q0_perp * st1.y;
+        let tangent = q1_perp * cell0.x + q0_perp * cell1.x;
+        let bitangent = q1_perp * cell0.y + q0_perp * cell1.y;
         let largest = max(dot(tangent, tangent), dot(bitangent, bitangent));
         var scale = 0.0;
         if largest > 0.0 {
@@ -112,9 +122,9 @@ fn fs_sprite(in: SpriteOut, @builtin(front_facing) front: bool) -> @location(0) 
         let tbn = mat3x3<f32>(tangent * scale, bitangent * scale, normal);
         var local = vec3<f32>(0.0, 0.0, 1.0);
         if mode == 1u {
-            // Synthetic dome over the atlas uv.
+            // Synthetic dome over the sprite's atlas frame.
             let radius = max(0.001, 1.0 + in.params.w);
-            let xy = (in.uv * 2.0 - 1.0) * strength / radius;
+            let xy = (in.cell * 2.0 - 1.0) * strength / radius;
             local = vec3<f32>(xy, sqrt(max(0.001, 1.0 - min(dot(xy, xy), 0.999))));
         } else {
             local = detail.xyz * 2.0 - 1.0;
