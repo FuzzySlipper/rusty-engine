@@ -100,6 +100,7 @@ public sealed class Product : IEngineProduct
         SpatialResidencyChecks.Run(context.Engine);
         CharacterMeshChecks.Run(context.Engine);
         AddressableInventoryStacksExercise.Run();
+        ItemCapacityCostExercise.Run();
         ProductInputMapping replacement = initialMapping with { Keyboard = KeyboardControl.KeyF };
         if (input.ReplacePhysicalMappings([replacement]) != InputMappingReplacementOutcome.Staged)
             throw new InvalidOperationException("Packaged input replacement did not stage.");
@@ -128,6 +129,7 @@ mkdir -p "$consumer/content/Textures"
 cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer/content/Textures/wall_lines.png"
 cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer/content/Textures/concrete.png"
 cp "$repo_root/csharp/Rusty.Engine.Mechanics.Example/AddressableInventoryStacksExercise.cs" "$consumer/AddressableInventoryStacksExercise.cs"
+cp "$repo_root/csharp/Rusty.Engine.Mechanics.Example/ItemCapacityCostExercise.cs" "$consumer/ItemCapacityCostExercise.cs"
 cat > "$consumer/product-ui/main.js" <<'EOF'
 export function mountProductUi(root, context) {
     root.dataset.fixture = 'ready';

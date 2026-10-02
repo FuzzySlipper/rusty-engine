@@ -373,6 +373,17 @@ DestroyUnique, and Equip/Unequip/Swap methods for ordinary operations.
 equip. A failed edit leaves the store unchanged; `Publish` refuses if the store
 changed directly after the edit began.
 
+A unique item counts its definition's `CapacityCosts` against its container,
+unless it has its own. `new ItemState(entity, definition, capacityCosts)` gives
+one item its own costs (a save restores them the same way), and
+`SetCapacityCosts(item, costs)` (also on an edit) replaces them on a live item,
+contained or equipped, keeping its entity, definition, container and equipment;
+`null` returns it to the definition's, and an empty list costs nothing. The
+change is admitted against the container's capacity limits like any other
+inventory change (`Capacity` refusal, nothing changed) and advances its
+revision. `ItemState.CapacityCosts` is what the item counts;
+`CapacityCostOverride` is its own costs, or null.
+
 After registering an owner's inventory/equipment, attach live facades if useful:
 
 ```csharp

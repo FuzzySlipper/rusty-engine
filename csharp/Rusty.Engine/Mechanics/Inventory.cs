@@ -484,7 +484,7 @@ public sealed class InventoryState
             .ToDictionary(limit => limit.Metric, _ => 0UL);
         foreach (InventoryStackEntry entry in _stacks.Values)
         {
-            InventoryStore.AddCapacityCosts(used, entry.Definition, entry.Quantity);
+            InventoryStore.AddCapacityCosts(used, entry.Definition.CapacityCosts, entry.Quantity);
         }
 
         foreach (InventoryCapacityLimit limit in CapacityLimits)
@@ -1130,7 +1130,7 @@ public sealed partial class InventoryStore
 
         foreach (InventoryState.InventoryStackEntry entry in inventory.Entries())
         {
-            AddCapacityCosts(used, entry.Definition, entry.Quantity);
+            AddCapacityCosts(used, entry.Definition.CapacityCosts, entry.Quantity);
         }
 
         if (_containedChildren.TryGetValue(owner, out SortedSet<EntityId>? children))
@@ -1141,18 +1141,18 @@ public sealed partial class InventoryStore
                 {
                     continue;
                 }
-                AddCapacityCosts(used, RequireItem(child).Definition, 1);
+                AddCapacityCosts(used, RequireItem(child).CapacityCosts, 1);
             }
         }
 
         if (includedItem is EntityId included
             && (!_containment.TryGetValue(included, out EntityId current) || current != owner))
         {
-            ItemDefinition definition = _items.TryGetValue(included, out ItemState? stored)
-                ? stored.Definition
-                : includedState?.Definition
+            ItemState state = _items.TryGetValue(included, out ItemState? stored)
+                ? stored
+                : includedState
                     ?? throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item entity {included.Value} is not registered.");
-            AddCapacityCosts(used, definition, 1);
+            AddCapacityCosts(used, state.CapacityCosts, 1);
         }
 
         Dictionary<CapacityMetricId, ulong> limits = inventory.CapacityLimits
@@ -1175,10 +1175,10 @@ public sealed partial class InventoryStore
 
     internal static void AddCapacityCosts(
         Dictionary<CapacityMetricId, ulong> used,
-        ItemDefinition definition,
+        IReadOnlyList<ItemCapacityCost> costs,
         ulong quantity)
     {
-        foreach (ItemCapacityCost cost in definition.CapacityCosts)
+        foreach (ItemCapacityCost cost in costs)
         {
             ulong amount;
             ulong total;
@@ -1327,6 +1327,9 @@ public sealed partial class InventoryEdit : IDisposable
 
     public ItemDestroyReceipt DestroyUnique(EntityId item) =>
         Execute(working => working.DestroyUniqueCore(item));
+
+    public ItemCapacityCostReceipt SetCapacityCosts(EntityId item, IEnumerable<ItemCapacityCost>? capacityCosts) =>
+        Execute(working => working.SetCapacityCostsCore(item, capacityCosts));
 
     public EquipmentMutationReceipt Equip(
         EntityId owner,

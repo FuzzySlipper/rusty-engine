@@ -11,6 +11,7 @@ OwnerRetirementExercise.Run();
 ExerciseEffectPolicies();
 ExerciseManagedInventory();
 ManagedLimitsExercise.Run();
+ItemCapacityCostExercise.Run();
 
 static void ExerciseTypedIds()
 {

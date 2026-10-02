@@ -8,7 +8,11 @@ namespace Rusty.Engine.Mechanics;
 /// </summary>
 public sealed class ItemState
 {
-    public ItemState(EntityId entity, ItemDefinition definition)
+    /// <param name="capacityCosts">
+    /// This item's own capacity costs, replacing its definition's for this item only (an empty
+    /// list costs nothing); null uses the definition's. Restore passes the values the product saved.
+    /// </param>
+    public ItemState(EntityId entity, ItemDefinition definition, IEnumerable<ItemCapacityCost>? capacityCosts = null)
     {
         if (entity.Value == 0)
         {
@@ -22,11 +26,57 @@ public sealed class ItemState
 
         Entity = entity;
         Definition = definition;
+        CapacityCostOverride = capacityCosts is null ? null : ItemDefinition.CopyCosts(capacityCosts);
     }
 
     public EntityId Entity { get; }
 
     public ItemDefinition Definition { get; }
+
+    /// <summary>This item's own capacity costs, or null when it uses its definition's.</summary>
+    public IReadOnlyList<ItemCapacityCost>? CapacityCostOverride { get; }
+
+    /// <summary>What this item counts against its container's capacity.</summary>
+    public IReadOnlyList<ItemCapacityCost> CapacityCosts => CapacityCostOverride ?? Definition.CapacityCosts;
+}
+
+/// <summary>Evidence for one change of a unique item's own capacity costs.</summary>
+public sealed class ItemCapacityCostReceipt
+{
+    internal ItemCapacityCostReceipt(
+        EntityId item,
+        ItemDefinitionId definition,
+        EntityId? container,
+        ulong inventoryRevisionBefore,
+        ulong inventoryRevisionAfter,
+        IReadOnlyList<CapacityUsage> capacityBefore,
+        IReadOnlyList<CapacityUsage> capacityAfter)
+    {
+        Item = item;
+        Definition = definition;
+        Container = container;
+        InventoryRevisionBefore = inventoryRevisionBefore;
+        InventoryRevisionAfter = inventoryRevisionAfter;
+        CapacityBefore = capacityBefore;
+        CapacityAfter = capacityAfter;
+    }
+
+    public EntityId Item { get; }
+
+    public ItemDefinitionId Definition { get; }
+
+    /// <summary>The inventory owner holding the item, whose capacity the change was admitted against.</summary>
+    public EntityId? Container { get; }
+
+    public ulong InventoryRevisionBefore { get; }
+
+    public ulong InventoryRevisionAfter { get; }
+
+    /// <summary>The container's capacity before the change; empty when the item has no container.</summary>
+    public IReadOnlyList<CapacityUsage> CapacityBefore { get; }
+
+    /// <summary>The container's capacity after the change; empty when the item has no container.</summary>
+    public IReadOnlyList<CapacityUsage> CapacityAfter { get; }
 }
 
 /// <summary>Evidence for one atomically materialized unique item.</summary>
@@ -152,6 +202,20 @@ public sealed partial class InventoryStore
     public ItemDestroyReceipt DestroyUnique(EntityId item) =>
         DestroyUniqueCore(item);
 
+    /// <summary>
+    /// Replaces a live unique item's own capacity costs, or with null returns it to its
+    /// definition's. Its entity, definition, container and equipment stay as they are. The
+    /// change is admitted against its container's capacity limits like any other inventory
+    /// change, and advances that container's revision.
+    /// </summary>
+    /// <exception cref="MechanicsException">
+    /// <see cref="MechanicsRefusal.NotFound"/> for an unregistered item;
+    /// <see cref="MechanicsRefusal.Capacity"/> when the container could not hold the new costs.
+    /// </exception>
+    /// <exception cref="ArgumentException">A capacity metric appears more than once.</exception>
+    public ItemCapacityCostReceipt SetCapacityCosts(EntityId item, IEnumerable<ItemCapacityCost>? capacityCosts) =>
+        SetCapacityCostsCore(item, capacityCosts);
+
     internal ItemMaterializationReceipt MaterializeUniqueCore(ItemState item, EntityId owner)
     {
         ArgumentNullException.ThrowIfNull(item);
@@ -275,6 +339,40 @@ public sealed partial class InventoryStore
             formerOwner,
             inventoryRevisionBefore,
             _revision);
+    }
+
+    internal ItemCapacityCostReceipt SetCapacityCostsCore(EntityId item, IEnumerable<ItemCapacityCost>? capacityCosts)
+    {
+        ItemState current = RequireItem(item);
+        var updated = new ItemState(item, current.Definition, capacityCosts);
+        ulong inventoryRevisionBefore = _revision;
+        if (!_containment.TryGetValue(item, out EntityId owner))
+        {
+            _items[item] = updated;
+            TouchStore();
+            return new ItemCapacityCostReceipt(
+                item, current.Definition.Id, null, inventoryRevisionBefore, _revision, [], []);
+        }
+
+        InventoryState inventory = RequireInventory(owner);
+        IReadOnlyList<CapacityUsage> before = ComputeCapacity(owner, inventory);
+        _items[item] = updated;
+        IReadOnlyList<CapacityUsage> after;
+        try
+        {
+            after = ComputeCapacity(owner, inventory);
+        }
+        catch
+        {
+            _items[item] = current;
+            throw;
+        }
+        InventoryState updatedInventory = inventory.Clone();
+        updatedInventory.SetRevision(checked(updatedInventory.Revision + 1));
+        _inventories[owner] = updatedInventory;
+        TouchStore();
+        return new ItemCapacityCostReceipt(
+            item, current.Definition.Id, owner, inventoryRevisionBefore, _revision, before, after);
     }
 
     private void SetContainment(EntityId child, EntityId container)

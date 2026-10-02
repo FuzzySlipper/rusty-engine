@@ -120,7 +120,7 @@ public sealed class ItemDefinition
             && left.RequiredSlots == right.RequiredSlots
             && left.ExclusiveGroup == right.ExclusiveGroup;
 
-    private static IReadOnlyList<ItemCapacityCost> CopyCosts(IEnumerable<ItemCapacityCost>? values)
+    internal static IReadOnlyList<ItemCapacityCost> CopyCosts(IEnumerable<ItemCapacityCost>? values)
     {
         if (values is null)
         {
