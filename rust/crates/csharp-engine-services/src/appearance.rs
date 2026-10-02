@@ -3182,6 +3182,25 @@ impl RuntimeAppearanceBridge {
                 Some(texture)
             }
         };
+        material.normal_map = normal_map_descriptor(
+            &staged.state.render_resources,
+            request.normal_map,
+            request.normal_scale,
+        )?;
+        let normal_texture = match &material.normal_map {
+            Some(map) => Some(
+                texture_descriptors_for_material(
+                    &RenderMaterialDescriptor {
+                        texture: Some(map.texture.clone()),
+                        normal_map: None,
+                        ..material.clone()
+                    },
+                    &staged.state.render_resources,
+                )?
+                .remove(0),
+            ),
+            None => None,
+        };
         material.validate().map_err(|error| {
             CsharpEngineServicesError::new(
                 "CSHARP_AUTHORED_MATERIAL",
@@ -3189,15 +3208,15 @@ impl RuntimeAppearanceBridge {
             )
         })?;
         let resources = staged.state.projector.resources_mut();
-        if let Some(texture) = texture {
+        for texture in texture.into_iter().chain(normal_texture) {
             retain_texture_descriptor(&mut resources.textures, texture)?;
         }
         resources.materials.push(material.clone());
         staged.state.materials.insert(handle, material.id);
-        staged
-            .state
-            .material_resources
-            .insert(handle, resource_set([request.texture.value]));
+        staged.state.material_resources.insert(
+            handle,
+            resource_set([request.texture.value, request.normal_map.value]),
+        );
         Ok(NativeMaterialHandle { value: handle })
     }
 
@@ -8915,29 +8934,7 @@ fn material_descriptor(
         }
         Some(resource.asset_identity().to_owned())
     };
-    let normal_map = if request.normal_map.value == 0 {
-        None
-    } else {
-        let linear = resources
-            .get(request.normal_map.value)
-            .and_then(CsharpRenderResource::texture)
-            .and_then(|texture| texture.payload.as_ref())
-            .is_some_and(|payload| payload.color_space == render_model::TextureColorSpace::Linear);
-        if !linear {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_MATERIAL_NORMAL_MAP",
-                "a material's normal map must be a texture opened with TextureColorSpace.Linear",
-            ));
-        }
-        let identity = resources
-            .get(request.normal_map.value)
-            .map(|resource| resource.asset_identity().to_owned())
-            .expect("checked above");
-        Some(render_model::MaterialNormalMapDescriptor {
-            texture: identity,
-            scale: request.normal_scale,
-        })
-    };
+    let normal_map = normal_map_descriptor(resources, request.normal_map, request.normal_scale)?;
     let descriptor = RenderMaterialDescriptor {
         id,
         color: native_color(request.color),
@@ -8999,6 +8996,38 @@ fn retarget_voxel_surface(surface: &mut VoxelSurfaceDescriptor, texture_id: &str
             *texture = texture_id.to_owned();
         }
     }
+}
+
+/// A material's normal map: a texture opened as linear data, or none for
+/// reference 0.
+fn normal_map_descriptor(
+    resources: &RenderResourceRegistry,
+    reference: NativeRenderResourceReference,
+    scale: f32,
+) -> Result<Option<render_model::MaterialNormalMapDescriptor>, CsharpEngineServicesError> {
+    if reference.value == 0 {
+        return Ok(None);
+    }
+    let resource = resources
+        .get(reference.value)
+        .filter(|resource| {
+            resource
+                .texture()
+                .and_then(|texture| texture.payload.as_ref())
+                .is_some_and(|payload| {
+                    payload.color_space == render_model::TextureColorSpace::Linear
+                })
+        })
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_MATERIAL_NORMAL_MAP",
+                "a material's normal map must be a texture opened with TextureColorSpace.Linear",
+            )
+        })?;
+    Ok(Some(render_model::MaterialNormalMapDescriptor {
+        texture: resource.asset_identity().to_owned(),
+        scale,
+    }))
 }
 
 fn texture_descriptors_for_material(

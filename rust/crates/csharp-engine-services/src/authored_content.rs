@@ -3577,7 +3577,23 @@ mod tests {
             },
             ABI_OK
         );
+        // The atlas material's normal map: the same PNG opened as data.
+        let mut normal_request = crate::appearance::tests::resource_request("pattern.png");
+        normal_request.color_space = NativeTextureColorSpace::Linear;
+        let mut normal = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::open_render_resource(
+                    context,
+                    &normal_request,
+                    &mut normal,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
         for material_id in [b"material/repeat".as_slice(), b"material/atlas".as_slice()] {
+            let atlas = material_id == b"material/atlas";
             let request = NativeAuthoredMaterialAppearanceRequest {
                 catalog: NativeAuthoredCatalogHandle { value: 1 },
                 material_id: NativeUtf8Slice {
@@ -3587,6 +3603,10 @@ mod tests {
                 texture: NativeRenderResourceReference {
                     value: texture.handle.value,
                 },
+                normal_map: NativeRenderResourceReference {
+                    value: if atlas { normal.handle.value } else { 0 },
+                },
+                normal_scale: 0.75,
             };
             let mut material = NativeMaterialHandle::default();
             assert_eq!(
@@ -3637,7 +3657,15 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!((textures.len(), materials.len()), (2, 2));
+        assert_eq!((textures.len(), materials.len()), (3, 2));
+        let mapped = materials
+            .iter()
+            .find_map(|material| material.normal_map.as_ref())
+            .expect("the atlas material's normal map");
+        assert_eq!(mapped.scale, 0.75);
+        assert!(textures.iter().any(|texture| texture.id == mapped.texture
+            && texture.payload.as_ref().map(|payload| payload.color_space)
+                == Some(render_model::TextureColorSpace::Linear)));
         assert!(textures.iter().any(|texture| texture.filter
             == render_model::TextureFilter::Nearest
             && texture.wrap == render_model::TextureWrap::Repeat
@@ -3665,6 +3693,11 @@ mod tests {
                 ..
             }) if region.id == "tile"
         )));
+        assert!(textures.iter().any(|texture| texture.filter
+            == render_model::TextureFilter::Nearest
+            && texture.wrap == render_model::TextureWrap::Clamp
+            && texture.payload.as_ref().map(|payload| payload.color_space)
+                == Some(render_model::TextureColorSpace::Linear)));
         for material in materials {
             let texture_id = material.texture.as_ref().expect("material texture");
             let surface = material.voxel_surface.as_ref().expect("voxel surface");

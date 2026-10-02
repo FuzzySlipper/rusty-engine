@@ -157,3 +157,10 @@ internal static class GraphicsDefaults
         0.5f,
         SpriteShadowPolicy.None);
 }
+
+public readonly partial record struct AuthoredMaterialAppearanceRequest
+{
+    /// <summary>An authored material appearance without a normal map.</summary>
+    public AuthoredMaterialAppearanceRequest(AuthoredCatalog catalog, string materialId, RenderResourceReference texture)
+        : this(catalog, materialId, texture, default, 1) { }
+}

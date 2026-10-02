@@ -426,6 +426,10 @@ including distinct atlases over the same texture. Atlas identity, region,
 texture and alpha mode belong to each material; there is no scene-wide atlas.
 Create each material with `Graphics.CreateAuthoredMaterial` and its selected
 texture resource, then bind its source slot through `VoxelScenePresentation`.
+`AuthoredMaterialAppearanceRequest.NormalMap` adds a normal map opened with
+`TextureColorSpace.Linear`. It repeats with the material's tiling, or
+shares an atlas material's region layout, so an atlas normal map matches its
+colour atlas texel for texel.
 An atlas reference must keep the catalog's pinned version/hash. Structural
 class does not select a scene atlas or replace canonical voxel state.
 

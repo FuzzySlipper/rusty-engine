@@ -590,6 +590,11 @@ pub struct NativeAuthoredMaterialAppearanceRequest {
     pub catalog: NativeAuthoredCatalogHandle,
     pub material_id: NativeUtf8Slice,
     pub texture: NativeRenderResourceReference,
+    /// A tangent-space normal map opened with a linear colour space; 0 for
+    /// none. On a voxel surface it repeats or follows the atlas regions with
+    /// the selected texture, so an atlas normal map shares its layout.
+    pub normal_map: NativeRenderResourceReference,
+    pub normal_scale: f32,
 }
 
 #[repr(C)]
