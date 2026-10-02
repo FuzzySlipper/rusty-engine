@@ -70,6 +70,23 @@ internal static class ContentContainerChecks
                 && refusal.Diagnostics.Span[0].Message.Contains(notes, StringComparison.Ordinal))
             {
             }
+
+            // An entry that fails to decompress refuses its read with the
+            // container's code, naming the container and the entry.
+            string broken = Path.Combine(library, "broken.container");
+            using ProductContentBundle damaged = ProductContentBundle.OpenContainer(engine.Content, broken);
+            Require(damaged.ReadText(ModuleManifest).Contains("broken", StringComparison.Ordinal), "a readable entry of a damaged container");
+            try
+            {
+                damaged.ReadText("data/table.json");
+                throw new InvalidOperationException("an entry that does not decompress was read");
+            }
+            catch (EngineCallException refusal) when (refusal.Diagnostics.Length == 1
+                && refusal.Diagnostics.Span[0].Code == "PRODUCT_CONTAINER_CORRUPT"
+                && refusal.Diagnostics.Span[0].Message.Contains(broken, StringComparison.Ordinal)
+                && refusal.Diagnostics.Span[0].Message.Contains("data/table.json", StringComparison.Ordinal))
+            {
+            }
         }
         finally
         {

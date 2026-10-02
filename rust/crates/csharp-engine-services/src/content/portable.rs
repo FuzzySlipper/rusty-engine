@@ -66,12 +66,16 @@ fn build(source: AdmittedContent, selected: String) -> Result<Asset, String> {
             &asset.definition
         {
             let full = format!("{directory}{path}");
-            let bytes = source.files.get(&full).ok_or_else(|| {
-                format!(
-                    "{}: asset '{}' references missing file '{path}' (resolved '{full}')",
-                    source.path, asset.id
-                )
-            })?;
+            let bytes = source
+                .files
+                .get(&full)
+                .map_err(|refusal| refusal.to_string())?
+                .ok_or_else(|| {
+                    format!(
+                        "{}: asset '{}' references missing file '{path}' (resolved '{full}')",
+                        source.path, asset.id
+                    )
+                })?;
             members.insert(
                 asset.id.clone(),
                 AdmittedContent {

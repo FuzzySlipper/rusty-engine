@@ -47,9 +47,14 @@ impl ContentFiles {
         Self::Snapshot(Arc::new(files))
     }
 
-    pub(crate) fn get(&self, path: &str) -> Option<Arc<[u8]>> {
+    /// The file's bytes, or none when there is no such file. A container file
+    /// that cannot be read refuses with the container's code.
+    pub(crate) fn get(
+        &self,
+        path: &str,
+    ) -> Result<Option<Arc<[u8]>>, crate::composition::CsharpEngineServicesError> {
         match self {
-            Self::Snapshot(files) => files.get(path).cloned(),
+            Self::Snapshot(files) => Ok(files.get(path).cloned()),
             Self::Container(container) => container.bytes(path),
         }
     }
@@ -360,14 +365,18 @@ unsafe extern "C" fn resolve_reference(
         Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(content) = bridge
+    let catalog = bridge
         .catalog
         .get(path)
         .filter(|content| content.sha256() == request.sha256)
-        .cloned()
-        .or_else(|| bridge.bundles.resolve(path, request.sha256))
-    else {
-        return 0;
+        .cloned();
+    let content = match catalog {
+        Some(content) => content,
+        None => match bridge.bundles.resolve(path, request.sha256) {
+            Ok(Some(content)) => content,
+            Ok(None) => return 0,
+            Err(refusal) => return refuse(&refusal, error),
+        },
     };
     let Some(handle) = bridge.retain(content) else {
         return 0;
@@ -528,7 +537,10 @@ mod tests {
         assert_eq!(source, [99, 2, 3]);
         let retained = bridge.retained_content(handle).unwrap();
         assert_eq!(&*retained.bytes, &[1, 2, 3]);
-        assert_eq!(&*retained.files.get("model/texture.png").unwrap(), &[4, 5]);
+        assert_eq!(
+            &*retained.files.get("model/texture.png").unwrap().unwrap(),
+            &[4, 5]
+        );
         assert!(retained.transient);
         assert!(bridge.catalog.is_empty());
         let weak = Arc::downgrade(&retained.bytes);

@@ -148,13 +148,13 @@ impl ProductContentBundles {
             .iter()
             .map(|file| Some((file.path.as_str(), hex_digest(&file.sha256)?)))
             .collect::<Option<Vec<_>>>()?;
-        let bodies = super::ContentFiles::snapshot(bodies);
+        let snapshot = super::ContentFiles::snapshot(bodies.clone());
         let files = bundle
             .files
             .iter()
             .map(|file| {
                 let path = format!("{}/{}", bundle.root, file.path);
-                let bytes = bodies.get(&path).expect("read above");
+                let bytes = Arc::clone(&bodies[&path]);
                 (
                     file.path.clone(),
                     AdmittedContent {
@@ -162,7 +162,7 @@ impl ProductContentBundles {
                         identity: super::ContentIdentity::known(hashes[file.path.as_str()]),
                         bytes,
                         transient: false,
-                        files: bodies.clone(),
+                        files: snapshot.clone(),
                     },
                 )
             })
@@ -221,27 +221,41 @@ pub(crate) struct ContainerFiles {
 }
 
 impl ContainerFiles {
-    pub(crate) fn bytes(&self, path: &str) -> Option<Arc<[u8]>> {
+    /// The file's bytes, or none when the container has no such file. A file
+    /// that cannot be read (a corrupt compressed entry) refuses with the
+    /// container's code, naming the container and the entry.
+    pub(crate) fn bytes(&self, path: &str) -> Result<Option<Arc<[u8]>>, CsharpEngineServicesError> {
         let mut read = self
             .read
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if let Some(bytes) = read.get(path) {
-            return Some(Arc::clone(bytes));
+            return Ok(Some(Arc::clone(bytes)));
         }
-        let bytes: Arc<[u8]> = Arc::from(self.container.get(path).ok()?.as_ref());
+        let bytes: Arc<[u8]> = match self.container.get(path) {
+            Ok(bytes) => Arc::from(bytes.as_ref()),
+            Err(product_container::Error::Missing(_)) => return Ok(None),
+            Err(failure) => return Err(container_error(&failure)),
+        };
         read.insert(path.to_owned(), Arc::clone(&bytes));
-        Some(bytes)
+        Ok(Some(bytes))
     }
 
-    fn content(self: &Arc<Self>, entry: &Entry) -> Option<AdmittedContent> {
-        Some(AdmittedContent {
+    fn content(
+        self: &Arc<Self>,
+        entry: &Entry,
+    ) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
+        let (Some(digest), Some(bytes)) = (hex_digest(&entry.sha256), self.bytes(&entry.path)?)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(AdmittedContent {
             path: entry.path.clone(),
-            identity: super::ContentIdentity::known(sha256_words(&hex_digest(&entry.sha256)?)),
-            bytes: self.bytes(&entry.path)?,
+            identity: super::ContentIdentity::known(sha256_words(&digest)),
+            bytes,
             transient: false,
             files: super::ContentFiles::Container(Arc::clone(self)),
-        })
+        }))
     }
 }
 
@@ -291,24 +305,35 @@ impl OpenBundle {
         }
     }
 
-    fn reference(&self, path: &str) -> Option<AdmittedContent> {
+    fn reference(&self, path: &str) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
         match &self.files {
-            OpenFiles::Snapshot(files) => files.get(path).cloned(),
-            OpenFiles::Container(files) => files.content(files.container.entry(path)?),
+            OpenFiles::Snapshot(files) => Ok(files.get(path).cloned()),
+            OpenFiles::Container(files) => match files.container.entry(path) {
+                Some(entry) => files.content(entry),
+                None => Ok(None),
+            },
         }
     }
 
-    fn resolve(&self, path: &str, hash: NativeContentSha256) -> Option<AdmittedContent> {
+    fn resolve(
+        &self,
+        path: &str,
+        hash: NativeContentSha256,
+    ) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
         match &self.files {
-            OpenFiles::Snapshot(files) => files
+            OpenFiles::Snapshot(files) => Ok(files
                 .values()
                 .find(|file| file.path == path && file.sha256() == hash)
-                .cloned(),
-            OpenFiles::Container(files) => {
-                let entry = files.container.entry(path)?;
-                (hex_digest(&entry.sha256).map(|digest| sha256_words(&digest)) == Some(hash))
-                    .then(|| files.content(entry))?
-            }
+                .cloned()),
+            OpenFiles::Container(files) => match files.container.entry(path) {
+                Some(entry)
+                    if hex_digest(&entry.sha256).map(|digest| sha256_words(&digest))
+                        == Some(hash) =>
+                {
+                    files.content(entry)
+                }
+                _ => Ok(None),
+            },
         }
     }
 }
@@ -334,10 +359,17 @@ pub(super) struct BundleState {
 }
 
 impl BundleState {
-    pub(super) fn resolve(&self, path: &str, hash: NativeContentSha256) -> Option<AdmittedContent> {
-        self.open
-            .values()
-            .find_map(|bundle| bundle.resolve(path, hash))
+    pub(super) fn resolve(
+        &self,
+        path: &str,
+        hash: NativeContentSha256,
+    ) -> Result<Option<AdmittedContent>, CsharpEngineServicesError> {
+        for bundle in self.open.values() {
+            if let Some(content) = bundle.resolve(path, hash)? {
+                return Ok(Some(content));
+            }
+        }
+        Ok(None)
     }
 
     fn next(&mut self) -> Option<u64> {
@@ -426,7 +458,7 @@ pub(super) unsafe extern "C" fn open_container(
             Err(refusal) => return refuse(&refusal, error),
         };
     let bundle = Container::open(Path::new(path))
-        .map_err(|failure| CsharpEngineServicesError::new(failure.code(), failure.to_string()))
+        .map_err(|failure| container_error(&failure))
         .and_then(|container| {
             OpenBundle::container(container).ok_or_else(|| {
                 CsharpEngineServicesError::new(
@@ -507,7 +539,9 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
     context: *mut c_void,
     request: *const NativeContentBundleReferenceRequest,
     result: *mut NativeContentReferenceHandle,
+    error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    clear_receipt(error);
     if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
@@ -517,13 +551,13 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
         return 0;
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(file) = bridge
-        .bundles
-        .open
-        .get(&request.bundle.value)
-        .and_then(|bundle| bundle.reference(path))
-    else {
+    let Some(bundle) = bridge.bundles.open.get(&request.bundle.value) else {
         return 0;
+    };
+    let file = match bundle.reference(path) {
+        Ok(Some(file)) => file,
+        Ok(None) => return 0,
+        Err(refusal) => return refuse(&refusal, error),
     };
     let Some(handle) = bridge.retain(file) else {
         return 0;
@@ -532,6 +566,12 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
         *result = handle;
     }
     ABI_OK
+}
+
+/// A container failure as a Content refusal: its `PRODUCT_*` code and a
+/// message naming the file.
+fn container_error(failure: &product_container::Error) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new(failure.code(), failure.to_string())
 }
 
 /// The 32 bytes of a validated 64-digit hex SHA-256.
@@ -601,6 +641,7 @@ mod tests {
             &bridge.bundles.open[&bundle.value]
                 .reference("a.json")
                 .unwrap()
+                .unwrap()
                 .bytes,
         );
         let mut reference = NativeContentReferenceHandle::default();
@@ -613,6 +654,7 @@ mod tests {
                         path: text("a.json"),
                     },
                     &mut reference,
+                    std::ptr::null_mut(),
                 )
             },
             ABI_OK
@@ -707,15 +749,20 @@ mod tests {
         let source = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
         let actors = source.load("actors").unwrap();
         let other = source.load("other").unwrap();
-        let retained = actors.reference("model.glb").unwrap();
-        let dependency = Arc::downgrade(&retained.files.get("actors/skin.png").unwrap());
+        let retained = actors.reference("model.glb").unwrap().unwrap();
+        let dependency = Arc::downgrade(&retained.files.get("actors/skin.png").unwrap().unwrap());
         drop(actors);
         drop(other);
         assert_eq!(
-            retained.files.get("actors/skin.png").unwrap().as_ref(),
+            retained
+                .files
+                .get("actors/skin.png")
+                .unwrap()
+                .unwrap()
+                .as_ref(),
             b"actors"
         );
-        assert!(retained.files.get("other/skin.png").is_none());
+        assert!(retained.files.get("other/skin.png").unwrap().is_none());
         assert!(dependency.upgrade().is_some());
         drop(retained);
         assert!(dependency.upgrade().is_none());
@@ -755,14 +802,17 @@ mod tests {
         let loose = ProductContentBundles::admit(&loose(directory.path()), "").unwrap();
         assert!(packed.owns_path("rules/a.json") && !packed.owns_path("loose.txt"));
         let (packed, loose) = (packed.load("rules").unwrap(), loose.load("rules").unwrap());
-        assert_eq!(packed.reference("a.json").unwrap().path, "rules/a.json");
         assert_eq!(
-            packed.reference("a.json").unwrap().bytes.as_ref(),
-            loose.reference("a.json").unwrap().bytes.as_ref()
+            packed.reference("a.json").unwrap().unwrap().path,
+            "rules/a.json"
         );
         assert_eq!(
-            packed.reference("a.json").unwrap().sha256(),
-            loose.reference("a.json").unwrap().sha256()
+            packed.reference("a.json").unwrap().unwrap().bytes.as_ref(),
+            loose.reference("a.json").unwrap().unwrap().bytes.as_ref()
+        );
+        assert_eq!(
+            packed.reference("a.json").unwrap().unwrap().sha256(),
+            loose.reference("a.json").unwrap().unwrap().sha256()
         );
     }
 
@@ -847,6 +897,7 @@ mod tests {
                                 path: text(path),
                             },
                             &mut reference,
+                            std::ptr::null_mut(),
                         )
                     },
                     ABI_OK,
@@ -895,6 +946,104 @@ mod tests {
             assert!(message.contains(path.to_str().unwrap()), "{message}");
         }
         assert!(bridge.bundles.open.is_empty());
+    }
+
+    /// A compressed entry that fails to decompress refuses each lazy read
+    /// (a reference, a resolve, a dependency lookup) with the container's code
+    /// and a message naming the container and the entry.
+    #[test]
+    fn an_unreadable_container_entry_refuses_with_the_container_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(module.join("data")).unwrap();
+        fs::write(module.join("module.json"), b"{\"id\":\"tables\"}").unwrap();
+        fs::write(module.join("data/table.json"), "[1,2,3],".repeat(4096)).unwrap();
+        let out = directory.path().join("tables.rpak");
+        product_container::pack_content(&module, &out, true).unwrap();
+        let entry = Container::open(&out)
+            .unwrap()
+            .entry("data/table.json")
+            .unwrap()
+            .clone();
+        assert!(
+            entry.zstd_length.is_some(),
+            "the table is stored compressed"
+        );
+        // Break the zstd frame magic: the header and inventory stay valid.
+        let mut bytes = fs::read(&out).unwrap();
+        bytes[entry.offset as usize..entry.offset as usize + 4].copy_from_slice(b"XXXX");
+        fs::write(&out, bytes).unwrap();
+
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let path = out.to_str().unwrap();
+        let mut bundle = NativeContentBundleHandle::default();
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                open_container(
+                    context,
+                    &NativeContentContainerOpenRequest { path: text(path) },
+                    &mut bundle,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let corrupt = |(code, message): (String, String)| {
+            assert_eq!(code, "PRODUCT_CONTAINER_CORRUPT");
+            assert!(
+                message.contains(path) && message.contains("data/table.json"),
+                "{message}"
+            );
+        };
+        let open_reference = |file: &str| {
+            let mut reference = NativeContentReferenceHandle::default();
+            let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let status = unsafe {
+                open_bundle_reference(
+                    context,
+                    &NativeContentBundleReferenceRequest {
+                        bundle,
+                        path: text(file),
+                    },
+                    &mut reference,
+                    &mut receipt,
+                )
+            };
+            (status == ABI_OK)
+                .then_some(reference)
+                .ok_or_else(|| diagnostic_code(receipt))
+        };
+        corrupt(open_reference("data/table.json").unwrap_err());
+
+        let mut resolved = NativeContentReferenceHandle::default();
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                super::super::resolve_reference(
+                    context,
+                    &NativeContentResolveRequest {
+                        path: text("data/table.json"),
+                        sha256: sha256_words(&hex_digest(&entry.sha256).unwrap()),
+                    },
+                    &mut resolved,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        corrupt(diagnostic_code(receipt));
+
+        // A readable file's dependency context reports the same refusal.
+        let manifest = open_reference("module.json").unwrap();
+        let refusal = bridge
+            .retained_content(manifest)
+            .unwrap()
+            .files
+            .get("data/table.json")
+            .unwrap_err();
+        corrupt((refusal.code().to_owned(), refusal.detail().to_owned()));
     }
 
     #[test]

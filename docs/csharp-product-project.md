@@ -319,7 +319,10 @@ follows the files, not how they are stored. A missing file, a file that is not
 a container, a truncated one or an inconsistent inventory throws
 `EngineCallException` with `PRODUCT_SOURCE_IO`,
 `PRODUCT_CONTAINER_NOT_A_CONTAINER`, `PRODUCT_CONTAINER_TRUNCATED` or
-`PRODUCT_CONTAINER_CORRUPT`, naming the file. Opening works the same whether
+`PRODUCT_CONTAINER_CORRUPT`, naming the file. A compressed file that no longer
+decompresses is found when it is read: that read (`ReadFile`, `OpenReference`,
+`ResolveReference`, or a GLB dependency) throws `EngineCallException` with
+`PRODUCT_CONTAINER_CORRUPT`, naming the container and the file. Opening works the same whether
 the product itself runs loose under `rusty dev` or from a release container.
 
 What a module is, its ID, version and requirements, which containers to open

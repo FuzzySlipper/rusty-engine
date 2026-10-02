@@ -777,6 +777,8 @@ impl RenderResourceImports {
                         content
                             .files
                             .get(path)
+                            .ok()
+                            .flatten()
                             .is_some_and(|current| Arc::ptr_eq(&current, bytes))
                     })
             });
@@ -1395,7 +1397,7 @@ fn pack_animated_glb_closure(
             } else {
                 format!("{directory}/{uri}")
             };
-            let bytes = content_resources.get(&content_path).ok_or_else(|| {
+            let bytes = content_resources.get(&content_path)?.ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_ANIMATION_GLB_CLOSURE",
                     format!("animated GLB dependency `{content_path}` is missing"),

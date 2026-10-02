@@ -166,6 +166,7 @@ pub type NativeOpenContentBundleReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContentBundleReferenceRequest,
     *mut NativeContentReferenceHandle,
+    *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
 
 /// One caller-supplied immutable dependency, named relative to the admission

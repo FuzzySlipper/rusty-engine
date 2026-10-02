@@ -2,7 +2,8 @@
 # Packs the two content modules ContentContainerChecks.cs opens into a module
 # library: `srd` (a ruleset that requires `walls`) packed raw, and `walls` (a
 # portrait and an animated GLB whose image is a separate file beside it)
-# packed compressed. A text file beside them is not a container.
+# packed compressed. A text file beside them is not a container, and
+# `broken.container` holds an entry that no longer decompresses.
 #
 # usage: make-content-modules.sh <library-dir> <rusty command...>
 set -euo pipefail
@@ -47,3 +48,22 @@ PY
 "$@" pack-content "$sources/srd" --output "$library/srd.rpak"
 "$@" pack-content "$sources/walls" --output "$library/walls.rpak" --compress
 printf 'not a container' > "$library/notes.txt"
+# A container whose compressed entry no longer decompresses: header and
+# inventory stay valid, so it opens and refuses only when the entry is read.
+mkdir -p "$sources/broken/data"
+printf '{"id":"broken"}' > "$sources/broken/module.json"
+python3 -c 'print("[1,2,3]," * 4096)' > "$sources/broken/data/table.json"
+"$@" pack-content "$sources/broken" --output "$library/broken.container" --compress
+python3 - "$library/broken.container" <<'PY'
+import json
+import struct
+import sys
+
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+offset, length = struct.unpack_from("<QQ", data, 8)
+entry = next(e for e in json.loads(data[offset:offset + length])["entries"] if e["path"] == "data/table.json")
+assert "zstdLength" in entry, "the table must be stored compressed"
+data[entry["offset"]:entry["offset"] + 4] = b"XXXX"
+open(path, "wb").write(data)
+PY
